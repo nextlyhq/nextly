@@ -16,6 +16,10 @@ import type { JSX } from "react";
 
 import { DynamicCollectionNav } from "@admin/components/features/dashboard/DynamicCollectionNav";
 import { DynamicSingleNav } from "@admin/components/features/dashboard/DynamicSingleNav";
+import {
+  PluginMenuItems,
+  usePluginMatchCounts,
+} from "@admin/components/features/dashboard/PluginMenuItems";
 import { Link } from "@admin/components/ui/link";
 import {
   useSidebarCollectionList,
@@ -82,14 +86,19 @@ export function ContentPanel({
 
   // Matches come from the same search the lists draw with, so a count here can
   // never disagree with what a list shows.
+  const pluginItems = usePluginMatchCounts(search);
   const { shown, other, showControl, otherHasMatches, shownIsEmpty } =
     contentPanelView({
       part,
       search,
       available: { collections: hasCollections, singles: hasSingles },
       matches: {
-        collections: searchSidebarCollections(collections.items, search).length,
-        singles: searchSidebarSingles(singles.items, search).length,
+        collections:
+          searchSidebarCollections(collections.items, search).length +
+          pluginItems.collections,
+        singles:
+          searchSidebarSingles(singles.items, search).length +
+          pluginItems.singles,
       },
       // Complete, not merely loaded: a search may say nothing matched only
       // once every page has arrived.
@@ -135,6 +144,13 @@ export function ContentPanel({
           ) : (
             <DynamicSingleNav isActive={isActive} search={search} />
           )}
+          {/* The plugin menu items placed in the part showing, as the narrow
+              sidebar lists them under Collections and Singles. */}
+          <PluginMenuItems
+            isActive={isActive}
+            section={shown}
+            search={search}
+          />
         </SidebarMenu>
       )}
     </div>

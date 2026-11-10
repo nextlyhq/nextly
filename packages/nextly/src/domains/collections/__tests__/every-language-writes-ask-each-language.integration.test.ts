@@ -185,7 +185,7 @@ async function entryIn(
       collection,
       id,
       locale: "de",
-      data: { title: `${title} de`, owner: german.owner },
+      data: { title: `${title} de`, owner: german.owner, _overwrite: true },
     } as never);
   }
   return id;
@@ -612,7 +612,7 @@ describe.each(getConfiguredTestDialects())(
           collection: DRAFTED,
           id,
           locale: "de",
-          data: { title: "entwurf" },
+          data: { title: "entwurf", _overwrite: true },
         } as never);
 
         expect(
@@ -634,7 +634,7 @@ describe.each(getConfiguredTestDialects())(
           collection: DRAFTED_NOT_FRENCH,
           id,
           locale: "de",
-          data: { title: "entwurf" },
+          data: { title: "entwurf", _overwrite: true },
         } as never);
         // The German held edit relabelled to a language since removed, as
         // one left behind when a locale is taken out of the config.
@@ -694,7 +694,7 @@ describe.each(getConfiguredTestDialects())(
           collection: HIDDEN,
           id: hidden,
           locale: "de",
-          data: { title: "ihres", owner: OTHER },
+          data: { title: "ihres", owner: OTHER, _overwrite: true },
         } as never);
         const missing = "00000000-0000-4000-8000-000000000000";
 
@@ -804,7 +804,8 @@ describe.each(getConfiguredTestDialects())(
             entriesOf(t).bulkUpdateByQuery({
               collectionName: NOT_ENGLISH,
               where,
-              data: { title: "renamed" },
+              // Refused for the rule, not for want of a version.
+              data: { title: "renamed", _overwrite: true },
               ...asAuthor,
             } as never)
           )
@@ -832,7 +833,8 @@ describe.each(getConfiguredTestDialects())(
         const result = await entriesOf(t).bulkUpdateByQuery({
           collectionName: NOT_GERMAN,
           where,
-          data: { title: "renamed" },
+          // The language rules are under test, not versions.
+          data: { title: "renamed", _overwrite: true },
           ...asAuthor,
         } as never);
 

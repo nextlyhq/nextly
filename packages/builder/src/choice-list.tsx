@@ -20,6 +20,16 @@ export interface ListedChoice {
   readonly label: string;
   /** The group it is listed under, when the list has groups. */
   readonly group?: string;
+  /**
+   * What the search matches it by, when not its label alone: a label and
+   * the line drawn under it, so what is searched is what is seen.
+   */
+  readonly search?: string;
+  /**
+   * Listed, and reached by the arrow keys, but never picked: a choice whose
+   * row says why it can't be had yet.
+   */
+  readonly disabled?: boolean;
 }
 
 /** How many entries the list holds before it offers a search. */
@@ -43,6 +53,7 @@ export interface ChoiceListProps<C extends ListedChoice> {
   readonly groups?: ReadonlyArray<{ group: string; heading: string }>;
   /** What an entry draws: its label unless said otherwise. */
   readonly renderChoice?: (choice: C) => React.ReactNode;
+
   /**
    * An entry's tooltip: its label unless said otherwise, such as a label and
    * a value the row may cut short.
@@ -52,6 +63,41 @@ export interface ChoiceListProps<C extends ListedChoice> {
   readonly choiceStyle?: (choice: C) => React.CSSProperties | undefined;
   /** A class each entry carries beside the list's own. */
   readonly choiceClassName?: string;
+  /**
+   * How many entries the list holds before it offers a search, when a list
+   * needs a figure of its own rather than the pickers' shared one.
+   */
+  readonly searchFrom?: number;
+  /**
+   * Drawn between the search and the rows: a group with nothing to offer,
+   * said where its rows would be.
+   */
+  readonly leading?: React.ReactNode;
+}
+
+/**
+ * The entries matching `query`, ignoring case, in the order the rows are
+ * DRAWN: grouped, a list draws group by group, and the row it opens on and
+ * the one an arrow moves to have to be the ones the author sees there, not
+ * the next in the order they were given.
+ */
+function drawnChoices<C extends ListedChoice>(
+  choices: readonly C[],
+  query: string,
+  groups: ChoiceListProps<C>["groups"]
+): readonly C[] {
+  const needle = query.trim().toLowerCase();
+  const matching =
+    needle === ""
+      ? choices
+      : choices.filter(choice =>
+          (choice.search ?? choice.label).toLowerCase().includes(needle)
+        );
+  return groups === undefined
+    ? matching
+    : groups.flatMap(({ group }) =>
+        matching.filter(choice => choice.group === group)
+      );
 }
 
 export function ChoiceList<C extends ListedChoice>({
@@ -66,24 +112,13 @@ export function ChoiceList<C extends ListedChoice>({
   choiceTitle,
   choiceStyle,
   choiceClassName,
+  searchFrom = SEARCH_FROM,
+  leading,
 }: ChoiceListProps<C>): React.JSX.Element {
   const listId = React.useId();
   const [query, setQuery] = React.useState("");
-  const searchable = choices.length > SEARCH_FROM;
-  const needle = query.trim().toLowerCase();
-  const matching =
-    needle === ""
-      ? choices
-      : choices.filter(choice => choice.label.toLowerCase().includes(needle));
-  // In the order the rows are DRAWN: grouped, a list draws group by group,
-  // and the row it opens on and the one an arrow moves to have to be the
-  // ones the author sees there, not the next in the order they were given.
-  const shown =
-    groups === undefined
-      ? matching
-      : groups.flatMap(({ group }) =>
-          matching.filter(choice => choice.group === group)
-        );
+  const searchable = choices.length > searchFrom;
+  const shown = drawnChoices(choices, query, groups);
   const [active, setActive] = React.useState(() =>
     Math.max(
       0,
@@ -122,7 +157,7 @@ export function ChoiceList<C extends ListedChoice>({
     }
     if (event.key === "Enter" && activeChoice !== undefined) {
       event.preventDefault();
-      onPick(activeChoice);
+      if (activeChoice.disabled !== true) onPick(activeChoice);
     }
   };
 
@@ -135,6 +170,7 @@ export function ChoiceList<C extends ListedChoice>({
       id={optionId(choice)}
       role="option"
       aria-selected={choice === activeChoice}
+      aria-disabled={choice.disabled === true ? "true" : undefined}
       data-current={choice.key === currentKey ? "" : undefined}
       className={
         choiceClassName === undefined
@@ -145,7 +181,9 @@ export function ChoiceList<C extends ListedChoice>({
       title={choiceTitle === undefined ? choice.label : choiceTitle(choice)}
       style={choiceStyle?.(choice)}
       onMouseMove={() => setActive(shown.indexOf(choice))}
-      onClick={() => onPick(choice)}
+      onClick={() => {
+        if (choice.disabled !== true) onPick(choice);
+      }}
     >
       {renderChoice === undefined ? choice.label : renderChoice(choice)}
     </li>
@@ -174,6 +212,7 @@ export function ChoiceList<C extends ListedChoice>({
           />
         </div>
       ) : null}
+      {leading}
       <ul
         ref={list}
         id={listId}

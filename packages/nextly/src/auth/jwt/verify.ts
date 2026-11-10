@@ -21,13 +21,16 @@ export type VerifyResult =
 /**
  * Verify a token for ONE purpose.
  *
- * A header `typ` naming another purpose is refused, so a token minted for a
- * challenge or any future single-purpose flow cannot be presented as a
- * session. An absent header `typ` is still accepted, because tokens already in
- * circulation were minted before the header existed; 0.1.0 drops that
- * allowance, so a token without a header `typ` stops verifying from then on.
- * Pending tokens are additionally recognised by their claim,
- * as they were before, which is what covers those legacy tokens meanwhile.
+ * Every token carries a header `typ` naming what it is for, and one that
+ * names another purpose — or names no purpose at all — is refused, so a token
+ * minted for a challenge or any future single-purpose flow cannot be
+ * presented as a session. The refusal of an absent header `typ` is the named
+ * release the typed-tokens change promised: tokens signed before the header
+ * existed were accepted while they could still be in circulation, and from
+ * this release a token without the header stops verifying wherever a session
+ * or a pending challenge is read. Pending tokens are additionally refused as
+ * sessions by their claim, which still covers a forged token carrying the
+ * session header alongside a pending claim.
  *
  * The algorithm list is explicit: left implicit, a token declaring `alg:
  * "none"` can talk the verifier out of checking the signature.
@@ -44,7 +47,7 @@ export async function verifyToken(
       { algorithms: [ALGORITHM] }
     );
     const typ = protectedHeader.typ;
-    if (typ !== undefined && typ !== TOKEN_TYP[purpose]) {
+    if (typ !== TOKEN_TYP[purpose]) {
       return { valid: false, reason: "invalid" };
     }
     if (purpose === "session" && payload.typ === PENDING_AUTH_TYP) {

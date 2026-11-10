@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   useDocumentLock,
+  type DocumentLockChangeNotice,
   type UseDocumentLockOptions,
 } from "@admin/hooks/queries/useDocumentLock";
 import { useDocumentLockHolder } from "@admin/hooks/queries/useDocumentLockHolder";
@@ -25,6 +26,7 @@ import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
 
 import {
   documentLockAffordances,
+  type HeldChangeChoice,
   readerAffordances,
   READER_LATEST_UNLOADED,
   READ_ONLY_REMOVED_FROM_CODE,
@@ -53,6 +55,18 @@ export interface DocumentLockSurface extends DocumentLockAffordances {
    * rather than unlocking over the one it read before.
    */
   readonly reloads: number;
+  /**
+   * Someone else's change to the document this editor holds, since the
+   * version its copy started from, not yet answered.
+   */
+  readonly change: DocumentLockChangeNotice | null;
+  /** The editor has been told of `change`. */
+  readonly settleChange: () => void;
+  /**
+   * The editor's answer to someone else's change the strip says: given by the
+   * editor that says it (`withHeldChange`), absent where nothing does.
+   */
+  readonly answerChange?: (choice: HeldChangeChoice) => void;
 }
 
 export interface DocumentLockSurfaceOptions extends UseDocumentLockOptions {
@@ -248,10 +262,11 @@ export function useDocumentLockSurface({
 }: DocumentLockSurfaceOptions): DocumentLockSurface {
   const enabled = options.enabled ?? true;
   const { latest, ...lockOptions } = options;
-  const { state, gains, takeOver, requestAccess } = useDocumentLock({
-    ...lockOptions,
-    enabled: enabled && !readOnlyForReader,
-  });
+  const { state, gains, takeOver, requestAccess, change, settleChange } =
+    useDocumentLock({
+      ...lockOptions,
+      enabled: enabled && !readOnlyForReader,
+    });
   const gainLoad = useGainLoad(gains, latest, state.status === "acquiring");
   // A reader claims nothing and is told who holds the document instead.
   const holder = useDocumentLockHolder({
@@ -296,5 +311,7 @@ export function useDocumentLockSurface({
     requestAccess,
     retryLoad: gainLoad.retry,
     reloads: gainLoad.reloads,
+    change,
+    settleChange,
   };
 }

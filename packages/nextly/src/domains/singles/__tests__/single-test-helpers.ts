@@ -57,7 +57,14 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
     // Answered as inside a transaction, so a registry read goes to `selectOne` as these tests
     // drive it rather than to the registry row cache, which has tests of its own.
     transactionOpenInFlow: vi.fn(() => true),
-    select: vi.fn().mockResolvedValue([]),
+    // A write reads back the document's version counter on its transaction;
+    // the row these tests write is at version 1. Every other read is empty.
+    select: vi
+      .fn()
+      .mockImplementation(
+        async (_table: string, options?: { columns?: string[] }) =>
+          options?.columns?.includes("_revision") ? [{ _revision: 1 }] : []
+      ),
     selectOne: vi.fn().mockResolvedValue(null),
     insert: vi.fn().mockResolvedValue({ id: "new-id" }),
     update: vi.fn().mockResolvedValue([{ id: "updated-id" }]),
@@ -151,6 +158,9 @@ export function createMockHookRegistry(): MockRecord {
     hasHooks: vi.fn().mockReturnValue(false),
     execute: vi.fn().mockResolvedValue(undefined),
     executeBeforeOperation: vi.fn().mockResolvedValue(undefined),
+    // No in-transaction handler, so a save never loads that phase.
+    hasInTransaction: vi.fn().mockReturnValue(false),
+    inTransactionRunners: vi.fn().mockReturnValue([]),
   };
 }
 

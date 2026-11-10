@@ -33,10 +33,15 @@ import {
 import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import { appLocalization } from "../i18n/configured-locales";
+import { storesPerLanguage } from "../i18n/per-language-storage";
 import { isValidLocale } from "../i18n/resolve-locale";
 import type { UserContext } from "../singles/types";
 
 import { applyComponentReadAccess } from "./component-read-access";
+import {
+  DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_VERSION_KEY,
+} from "./document-revision";
 import {
   buildRestorePayload,
   payloadTouchesComponents,
@@ -74,18 +79,33 @@ export interface RestoreVersionArgs {
    * differently would apply the wrong one.
    */
   request?: Request;
+  /**
+   * The version the restore was made from (`_rev`) and the overwrite choice
+   * (`_overwrite`), as a save's data carries them. A restore puts an old
+   * version's content over the document as it is now, so it is judged as the
+   * update it makes is: made from an out-of-date view, it would undo a save
+   * the restorer never saw. Only those two keys are read.
+   */
+  version?: Readonly<Record<string, unknown>>;
 }
 
-export interface RestoreVersionResult {
+export type RestoreVersionResult = {
   /** The version that was restored from. */
   restoredFrom: number;
+  /**
+   * The document's version after the restore, as the next read gives it, so a
+   * save can follow without reading first.
+   *
+   * @experimental
+   */
+  _rev?: string;
   /**
    * Snapshot keys the current schema no longer has. Surfaced so a caller can
    * tell the editor what could not come back, rather than reporting a restore
    * that silently left parts behind.
    */
   droppedFields: string[];
-}
+};
 
 /** Current field configs and whether the entity stores values per locale. */
 interface EntityDescription {
@@ -509,8 +529,12 @@ export async function restoreVersion(
   // embedding a localized component still holds values that belong to one
   // language, and writing them with no locale resolves the default one — so a
   // German component snapshot would land on top of the default language.
+  // Where its values are stored, which decides whose language a snapshot holds: per language
+  // when it is translated, or always under per-language storage. `localized` stays the
+  // product's flag, for how the restored document publishes.
+  const storedPerLanguage = storesPerLanguage({ localized });
   const perLocaleContent = schemaStoresPerLocaleContent(
-    localized,
+    storedPerLanguage,
     fields,
     componentSchemas
   );
@@ -614,13 +638,19 @@ export async function restoreVersion(
   // reaches no component needs none, and passing a stale one would be rejected.
   const writeLocale =
     storedLocale !== null &&
-    (localized || payloadTouchesComponents(payload, fields))
+    (storedPerLanguage || payloadTouchesComponents(payload, fields))
       ? storedLocale
       : null;
 
+  // Judged by the version the restore was made from, read out of the
+  // update's data as a save's is. Added after the payload is known to hold
+  // something to restore, so a version alone never reads as content.
+  const judgedPayload = { ...payload, ...versionKeysOf(args.version) };
+
+  let written: { data?: unknown };
   if (args.scopeKind === "single") {
     const singles = getService("singleEntryService");
-    const result = await singles.update(args.slug, payload, {
+    const result = await singles.update(args.slug, judgedPayload, {
       user: args.user,
       overrideAccess: false,
       // Not route-authorized: the route judged the restore in every language,
@@ -639,6 +669,7 @@ export async function restoreVersion(
       ...(restoresSavedDraft ? { requireHeldDraft: true } : {}),
     });
     assertWriteSucceeded(result, args);
+    written = result;
   } else {
     const collections = getService("collectionsHandler");
     const result = await collections.updateEntry(
@@ -662,12 +693,37 @@ export async function restoreVersion(
         sourceVersionNo: args.versionNo,
         ...(restoresSavedDraft ? { requireHeldDraft: true } : {}),
       },
-      payload
+      judgedPayload
     );
     assertWriteSucceeded(result, args);
+    written = result;
   }
 
-  return { restoredFrom: args.versionNo, droppedFields };
+  return {
+    restoredFrom: args.versionNo,
+    droppedFields,
+    ...versionWritten(written),
+  };
+}
+
+/**
+ * The version keys of a restore's request, and nothing else: the restore's
+ * content is the version's, never the request's.
+ */
+function versionKeysOf(
+  version: Readonly<Record<string, unknown>> | undefined
+): Record<string, unknown> {
+  const keys: Record<string, unknown> = {};
+  for (const key of [DOCUMENT_VERSION_KEY, DOCUMENT_OVERWRITE_KEY]) {
+    if (version?.[key] !== undefined) keys[key] = version[key];
+  }
+  return keys;
+}
+
+/** The version the restore's update answered with, where it gave one. */
+function versionWritten(result: { data?: unknown }): { _rev?: string } {
+  const rev = (result.data as { _rev?: unknown } | null | undefined)?._rev;
+  return typeof rev === "string" ? { _rev: rev } : {};
 }
 
 /**

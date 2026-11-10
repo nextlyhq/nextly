@@ -17,6 +17,7 @@ import {
   previewStateClass,
 } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
+import { overlaid } from "./overlay";
 import {
   CHILD_GAP_CLASS,
   nodeClassName,
@@ -150,7 +151,8 @@ describe("urls", () => {
     const out = css(
       doc([node("n1", { base: { base: { background: { url: "/a.png" } } } })])
     );
-    expect(out).toContain('background-image: url("/a.png")');
+    // Behind the overlay's layer, which is laid over every image.
+    expect(out).toContain(`background-image: ${overlaid('url("/a.png")')}`);
   });
 
   it("leaves a keyword alone rather than going looking for a file", () => {
@@ -2216,6 +2218,35 @@ describe("the space a container puts between its children", () => {
     }
   });
 
+  it("writes no gap and no marker under the classic spacing model", () => {
+    const child = node("child");
+    const document = doc([
+      node("parent", undefined, {
+        slots: { children: [child] },
+        styles: { base: { base: { display: "flex" } } },
+      }),
+    ]);
+    const classic = compilePageCss(document, {
+      ...CTX,
+      childGaps: GAPS,
+      spacingMode: "classic",
+    });
+    // Byte for byte the compile that was never handed a gap: the flag takes
+    // the whole tier away, the layout-mode rules a gap decides included.
+    expect(classic.css).toBe(compilePageCss(document, CTX).css);
+    expect(classic.classes.get("parent")?.split(" ")).not.toContain(
+      CHILD_GAP_CLASS
+    );
+    // The control: the same input under the gaps model writes both.
+    const gaps = compilePageCss(document, {
+      ...CTX,
+      childGaps: GAPS,
+      spacingMode: "gaps",
+    });
+    expect(gaps.css).toContain("> * + *");
+    expect(gaps.classes.get("parent")?.split(" ")).toContain(CHILD_GAP_CLASS);
+  });
+
   it("writes a child gap only where a margin AND a gap can take it", () => {
     // `-1rem` is a margin a block-flow container could write, but no `gap`:
     // written as the one and not the other, a container switched to flex or
@@ -2246,5 +2277,26 @@ describe("the space a container puts between its children", () => {
       CTX
     );
     expect(out).not.toContain("> * + *");
+  });
+});
+
+describe("the overlay's two properties", () => {
+  it("are reset on every element of a page that uses them, so none inherits", () => {
+    // Inherited, a section's overlay would darken every image nested in it.
+    // The reset has no specificity, so a block's own value beats it.
+    const used = css(
+      doc([node("n1", { base: { base: { background: { url: "/a.png" } } } })])
+    );
+    expect(
+      used.startsWith(
+        ":where(.nx-pb-page *) { --nx-pb-overlay: initial; --nx-pb-overlay-strength: initial; --nx-pb-overlay-layer: initial; --nx-pb-overlay-position: initial; --nx-pb-overlay-size: initial; --nx-pb-overlay-repeat: initial; --nx-pb-overlay-attachment: initial; }\n"
+      )
+    ).toBe(true);
+  });
+
+  it("are not reset on a page with no background to lay one over", () => {
+    expect(
+      css(doc([node("n1", { base: { base: { color: "#fff" } } })]))
+    ).not.toContain("--nx-pb-overlay");
   });
 });

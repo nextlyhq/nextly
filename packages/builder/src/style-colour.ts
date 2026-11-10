@@ -63,12 +63,14 @@ import {
   checkContrast,
   emitTokenBlocks,
   isPlainRecord,
+  isStyleLeaf,
   isTokenRef,
   leafAcceptsValue,
   locateNode,
   parseColor,
   resolveSiteTokens,
   STYLE_CATALOG,
+  styleUnionVariant,
   tokenCustomProperty,
   tokenDisplayLabel,
   trimCssWhitespace,
@@ -83,6 +85,7 @@ import {
   type TokenMode,
   type StyleLeaf,
   type StyleValue,
+  type UnionShape,
 } from "@nextlyhq/blocks-engine";
 import { toHex } from "@nextlyhq/ui/color";
 
@@ -233,19 +236,42 @@ export function variablesFor(
  * field writes as its length form) is the other form's to judge.
  */
 function valueFits(token: SiteVariable, leaf: StyleLeaf): boolean {
-  // A folded field's own forms, so the variable is judged by the one its kind
-  // is written in: a font weight's number by the number form's 1 to 1000,
-  // though the field shows the keyword form while unset.
-  const arms = FOLDED_ARMS.get(leaf) ?? [leaf];
-  const arm = arms.find(each => judgedAt(token.kind, each.kind));
+  const folded = FOLDED_ARMS.get(leaf);
+  const text = trimCssWhitespace(token.value);
+  // A number variable holds its number as text; a number form takes a number.
+  const asNumber = CSS_NUMBER.test(text) ? Number(text) : text;
+  // A folded field's forms: the variable is judged by the form the ENGINE
+  // picks for its value, the one the compiler will judge it by, so a font
+  // weight holding "bold" is judged by the keyword form and one holding 700
+  // by the number form's 1 to 1000.
+  const arm =
+    folded === undefined
+      ? judgedAt(token.kind, leaf.kind)
+        ? leaf
+        : undefined
+      : armForValue(folded, token.kind, asNumber);
   if (arm === undefined) return true;
   // A length or a number through a function resolves only on the page.
   if (arm.kind !== "cssValue" && throughFunction(token.value)) return true;
-  const text = trimCssWhitespace(token.value);
-  // A number variable holds its number as text; the leaf takes a number.
-  const value =
-    arm.kind === "number" && CSS_NUMBER.test(text) ? Number(text) : text;
-  return leafAcceptsValue(arm, value);
+  return leafAcceptsValue(arm, arm.kind === "number" ? asNumber : text);
+}
+
+/**
+ * The form of a folded field that judges a value: the engine's own choice of
+ * the union's arm for it, when the field's union is known, else the form a
+ * variable of its kind is written in.
+ */
+function armForValue(
+  folded: { readonly arms: readonly StyleLeaf[]; readonly union?: UnionShape },
+  kind: TokenKind,
+  value: unknown
+): StyleLeaf | undefined {
+  if (folded.union !== undefined) {
+    const index = styleUnionVariant(folded.union, value);
+    const chosen = index === undefined ? undefined : folded.union.of[index];
+    if (chosen !== undefined && isStyleLeaf(chosen)) return chosen;
+  }
+  return folded.arms.find(each => judgedAt(kind, each.kind));
 }
 
 /**
@@ -276,7 +302,10 @@ function judgedAt(kind: TokenKind, leafKind: StyleLeaf["kind"]): boolean {
  * The forms behind a leaf drawn as one field over a union, by the leaf
  * {@link foldedLeaf} made for them.
  */
-const FOLDED_ARMS = new WeakMap<StyleLeaf, readonly StyleLeaf[]>();
+const FOLDED_ARMS = new WeakMap<
+  StyleLeaf,
+  { readonly arms: readonly StyleLeaf[]; readonly union?: UnionShape }
+>();
 
 /**
  * One leaf for a field drawn over a union's forms (a line height's number or
@@ -284,12 +313,17 @@ const FOLDED_ARMS = new WeakMap<StyleLeaf, readonly StyleLeaf[]>();
  * form takes, and each variable offered there is judged by the form its kind
  * is written in, not by whichever form the field happens to show.
  */
-export function foldedLeaf(arms: readonly StyleLeaf[]): StyleLeaf {
+export function foldedLeaf(
+  arms: readonly StyleLeaf[],
+  union?: UnionShape
+): StyleLeaf {
   const [first] = arms;
   if (first === undefined) throw new Error("a folded field has no forms");
   const tokenKinds = [...new Set(arms.flatMap(arm => arm.tokenKinds))];
   const leaf: StyleLeaf = { ...first, tokenKinds };
-  FOLDED_ARMS.set(leaf, arms);
+  // With the union they came from, when known, so a variable is judged by
+  // the arm the engine picks for its value.
+  FOLDED_ARMS.set(leaf, union === undefined ? { arms } : { arms, union });
   return leaf;
 }
 

@@ -19,7 +19,9 @@
  *
  * @module admin/editor/settings-dialog
  */
+import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import {
+  BASE_DEVICE_LABEL,
   BreakpointManager,
   EDITOR_WORDS,
   type BuilderShellProps,
@@ -56,6 +58,7 @@ import { AlertCircle, Check, Loader2, TriangleAlert } from "lucide-react";
 import {
   useEffect,
   useId,
+  useRef,
   useState,
   type ComponentProps,
   type JSX,
@@ -68,8 +71,34 @@ import {
   SITE_SETTINGS_ROUTE_PATH,
   type SiteSettingsRead,
 } from "../../library-contract";
+import {
+  pageAddressPath,
+  type PageAddressResponse,
+} from "../../pages-search-contract";
+import type { PublishReadinessResponse } from "../../publish-readiness-contract";
+import {
+  askReadiness,
+  publishChosen,
+  PublishOfferDialog,
+  reportLeftUnpublished,
+  type PublishChoice,
+} from "../publish-offer";
 
+import { RemovalStatusRow, RemovalStepPanel } from "./breakpoint-removal-step";
+import { undoableHint } from "./breakpoint-undo-flow";
+import { UndoStatusRow, UndoStepPanel } from "./breakpoint-undo-step";
+import type { SettingsAddress } from "./settings-address";
 import type { SharePreview } from "./share-preview";
+import { SiteCodeSection } from "./site-code-settings";
+import {
+  useBreakpointRemoval,
+  type BreakpointRemoval,
+} from "./use-breakpoint-removal";
+import {
+  useBreakpointUndo,
+  type BreakpointUndo,
+  type UndoStep,
+} from "./use-breakpoint-undo";
 
 /** What the shell hands the dialog. */
 type DialogState = Parameters<
@@ -96,11 +125,19 @@ export interface SettingsDialogProps extends DialogState {
    * and a line says the SEO plugin adds them.
    */
   seoFields: boolean;
-  /** The site's breakpoints: what is saved, how to save, whether it is read. */
+  /**
+   * The page whose address to show, or null for a page never saved, which
+   * has no address to read yet.
+   */
+  address?: SettingsAddress | null;
+  /**
+   * The site's breakpoints: what is saved, how to save, whether it is read,
+   * and how to read the site's style again once a removal has changed it.
+   */
   breakpoints: Pick<
     ComponentProps<typeof BreakpointManager>,
     "value" | "onSave" | "status"
-  >;
+  > & { refresh: () => void };
 }
 
 /**
@@ -123,6 +160,7 @@ export function SettingsDialog({
   pageLayout = null,
   share,
   seoFields,
+  address = null,
   breakpoints,
 }: SettingsDialogProps): JSX.Element {
   const site = usePluginRoute<SiteSettingsRead>({
@@ -184,6 +222,11 @@ export function SettingsDialog({
                 pageLayout={pageLayout}
                 share={share}
                 seoFields={seoFields}
+                address={
+                  address === null ? null : (
+                    <AddressLine address={address} open={open} />
+                  )
+                }
               />
             </TabsContent>
             {siteTab ? (
@@ -199,6 +242,9 @@ export function SettingsDialog({
                   breakpoints={breakpoints}
                   onEditingBreakpoints={leave.setEditing}
                   onSavingBreakpoints={leave.setSaving}
+                  onEditingCode={leave.setEditingCode}
+                  onSavingCode={leave.setSavingCode}
+                  onClose={() => leave.request({ kind: "close" })}
                 />
               </TabsContent>
             ) : null}
@@ -221,10 +267,10 @@ export function SettingsDialog({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Discard your breakpoint changes?
+              {DISCARD_WORDS[leave.discarding].title}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              They have not been saved. The site keeps the breakpoints it has.
+              {DISCARD_WORDS[leave.discarding].description}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -239,19 +285,49 @@ export function SettingsDialog({
   );
 }
 
+/** What leaving would discard, and how the question says so. */
+const DISCARD_WORDS = {
+  breakpoints: {
+    title: "Discard your breakpoint changes?",
+    description:
+      "They have not been saved. The site keeps the breakpoints it has.",
+  },
+  code: {
+    title: "Discard your code changes?",
+    description: "They have not been saved. The site keeps the code it has.",
+  },
+  both: {
+    title: "Discard your breakpoint and code changes?",
+    description:
+      "Neither has been saved. The site keeps the breakpoints and the code it has.",
+  },
+} as const;
+
 /** A way out of the breakpoint editor: closing Settings, or another tab. */
 type Leave = { kind: "close" } | { kind: "tab"; to: string };
 
+/** Which drafts leaving would discard. */
+function discardingOf(
+  breakpoints: boolean,
+  code: boolean
+): keyof typeof DISCARD_WORDS {
+  if (breakpoints && code) return "both";
+  return code ? "code" : "breakpoints";
+}
+
 /**
- * Leaving the Site tab while its breakpoints are being edited asks first, by
- * closing Settings or by switching tabs alike, since either takes the draft
- * away. While a save of them is in flight, neither happens: the write must
- * answer on screen, and a "discard" could not stop it reaching the site.
+ * Leaving the Site tab while its breakpoints or its code are being edited
+ * asks first, by closing Settings or by switching tabs alike, since either
+ * takes the draft away. While a save of either is in flight, neither happens:
+ * the write must answer on screen, and a "discard" could not stop it reaching
+ * the site.
  */
 function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
   const [tab, setTab] = useState("page");
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editingCode, setEditingCode] = useState(false);
+  const [savingCode, setSavingCode] = useState(false);
   const [pending, setPending] = useState<Leave | null>(null);
   // Closed from outside (the editor giving way to its narrow-window notice),
   // the editor's draft went with the dialog, so nothing is left to guard.
@@ -259,6 +335,8 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
     if (open) return;
     setEditing(false);
     setSaving(false);
+    setEditingCode(false);
+    setSavingCode(false);
     setPending(null);
   }, [open]);
   const go = (leave: Leave): void => {
@@ -268,12 +346,17 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
   return {
     tab,
     asking: pending !== null,
+    // What a discard would throw away: both drafts where both are open, as a
+    // breakpoint draft stays while the code is open over it.
+    discarding: discardingOf(editing, editingCode),
     setEditing,
     setSaving,
+    setEditingCode,
+    setSavingCode,
     request: (leave: Leave): void => {
-      if (saving) return;
+      if (saving || savingCode) return;
       if (leave.kind === "tab" && leave.to === tab) return;
-      if (editing && tab === "site") {
+      if ((editing || editingCode) && tab === "site") {
         setPending(leave);
         return;
       }
@@ -285,6 +368,7 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
     },
     discard: (): void => {
       setEditing(false);
+      setEditingCode(false);
       if (pending !== null) go(pending);
       setPending(null);
     },
@@ -297,11 +381,17 @@ function SiteTab({
   breakpoints,
   onEditingBreakpoints,
   onSavingBreakpoints,
+  onEditingCode,
+  onSavingCode,
+  onClose,
 }: {
   site: ReturnType<typeof usePluginRoute<SiteSettingsRead>>;
   breakpoints: SettingsDialogProps["breakpoints"];
   onEditingBreakpoints: (editing: boolean) => void;
   onSavingBreakpoints: (saving: boolean) => void;
+  onEditingCode: (editing: boolean) => void;
+  onSavingCode: (saving: boolean) => void;
+  onClose: () => void;
 }): JSX.Element | null {
   if (site.data === undefined) {
     return site.error === null ? null : (
@@ -339,29 +429,116 @@ function SiteTab({
           site.refetch();
           return typeof answer === "string" ? answer : undefined;
         },
+        refresh: breakpoints.refresh,
       }}
       onEditingBreakpoints={onEditingBreakpoints}
       onSavingBreakpoints={onSavingBreakpoints}
+      onEditingCode={onEditingCode}
+      onSavingCode={onSavingCode}
+      onClose={onClose}
     />
   );
 }
 
 /**
- * The page's own fields, the Layout it is drawn inside, then how a shared link
- * to it would look.
+ * Where the page is served, as it is saved: read from the server, which
+ * resolves it as the pages search does, never built here from the slug, so
+ * it names the address visitors reach rather than a guess at it.
+ *
+ * A slug changed since the last save does not move it: the line says this is
+ * the saved address and that it changes when the page is saved. Nothing shows
+ * while it is read, or where the page has no address (another collection, a
+ * site that states none, a page whose fields cannot fill it yet).
+ */
+function AddressLine({
+  address,
+  open,
+}: {
+  address: SettingsAddress;
+  open: boolean;
+}): JSX.Element | null {
+  const read = usePluginRoute<PageAddressResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: pageAddressPath(address.page, address.locale),
+    staleTime: 0,
+    enabled: open,
+  });
+  // Read again after each save, whichever field it changed: the host's path
+  // can name more than the slug, and the query's own key would not move.
+  const { refetch } = read;
+  const revisionSeen = useRef(address.savedRevision);
+  useEffect(() => {
+    if (revisionSeen.current === address.savedRevision) return;
+    revisionSeen.current = address.savedRevision;
+    void refetch();
+  }, [address.savedRevision, refetch]);
+  if (read.data === undefined) {
+    return read.error === null ? null : (
+      <p className="text-xs text-muted-foreground">
+        {"This page's address could not be read."}
+      </p>
+    );
+  }
+  const path = read.data.path;
+  if (path === null) return null;
+  return (
+    // Drawn as the Address field's own line, right under it, rather than as
+    // a section of its own: it is the same address, written out in full.
+    <section
+      aria-label="Address on your site"
+      className="space-y-1 text-xs text-muted-foreground"
+    >
+      <p>
+        On your site:{" "}
+        <span
+          className="break-all font-mono text-sm text-foreground"
+          data-page-address=""
+        >
+          {path}
+        </span>
+      </p>
+      {address.slugChanged ? (
+        <p role="status">
+          This is the saved address. It changes when you save the page.
+        </p>
+      ) : null}
+      {/* Only the plugin's own Pages have this line, and their addresses
+          may sit beneath another page's, which nothing else says. */}
+      <p>
+        To put this page beneath another, use / in its address, as in{" "}
+        <span className="font-mono">docs/getting-started</span>.
+      </p>
+    </section>
+  );
+}
+
+/**
+ * The page's own fields, its address, the Layout it is drawn inside, then how
+ * a shared link to it would look.
  */
 function ThisPage({
   pageFields,
   pageLayout,
   share,
   seoFields,
+  address,
 }: Pick<
   SettingsDialogProps,
   "pageFields" | "pageLayout" | "share" | "seoFields"
->): JSX.Element {
+> & {
+  /** The page's address line, or null where it has none to show. */
+  address: ReactNode | null;
+}): JSX.Element {
   return (
     <div className="space-y-6 pt-4">
-      {pageFields === null ? null : <section>{pageFields}</section>}
+      {/* The address line sits with the page's own fields, under the
+          Address field it writes out. */}
+      {pageFields === null && address === null ? null : (
+        <section className="space-y-2">
+          {pageFields}
+          {address}
+        </section>
+      )}
       {pageLayout ?? null}
       <section aria-labelledby="settings-share-title" className="space-y-2">
         <h3 id="settings-share-title" className="text-sm font-semibold">
@@ -422,13 +599,61 @@ function SiteSettings({
   breakpoints,
   onEditingBreakpoints,
   onSavingBreakpoints,
+  onEditingCode,
+  onSavingCode,
+  onClose,
 }: {
   read: SiteSettingsRead;
   reread: () => void;
   breakpoints: SettingsDialogProps["breakpoints"];
   onEditingBreakpoints: (editing: boolean) => void;
   onSavingBreakpoints: (saving: boolean) => void;
+  onEditingCode: (editing: boolean) => void;
+  onSavingCode: (saving: boolean) => void;
+  onClose: () => void;
 }): JSX.Element {
+  // While the code is open the other sections step aside, as they do for a
+  // breakpoint removal's steps.
+  const [codeOpen, setCodeOpen] = useState(false);
+  const { refresh, ...manager } = breakpoints;
+  const removal = useBreakpointRemoval({
+    current: manager.value,
+    save: async next => {
+      const answer = await manager.onSave(next);
+      return typeof answer === "string" ? answer : undefined;
+    },
+    removals: read.removals,
+    undoable: read.undoable,
+    reread,
+    refreshStyle: refresh,
+  });
+  const undo = useBreakpointUndo({
+    undoable: read.undoable,
+    removals: read.removals,
+    reread,
+    refreshStyle: refresh,
+  });
+  // A step that asks or works has the tab to itself: a removal's first, then
+  // an undo's.
+  const takesOver = removal.takesOver || undo.takesOver;
+  // Counted up to open the breakpoint editor from a step, once it gives way.
+  const [editRequest, setEditRequest] = useState(0);
+  // The editor's own save is hidden under a removal's steps while they ask
+  // before saving: then leaving waits only on a request a step has out, and
+  // a confirmation on screen can be left, asking first as a draft is.
+  const [editorSaving, setEditorSaving] = useState(false);
+  const saving = takesOver ? removal.inFlight || undo.inFlight : editorSaving;
+  useEffect(() => {
+    onSavingBreakpoints(saving);
+  }, [saving, onSavingBreakpoints]);
+  // Reloaded, the editor starts again from the stored set, with no draft.
+  const steps = {
+    ...removal,
+    reload: (): void => {
+      onEditingBreakpoints(false);
+      removal.reload();
+    },
+  };
   return (
     <div className="space-y-6 pt-4">
       <Alert variant="warning">
@@ -440,6 +665,8 @@ function SiteSettings({
       <section
         aria-labelledby="settings-breakpoints-title"
         className="space-y-2"
+        // Kept mounted while the code is open, so a breakpoint draft stays.
+        hidden={codeOpen}
       >
         <h3 id="settings-breakpoints-title" className="text-sm font-semibold">
           Breakpoints
@@ -448,14 +675,149 @@ function SiteSettings({
           Widths your styles can change at. Each applies at that width and
           below.
         </p>
-        <BreakpointManager
-          {...breakpoints}
-          onEditingChange={onEditingBreakpoints}
-          onSavingChange={onSavingBreakpoints}
+        <BreakpointSteps
+          removal={steps}
+          undo={undo}
+          current={manager.value}
+          onClose={onClose}
+          onEditBreakpoints={() => setEditRequest(value => value + 1)}
         />
+        {/* Kept mounted under a step, so Back returns to the draft as it was. */}
+        <div hidden={takesOver}>
+          <BreakpointManager
+            key={removal.generation}
+            {...manager}
+            onSave={removal.save}
+            {...(removal.blocked === undefined
+              ? {}
+              : { blocked: removal.blocked })}
+            tags={undo.putBack}
+            editRequest={editRequest}
+            onEditingChange={editing => {
+              onEditingBreakpoints(editing);
+              removal.editing(editing);
+              undo.editing(editing);
+            }}
+            onSavingChange={setEditorSaving}
+          />
+        </div>
       </section>
-      <DefaultLayout read={read} reread={reread} />
+      {/* The step has the tab to itself while it asks or works. */}
+      {takesOver ? null : (
+        <LaterSections
+          read={read}
+          reread={reread}
+          codeOpen={codeOpen}
+          code={{
+            onEditingChange: onEditingCode,
+            onSavingChange: onSavingCode,
+            onOpenChange: setCodeOpen,
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The Site sections after the breakpoints: the default Layout, which steps
+ * aside while the code is open, and the code.
+ */
+function LaterSections({
+  read,
+  reread,
+  codeOpen,
+  code,
+}: {
+  read: SiteSettingsRead;
+  reread: () => void;
+  codeOpen: boolean;
+  code: ComponentProps<typeof SiteCodeSection>;
+}): JSX.Element {
+  return (
+    <>
+      {codeOpen ? null : <DefaultLayout read={read} reread={reread} />}
+      <SiteCodeSection {...code} />
+    </>
+  );
+}
+
+/** Whether an undo, going or finished, puts back removal `runId`. */
+function undoes(step: UndoStep, runId: string): boolean {
+  return (
+    (step.kind === "undoing" ||
+      step.kind === "undone" ||
+      step.kind === "left") &&
+    step.undoes === runId
+  );
+}
+
+/**
+ * What the Site tab shows of a removal and its undo above the breakpoint
+ * list: the step that takes the list's place while one asks or works (a
+ * removal's first), else their rows. The removal's own finished row offers
+ * its undo where it is the one on offer; otherwise the undo's row does.
+ */
+function BreakpointSteps({
+  removal,
+  undo,
+  current,
+  onClose,
+  onEditBreakpoints,
+}: {
+  removal: BreakpointRemoval;
+  undo: BreakpointUndo;
+  current: BreakpointSet;
+  onClose: () => void;
+  onEditBreakpoints: () => void;
+}): JSX.Element {
+  if (removal.takesOver) {
+    return (
+      <RemovalStepPanel
+        removal={removal}
+        current={current}
+        baseLabel={BASE_DEVICE_LABEL}
+        onClose={onClose}
+      />
+    );
+  }
+  if (undo.takesOver) {
+    return (
+      <UndoStepPanel
+        undo={undo}
+        onClose={onClose}
+        onEditBreakpoints={onEditBreakpoints}
+      />
+    );
+  }
+  const shownRun =
+    removal.step.kind === "done" || removal.step.kind === "left"
+      ? removal.step.runId
+      : undefined;
+  const offered = undo.offered;
+  // A finished removal this tab saw gives way to its undo, going or done, so
+  // the tab never says at once that a breakpoint was removed and is back.
+  const undoneHere = shownRun !== undefined && undoes(undo.step, shownRun);
+  return (
+    <>
+      {undoneHere ? null : (
+        <RemovalStatusRow
+          removal={removal}
+          {...(offered !== undefined && shownRun === offered.runId
+            ? {
+                offer: {
+                  hint: undoableHint(offered),
+                  undo: () => undo.ask(offered),
+                },
+              }
+            : {})}
+        />
+      )}
+      <UndoStatusRow
+        undo={undo}
+        offerHere={shownRun === undefined && removal.step.kind !== "resumed"}
+      />
+    </>
   );
 }
 
@@ -484,7 +846,54 @@ function DefaultLayout({
   useEffect(() => {
     if (chosen !== null && read.defaultLayout === chosen) setChosen(null);
   }, [chosen, read.defaultLayout]);
+  // A Layout about to wrap every page that names none, asked about first:
+  // the components its areas place that are not live, with the offer to
+  // publish them before it becomes the default. Never a refusal.
+  const [offer, setOffer] = useState<{
+    id: string;
+    readiness: PublishReadinessResponse;
+  } | null>(null);
   const choose = (id: string): void => {
+    setSave({ kind: "saving" });
+    void askReadiness({ documents: [], layout: id }).then(readiness => {
+      if (
+        readiness === null ||
+        (readiness.dependencies.length === 0 && readiness.missing === 0)
+      ) {
+        makeDefault(id);
+        return;
+      }
+      setSave({ kind: "idle" });
+      setOffer({ id, readiness });
+    });
+  };
+  const answer = (choice: PublishChoice): void => {
+    const asked = offer;
+    setOffer(null);
+    if (asked === null || choice.kind === "cancel") return;
+    if (choice.kind === "only") {
+      makeDefault(asked.id);
+      return;
+    }
+    setSave({ kind: "saving" });
+    publishChosen(choice.dependencies).then(
+      result => {
+        reportLeftUnpublished(result, asked.readiness, "Layout");
+        makeDefault(asked.id);
+      },
+      (reason: unknown) => {
+        setSave({
+          kind: "failed",
+          message:
+            reason instanceof Error
+              ? reason.message
+              : "The components could not be published.",
+          retry: () => choose(asked.id),
+        });
+      }
+    );
+  };
+  const makeDefault = (id: string): void => {
     setSave({ kind: "saving" });
     writePluginRoute({
       plugin: PAGE_BUILDER_PLUGIN_NAME,
@@ -536,6 +945,17 @@ function DefaultLayout({
         </Select>
         <SaveWords save={save} />
       </div>
+      <PublishOfferDialog
+        readiness={offer?.readiness ?? null}
+        subject="Layout"
+        onAnswer={answer}
+        onlyLabel="Make default anyway"
+        withLabel={count =>
+          count === 1
+            ? "Publish it, then make default"
+            : `Publish ${String(count)}, then make default`
+        }
+      />
       {read.mayChooseDefaultLayout ? null : (
         <p className="text-xs text-muted-foreground">
           {current === undefined ? "" : `${current.title}. `}You can see the

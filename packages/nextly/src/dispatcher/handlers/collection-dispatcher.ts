@@ -38,6 +38,10 @@ import type { UserContext } from "../../domains/collections/services/collection-
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
@@ -101,6 +105,7 @@ import {
   readClientWhere,
   toNumber,
 } from "../helpers/validation";
+import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -193,18 +198,22 @@ function allLocalesLifecycle(
   successMessage: string
 ): MethodHandler<CollectionsHandlerType> {
   return {
-    execute: async (svc, p) => {
+    execute: async (svc, p, body, request) => {
       // `requireParam` rather than an inline throw: a missing route parameter is
       // caller-fixable, and a bare `Error` here would surface it as a 500.
       const collectionName = requireParam(p, "collectionName");
       const entryId = requireParam(p, "entryId");
       const result = await svc[method]({
+        // The request this transition's hooks are told about.
+        request,
         collectionName,
         entryId,
         actor: readAuthenticatedActor(),
         ...callerUser(),
         routeAuthorized: false,
         authenticatedScope: readAuthenticatedScope(),
+        // The version the move was made from, judged on every language.
+        data: versionInputOf(body),
       });
       const entry = unwrapServiceResult(result, { collectionName, entryId });
       return respondMutation(result.message ?? successMessage, entry);
@@ -309,7 +318,7 @@ export const COLLECTION_VERSION_METHODS: Record<
     },
   },
   restoreEntryVersion: {
-    execute: async (_svc, p, _body, request) => {
+    execute: async (_svc, p, body, request) => {
       const result = await restoreVersionForDocument({
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
@@ -321,6 +330,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         // A restore replays a snapshot through the ordinary update, so its
         // hooks are told about the caller the same way an edit's are.
         request,
+        // The version the restore was made from, judged as its update is.
+        version: versionInputOf(body),
       });
       return respondAction("Version restored.", result);
     },
@@ -337,12 +348,15 @@ export const COLLECTION_VERSION_METHODS: Record<
         // away. An empty value is the same as none: the request named no
         // language, which a localized document resolves to its default.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // The version the change was read at, from the query: a DELETE
+        // carries no body to read it from.
+        version: versionInputOfQuery(p),
       });
       return respondMutation("Working draft discarded.", item);
     },
   },
   takeLiveSharedValues: {
-    execute: async (_svc, p) => {
+    execute: async (_svc, p, body) => {
       const item = await takeLiveSharedValuesForDocument({
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
@@ -351,6 +365,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         // `?locale=` names the language whose pending change takes the live
         // values. An empty value is the same as none: the default language.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // The version the change was read at, judged as a save of it.
+        version: versionInputOf(body),
       });
       return respondMutation("Live values taken.", item);
     },
@@ -615,6 +631,31 @@ const COLLECTIONS_METHODS: Record<
       );
     },
   },
+  // What deleting a collection takes with it besides its own entries, by the
+  // plugin that holds it (`ctx.hooks.onCollectionDelete`), for the delete
+  // dialog to list before the confirm. `?together=a,b` names the collections
+  // a bulk delete removes with this one, as on the delete. Reads only.
+  previewCollectionDelete: {
+    execute: async (_svc, p) => {
+      const collectionName = requireParam(p, "collectionName");
+      const slugs = [
+        ...new Set([collectionName, ...parseTogetherParam(p.together)]),
+      ];
+      const [{ collectionDeleteImpact }, { getActiveHookRegistry }] =
+        await Promise.all([
+          import(
+            "../../domains/collections/services/collection-delete-plugins"
+          ),
+          import("../../hooks/hook-registry"),
+        ]);
+      const impact = await collectionDeleteImpact(
+        getActiveHookRegistry(),
+        slugs
+      );
+      // Read for this caller's dialog only; no shared cache keeps it.
+      return withSessionCacheHeaders(respondData({ impact }));
+    },
+  },
   // Preview schema changes (dry-run diff with row-count impact)
   previewSchemaChanges: {
     execute: async (_svc, p, body) => {
@@ -846,6 +887,12 @@ const COLLECTIONS_METHODS: Record<
           // collection into a DISABLE transition, restoring the companion's
           // columns onto the main table and archiving it.
           const isLocalized = readRequestLocalized(body) ?? wasLocalized;
+          // Where its translatable values are stored once this apply runs, which the runtime
+          // tables registered below describe: per language when it is translated, or always under
+          // per-language storage. `isLocalized` stays the product's answer.
+          const isStoredPerLanguage = storesPerLanguage({
+            localized: isLocalized,
+          });
           // i18n: enabling Internationalization needs the app-level
           // `localization` config — without it the companion reconcile below
           // would move translatable columns into a table the runtime cannot
@@ -979,7 +1026,10 @@ const COLLECTIONS_METHODS: Record<
               tableName,
               fields as FieldDefinition[],
               dialect,
-              { localized: isLocalized, status: collection.status === true }
+              {
+                localized: isStoredPerLanguage,
+                status: collection.status === true,
+              }
             );
             getCollectionsHandlerFromDI()?.refreshCollectionSchema(
               tableName,
@@ -989,14 +1039,19 @@ const COLLECTIONS_METHODS: Record<
               tableName,
               freshTable
             );
-            if (isLocalized) {
+            if (isStoredPerLanguage) {
               const companion = buildCompanionRuntimeTable({
                 slug: p.collectionName,
                 tableName,
                 fields: fields as FieldDefinition[],
                 dialect,
                 localized: true,
-                status: collection.status === true,
+                // As saved, not as the record read before the save: a save that turns
+                // translation on gives a Draft/Published collection its per-language `_status`.
+                status: publishesPerLanguage({
+                  localized: isLocalized,
+                  status: (collection as { status?: unknown }).status,
+                }),
               });
               if (companion) {
                 getCollectionsHandlerFromDI()?.refreshCollectionSchema(
@@ -1403,7 +1458,7 @@ const COLLECTIONS_METHODS: Record<
   bulkUpdateEntries: {
     execute: async (svc, p, body, request) => {
       const b = body as
-        | { ids?: string[]; data?: Record<string, unknown> }
+        | { ids?: string[]; data?: Record<string, unknown>; revs?: unknown }
         | undefined;
       if (!p.collectionName) {
         throw new Error("collectionName parameter is required");
@@ -1420,6 +1475,8 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         ids: b.ids,
         data: b.data,
+        // Each id's own version, where given: judged per document.
+        revs: b.revs,
         actor: readAuthenticatedActor(),
         ...callerUser(),
         // Where the route admitted the caller on update, attest it so the
@@ -1452,6 +1509,7 @@ const COLLECTIONS_METHODS: Record<
             where?: Record<string, unknown>;
             data?: Record<string, unknown>;
             limit?: number;
+            revs?: unknown;
           }
         | undefined;
       if (!p.collectionName) {
@@ -1478,6 +1536,8 @@ const COLLECTIONS_METHODS: Record<
           // above, so the check always returns it.
           where: readClientWhere(b.where) ?? {},
           data: b.data,
+          // Passed so it is refused, not ignored: a query names no ids.
+          revs: b.revs,
           actor: readAuthenticatedActor(),
           ...callerUser(),
           // Where the route admitted the caller on update, attest it so the

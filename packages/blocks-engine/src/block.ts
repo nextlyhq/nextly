@@ -12,6 +12,7 @@
 import type { ContentModel } from "./content-model";
 import type { BlockNode, BlockPart, NodeStyles, TokenRef } from "./document";
 import type { MigrationMap } from "./migration";
+import type { BoundValue } from "./resolve-bindings";
 
 /** Why a block needs JavaScript in the browser. */
 export interface BlockIsland {
@@ -94,7 +95,35 @@ export interface PropSchema {
    * list (`image/*`), so an image is never given a PDF to draw.
    */
   accept?: string;
+  /**
+   * For a `media` or `upload` prop: the block's `url` prop that holds an image
+   * by its address rather than its library id, as core/image's `mediaId` and
+   * `src` are. Declared, never guessed from the props beside it: unbinding an
+   * image a visitor saw by its address keeps that address here, since the
+   * media prop can hold only a library id. Registration refuses one that
+   * names no `url` prop of the block.
+   */
+  addressProp?: string;
   [option: string]: unknown;
+}
+
+/**
+ * The prop that holds an image by its address for the media prop `prop`, as
+ * the block's definition declares it ({@link PropSchema.addressProp}), or
+ * `undefined` when it declares none.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function addressPropOf(
+  props: Readonly<Partial<Record<string, PropSchema>>> | undefined,
+  prop: string
+): string | undefined {
+  const schema = props?.[prop];
+  // Read on a media prop alone, as registration judges it: elsewhere the key
+  // is a block's own extension option.
+  if (schema?.type !== "media" && schema?.type !== "upload") return undefined;
+  const declared = schema.addressProp;
+  return typeof declared === "string" && declared !== "" ? declared : undefined;
 }
 
 /**
@@ -250,6 +279,8 @@ export const BLOCK_ICONS = [
   "star",
   // A component the site made, so the Add panel can say what it is at a glance.
   "component",
+  // An entry's own content drawn inside its template.
+  "entry",
 ] as const;
 
 /**
@@ -341,6 +372,22 @@ export interface BlockVariation<P extends object = Record<string, unknown>> {
   name: string;
   label?: string;
   props?: Partial<P>;
+  /**
+   * A LOOK rather than an insert preset: the styles of one named variant of the block
+   * (Outline, Rounded), which an author picks for a block already on the page. The site
+   * receives it as a shared style bound to this block type (`blockLooks`), which it may edit;
+   * a variation with styles is not offered as a separate insert entry.
+   *
+   * @experimental
+   */
+  styles?: NodeStyles;
+  /**
+   * Names the block's own look, its `baseStyles`, as one of its looks (a button's Primary).
+   * Carries no styles of its own: wearing it is wearing no look.
+   *
+   * @experimental
+   */
+  isDefault?: true;
 }
 
 /**
@@ -403,6 +450,23 @@ export interface BlockRenderArgs<P, C = unknown> {
    * the convenience of an editor-only component.
    */
   markProp?: (name: string) => Record<string, string>;
+  /**
+   * What each bound prop's value is, by prop name, for a block that wants
+   * more than the value in `props`.
+   *
+   * A bound date reaches a text prop as text, formatted for the reader; its
+   * entry here is `{ kind: "date", datetime }`, the machine-readable value a
+   * block can put in `<time datetime>`. A prop filled from its binding's
+   * fallback says so. A prop showing its own value has no entry, and a block
+   * with no bound prop receives no `bound` at all.
+   *
+   * An argument rather than a field of `ctx`, so it comes from the renderer
+   * that filled the props and cannot be supplied by a block rebuilding the
+   * context its children see.
+   *
+   * @experimental Settles with the editor's binding controls.
+   */
+  bound?: Readonly<Record<string, BoundValue>>;
   /**
    * Render one of this block's slots, optionally under a different context.
    *
@@ -646,8 +710,11 @@ export interface BlockDefinition<
    * would put a network call between a crawler and the page title. An image is
    * returned as a media id or a URL and resolved by the caller, which is what
    * keeps it that way.
+   *
+   * `read.bound` names what each bound prop holds, as the block's render is
+   * given it, so the metadata offers the picture the page draws.
    */
-  seo?(props: P): BlockSeoContribution | undefined;
+  seo?(props: P, read?: BlockSeoRead): BlockSeoContribution | undefined;
   /**
    * Slots this block may decline to render for some props.
    *
@@ -671,6 +738,16 @@ export interface BlockDefinition<
   conditionalSlots?: readonly string[];
   /** Editor-only metadata; never serialized. */
   editor?: BlockEditorMeta<P>;
+}
+
+/**
+ * What a block's `seo` is told about the props it is asked with.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface BlockSeoRead {
+  /** What each bound prop holds, by prop name, as its render is given it. */
+  readonly bound?: Readonly<Record<string, BoundValue>>;
 }
 
 /**
@@ -812,5 +889,5 @@ export interface AnyBlockDefinition
    * nothing to fall back on, and EVERY typed definition was rejected by
    * `registerBlocks` whether or not it contributed any SEO at all.
    */
-  seo?(props: object): BlockSeoContribution | undefined;
+  seo?(props: object, read?: BlockSeoRead): BlockSeoContribution | undefined;
 }

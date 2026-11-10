@@ -57,11 +57,8 @@ vi.mock(
 vi.mock("@admin/components/features/releases/ScheduledReleaseBanner", () => ({
   ScheduledReleaseBanner: () => <p>scheduled release banner</p>,
 }));
-vi.mock("@admin/components/features/releases/AddToReleaseAction", () => ({
-  useAddToReleaseAction: () => ({ dialog: null, contributed: null }),
-}));
-vi.mock("@admin/components/features/releases/SchedulePublishAction", () => ({
-  useSchedulePublishAction: () => ({ dialog: null, contributed: null }),
+vi.mock("@admin/components/features/releases/ScheduleDocumentAction", () => ({
+  useScheduleDocumentAction: () => ({ dialog: null, contributed: null }),
 }));
 
 let collectionSchema: Record<string, unknown> = {};
@@ -512,8 +509,9 @@ describe("a routed document view", () => {
     registerDocumentViews([
       { fieldType: "blocks", path: "builder", component: VIEW },
     ]);
-    // Only inside a repeater's rows, which a view does not reach: a row is
-    // addressed by its position, which names another row after a reorder.
+    // Only inside the rows of a repeater that declares its own `id`, which a
+    // view does not reach: those rows get no saved id to address one by, and
+    // a position names another row after a reorder.
     collectionSchema = {
       ...collectionSchema,
       fields: [
@@ -521,7 +519,10 @@ describe("a routed document view", () => {
         {
           name: "extra",
           type: "repeater",
-          fields: [{ name: "body", type: "blocks" }],
+          fields: [
+            { name: "id", type: "text" },
+            { name: "body", type: "blocks" },
+          ],
         },
       ],
     };

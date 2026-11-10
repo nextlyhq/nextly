@@ -195,6 +195,11 @@ const clientEntries = [
   // the server, so neither keeps a copy; it imports nothing. Internal: not a
   // public API.
   "src/collections/fields/field-label.ts",
+  // The one deprecation notice, said once per process, as its own entry: the
+  // admin's browser code and the server's both tell a deprecated surface's
+  // user through it, so neither keeps its own record of what it already
+  // said; it imports nothing.
+  "src/shared/lib/deprecation-notice.ts",
   // Which kind of file a MIME type is, as its own entry: the admin badges an
   // item by it and the library query narrows to a kind by it, so neither
   // keeps a copy; it imports nothing. Internal: not a public API.

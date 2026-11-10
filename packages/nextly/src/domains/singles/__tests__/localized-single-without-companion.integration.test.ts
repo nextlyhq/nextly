@@ -25,6 +25,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { forgetCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 
 import type { SingleEntryService } from "../services/single-entry-service";
 
@@ -79,7 +80,7 @@ describe("localized single without a companion table (integration)", () => {
     current = await boot(false);
     await current.nextly.updateSingle({
       slug: "swin_settings",
-      data: { headline: "Original" },
+      data: { headline: "Original", _overwrite: true },
     } as Parameters<typeof current.nextly.updateSingle>[0]);
 
     // Re-open localized, then remove the companion to recreate the window.
@@ -91,7 +92,10 @@ describe("localized single without a companion table (integration)", () => {
 
     await current.nextly.updateSingle({
       slug: "swin_settings",
-      data: { headline: "Edited while the companion was missing" },
+      data: {
+        headline: "Edited while the companion was missing",
+        _overwrite: true,
+      },
       locale: "en",
     } as Parameters<typeof current.nextly.updateSingle>[0]);
 
@@ -99,6 +103,61 @@ describe("localized single without a companion table (integration)", () => {
       "SELECT headline FROM single_swin_settings"
     );
     expect(rows[0]?.headline).toBe("Edited while the companion was missing");
+  });
+
+  it("saves back the version a read gave while translations are not ready, and still refuses a stale one", async () => {
+    current = await boot(false);
+    await current.nextly.updateSingle({
+      slug: "swin_settings",
+      data: { headline: "Original", _overwrite: true },
+    } as Parameters<typeof current.nextly.updateSingle>[0]);
+    await current.destroy();
+    current = await boot(true);
+    await current.adapter.executeQuery(
+      "DROP TABLE IF EXISTS single_swin_settings_locales"
+    );
+    forgetCompanionReadiness(current.adapter, "single_swin_settings_locales");
+
+    // With no translation table, a read's version names no language.
+    const read = (await current.nextly.findSingle({
+      slug: "swin_settings",
+      locale: "en",
+    } as never)) as { _rev: string };
+    expect(read._rev).toMatch(/^\d+$/);
+
+    const saved = await current
+      .getService<SingleEntryService>("singleEntryService")
+      .update("swin_settings", { headline: "Edited", _rev: read._rev }, {
+        overrideAccess: true,
+        locale: "en",
+      } as never);
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    const rows = await current.adapter.executeQuery<{ headline: string }>(
+      "SELECT headline FROM single_swin_settings"
+    );
+    expect(rows[0]?.headline).toBe("Edited");
+
+    // A Spanish save with that version has nowhere to go: refused as a
+    // version naming no Spanish, before any hook runs.
+    const spanish = await current
+      .getService<SingleEntryService>("singleEntryService")
+      .update("swin_settings", { headline: "Editado", _rev: read._rev }, {
+        overrideAccess: true,
+        locale: "es",
+      } as never);
+    expect(spanish).toMatchObject({ success: false, statusCode: 400 });
+
+    const stale = await current
+      .getService<SingleEntryService>("singleEntryService")
+      .update("swin_settings", { headline: "Again", _rev: read._rev }, {
+        overrideAccess: true,
+        locale: "en",
+      } as never);
+    expect(stale).toMatchObject({
+      success: false,
+      statusCode: 409,
+      code: "STALE_VERSION",
+    });
   });
 
   it("refuses a default-language write when the main table never had the column", async () => {
@@ -114,7 +173,10 @@ describe("localized single without a companion table (integration)", () => {
     await expect(
       current.nextly.updateSingle({
         slug: "swin_settings",
-        data: { headline: "Edited while the companion was missing" },
+        data: {
+          headline: "Edited while the companion was missing",
+          _overwrite: true,
+        },
         locale: "en",
       } as Parameters<typeof current.nextly.updateSingle>[0])
     ).rejects.toThrow(/Translations are not ready/);
@@ -155,7 +217,10 @@ describe.each(getConfiguredTestDialects())(
         .getService<SingleEntryService>("singleEntryService")
         .update(
           "swin_settings",
-          { headline: "Edited while the companion was missing" },
+          {
+            headline: "Edited while the companion was missing",
+            _overwrite: true,
+          },
           { locale: "en", overrideAccess: true }
         );
 

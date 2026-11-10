@@ -51,6 +51,7 @@ import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
+import { libraryDefinition } from "./classic-spacing";
 import {
   CONTAINER_CHILD_GAP,
   CONTAINER_SUPPORTS,
@@ -117,53 +118,56 @@ export const CARD_BASE_STYLES = {
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
-export const card: BlockDefinition<ContainerProps, PageContext> = defineBlock({
-  name: CARD_BLOCK,
-  version: 1,
-  // What an author reads, in the Add panel and the block card: one plain line.
-  // What the block does, for whoever maintains it: A rounded container that
-  // clips its contents, so an image sitting at its top edge follows the corner
-  // instead of overhanging it.
-  description: "A rounded panel for an image and some text.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Card",
-    icon: "card",
-    category: LAYOUT,
-    keywords: ["panel", "tile", "surface"],
-  },
-  props: {
-    // `article` is offered rather than defaulted. It is the right element for a
-    // card that is independently distributable — a post, a product — and it is
-    // announced as a landmark, which is noise on a card that merely groups a
-    // heading and a sentence. The author knows which one theirs is.
-    as: htmlTagProp(["div", "article", "section", "aside"]),
-    contained: { label: "Constrain content width", type: "checkbox" },
-    // A whole-card link, as on `core/box`.
-    link: { label: "Whole card links to", role: "content", type: "url" },
-  },
-  defaultProps: { as: "div", contained: false },
-  example: { props: { as: "div" } },
-  slots: {
-    children: {
-      // No allow-list: a card holds whatever a box holds. Restricting it would
-      // be the `core/columns` arrangement, and a row restricts its slot because
-      // a column is meaningless elsewhere — nothing about a card's contents is.
-      //
-      // And no `defaultBlock`, which follows from the same fact. A row declares
-      // one because `core/column` names `core/columns` as its only parent, so
-      // an empty row is a container whose only legal child exists nowhere else.
-      // A card's slot admits every block, so no starting child is more correct
-      // than none, and guessing one would put a block on the page the author
-      // has to delete.
-    },
-  },
-  baseStyles: CARD_BASE_STYLES,
-  childGap: CONTAINER_CHILD_GAP,
-  supports: CONTAINER_SUPPORTS,
-  // A linked card is an `<a>`, so what may sit inside it follows its link.
-  contentModel: linkableContentModel,
-  render: renderLinkableContainer,
-});
+export const card: BlockDefinition<ContainerProps, PageContext> =
+  libraryDefinition(
+    defineBlock({
+      name: CARD_BLOCK,
+      version: 1,
+      // What an author reads, in the Add panel and the block card: one plain line.
+      // What the block does, for whoever maintains it: A rounded container that
+      // clips its contents, so an image sitting at its top edge follows the corner
+      // instead of overhanging it.
+      description: "A rounded panel for an image and some text.",
+      // Palette metadata. The category is imported rather than spelled here so
+      // nineteen blocks cannot drift into nineteen headings; keywords are what
+      // let a search for a word the description never uses still find this.
+      editor: {
+        label: "Card",
+        icon: "card",
+        category: LAYOUT,
+        keywords: ["panel", "tile", "surface"],
+      },
+      props: {
+        // `article` is offered rather than defaulted. It is the right element for a
+        // card that is independently distributable — a post, a product — and it is
+        // announced as a landmark, which is noise on a card that merely groups a
+        // heading and a sentence. The author knows which one theirs is.
+        as: htmlTagProp(["div", "article", "section", "aside"]),
+        contained: { label: "Constrain content width", type: "checkbox" },
+        // A whole-card link, as on `core/box`.
+        link: { label: "Whole card links to", role: "content", type: "url" },
+      },
+      defaultProps: { as: "div", contained: false },
+      example: { props: { as: "div" } },
+      slots: {
+        children: {
+          // No allow-list: a card holds whatever a box holds. Restricting it would
+          // be the `core/columns` arrangement, and a row restricts its slot because
+          // a column is meaningless elsewhere — nothing about a card's contents is.
+          //
+          // And no `defaultBlock`, which follows from the same fact. A row declares
+          // one because `core/column` names `core/columns` as its only parent, so
+          // an empty row is a container whose only legal child exists nowhere else.
+          // A card's slot admits every block, so no starting child is more correct
+          // than none, and guessing one would put a block on the page the author
+          // has to delete.
+        },
+      },
+      baseStyles: CARD_BASE_STYLES,
+      childGap: CONTAINER_CHILD_GAP,
+      supports: CONTAINER_SUPPORTS,
+      // A linked card is an `<a>`, so what may sit inside it follows its link.
+      contentModel: linkableContentModel,
+      render: renderLinkableContainer,
+    })
+  );

@@ -99,6 +99,12 @@ export interface DocumentHistoryValue {
   /** Present only while the history panel is mounted to provide it. */
   restore: RestoreAffordance | null;
   setRestore: (restore: RestoreAffordance | null) => void;
+  /**
+   * The document's version, as the editor holds it in a language, for a
+   * write the history makes in that language (a restore): absent where no
+   * editor publishes it.
+   */
+  versionFor?: (locale: string | null) => Promise<string | undefined>;
 }
 
 /**

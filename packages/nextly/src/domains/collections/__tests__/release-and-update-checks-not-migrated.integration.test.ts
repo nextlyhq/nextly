@@ -71,7 +71,7 @@ async function boot(dialect: TestDialect): Promise<string> {
   };
   await api.updateSingle({
     slug: BANNER,
-    data: { title: "First", subtitle: "One" },
+    data: { title: "First", subtitle: "One", _overwrite: true },
   });
   const created = await api.create({
     collection: POSTS,

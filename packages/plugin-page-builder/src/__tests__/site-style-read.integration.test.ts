@@ -87,7 +87,7 @@ describe.each(getConfiguredTestDialects())(
       });
       await current.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { tokens: TOKENS, classes: CLASSES },
+        data: { tokens: TOKENS, classes: CLASSES, _overwrite: true },
         overrideAccess: true,
       });
       return current;
@@ -185,20 +185,30 @@ describe.each(getConfiguredTestDialects())(
       expect(answer.body.classes).toEqual(CLASSES);
     });
 
-    it("answers the four stored sections and nothing else", async () => {
+    it("answers the four stored sections, the spacing model and the version, and nothing else", async () => {
       const t = await boot();
       const author = await holding(t, "read-pages", "update-pages");
       const answer = await read(author);
       expect(answer.status).toBe(200);
       expect(Object.keys(answer.body).sort()).toEqual([
+        "_rev",
         "breakpoints",
         "classes",
         "fonts",
+        "spacingMode",
         "tokens",
       ]);
       // A section the Single does not hold reads as empty, not as missing.
       expect(answer.body.fonts).toBeNull();
       expect(answer.body.breakpoints).toBeNull();
+      // The Single's own version, as its read gives it: what a save made
+      // from this answer sends back.
+      const single = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as { _rev?: unknown };
+      expect(typeof single._rev).toBe("string");
+      expect(answer.body._rev).toBe(single._rev);
     });
 
     it("lets an author who may update components read it", async () => {

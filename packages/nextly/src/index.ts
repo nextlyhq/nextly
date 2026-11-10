@@ -103,6 +103,7 @@ export {
 // no other way to tell the caller without dressing it as a failure.
 export {
   recordAdvisoryNotice,
+  type AdvisoryNotice,
   type HookWarning,
 } from "./hooks/side-effect-warnings";
 
@@ -111,9 +112,13 @@ export {
 // ============================================================
 
 // Main initialization API - recommended for most applications
+// `registerNextlyStart` is how an app's `cached-read.ts` says how to start
+// Nextly for a read that finds it not started (a root layout's read on
+// `/_not-found` during `next build`), without starting it eagerly.
 export {
   getNextly,
   getCachedNextly,
+  registerNextlyStart,
   shutdownNextly,
   createRegister,
   type Nextly,
@@ -255,6 +260,7 @@ export type {
   UploadMediaArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
+  FindMediaByIDsArgs,
   UpdateMediaArgs,
   DeleteMediaArgs,
   BulkDeleteMediaArgs,
@@ -514,8 +520,16 @@ export {
   type PluginAuditApi,
   type PluginAuditDeclaration,
   // The helpers a plugin receives on `ctx.security`: passwords, opaque
-  // secrets and one-purpose secrets.
+  // secrets, one-purpose secrets and verifying the webhooks it receives.
   type PluginSecurityApi,
+  standardWebhooks,
+  type InboundWebhookDelivery,
+  type InboundWebhookReading,
+  type InboundWebhookScheme,
+  type PluginReceivedWebhooks,
+  type VerifyWebhookOptions,
+  type WebhookRefusal,
+  type WebhookVerification,
   PasswordTooLongError,
   type PasswordCheck,
   type PasswordHelper,
@@ -572,9 +586,15 @@ export {
   type PluginFieldCodegen,
   type PluginFieldCodegenImport,
   type FieldSurface,
+  type PluginSchedule,
   type ScheduledTask,
+  type PluginWebhookEventType,
+  type PluginTranslations,
   type PermissionSlug,
   type PluginHookRegistry,
+  // `ctx.hooks.onInTransaction`'s handler and what it is handed.
+  type InTransactionContext,
+  type InTransactionHandler,
   type PluginFilterRegistry,
   type PluginActionRegistry,
   type HookPointContext,
@@ -615,10 +635,32 @@ export {
   type PluginAdminContributions,
   type PluginAdminPage,
   type PluginCollectionView,
+  type OverridableDocumentAction,
+  type PluginDocumentActionOverride,
+  type PluginDocumentActionOverrides,
   type PluginDocumentView,
   type PluginFieldTypeDocumentView,
+  type PluginPanelSection,
+  type PluginAdminPlaceDeclaration,
+  type AdminBlockContribution,
+  type AdminBulkActionContribution,
+  type AdminColumnContribution,
+  type AdminContribution,
+  type AdminContributionAction,
+  type AdminRowActionContribution,
+  type AdminSidebarSectionContribution,
+  type AdminTabContribution,
+  type AdminContributionKind,
+  type RowPredicate,
+  type RowPredicateValue,
+  type PluginListFilterDeclaration,
+  type PluginListFilterOption,
   type PluginMenuItem,
   type PluginNavSection,
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
 } from "./plugins";
 
 // The plugin limiter: `contributes.limits` rules and `ctx.limits`.
@@ -845,6 +887,34 @@ export type {
   ReadableContentCaller,
   ReadableContentEntity,
 } from "./auth/readable-content";
+// A plugin's read of a document's stored field values with no read hook, and
+// its write of a field only if the stored value is still the one it read,
+// judged under the write's own row lock. Here for `@nextlyhq/plugin-sdk` to
+// publish; it is the surface a plugin is promised. The hash is the one both
+// sides of the comparison use, so a plugin never computes its own.
+export { readStoredFields, updateIfUnchanged } from "./plugins/stored-fields";
+export type {
+  PluginConditionalUpdate,
+  PluginConditionalWriteIdentity,
+  PluginStoredDocument,
+  PluginStoredFields,
+  PluginStoredFieldsRequest,
+  PluginStoredIdentity,
+  PluginStoredLifecycle,
+  PluginSystemCheckedWrite,
+  PluginSystemIdentity,
+  PluginWriteExpectation,
+} from "./plugins/stored-fields";
+export { storedValueHash } from "./domains/collections/services/stored-field-read";
+// A plugin's question "may this person delete this entry", asked of the
+// delete's own gate (its grant and a rule's row filter for the entry) with no
+// hook run and nothing written. Here for `@nextlyhq/plugin-sdk` to publish.
+export { mayDeleteEntry } from "./plugins/entry-delete-access";
+export type { PluginDeleteCheck } from "./plugins/entry-delete-access";
+// The same question for a write: the update gate, the publish gate where it
+// puts the document live, and each named field's update rule.
+export { mayWriteEntry } from "./plugins/entry-write-access";
+export type { PluginWriteCheck } from "./plugins/entry-write-access";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).
@@ -1033,6 +1103,9 @@ export type {
   QueueJobArgs,
   QueueJobResult,
 } from "./direct-api/types/jobs";
+// A plugin's `ctx.services.jobs`: the queue, and running one of its own
+// sweeps now. Named so a plugin can annotate what it hands that service to.
+export type { PluginJobsNamespace } from "./plugins/jobs/plugin-jobs";
 
 // The release materialiser, as a job definition. Exported so an application can
 // register it with the runner today: the periodic trigger that would register it

@@ -135,7 +135,7 @@ describe.each(getConfiguredTestDialects())(
       const service = t.getService("collectionService") as unknown as Service;
       const result = await service.updateMany(
         COMPONENTS_SLUG,
-        [{ id: hostId, data: { title: "band, edited" } }],
+        [{ id: hostId, data: { title: "band, edited", _overwrite: true } }],
         { overrideAccess: true }
       );
       expect(result.successful).toBe(1);
@@ -150,7 +150,12 @@ describe.each(getConfiguredTestDialects())(
       });
       const result = await service.updateMany(
         COMPONENTS_SLUG,
-        [{ id: hostId, data: { title: "band, edited again" } }],
+        [
+          {
+            id: hostId,
+            data: { title: "band, edited again", _overwrite: true },
+          },
+        ],
         { overrideAccess: true }
       );
       expect(result.successful).toBe(1);
@@ -163,7 +168,7 @@ describe.each(getConfiguredTestDialects())(
       seen.length = 0;
       await service.updateMany(
         COMPONENTS_SLUG,
-        [{ id: hostId, data: { status: "published" } }],
+        [{ id: hostId, data: { status: "published", _overwrite: true } }],
         { overrideAccess: true }
       );
       expect(leavesDocumentPublished(seen[0] as never, collection)).toBe(true);
@@ -175,7 +180,11 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id: hostId,
-        data: { title: "band, published", status: "published" },
+        data: {
+          title: "band, published",
+          status: "published",
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       expect(notices()).toHaveLength(1);

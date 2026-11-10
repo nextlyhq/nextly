@@ -137,14 +137,13 @@ export function useInlineEditing(
     () => passages?.isOpen() ?? false,
     () => false
   );
-  const plain = useInlineText(editor);
   /*
-   * Passages only. The plain surface commits from its own blur handler and
-   * answers the pre-union way, so an edit it ends is not observable from here
-   * at all — a line of text lost to a capped write goes unreported, which is a
-   * defect of that surface rather than something this can translate. Stated so
-   * a host does not read silence as "nothing happened".
+   * The plain surface reports only a key's refused way out, the case where its
+   * line stays open: its blur commits and answers the pre-union way, so a line
+   * lost to a capped write on blur still goes unreported. Stated so a host
+   * does not read silence there as "nothing happened".
    */
+  const plain = useInlineText(editor, onFinished);
   const rich = useInlineRichText(editor, loadRichText, onFinished);
 
   /** The kind the block declared for this value, or `null` if it declared none. */
@@ -173,7 +172,8 @@ export function useInlineEditing(
       nodeId: string,
       prop: string,
       element?: HTMLElement,
-      point?: CaretPoint
+      point?: CaretPoint,
+      exposure?: InlineRichTextEditing["exposure"]
     ) => {
       plain.commit();
       const finished = rich.commit();
@@ -185,7 +185,7 @@ export function useInlineEditing(
        */
       if (finished.status === "refused") return false;
       return kind === "rich"
-        ? rich.begin(nodeId, prop, element, point)
+        ? rich.begin(nodeId, prop, element, point, exposure)
         : plain.begin(nodeId, prop);
     },
     [plain, rich]
@@ -244,9 +244,10 @@ export function useInlineEditing(
     }) => {
       const found = markedAt(event.target);
       if (found === null) return;
-      // Text inside a component: its exposed text is edited in place through
-      // the placement (the plain surface below finds it), and anything else
-      // is the component's own, which selects the placement and says so.
+      // Text inside a component: its exposed text and passages are edited in
+      // place through the placement (the plain surface below finds the text),
+      // and anything else is the component's own, which selects the
+      // placement and says so.
       // Asked only of an element a component contributed, which the renderer
       // marks with its placement: the page's own text never needs the
       // composition.
@@ -274,6 +275,15 @@ export function useInlineEditing(
         event.clientX === undefined || event.clientY === undefined
           ? undefined
           : { x: event.clientX, y: event.clientY };
+      // A component's exposed passage, edited in place on its placement.
+      if (composed?.kind === "exposed-rich") {
+        const { placementId, exposureId } = composed.target;
+        openOn("rich", found.nodeId, found.prop, found.element, point, {
+          placementId,
+          exposureId,
+        });
+        return;
+      }
       if (kindOf(found.nodeId, found.prop) === "rich") {
         // The element the gesture landed on is passed rather than looked up
         // again: two canvases showing one document carry the same node ids, so

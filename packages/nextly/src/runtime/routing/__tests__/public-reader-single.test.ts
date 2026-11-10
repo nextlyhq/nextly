@@ -169,6 +169,29 @@ describe("toPublicFindSingle", () => {
     expect(message).toContain(where);
   });
 
+  it("asks the read for the id and the fields named, as a list's read does", () => {
+    const single = toPublicFindSingle({
+      slug: "banner",
+      select: ["headline", "body"],
+    });
+    expect(single.select).toEqual({ id: true, headline: true, body: true });
+    // One spelling of a selection for both reads.
+    expect(single.select).toEqual(
+      toPublicFind({ collection: "posts", select: ["headline", "body"] }).select
+    );
+  });
+
+  // The control: with no field named the read is asked for the whole
+  // document, as it always was, so an empty selection cannot narrow it.
+  it.each([
+    ["no selection", {}],
+    ["an empty selection", { select: [] }],
+  ])("asks the read for the whole document given %s", (_, query) => {
+    expect("select" in toPublicFindSingle({ slug: "banner", ...query })).toBe(
+      false
+    );
+  });
+
   it("refuses a query naming no Single", () => {
     expect(refusal(() => toPublicFindSingle({ slug: "" }))).toContain(
       "public-read-single-missing"
@@ -210,6 +233,43 @@ describe("createPublicReader findSingle", () => {
     ).resolves.toEqual({ id: "s1", headline: "Hi" });
   });
 
+  it("asks the read for only the fields named, and answers only those", async () => {
+    // Takes the read, so its arguments can be read back from `mock.calls`.
+    // Answers the whole document, as a read that ignores `select` does.
+    const findSingle = vi.fn(async (_read: unknown) => ({
+      id: "s1",
+      headline: "Hi",
+      body: "Long",
+    }));
+    const { reader } = readerOver(findSingle);
+    await expect(
+      reader.findSingle({ slug: "banner", select: ["headline"] })
+    ).resolves.toEqual({ id: "s1", headline: "Hi" });
+    expect(findSingle).toHaveBeenCalledTimes(1);
+    expect(findSingle.mock.calls[0]?.[0]).toMatchObject({
+      slug: "banner",
+      select: { id: true, headline: true },
+    });
+  });
+
+  it("asks the read for the whole document when no field is named", async () => {
+    // The control for the read above: the same read, no selection.
+    const findSingle = vi.fn(async (_read: unknown) => ({
+      id: "s1",
+      headline: "Hi",
+      body: "Long",
+    }));
+    const { reader } = readerOver(findSingle);
+    await expect(reader.findSingle({ slug: "banner" })).resolves.toEqual({
+      id: "s1",
+      headline: "Hi",
+      body: "Long",
+    });
+    expect(findSingle).toHaveBeenCalledTimes(1);
+    expect(findSingle.mock.calls[0]?.[0]).toMatchObject({ slug: "banner" });
+    expect(findSingle.mock.calls[0]?.[0]).not.toHaveProperty("select");
+  });
+
   it.each([
     ["missing or unpublished", NextlyError.notFound()],
     ["refused to the visitor", NextlyError.forbidden()],
@@ -221,6 +281,34 @@ describe("createPublicReader findSingle", () => {
       })
     );
     await expect(reader.findSingle({ slug: "banner" })).resolves.toBeNull();
+  });
+
+  // A source a route hands over may fail before it returns a promise. That is
+  // the same miss, so it gets the same answer.
+  it.each([
+    ["missing or unpublished", NextlyError.notFound()],
+    ["refused to the visitor", NextlyError.forbidden()],
+    ["refused for want of a sign-in", NextlyError.authRequired()],
+  ])(
+    "answers null for a Single that is %s when the source throws at once",
+    async (_, error) => {
+      const { reader } = readerOver(
+        vi.fn(() => {
+          throw error;
+        })
+      );
+      await expect(reader.findSingle({ slug: "banner" })).resolves.toBeNull();
+    }
+  );
+
+  it("lets any other failure through when the source throws at once", async () => {
+    const failure = NextlyError.internal();
+    const { reader } = readerOver(
+      vi.fn(() => {
+        throw failure;
+      })
+    );
+    await expect(reader.findSingle({ slug: "banner" })).rejects.toBe(failure);
   });
 
   it("answers null when the Single has no document", async () => {

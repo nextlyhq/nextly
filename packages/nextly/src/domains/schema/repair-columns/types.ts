@@ -13,6 +13,7 @@ import type { ColumnOrigin } from "../services/field-column-descriptor";
 import type { ConversionJudgement } from "../value-conversion/types";
 
 import type { ColumnAspects } from "./column-comparison";
+import type { ColumnConversionPlan } from "./conversion/types";
 
 /** The kinds of entity whose fields Nextly builds a table from. */
 export type RepairEntityKind =
@@ -149,6 +150,18 @@ export interface DiffersFinding extends FindingBase {
    * that give it. Null for a column a plugin owns, which is reported and never changed.
    */
   judgement: ConversionJudgement | null;
+  /**
+   * How the column would convert, read from the live table: its statements, what they cost and
+   * what the new type cannot keep, which makes the difference blocked. Null where the judgement is
+   * null or found no conversion for the pair of types.
+   */
+  conversion: ColumnConversionPlan | null;
+  /**
+   * How many rows the conversion rewrites on this database: every row of the table where the
+   * database rewrites or copies it to convert the column, none where it changes the column in
+   * place. Null where there is no conversion to run.
+   */
+  rowsRewritten: number | null;
 }
 
 /**
@@ -164,7 +177,19 @@ export interface PendingMigrationFinding extends FindingBase {
   live: ColumnState | null;
 }
 
+/**
+ * A column the applied definition names on a table whose definition the database would not let
+ * the run read, because another connection held the whole database (SQLite in exclusive locking
+ * mode). Whether it differs could not be read, so it carries what the configuration gives: where
+ * it is and the column its field expects.
+ */
+export interface DefinitionUnreadableFinding extends FindingBase {
+  kind: "definition-unreadable";
+  expected: ColumnState;
+}
+
 export type ColumnFinding =
   | NotMigratedFinding
   | DiffersFinding
-  | PendingMigrationFinding;
+  | PendingMigrationFinding
+  | DefinitionUnreadableFinding;

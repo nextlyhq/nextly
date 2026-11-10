@@ -6,6 +6,7 @@
 import type { Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 /** Register the `nextly plugins` command group (D48). */
@@ -21,23 +22,31 @@ export function registerPluginsCommand(program: Command): void {
       lazyAction(async () => (await import("./plugins")).pluginsListAction)
     );
 
-  plugins
-    .command("install [name]")
-    .description(
-      "Apply a plugin's migrations and run its onInstall hook, or every configured plugin's with --all"
-    )
+  // `--dry-run` carries the one meaning and help line it has everywhere.
+  withDryRun(
+    plugins
+      .command("install [name]")
+      .description(
+        "Apply a plugin's migrations and run its onInstall hook, or every configured plugin's with --all"
+      )
+  )
     .option(
       "--all",
       "Install every configured plugin, dependencies first",
       false
     )
+    // A pending module that deletes data takes the data-loss consent, as
+    // `nextly migrate` asks for the same module.
+    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
     .action(
       lazyAction(async () => (await import("./plugins")).pluginsInstallAction)
     );
 
-  plugins
-    .command("uninstall <name>")
-    .description("Undo a plugin's schema and run its onUninstall hook")
+  withDryRun(
+    plugins
+      .command("uninstall <name>")
+      .description("Undo a plugin's schema and run its onUninstall hook")
+  )
     .option("--keep-data", "Leave the plugin's tables in place", false)
     // A full uninstall drops the plugin's tables, which takes the data-loss
     // consent; `--keep-data` drops nothing and needs none.

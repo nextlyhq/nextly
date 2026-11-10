@@ -18,7 +18,9 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { Fragment, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+
+import { afterOverrunLines } from "./__tests__/overrun-quiet";
 
 import { coreBlocks } from "./blocks";
 import { createBlockResolver } from "./resolver";
@@ -47,6 +49,17 @@ vi.mock("nextly/runtime", async importActual => {
       }
     ),
     releaseBoundedRevalidate: vi.fn(async () => 42),
+    // The public's fields of every source: a condition on a field visitors
+    // may not read fails closed, so the entry's title must be one.
+    bindingFieldShapes: vi.fn(async () => [{ name: "title", type: "text" }]),
+    // No Nextly instance is registered here to say which fields are hidden.
+    createPublicReader: (
+      ...[source, binding]: Parameters<typeof actual.createPublicReader>
+    ) =>
+      actual.createPublicReader(source, {
+        ...binding,
+        declarations: { hiddenFields: () => [] },
+      }),
     // The real factory, observed: what the helper asks the route to tag EVERY
     // page with is the static half of a page's tags.
     createContentRoute: vi.fn((config: unknown) => {
@@ -634,6 +647,56 @@ describe("a page drawn inside its Layout", () => {
     expect(meta.title).toBe("Entry title");
   });
 
+  it("spends a tight budget in metadata as the render does, when the page's conditions read the entry", async () => {
+    // A heading shown by a condition on the entry: no binding, but the entry
+    // read it needs comes after the Layout's, in the render and in metadata.
+    const content = doc([
+      {
+        ...heading("c", "Conditioned title", "h1"),
+        visibility: {
+          conditions: [
+            [{ field: "title", op: "equals", value: "Entry title" }],
+          ],
+        },
+      },
+    ]);
+    const routeWith = (maxQueries?: number) => {
+      const r = siteReader({ page: { content } });
+      return createBlocksPage({
+        collections: ["pages"],
+        field: "content",
+        nextly: r.nextly,
+        blocks: createBlockResolver(coreBlocks),
+        layouts: provider("main"),
+        metadata: (_entry, _context, derived) => ({
+          title: derived.title ?? "No derived title",
+        }),
+        ...(maxQueries === undefined ? {} : { maxQueries }),
+      });
+    };
+    const outcome = async (maxQueries?: number) => {
+      const element = await throughBoundary(
+        routeWith(maxQueries).ContentPage({ params: { slug: ["about"] } })
+      );
+      const html = renderToStaticMarkup(element as ReactElement);
+      const meta = await routeWith(maxQueries).generateMetadata({
+        params: { slug: ["about"] },
+      });
+      return { drawn: html.includes("Conditioned title"), title: meta.title };
+    };
+    // One claim: the Layout takes it, so the entry can't be read and the
+    // block fails closed; metadata, reading in the same order, agrees.
+    expect(await outcome(1)).toEqual({
+      drawn: false,
+      title: "No derived title",
+    });
+    // CONTROL: with room for both, the block shows and names the page.
+    expect(await outcome()).toEqual({
+      drawn: true,
+      title: "Conditioned title",
+    });
+  });
+
   it("renders exactly as before when the option is off", async () => {
     const off = await render(
       { page: { content: PAGE_BODY, layout: "landing" } },
@@ -663,6 +726,58 @@ describe("a page drawn inside its Layout", () => {
  * release bound is stubbed to "none scheduled" (`false`), so a read carries a
  * number only where something capped it.
  */
+describe("a classic site through the route", () => {
+  const box = (id: string, children: unknown[]) => ({
+    id,
+    type: "core/box",
+    version: 1,
+    props: {},
+    slots: { children },
+  });
+
+  /** A page and its header, each a box of blocks, on a site in `mode`. */
+  async function drawn(mode: "classic" | "gaps") {
+    return render(
+      {
+        page: {
+          content: doc([
+            box("pb", [heading("p1", "One"), heading("p2", "Two")]),
+          ]),
+          layout: "main",
+        },
+        components: {
+          ...COMPONENTS,
+          "main-header": definition([
+            box("hb", [heading("h1", "Head"), heading("h2", "Line")]),
+          ]),
+        },
+      },
+      {
+        extra: {
+          // The site's style the way a host's route reads it: through a
+          // provider, which names the single its read depends on.
+          siteStyles: {
+            read: async () => ({ breakpoints: BREAKPOINTS, spacingMode: mode }),
+            singles: ["site-style"],
+          },
+        },
+      }
+    );
+  }
+
+  it("compiles the page and its Layout's regions under the classic model", async () => {
+    const { html } = await drawn("classic");
+    expect(html).toContain("Head");
+    expect(html).not.toContain("nx-pb-gap");
+    expect(html).toMatch(
+      /:where\(h2\) \{[^}]*margin-block-end: 0\.5em; margin-block-start: 1\.5em/
+    );
+    // The control: the same site on container gaps marks both boxes.
+    const gaps = await drawn("gaps");
+    expect(gaps.html).toContain("nx-pb-gap");
+  });
+});
+
 describe("a page with no usable default", () => {
   async function withRelease<T>(
     release: number | false,
@@ -884,3 +999,6 @@ describe("the layouts option at boot", () => {
     expect(layoutReads(r.calls)).toEqual([]);
   });
 });
+
+// Pages here outrun their caps, and a route logs that after a short quiet.
+afterAll(afterOverrunLines);

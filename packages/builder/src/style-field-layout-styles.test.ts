@@ -175,6 +175,13 @@ describe("the field stacks before a control runs out of room", () => {
 });
 
 describe("a segmented choice's selected state", () => {
+  /** The one rule every chosen segment and toggle is drawn by. */
+  const chosen = () =>
+    ruleBody(
+      CHROME,
+      '.nx-style-inspector__toggle > button[aria-pressed="true"],\n.nx-style-inspector__toggle > button[aria-checked="true"],\n.nx-segment__option[aria-checked="true"],\n.nx-icon-choice__option[aria-checked="true"]'
+    );
+
   it("is told by its words' weight and colour, not by its fill alone", () => {
     // The accent fill alone measured about 1.7:1 against the unselected
     // background in dark, under 3:1: "This tab" and "New tab" could not be
@@ -182,22 +189,18 @@ describe("a segmented choice's selected state", () => {
     const button = ruleBody(CHROME, ".nx-style-inspector__toggle > button");
     expect(button).toContain("font-weight: 500");
     expect(button).toContain("color: var(--nx-muted-foreground)");
-    const chosen = ruleBody(
-      CHROME,
-      '.nx-style-inspector__toggle > button[aria-pressed="true"],\n.nx-style-inspector__toggle > button[aria-checked="true"]'
-    );
-    expect(chosen).toContain("font-weight: 600");
-    expect(chosen).toContain("color: var(--nx-foreground)");
+    expect(chosen()).toContain("font-weight: 600");
   });
 
-  it("is a step lighter in dark, its fill told from the panel's black", () => {
-    expect(
-      ruleBody(
-        CHROME,
-        '.dark .nx-style-inspector__toggle > button[aria-pressed="true"],\n.dark .nx-style-inspector__toggle > button[aria-checked="true"]'
-      )
-    ).toContain(
-      "background: color-mix(in oklch, var(--nx-accent) 82%, var(--nx-foreground))"
+  it("is filled with the panel's text colour, never the brand accent", () => {
+    // The accent is the site's brand colour, set at run time: an orange one
+    // measured 1.83:1 under the white label in dark. The panel's own pair is
+    // the most contrast either mode has, for the label and the fill.
+    expect(chosen()).toContain("background: var(--nx-foreground)");
+    expect(chosen()).toContain("color: var(--nx-background)");
+    expect(chosen()).not.toContain("--nx-accent");
+    expect(CHROME).not.toContain(
+      '.dark .nx-style-inspector__toggle > button[aria-checked="true"]'
     );
   });
 });
@@ -244,5 +247,73 @@ describe("an inspector switch", () => {
         ':is(.nx-inspector, .nx-style-inspector) [data-slot="switch-thumb"]'
       )
     ).toContain("block-size: 1.25rem");
+  });
+});
+
+describe("opacity's slider and field", () => {
+  it("lays the slider across the row, the number and its percent sign after it", () => {
+    const row = ruleBody(CHROME, ".nx-style-inspector__opacity");
+    expect(row).toContain("display: flex");
+    expect(row).toContain("align-items: center");
+    // The number holds three digits and no more of the row.
+    expect(
+      ruleBody(
+        CHROME,
+        ".nx-style-inspector__opacity > .nx-style-inspector__numeric"
+      )
+    ).toContain("flex: 0 0 3.5rem");
+    expect(ruleBody(CHROME, ".nx-style-inspector__percent")).toContain(
+      "color: var(--nx-builder-text-muted)"
+    );
+  });
+});
+
+describe("a custom aspect ratio", () => {
+  it("puts its width and height on one line under the menu", () => {
+    const ratio = ruleBody(CHROME, ".nx-style-inspector__ratio");
+    expect(ratio).toContain("display: grid");
+    expect(ratio).toContain("row-gap: 0.375rem");
+    const custom = ruleBody(CHROME, ".nx-style-inspector__ratio-custom");
+    expect(custom).toContain("display: grid");
+    expect(custom).toContain(
+      "grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr)"
+    );
+  });
+});
+
+describe("an icon choice's help line", () => {
+  it("takes a line of its own under the icons, rather than a column beside them", () => {
+    // Beside the strip it had what was left of the row, one word a line.
+    expect(ruleBody(CHROME, ".nx-icon-choice")).toContain("flex-wrap: wrap");
+    expect(ruleBody(CHROME, ".nx-icon-choice__help")).toContain(
+      "flex-basis: 100%"
+    );
+  });
+});
+
+describe("text decoration's icons and style", () => {
+  it("puts Style… beside the icons, and the popover's parts in rows", () => {
+    const row = ruleBody(CHROME, ".nx-style-inspector__decoration");
+    expect(row).toContain("display: flex");
+    expect(row).toContain("flex-wrap: wrap");
+    // A control's height and a quiet edge, as the inspector's other buttons.
+    const style = ruleBody(CHROME, ".nx-style-inspector__decoration-style");
+    expect(style).toContain("block-size: var(--nx-builder-control-height)");
+    expect(style).toContain("border: 1px solid var(--nx-builder-border)");
+    expect(ruleBody(CHROME, ".nx-style-inspector__decoration-part")).toContain(
+      "grid-template-columns: 5.5rem minmax(0, 1fr)"
+    );
+    // A square segment, so the four icons and it fit the control column.
+    expect(style).toContain("inline-size: var(--nx-builder-control-height)");
+    // Mounted outside the inspector, the popover takes its density itself:
+    // without it, its text and fields were the page's 16px and 40px.
+    const popover = ruleBody(
+      CHROME,
+      '[data-slot="popover-content"].nx-style-inspector__decoration-popover'
+    );
+    expect(popover).toContain("font-size: var(--nx-builder-font-size)");
+    expect(popover).toContain(
+      "--nx-control-height: var(--nx-builder-control-height)"
+    );
   });
 });

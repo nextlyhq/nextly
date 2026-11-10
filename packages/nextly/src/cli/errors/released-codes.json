@@ -157,6 +157,8 @@
   "RECORD_SNAPSHOT_NEEDS_APP_MIGRATION": "`--record-snapshot` was given to `nextly migrate:create` with `--blank` or `--plugin`, which write no snapshot of the app.",
   "RECORD_SNAPSHOT_STORAGE_MISSING": "`nextly migrate:create --record-snapshot` would record translated fields that the database has no translations table or column for.",
   "REFUSED_STATEMENT": "A migration holds a statement the runner refuses to run where it is, so nothing in it ran.",
+  "REQUIRED_COLUMN_HAS_NULLS": "A migration would make a column required while rows of its table hold no value in it.",
+  "REQUIRED_COLUMN_UNCOUNTED": "The rows in the way of a column becoming required could not be counted, so that change was refused before it ran.",
   "RESOLVE_FILE_NOT_FOUND": "The migration file named to `nextly migrate:resolve` is not in the migrations folder.",
   "RESOLVE_LOCK_RELEASED": "The schema lock was released before `nextly migrate:resolve` changed the migration's record, so nothing was written.",
   "RESOLVE_MODE_REQUIRED": "`nextly migrate:resolve` was given none, or more than one, of `--applied`, `--rolled-back` and `--failed-cleanup`.",
@@ -184,5 +186,10 @@
   "WIDGET_GENERATE_CANCELLED": "A prompt of `nextly generate:widget` was cancelled, so it wrote no widget.",
   "WORKFLOW_CANNOT_ATTACH": "A workflow in the configuration is attached to a collection or Single it cannot run on.",
   "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS": "A full uninstall would drop schema another owner built on the plugin's.",
-  "PLUGIN_DOWN_LEFT_ELEMENTS": "A plugin's DOWN migrations ran and left a column, index, foreign key or check it added to another owner's table in place, so the uninstall was not recorded."
+  "PLUGIN_DOWN_LEFT_ELEMENTS": "A plugin's DOWN migrations ran and left a column, index, foreign key or check it added to another owner's table in place, so the uninstall was not recorded.",
+  "PLAN_CHANGED_AFTER_CONSENT": "What the command was agreed to do changed before it could act on it, so it changed nothing.",
+  "PLUGIN_DOCUMENT_SURFACE_COLLISION": "Two plugins override the same document action on one collection.",
+  "PLUGIN_DOCUMENT_SURFACE_INVALID": "A plugin overrides a document action it may not override, or declares a document action override or panel section with nothing to draw.",
+  "ACTION_NOT_AVAILABLE": "A plugin's declared action was asked of an entry its rule does not hold for, or in a collection it is not offered on, so its route's handler did not run.",
+  "PLUGIN_ACTION_ROW_NOT_FOUND": "A plugin's declared action named a row its caller may not read, or one that does not exist, so its route's handler did not run."
 }

@@ -1,6 +1,6 @@
 ---
 title: Using the editor
-description: The editor's rail and panels, the Design panel's tabs, Help, and the keyboard shortcuts.
+description: The editor's rail and panels, the Design panel's tabs, editing a template, Help, and the keyboard shortcuts.
 ---
 
 The editor opens with the page on the canvas, the inspector on the right for the
@@ -22,6 +22,49 @@ The top bar runs across the editor in three parts.
 and **Unpublish**, each where the entry offers it. An action you can't use right now is
 greyed out and says why. Duplicating, discarding and deleting stay on the entry's page.
 
+### Bindings to fix
+
+When a field, a Single or a block changes so a binding on the page no longer fits, a
+chip beside the page's status says how many: **2 bindings to fix**. Choose it for the
+list: each binding's block and prop, what changed, and what visitors see meanwhile (its
+fallback, the block's own value, or nothing). **Select** selects the block, opens Layers
+on it and brings it into view; **All bindings to fix** opens the site-wide list. The chip
+shows only on a page that has one.
+
+The site-wide list is **Bindings to fix**, in the Page Builder's menu beside Patterns,
+Components and Layouts
+(`/admin/plugins/nextlyhq-plugin-page-builder/bindings-to-fix`), for people who can edit
+pages. It lists every document whose bindings no longer fit, by place (pages, components,
+patterns, Layouts, other entries and Singles), each with **Open in editor** at its block.
+The dashboard's **Needs your attention** card counts them and links to it, and a
+**Bindings to fix** card can be added under **Customize**.
+
+A binding in a page's Layout region opens the component that region places, where it is
+edited. One in a language other than the default has no link, since the editor edits the
+default language. A document's draft is checked as well, so a binding broken only in a
+draft is listed before that draft is published. Until the first check of every document
+finishes, the list says it hasn't checked yet rather than that every binding fits.
+
+### Publishing a page whose parts aren't published
+
+A page, the components it places and its Layout are published separately. When you
+publish a page that places a component that isn't published, or one placed inside
+another component, or names a Layout that isn't published, the editor tells you before
+it publishes. The dialog lists each part, and what visitors see meanwhile: nothing where
+an unpublished component sits, and the site's default Layout around the page until its
+own is published.
+
+- **Publish page only** publishes the page and leaves the parts as they are. It's the
+  first choice, because publishing a page before its parts is an ordinary order of work.
+- **Publish both** (or **Publish all**) publishes the ticked parts first, then the page.
+  It's offered only for parts you may publish yourself, and each is published as you.
+  A part you can't publish is listed with the reason, and stays unpublished.
+- **Cancel** or Escape publishes nothing.
+
+The same question is asked when you publish a page or a component from its own entry
+page. A component you publish from its own view is checked the same way, for the
+components it places.
+
 The save state reads **Saving…**, **Unsaved changes**, **Saved**, or **Not saved** with
 a **Retry** button. It covers the page and the site-wide styles you change in **Design**.
 
@@ -31,6 +74,10 @@ is finished first, so its words are the step undone.
 A change to the site's shared styles in **Design** (a variable, a class, a font or a
 breakpoint) is a step of the same history. Those are saved as you make them, so undoing
 one saves the style as it was before, and the page's own save state doesn't change.
+These saves don't check for changes made since you opened the editor yet: when two people
+change a variable, a class or a font at the same time, the later save wins. A breakpoint change
+is the exception: if someone else's change is stored while yours is being saved, yours is
+refused instead of replacing it.
 
 Hiding a side gives the canvas its room. The left panel you had open comes back when
 you use the rail again. The editor remembers which sides you hid, for you.
@@ -40,6 +87,42 @@ puts the rest in a menu beside them, under **More devices**. While you style one
 the menu's button shows its name and width. The buttons never change places.
 
 When the bar is narrow, the device buttons drop their label first and keep their icons.
+
+## A field inside a group or a repeater's row
+
+A page's blocks field doesn't have to sit at the top of the entry. One inside a group
+opens at its path, `?field=hero.body`. One inside a repeater's row opens for that row,
+and the address names the row by its saved id rather than its place in the list,
+`?field=sections.<rowId>.body`, so it opens the same row after the rows are reordered.
+
+The top bar names where the field sits beside the page's title, such as
+**Sections · Hero banner · Body**, and so does the start of the bottom bar. A row is
+named by its title, as the entry's row header shows it, and by its place only when it
+has no title. While the editor is open, the entry's fields panel leaves out the repeater
+holding the row, so its rows can't be reordered or removed under the editor. Leaving
+returns you to the entry with that row's **Open Page Builder** focused.
+
+- **Save the entry once first.** A row gets its id when it is saved. The button of a row
+  added since the last save is greyed out and says "Save the entry once to design this
+  row."
+- **Rows open in the default language.** The Page Builder edits the default language's
+  rows, and a translated repeater can hold different rows in each language. So while the
+  entry shows another language, a row's button is greyed out and asks you to switch to
+  the default language.
+- **A row that's gone opens nothing.** An address naming a row that has since been
+  removed, or naming a row by its position (`sections.1.body`), isn't opened on
+  another row: the editor says the row can't be opened and offers the way back.
+- **Saving goes to that row.** The save writes into the row with that id, wherever it
+  now stands, and leaves the other rows as they are. If the row is no longer in the
+  entry when you save, the save is refused and nothing is written into another row.
+- **A repeater whose rows set their own `id` field** gives its rows no saved id, so its
+  rows don't open in the editor. Their button says why, and the server log names each
+  such field at startup.
+- **Some locks aren't enforced on save inside a row yet.** The server can't read a
+  row's saved layout to compare against. So a save of a row's layout isn't checked
+  against Layers locks or variant locks, and a content-only slot is compared with its
+  starting blocks alone. The server log notes each save whose Layers locks it couldn't
+  check. Layers locks inside a group aren't checked on save either.
 
 ## Search
 
@@ -63,14 +146,14 @@ are added from the Add panel's **Sections** tab.
 The rail shows only the panels that work in this editor. A panel that is not built yet
 has no item at all, so nothing on the rail opens an empty panel.
 
-| Item         | What it holds                                                                                                                                                                                                                                                                                                                                    |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Add**      | The blocks, components and saved patterns you can place. Drag one onto the canvas, or choose it to place it after the selected block, or at the end of the page when nothing is selected.                                                                                                                                                        |
-| **Layers**   | The page as a tree. Select, expand, move, hide, lock and rename blocks here. See [Working with a block's row in Layers](#working-with-a-blocks-row-in-layers).                                                                                                                                                                                   |
-| **Pages**    | The site's pages, with search. Open, add, duplicate, rename or delete one without leaving the editor. See [Pages](#pages).                                                                                                                                                                                                                       |
-| **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts** (see [Fonts](#fonts)). A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. |
-| **Settings** | A dialog with **This page** and **Site**. See [Settings](#settings).                                                                                                                                                                                                                                                                             |
-| **Help**     | The keyboard shortcuts in effect, and links to these pages.                                                                                                                                                                                                                                                                                      |
+| Item         | What it holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Add**      | The blocks, components and saved patterns you can place. Drag one onto the canvas, or choose it to place it after the selected block, or at the end of the page when nothing is selected.                                                                                                                                                                                                                                                                                             |
+| **Layers**   | The page as a tree. Select, expand, move, hide, lock and rename blocks here. See [Working with a block's row in Layers](#working-with-a-blocks-row-in-layers).                                                                                                                                                                                                                                                                                                                        |
+| **Pages**    | The site's pages, with search. Open, add, duplicate, rename or delete one without leaving the editor. See [Pages](#pages).                                                                                                                                                                                                                                                                                                                                                            |
+| **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts** (see [Fonts](#fonts)). A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. A variable that a page, a component, a shared style or a block's default style still uses can't be removed: change those uses first. |
+| **Settings** | A dialog with **This page** and **Site**. See [Settings](#settings).                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **Help**     | The keyboard shortcuts in effect, and links to these pages.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 Add, Layers and Design sit at the top. Settings and Help sit at the bottom.
 
@@ -160,7 +243,7 @@ pageBuilder({
 Blocks have no outer margin of their own. The space between two blocks comes from the
 block that holds them:
 
-- **Section, Box, Card, Column**, an accordion item and a collection loop put a gap above
+- **Section, Box, Card, Column**, an accordion item and a Collection list put a gap above
   every block after the first. Set the container to flex or grid and the same gap
   becomes its `gap`.
 - **Columns** and **Gallery** space their columns and images with a wider gap.
@@ -199,6 +282,34 @@ gap above it; give that block a top margin of 0 on that device to remove it.
 
 With a block selected, the canvas shows the space above it from its container as
 **Gap · from Section** (or the container's name), not as the block's own margin.
+
+### Space between blocks: classic or the container's gap
+
+**Design → Variables** opens with **Space between blocks**, which decides how the
+whole site is spaced:
+
+- **From the container's gap**: the model described above. A new site starts here.
+- **From each block's margins (classic)**: the spacing pages had before container
+  gaps. Headings carry 1.5em above and 0.5em below, paragraphs 1em below, Divider
+  and Quote 1.5em above and below; Section and Card have no padding; Columns,
+  Gallery and Accordion keep the `space.4` gap; an Accordion's sections keep the
+  browser's own triangle (its Icon is **Browser default**); a Button is padded
+  0.5rem × 1rem; and no container puts a gap between its blocks. The variables in the table above
+  are not used.
+
+A site that already had a page, a component or a Layout of its own when it first
+started on the version that added container gaps (the seeded default Layout does not
+count) is put on **Classic** once, so its pages look exactly as they did. That step
+never runs again and never changes a choice made here. To move such a site to
+container gaps, choose **From the container's gap**; the canvas redraws at once, and
+published pages follow on their next render. Changing it needs the permission to
+update the site style.
+
+The choice is kept in the plugin's own table `page_builder__site_options`, created by
+the plugin's migration (`npx nextly migrate`). A route that renders with
+`loadSiteStyle({ nextly })` reads it with the rest of the site style, and a change to it
+expires the cached pages that name the `site-style` single among their `singles`, as a
+saved variable does.
 
 ## The bottom bar
 
@@ -276,6 +387,187 @@ up**, **Move down**, **Move in** or **Move out**.
   through the rows, <kbd>→</kbd> and <kbd>←</kbd> open and close a block, and
   <kbd>Home</kbd> and <kbd>End</kbd> go to the first and last row.
 
+## Binding a prop to a field
+
+A block's prop can show a field's value instead of its own: the entry's (a page's own,
+or the entry a template is previewed with), a Single's, or the site settings'. In the
+Content tab, a prop that a field can fill has a bind button beside it. Choose it for
+the fields that fit, grouped by where they come from, with each one's value as you read
+it. A field visitors can't read says **Not public**, and one whose value is only in a
+draft says **Draft**.
+
+Once bound, the prop shows a chip naming the field and where it comes from, with its
+**Fallback** under it: what visitors see when the field is empty or they can't read it.
+The chip's menu has:
+
+- **Change field** opens the fields again.
+- **Open source** opens the screen the field is edited on in a new tab: the entry's,
+  the Single's, or the site settings. It isn't offered for a list's item, which is a
+  different entry on every row.
+- **Unbind** keeps what visitors saw in the prop, and a note under it says what was
+  kept and why. A field visitors can't read keeps the fallback instead.
+
+**Format.** A date or a number shows as text only through a format, so a text prop bound
+to one has a **Format** under its fallback. The picker names the format a date or a number
+starts with, **Long date** or **Number**, and a pick writes it with the binding; change it
+there. Dates offer a long or short date, the weekday and date, the date and time, the
+time, or the month and year, and only those the field can show: a field holding a day
+offers no time, and one holding a time offers no date. Numbers offer a plain or whole
+number, a percent, a compact number (1.2K), or a currency, whose three-letter code you
+type beside it. A format written through the API that the page can't use is shown in
+red with the reason.
+
+**Images.** An image's bind button is on its **Source** row, and binds the picture to a
+media field or to a URL field holding an image address. The image address field, on the
+URL side, and the alt text each have a bind button of their own. A bound image's
+**Fallback** is an image address, shown with a small picture of it: one starting
+`https://` or `http://`, or a path on the site such as `/media/spring.jpg`. Anything else
+is held back with the reason.
+
+The fallback can also be an image from the media library. **Choose from library**, the
+button at the end of the Fallback row, opens the newest images with a search by name:
+use the arrow keys to move through them and Enter to pick, or click one. **Browse all…**
+opens the full media library, where you can also upload. An image address pasted into
+the search is offered as **Use this address**. A chosen image is shown by its picture
+and file name, with a button to remove it, and the canvas's "Visitors won't see this"
+badge names it the same way.
+
+When an image is unbound and visitors saw it by its
+address (the field held one, or they saw the fallback), the address is kept in
+**Image address** and the image is left empty, since an image chosen from the library
+holds a library file only. The note under the Source row says so.
+
+Inside a link, an image or a list, the parts that qualify the main value (how a link
+opens, whether an image is decorative, a list's query) are set in their own controls and
+have no bind button.
+
+## Editing a template
+
+A template draws every entry of the collection it names, so while you edit one the
+canvas draws it with a real entry of that collection. The **Previewing** strip pinned
+above the canvas names that entry in full, with its status: Draft, Published, or Changed
+(published, with saved changes not yet published). It stays in place while the page
+scrolls, and appears only on a template.
+
+- **The entry it opens on** is the one you last previewed this template with in this
+  browser session, or the most recently updated entry you may read.
+- **Choose another** from the strip's chip. The list shows the entries you may read,
+  drafts included, most recently updated first, with when each was updated. Each shows
+  its saved title, and one with changes saved but not yet published is marked Changed.
+  Type to search the saved titles. Choosing an entry previews it as you would read it,
+  its unpublished changes included, so the chip and the canvas show its newest title.
+- **An entry's own design** previews the one entry it serves. There is nothing to
+  choose, so its chip opens no list and the keys below don't apply.
+- **The keys** <kbd>Shift+Alt+↓</kbd> and <kbd>Shift+Alt+↑</kbd> preview the next
+  and the previous entry in the list, from the canvas or the panels but not while you
+  type. A short message says which entry you switched to.
+- **New** opens the screen for a new entry in a new tab and leaves the template open.
+  When you come back to the editor the list is read again, so the new entry is there to
+  choose. It is offered only if you may create entries in that collection.
+
+Bound text and lists of related entries on the canvas read the entry you preview as you
+would read it, drafts included. Visibility conditions are checked against what a visitor
+reads instead, when you apply them (below). When there is no entry you may
+read, the chip says so, for example "No posts to preview", and the canvas draws each
+binding's fallback until there is one. The words are the same whether the collection is
+empty or you may read none of it. If the entry you chose can't be read when the editor
+asks for it, for example because it was deleted, the chip says so and offers to try
+again, rather than naming an entry the canvas isn't drawing.
+
+Which entry you preview is not saved with the template. When the template is saved, its
+lists and conditions are checked against the collection it draws.
+
+### Applying conditions
+
+While the canvas draws every block, a block with visibility conditions carries a
+**Conditional** badge, whoever the page would show it to. When a template holds such a
+block, the **Previewing** strip offers an **Apply conditions** switch after the entry.
+Turn it on to see the page as a visitor reading that entry would get it:
+
+- **A block a visitor would see** is drawn as usual, with the badge **Shown for this
+  post** (named after the collection's entries).
+- **A block a visitor wouldn't see** is drawn as one dashed line in its place, naming
+  it and why: "Members' worksheet · hidden for this post: Category is not Guides". It
+  stays selectable, so you can change its conditions.
+- **The strip's far end** says what the conditions did: "1 block hidden for this post",
+  or "Every conditioned block shows for this post" ("Every block checked shows" while the
+  template also holds blocks it doesn't check, below).
+
+The conditions are checked against the entry as a visitor reads it: its published values
+and the fields visitors may read, not your unpublished changes. An entry that was never
+published hides every conditioned block, and its line says so. A condition that can't be
+checked, for example on a field visitors can't see, hides its block from every visitor,
+and its line says so, with a warning sign.
+
+A block inside a list's entries is checked against each entry the list draws, as the
+published page checks it. While the switch is on, the canvas's lists show what a visitor
+would see: published entries only, with only the fields visitors may read, not the drafts
+you can see. An entry that hides the block draws its line in the block's place, saying why
+for that entry: "Premium badge · hidden for this entry: Price isn't more than 10". A list that
+shows a visitor fewer entries than you see says so above its entries: "Showing what
+visitors see: 4 of 6 entries". Turn the switch off to see your own entries again, drafts
+included. The switch is offered when only a list's blocks have conditions, too; the
+strip's count is of the page's own blocks, and says "Conditions checked for each entry in
+the list" when a list's blocks are all there is to check, adding "some blocks aren't
+checked" when a Layout region also holds conditions.
+
+Blocks inside a placed component are checked with the page's: a component's own block
+whose conditions don't hold is drawn as its line where it would be, "Members offer ·
+hidden for this page: Title doesn't contain Members", and the strip counts it, once for
+each place the component is drawn. A press on the line selects the placement, as a press
+on any of the component's blocks does. The switch is offered even when only a placed
+component's blocks have conditions.
+
+Blocks inside a region of the page's Layout aren't checked yet: they keep their
+**Conditional** badge while conditions are applied, and the strip says some blocks aren't
+checked.
+
+Blocks inside the entry's own content, drawn by **Entry content** (below), are checked
+with the template's: a hidden one is drawn as its line inside Entry content, and the
+strip counts it. The switch is offered even when only those blocks have conditions.
+
+On a page, the conditions read the page's own fields. When a page holds a block whose
+conditions read it, a strip above the canvas offers the same **Apply conditions** switch,
+with nothing to choose: the page is checked as a visitor reads it, its published values
+and the fields visitors may read. "1 block hidden for this page" says what the conditions
+did. A page that was never published hides every conditioned block.
+
+Editing a component or a Layout that holds a conditioned block, the switch is shown but
+turned off: there's no entry to check against there. The published page checks them
+where the component or the Layout is placed. The switch is yours for this session and is
+never saved.
+
+### Showing the entry's own content
+
+An entry can hold blocks of its own, such as a post's Body. To draw them inside the
+template, add **Entry content**, under **Entry** in the Add panel. It is offered only
+while a template is open, and a template holds one: with one placed, its tile says
+"A template holds one Entry content block.", and Duplicate is turned off for it.
+
+- **Field** chooses which of the collection's blocks fields it shows, from the fields
+  stored on the entry itself. When the collection has one, it is chosen for you; when it
+  has several, the first is chosen and you can pick another.
+- **On the canvas** it shows the entry you preview, drafts included, read-only: a click
+  anywhere inside selects Entry content itself, and the content is edited on the entry.
+  **Open post** (named after the collection) opens that entry in a new tab. A faint
+  dashed outline with a tab, such as "Entry content · Body", marks the block whether or
+  not it is selected.
+- **When there is nothing to show** the canvas says why: "The post’s Body shows here."
+  with no entry to preview, "_Title_ has no Body content yet." for an empty field, and,
+  in red, "The Body field no longer exists in Posts, so this shows nothing. Choose
+  another field." when the field was removed from the collection. A template saved
+  before its field was removed keeps saving, and Field shows the old choice as
+  "Body (removed)" until you choose another.
+- **On the published page** it shows the field as visitors may read it. When they may
+  not read it, or it is empty or gone, nothing is drawn: no markup, and none of the
+  field's content in the page.
+
+Entry content is refused when it is saved anywhere but a template, an entry's own blocks
+field included, and so is a second one, or a field the collection doesn't have as a
+blocks field. A blocks field inside a repeater is stored on each row, not on the entry,
+so it is never offered. **Save as pattern**, **Update a pattern** and **Turn into
+component** are turned off, with the reason, while the selection holds Entry content.
+
 ## Help
 
 Help lists the keyboard shortcuts the editor has right now, read from the same list the
@@ -289,25 +581,26 @@ Escape closes Help and returns you to the rail.
 
 On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 
-| Keys                                                                          | What they do                                                                                                                      |
-| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| <kbd>Ctrl</kbd>+<kbd>Z</kbd>                                                  | Undo the last change                                                                                                              |
-| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Redo the last undone change                                                                                                       |
-| <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                  | Duplicate the selected block                                                                                                      |
-| <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                     | Delete the selected block                                                                                                         |
-| <kbd>Enter</kbd>                                                              | Edit the selected block's text                                                                                                    |
-| <kbd>Escape</kbd>                                                             | Select the block holding this one, or clear the selection at the top of the page                                                  |
-| <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                     | Move the selected block up or down                                                                                                |
-| <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                     | Move the selected block into the container above it, or out of its container                                                      |
-| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                  | Open search: blocks to add, this page's blocks, other pages and commands                                                          |
-| <kbd>F6</kbd>                                                                 | Move to the next area of the editor: top bar, rail, panel, canvas, inspector                                                      |
-| <kbd>Ctrl</kbd>+<kbd>\\</kbd>                                                 | Hide both side panels, or show them again                                                                                         |
-| <kbd>Ctrl</kbd>+<kbd>0</kbd>                                                  | Show the page at actual size                                                                                                      |
-| <kbd>Shift</kbd>+<kbd>1</kbd>                                                 | Fit the page to the canvas                                                                                                        |
-| <kbd>F2</kbd>                                                                 | In Layers, rename the focused row's block                                                                                         |
-| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>                                 | In Layers, hide or show the focused row's block on the device you are editing                                                     |
-| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd>                                 | In Layers, lock or unlock the focused row's block                                                                                 |
-| <kbd>Shift</kbd>+<kbd>F10</kbd> or the menu key                               | Open the menu of the block that holds focus, from a link or button inside it. Elsewhere, right-click the block or use its toolbar |
+| Keys                                                                                        | What they do                                                                                                                      |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| <kbd>Ctrl</kbd>+<kbd>Z</kbd>                                                                | Undo the last change                                                                                                              |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or <kbd>Ctrl</kbd>+<kbd>Y</kbd>               | Redo the last undone change                                                                                                       |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                                | Duplicate the selected block                                                                                                      |
+| <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                                   | Delete the selected block                                                                                                         |
+| <kbd>Enter</kbd>                                                                            | Edit the selected block's text                                                                                                    |
+| <kbd>Escape</kbd>                                                                           | Select the block holding this one, or clear the selection at the top of the page                                                  |
+| <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                                   | Move the selected block up or down                                                                                                |
+| <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                                   | Move the selected block into the container above it, or out of its container                                                      |
+| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                                | Open search: blocks to add, this page's blocks, other pages and commands                                                          |
+| <kbd>F6</kbd>                                                                               | Move to the next area of the editor: top bar, rail, panel, canvas, inspector                                                      |
+| <kbd>Ctrl</kbd>+<kbd>\\</kbd>                                                               | Hide both side panels, or show them again                                                                                         |
+| <kbd>Ctrl</kbd>+<kbd>0</kbd>                                                                | Show the page at actual size                                                                                                      |
+| <kbd>Shift</kbd>+<kbd>1</kbd>                                                               | Fit the page to the canvas                                                                                                        |
+| <kbd>Shift</kbd>+<kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Shift</kbd>+<kbd>Alt</kbd>+<kbd>↓</kbd> | In a template, preview the previous or the next entry                                                                             |
+| <kbd>F2</kbd>                                                                               | In Layers, rename the focused row's block                                                                                         |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>                                               | In Layers, hide or show the focused row's block on the device you are editing                                                     |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd>                                               | In Layers, lock or unlock the focused row's block                                                                                 |
+| <kbd>Shift</kbd>+<kbd>F10</kbd> or the menu key                                             | Open the menu of the block that holds focus, from a link or button inside it. Elsewhere, right-click the block or use its toolbar |
 
 Help is the complete list for the editor you have open, including any shortcut the
 page around it adds, such as saving.

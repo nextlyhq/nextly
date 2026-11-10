@@ -86,6 +86,62 @@ describe("localization migration intent", () => {
     expect(versionOf("shared")).toBe(2);
   });
 
+  it("records a move's settings at version 6, and only the files that carry them", () => {
+    const settings = {
+      required: [{ field: "body", column: "body" }],
+      unique: [{ field: "code", column: "code" }],
+    };
+    const line = formatLocalizationIntent({
+      kind: "archive",
+      entity: "collection",
+      spec: spec({ settings }),
+    });
+    const payload = JSON.parse(
+      line.slice(LOCALIZATION_INTENT_HEADER.length).trim()
+    );
+
+    // A build before 6 ignores keys it does not know, so it would run the move unchecked; at 6 it
+    // refuses the file instead, as one it does not support.
+    expect(payload.version).toBe(6);
+    expect(
+      parseLocalizationIntent(fileWith(line), "m.sql")?.spec.settings
+    ).toEqual(settings);
+    // The same kind without settings keeps its version, so its files stay readable by older builds.
+    expect(
+      JSON.parse(
+        formatLocalizationIntent({
+          kind: "archive",
+          entity: "collection",
+          spec: spec(),
+        })
+          .slice(LOCALIZATION_INTENT_HEADER.length)
+          .trim()
+      ).version
+    ).toBe(2);
+  });
+
+  it("refuses settings under a version before 6, and settings of the wrong shape", () => {
+    const line = formatLocalizationIntent({
+      kind: "shared",
+      entity: "collection",
+      spec: spec({
+        settings: { required: [{ field: "body", column: "body" }], unique: [] },
+      }),
+    });
+    expect(() =>
+      parseLocalizationIntent(
+        fileWith(line.replace('"version":6', '"version":5')),
+        "m.sql"
+      )
+    ).toThrow();
+    expect(() =>
+      parseLocalizationIntent(
+        fileWith(line.replace('"unique":[]', '"unique":"body"')),
+        "m.sql"
+      )
+    ).toThrow();
+  });
+
   it("reads a version-2 kind, and refuses one claimed under version 1", () => {
     const v2 = formatLocalizationIntent({
       kind: "archive",

@@ -22,6 +22,7 @@ import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import { defineCollection, defineSingle, text } from "../../../config";
+import type { ApiKeyService } from "../../auth/services/api-key-service";
 import { Nextly } from "../../../direct-api/nextly";
 import { NextlyError } from "../../../errors/nextly-error";
 import { resetHookRegistry } from "../../../hooks/hook-registry";
@@ -348,6 +349,7 @@ describe.each(getConfiguredTestDialects())(
         await rest(PUBLISHER, "PATCH", entry, {
           status: "draft",
           title: "edited",
+          _overwrite: true,
         })
       ).toBe(403);
       expect(await stored(POSTS, id)).toMatchObject({
@@ -356,7 +358,10 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(
-        await rest(PUBLISHER, "PATCH", entry, { status: "published" })
+        await rest(PUBLISHER, "PATCH", entry, {
+          status: "published",
+          _overwrite: true,
+        })
       ).toBe(200);
       expect((await stored(POSTS, id)).status).toBe("published");
     });
@@ -369,7 +374,7 @@ describe.each(getConfiguredTestDialects())(
         as(PUBLISHER).update({
           collection: POSTS,
           id,
-          data: { status: "published", title: "edited" },
+          data: { status: "published", title: "edited", _overwrite: true },
         } as never)
       ).rejects.toThrow();
       expect(await stored(POSTS, id)).toMatchObject({
@@ -380,7 +385,7 @@ describe.each(getConfiguredTestDialects())(
       await as(PUBLISHER).update({
         collection: POSTS,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
       expect((await stored(POSTS, id)).status).toBe("published");
     });
@@ -394,7 +399,7 @@ describe.each(getConfiguredTestDialects())(
         collections.updateEntry(
           POSTS,
           id,
-          { status: "published", title: "edited" },
+          { status: "published", title: "edited", _overwrite: true },
           asPlugin(PUBLISHER)
         )
       ).rejects.toThrow();
@@ -406,7 +411,7 @@ describe.each(getConfiguredTestDialects())(
       await collections.updateEntry(
         POSTS,
         id,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         asPlugin(PUBLISHER)
       );
       expect((await stored(POSTS, id)).status).toBe("published");
@@ -420,8 +425,11 @@ describe.each(getConfiguredTestDialects())(
       const result = await pluginServices().collections.updateMany(
         POSTS,
         [
-          { id: plain, data: { status: "published" } },
-          { id: edited, data: { status: "published", title: "changed" } },
+          { id: plain, data: { status: "published", _overwrite: true } },
+          {
+            id: edited,
+            data: { status: "published", title: "changed", _overwrite: true },
+          },
         ],
         asPlugin(PUBLISHER)
       );
@@ -440,11 +448,12 @@ describe.each(getConfiguredTestDialects())(
       const id = await draft(POSTS, "t");
       const where = { id: { equals: id } };
 
+      // Refused for the field it names, not for want of a version.
       await expect(
         as(PUBLISHER).update({
           collection: POSTS,
           where,
-          data: { status: "published", title: "edited" },
+          data: { status: "published", title: "edited", _overwrite: true },
         } as never)
       ).rejects.toThrow();
       expect(await stored(POSTS, id)).toMatchObject({
@@ -452,10 +461,11 @@ describe.each(getConfiguredTestDialects())(
         status: "draft",
       });
 
+      // A status set on every match whatever each holds: still a publish.
       await as(PUBLISHER).update({
         collection: POSTS,
         where,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
       expect((await stored(POSTS, id)).status).toBe("published");
     });
@@ -464,7 +474,7 @@ describe.each(getConfiguredTestDialects())(
       await boot(dialect);
       await trusted().updateSingle({
         slug: HOME,
-        data: { headline: "h", status: "draft" },
+        data: { headline: "h", status: "draft", _overwrite: true },
       } as never);
       const single = ["singles", HOME];
       const home = async () =>
@@ -477,12 +487,16 @@ describe.each(getConfiguredTestDialects())(
         await rest(PUBLISHER, "PATCH", single, {
           status: "published",
           headline: "edited",
+          _overwrite: true,
         })
       ).toBe(403);
       expect(await home()).toMatchObject({ headline: "h", status: "draft" });
 
       expect(
-        await rest(PUBLISHER, "PATCH", single, { status: "published" })
+        await rest(PUBLISHER, "PATCH", single, {
+          status: "published",
+          _overwrite: true,
+        })
       ).toBe(200);
       expect((await home()).status).toBe("published");
     });
@@ -498,6 +512,7 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await rest(PUBLISHER, "PATCH", ["collections", NOTES, "entries", id], {
           status: "published",
+          _overwrite: true,
         })
       ).toBe(403);
       expect((await stored(NOTES, id)).status).toBe("open");
@@ -509,7 +524,7 @@ describe.each(getConfiguredTestDialects())(
       await trusted().update({
         collection: POSTS,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
 
       // An editor who may update and not publish names only the status the
@@ -517,12 +532,14 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await rest(EDITOR, "PATCH", ["collections", POSTS, "entries", id], {
           status: "published",
+          _overwrite: true,
         })
       ).toBe(403);
       // The control: the same editor's write naming a field is an update.
       expect(
         await rest(EDITOR, "PATCH", ["collections", POSTS, "entries", id], {
           title: "edited",
+          _overwrite: true,
         })
       ).toBe(200);
     });
@@ -536,18 +553,26 @@ describe.each(getConfiguredTestDialects())(
       // Every gate refuses this caller, so each write is refused; the
       // refusal names the action the body asks, not update.
       expect
-        .soft(await restRefusal(READER, entry, { status: "published" }))
+        .soft(
+          await restRefusal(READER, entry, {
+            status: "published",
+            _overwrite: true,
+          })
+        )
         .toEqual({ status: 403, message: "You can't publish this posts." });
       expect
         .soft(
-          await restRefusal(READER, ["singles", HOME], { status: "published" })
+          await restRefusal(READER, ["singles", HOME], {
+            status: "published",
+            _overwrite: true,
+          })
         )
         .toEqual({ status: 403, message: "You can't publish Home." });
       expect
         .soft(
           await restRefusal(READER, ["collections", POSTS, "entries"], {
             where: { id: { equals: id } },
-            data: { status: "published" },
+            data: { status: "published", _overwrite: true },
           })
         )
         .toEqual({ status: 403, message: "You can't publish posts." });
@@ -556,10 +581,15 @@ describe.each(getConfiguredTestDialects())(
       await trusted().update({
         collection: POSTS,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
       expect
-        .soft(await restRefusal(READER, entry, { status: "draft" }))
+        .soft(
+          await restRefusal(READER, entry, {
+            status: "draft",
+            _overwrite: true,
+          })
+        )
         .toEqual({
           status: 403,
           message: "You can't unpublish this posts.",
@@ -569,7 +599,11 @@ describe.each(getConfiguredTestDialects())(
       // A write naming a field is an edit, refused as one.
       expect
         .soft(
-          await restRefusal(READER, entry, { status: "draft", title: "edited" })
+          await restRefusal(READER, entry, {
+            status: "draft",
+            title: "edited",
+            _overwrite: true,
+          })
         )
         .toEqual({ status: 403, message: "You can't edit this posts." });
       // Where a collection has no lifecycle its status is a field, so a write
@@ -588,7 +622,7 @@ describe.each(getConfiguredTestDialects())(
               "entries",
               String((item as { id: unknown }).id),
             ],
-            { status: "published" }
+            { status: "published", _overwrite: true }
           )
         )
         .toEqual({ status: 403, message: "You can't edit this notes." });
@@ -604,12 +638,18 @@ describe.each(getConfiguredTestDialects())(
       // the write asks: naming the action would confirm the entry exists.
       const missing = { status: 404, message: "Not found." };
       expect(
-        await restRefusal(STRANGER, entry, { status: "published" })
+        await restRefusal(STRANGER, entry, {
+          status: "published",
+          _overwrite: true,
+        })
       ).toEqual(missing);
       // The control: an ordinary update by the same caller is answered alike.
-      expect(await restRefusal(STRANGER, entry, { title: "edited" })).toEqual(
-        missing
-      );
+      expect(
+        await restRefusal(STRANGER, entry, {
+          title: "edited",
+          _overwrite: true,
+        })
+      ).toEqual(missing);
       expect((await stored(POSTS, id)).status).toBe("draft");
     });
 
@@ -619,7 +659,7 @@ describe.each(getConfiguredTestDialects())(
       await trusted().update({
         collection: POSTS,
         id: live,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
       const other = await draft(POSTS, "other");
 
@@ -629,8 +669,8 @@ describe.each(getConfiguredTestDialects())(
       const result = await pluginServices().collections.updateMany(
         POSTS,
         [
-          { id: live, data: { status: "published" } },
-          { id: other, data: { title: "edited" } },
+          { id: live, data: { status: "published", _overwrite: true } },
+          { id: other, data: { title: "edited", _overwrite: true } },
         ],
         asPlugin(EDITOR)
       );
@@ -651,7 +691,12 @@ describe.each(getConfiguredTestDialects())(
       await as(PUBLISHER).update({
         collection: POSTS,
         id,
-        data: { status: "published", id, createdAt: SENT_SYSTEM_VALUE },
+        data: {
+          status: "published",
+          id,
+          createdAt: SENT_SYSTEM_VALUE,
+          _overwrite: true,
+        },
       } as never);
 
       expect((await stored(POSTS, id)).status).toBe("published");
@@ -662,7 +707,7 @@ describe.each(getConfiguredTestDialects())(
       await boot(dialect);
       await trusted().updateSingle({
         slug: HOME,
-        data: { headline: "h", status: "draft" },
+        data: { headline: "h", status: "draft", _overwrite: true },
       } as never);
       handedToHooks = [];
 
@@ -670,6 +715,7 @@ describe.each(getConfiguredTestDialects())(
         await rest(PUBLISHER, "PATCH", ["singles", HOME], {
           status: "published",
           updatedAt: SENT_SYSTEM_VALUE,
+          _overwrite: true,
         })
       ).toBe(200);
 
@@ -689,7 +735,7 @@ describe.each(getConfiguredTestDialects())(
         as(MAINTAINER).update({
           collection: FILTERED,
           id,
-          data: { status: "published", title: "edited" },
+          data: { status: "published", title: "edited", _overwrite: true },
         } as never)
       ).rejects.toThrow();
       expect(await stored(FILTERED, id)).toMatchObject({
@@ -701,7 +747,7 @@ describe.each(getConfiguredTestDialects())(
       await as(MAINTAINER).update({
         collection: FILTERED,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
       expect((await stored(FILTERED, id)).status).toBe("published");
     });
@@ -715,7 +761,7 @@ describe.each(getConfiguredTestDialects())(
           collection: FRENCH_INVOLVED,
           id,
           locale: "de",
-          data: { title: "de" },
+          data: { title: "de", _overwrite: true },
         } as never);
         return id;
       };
@@ -725,7 +771,7 @@ describe.each(getConfiguredTestDialects())(
         await trusted().updateSingle({
           slug: FRENCH_INVOLVED_HOME,
           locale,
-          data: { headline: locale },
+          data: { headline: locale, _overwrite: true },
         } as never);
       }
       const entry = (id: string) => [
@@ -737,7 +783,9 @@ describe.each(getConfiguredTestDialects())(
 
       // Publishing every language, as a caller who may also update.
       expect(
-        await rest(MAINTAINER, "POST", [...entry(viaRoute), "publish-all"], {})
+        await rest(MAINTAINER, "POST", [...entry(viaRoute), "publish-all"], {
+          _overwrite: true,
+        })
       ).toBe(200);
       expect((await stored(FRENCH_INVOLVED, viaRoute)).status).toBe(
         "published"
@@ -747,7 +795,7 @@ describe.each(getConfiguredTestDialects())(
           MAINTAINER,
           "POST",
           ["singles", FRENCH_INVOLVED_HOME, "publish-all"],
-          {}
+          { _overwrite: true }
         )
       ).toBe(200);
       // A status-only write to every language, as a caller who may only
@@ -757,7 +805,7 @@ describe.each(getConfiguredTestDialects())(
           PUBLISHER,
           "PATCH",
           entry(viaPatch),
-          { status: "published" },
+          { status: "published", _overwrite: true },
           "?locale=*"
         )
       ).toBe(200);
@@ -771,10 +819,12 @@ describe.each(getConfiguredTestDialects())(
         collection: FRENCH_INVOLVED,
         id: viaRoute,
         locale: "fr",
-        data: { title: "fr" },
+        data: { title: "fr", _overwrite: true },
       } as never);
       expect(
-        await rest(MAINTAINER, "POST", [...entry(viaRoute), "publish-all"], {})
+        await rest(MAINTAINER, "POST", [...entry(viaRoute), "publish-all"], {
+          _overwrite: true,
+        })
       ).toBe(403);
     });
 
@@ -792,7 +842,7 @@ describe.each(getConfiguredTestDialects())(
           EDITOR,
           "POST",
           ["collections", NOTES, "entries", id, "publish-all"],
-          {}
+          { _overwrite: true }
         )
       ).toBe(200);
       expect((await stored(NOTES, id)).status).toBe("open");
@@ -813,6 +863,7 @@ describe.each(getConfiguredTestDialects())(
           entryId: id,
           overrideAccess: false,
           user: { id: userId } as never,
+          data: { _overwrite: true },
         });
 
       // A caller who may not update learns nothing, the publisher included.
@@ -832,8 +883,8 @@ describe.each(getConfiguredTestDialects())(
       const result = await pluginServices().collections.updateMany(
         FILTERED,
         [
-          { id: a, data: { status: "published" } },
-          { id: b, data: { status: "published" } },
+          { id: a, data: { status: "published", _overwrite: true } },
+          { id: b, data: { status: "published", _overwrite: true } },
         ],
         asPlugin(MAINTAINER)
       );
@@ -849,7 +900,7 @@ describe.each(getConfiguredTestDialects())(
       await as(MAINTAINER).update({
         collection: FILTERED,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
 
       expect((await stored(FILTERED, id)).status).toBe("published");
@@ -860,7 +911,7 @@ describe.each(getConfiguredTestDialects())(
       await boot(dialect);
       await trusted().updateSingle({
         slug: HOME,
-        data: { headline: "h", status: "draft" },
+        data: { headline: "h", status: "draft", _overwrite: true },
       } as never);
       ruleAsks.homePublish = 0;
       const singles = current!.getService("singleEntryService") as unknown as {
@@ -873,7 +924,7 @@ describe.each(getConfiguredTestDialects())(
 
       const published = await singles.update(
         HOME,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { user: { id: PUBLISHER }, overrideAccess: false }
       );
 
@@ -893,6 +944,7 @@ describe.each(getConfiguredTestDialects())(
           reads += 1;
           return reads <= 2 ? "published" : "draft";
         },
+        _overwrite: true,
       };
 
       await as(PUBLISHER).update({
@@ -940,7 +992,7 @@ describe.each(getConfiguredTestDialects())(
       // by the publish gate, before its row is locked.
       const result = await pluginServices().collections.updateMany(
         POSTS,
-        [{ id, data: { status: "published" } }],
+        [{ id, data: { status: "published", _overwrite: true } }],
         asPlugin(EDITOR)
       );
 
@@ -958,6 +1010,7 @@ describe.each(getConfiguredTestDialects())(
           reads += 1;
           return "published";
         },
+        _overwrite: true,
       };
 
       const result = await pluginServices().collections.updateMany(
@@ -980,7 +1033,7 @@ describe.each(getConfiguredTestDialects())(
 
       const result = await pluginServices().collections.updateMany(
         FILTERED,
-        [{ id, data: { status: "published" } }],
+        [{ id, data: { status: "published", _overwrite: true } }],
         asPlugin(MAINTAINER)
       );
 
@@ -1009,7 +1062,7 @@ describe.each(getConfiguredTestDialects())(
 
       const result = await pluginServices().collections.updateMany(
         FILTERED,
-        [{ id, data: { status: "published" } }],
+        [{ id, data: { status: "published", _overwrite: true } }],
         asPlugin(MAINTAINER)
       );
 
@@ -1030,7 +1083,7 @@ describe.each(getConfiguredTestDialects())(
             as(PUBLISHER).update({
               collection: POSTS,
               id,
-              data: { status: "published" },
+              data: { status: "published", _overwrite: true },
             } as never)
           ).rejects.toThrow();
           expect(await stored(POSTS, id)).toMatchObject({
@@ -1042,7 +1095,7 @@ describe.each(getConfiguredTestDialects())(
           await trusted().update({
             collection: POSTS,
             id,
-            data: { status: "published" },
+            data: { status: "published", _overwrite: true },
           } as never);
           expect((await stored(POSTS, id)).title).toBe(SET_BY_A_HOOK);
         });
@@ -1054,7 +1107,7 @@ describe.each(getConfiguredTestDialects())(
 
           const result = await pluginServices().collections.updateMany(
             POSTS,
-            [{ id, data: { status: "published" } }],
+            [{ id, data: { status: "published", _overwrite: true } }],
             asPlugin(PUBLISHER)
           );
 
@@ -1068,7 +1121,7 @@ describe.each(getConfiguredTestDialects())(
           hookEdits = undefined;
           const plain = await pluginServices().collections.updateMany(
             POSTS,
-            [{ id, data: { status: "published" } }],
+            [{ id, data: { status: "published", _overwrite: true } }],
             asPlugin(PUBLISHER)
           );
           expect(plain.successful).toBe(1);
@@ -1078,7 +1131,7 @@ describe.each(getConfiguredTestDialects())(
           await boot(dialect);
           await trusted().updateSingle({
             slug: HOME,
-            data: { headline: "h", status: "draft" },
+            data: { headline: "h", status: "draft", _overwrite: true },
           } as never);
           const home = async () =>
             (await trusted().findSingle({ slug: HOME } as never)) as {
@@ -1090,6 +1143,7 @@ describe.each(getConfiguredTestDialects())(
           expect(
             await rest(PUBLISHER, "PATCH", ["singles", HOME], {
               status: "published",
+              _overwrite: true,
             })
           ).toBe(403);
           expect(await home()).toMatchObject({
@@ -1102,10 +1156,342 @@ describe.each(getConfiguredTestDialects())(
           expect(
             await rest(PUBLISHER, "PATCH", ["singles", HOME], {
               status: "published",
+              _overwrite: true,
             })
           ).toBe(200);
         });
       }
     );
+  }
+);
+
+/** A full-access API key of `userId`, which acts with that person's grants. */
+async function keyOf(userId: string): Promise<string> {
+  const keys = current!.getService("apiKeyService") as unknown as ApiKeyService;
+  const { key } = await keys.createApiKey(userId, {
+    name: `${userId} key`,
+    tokenType: "full-access",
+    expiresIn: "unlimited",
+  });
+  return key;
+}
+
+/** A REST write with an API key, answered with its status and JSON. */
+async function restWithKey(
+  key: string,
+  method: "PATCH" | "POST",
+  path: string[],
+  body: unknown
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  const handlers = createDynamicHandlers() as unknown as Record<
+    string,
+    (request: Request, context: unknown) => Promise<Response>
+  >;
+  const res = await handlers[method]!(
+    new Request(`http://localhost/api/${path.join("/")}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ params: path }) }
+  );
+  return {
+    status: res.status,
+    json: (await res.json()) as Record<string, unknown>,
+  };
+}
+
+/** The refusal message a REST answer carries, whole or for its first item. */
+function refusalMessage(json: Record<string, unknown>): unknown {
+  const whole = (json.error as { message?: unknown } | undefined)?.message;
+  if (whole !== undefined) return whole;
+  return (json.errors as { message?: unknown }[] | undefined)?.[0]?.message;
+}
+
+// The overwrite choice is no field: it says how the version is judged, and the
+// write never stores it. So a body naming only the status beside it is still a
+// status-only write, judged by publish or unpublish, on every path that judges
+// the body before the version keys leave it.
+describe.each(getConfiguredTestDialects())(
+  "a status-only write that chooses to overwrite is judged by its own permission (%s)",
+  dialect => {
+    const OVERWRITE = { _overwrite: true } as const;
+
+    it("publishes and unpublishes over REST", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      const entry = ["collections", POSTS, "entries", id];
+
+      expect(
+        await rest(PUBLISHER, "PATCH", entry, {
+          status: "published",
+          ...OVERWRITE,
+        })
+      ).toBe(200);
+      expect((await stored(POSTS, id)).status).toBe("published");
+
+      expect(
+        await rest(PUBLISHER, "PATCH", entry, { status: "draft", ...OVERWRITE })
+      ).toBe(200);
+      expect(await stored(POSTS, id)).toMatchObject({
+        title: "t",
+        status: "draft",
+      });
+    });
+
+    it("publishes and unpublishes by query", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      const where = { id: { equals: id } };
+
+      await as(PUBLISHER).update({
+        collection: POSTS,
+        where,
+        data: { status: "published", ...OVERWRITE },
+      } as never);
+      expect((await stored(POSTS, id)).status).toBe("published");
+
+      // The unpublish is let through and applies. The Direct API then reads
+      // the entry back as the caller, and a draft is not this caller's to
+      // read, which answers "not found" with or without the overwrite choice;
+      // what matters here is that the gate did not refuse it as an edit.
+      const unpublished = await as(PUBLISHER)
+        .update({
+          collection: POSTS,
+          where,
+          data: { status: "draft", ...OVERWRITE },
+        } as never)
+        .then(
+          () => "applied",
+          (error: unknown) => String((error as { code?: unknown }).code)
+        );
+      expect(["applied", "NOT_FOUND"]).toContain(unpublished);
+      expect((await stored(POSTS, id)).status).toBe("draft");
+    });
+
+    it("publishes and unpublishes by ids over REST", async () => {
+      await boot(dialect);
+      const a = await draft(POSTS, "a");
+      const b = await draft(POSTS, "b");
+      const bulk = ["collections", POSTS, "entries", "bulk-update"];
+
+      const published = await restResponse(PUBLISHER, "POST", bulk, {
+        ids: [a, b],
+        data: { status: "published", ...OVERWRITE },
+      });
+      expect(published.status).toBe(200);
+      expect(
+        ((await published.json()) as { errors?: unknown[] }).errors
+      ).toEqual([]);
+      expect((await stored(POSTS, a)).status).toBe("published");
+      expect((await stored(POSTS, b)).status).toBe("published");
+
+      const unpublished = await restResponse(PUBLISHER, "POST", bulk, {
+        ids: [a, b],
+        data: { status: "draft", ...OVERWRITE },
+      });
+      expect(
+        ((await unpublished.json()) as { errors?: unknown[] }).errors
+      ).toEqual([]);
+      expect((await stored(POSTS, a)).status).toBe("draft");
+      expect((await stored(POSTS, b)).status).toBe("draft");
+    });
+
+    it("publishes and unpublishes each row of a batch", async () => {
+      await boot(dialect);
+      const a = await draft(POSTS, "a");
+      const b = await draft(POSTS, "b");
+      const collections = pluginServices().collections;
+
+      const published = await collections.updateMany(
+        POSTS,
+        [
+          { id: a, data: { status: "published", ...OVERWRITE } },
+          { id: b, data: { status: "published", ...OVERWRITE } },
+        ],
+        asPlugin(PUBLISHER)
+      );
+      expect(published).toMatchObject({ successful: 2, failed: 0 });
+      // Each row took its publish, not only the count of them.
+      expect((await stored(POSTS, a)).status).toBe("published");
+      expect((await stored(POSTS, b)).status).toBe("published");
+
+      const unpublished = await collections.updateMany(
+        POSTS,
+        [{ id: a, data: { status: "draft", ...OVERWRITE } }],
+        asPlugin(PUBLISHER)
+      );
+      expect(unpublished).toMatchObject({ successful: 1, failed: 0 });
+      expect((await stored(POSTS, a)).status).toBe("draft");
+      expect((await stored(POSTS, b)).status).toBe("published");
+    });
+
+    it("publishes and unpublishes over REST with an API key, by id and by ids", async () => {
+      await boot(dialect);
+      const key = await keyOf(PUBLISHER);
+      const id = await draft(POSTS, "t");
+      const other = await draft(POSTS, "u");
+      const entry = ["collections", POSTS, "entries", id];
+      const bulk = ["collections", POSTS, "entries", "bulk-update"];
+
+      const byId = await restWithKey(key, "PATCH", entry, {
+        status: "published",
+        ...OVERWRITE,
+      });
+      expect(byId.status, JSON.stringify(byId.json)).toBe(200);
+      expect((await stored(POSTS, id)).status).toBe("published");
+      const undone = await restWithKey(key, "PATCH", entry, {
+        status: "draft",
+        ...OVERWRITE,
+      });
+      expect(undone.status, JSON.stringify(undone.json)).toBe(200);
+      expect((await stored(POSTS, id)).status).toBe("draft");
+
+      const byIds = await restWithKey(key, "POST", bulk, {
+        ids: [id, other],
+        data: { status: "published", ...OVERWRITE },
+      });
+      expect(byIds.json.errors, JSON.stringify(byIds.json)).toEqual([]);
+      // Both rows took the publish before it is undone, so a route that
+      // answered without writing cannot pass.
+      expect((await stored(POSTS, id)).status).toBe("published");
+      expect((await stored(POSTS, other)).status).toBe("published");
+      const unpublished = await restWithKey(key, "POST", bulk, {
+        ids: [id, other],
+        data: { status: "draft", ...OVERWRITE },
+      });
+      expect(unpublished.json.errors).toEqual([]);
+      expect((await stored(POSTS, id)).status).toBe("draft");
+      expect((await stored(POSTS, other)).status).toBe("draft");
+    });
+
+    it("refuses one who may neither publish nor edit in the words of publish, not edit", async () => {
+      const t = await boot(dialect);
+      await userWhoMay(t, READER, "read", [POSTS, NOTES, HOME]);
+      const key = await keyOf(READER);
+      const id = await draft(POSTS, "t");
+      const entry = ["collections", POSTS, "entries", id];
+      const publish = { status: "published", ...OVERWRITE };
+
+      // The refusal names the action the body asks: a status beside the
+      // overwrite choice asks publish, so being told "edit" would be wrong.
+      expect
+        .soft(await restRefusal(READER, entry, publish))
+        .toEqual({ status: 403, message: "You can't publish this posts." });
+      expect
+        .soft(
+          await restRefusal(READER, ["collections", POSTS, "entries"], {
+            where: { id: { equals: id } },
+            data: publish,
+          })
+        )
+        .toEqual({ status: 403, message: "You can't publish posts." });
+      const byKey = await restWithKey(key, "PATCH", entry, publish);
+      expect
+        .soft({ status: byKey.status, message: refusalMessage(byKey.json) })
+        .toEqual({ status: 403, message: "You can't publish this posts." });
+      expect
+        .soft(
+          refusalMessage(
+            (
+              await restWithKey(
+                key,
+                "POST",
+                ["collections", POSTS, "entries", "bulk-update"],
+                { ids: [id], data: publish }
+              )
+            ).json
+          )
+        )
+        .toMatch(/^You can't publish/);
+      // And the same body naming a field is an edit, refused as one.
+      expect
+        .soft(await restRefusal(READER, entry, { ...publish, title: "edited" }))
+        .toEqual({ status: 403, message: "You can't edit this posts." });
+      expect((await stored(POSTS, id)).status).toBe("draft");
+    });
+
+    it("publishes a Single over REST", async () => {
+      await boot(dialect);
+      await trusted().updateSingle({
+        slug: HOME,
+        data: { headline: "h", status: "draft", _overwrite: true },
+      } as never);
+
+      expect(
+        await rest(PUBLISHER, "PATCH", ["singles", HOME], {
+          status: "published",
+          ...OVERWRITE,
+        })
+      ).toBe(200);
+      expect(
+        (await trusted().findSingle({ slug: HOME } as never)) as {
+          status?: unknown;
+        }
+      ).toMatchObject({ headline: "h", status: "published" });
+    });
+
+    it("still asks update of a write naming a field beside the choice, on every path, writing nothing", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      const edit = { status: "published", title: "edited", ...OVERWRITE };
+
+      expect(
+        await rest(
+          PUBLISHER,
+          "PATCH",
+          ["collections", POSTS, "entries", id],
+          edit
+        )
+      ).toBe(403);
+      await expect(
+        as(PUBLISHER).update({
+          collection: POSTS,
+          where: { id: { equals: id } },
+          data: edit,
+        } as never)
+      ).rejects.toThrow();
+      const byIds = await restResponse(
+        PUBLISHER,
+        "POST",
+        ["collections", POSTS, "entries", "bulk-update"],
+        { ids: [id], data: edit }
+      );
+      const byIdsBody = (await byIds.json()) as {
+        items?: unknown[];
+        error?: { code?: unknown; message?: unknown };
+        errors?: { code?: unknown; message?: unknown }[];
+      };
+      // Refused as an edit, whole or for the one row: a route that dropped
+      // the row and answered nothing would not say so.
+      const byIdsRefusal =
+        byIds.status === 403 ? byIdsBody.error : byIdsBody.errors?.[0];
+      expect(byIdsRefusal, JSON.stringify(byIdsBody)).toMatchObject({
+        code: "FORBIDDEN",
+        message: expect.stringMatching(/^You can't edit/),
+      });
+      const batch = await pluginServices().collections.updateMany(
+        POSTS,
+        [{ id, data: edit }],
+        asPlugin(PUBLISHER)
+      );
+      expect(batch).toMatchObject({ successful: 0, failed: 1 });
+      await expect(
+        pluginServices().collections.updateEntry(
+          POSTS,
+          id,
+          edit,
+          asPlugin(PUBLISHER)
+        )
+      ).rejects.toThrow();
+
+      expect(await stored(POSTS, id)).toMatchObject({
+        title: "t",
+        status: "draft",
+      });
+    });
   }
 );

@@ -170,6 +170,7 @@ async function boot(dialect: TestDialect, placement: Placement) {
         ? {}
         : documentWith(placement.path, { heading: "Live", code: "ok" })),
       status: "published",
+      _overwrite: true,
     },
     { overrideAccess: true }
   );
@@ -180,7 +181,11 @@ async function boot(dialect: TestDialect, placement: Placement) {
 type Singles = Awaited<ReturnType<typeof boot>>;
 
 async function hold(singles: Singles, data: Record<string, unknown>) {
-  const result = await singles.update("home", data, { overrideAccess: true });
+  const result = await singles.update(
+    "home",
+    { ...data, _overwrite: true },
+    { overrideAccess: true }
+  );
   expect(result.success, JSON.stringify(result)).not.toBe(false);
 }
 
@@ -234,11 +239,19 @@ describe.each(getConfiguredTestDialects())(
         [
           "published by an update",
           (s: Singles) =>
-            s.update("home", { status: "published" }, { overrideAccess: true }),
+            s.update(
+              "home",
+              { status: "published", _overwrite: true },
+              { overrideAccess: true }
+            ),
         ],
         [
           "promoted directly by a publish of every language",
-          (s: Singles) => s.publishAllLocales("home", { overrideAccess: true }),
+          (s: Singles) =>
+            s.publishAllLocales("home", {
+              overrideAccess: true,
+              data: { _overwrite: true },
+            }),
         ],
       ])(
         "is %s with no tag, its validators seeing the public value",
@@ -283,7 +296,11 @@ describe.each(getConfiguredTestDialects())(
 
         for (const data of [invalid, { ...invalid, status: "published" }]) {
           const result = (await singles
-            .update("home", data, { overrideAccess: true })
+            .update(
+              "home",
+              { ...data, _overwrite: true },
+              { overrideAccess: true }
+            )
             .catch((error: unknown) => error)) as {
             success?: boolean;
             errors?: Array<{ field?: string; message: string }>;

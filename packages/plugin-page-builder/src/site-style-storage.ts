@@ -18,10 +18,24 @@
  *
  * @module @nextlyhq/plugin-page-builder/site-style-storage
  */
-import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import {
+  isPlainRecord,
+  resolveSiteTokens,
+  tokenDisplayLabel,
+  tokenIdentity,
+  type SpacingMode,
+} from "@nextlyhq/blocks-engine";
 import { defineSingle, json, type SingleConfig } from "nextly/config";
 import { NextlyError } from "nextly/errors";
 
+import {
+  openRemovalFor,
+  type OpenRemovalReader,
+  type OpenWork,
+} from "./breakpoint-removal/lock-acceptance";
+import { restoreClasses } from "./breakpoint-removal/restore";
+import { stripClass } from "./breakpoint-removal/strip";
+import { documentVersionOf } from "./document-version";
 import type { StoredSiteStyle } from "./library-contract";
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import {
@@ -33,7 +47,17 @@ import {
   type SectionCheck,
   type SectionPolicy,
 } from "./site-style-record";
-import { readStoredJson } from "./stored-json";
+import {
+  spacingModeReaderOf,
+  type SpacingModeReader,
+} from "./spacing-mode-reader";
+import { readStoredJson, sameStoredValue } from "./stored-json";
+import {
+  sharedStyleVariables,
+  UNKNOWN_TOKEN_CODE,
+  undefinedVariablesMessage,
+} from "./token-usage";
+import { newUndefinedIds } from "./undefined-references";
 
 /** The single the stored tier lives in. One document per site, by design. */
 export const SITE_STYLE_SLUG = "site-style";
@@ -70,31 +94,6 @@ export const BREAKPOINTS_OUTSIDE_SETTINGS =
   "The site's breakpoints are changed in the page builder's Settings.";
 
 /**
- * A JSON value with every object's keys in one order, so two values holding
- * the same thing compare equal however they were stored: Postgres `jsonb`
- * reorders keys, and an unchanged set sent back by a form must not read as a
- * change.
- */
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.keys(value)
-        .sort()
-        .map(key => [key, canonical((value as Record<string, unknown>)[key])])
-    );
-  }
-  return value;
-}
-
-function sameValue(a: unknown, b: unknown): boolean {
-  return (
-    JSON.stringify(canonical(a ?? null)) ===
-    JSON.stringify(canonical(b ?? null))
-  );
-}
-
-/**
  * Refuse a write to this Single that changes its breakpoints, unless the
  * Settings route made it.
  *
@@ -117,7 +116,7 @@ export function refuseBreakpointsOutsideSettings(hook: {
   if (hook.context?.[SITE_SETTINGS_WRITE] === true) return;
   const data = hook.data;
   if (data === undefined || !Object.hasOwn(data, "breakpoints")) return;
-  if (sameValue(data.breakpoints, hook.originalData?.breakpoints)) return;
+  if (sameStoredValue(data.breakpoints, hook.originalData?.breakpoints)) return;
   if (hook.user === undefined && hook.principal === undefined) return;
   throw new NextlyError({
     code: "FORBIDDEN",
@@ -179,28 +178,54 @@ function lockOutsideItsRoute(): NextlyError {
 }
 
 /**
+ * Whether a write changes a locked entry. Still locked after the write, the
+ * entry must come back as it was; an unlock through the lock route is the one
+ * change a locked entry takes. While a breakpoint removal is open, the
+ * settings write may bring it back with exactly the removed breakpoints'
+ * values stripped (`removed`), and no other way. While its undo is open, the
+ * settings write may bring it back exactly as the undo leaves it
+ * (`restored`, the stored tier after the undo by id), or take it out where
+ * the undo does.
+ */
+function lockedEntryChanged(
+  id: string,
+  was: Record<string, unknown>,
+  now: Record<string, unknown> | undefined,
+  removed: ReadonlySet<string> | undefined,
+  restored: ReadonlyMap<string, unknown> | undefined
+): boolean {
+  // Taken out: only the strip's override of a code class, which an undo
+  // takes out again (absent from what the undo leaves).
+  if (now === undefined) return restored === undefined || restored.has(id);
+  if (now.locked !== true || sameStoredValue(was, now)) return false;
+  if (restored !== undefined) return !sameStoredValue(restored.get(id), now);
+  return (
+    removed === undefined || !sameStoredValue(stripClass(was, removed), now)
+  );
+}
+
+/**
  * Refuse what a write does to one stored entry: a locked one changed or
  * removed by anyone, or a lock moved outside the lock route. `now` is the
  * entry as written, absent if removed.
  *
  * An unlocked entry may be removed by a whole-list write: undoing the making
- * of a style writes the section back without it. Checking that nothing uses a
- * style before it goes needs a usage index that has counted every page, which
- * a site holding blocks in Singles does not have yet; the remove route makes
- * that check, and refuses while the index is not whole.
+ * of a style writes the section back without it. The usage index's check is
+ * the remove route's, which refuses while the index is not whole; a style a
+ * stored page still applies is refused on every path all the same, by the
+ * read of the stored documents the write makes under the composition graph
+ * lock (`site-style-removal-lock`).
  */
 function refuseStoredEntryChange(
   id: string,
   was: Record<string, unknown>,
   now: Record<string, unknown> | undefined,
-  lockRoute: boolean
+  lockRoute: boolean,
+  removed: ReadonlySet<string> | undefined,
+  restored: ReadonlyMap<string, unknown> | undefined
 ): void {
   const wasLocked = was.locked === true;
-  // Still locked after the write, so the entry must come back as it was; an
-  // unlock through the lock route is the one change a locked entry takes.
-  const lockedEntryChanged =
-    now === undefined || (now.locked === true && !sameValue(was, now));
-  if (wasLocked && lockedEntryChanged) {
+  if (wasLocked && lockedEntryChanged(id, was, now, removed, restored)) {
     throw NextlyError.conflict({
       reason: "state",
       message: `${sharedStyleName(was)} is locked, so it can't be changed, renamed or removed. Unlock it first.`,
@@ -225,9 +250,10 @@ function refuseStoredEntryChange(
  * error.
  *
  * An unlocked style may still be removed by a whole-list write, which is how
- * an undo of making one is written. The remove route is the editor's delete:
- * it checks, just before it writes, that the usage index is whole and that
- * nothing uses the style.
+ * an undo of making one is written, unless a stored page applies it: that is
+ * refused inside the write's transaction (`site-style-removal-lock`). The
+ * remove route is the editor's delete: it checks, just before it writes, that
+ * the usage index is whole and that nothing uses the style.
  *
  * Applying a style to a block, detaching it and overriding it on one block are
  * page writes, which never reach this Single, so a lock does not stop them.
@@ -235,13 +261,31 @@ function refuseStoredEntryChange(
  * Server code acting as nobody (the Direct API, an import) is trusted, as for
  * the breakpoints.
  */
-export function refuseSharedStyleChangesOutsideTheirRoutes(hook: {
-  data?: Record<string, unknown>;
-  originalData?: Record<string, unknown>;
-  user?: { id: string };
-  principal?: unknown;
-  context?: Record<string, unknown>;
-}): void {
+export function refuseSharedStyleChangesOutsideTheirRoutes(
+  hook: {
+    data?: Record<string, unknown>;
+    originalData?: Record<string, unknown>;
+    user?: { id: string };
+    principal?: unknown;
+    context?: Record<string, unknown>;
+  },
+  /**
+   * The breakpoints an open removal is stripping, for the settings write that
+   * strips them; absent for every other write, and where none is open.
+   */
+  removed?: ReadonlySet<string>,
+  /**
+   * The code's classes, which that write may store a stripped override of: a
+   * locked one comes in as a new stored entry already locked.
+   */
+  supplied?: ReadonlyMap<string, unknown>,
+  /**
+   * For the settings write of an open undo: the stored tier as the undo
+   * leaves it, by id. A locked style may come back exactly so, and the
+   * removal's override of a locked code class may be taken out.
+   */
+  restored?: ReadonlyMap<string, unknown>
+): void {
   const data = hook.data;
   if (data === undefined || !Object.hasOwn(data, "classes")) return;
   if (hook.user === undefined && hook.principal === undefined) return;
@@ -249,14 +293,368 @@ export function refuseSharedStyleChangesOutsideTheirRoutes(hook: {
   const before = classEntriesById(hook.originalData?.classes);
   const after = classEntriesById(data.classes);
   for (const [id, was] of before) {
-    refuseStoredEntryChange(id, was, after.get(id), lockRoute);
+    refuseStoredEntryChange(
+      id,
+      was,
+      after.get(id),
+      lockRoute,
+      removed,
+      restored
+    );
   }
   for (const [id, now] of after) {
-    // A style written already locked is a lock moved outside its route.
+    // A style written already locked is a lock moved outside its route,
+    // except the removal's override of a locked code class: exactly that
+    // class with the removed breakpoints' values stripped.
     if (!before.has(id) && now.locked === true && !lockRoute) {
-      throw lockOutsideItsRoute();
+      const code = supplied?.get(id);
+      const stripped =
+        removed !== undefined &&
+        code !== undefined &&
+        sameStoredValue(stripClass(code, removed), now);
+      if (!stripped) throw lockOutsideItsRoute();
     }
   }
+}
+
+/** The mark the variables remove route puts on its own write. */
+const VARIABLE_REMOVE_WRITE = "pageBuilder.variableRemoveWrite";
+
+/**
+ * The context the variables remove route writes with: it has just made the
+ * in-use check itself, so the Single's guard does not walk the site again.
+ */
+export const VARIABLE_REMOVE_WRITE_CONTEXT: Readonly<Record<string, unknown>> =
+  { [VARIABLE_REMOVE_WRITE]: true };
+
+/** One stored variable as a removal names it: its identity and its name. */
+export interface NamedVariable {
+  readonly id: string;
+  readonly name: string;
+}
+
+/**
+ * The variables a stored or sent tokens section holds, by identity (`id`,
+ * else `name`), each with the name an author knows it by. Read with the
+ * Single's own token rules, so an entry the write gate would refuse, which no
+ * page can resolve, is no variable here either; SQLite hands the section back
+ * as text.
+ */
+export function storedVariables(raw: unknown): Map<string, NamedVariable> {
+  const variables = new Map<string, NamedVariable>();
+  const tokens = checkStoredTokens(readStoredJson(raw)).value?.tokens ?? [];
+  for (const token of tokens) {
+    const id = tokenIdentity(token);
+    if (!variables.has(id)) {
+      variables.set(id, { id, name: tokenDisplayLabel(token) });
+    }
+  }
+  return variables;
+}
+
+/**
+ * One stored token entry's identity, read by the Single's own token rules,
+ * or `undefined` for an entry they cannot read. What a writer changing some
+ * entries keys the others by, so one it cannot read is kept as stored.
+ */
+export function storedVariableIdentity(entry: unknown): string | undefined {
+  const [only] = storedVariables({ tokens: [entry] }).keys();
+  return only;
+}
+
+/**
+ * The identities of the variables the site's code supplies, the engine's own
+ * defaults among them: these merge back on every read, so dropping a stored
+ * override of one resets it and removes nothing.
+ */
+export function suppliedVariableIds(
+  defaults: SiteStyleData | undefined
+): ReadonlySet<string> {
+  return new Set(resolveSiteTokens(defaults?.tokens).tokens.map(tokenIdentity));
+}
+
+/**
+ * Whether the variables are still used, refusing (by throwing) when any is:
+ * the one check a removal makes, handed the site's shared styles as they
+ * will be once the write lands. The plugin supplies it once installed.
+ */
+export type VariablesInUseCheck = (
+  removable: readonly NamedVariable[],
+  classes: readonly unknown[]
+) => Promise<void>;
+
+/**
+ * Refuse a write to this Single that drops a variable still in use.
+ *
+ * A whole-section write of the tokens (the Variables panel's save, an undo,
+ * an import of a token file) removes a variable as surely as the remove
+ * route does, so it is judged by the same check: refused, with the same
+ * in-use refusal, when a block, a page's settings or a shared style still
+ * uses it. Shared styles are unlike that before the transaction: their
+ * removal by a whole list is let through here and the remove route is their
+ * delete, while a variable removed in use leaves every reference resolving to
+ * nothing, so it is refused here on every path. Inside the write's
+ * transaction both are judged alike, against the stored documents, under the
+ * composition graph lock (`site-style-removal-lock`).
+ *
+ * The cost falls only on a write that drops one. The stored identities are
+ * compared first, from values in hand, so a write that edits values or labels,
+ * or adds a variable, asks nothing more. Dropping the stored override of a
+ * variable the code supplies is a reset and drops nothing. The remove route's
+ * own write, which has just made this check, and server code acting as
+ * nobody (an import's take-back), are not judged again.
+ */
+function variableRemovalGuard(
+  check: (() => VariablesInUseCheck | undefined) | undefined,
+  defaults: SiteStyleData | undefined
+): (hook: {
+  data?: Record<string, unknown>;
+  originalData?: Record<string, unknown>;
+  user?: { id: string };
+  principal?: unknown;
+  context?: Record<string, unknown>;
+}) => Promise<void> {
+  return async hook => {
+    const data = hook.data;
+    if (data === undefined || !Object.hasOwn(data, "tokens")) return;
+    if (!variableGuardsJudge(hook)) return;
+    const dropped = droppedVariables(
+      hook.originalData?.tokens,
+      data.tokens,
+      suppliedVariableIds(defaults)
+    );
+    if (dropped.length === 0) return;
+    const inUse = check?.();
+    if (inUse === undefined) return;
+    // The shared styles as they will be once this write lands: the classes it
+    // writes beside the tokens, else the stored ones, over the code's.
+    const classes = Object.hasOwn(data, "classes")
+      ? data.classes
+      : hook.originalData?.classes;
+    await inUse(dropped, sharedStylesOverCode(defaults, classes));
+  };
+}
+
+/**
+ * Whether the variable guards judge a write of this Single: not one made as
+ * nobody (server code, an import's take-back), which is trusted to say what
+ * the site is, and not the variables remove route's own, which has just made
+ * its check. One predicate, so the guards before the transaction and the
+ * judgement inside it (`site-style-removal-lock`) trust the same writes.
+ */
+export function variableGuardsJudge(hook: {
+  user?: unknown;
+  principal?: unknown;
+  context?: Readonly<Record<string, unknown>>;
+}): boolean {
+  if (hook.user === undefined && hook.principal === undefined) return false;
+  return hook.context?.[VARIABLE_REMOVE_WRITE] !== true;
+}
+
+/**
+ * The site's shared styles as the compiler merges them, the code's and the
+ * stored section `classes` (as stored or as written; SQLite hands it back as
+ * text), in that order.
+ */
+export function sharedStylesOverCode(
+  defaults: SiteStyleData | undefined,
+  classes: unknown
+): readonly unknown[] {
+  return (
+    resolveSiteStyle(
+      defaults,
+      readSiteStyleRecord({ classes: readStoredJson(classes) })
+    ).classes ?? []
+  );
+}
+
+/** Every variable the stored shared styles name, the first entry per id. */
+function sharedStylesVariables(raw: unknown): Set<string> {
+  const found = new Set<string>();
+  for (const entry of classEntriesById(raw).values()) {
+    for (const identity of sharedStyleVariables(entry)) found.add(identity);
+  }
+  return found;
+}
+
+/**
+ * The variables the shared styles `classes` ADD, over the ones `held`
+ * already named, that the site does not define with the tokens section
+ * `tokens`: every tier as the stylesheet resolves them. Both sections as
+ * stored or as written; SQLite hands them back as text. Empty, and the
+ * variables not resolved, where the shared styles name no variable.
+ */
+export function undefinedSharedStyleVariables(
+  defaults: SiteStyleData | undefined,
+  sections: { classes: unknown; held: unknown; tokens: unknown }
+): string[] {
+  const used = sharedStylesVariables(sections.classes);
+  // Nothing named, nothing to resolve: an ordinary class save pays nothing.
+  if (used.size === 0) return [];
+  const defined = new Set(
+    resolveSiteTokens(
+      resolveSiteStyle(
+        defaults,
+        readSiteStyleRecord({ tokens: readStoredJson(sections.tokens) })
+      ).tokens
+    ).tokens.map(tokenIdentity)
+  );
+  return newUndefinedIds(used, defined, sharedStylesVariables(sections.held));
+}
+
+/** The refusal of shared styles naming variables the site does not define. */
+export function undefinedSharedStyleVariablesRefusal(
+  added: readonly string[]
+): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: "classes",
+        code: UNKNOWN_TOKEN_CODE,
+        message: undefinedVariablesMessage(
+          "Shared styles",
+          added,
+          "the shared style"
+        ),
+      },
+    ],
+  });
+}
+
+/**
+ * Refuse a write to this Single whose shared styles ADD a reference to a
+ * variable the site will not define once the write lands.
+ *
+ * A write of the classes alone asks no variable check, so without this a
+ * shared style could be saved naming a variable just removed, and every page
+ * wearing it would style with nothing. The rule is the page fence's
+ * (`fields/token-reference-judgement`), judged by the same comparison: a
+ * reference the stored shared styles already held is kept, since a variable
+ * removed before this rule existed must not make them unsavable, and only a
+ * reference this write adds is refused. The variables defined are every tier
+ * as the stylesheet resolves them, with this write's tokens when it writes
+ * them, else the stored ones. Server code acting as nobody, and the remove
+ * route's own write, are not judged, as the variable guard does not judge
+ * them.
+ */
+function sharedStyleVariableGuard(
+  defaults: SiteStyleData | undefined
+): (hook: {
+  data?: Record<string, unknown>;
+  originalData?: Record<string, unknown>;
+  user?: { id: string };
+  principal?: unknown;
+  context?: Record<string, unknown>;
+}) => void {
+  return hook => {
+    const data = hook.data;
+    if (data === undefined || !Object.hasOwn(data, "classes")) return;
+    if (!variableGuardsJudge(hook)) return;
+    // The same judgement the site style's write makes again inside its
+    // transaction (`site-style-removal-lock`).
+    const added = undefinedSharedStyleVariables(defaults, {
+      classes: data.classes,
+      held: hook.originalData?.classes,
+      tokens: Object.hasOwn(data, "tokens")
+        ? data.tokens
+        : hook.originalData?.tokens,
+    });
+    if (added.length === 0) return;
+    throw undefinedSharedStyleVariablesRefusal(added);
+  };
+}
+
+/**
+ * The stored variables a write drops: held before, absent after, and not
+ * supplied by the code, by identity.
+ */
+export function droppedVariables(
+  before: unknown,
+  after: unknown,
+  supplied: ReadonlySet<string>
+): NamedVariable[] {
+  const kept = storedVariables(after);
+  return [...storedVariables(before).values()].filter(
+    variable => !kept.has(variable.id) && !supplied.has(variable.id)
+  );
+}
+
+/**
+ * The stored shared styles a write drops: an id held before, absent after,
+ * and not one the code supplies, read by the same entry identity the lock
+ * guard reads (the first entry with an id). Dropping a stored override of a
+ * code class resets it, and the class is still defined, so that drops
+ * nothing.
+ */
+export function droppedSharedStyles(
+  before: unknown,
+  after: unknown,
+  supplied: ReadonlySet<string>
+): string[] {
+  const kept = classEntriesById(after);
+  return [...classEntriesById(before).keys()].filter(
+    id => !kept.has(id) && !supplied.has(id)
+  );
+}
+
+/**
+ * The shared-style guard as the Single runs it. The settings write, and only
+ * it, is judged with the open breakpoint removal's ids, read from the
+ * plugin's own table: a locked style may come back stripped of exactly those,
+ * or, while an undo is open, exactly as the undo puts it back. Where the open
+ * work cannot be read, nothing extra is accepted.
+ */
+function sharedStyleGuard(
+  openRemoval: OpenRemovalReader | undefined,
+  supplied: SiteStyleData["classes"]
+): (
+  hook: Parameters<typeof refuseSharedStyleChangesOutsideTheirRoutes>[0]
+) => Promise<void> {
+  return async hook => {
+    const settingsWrite = hook.context?.[SITE_SETTINGS_WRITE] === true;
+    const touchesClasses =
+      hook.data !== undefined && Object.hasOwn(hook.data, "classes");
+    // The settings route writes the Single on its own, never inside a
+    // transaction, so its write may read the removal on the pool.
+    const work =
+      settingsWrite && touchesClasses
+        ? await openRemovalFor(openRemoval, { inTransaction: false })
+        : null;
+    refuseSharedStyleChangesOutsideTheirRoutes(
+      hook,
+      work?.kind === "strip" ? work.removal.ids : undefined,
+      new Map((supplied ?? []).map(entry => [entry.id, entry])),
+      work?.kind === "restore" && work.classes !== undefined
+        ? restoredTier(hook.originalData?.classes, supplied, work.classes)
+        : undefined
+    );
+  };
+}
+
+/** What an open undo kept of the shared styles, with every id it took out. */
+type RestoredClasses = NonNullable<
+  Extract<OpenWork, { readonly kind: "restore" }>["classes"]
+>;
+
+/**
+ * The stored class tier as an undo's settings write leaves it, by id: the
+ * same restore the undo writes (`restoreClasses`), so the lock accepts that
+ * write and nothing else.
+ */
+function restoredTier(
+  stored: unknown,
+  supplied: SiteStyleData["classes"],
+  classes: RestoredClasses
+): ReadonlyMap<string, unknown> {
+  const tier = readStoredJson(stored);
+  return classEntriesById(
+    restoreClasses(
+      Array.isArray(tier) ? tier : [],
+      supplied ?? [],
+      classes.fragment,
+      classes.ids
+    ).value
+  );
 }
 
 /**
@@ -275,7 +673,16 @@ export function refuseSharedStyleChangesOutsideTheirRoutes(hook: {
  *   whole sections at a time; a field-per-property schema here would be a
  *   third statement of shapes two packages already agree on.
  */
-export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
+export function siteStyleSingle(
+  policy: SectionPolicy = {},
+  /** The open breakpoint removal, which a locked shared style may be stripped by. */
+  openRemoval?: OpenRemovalReader,
+  /**
+   * The in-use check a write dropping a variable is judged by, once the
+   * plugin is installed; absent, such a write is not judged.
+   */
+  variablesInUse?: () => VariablesInUseCheck | undefined
+): SingleConfig {
   return defineSingle({
     slug: SITE_STYLE_SLUG,
     label: { singular: "Site Style" },
@@ -285,7 +692,9 @@ export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
     hooks: {
       beforeValidate: [
         refuseBreakpointsOutsideSettings,
-        refuseSharedStyleChangesOutsideTheirRoutes,
+        sharedStyleGuard(openRemoval, policy.defaults?.classes),
+        variableRemovalGuard(variablesInUse, policy.defaults),
+        sharedStyleVariableGuard(policy.defaults),
       ],
     },
     // No `access` block, deliberately: read and update both fall through to
@@ -365,14 +774,25 @@ export interface SiteStyleReader {
     slug: string;
     overrideAccess?: boolean;
   }): Promise<unknown>;
+  /**
+   * The plugin services the Direct API offers, where the site's spacing model
+   * is read (it lives in the plugin's own table, not in the Single). Optional:
+   * a reader without it reads no model, and the engine's default applies.
+   */
+  readonly plugins?: Readonly<
+    Record<string, Readonly<Record<string, unknown>> | undefined>
+  >;
 }
 
 /**
  * The stored document's four sections exactly as stored, each `null` where
  * nothing is stored, and nothing else the row carries (its id, timestamps or
- * any field a host added).
+ * any field a host added), with the site's recorded spacing model beside them.
  */
-function storedSiteStyleOf(doc: unknown): StoredSiteStyle {
+function storedSiteStyleOf(
+  doc: unknown,
+  spacingMode: SpacingMode | null
+): StoredSiteStyle {
   const record =
     typeof doc === "object" && doc !== null
       ? (doc as Record<string, unknown>)
@@ -382,6 +802,7 @@ function storedSiteStyleOf(doc: unknown): StoredSiteStyle {
     fonts: record.fonts ?? null,
     classes: record.classes ?? null,
     breakpoints: record.breakpoints ?? null,
+    spacingMode,
   };
 }
 
@@ -402,13 +823,51 @@ export async function readStoredSiteStyle(args: {
   slug?: string;
   /** Read past the Single's own read permission. */
   overrideAccess?: true;
+  /**
+   * Where to read the model when `nextly` offers no plugin services: a server
+   * path hands the booted instance's reader (`spacing-mode-booted`). Handed in
+   * rather than imported, so this module stays safe for a browser entry.
+   */
+  bootedReader?: () => Promise<SpacingModeReader | undefined>;
 }): Promise<StoredSiteStyle> {
-  return storedSiteStyleOf(
-    await args.nextly.findSingle({
+  return (await readStoredSiteStyleVersioned(args)).stored;
+}
+
+/**
+ * The stored site style, and the Single's version as the same read gave it,
+ * for a write made from that read to send back.
+ */
+export async function readStoredSiteStyleVersioned(
+  args: Parameters<typeof readStoredSiteStyle>[0]
+): Promise<{ stored: StoredSiteStyle; rev: string | undefined }> {
+  // Read beside the Single, so every reader of the stored style, the
+  // published render and the editor's route alike, compiles under the model
+  // the site recorded.
+  const readDoc = () =>
+    args.nextly.findSingle({
       slug: args.slug ?? SITE_STYLE_SLUG,
       ...(args.overrideAccess === true ? { overrideAccess: true } : {}),
-    })
-  );
+    });
+  const own = spacingModeReaderOf(args.nextly);
+  if (own !== undefined) {
+    const [doc, spacingMode] = await Promise.all([readDoc(), own.read()]);
+    return {
+      stored: storedSiteStyleOf(doc, spacingMode),
+      rev: documentVersionOf(doc),
+    };
+  }
+  // The booted instance only AFTER the document read: a lazy reader boots
+  // the instance on its first read, and asked before that there is none, so
+  // the page would render with no model.
+  const doc = await readDoc();
+  const booted = await args.bootedReader?.();
+  return {
+    stored: storedSiteStyleOf(
+      doc,
+      booted === undefined ? null : await booted.read()
+    ),
+    rev: documentVersionOf(doc),
+  };
 }
 
 /**
@@ -429,16 +888,60 @@ export async function loadSiteStyle(args: {
   defaults?: SiteStyleData;
   /** The Single's RESOLVED slug, where a host renamed it. */
   slug?: string;
+  /** As {@link readStoredSiteStyle} takes it. */
+  bootedReader?: () => Promise<SpacingModeReader | undefined>;
 }): Promise<SiteStyleData> {
-  return resolveSiteStyle(
-    args.defaults,
-    readSiteStyleRecord(
-      // The slug alone, never an access override: this is published, and
-      // its read keeps the posture of the reader it was handed.
-      await readStoredSiteStyle({
-        nextly: args.nextly,
-        ...(args.slug === undefined ? {} : { slug: args.slug }),
-      })
-    )
+  return (await loadSiteStyleVersioned(args)).style;
+}
+
+/**
+ * The site style as {@link loadSiteStyle} gives it, and the Single's version
+ * as that read gave it, for a write made from the style to send back.
+ */
+export async function loadSiteStyleVersioned(
+  args: Parameters<typeof loadSiteStyle>[0]
+): Promise<{ style: SiteStyleData; rev: string | undefined }> {
+  // The slug alone, never an access override: this is published, and its
+  // read keeps the posture of the reader it was handed.
+  const { stored, rev } = await readStoredSiteStyleVersioned({
+    nextly: args.nextly,
+    ...(args.slug === undefined ? {} : { slug: args.slug }),
+    ...(args.bootedReader === undefined
+      ? {}
+      : { bootedReader: args.bootedReader }),
+  });
+  return { style: resolvedSiteStyleOf(stored, args.defaults), rev };
+}
+
+/** The site style a stored record resolves to over the code's defaults. */
+function resolvedSiteStyleOf(
+  stored: StoredSiteStyle,
+  defaults: SiteStyleData | undefined
+): SiteStyleData {
+  return resolveSiteStyle(defaults, readSiteStyleRecord(stored));
+}
+
+/**
+ * The site style the Single's document `doc` resolves to over the code's
+ * defaults, as {@link loadSiteStyle} resolves it, with no spacing model: the
+ * one reading for every judgement of a write against the site's definitions,
+ * whether `doc` was read through the Direct API or on a write's own
+ * transaction. The spacing model changes no class, variable or breakpoint.
+ * Each section is read as stored, SQLite's text included.
+ */
+export function siteStyleOfDocument(
+  doc: unknown,
+  defaults: SiteStyleData | undefined
+): SiteStyleData {
+  const stored = storedSiteStyleOf(doc, null);
+  return resolvedSiteStyleOf(
+    {
+      ...stored,
+      tokens: readStoredJson(stored.tokens) ?? null,
+      fonts: readStoredJson(stored.fonts) ?? null,
+      classes: readStoredJson(stored.classes) ?? null,
+      breakpoints: readStoredJson(stored.breakpoints) ?? null,
+    },
+    defaults
   );
 }

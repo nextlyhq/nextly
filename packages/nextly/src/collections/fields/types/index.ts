@@ -20,6 +20,7 @@ import type { FieldGroupFieldConfig } from "./component";
 import type { DateFieldConfig } from "./date";
 import type { EmailFieldConfig } from "./email";
 import type { GroupFieldConfig } from "./group";
+import type { IconFieldConfig } from "./icon";
 import type { JSONFieldConfig } from "./json";
 import type { NumberFieldConfig } from "./number";
 import type { PasswordFieldConfig } from "./password";
@@ -42,6 +43,7 @@ export * from "./rich-text";
 export * from "./email";
 export * from "./password";
 export * from "./code";
+export * from "./icon";
 
 // Numeric field types
 export * from "./number";
@@ -91,6 +93,7 @@ export type DataFieldConfig =
   | EmailFieldConfig
   | PasswordFieldConfig
   | CodeFieldConfig
+  | IconFieldConfig
   | NumberFieldConfig
   | CheckboxFieldConfig
   | DateFieldConfig
@@ -127,6 +130,7 @@ export type DataFieldType =
   | "email"
   | "password"
   | "code"
+  | "icon"
   | "number"
   | "checkbox"
   | "date"
@@ -165,6 +169,7 @@ export const DATA_FIELD_TYPES: readonly DataFieldType[] = [
   "email",
   "password",
   "code",
+  "icon",
   "number",
   "checkbox",
   "date",

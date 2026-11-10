@@ -18,6 +18,7 @@ process.env.NEXTLY_SECRET =
   "test-secret-must-be-at-least-32-characters-long!!";
 
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -40,6 +41,42 @@ import { pageBuilder } from "../plugin";
 type Row = Record<string, unknown>;
 
 const ORIGIN = "http://localhost";
+
+/** While set, every write to the retired table is refused, as a lost record is. */
+let refuseRetiredWrites = false;
+
+/** The version numbers a component's history holds, newest first. */
+type HistoryNumbers = (componentId: string) => Promise<number[]>;
+
+/** Set by the plugin below, which reads history through its own context. */
+let historyOf: HistoryNumbers | undefined;
+
+/**
+ * A plugin that refuses retired-table writes while asked to, and reads a
+ * component's history as a plugin does.
+ */
+const refusingRetired = definePlugin({
+  name: "@t/refusing-retired",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init(ctx) {
+    historyOf = async componentId =>
+      (
+        await ctx.services.versions.list(
+          {
+            scopeKind: "collection",
+            scopeSlug: COMPONENTS_SLUG,
+            entryId: componentId,
+          },
+          { limit: 200 }
+        )
+      ).flatMap(row => (row.versionNo === null ? [] : [row.versionNo]));
+    ctx.hooks.on("beforeCreate", COMPONENT_RETIRED_SLUG, hook => {
+      if (refuseRetiredWrites) throw new Error("The retired table is down.");
+      return (hook as { data?: unknown }).data;
+    });
+  },
+});
 
 /** A hero exposing the named fields, each on a heading of its own. */
 const hero = (fields: string[]): Row => ({
@@ -66,6 +103,7 @@ describe.each(getConfiguredTestDialects())(
     let current: TestNextly | undefined;
 
     afterEach(async () => {
+      refuseRetiredWrites = false;
       await current?.destroy();
       current = undefined;
     });
@@ -73,7 +111,7 @@ describe.each(getConfiguredTestDialects())(
     async function boot(): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [pageBuilder(), refusingRetired],
         seedPublic: true,
       });
       // The instance's first user is its super admin, so it is made here
@@ -168,6 +206,7 @@ describe.each(getConfiguredTestDialects())(
         data: {
           content: hero(fields),
           ...(status === undefined ? {} : { status }),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -253,6 +292,39 @@ describe.each(getConfiguredTestDialects())(
         [heroId, "property", "title"],
       ]);
     });
+
+    it("keeps a lost retirement after more saves than retention keeps", async () => {
+      const t = await boot();
+      const heroId = await publishedHero(t);
+      // The record of this removal fails, and so does every repair, so the
+      // removal lives on only in the versions either side of it.
+      refuseRetiredWrites = true;
+      await save(t, heroId, ["body"], "published");
+      expect(await retiredRows(t)).toEqual([]);
+      // More held saves than retention keeps (50 a document by default), so
+      // the version from before the removal is pruned unless it is held.
+      for (let save_ = 0; save_ < 55; save_ += 1) {
+        await save(t, heroId, ["body", save_ % 2 === 0 ? "even" : "odd"]);
+      }
+      // Held: the version before the removal, and the removal, outlive
+      // retention, so a repair made after a restart can still read them.
+      const held = await historyOf!(heroId);
+      expect(held).toContain(1);
+      expect(held).toContain(2);
+      refuseRetiredWrites = false;
+      const cookie = await reader(t);
+
+      expect((await facts(cookie, heroId)).retired).toEqual({
+        properties: ["title"],
+        slots: [],
+      });
+      expect(triples(await retiredRows(t))).toEqual([
+        [heroId, "property", "title"],
+      ]);
+      // Recorded, so released: the next save's retention prunes them.
+      await save(t, heroId, ["body", "after"]);
+      expect(await historyOf!(heroId)).not.toContain(1);
+    }, 120_000);
 
     it("does not retire a field only a draft held", async () => {
       const t = await boot();

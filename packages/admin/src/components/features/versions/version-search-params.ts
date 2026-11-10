@@ -11,9 +11,31 @@
 
 import {
   defaultPair,
+  pairEndingAt,
   type PairableVersion,
   type PairResolution,
 } from "./version-pairing";
+
+/**
+ * What a comparison's `from` may name besides a version number: the version
+ * before `to` in its own language, for a link that knows the change it wants
+ * to show but not the number of the version before it.
+ */
+export const PREVIOUS_VERSION = "previous";
+
+/** A comparison's start: a version number, or the one before `to`. */
+export type ComparisonFrom = number | typeof PREVIOUS_VERSION;
+
+/**
+ * A comparison's `from`: a version number, as `readVersionParam` reads one, or
+ * the named baseline `previous`. A repeated parameter takes its first value.
+ */
+export function readFromParam(
+  value: string | string[] | undefined
+): ComparisonFrom | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return raw === PREVIOUS_VERSION ? PREVIOUS_VERSION : readVersionParam(raw);
+}
 
 /**
  * One numeric search parameter, or undefined for anything that is not a version
@@ -70,11 +92,18 @@ export function readLocaleParam(
 
 export function resolvePair(
   versions: readonly PairableVersion[],
-  from: number | undefined,
+  from: ComparisonFrom | undefined,
   to: number | undefined,
   hasMore: boolean
 ): PairResolution {
-  if (from !== undefined && to !== undefined) return { kind: "pair", from, to };
+  if (from === PREVIOUS_VERSION && to !== undefined) {
+    // The change `to` made: compared with the version before it in its own
+    // language, as choosing it in the history does.
+    return pairEndingAt(versions, to, hasMore);
+  }
+  if (typeof from === "number" && to !== undefined) {
+    return { kind: "pair", from, to };
+  }
   // The default pair is derived rather than read off the top of the list: on a
   // localized document the two newest rows are routinely different languages,
   // and the server rejects a cross-locale pair — so a page opened with no

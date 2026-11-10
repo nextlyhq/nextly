@@ -562,12 +562,18 @@ export interface DirectAPIConfig {
   request?: Request;
 
   /**
-   * Include hidden fields in the response.
+   * Include hidden fields (`admin.hidden: true`) in the response.
    *
-   * Hidden fields (defined with `hidden: true` in field config)
-   * are normally excluded from responses. Set to `true` to include them.
+   * `admin.hidden` is a UI flag, so every read returns such fields unless it
+   * passes `false`, trusted or judged as a caller alike; a field's read rule
+   * (`access.read`) is what keeps a value from a caller. With `false`, a
+   * `where` or `sort` naming a hidden field is refused, as is an aggregate's
+   * group key or date field, once the caller has passed the read gate. A
+   * related document populated at a `depth` loses its own collection's hidden
+   * fields too, and a user read its hidden custom user fields.
+   * Password fields are never returned, whatever this says.
    *
-   * @default false
+   * @default true
    */
   showHiddenFields?: boolean;
 

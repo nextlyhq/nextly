@@ -175,7 +175,11 @@ test.describe("the Add panel", () => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
 
-    await page.getByRole("button", { name: "Add a block to Section" }).click();
+    await page
+      .getByRole("button", {
+        name: "Drop a block here, or click to add one, in Section",
+      })
+      .click();
     await expect(placementLine(page)).toHaveText("Adding inside Section");
     await tile(page, "Divider").click();
     await expect(placementLine(page)).toHaveText("Adding after Divider");

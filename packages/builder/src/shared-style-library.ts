@@ -10,8 +10,9 @@
  * @module shared-style-library
  */
 import {
+  classNameOf,
+  isLook,
   MAX_NAMED_CLASS_NAME_LENGTH,
-  namedClassName,
   tokenLabelIssue,
   type NamedClass,
   type NodeStyles,
@@ -51,17 +52,42 @@ export interface SharedStylesUsage {
    * keeps them floors for good.
    *
    * Optional, so a host written before it existed still compiles. Absent
-   * means unknown: while the counts are not whole the tab asks again every
-   * 15 seconds, at most 20 times (`USAGE_RECOUNT_MS` and
-   * `USAGE_RECOUNT_UNKNOWN_MAX` in the panel), so it neither stops while the
-   * site may still be counting nor asks for ever where it cannot finish.
+   * means unknown, and the tab asks again as it does while counting: every
+   * 15 seconds while the counts are not whole, until 20 asks in a row change
+   * nothing (`USAGE_RECOUNT_MS` and `USAGE_RECOUNT_IDLE_MAX` in the panel), so
+   * it neither stops while the counts still move nor asks for ever where they
+   * cannot finish.
    */
   readonly counting?: boolean;
   /** Whether this author may lock and unlock shared styles. */
   readonly mayLock: boolean;
+  /**
+   * Whether this author may ask for the pages to be counted now
+   * ({@link SharedStylesAccess.count}). Optional, so a host written before it
+   * existed still compiles; absent means no.
+   *
+   * @experimental Settles with the Shared styles tab.
+   */
+  readonly mayCount?: boolean;
   /** Each style asked about, by id. */
   readonly styles: ReadonlyMap<string, SharedStyleReach>;
 }
+
+/**
+ * What asking for the pages to be counted now answered: how far the counting
+ * got, in the usage read's terms, or why it was refused.
+ *
+ * @experimental Settles with the Shared styles tab.
+ */
+export type SharedStylesCount =
+  | {
+      readonly kind: "counted";
+      /** Every page is counted now, so the counts can be exact. */
+      readonly whole: boolean;
+      /** Pages are left that a further count would reach. */
+      readonly counting: boolean;
+    }
+  | { readonly kind: "refused"; readonly reason: string };
 
 /** One document a shared style is used on. */
 export interface SharedStyleUse {
@@ -119,6 +145,8 @@ export interface SharedStyleRow {
   readonly locked: boolean;
   /** Supplied by the site's code: shown, never renamed, locked or removed. */
   readonly inCode: boolean;
+  /** A look, bound to one block type, rather than a shared style. */
+  readonly look?: boolean;
   readonly styles: NodeStyles;
 }
 
@@ -135,15 +163,29 @@ export function sharedStyleRows(
     id: entry.id,
     name: sharedStyleName(entry),
     slug: entry.slug,
-    className: `.${namedClassName(entry.slug)}`,
+    // A look's class is written under its own prefix.
+    className: `.${classNameOf(entry)}`,
     locked: entry.locked === true,
     inCode: suppliedIds.has(entry.id),
+    ...(isLook(entry) ? { look: true } : {}),
     styles: entry.styles,
   }));
 }
 
+/**
+ * The library without its looks: the shared styles an author applies to any
+ * block, as the Shared styles tab and the picker list them. A look is bound
+ * to one block type and is picked from that block's own tiles.
+ */
+export function sharedStylesOnly(library: readonly NamedClass[]): NamedClass[] {
+  return library.filter(entry => !isLook(entry));
+}
+
 /** A style's name: its label, or its slug for a style made before labels. */
-function sharedStyleName(entry: Pick<NamedClass, "slug" | "label">): string {
+/** A class's name as the surfaces show it: its label, or its slug when blank. */
+export function sharedStyleName(
+  entry: Pick<NamedClass, "slug" | "label">
+): string {
   const label = entry.label?.trim();
   return label === undefined || label === "" ? entry.slug : label;
 }
@@ -227,12 +269,16 @@ export function sharedStyleSearchText(
   );
 }
 
-/** The rows a search finds, by name, class name, property or value. */
-export function searchSharedStyles(
-  rows: readonly SharedStyleRow[],
+/**
+ * The rows a search finds, by name, class name, property or value, in their
+ * order. Any row a shared style's row extends, so a look's row comes back as
+ * the row it was.
+ */
+export function searchSharedStyles<Row extends SharedStyleRow>(
+  rows: readonly Row[],
   query: string,
-  textOf: (row: SharedStyleRow) => string
-): SharedStyleRow[] {
+  textOf: (row: Row) => string
+): Row[] {
   const needle = searchable(query.trim());
   if (needle === "") return [...rows];
   return rows.filter(row => textOf(row).includes(needle));
@@ -381,54 +427,24 @@ function resolvedColour(colour: string): string {
     : colour;
 }
 
-/** Which end of the scale a colour sits at, where that can be told. */
-type Lightness = "light" | "dark" | undefined;
-
-/** OKLCH and OKLab lead with lightness, as a number from 0 to 1 or a percentage. */
-const OK_LIGHTNESS = /^okl(?:ch|ab)\(\s*([\d.]+)(%?)/i;
-
 /**
- * Whether a colour is light or dark: by the contrast verdict where it can
- * measure it (nearer black or white), else from what the value states, an
- * OKLCH or OKLab lightness or the keywords `white` and `black`, else unknown.
- * The verdict's parser reads hex and rgb() only, and a preview may hold any
- * colour CSS takes.
+ * The contrast between two colours, each resolved by the browser first
+ * ({@link resolvedColour}), by the verdict the colour field shows
+ * ({@link contrastOf}); `undefined` when either still cannot be measured.
+ * Nothing is guessed: two colours either side of a light/dark line can be
+ * all but the same.
  */
-function lightnessOf(colour: string): Lightness {
-  const resolved = resolvedColour(colour);
-  const onBlack = contrastOf(resolved, "#000000", undefined);
-  const onWhite = contrastOf(resolved, "#ffffff", undefined);
-  if (onBlack !== undefined && onWhite !== undefined) {
-    return onBlack.ratio >= onWhite.ratio ? "light" : "dark";
-  }
-  return statedLightness(colour.trim().toLowerCase());
-}
-
-/** The lightness a colour the verdict cannot read states in its own text. */
-function statedLightness(text: string): Lightness {
-  if (text === "white") return "light";
-  if (text === "black") return "dark";
-  const ok = OK_LIGHTNESS.exec(text);
-  if (ok === null) return undefined;
-  const lightness = Number(ok[1]) / (ok[2] === "%" ? 100 : 1);
-  if (!Number.isFinite(lightness)) return undefined;
-  // About where text on it reads equally well in black or in white.
-  return lightness >= 0.6 ? "light" : "dark";
+function ratioOf(fg: string, bg: string): number | undefined {
+  return contrastOf(resolvedColour(fg), resolvedColour(bg), undefined)?.ratio;
 }
 
 /**
- * Whether text drawn with `fg` on `bg` reads: by the contrast verdict the
- * colour field shows ({@link contrastOf}) where it can measure the pair;
- * else a light colour on a dark one reads and two at the same end do not;
- * else unknown. Unknown is never taken as readable.
+ * Whether text drawn with `fg` on `bg` reads, by a measured ratio; unknown
+ * where the pair cannot be measured, which is never taken as readable.
  */
 function readability(fg: string, bg: string): boolean | undefined {
-  const verdict = contrastOf(resolvedColour(fg), resolvedColour(bg), undefined);
-  if (verdict !== undefined) return verdict.ratio >= READABLE_RATIO;
-  const text = lightnessOf(fg);
-  const ground = lightnessOf(bg);
-  if (text === undefined || ground === undefined) return undefined;
-  return text !== ground;
+  const ratio = ratioOf(fg, bg);
+  return ratio === undefined ? undefined : ratio >= READABLE_RATIO;
 }
 
 /**
@@ -484,7 +500,13 @@ export function sharedStyleTile(
   const outlined = notShownToRead(preview, specimen, page);
   return {
     page,
-    specimen: outlined ? outlinedSpecimen(specimen, page) : specimen,
+    specimen: outlined
+      ? outlinedSpecimen(
+          specimen,
+          page,
+          preview.backgroundColor ?? page.backgroundColor
+        )
+      : specimen,
     darkUnreadable,
     outlined,
   };
@@ -511,20 +533,59 @@ function notShownToRead(
 }
 
 /**
- * The "Aa" with an outline painted under its fill, in the page's colour,
- * which contrasts with the page's text. Without the site's page colour the
- * tab's own class draws the outline from the editor's.
+ * The "Aa" with an outline it shows by on its own background. Where that
+ * background can be measured, one stroke painted under the fill, in the
+ * colour that measures best against it of the page's background and text and
+ * the engine's light and dark text. Where it cannot, a light and a dark halo
+ * together, which show on any colour.
  */
 function outlinedSpecimen(
   specimen: Readonly<Record<string, string>>,
-  page: { backgroundColor?: string }
+  page: { backgroundColor?: string; color?: string },
+  background: string | undefined
 ): Readonly<Record<string, string>> {
-  if (page.backgroundColor === undefined) return specimen;
+  const light = sharedStylePageTile(ENGINE_TOKENS, "dark").color;
+  const dark = sharedStylePageTile(ENGINE_TOKENS, "light").color;
+  const outline =
+    background === undefined
+      ? undefined
+      : bestAgainst(background, [
+          page.backgroundColor,
+          page.color,
+          dark,
+          light,
+        ]);
+  if (outline !== undefined) {
+    return {
+      ...specimen,
+      WebkitTextStroke: `2px ${outline}`,
+      paintOrder: "stroke fill",
+    };
+  }
   return {
     ...specimen,
-    WebkitTextStroke: `2px ${page.backgroundColor}`,
-    paintOrder: "stroke fill",
+    textShadow: `0 0 1px ${dark ?? "currentcolor"}, 0 0 3px ${light ?? "currentcolor"}`,
+    // No stroke over the halos, whatever a class supplies: one would hide the
+    // inner dark halo, and could be the very colour of a background this
+    // cannot measure.
+    WebkitTextStroke: "0",
   };
+}
+
+/** The candidate that measures best against `background`, if any measures. */
+function bestAgainst(
+  background: string,
+  candidates: readonly (string | undefined)[]
+): string | undefined {
+  let best: { colour: string; ratio: number } | undefined;
+  for (const colour of candidates) {
+    if (colour === undefined) continue;
+    const ratio = ratioOf(colour, background);
+    if (ratio !== undefined && (best === undefined || ratio > best.ratio)) {
+      best = { colour, ratio };
+    }
+  }
+  return best?.colour;
 }
 
 /**
@@ -565,7 +626,7 @@ function counted(
 }
 
 /** "a", "a and b", "a, b and c". */
-function listed(parts: readonly string[]): string {
+export function listedWords(parts: readonly string[]): string {
   if (parts.length <= 1) return parts.join("");
   return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1) ?? ""}`;
 }
@@ -597,7 +658,9 @@ export function sharedStyleReachSentence(
       .filter(kind => reach.byKind[kind] > 0)
       .map(kind => counted(reach.byKind[kind], KIND_WORDS[kind]));
     if (kinds.length > 0) {
-      parts.push(`on ${reach.complete ? "" : "at least "}${listed(kinds)}`);
+      parts.push(
+        `on ${reach.complete ? "" : "at least "}${listedWords(kinds)}`
+      );
     }
   }
   if (parts.length > 0) {
@@ -609,9 +672,37 @@ export function sharedStyleReachSentence(
   return exact ? "Not used anywhere" : "No uses counted yet";
 }
 
-/** A row's count: its documents, with "+" when that is a floor. */
-export function sharedStyleReachChip(reach: SharedStyleReach): string {
-  return `${reach.documents}${reach.complete ? "" : "+"}`;
+/** A row's count in words, and whether it is a zero not counted yet. */
+export interface SharedStyleReachChip {
+  readonly words: string;
+  /** No use found so far on a site not counted in full: drawn muted. */
+  readonly uncounted: boolean;
+}
+
+/**
+ * A row's count: its documents, with "+" when that is a floor, and what they
+ * are. A bare number was read as uses, 17 blocks on 2 pages reading "2", so
+ * the chip names the kind it counts: "4 pages", or "5 places" across several
+ * kinds, which the row's name says one by one. A zero that is a floor says
+ * "Not counted yet" rather than "0+ pages", a number that says nothing.
+ */
+export function sharedStyleReachChip(
+  reach: SharedStyleReach
+): SharedStyleReachChip {
+  if (reach.documents === 0 && !reach.complete) {
+    return { words: "Not counted yet", uncounted: true };
+  }
+  const kinds = (Object.keys(KIND_WORDS) as SharedStyleKind[]).filter(
+    kind => reach.byKind[kind] > 0
+  );
+  const [only] = kinds;
+  // Nothing used reads in pages, the kind a style is most often on.
+  const words: readonly [string, string] =
+    kinds.length > 1 ? ["place", "places"] : KIND_WORDS[only ?? "pages"];
+  const plus = reach.complete ? "" : "+";
+  const [one, many] = words;
+  const noun = reach.documents === 1 && plus === "" ? one : many;
+  return { words: `${reach.documents}${plus} ${noun}`, uncounted: false };
 }
 
 /**
@@ -723,7 +814,7 @@ export function sharedStyleFilterEmpty(
  * the tab says the same before it is asked.
  */
 export const SHARED_STYLE_NOT_WHOLE_REMOVAL =
-  "Some pages are still being counted, so no shared style can be removed yet.";
+  "Some pages haven't been counted yet, so no shared style can be removed.";
 
 /**
  * Why Lock, Remove and Remove unused wait: a rename writes the whole list of
@@ -738,7 +829,7 @@ export const SHARED_STYLE_RENAME_PENDING =
  * it covers the minimums, the withheld rows and Remove unused waiting.
  */
 export const SHARED_STYLE_COUNTING_NOTE =
-  "Some pages are still being counted, so the numbers are minimums and no style can be called unused or removed yet.";
+  "Some pages haven't been counted yet, so the numbers are minimums and no style can be called unused or removed.";
 
 /**
  * The note while counts are floors for good: content the index cannot reach
@@ -753,11 +844,19 @@ export const SHARED_STYLE_UNCOUNTABLE_REMOVAL =
 
 /**
  * What Unused says when every page is counted but some style's count was cut
- * short, and it holds every row back.
+ * short, so it holds that style back, beside any rows it does list.
  */
 export const SHARED_STYLE_UNUSED_UNCERTAIN =
-  "Some uses could not all be counted, so no style can be called unused yet.";
+  "Some uses could not all be counted, so some styles can't be called unused yet.";
+
+/**
+ * What a removal's confirmation says the count cannot see. The count reads
+ * only the styles chosen in the editor; a class written by hand elsewhere is
+ * invisible to it, so a zero is what the editor knows, not a promise.
+ */
+export const SHARED_STYLE_UNCOUNTED_USES =
+  "A class written by hand, in custom code, an HTML attribute or another plugin, isn't counted.";
 
 /** The note under counts that are floors. */
 export const SHARED_STYLE_NOT_WHOLE_NOTE =
-  "Some pages are still being counted, so these numbers are minimums.";
+  "Some pages haven't been counted yet, so these numbers are minimums.";

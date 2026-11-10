@@ -88,6 +88,8 @@ function formHolding(
 ): RefusedForm {
   return {
     mayWrite: vi.fn(() => true),
+    // The version its own Save answered, which the take sends.
+    version: () => "7.es:3",
     recover: vi.fn(async (takeAfter: () => Promise<void>) => {
       order.push("hold");
       try {
@@ -198,9 +200,11 @@ describe("useSharedFieldsRecovery", () => {
     await vi.waitFor(() => expect(order).toContain("release"));
 
     expect(order).toEqual(["hold", "save", "take", "reload", "release"]);
+    // With the version the form's own Save answered: a take is judged by it.
     expect(take).toHaveBeenCalledWith(
       { kind: "collection", slug: "authors", entryId: "e1" },
-      "es"
+      "es",
+      "7.es:3"
     );
     // The Save says what it stored on its own toast; this one says what
     // was taken.
@@ -530,7 +534,8 @@ describe("useSharedFieldsRecovery", () => {
     // the form then starts afresh from whatever is on screen.
     expect(take).toHaveBeenCalledWith(
       { kind: "collection", slug: "authors", entryId: "e1" },
-      "es"
+      "es",
+      "7.es:3"
     );
     expect(toast.success).toHaveBeenCalledWith(
       "Spanish now uses the live Article Count. Its earlier value is in History."

@@ -26,6 +26,15 @@ const mockIsCancel = vi.fn(
   (value: unknown) => value === Symbol.for("clack:cancel")
 );
 
+// Every case here fakes the terminal it needs, and the dispatcher asks only when a person can
+// answer (`canPrompt`), which a set `CI` rules out: a CI runner's own `CI` must not decide them.
+beforeEach(() => {
+  vi.stubEnv("CI", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 vi.mock("@clack/prompts", () => ({
   select: (...args: unknown[]) => mockSelect(...args),
   confirm: (...args: unknown[]) => mockConfirm(...args),
@@ -261,6 +270,69 @@ describe("ClackTerminalPromptDispatcher - non-TTY", () => {
       resolutions: [],
       proceed: true,
     });
+  });
+
+  it("leaves a column made required unanswered without a TTY, for the push to refuse with its count", async () => {
+    // No terminal can answer it, so it reaches the push unanswered, which counts the rows in its
+    // way and refuses naming the entity, the field and the count. Thrown here as a confirmation
+    // the run could never give, it named none of them.
+    const dispatcher = new ClackTerminalPromptDispatcher();
+    const events: ClassifierEvent[] = [
+      {
+        id: "add_not_null_with_nulls:dc_posts.summary",
+        kind: "add_not_null_with_nulls",
+        tableName: "dc_posts",
+        columnName: "summary",
+        nullCount: 2,
+        tableRowCount: 3,
+        applicableResolutions: ["provide_default", "make_optional", "abort"],
+      },
+      {
+        id: "add_required_field_no_default:dc_posts.byline",
+        kind: "add_required_field_no_default",
+        tableName: "dc_posts",
+        columnName: "byline",
+        tableRowCount: 3,
+        applicableResolutions: ["provide_default", "make_optional", "abort"],
+      },
+    ];
+
+    const result = await dispatcher.dispatch({
+      candidates: [],
+      events,
+      classification: "interactive",
+      channel: "terminal",
+    });
+
+    expect(result).toEqual({
+      confirmedRenames: [],
+      resolutions: [],
+      proceed: true,
+    });
+    expect(mockSelect).not.toHaveBeenCalled();
+  });
+
+  it("still needs a TTY when a column made required comes with a rename candidate", async () => {
+    // The control: only a batch nothing else in it needs answering goes on unanswered.
+    const dispatcher = new ClackTerminalPromptDispatcher();
+    await expect(
+      dispatcher.dispatch({
+        candidates: [candidate("title", "name")],
+        events: [
+          {
+            id: "add_not_null_with_nulls:dc_posts.summary",
+            kind: "add_not_null_with_nulls",
+            tableName: "dc_posts",
+            columnName: "summary",
+            nullCount: 2,
+            tableRowCount: 3,
+            applicableResolutions: ["provide_default", "abort"],
+          },
+        ],
+        classification: "interactive",
+        channel: "terminal",
+      })
+    ).rejects.toThrow(TTYRequiredError);
   });
 
   it("NEXTLY_ACCEPT_DATA_LOSS=1 auto-confirms a drop-only batch without a TTY", async () => {

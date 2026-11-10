@@ -26,6 +26,7 @@ import {
   TokensPanel,
   useVariablesHeader,
   type TokensPanelProps,
+  type VariablesPreview,
 } from "./tokens-panel";
 
 type HostedProps = Omit<TokensPanelProps, "currentTokens" | "onChange"> &
@@ -124,6 +125,133 @@ describe("the rows", () => {
     // A type size and its line height are one row, written "16 / 26".
     expect(row(/^Body/).textContent).toContain("16 / 26");
     expect(screen.queryByText(/used by|uses/i)).toBeNull();
+  });
+
+  it("shows a length that changes with the page as Fluid, its whole value on hover", () => {
+    // The whole clamp() crowded the name out of the row; the row says what
+    // kind of value it is, and the hover and the name say the value.
+    const fluid = "clamp(1rem, 0.5rem + 2vw, 2rem)";
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "space.section-y",
+              kind: "dimension",
+              values: { light: fluid },
+            },
+          ],
+        }}
+      />
+    );
+    const section = row(/^Section y/);
+    const chip = section.querySelector(".nx-vars__chip");
+    expect(chip?.textContent).toBe("Fluid");
+    expect(chip?.getAttribute("title")).toBe(fluid);
+    expect(section.getAttribute("aria-label")).toBe(`Section y, ${fluid}`);
+    // A fixed length still reads as itself, with no hover to add.
+    const fixed = row(/^Space 4/).querySelector(".nx-vars__chip");
+    expect(fixed?.textContent).toBe("1rem");
+    expect(fixed?.getAttribute("title")).toBeNull();
+  });
+
+  it("tells apart two rows shown under one name by their kind, and only those", () => {
+    // `space.card` and `radius.card` both read "Card": side by side, nothing
+    // said which was which.
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "space.card",
+              kind: "dimension",
+              values: { light: "24px" },
+            },
+            {
+              name: "radius.card",
+              kind: "dimension",
+              values: { light: "12px" },
+            },
+          ],
+        }}
+      />
+    );
+    const spacing = row(/^Card · spacing/);
+    const radius = row(/^Card · radius/);
+    expect(spacing.getAttribute("aria-label")).toBe("Card · spacing, 24px");
+    expect(radius.getAttribute("aria-label")).toBe("Card · radius, 12px");
+    // The kind is muted beside the name, not part of it.
+    expect(radius.querySelector(".nx-vars__name")?.textContent).toBe(
+      "Card · radius"
+    );
+    expect(radius.querySelector(".nx-vars__name-kind")?.textContent).toBe(
+      " · radius"
+    );
+    // A name only one row has stays as it is.
+    expect(row(/^Space 4/).getAttribute("aria-label")).toBe("Space 4, 1rem");
+    // Each draws its kind's icon, so the two differ at a glance too.
+    expect(
+      radius
+        .querySelector("[data-variable-icon]")
+        ?.getAttribute("data-variable-icon")
+    ).toBe("radius");
+    expect(
+      spacing
+        .querySelector("[data-variable-icon]")
+        ?.getAttribute("data-variable-icon")
+    ).toBe("spacing");
+  });
+
+  it("names the code name when two rows of one name are of one kind too", () => {
+    // `space.card` and `spacing.card` are both spacing steps called "Card":
+    // the kind cannot tell them apart, the code name can.
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "space.card",
+              kind: "dimension",
+              values: { light: "24px" },
+            },
+            {
+              name: "spacing.card",
+              kind: "dimension",
+              values: { light: "32px" },
+            },
+          ],
+        }}
+      />
+    );
+    expect(row(/^Card · space\.card,/).getAttribute("aria-label")).toBe(
+      "Card · space.card, 24px"
+    );
+    expect(row(/^Card · spacing\.card,/).getAttribute("aria-label")).toBe(
+      "Card · spacing.card, 32px"
+    );
+  });
+
+  it("says no kind for one name shown in two groups, whose headings tell them apart", () => {
+    // The body font and the body type size both read "Body", each under its
+    // own heading.
+    render(
+      <Hosted
+        tokens={{
+          tokens: [
+            ...SITE.tokens,
+            {
+              name: "font.body",
+              kind: "fontFamily",
+              values: { light: "Inter" },
+            },
+          ],
+        }}
+      />
+    );
+    expect(row(/^Body, size/).querySelector(".nx-vars__name-kind")).toBeNull();
   });
 
   it("never says token to the author", () => {
@@ -401,6 +529,28 @@ describe("states", () => {
     expect(screen.getByRole("alert").textContent).toBe(
       "That change was not saved."
     );
+  });
+
+  it("says what a stored save met as a status, with a Reload, and no alert", () => {
+    // Nothing failed, so it is not an alert; the words are the host's.
+    const onReload = vi.fn();
+    const text =
+      "Sam changed Primary while you were editing. Your value was kept. Undo puts theirs back.";
+    render(<Hosted tokens={SITE} notice={{ text, onReload }} />);
+    const status = screen
+      .getAllByRole("status")
+      .find(each => each.textContent?.includes(text));
+    expect(status).toBeDefined();
+    expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.click(
+      within(status as HTMLElement).getByRole("button", { name: "Reload" })
+    );
+    expect(onReload).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws no notice when the host gives none", () => {
+    render(<Hosted tokens={SITE} />);
+    expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
   });
 
   it("says when a search matches nothing", () => {
@@ -979,6 +1129,115 @@ describe("the preview's first mode", () => {
       ).toHaveProperty("ariaPressed", "true");
     } finally {
       window.matchMedia = original;
+    }
+  });
+});
+
+/** The Design panel's header, held by a host as the editor holds it. */
+function HeaderHost({
+  preview,
+}: {
+  preview?: VariablesPreview;
+}): React.JSX.Element {
+  const header = useVariablesHeader({
+    onChange: () => undefined,
+    currentTokens: () => SITE,
+    readOnly: false,
+    ...(preview === undefined ? {} : { preview }),
+  });
+  return (
+    <>
+      <div data-testid="host-header">{header.controls}</div>
+      <TokensPanel
+        tokens={SITE}
+        onChange={() => undefined}
+        currentTokens={() => SITE}
+        header={header}
+      />
+    </>
+  );
+}
+
+const brandSwatch = (): string =>
+  (
+    row(/^Brand/).querySelector(".nx-vars__swatch--main") as HTMLElement
+  ).style.getPropertyValue("--nx-swatch");
+
+const pressed = (name: "Light" | "Dark"): string | null =>
+  within(screen.getByRole("group", { name: "Preview" })).getByRole("button", {
+    name,
+  }).ariaPressed;
+
+describe("a preview mode the host holds", () => {
+  it("shows the host's pick and hands a press to the host rather than keeping it", () => {
+    const onPick = vi.fn();
+    const { rerender } = render(
+      <HeaderHost preview={{ picked: "dark", onPick }} />
+    );
+    expect(pressed("Dark")).toBe("true");
+    expect(brandSwatch()).toBe("#8fa7ff");
+
+    fireEvent.click(screen.getByRole("button", { name: "Light" }));
+    expect(onPick).toHaveBeenCalledWith("light");
+    // The host has not taken the pick yet, so nothing changed here: a header
+    // keeping the press itself would show Light already.
+    expect(pressed("Dark")).toBe("true");
+    expect(brandSwatch()).toBe("#8fa7ff");
+
+    rerender(<HeaderHost preview={{ picked: "light", onPick }} />);
+    expect(pressed("Light")).toBe("true");
+    expect(brandSwatch()).toBe("#1d2b6b");
+  });
+
+  it("keeps a press itself when no host holds the mode", () => {
+    render(<HeaderHost />);
+    expect(pressed("Light")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+    expect(pressed("Dark")).toBe("true");
+    expect(brandSwatch()).toBe("#8fa7ff");
+  });
+});
+
+describe("the preview while nothing is picked", () => {
+  /**
+   * A canvas root under a page's own theme marker, on a device that prefers
+   * light (jsdom answers no media query), so the canvas draws one mode and
+   * the device names the other.
+   */
+  function canvasUnder(mode: "light" | "dark"): () => void {
+    const page = document.createElement("div");
+    page.setAttribute("data-nx-theme", mode);
+    const root = document.createElement("div");
+    root.className = "nx-canvas";
+    page.append(root);
+    document.body.append(page);
+    return () => page.remove();
+  }
+
+  it("shows the mode the canvas draws, not the device's, with a host holding none", () => {
+    const remove = canvasUnder("dark");
+    try {
+      render(
+        <HeaderHost preview={{ picked: null, onPick: () => undefined }} />
+      );
+      expect(pressed("Dark")).toBe("true");
+      expect(brandSwatch()).toBe("#8fa7ff");
+    } finally {
+      remove();
+    }
+  });
+
+  it("shows the mode the canvas draws on its own too, and follows the page's marker", async () => {
+    const remove = canvasUnder("dark");
+    try {
+      render(<HeaderHost />);
+      expect(pressed("Dark")).toBe("true");
+      const marked = document.querySelector("[data-nx-theme]");
+      // Heard through a mutation observer, which answers after this task.
+      marked?.setAttribute("data-nx-theme", "light");
+      await waitFor(() => expect(pressed("Light")).toBe("true"));
+    } finally {
+      remove();
     }
   });
 });

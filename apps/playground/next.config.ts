@@ -66,6 +66,15 @@ const nextConfig: NextConfig = {
   // Unset everywhere else, which leaves Next.js's own default.
   distDir: process.env.NEXT_DIST_DIR || ".next",
 
+  // The browser suite's own server turns Next.js's development indicator off.
+  // In development the indicator's button is injected into every document the
+  // app serves, the canvas's frame included, so a keyboard walk through the
+  // editor meets a tab stop inside the canvas that no deployed site has.
+  // Unset everywhere else, which keeps the indicator for a contributor.
+  ...(process.env.NEXTLY_E2E_DEV_INDICATORS === "0"
+    ? { devIndicators: false as const }
+    : {}),
+
   // Type-checking responsibility lives in each workspace package's own
   // `pnpm check-types` (run by CI and during dev). The playground's prod
   // build should only gate on actual bundling/compilation, not re-run
@@ -227,6 +236,20 @@ const nextConfig: NextConfig = {
       "@nextly/types/*": ["../../packages/nextly/src/types/*"],
       "@nextly/validation": ["../../packages/nextly/src/validation/index.ts"],
       "@nextly/validation/*": ["../../packages/nextly/src/validation/*"],
+      // The root layout imports `@/nextly/cached-read`, the app's "use cache"
+      // read function, which registers it, and how Nextly starts, for every
+      // route (`<SiteCode>` refuses to read under Cache Components without
+      // it). Next.js refuses to compile `"use cache"` with Cache Components
+      // off, so that leg points the import at a variant that registers only
+      // how Nextly starts. An exact key, so it takes precedence over
+      // tsconfig's `@/*` wildcard, which type-checking follows to the Cache
+      // Components file.
+      ...(CACHE_COMPONENTS
+        ? {}
+        : {
+            "@/nextly/cached-read":
+              "./src/nextly/cached-read.cache-components-off.ts",
+          }),
       // Stubs / native-deps resolution. pg + mysql2 stubs predate this commit
       // and remain load-bearing for Turbopack's optional-peer-dep handling
       // inside nextly.

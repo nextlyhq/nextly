@@ -1,19 +1,13 @@
 // @vitest-environment jsdom
 
 /**
- * `showEmptyElements` reaching the empty-container appender.
+ * The empty-container appender as this field mounts it.
  *
  * `empty-container-appender.test.tsx` (in the builder package) asserts the
  * component's own behaviour given `hidden`. What is only true HERE is the
- * WIRING: that this field folds the shell's `showEmptyElements` report into
- * that prop at all. The shell reports it as always shown now that the top
- * bar has no control to hide empty containers; the report, and this wiring,
- * stay until the preference itself is removed. The component was mounted with no
- * awareness of the preference — it reads only `hidden` and the document — so
- * without this wiring the dashed placeholder box collapses to zero height
- * when the preference is off (that CSS rule already matches the preference)
- * while the appender's own "+" keeps floating over nothing, defeating the
- * preference's whole point: seeing the page as a visitor would.
+ * WIRING: which `hidden` this field passes, and what its "+" opens. Empty
+ * containers always show, so the appender is hidden only during a drag, and
+ * its "+" opens Add to fill the container it sits on.
  *
  * The builder shell is replaced with recorders rather than rendered, as
  * `BlocksField.breakpoints.test` does and for its reason: what is under test
@@ -86,8 +80,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   }): React.JSX.Element => <>{children}</>;
   return {
     ...real,
-    // Captures the WHOLE props object — `onShowEmptyElementsChange` and
-    // `openPanelRequest` are what this file drives, and a narrower
+    // Captures the WHOLE props object — `openPanelRequest` and
+    // `renderPanel` are what this file drives, and a narrower
     // destructure (as the sibling files use for a shell that ignores those)
     // would silently discard them.
     BuilderShell: (
@@ -202,6 +196,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
     read => () =>
       read
   )(() => Promise.resolve(null)),
+  // The Fallback picker's library search, finding nothing: no case here
+  // opens it. One function for every call, as the admin's own hook keeps it.
+  useMediaSearcher: (
+    search => () =>
+      search
+  )(() => Promise.resolve([])),
   // The host's font table, which the real entry re-exports from core.
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The editor mount asks for the variant-use writer; no case here opens a
@@ -316,61 +316,16 @@ afterEach(() => {
   cleanup();
 });
 
-describe("the empty-container appender and the show-empty-elements preference", () => {
-  it("starts visible, matching the preference's own default of shown", () => {
+describe("the empty-container appender's visibility", () => {
+  it("is shown outside a drag, since empty containers always show", () => {
     openEditor();
 
     expect(seen.appender?.hidden).toBe(false);
   });
 
-  it("hides the appender once the shell reports the preference switched off", () => {
-    const { rerender } = openEditor();
-
-    const report = seen.builderShell?.onShowEmptyElementsChange as
-      | ((value: boolean) => void)
-      | undefined;
-    if (report === undefined) {
-      throw new Error("the shell was given no onShowEmptyElementsChange");
-    }
-    React.act(() => {
-      report(false);
-    });
-    rerender();
-
-    expect(seen.appender?.hidden).toBe(true);
-  });
-
-  it("shows the appender again once the shell reports the preference switched back on", () => {
-    // Asserted at EACH step rather than only at the end: a fold that ORs the
-    // wrong thing, or one that was never wired at all, can still leave the
-    // FINAL value `false` here purely because it never became `true` in
-    // between — which is exactly the shape of a test that would pass whether
-    // or not the fix under test exists. Requiring the intermediate `true` is
-    // what makes "back on" mean something distinct from "was never off".
-    const { rerender } = openEditor();
-
-    const report = seen.builderShell?.onShowEmptyElementsChange as (
-      value: boolean
-    ) => void;
-    React.act(() => {
-      report(false);
-    });
-    rerender();
-    expect(seen.appender?.hidden).toBe(true);
-
-    React.act(() => {
-      report(true);
-    });
-    rerender();
-
-    expect(seen.appender?.hidden).toBe(false);
-  });
-
-  it("stays hidden during a drag even while the preference is on", () => {
-    // The regression this guards: folding the preference into `hidden`
-    // must OR with the drag condition, not replace it — a control that
-    // reappeared mid-drag because the preference happened to be on would be
-    // exactly the failure `hidden` exists to prevent.
+  it("stays hidden during a drag", () => {
+    // A control left over the canvas mid-drag would sit on a layout that is
+    // about to change, which is the failure `hidden` exists to prevent.
     draggingId = "some-node";
 
     openEditor();

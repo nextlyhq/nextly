@@ -45,6 +45,8 @@ import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 import { z } from "nextly/zod";
 
 import { LAYOUTS_SLUG } from "../collections/layouts";
+import type { ActionBy } from "../component-actions-contract";
+import { actionByOf } from "../composition-route-kit";
 import {
   layoutRemovalStore,
   type LayoutRemovalStore,
@@ -54,6 +56,7 @@ import { MANAGE_SITE_PERMISSION } from "../site-settings";
 
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./settings-single";
 import {
+  changedByOf,
   layoutExists,
   publishedLayoutIds,
   readLayoutSettings,
@@ -80,7 +83,12 @@ export interface MakeDefaultRouteContext {
     singles: Record<string, string | undefined>;
   };
   user: { id: string } | null;
-  caller: { can(action: string, resource: string): Promise<boolean> } | null;
+  caller: {
+    can(action: string, resource: string): Promise<boolean>;
+    /** How the caller signed in, so the answer can say who acted. */
+    readonly authMethod?: "session" | "api-key";
+    readonly apiKeyId?: string;
+  } | null;
   params: Record<string, string>;
   logger: { warn(message: string, meta?: Record<string, unknown>): void };
   /** The plugin's own tables, where a Layout's removal fence is read. */
@@ -93,6 +101,8 @@ interface MakeDefaultResult {
   defaultLayout: string;
   previousDefaultLayout: string | null;
   dryRun: boolean;
+  /** Who chose it: the person, or the API key and its owner. */
+  by: ActionBy;
 }
 
 /**
@@ -109,7 +119,7 @@ async function makeDefault(
   const slugs = slugsOf(ctx);
   // Preconditions first, whatever they cost: nothing below runs for a caller
   // who may not publish a Layout.
-  const userId = await requireLayoutPublisher(ctx, slugs);
+  const by = await requireLayoutPublisher(ctx, slugs);
 
   const body = await readBody(req);
   const id = ctx.params.id ?? "";
@@ -127,13 +137,15 @@ async function makeDefault(
       previous === id
         ? "This Layout is already the default."
         : "This Layout would become the default.",
-      { defaultLayout: id, previousDefaultLayout: previous, dryRun: true }
+      { defaultLayout: id, previousDefaultLayout: previous, dryRun: true, by }
     );
   }
 
-  await writeLayoutSettings(nextly, slugs, {
+  // Whatever the settings hold now: choosing this Layout depends on none of
+  // it, so of two calls at once the later write wins, as said above.
+  await writeLayoutSettings(nextly, slugs, "overwrite", {
     defaultLayout: id,
-    defaultLayoutChangedBy: userId,
+    defaultLayoutChangedBy: changedByOf(by),
   });
   await restoreIfUnusable(nextly, slugs, ctx, removals, {
     id,
@@ -145,6 +157,7 @@ async function makeDefault(
     defaultLayout: id,
     previousDefaultLayout: previous,
     dryRun: false,
+    by,
   });
 }
 
@@ -159,13 +172,13 @@ function slugsOf(ctx: MakeDefaultRouteContext): DefaultLayoutSlugs {
 }
 
 /**
- * The caller's user id, once they are shown to be allowed to update AND
- * publish Layouts; otherwise the refusal.
+ * Who the caller is, once they are shown to be allowed to update AND publish
+ * Layouts; otherwise the refusal.
  */
 async function requireLayoutPublisher(
   ctx: MakeDefaultRouteContext,
   slugs: DefaultLayoutSlugs
-): Promise<string> {
+): Promise<ActionBy> {
   const { user, caller } = ctx;
   if (
     user !== null &&
@@ -173,7 +186,7 @@ async function requireLayoutPublisher(
     (await caller.can("update", slugs.layouts)) &&
     (await caller.can("publish", slugs.layouts))
   ) {
-    return user.id;
+    return actionByOf(user, caller);
   }
   throw NextlyError.forbidden({
     logContext: { reason: "make-default-needs-layout-publish" },
@@ -211,10 +224,10 @@ async function restoreIfUnusable(
   const published = (await publishedLayoutIds(nextly, slugs, [id])).has(id);
   const fenced = (await removals.removalOf(id)) !== null;
   if (published && !fenced) return;
-  const stillOurs =
-    (await readLayoutSettings(nextly, slugs)).defaultLayout === id;
+  const latest = await readLayoutSettings(nextly, slugs);
+  const stillOurs = latest.defaultLayout === id;
   if (stillOurs) {
-    await writeLayoutSettings(nextly, slugs, {
+    await writeLayoutSettings(nextly, slugs, latest, {
       defaultLayout: previous,
       defaultLayoutChangedBy: previousChangedBy,
     });

@@ -22,7 +22,10 @@ import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
-import { workflowPermissionActions } from "../../workflows/permissions";
+import {
+  WORKFLOW_PERMISSION_GROUP,
+  workflowPermissionActions,
+} from "../../workflows/permissions";
 
 import { entityPermissionSpelling } from "./entity-permission-spelling";
 import { PermissionService } from "./permission-service";
@@ -811,8 +814,11 @@ export class PermissionSeedService extends BaseService {
     for (const action of workflowPermissionActions(attached.workflow)) {
       result.total++;
       try {
+        // A row already there keeps its owner and group: an app's, a plugin's, or an admin's own
+        // ownerless permission the step happens to name is not made the workflow's. Only a row
+        // the seeder creates is stored under the workflow group.
         const owner = await permissions.ownerOf(action, entitySlug);
-        if (typeof owner === "string") {
+        if (owner !== undefined) {
           result.skipped++;
           continue;
         }
@@ -820,12 +826,14 @@ export class PermissionSeedService extends BaseService {
           action,
           entitySlug
         );
+        // Stored under the workflow group, which is how the presets tell it is a workflow's.
         const ensured = await permissions.ensurePermission(
           action,
           entitySlug,
           name,
           slug,
-          description
+          description,
+          { group: WORKFLOW_PERMISSION_GROUP }
         );
         if (ensured.created) {
           result.created++;

@@ -23,6 +23,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import type { SingleEntryService } from "../services/single-entry-service";
+import { VersionsRepository } from "../../versions/versions-repository";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -78,10 +79,11 @@ async function save(
   locale: string,
   data: Record<string, unknown>
 ): Promise<void> {
-  const saved = await singles.update(SLUG, data, {
-    locale,
-    overrideAccess: true,
-  });
+  const saved = await singles.update(
+    SLUG,
+    { ...data, _overwrite: true },
+    { locale, overrideAccess: true }
+  );
   expect(saved.success, JSON.stringify(saved)).toBe(true);
 }
 
@@ -123,6 +125,7 @@ describe.each(getConfiguredTestDialects())(
 
       const published = await singles.publishAllLocales(SLUG, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(published.success, JSON.stringify(published)).toBe(true);
       expect(published.data?.languages).toEqual(preview.data?.languages);
@@ -156,6 +159,7 @@ describe.each(getConfiguredTestDialects())(
 
       const published = await singles.publishAllLocales(SLUG, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(published.data?.languages).toEqual(preview.data?.languages);
       expect(await siteNameIn(singles, "es")).toBe("Bonjour");
@@ -195,7 +199,10 @@ describe.each(getConfiguredTestDialects())(
       });
 
       await expect(
-        singles.publishAllLocales(SLUG, options)
+        singles.publishAllLocales(SLUG, {
+          ...options,
+          data: { _overwrite: true },
+        })
       ).rejects.toMatchObject({
         statusCode: 409,
         publicData: {
@@ -288,7 +295,10 @@ describe.each(getConfiguredTestDialects())(
       ]);
 
       await expect(
-        singles.publishAllLocales(SLUG, options)
+        singles.publishAllLocales(SLUG, {
+          ...options,
+          data: { _overwrite: true },
+        })
       ).rejects.toMatchObject({
         statusCode: 400,
         publicData: {
@@ -297,6 +307,105 @@ describe.each(getConfiguredTestDialects())(
           ],
         },
       });
+    });
+
+    // A caller who may publish the Single but not read it is told an invalid
+    // pending change is invalid, as the publish's refusal tells it, without
+    // the field: the preview passes the gate the Single's read verdict, as
+    // the publish does. The plausible broken implementation asks the gate
+    // without that verdict, so only the field's own read rule filters the
+    // issues, and the field is named.
+    it("names no field of an invalid pending change to a caller who may publish but not read", async () => {
+      const CODED = "codedprefs";
+      current = await createTestNextly({
+        dialect,
+        singles: [
+          defineSingle({
+            slug: CODED,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "siteName", localized: true }),
+              text({ name: "code", localized: false, maxLength: 3 }),
+            ],
+          }),
+        ],
+        localization: { locales: ["en"], defaultLocale: "en" },
+      });
+      const singles = current.getService("singleEntryService");
+      const trusted = { locale: "en", overrideAccess: true };
+      const live = await singles.update(
+        CODED,
+        {
+          siteName: "Hello",
+          code: "OK",
+          status: "published",
+          _overwrite: true,
+        },
+        trusted
+      );
+      expect(live.success, JSON.stringify(live)).toBe(true);
+      const held = await singles.update(
+        CODED,
+        { siteName: "Hello again", _overwrite: true },
+        trusted
+      );
+      expect(held.success, JSON.stringify(held)).toBe(true);
+      // The pending change, as stored, made invalid: a code longer than the
+      // schema allows.
+      const read = await singles.get(CODED, trusted);
+      const doc = ((read as { data?: unknown }).data ?? read) as {
+        id: string;
+      };
+      const repo = new VersionsRepository(
+        current.adapter as unknown as ConstructorParameters<
+          typeof VersionsRepository
+        >[0]
+      );
+      const ref = {
+        scopeKind: "single" as const,
+        scopeSlug: CODED,
+        entryId: doc.id,
+      };
+      const draft = await repo.findWorkingDraft(ref, "en");
+      expect(draft).not.toBeNull();
+      const stored = draft!.snapshot;
+      const snapshot = (
+        typeof stored === "string" ? JSON.parse(stored) : stored
+      ) as Record<string, unknown>;
+      await repo.upsertWorkingDraft({
+        ref,
+        locale: "en",
+        snapshot: { ...snapshot, code: "TOO LONG" },
+      });
+
+      // CONTROL: told without access checks, the preview names the field, so
+      // the change does reach validation.
+      const told = await singles.previewPublishAllLocales(CODED, {
+        overrideAccess: true,
+      });
+      expect(told.data?.blockers).toEqual([
+        { reason: "pending-change-invalid", fields: ["code"] },
+      ]);
+
+      const publisher = { id: "publisher-1", email: "publisher@x.test" };
+      await userWhoMay(current, publisher.id, "publish", [CODED]);
+      const options = { user: publisher, overrideAccess: false };
+
+      const preview = await singles.previewPublishAllLocales(CODED, options);
+      expect(preview.success, JSON.stringify(preview)).toBe(true);
+      const blockers = preview.data?.blockers ?? [];
+      expect(blockers.map(blocker => blocker.reason)).toEqual([
+        "pending-change-invalid",
+      ]);
+      expect(blockers.flatMap(blocker => blocker.fields)).not.toContain("code");
+
+      const refused = await singles
+        .publishAllLocales(CODED, { ...options, data: { _overwrite: true } })
+        .catch((error: unknown) => error);
+      expect(refused).toMatchObject({ statusCode: 400 });
+      expect(JSON.stringify(refused)).not.toContain('"path":"code"');
     });
   }
 );

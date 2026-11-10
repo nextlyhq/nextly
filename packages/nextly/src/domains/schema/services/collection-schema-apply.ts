@@ -39,9 +39,18 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../i18n/migration/companion-rename";
+import {
+  companionUniqueIndexName,
+  uniqueTranslatedColumns,
+} from "../../i18n/migration/companion-unique-indexes";
 import { withoutLeavingConstraints } from "../../i18n/migration/field-leaves-translation-rules";
 import { applyCompanionTransition } from "../../i18n/migration/held-leaving-drops";
 import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
+import {
+  perLanguageStorageEnabled,
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import {
   companionHasStatusColumn,
   liveCompanionShape,
@@ -56,8 +65,10 @@ import { RealClassifier } from "../pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../pipeline/database-url";
 import { desiredCollectionTable } from "../pipeline/desired-collection-table";
 import {
+  type NameHolder,
   readIndexColumns,
   readIndexUniqueness,
+  readNameHoldersElsewhere,
   readUniqueColumns,
 } from "../pipeline/live-table-facts";
 import { RealPreCleanupExecutor } from "../pipeline/pre-cleanup/executor";
@@ -72,6 +83,7 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../pipeline/pushschema-pipeline-stubs";
+import { builtByFor } from "../pipeline/registered-collections";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import type { Resolution } from "../pipeline/resolution/types";
 import { recoverInterruptedSqliteRebuilds } from "../pipeline/sqlite-rebuild-recovery";
@@ -561,11 +573,29 @@ function translatedSettingsDeferred(
     : undefined;
 }
 
+/**
+ * Whether the change's collection kept, and keeps, its translatable values per language: the
+ * storage answer to its translation flags before and after.
+ */
+function storedPerLanguage(change: CollectionSchemaChange): {
+  wasLocalized: boolean;
+  isLocalized: boolean;
+} {
+  return {
+    wasLocalized: storesPerLanguage({ localized: change.wasLocalized }),
+    isLocalized: storesPerLanguage({ localized: change.isLocalized }),
+  };
+}
+
 /** `applyCollectionSchemaChange`'s work, run while this context holds the schema lock. */
 async function applyHoldingSchemaLock(
   change: CollectionSchemaChange
 ): Promise<Extract<ApplyResult, { success: true }>> {
-  const { slug, collection, fields, wasLocalized, isLocalized } = change;
+  const { slug, collection, fields } = change;
+  // Where its translatable values were and are stored, which every step below decides from: per
+  // language when it is translated, or always under per-language storage, where turning
+  // translation on or off moves nothing.
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
   const { tableName } = collection;
   const deps = requireSchemaChangeDeps(slug);
   const { adapter } = deps;
@@ -709,7 +739,8 @@ async function reconcileCompanion(args: {
   defaultLocale: string;
 }): Promise<void> {
   const { change, adapter, desired, apply, oldFields } = args;
-  const { slug, fields, wasLocalized, isLocalized } = change;
+  const { slug, fields } = change;
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
   const { tableName } = change.collection;
   try {
     const companionExists = await adapter.tableExists(`${tableName}_locales`);
@@ -725,7 +756,14 @@ async function reconcileCompanion(args: {
       tableName,
       dialect: adapter.dialect,
       defaultLocale: args.defaultLocale,
-      status: change.status,
+      // Under per-language storage a per-language `_status` only where it publishes each language
+      // on its own; otherwise the Draft/Published flag, as it has always been.
+      status: perLanguageStorageEnabled()
+        ? publishesPerLanguage({
+            localized: change.isLocalized,
+            status: change.status,
+          })
+        : change.status,
       wasLocalized,
       isLocalized,
       // The status before the change, which decides whether main carried `status` and the
@@ -812,26 +850,61 @@ function expectedCollectionColumns(
 }
 
 /**
- * Refuse a change that declares an index under a name another index of the table already holds,
- * on other columns or with another uniqueness: the push creates an index only where its name is
- * free, so the field would be recorded unique, or indexed, while the index under that name
- * enforces something else. A precondition, read from the live table before anything changes,
- * against the indexes the push itself declares.
+ * Refuse creating a Builder collection whose indexes would take a name held elsewhere
+ * (`refuseIndexNamesTaken`). Its table doesn't exist yet, so only names held beyond it can be in
+ * the way, and the create's `CREATE ... IF NOT EXISTS` would skip them. A precondition the create
+ * asks before its migration runs, against the adapter the create itself runs on (a standalone
+ * container's, say), never one looked up elsewhere.
+ */
+export async function refuseNewCollectionIndexNamesTaken(
+  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>,
+  collection: {
+    slug: string;
+    tableName: string;
+    fields: readonly unknown[];
+    localized?: boolean;
+  }
+): Promise<void> {
+  await refuseIndexNamesTaken(adapter, {
+    slug: collection.slug,
+    tableName: collection.tableName,
+    fields: [...collection.fields] as DesiredCollection["fields"],
+    localized: collection.localized === true,
+    // Authored in the Schema Builder.
+    builderOwned: true,
+  });
+}
+
+/**
+ * Refuse a change that declares an index under a name another index already holds: one of the
+ * table's own, on other columns or with another uniqueness, or, where the dialect shares index
+ * names beyond one table, any object elsewhere under that name (`readNameHoldersElsewhere`). The
+ * push creates an index only where its name is free, so the field would be recorded unique, or
+ * indexed, while the index under that name enforces something else, or nothing on this table. A
+ * precondition, read from the live database before anything changes, against the indexes the
+ * push itself declares.
  */
 async function refuseIndexNamesTaken(
   adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>,
   collection: DesiredCollection
 ): Promise<void> {
   const { tableName } = collection;
-  if (!(await adapter.tableExists(tableName))) return;
   const db = adapter.getDrizzle();
-  const [covers, uniqueness] = await Promise.all([
-    readIndexColumns(db, adapter.dialect, tableName),
-    readIndexUniqueness(db, adapter.dialect, tableName),
-  ]);
+  // A collection created by this save has no table, and so no indexes of its own yet; names held
+  // elsewhere are still checked below, since a new table's indexes take them too.
+  const exists = await adapter.tableExists(tableName);
+  const [covers, uniqueness] = exists
+    ? await Promise.all([
+        readIndexColumns(db, adapter.dialect, tableName),
+        readIndexUniqueness(db, adapter.dialect, tableName),
+      ])
+    : [new Map<string, string[]>(), new Map<string, { unique: boolean }>()];
   const declared =
     desiredCollectionTable(collection, adapter.dialect).indexes ?? [];
-  const taken = declared.flatMap(index => {
+  // Typed once, so the branch that cannot read the index's columns (`live: null`) and the
+  // branch that can (`live: string[]`) yield one element type.
+  type Taken = { index: (typeof declared)[number]; live: string[] | null };
+  const taken = declared.flatMap((index): Taken[] => {
     if (index.columns.length === 0 || !uniqueness.has(index.name)) return [];
     // An index under the name that does not stand on whole columns (partial, on an expression,
     // a MySQL prefix, or invalid) is not described by its columns, but it still holds the name:
@@ -845,23 +918,98 @@ async function refuseIndexNamesTaken(
       (uniqueness.get(index.name)?.unique === true) === index.unique;
     return sameColumns && sameUniqueness ? [] : [{ index, live }];
   });
-  if (taken.length === 0) return;
+  // A name this table's indexes don't hold under that exact spelling may still be held elsewhere.
+  const unheld = declared.filter(
+    index => index.columns.length > 0 && !uniqueness.has(index.name)
+  );
+  const elsewhere = await readNameHoldersElsewhere(
+    db,
+    adapter.dialect,
+    tableName,
+    unheld.map(index => index.name)
+  );
+  const heldElsewhere = [
+    ...unheld.flatMap(index => {
+      const holder = elsewhere.get(index.name);
+      return holder ? [{ index, holder }] : [];
+    }),
+    ...(await companionUniqueNamesHeld(adapter, collection)),
+  ];
+  if (taken.length === 0 && heldElsewhere.length === 0) return;
   throw NextlyError.validation({
-    errors: taken.map(({ index, live }) => ({
-      path: `fields.${index.columns[0]}`,
-      code: "INDEX_NAME_TAKEN",
-      message:
-        `The table already has an index "${index.name}" ` +
-        (live === null
-          ? "that is partial, on an expression or on part of a column"
-          : `on ${live.join(", ")}`) +
-        `, under the name this change's ${index.unique ? "unique " : ""}index on ` +
-        `${index.columns.join(", ")} takes. Remove that index first, then save again.`,
-    })),
+    errors: [
+      ...heldElsewhere.map(({ index, holder }) => ({
+        path: `fields.${index.columns[0]}`,
+        code: "INDEX_NAME_TAKEN",
+        message:
+          `The database already has ${holder.type === "index" ? "an index" : `a ${holder.type}`} ` +
+          `"${holder.name}"${holder.table === null ? "" : ` on ${holder.table}`}, holding the name ` +
+          `this change's ${index.unique ? "unique " : ""}index on ${index.columns.join(", ")} takes. ` +
+          "Remove or rename it first, then save again.",
+      })),
+      ...taken.map(({ index, live }) => ({
+        path: `fields.${index.columns[0]}`,
+        code: "INDEX_NAME_TAKEN",
+        message:
+          `The table already has an index "${index.name}" ` +
+          (live === null
+            ? "that is partial, on an expression or on part of a column"
+            : `on ${live.join(", ")}`) +
+          `, under the name this change's ${index.unique ? "unique " : ""}index on ` +
+          `${index.columns.join(", ")} takes. Remove that index first, then save again.`,
+      })),
+    ],
     logContext: {
       tableName,
       indexes: taken.map(({ index, live }) => ({ name: index.name, live })),
+      heldElsewhere: heldElsewhere.map(({ index, holder }) => ({
+        name: index.name,
+        holder,
+      })),
     },
+  });
+}
+
+/**
+ * The per-language unique indexes a translated collection's unique translated fields take on its
+ * `<table>_locales` companion, whose names are held elsewhere (`readNameHoldersElsewhere`): the
+ * companion reconcile creates them with `IF NOT EXISTS` too, so a held name would leave the field
+ * recorded unique with nothing enforcing it. Each is described as an index on its column.
+ */
+async function companionUniqueNamesHeld(
+  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>,
+  collection: DesiredCollection
+): Promise<
+  {
+    index: { name: string; columns: string[]; unique: boolean };
+    holder: NameHolder;
+  }[]
+> {
+  if (collection.localized !== true) return [];
+  const companionTable = `${collection.tableName}_locales`;
+  const wanted = uniqueTranslatedColumns({
+    // Only a named field has a column; a group's name is optional, and an unnamed one holds none.
+    fields: collection.fields.filter(
+      (f): f is typeof f & { name: string } => typeof f.name === "string"
+    ),
+    entityLocalized: true,
+    dialect: adapter.dialect,
+    builtBy: builtByFor("collection", collection.builderOwned),
+  }).map(({ column }) => ({
+    name: companionUniqueIndexName(companionTable, column),
+    columns: [column],
+    unique: true,
+  }));
+  if (wanted.length === 0) return [];
+  const held = await readNameHoldersElsewhere(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    companionTable,
+    wanted.map(index => index.name)
+  );
+  return wanted.flatMap(index => {
+    const holder = held.get(index.name);
+    return holder ? [{ index, holder }] : [];
   });
 }
 

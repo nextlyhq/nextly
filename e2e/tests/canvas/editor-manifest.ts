@@ -78,7 +78,8 @@ export const EDITOR_PROPERTIES: readonly AcceptanceProperty[] = [
   },
   {
     n: 10,
-    property: "Escape cancels a plain-text edit and restores the text",
+    property:
+      "Escape keeps a plain-text edit, and a second Escape selects the parent",
     greenIn: "inline text",
     status: "covered",
   },
@@ -98,7 +99,7 @@ export const EDITOR_PROPERTIES: readonly AcceptanceProperty[] = [
   },
   {
     n: 13,
-    property: "Escape cancels a rich-text edit and restores the passage",
+    property: "Escape keeps a rich-text edit, as one undo step",
     greenIn: "inline rich text",
     status: "covered",
   },

@@ -11,29 +11,77 @@ import {
   render,
   screen,
   waitFor,
+  renderHook,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { cloneElement, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { SiteSettingsRead } from "../../library-contract";
+import type { SiteCodeRead, SiteSettingsRead } from "../../library-contract";
+import type { PageAddressResponse } from "../../pages-search-contract";
+import {
+  settingsAddressOf,
+  useSavedRevision,
+  type SettingsAddress,
+} from "./settings-address";
 
 let siteRead: SiteSettingsRead | undefined;
+/** The site code read, empty: its section has tests of its own. */
+const codeRead: SiteCodeRead = {
+  head: "",
+  body: "",
+  version: null,
+  policyDeclared: false,
+  described: { head: [], body: [] },
+  changedAt: null,
+  changedBy: null,
+};
+// The page address read's answer, and the paths it was asked at.
+let addressRead: PageAddressResponse | undefined;
+const addressAsked: string[] = [];
 let siteError: Error | null = null;
 let siteFetching = false;
 const refetch = vi.fn();
 const writes: Array<{ path: string }> = [];
 let writeAnswer: () => Promise<unknown> = async () => ({});
+/** What the readiness question answers; nothing to publish by default. */
+let readinessAnswer: unknown = { dependencies: [], missing: 0 };
+const asked: unknown[] = [];
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  usePluginRoute: () => ({
-    data: siteRead,
-    pending: false,
-    error: siteError,
-    fetching: siteFetching,
-    refetch,
-  }),
-  writePluginRoute: async (write: { path: string }) => {
+  usePluginRoute: ({ path }: { path: string }) => {
+    if (path === "/site/code") {
+      return {
+        data: codeRead,
+        pending: false,
+        error: null,
+        fetching: false,
+        refetch: vi.fn(),
+      };
+    }
+    if (path.startsWith("/pages/address")) {
+      addressAsked.push(path);
+      return {
+        data: addressRead,
+        pending: false,
+        error: null,
+        fetching: false,
+        refetch,
+      };
+    }
+    return {
+      data: siteRead,
+      pending: false,
+      error: siteError,
+      fetching: siteFetching,
+      refetch,
+    };
+  },
+  writePluginRoute: async (write: { path: string; body?: unknown }) => {
+    if (write.path === "/publish-readiness") {
+      asked.push(write.body);
+      return readinessAnswer;
+    }
     writes.push(write);
     return writeAnswer();
   },
@@ -43,9 +91,11 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 // when editing starts, as the real one does.
 vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
   // The editor's real words, so the dialog's title reads as an author sees it.
-  EDITOR_WORDS: (
-    await importOriginal<typeof import("@nextlyhq/builder/shell")>()
-  ).EDITOR_WORDS,
+  ...(({ EDITOR_WORDS, BASE_DEVICE_LABEL, SITE_CODE_POLICY_DOCS_HREF }) => ({
+    EDITOR_WORDS,
+    BASE_DEVICE_LABEL,
+    SITE_CODE_POLICY_DOCS_HREF,
+  }))(await importOriginal<typeof import("@nextlyhq/builder/shell")>()),
   BreakpointManager: ({
     status,
     onEditingChange,
@@ -97,11 +147,16 @@ const MANAGER: SiteSettingsRead = {
 /** Renders the dialog again with the current read, as a refetch would. */
 let reshow: () => void = () => {};
 
+/** The address the dialog is drawn with; a case may change it and reshow. */
+let shownAddress: SettingsAddress | null = null;
+
 function show(
   onOpenChange = vi.fn(),
   pageLayout?: ReactElement,
-  seoFields = true
+  seoFields = true,
+  address: SettingsAddress | null = null
 ) {
+  shownAddress = address;
   // Built afresh each time: React skips a child whose element is unchanged,
   // so re-rendering the same tree would never ask the dialog again.
   const element = (): ReactElement => (
@@ -114,10 +169,12 @@ function show(
         {...(pageLayout === undefined ? {} : { pageLayout })}
         share={{ title: "Who we are", description: "We build tools." }}
         seoFields={seoFields}
+        address={shownAddress}
         breakpoints={{
           value: { viewport: [], container: [] },
           onSave: vi.fn(),
           status: "ready",
+          refresh: vi.fn(),
         }}
       />
     </form>
@@ -128,11 +185,15 @@ function show(
 }
 
 beforeEach(() => {
+  addressRead = undefined;
+  addressAsked.length = 0;
   siteRead = MANAGER;
   siteError = null;
   siteFetching = false;
   writes.length = 0;
   writeAnswer = async () => ({});
+  asked.length = 0;
+  readinessAnswer = { dependencies: [], missing: 0 };
   refetch.mockClear();
 });
 afterEach(cleanup);
@@ -189,6 +250,129 @@ describe("the Settings dialog", () => {
       screen.queryByText("Saved with the page when you Save or Publish.")
     ).toBeNull();
     expect(screen.queryByText(/save as you change them/)).toBeNull();
+  });
+
+  it("shows the page's saved address as the server resolved it", () => {
+    addressRead = { path: "/company/about-us" };
+    show(vi.fn(), undefined, true, {
+      page: { collection: "pages", id: "p-1" },
+      locale: "fr",
+      savedSlug: "about-us",
+      slugChanged: false,
+      savedRevision: 0,
+    });
+    expect(
+      screen.getByRole("region", { name: "Address on your site" }).textContent
+    ).toContain("/company/about-us");
+    // Asked of the server for this page, in the language being edited: the
+    // address is never assembled here from the slug.
+    expect(addressAsked.at(-1)).toBe(
+      "/pages/address?collection=pages&id=p-1&locale=fr"
+    );
+    expect(screen.queryByText(/changes when you save/)).toBeNull();
+  });
+
+  it("reads the address again after every save, whichever field it changed", () => {
+    // A host's path can name fields besides the slug: a save that changes
+    // one of them moves the page while the slug stays as it was.
+    addressRead = { path: "/news/about-us" };
+    refetch.mockClear();
+    const address: SettingsAddress = {
+      page: { collection: "pages", id: "p-1" },
+      savedSlug: "about-us",
+      slugChanged: false,
+      savedRevision: 0,
+    };
+    show(vi.fn(), undefined, true, address);
+    expect(refetch).not.toHaveBeenCalled();
+    shownAddress = { ...address, savedRevision: 1 };
+    reshow();
+    expect(refetch).toHaveBeenCalledTimes(1);
+    // Drawn again with nothing saved since: not read again.
+    reshow();
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the saved address changes on save while the slug differs", () => {
+    addressRead = { path: "/about-us" };
+    show(vi.fn(), undefined, true, {
+      page: { collection: "pages", id: "p-1" },
+      savedSlug: "about-us",
+      slugChanged: true,
+      savedRevision: 0,
+    });
+    // Still the SAVED address: the server knows nothing of the typed slug.
+    expect(
+      screen.getByRole("region", { name: "Address on your site" }).textContent
+    ).toContain("/about-us");
+    const line = screen.getByText(
+      "This is the saved address. It changes when you save the page."
+    );
+    // Announced as it appears, as the admin's own address warning is.
+    expect(line.getAttribute("role")).toBe("status");
+  });
+
+  it("shows no address line where the page has none, or was never saved", () => {
+    addressRead = { path: null };
+    show(vi.fn(), undefined, true, {
+      page: { collection: "posts", id: "x" },
+      slugChanged: false,
+      savedRevision: 0,
+    });
+    expect(
+      screen.queryByRole("region", { name: "Address on your site" })
+    ).toBeNull();
+    cleanup();
+    show();
+    expect(addressAsked).toHaveLength(1);
+    expect(
+      screen.queryByRole("region", { name: "Address on your site" })
+    ).toBeNull();
+  });
+
+  it("counts a save each time the form takes in new stored values", () => {
+    // Every load or save installs a fresh defaults object; drawing again
+    // with the same one is not a save.
+    const first = { slug: "about-us" };
+    const { result, rerender } = renderHook(
+      ({ saved }: { saved: unknown }) => useSavedRevision(saved),
+      { initialProps: { saved: first as unknown } }
+    );
+    expect(result.current).toBe(0);
+    rerender({ saved: first });
+    expect(result.current).toBe(0);
+    rerender({ saved: { slug: "about-us" } });
+    expect(result.current).toBe(1);
+  });
+
+  it("reads the saved entry's address, and a slug typed since as a change", () => {
+    const saved = { kind: "collection", slug: "pages", documentId: "p-1" };
+    expect(settingsAddressOf(saved, "about-us", "about-us", 0)).toEqual({
+      page: { collection: "pages", id: "p-1" },
+      savedSlug: "about-us",
+      slugChanged: false,
+      savedRevision: 0,
+    });
+    expect(settingsAddressOf(saved, "about", "about-us", 0)?.slugChanged).toBe(
+      true
+    );
+    // Never saved, or a Single: no page address to read.
+    expect(
+      settingsAddressOf(
+        { kind: "collection", slug: "pages" },
+        "a",
+        undefined,
+        0
+      )
+    ).toBeNull();
+    expect(
+      settingsAddressOf(
+        { kind: "single", slug: "home", documentId: "1" },
+        "a",
+        "a",
+        0
+      )
+    ).toBeNull();
   });
 
   it("offers no Site tab to a role that may not manage the site", () => {
@@ -270,6 +454,27 @@ describe("the Settings dialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("asks before closing over unsaved code, naming a breakpoint draft kept under it too", async () => {
+    const onOpenChange = show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Edit breakpoints" })
+    );
+    // The code opens over the breakpoint draft, which stays.
+    await userEvent.click(screen.getByRole("button", { name: "Add code" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Head" }), {
+      target: { value: "<script>a()</script>" },
+    });
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    const ask = await screen.findByRole("alertdialog");
+    expect(ask.textContent).toContain(
+      "Discard your breakpoint and code changes?"
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   it("changes the default Layout at once, and says Saved", async () => {
     show();
     await userEvent.click(screen.getByRole("tab", { name: "Site" }));
@@ -292,6 +497,88 @@ describe("the Settings dialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByText("Saved");
     expect(writes).toHaveLength(2);
+  });
+
+  it("asks about the Layout's unpublished components before making it the default", async () => {
+    readinessAnswer = {
+      dependencies: [
+        {
+          kind: "component",
+          id: "hdr",
+          title: "Site header",
+          mayPublish: true,
+        },
+      ],
+      missing: 0,
+    };
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await chooseLayout("No header or footer");
+    const question = await screen.findByRole("alertdialog");
+    expect(question.textContent).toContain(
+      "This Layout uses 1 component that isn't published"
+    );
+    expect(asked).toEqual([{ documents: [], layout: "bare" }]);
+    // Nothing is written while the author is being asked.
+    expect(writes).toEqual([]);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Make default anyway" })
+    );
+    await screen.findByText("Saved");
+    expect(writes).toEqual([
+      expect.objectContaining({ path: "/layouts/bare/make-default" }),
+    ]);
+  });
+
+  it("publishes the components first, then makes the Layout the default", async () => {
+    readinessAnswer = {
+      dependencies: [
+        {
+          kind: "component",
+          id: "hdr",
+          title: "Site header",
+          mayPublish: true,
+        },
+      ],
+      missing: 0,
+    };
+    writeAnswer = async () => ({ item: { published: [], refused: [] } });
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await chooseLayout("No header or footer");
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "Publish it, then make default",
+      })
+    );
+    await screen.findByText("Saved");
+    expect(writes.map(write => write.path)).toEqual([
+      "/publish-dependencies",
+      "/layouts/bare/make-default",
+    ]);
+  });
+
+  it("changes nothing when the author cancels the question", async () => {
+    readinessAnswer = {
+      dependencies: [
+        {
+          kind: "component",
+          id: "hdr",
+          title: "Site header",
+          mayPublish: true,
+        },
+      ],
+      missing: 0,
+    };
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await chooseLayout("No header or footer");
+    await screen.findByRole("alertdialog");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(writes).toEqual([]);
+    expect(screen.queryByText("Saving…")).toBeNull();
   });
 
   it("shows the default read-only, naming it, without the Layout rights", async () => {
@@ -421,6 +708,7 @@ describe("the Settings dialog", () => {
           value: { viewport: [], container: [] },
           onSave: vi.fn(),
           status: "ready",
+          refresh: vi.fn(),
         }}
       />
     );

@@ -125,38 +125,10 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 insert nextly_cache_tag_expiries",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: LEDGER,
-  },
-  {
-    dialect: "mysql",
     key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
     reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_cache_tag_expiries",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: LEDGER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry \u00b7 checkout",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/dashboard/table-presence.ts#<anonymous> \u00b7 select tables",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: LEDGER,
   },
   {
     dialect: "mysql",
@@ -194,10 +166,24 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts#<anonymous> (opened the transaction) \u00b7 select nextly_schema_owners",
+    key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select role_inherits",
     witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.mysql.integration.test.ts",
-    reason: PIPELINE,
+      "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select roles",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select users",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
+    reason: CALLER,
   },
   {
     dialect: "mysql",
@@ -219,6 +205,20 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     witness:
       "packages/nextly/src/plugins/__tests__/plugin-db-transaction-dialects.integration.test.ts",
     reason: PLUGIN,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/shared/lib/__tests__/transaction-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
+    witness:
+      "packages/nextly/src/shared/lib/__tests__/transaction-scope.integration.test.ts",
+    reason: CALLER,
   },
   {
     dialect: "postgresql",
@@ -247,28 +247,7 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 insert nextly_cache_tag_expiries",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: LEDGER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select clock_timestamp",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: LEDGER,
-  },
-  {
-    dialect: "postgresql",
     key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry \u00b7 checkout",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
     reason: CALLER,
@@ -277,8 +256,8 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     dialect: "postgresql",
     key: "packages/nextly/src/domains/dashboard/table-presence.ts#<anonymous> \u00b7 select tables",
     witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: LEDGER,
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
   },
   {
     dialect: "postgresql",
@@ -316,10 +295,24 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
-    key: "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts#<anonymous> (opened the transaction) \u00b7 select nextly_schema_owners",
+    key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select role_inherits",
     witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.postgresql.integration.test.ts",
-    reason: PIPELINE,
+      "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select roles",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select users",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
+    reason: CALLER,
   },
   {
     dialect: "postgresql",
@@ -337,9 +330,142 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
+    key: "packages/nextly/src/domains/users/services/user-mutation-service.ts#UserMutationService.supportsErasure \u00b7 select tables",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/domains/users/services/user-mutation-service.ts#UserMutationService.tablePresent \u00b7 select tables",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
     key: "packages/nextly/src/plugins/__tests__/plugin-db-transaction-dialects.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select txd__marks",
     witness:
       "packages/nextly/src/plugins/__tests__/plugin-db-transaction-dialects.integration.test.ts",
     reason: PLUGIN,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 delete nextly_versions",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_deliveries",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_queue_recipients",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_versions",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select pg_class",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select pg_constraint",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select pg_index",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select single_*",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select unnest",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select user_roles",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select users",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 update activity_log",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 update audit_log",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 update email_deliveries",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 update nextly_content_events",
+    witness:
+      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/shared/lib/__tests__/transaction-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
+    witness:
+      "packages/nextly/src/shared/lib/__tests__/transaction-scope.integration.test.ts",
+    reason: CALLER,
   },
 ];

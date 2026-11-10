@@ -241,7 +241,11 @@ describe("judging a run's deletions", () => {
     consent: DataLossConsent,
     interactive: boolean,
     answer = false,
-    extra: { flag?: boolean; approved?: Deletion[] } = {}
+    extra: {
+      flag?: boolean;
+      approved?: Deletion[];
+      sourceOf?: (deletion: Deletion) => string | undefined;
+    } = {}
   ) => {
     const printed: string[] = [];
     const ask = vi.fn(() => Promise.resolve(answer));
@@ -316,6 +320,50 @@ describe("judging a run's deletions", () => {
     ]);
     expect(ask).toHaveBeenCalledTimes(1);
     expect(verdict).toEqual({ kind: "proceed" });
+  });
+
+  it("asks once for deletions from several files, naming each file above its own", async () => {
+    const posts = table("posts");
+    const pages = { kind: "rows", table: "pages" } as const;
+    const summary = column("posts", "summary");
+    const sources = new Map<Deletion, string>([
+      [posts, "a.sql"],
+      [summary, "a.sql"],
+      [pages, "b.sql"],
+    ]);
+    const { verdict, printed, ask } = await judge(
+      [posts, summary, pages],
+      NO_CONSENT,
+      true,
+      true,
+      { sourceOf: deletion => sources.get(deletion) }
+    );
+    expect(printed).toEqual([
+      "This deletes 3 items, which cannot be undone:",
+      "  a.sql:",
+      "    - table posts",
+      "    - column posts.summary",
+      "  b.sql:",
+      "    - rows of pages",
+    ]);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(verdict).toEqual({ kind: "proceed" });
+  });
+
+  it("covers a deletion on a schema-qualified table only by the consent without targets, and says so", async () => {
+    const qualified: Deletion = { kind: "rows", table: "archive.comments" };
+    const named = resolveDataLossConsent({ flag: "archive.comments", env: {} });
+    expect(consentCovers(named, qualified)).toBe(false);
+    expect(
+      consentCovers(resolveDataLossConsent({ flag: true, env: {} }), qualified)
+    ).toBe(true);
+    const { verdict } = await judge([qualified], named, false);
+    expect(verdict.kind).toBe("refused");
+    if (verdict.kind !== "refused") return;
+    expect(verdict.message).toContain("only by the consent without targets");
+    expect(verdict.message).toContain(
+      "--accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS=1)"
+    );
   });
 
   it("stops when the terminal says no", async () => {

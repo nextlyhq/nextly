@@ -186,6 +186,137 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** Live facts answering that nothing references, carries code or inherits from anything. */
+const quietFacts = async () => ({
+  cascadeFrom: () => [],
+  truncateCascadeFrom: () => [],
+  nulledBy: () => [],
+  hiddenCode: () => false,
+  descendantsOf: () => [],
+  liveTable: () => undefined,
+  liveColumns: new Map(),
+});
+
+describe("a rollback's deletions, read as one run", () => {
+  it("follows a cascade key an earlier target's DOWN restores from a later target's removal of rows", async () => {
+    // a.sql is the newer file, so its DOWN runs first and restores the key.
+    const downs: Record<string, string> = {
+      "a.sql":
+        'ALTER TABLE "comments" ADD CONSTRAINT "fk" FOREIGN KEY ("post_id") REFERENCES "posts" ("id") ON DELETE CASCADE;',
+      "b.sql": 'DELETE FROM "posts";',
+    };
+    const { deps, executed } = baseDeps({
+      options: {
+        step: 2,
+        yes: false,
+        dryRun: false,
+        consent: resolveDataLossConsent({ flag: "posts", env: {} }),
+      },
+      listFileApplies: async () => [
+        row("b.sql", "applied", 1000),
+        row("a.sql", "applied", 2000),
+      ],
+      readDownSql: async (filename: string) => down(downs[filename] ?? ""),
+      readDeletionFacts: quietFacts,
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(/comments/);
+    expect(executed).toEqual([]);
+  });
+
+  it("names the database's DDL event triggers beside a rollback's deletions", async () => {
+    const { deps, executed } = baseDeps({
+      listFileApplies: async () => [row("b.sql", "applied", 1000)],
+      readDownSql: async () => down('DELETE FROM "posts";'),
+      readDeletionFacts: quietFacts,
+      readEventTriggers: async () => ["audit_ddl"],
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(
+      /DDL event trigger audit_ddl/
+    );
+    expect(executed).toEqual([]);
+  });
+
+  it("never lets a yes to one file's deletion stand for another file's, when the plan moves while the lock is awaited", async () => {
+    // Before the lock a.sql is the newest applied file; while this run waits,
+    // another rolls it back, and the plan under the lock reaches b.sql,
+    // which deletes the same rows by the same statement.
+    let reads = 0;
+    const asked: string[] = [];
+    const { deps, executed } = baseDeps({
+      interactive: true,
+      askToDelete: async (question: string) => {
+        asked.push(question);
+        return true;
+      },
+      listFileApplies: async () =>
+        reads++ === 0
+          ? [row("b.sql", "applied", 1000), row("a.sql", "applied", 2000)]
+          : [
+              row("b.sql", "applied", 1000),
+              row("a.sql", "applied", 2000),
+              row("a.sql", "rolled_back", 3000),
+            ],
+      readDownSql: async () => down('DELETE FROM "posts";'),
+      readDeletionFacts: quietFacts,
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(/b\.sql/);
+    expect(asked).toHaveLength(1);
+    expect(executed).toEqual([]);
+  });
+
+  it("never lets one file's agreed deletion cover another file's same deletion once that file changed", async () => {
+    // Both DOWNs delete posts' rows. a.sql stays as agreed; b.sql's text
+    // changes while the lock is awaited, so its deletion is not the one agreed.
+    const reads = new Map<string, number>();
+    const asked: string[] = [];
+    const { deps, executed } = baseDeps({
+      interactive: true,
+      askToDelete: async (question: string) => {
+        asked.push(question);
+        return true;
+      },
+      options: { step: 2, allowDataLoss: false, yes: false, dryRun: false },
+      listFileApplies: async () => [
+        row("b.sql", "applied", 1000),
+        row("a.sql", "applied", 2000),
+      ],
+      readDownSql: async (filename: string) => {
+        const read = reads.get(filename) ?? 0;
+        reads.set(filename, read + 1);
+        return down(
+          filename === "b.sql" && read > 0
+            ? 'DELETE FROM "posts"; DELETE FROM "posts";'
+            : 'DELETE FROM "posts";'
+        );
+      },
+      readDeletionFacts: quietFacts,
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(/b\.sql/);
+    expect(asked).toHaveLength(1);
+    expect(executed).toEqual([]);
+  });
+
+  it("names what a plugin module's DOWN deletes, a removal of rows included, and needs consent for it", async () => {
+    const { deps, executed } = baseDeps({
+      owners: authOwnsT,
+      options: {
+        step: 1,
+        allowDataLoss: false,
+        yes: false,
+        dryRun: false,
+        plugin: "auth",
+      },
+      listFileApplies: async () => [
+        row("plugin:auth/001_init.sql", "applied", 2000),
+      ],
+      readDownSql: async () => down('DELETE FROM "t";'),
+      readDeletionFacts: quietFacts,
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(/rows of t/);
+    expect(executed).toEqual([]);
+  });
+});
+
 describe("migrateDownCore", () => {
   describe("an unresolved attempt", () => {
     const refusal = new Error("unresolved attempt");
@@ -200,13 +331,13 @@ describe("migrateDownCore", () => {
         },
       };
       const empty = { listFileApplies: async () => [] };
-      const real = baseDeps({ ...empty, refuseUnresolvedAttempts: refuse });
+      const real = baseDeps({ ...empty, checkAppHistory: refuse });
       await expect(migrateDownCore(real.deps as never)).rejects.toBe(refusal);
 
       const dry = baseDeps({
         ...empty,
         logger,
-        refuseUnresolvedAttempts: refuse,
+        checkAppHistory: refuse,
         options: { step: 1, allowDataLoss: false, yes: false, dryRun: true },
       });
       await expect(migrateDownCore(dry.deps as never)).resolves.toEqual({
@@ -219,7 +350,7 @@ describe("migrateDownCore", () => {
 
     it("stops a run with targets before any DOWN runs", async () => {
       const { deps, executed } = baseDeps({
-        refuseUnresolvedAttempts: refuse,
+        checkAppHistory: refuse,
         // Consented, so the run reaches the lock rather than stopping on it.
         options: { step: 1, allowDataLoss: true, yes: true, dryRun: false },
       });
@@ -227,11 +358,49 @@ describe("migrateDownCore", () => {
       expect(executed).toEqual([]);
     });
 
+    it("is asked before the plan reads any down section, so an older build stops on its history", async () => {
+      const order: string[] = [];
+      const { deps } = baseDeps({
+        checkAppHistory: async () => {
+          order.push("history");
+          throw refusal;
+        },
+        readDownSql: async () => {
+          order.push("read");
+          return down('ALTER TABLE "t" DROP COLUMN "c";');
+        },
+        options: { step: 1, allowDataLoss: true, yes: true, dryRun: false },
+      });
+      await expect(migrateDownCore(deps as never)).rejects.toBe(refusal);
+      expect(order).toEqual(["history"]);
+    });
+
+    it("records no checksum in a dry run, and may in a real one", async () => {
+      const asked: boolean[] = [];
+      const check = async (args: { recordChecksums: boolean }) => {
+        asked.push(args.recordChecksums);
+      };
+      const empty = { listFileApplies: async () => [] };
+      await migrateDownCore(
+        baseDeps({ ...empty, checkAppHistory: check }).deps as never
+      );
+      await migrateDownCore(
+        baseDeps({
+          ...empty,
+          logger: { info: () => {}, warn: () => {}, debug: () => {} },
+          checkAppHistory: check,
+          options: { step: 1, allowDataLoss: false, yes: false, dryRun: true },
+        }).deps as never
+      );
+      // A real run asks read-only before its plan and again under the lock.
+      expect(asked).toEqual([false, true, false]);
+    });
+
     it("is not asked for a plugin's stream", async () => {
       const asked: string[] = [];
       const { deps } = baseDeps({
         listFileApplies: async () => [],
-        refuseUnresolvedAttempts: async () => {
+        checkAppHistory: async () => {
           asked.push("asked");
         },
         options: {
@@ -307,19 +476,24 @@ describe("migrateDownCore", () => {
     expect(executed.length).toBe(1);
   });
 
-  it("refuses a consent naming targets, which cannot cover a DOWN it does not name", async () => {
-    const { deps, executed } = baseDeps({
-      options: {
-        step: 1,
-        yes: false,
-        dryRun: false,
-        consent: resolveDataLossConsent({ flag: "t", env: {} }),
-      },
-    });
-    await expect(migrateDownCore(deps)).rejects.toThrow(
-      /does not cover[\s\S]*a\.sql's DOWN[\s\S]*only by the consent without targets/
+  it("refuses a consent naming targets that leave out what the DOWN deletes, and rolls back with one naming it", async () => {
+    const withConsent = (targets: string) =>
+      baseDeps({
+        options: {
+          step: 1,
+          yes: false,
+          dryRun: false,
+          consent: resolveDataLossConsent({ flag: targets, env: {} }),
+        },
+      });
+    const other = withConsent("u");
+    await expect(migrateDownCore(other.deps)).rejects.toThrow(
+      /does not cover[\s\S]*column t\.c[\s\S]*--accept-data-loss=u,t\.c/
     );
-    expect(executed).toEqual([]);
+    expect(other.executed).toEqual([]);
+    const named = withConsent("t.c");
+    await migrateDownCore(named.deps);
+    expect(named.executed.length).toBe(1);
   });
 
   it("asks a terminal, and rolls back only on yes", async () => {
@@ -362,7 +536,7 @@ describe("migrateDownCore", () => {
         ),
     });
     await expect(migrateDownCore(changed.deps)).rejects.toThrow(
-      /needs consent[\s\S]*a\.sql's DOWN/
+      /needs consent[\s\S]*column t\.d/
     );
     expect(changed.executed).toEqual([]);
   });
@@ -379,8 +553,23 @@ describe("migrateDownCore", () => {
     const { deps, executed } = baseDeps({
       dialect: "sqlite",
       readDownSql: async () => down(`${rebuild.join(";\n")};`),
-      // The table as the database holds it: the twin declares every column.
+      // The table as the database holds it: the twin declares every column,
+      // each with the type it has.
       readLiveColumns: async () => new Map([["t", new Set(["id", "a"])]]),
+      readDeletionFacts: async () => ({
+        cascadeFrom: () => [],
+        truncateCascadeFrom: () => [],
+        liveColumns: new Map([["t", new Set(["id", "a"])]]),
+        liveColumnTypes: new Map([
+          [
+            "t",
+            new Map([
+              ["id", "text"],
+              ["a", "text"],
+            ]),
+          ],
+        ]),
+      }),
     });
     await migrateDownCore(deps);
     expect(executed).toEqual([rebuild.join(";\n")]);
@@ -417,6 +606,27 @@ describe("migrateDownCore", () => {
     });
     await migrateDownCore(deps);
     expect(executed.length).toBe(1);
+  });
+
+  describe("a migration whose removal was recorded", () => {
+    it("is refused by name while its file is absent, running nothing", async () => {
+      const gone = Object.assign(new Error("ENOENT: no such file"), {
+        code: "ENOENT",
+      });
+      const { deps, executed } = baseDeps({
+        readDownSql: async () => {
+          throw gone;
+        },
+        removedFiles: async () => new Set(["a.sql"]),
+        options: { step: 1, allowDataLoss: true, yes: true, dryRun: false },
+      });
+      await expect(migrateDownCore(deps as never)).rejects.toMatchObject({
+        publicMessage: expect.stringMatching(
+          /a\.sql[\s\S]*recorded as removed/
+        ),
+      });
+      expect(executed).toEqual([]);
+    });
   });
 
   describe("a dry run reports what a real run would refuse, without throwing", () => {

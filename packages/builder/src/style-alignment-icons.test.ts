@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { BASE_BREAKPOINT, type NodeStyles } from "@nextlyhq/blocks-engine";
+import {
+  BASE_BREAKPOINT,
+  STYLE_CATALOG,
+  type NodeStyles,
+} from "@nextlyhq/blocks-engine";
 
-import { alignmentGroupFor, flowOf, type Flow } from "./style-alignment-icons";
+import {
+  alignmentGroupFor,
+  drawsIcons,
+  flowOf,
+  type Flow,
+} from "./style-alignment-icons";
 
 /** A flow, horizontal and left to right unless the test says otherwise. */
 function flow(over: Partial<Flow> = {}): Flow {
@@ -209,6 +218,120 @@ describe("alignmentGroupFor", () => {
 
   it("answers nothing for a property it does not draw as icons", () => {
     expect(alignmentGroupFor("font-weight", ["bold"], ROW)).toBeUndefined();
+  });
+});
+
+/** A keyword property's values, as the catalog offers them. */
+function keywordsOf(property: string): readonly string[] {
+  const entry = STYLE_CATALOG.find(
+    candidate => candidate.property === property
+  );
+  const shape = entry?.shape as { kind?: string; values?: readonly string[] };
+  if (shape?.kind !== "keyword" || shape.values === undefined) {
+    throw new Error(`${property} is not a keyword property`);
+  }
+  return shape.values;
+}
+
+describe("choices drawn as icons whatever the flow", () => {
+  it("draws Display as Block, Flex, Grid and None, the rest a layout reaches for under More", () => {
+    const values = keywordsOf("display");
+    const group = alignmentGroupFor("display", values, ROW);
+    expect(icons("display", values, ROW)).toEqual([
+      "block:RectangleHorizontal",
+      "flex:Columns3",
+      "grid:Grid2x2",
+      "none:EyeOff",
+    ]);
+    expect(group?.options.map(option => option.label)).toEqual([
+      "Block",
+      "Flex",
+      "Grid",
+      "Hidden",
+    ]);
+    // The table and ruby modes and the two-keyword spellings are not offered;
+    // a stored one still shows, as the field lists a value it does not carry.
+    expect(group?.rest).toEqual([
+      "inline",
+      "inline-block",
+      "inline-flex",
+      "inline-grid",
+      "flow-root",
+      "list-item",
+    ]);
+  });
+
+  it("draws text case as None, Uppercase, Lowercase and Capitalize", () => {
+    const values = keywordsOf("textTransform");
+    const group = alignmentGroupFor("text-transform", values, ROW);
+    expect(icons("text-transform", values, ROW)).toEqual([
+      "none:Minus",
+      "uppercase:CaseUpper",
+      "lowercase:CaseLower",
+      "capitalize:CaseSensitive",
+    ]);
+    expect(group?.rest).toEqual(["math-auto", "full-width", "full-size-kana"]);
+  });
+
+  it("draws object fit as Cover, Fit inside and Stretch to fill, the rest under More", () => {
+    const values = keywordsOf("objectFit");
+    const group = alignmentGroupFor("object-fit", values, ROW);
+    expect(icons("object-fit", values, ROW)).toEqual([
+      "cover:Crop",
+      "contain:Shrink",
+      "fill:StretchHorizontal",
+    ]);
+    expect(group?.options.map(option => option.label)).toEqual([
+      "Cover",
+      "Fit inside",
+      "Stretch to fill",
+    ]);
+    expect(group?.rest).toEqual(["none", "scale-down"]);
+  });
+
+  it("says what each fit does, in a line for the value that applies", () => {
+    const group = alignmentGroupFor("object-fit", keywordsOf("objectFit"), ROW);
+    expect(group?.help?.["cover"]).toBe("Fills the box; edges may be cut.");
+    // The row fits a video, an embed or a canvas as well as an image, so no
+    // line names the image.
+    for (const line of Object.values(group?.help ?? {})) {
+      expect(line).not.toMatch(/image/i);
+    }
+    for (const value of ["cover", "contain", "fill", "none", "scale-down"]) {
+      expect(group?.help?.[value]).toMatch(/\.$/);
+    }
+    // Only where a choice's icon cannot say it: Display needs no line.
+    expect(
+      alignmentGroupFor("display", keywordsOf("display"), ROW)?.help
+    ).toBeUndefined();
+  });
+
+  it("neither turns nor mirrors them in a column, a right-to-left element or vertical text", () => {
+    const values = keywordsOf("display");
+    const drawn = icons("display", values, ROW);
+    for (const at of [
+      COLUMN,
+      flow({ rtl: true }),
+      flow({ writingMode: "vertical-rl" }),
+    ]) {
+      expect(icons("display", values, at)).toEqual(drawn);
+      expect(
+        alignmentGroupFor("display", values, at)?.options.some(
+          option => option.matrix !== undefined || option.rotated === true
+        )
+      ).toBe(false);
+    }
+  });
+
+  it("names the property each group is for, so its More list reads in words", () => {
+    expect(
+      alignmentGroupFor("display", keywordsOf("display"), ROW)?.cssProperty
+    ).toBe("display");
+  });
+
+  it("is drawn as icons for the label to point at", () => {
+    const leaf = { kind: "keyword", cssProperty: "display", values: ["block"] };
+    expect(drawsIcons(leaf as never)).toBe(true);
   });
 });
 

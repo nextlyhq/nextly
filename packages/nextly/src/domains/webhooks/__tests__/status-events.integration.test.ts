@@ -89,7 +89,7 @@ describe("collection status webhook events (integration)", () => {
 
     const upd = await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(upd.success).toBe(true);
 
@@ -130,7 +130,7 @@ describe("collection status webhook events (integration)", () => {
 
     const upd = await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { status: "draft" }
+      { status: "draft", _overwrite: true }
     );
     expect(upd.success).toBe(true);
 
@@ -192,7 +192,7 @@ describe("collection status webhook events (integration)", () => {
         overrideAccess: true,
         locale: "en",
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     const published = (await events(current)).filter(
@@ -241,7 +241,7 @@ describe("collection status webhook events (integration)", () => {
         overrideAccess: true,
         locale: "en",
       },
-      { status: 0 }
+      { status: 0, _overwrite: true }
     );
 
     const changed = (await events(current)).find(
@@ -293,7 +293,7 @@ describe("collection status webhook events (integration)", () => {
         overrideAccess: true,
         locale: "en",
       },
-      { status: 0 }
+      { status: 0, _overwrite: true }
     );
     const coerced = (
       envelopeOf(
@@ -312,7 +312,7 @@ describe("collection status webhook events (integration)", () => {
         overrideAccess: true,
         locale: "en",
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     const republish = (await events(current)).find(
@@ -348,7 +348,7 @@ describe("collection status webhook events (integration)", () => {
     const id = (created.data as { id: string }).id;
     await handler.updateEntry(
       { collectionName: "leads", entryId: id, overrideAccess: true },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     // The 001 recording gate short-circuits every recordMutationEvent, including
     // the status events, so an opted-out collection writes nothing at all.

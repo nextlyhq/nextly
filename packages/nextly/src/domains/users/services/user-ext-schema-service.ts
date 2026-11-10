@@ -197,6 +197,21 @@ const TIMESTAMP_DEFAULT: Record<SupportedDialect, string> = {
   sqlite: "DEFAULT (strftime('%s', 'now'))",
 };
 
+/**
+ * Whether a stored field's carried options declare it `admin.hidden`: the
+ * sync keeps a field's declared `admin` among them (`carriedUserFieldOptions`).
+ */
+function declaredHidden(
+  pluginOptions: Record<string, unknown> | null | undefined
+): boolean {
+  const admin = pluginOptions?.admin;
+  return (
+    typeof admin === "object" &&
+    admin !== null &&
+    (admin as { hidden?: unknown }).hidden === true
+  );
+}
+
 // ============================================================
 // UserExtSchemaService
 // ============================================================
@@ -555,6 +570,11 @@ export class UserExtSchemaService {
     const adminOpts: Record<string, unknown> = {};
     if (record.placeholder) adminOpts.placeholder = record.placeholder;
     if (record.description) adminOpts.description = record.description;
+    // A field declared `admin.hidden` keeps the flag: the row has no column
+    // for it, so the sync carries the declared `admin` among the field's
+    // options. Dropped here, a read asking to leave hidden fields out
+    // (`showHiddenFields: false`) would return this one.
+    if (declaredHidden(record.pluginOptions)) adminOpts.hidden = true;
     if (Object.keys(adminOpts).length > 0) base.admin = adminOpts;
 
     // Validation bounds ride the stored row so the schema builder and the

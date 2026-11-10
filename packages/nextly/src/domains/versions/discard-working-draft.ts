@@ -32,6 +32,8 @@ import type { VersionScopeKind } from "../../schemas/versions/types";
 import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 import type { UserContext } from "../singles/types";
 
+import { DOCUMENT_VERSION_KEY, withDocumentVersion } from "./document-revision";
+
 /**
  * The document kinds a discard is implemented for.
  *
@@ -77,6 +79,11 @@ export interface DiscardWorkingDraftArgs {
   /** The request and context the caller's own read carries, for read hooks. */
   request?: Request;
   context?: Record<string, unknown>;
+  /**
+   * The version the pending change was read at (`_rev`) and the overwrite
+   * choice (`_overwrite`): a discard is judged as a save of the change is.
+   */
+  version?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -167,6 +174,14 @@ export async function discardWorkingDraft(
   // this request's authorization checks and the delete would otherwise have its
   // brand-new draft removed with both requests reporting success. Deleting when
   // none exists is a no-op, not an error.
+  //
+  // The version the discard left the document at, read on its own
+  // transaction: the live document read above carries the one from before the
+  // discard moved it.
+  let discardedVersion: string | undefined;
+  const onVersion = (version: string | undefined) => {
+    discardedVersion = version;
+  };
   const removed =
     args.scopeKind === "single"
       ? await getService("singleEntryService").discardWorkingDraftCounted({
@@ -176,6 +191,8 @@ export async function discardWorkingDraft(
           locale: args.locale ?? null,
           actor: args.actor,
           user: args.user,
+          version: args.version,
+          onVersion,
         })
       : await getService("collectionsHandler").discardWorkingDraftCounted({
           collectionName: args.slug,
@@ -186,7 +203,17 @@ export async function discardWorkingDraft(
           // The update this discard was authorized for, asked again under the
           // lock the delete holds.
           updateUnderLock: { authenticatedScope: args.authenticatedScope },
+          version: args.version,
+          onVersion,
         });
 
+  if (removed > 0 && typeof result.data === "object" && result.data !== null) {
+    const document = { ...(result.data as Record<string, unknown>) };
+    delete document[DOCUMENT_VERSION_KEY];
+    return {
+      document: withDocumentVersion(document, discardedVersion),
+      removed,
+    };
+  }
   return { document: result.data, removed };
 }

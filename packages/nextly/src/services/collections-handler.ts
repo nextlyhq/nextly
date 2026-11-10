@@ -36,6 +36,7 @@ import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { CacheRevalidator } from "../revalidation/types";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { ValidationIssue } from "../shared/lib/entry-validation";
+import type { HiddenFieldPaths } from "../shared/lib/filterable-fields";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import { CollectionFileManager } from "./collection-file-manager";
@@ -51,6 +52,99 @@ import type { FieldGroupDataService } from "./field-groups/field-group-data-serv
 import type { FieldGroupRegistryService } from "./field-groups/field-group-registry-service";
 import { consoleLogger } from "./shared";
 import type { Logger } from "./shared";
+
+/** What publishing or unpublishing every language of an entry takes. */
+type EveryLanguageLifecycleHandlerParams = {
+  collectionName: string;
+  entryId: string;
+  userId?: string;
+  userName?: string;
+  userEmail?: string;
+  /** Authenticated role set, forwarded to role-based access rules. */
+  userRoles?: string[];
+  user?: UserContext;
+  /** When true, bypass all access control checks */
+  overrideAccess?: boolean;
+  /**
+   * Which collections a trusted read may reach as relationships are expanded.
+   * Absent means every populated target inherits the caller's trust. Only ever
+   * narrows, and never admits a target's drafts.
+   */
+  trusted?: TrustBound;
+  /**
+   * Set by the REST dispatcher to attest the route middleware already ran the
+   * RBAC/code-access gate, so the entry service skips only that redundant
+   * re-check. Never inferred from a userId.
+   */
+  routeAuthorized?: boolean;
+  /** API-key scope; gates the unconditional publish or unpublish check. */
+  authenticatedScope?: AuthenticatedScope;
+  /** Acting identity from the transport, forwarded to the recorded event. */
+  actor?: RequestActor;
+  /**
+   * The version the move was made from: `_rev` and `_overwrite`, judged as a
+   * save's are (see the entry service).
+   */
+  data?: Readonly<Record<string, unknown>>;
+  /**
+   * The HTTP request behind this transition, when one produced it, told to
+   * its hooks.
+   */
+  request?: Request;
+  /** Seeds the context every hook of this transition shares. */
+  context?: Record<string, unknown>;
+};
+
+/**
+ * What a bulk update takes, by ids or by query; each adds the documents it
+ * names.
+ */
+type BulkUpdateHandlerParams = {
+  collectionName: string;
+  data: Record<string, unknown>;
+  userId?: string;
+  userName?: string;
+  userEmail?: string;
+  /** Authenticated role set, forwarded to role-based access rules. */
+  userRoles?: string[];
+  /** User context for access control */
+  user?: UserContext;
+  /** When true, bypass all access control checks */
+  overrideAccess?: boolean;
+  /**
+   * Which collections a trusted read may reach as relationships are expanded.
+   * Absent means every populated target inherits the caller's trust. Only ever
+   * narrows, and never admits a target's drafts.
+   */
+  trusted?: TrustBound;
+  /**
+   * Set by the REST dispatcher to attest the route middleware already ran
+   * the RBAC/code-access gate, so the entry service skips only that redundant
+   * re-check; the response is still redacted for this user. Never inferred
+   * from a userId — a caller attributing a user for hooks/audit must still
+   * pass the permission gate.
+   */
+  routeAuthorized?: boolean;
+  /** Arbitrary data passed to hooks via context */
+  context?: Record<string, unknown>;
+  /** The HTTP request behind this operation, when one produced it. */
+  request?: Request;
+  /** Acting identity from the transport, forwarded to the recorded event. */
+  actor?: RequestActor;
+  /**
+   * The caller's authenticated scope. Judges the collection-level gate and
+   * each per-row publish/unpublish transition on a scoped API key's OWN
+   * grants.
+   */
+  authenticatedScope?: AuthenticatedScope;
+  /** Skip cache revalidation for this bulk update (the outbox drain still runs). */
+  disableRevalidate?: boolean;
+  /**
+   * Each id's own version, judged per document (see the entry service). An
+   * update by query names no ids to give versions for, so it is refused one.
+   */
+  revs?: unknown;
+};
 
 /**
  * CollectionsHandler - Unified facade for collection operations.
@@ -281,6 +375,41 @@ export class CollectionsHandler {
   }
 
   /**
+   * Whether this caller may make a write naming `nextStatus` of the entry: the
+   * lifecycle gate an update asks, only where it moves the row into or out of
+   * published, judged without writing. See the mutation service.
+   *
+   * @experimental
+   */
+  async canMoveEntryStatus(params: {
+    collectionName: string;
+    entryId: string;
+    nextStatus: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    locale?: string;
+  }): Promise<boolean> {
+    return this.entryService.canMoveEntryStatus(params);
+  }
+
+  /**
+   * Whether this caller may delete the entry, judged by the delete's own gate
+   * without deleting it or running a hook, on the instance that serves
+   * collection writes, so the decision is the one the delete would take.
+   *
+   * @experimental
+   */
+  async canDeleteEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    /** API-key scope; judges the delete gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<boolean> {
+    return this.entryService.canDeleteEntry(params);
+  }
+
+  /**
    * What a release's write of these entries, for its action, would be
    * refused with by validation and field rules, judged without writing — on
    * the instance that serves
@@ -295,6 +424,18 @@ export class CollectionsHandler {
     action: "publish" | "unpublish";
   }): Promise<Map<string, ValidationIssue[]>> {
     return this.entryService.releasePublishIssues(params);
+  }
+
+  /**
+   * Every reason a list read would refuse this caller's query, or none, on the
+   * instance that serves collection reads. See the query service.
+   *
+   * @experimental
+   */
+  async queryReadableProblems(
+    params: Parameters<CollectionEntryService["queryReadableProblems"]>[0]
+  ): ReturnType<CollectionEntryService["queryReadableProblems"]> {
+    return this.entryService.queryReadableProblems(params);
   }
 
   /**
@@ -610,6 +751,11 @@ export class CollectionsHandler {
     offset?: number;
     /** Refuse a sort key that names no sortable field instead of dropping it. */
     unknownSort?: "drop" | "refuse";
+    /**
+     * Fields the read leaves out of its rows: a filter or sort naming one is
+     * refused, after the read gate. See the query service's `hiddenFields`.
+     */
+    hiddenFields?: HiddenFieldPaths;
     /** Number of documents per page (default: 10, max: 500) */
     limit?: number;
     /** Search query to filter entries by searchable fields */
@@ -889,6 +1035,8 @@ export class CollectionsHandler {
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
     request?: Request;
+    /** Fields the read leaves out, refused in its filter after the read gate. */
+    hiddenFields?: HiddenFieldPaths;
   }) {
     return this.entryService.countEntries(params);
   }
@@ -1003,34 +1151,7 @@ export class CollectionsHandler {
    * i18n M7: publish every language of an entry at once (spec §10). Sets the main status and,
    * for localized+draft collections, every companion `_status` to published, atomically.
    */
-  async publishAllLocales(params: {
-    collectionName: string;
-    entryId: string;
-    userId?: string;
-    userName?: string;
-    userEmail?: string;
-    /** Authenticated role set, forwarded to role-based access rules. */
-    userRoles?: string[];
-    user?: UserContext;
-    /** When true, bypass all access control checks */
-    overrideAccess?: boolean;
-    /**
-     * Which collections a trusted read may reach as relationships are expanded.
-     * Absent means every populated target inherits the caller's trust. Only ever
-     * narrows, and never admits a target's drafts.
-     */
-    trusted?: TrustBound;
-    /**
-     * Set by the REST dispatcher to attest the route middleware already ran the
-     * RBAC/code-access gate, so the entry service skips only that redundant
-     * re-check. Never inferred from a userId.
-     */
-    routeAuthorized?: boolean;
-    /** API-key scope; gates the unconditional publish check. */
-    authenticatedScope?: AuthenticatedScope;
-    /** Acting identity from the transport, forwarded to the recorded event. */
-    actor?: RequestActor;
-  }) {
+  async publishAllLocales(params: EveryLanguageLifecycleHandlerParams) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
   }
 
@@ -1043,34 +1164,7 @@ export class CollectionsHandler {
    * `unpublishAllLocales` on the mutation service for why a takedown asks that
    * question when a publish does not.
    */
-  async unpublishAllLocales(params: {
-    collectionName: string;
-    entryId: string;
-    userId?: string;
-    userName?: string;
-    userEmail?: string;
-    /** Authenticated role set, forwarded to role-based access rules. */
-    userRoles?: string[];
-    user?: UserContext;
-    /** When true, bypass all access control checks */
-    overrideAccess?: boolean;
-    /**
-     * Which collections a trusted read may reach as relationships are expanded.
-     * Absent means every populated target inherits the caller's trust. Only ever
-     * narrows, and never admits a target's drafts.
-     */
-    trusted?: TrustBound;
-    /**
-     * Set by the REST dispatcher to attest the route middleware already ran the
-     * RBAC/code-access gate, so the entry service skips only that redundant
-     * re-check. Never inferred from a userId.
-     */
-    routeAuthorized?: boolean;
-    /** API-key scope; gates the unconditional unpublish check. */
-    authenticatedScope?: AuthenticatedScope;
-    /** Acting identity from the transport, forwarded to the recorded event. */
-    actor?: RequestActor;
-  }) {
+  async unpublishAllLocales(params: EveryLanguageLifecycleHandlerParams) {
     return this.entryService.unpublishAllLocales(this.resolveUserParam(params));
   }
 
@@ -1201,46 +1295,7 @@ export class CollectionsHandler {
    * @param params - Collection name, array of entry IDs, and update data
    * @returns Bulk operation result with success/failed arrays and counts
    */
-  async bulkUpdateEntries(params: {
-    collectionName: string;
-    ids: string[];
-    data: Record<string, unknown>;
-    userId?: string;
-    userName?: string;
-    userEmail?: string;
-    /** Authenticated role set, forwarded to role-based access rules. */
-    userRoles?: string[];
-    /** User context for access control */
-    user?: UserContext;
-    /** When true, bypass all access control checks */
-    overrideAccess?: boolean;
-    /**
-     * Which collections a trusted read may reach as relationships are expanded.
-     * Absent means every populated target inherits the caller's trust. Only ever
-     * narrows, and never admits a target's drafts.
-     */
-    trusted?: TrustBound;
-    /**
-     * Set by the REST dispatcher to attest the route middleware already ran
-     * the RBAC/code-access gate, so the entry service skips only that redundant
-     * re-check. Never inferred from a userId — a caller attributing a user for
-     * hooks/audit must still pass the permission gate.
-     */
-    routeAuthorized?: boolean;
-    /** Arbitrary data passed to hooks via context */
-    context?: Record<string, unknown>;
-    /** The HTTP request behind this operation, when one produced it. */
-    request?: Request;
-    /** Acting identity from the transport, forwarded to the recorded event. */
-    actor?: RequestActor;
-    /**
-     * The caller's authenticated scope. For a scoped API-key bulk update each
-     * per-id publish/unpublish transition is judged on the key's OWN grants.
-     */
-    authenticatedScope?: AuthenticatedScope;
-    /** Skip cache revalidation for this bulk update (the outbox drain still runs). */
-    disableRevalidate?: boolean;
-  }) {
+  async bulkUpdateEntries(params: BulkUpdateHandlerParams & { ids: string[] }) {
     return this.entryService.bulkUpdateEntries({
       ...this.resolveUserParam(params),
       // Named explicitly (like updateEntry) so the API-key scope survives the
@@ -1258,41 +1313,7 @@ export class CollectionsHandler {
    * @returns Bulk operation result with success/failed arrays and counts
    */
   async bulkUpdateByQuery(
-    params: {
-      collectionName: string;
-      where: WhereFilter;
-      data: Record<string, unknown>;
-      userId?: string;
-      userName?: string;
-      userEmail?: string;
-      /** Authenticated role set, forwarded to role-based access rules. */
-      userRoles?: string[];
-      /** User context for access control */
-      user?: UserContext;
-      /** When true, bypass all access control checks */
-      overrideAccess?: boolean;
-      /**
-       * Which collections a trusted read may reach as relationships are expanded.
-       * Absent means every populated target inherits the caller's trust. Only ever
-       * narrows, and never admits a target's drafts.
-       */
-      trusted?: TrustBound;
-      /** Route auth already ran; response is still redacted for this user */
-      routeAuthorized?: boolean;
-      /** Arbitrary data passed to hooks via context */
-      context?: Record<string, unknown>;
-      /** The HTTP request behind this operation, when one produced it. */
-      request?: Request;
-      /** Acting identity from the transport, forwarded to the recorded event. */
-      actor?: RequestActor;
-      /**
-       * The caller's authenticated scope. Judges the collection-level gate and
-       * each per-row transition on a scoped API key's OWN grants.
-       */
-      authenticatedScope?: AuthenticatedScope;
-      /** Skip cache revalidation for this bulk update (the outbox drain still runs). */
-      disableRevalidate?: boolean;
-    },
+    params: BulkUpdateHandlerParams & { where: WhereFilter },
     options?: { limit?: number }
   ) {
     // Resolve userId -> user and mark route-authorized, mirroring

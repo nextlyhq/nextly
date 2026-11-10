@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Author">
+  <!-- The blog fixture's picture for an author with no avatar: a neutral silhouette. -->
+  <rect width="64" height="64" fill="#d4d4d8"/>
+  <circle cx="32" cy="25" r="11" fill="#71717a"/>
+  <path d="M10 60c2.5-12 11.5-19 22-19s19.5 7 22 19z" fill="#71717a"/>
+</svg>

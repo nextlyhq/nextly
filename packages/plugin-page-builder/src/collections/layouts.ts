@@ -66,6 +66,8 @@ import {
   textarea,
 } from "nextly/config";
 
+import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
+
 import { layoutAreaOptions } from "./areas";
 import { COMPONENTS_SLUG } from "./components";
 
@@ -161,6 +163,12 @@ export function layoutsCollection(): CollectionConfig {
     // Hidden costs nothing else: the collection keeps its URL, its API and its
     // permissions, and only stops being offered by navigation nobody asked
     // for — this plugin's own menu links to it explicitly.
-    admin: { useAsTitle: "title", hidden: true },
+    admin: {
+      useAsTitle: "title",
+      hidden: true,
+      // "Import from file" above the list, where a file exported from
+      // another site is brought in after its preview.
+      components: { BeforeListTable: TRANSFER_IMPORT_COMPONENT },
+    },
   });
 }

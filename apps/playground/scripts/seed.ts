@@ -21,6 +21,7 @@ import { seedPermissions, seedSuperAdmin } from "nextly/database/seeders";
 
 import { isCliEntry } from "../../../scripts/cli-entry.mjs";
 import config from "../nextly.config";
+import { seedCompositionDemo, type DemoStore } from "../seed/composition-demo";
 import {
   KITCHEN_SINK_DOCUMENT,
   KITCHEN_SINK_SLUG,
@@ -64,6 +65,7 @@ export interface SeedResult {
   postsCreated: number;
   mediaUploaded: number;
   blockPagesCreated: number;
+  demoPagesCreated: number;
 }
 
 const EMPTY_RESULT: SeedResult = {
@@ -74,6 +76,7 @@ const EMPTY_RESULT: SeedResult = {
   postsCreated: 0,
   mediaUploaded: 0,
   blockPagesCreated: 0,
+  demoPagesCreated: 0,
 };
 
 async function loadSeedData(): Promise<SeedData> {
@@ -319,6 +322,22 @@ function isDuplicateRefusal(error: unknown): boolean {
   );
 }
 
+/**
+ * The demo site's welcome page (`seed/composition-demo`), offered on every
+ * run for the reason the kitchen-sink page is: it is keyed on slugs nothing
+ * else writes and leaves an existing page alone. Its hero image is the seed's
+ * own, with no words in the picture to argue with the headline, uploaded only
+ * when the page is about to be made.
+ */
+async function seedDemoSite(nextly: DemoStore): Promise<{ created: number }> {
+  return seedCompositionDemo(nextly, {
+    heroImage: async () =>
+      (await seedMedia(nextly, ["hero-desk.webp"])).idByFilename.get(
+        "hero-desk.webp"
+      ) ?? null,
+  });
+}
+
 export async function seedForce(): Promise<SeedResult> {
   const nextly = await getNextly({ config });
   const data = await loadSeedData();
@@ -359,6 +378,9 @@ export async function seedForce(): Promise<SeedResult> {
   const blockPages = await seedBlockPages(nextly);
   result.blockPagesCreated = blockPages.created;
 
+  const demo = await seedDemoSite(nextly);
+  result.demoPagesCreated = demo.created;
+
   return result;
 }
 
@@ -382,11 +404,13 @@ export async function seedIfEmpty(): Promise<SeedResult> {
      * contributor reaches this path on every run after their first.
      */
     const blockPages = await seedBlockPages(nextly);
+    const demo = await seedDemoSite(nextly);
     return {
       ...EMPTY_RESULT,
       skipped: true,
       reason: "users-exist",
       blockPagesCreated: blockPages.created,
+      demoPagesCreated: demo.created,
     };
   }
   return seedForce();
@@ -405,14 +429,16 @@ if (isCliEntry(import.meta.url)) {
           `[nextly] seed skipped (${result.reason ?? "no-op"})` +
             (result.blockPagesCreated > 0
               ? `, added ${result.blockPagesCreated} block page`
-              : "")
+              : "") +
+            (result.demoPagesCreated > 0 ? ", added the welcome page" : "")
         );
       } else {
         console.log(
           `[nextly] seed complete: ${result.usersCreated} user, ` +
             `${result.postsCreated} posts, ${result.categoriesCreated} categories, ` +
             `${result.tagsCreated} tags, ${result.mediaUploaded} media, ` +
-            `${result.blockPagesCreated} block pages`
+            `${result.blockPagesCreated} block pages, ` +
+            `${result.demoPagesCreated} welcome page`
         );
       }
       process.exit(0);

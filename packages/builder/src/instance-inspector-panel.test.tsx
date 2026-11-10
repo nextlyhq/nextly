@@ -22,7 +22,13 @@ import {
   type ComponentDocument,
   type ComponentLookup,
 } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -849,6 +855,218 @@ describe("an exposed image", () => {
   });
 });
 
+/** A passage, as the rich-text editor stores one. */
+function passage(text: string): unknown {
+  return {
+    root: {
+      type: "root",
+      children: [{ type: "paragraph", children: [{ type: "text", text }] }],
+    },
+  };
+}
+
+/** The header with a rich-text body exposed, mounted with the given services. */
+function mountRich(
+  node: BlockNode,
+  services: ContentServices,
+  canvasPassage?: { placementId: string; exposureId: string }
+) {
+  const definition = header({
+    nodes: [
+      {
+        id: "h1",
+        type: "acme/heading",
+        version: 1,
+        props: { text: "Site name", body: passage("The component's words") },
+      },
+    ],
+    exposed: [
+      {
+        id: "body",
+        label: "Body",
+        nodeId: "h1",
+        propPath: "body",
+        type: "richText",
+      },
+    ],
+  });
+  const editor = editorFor(pageOf(node));
+  render(
+    <InspectorPanel
+      editor={editor}
+      componentLibrary={{
+        definitions: new Map([["header", definition]]),
+        components: LIBRARY,
+      }}
+      contentServices={services}
+      {...(canvasPassage === undefined ? {} : { canvasPassage })}
+    />
+  );
+  return editor;
+}
+
+/** A rich-text editor that attaches, and reads back the given passage. */
+function richEditor(read: unknown) {
+  const attach = vi.fn(() => ({
+    status: "attached",
+    session: {
+      focus: vi.fn(),
+      read: () => read,
+      detach: vi.fn(),
+      hold: vi.fn(),
+    },
+  }));
+  const load = vi.fn(async () => ({
+    attach,
+  })) as unknown as ContentServices["loadRichTextEditor"];
+  return { attach, load };
+}
+
+describe("an exposed rich text the canvas is editing", () => {
+  it("is held in the panel, saying where it is being edited", async () => {
+    // One editor serves both: opening it here would take the passage from
+    // under the author's caret on the canvas.
+    const { attach, load } = richEditor(passage("Edited"));
+    mountRich(
+      instance(),
+      { loadRichTextEditor: load },
+      { placementId: "i1", exposureId: "body" }
+    );
+    const field = screen.getByRole("textbox", { name: "Body" });
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    expect(attach).not.toHaveBeenCalled();
+    expect(screen.getByText(/being edited on the canvas/i)).toBeDefined();
+  });
+
+  it("is not held while the canvas edits another placement's", async () => {
+    const { attach, load } = richEditor(passage("Edited"));
+    mountRich(
+      instance(),
+      { loadRichTextEditor: load },
+      { placementId: "other", exposureId: "body" }
+    );
+    const field = screen.getByRole("textbox", { name: "Body" });
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    expect(attach).toHaveBeenCalled();
+  });
+});
+
+describe("an exposed rich text", () => {
+  it("is edited with the admin's rich-text editor, written as the placement's own", async () => {
+    // "Not editable here yet (rich text)" left a placement's passage fixed
+    // to the component's.
+    const { attach, load } = richEditor(passage("This page's words"));
+    const editor = mountRich(instance(), { loadRichTextEditor: load });
+    expect(screen.queryByText(/Not editable here yet/)).toBeNull();
+    const field = screen.getByRole("textbox", { name: "Body" });
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    // Opened on what the page shows: the component's passage.
+    expect(attach).toHaveBeenCalledWith(
+      field,
+      passage("The component's words")
+    );
+    await act(async () => {
+      fireEvent.blur(field);
+    });
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { body: passage("This page's words") },
+    });
+  });
+
+  it("opens on the placement's own passage where it has one", async () => {
+    const { attach, load } = richEditor(passage("Edited"));
+    mountRich(instance({ overrides: { body: passage("Ours") } }), {
+      loadRichTextEditor: load,
+    });
+    const field = screen.getByRole("textbox", { name: "Body" });
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    expect(attach).toHaveBeenCalledWith(field, passage("Ours"));
+  });
+
+  it("opens a cleared passage empty, not on the component's", async () => {
+    const { attach, load } = richEditor(passage("Edited"));
+    mountRich(instance({ overrides: { body: { $unset: true } } }), {
+      loadRichTextEditor: load,
+    });
+    const field = screen.getByRole("textbox", { name: "Body" });
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    expect(attach).toHaveBeenCalledWith(field, undefined);
+  });
+
+  it("keeps the passage open with the author's words when the write is refused", async () => {
+    const { load } = richEditor(passage("Too long"));
+    const editor = mountRich(instance(), { loadRichTextEditor: load });
+    editor.apply.mockImplementation(() => null);
+    const field = screen.getByRole("textbox", { name: "Body" });
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    await act(async () => {
+      fireEvent.blur(field);
+    });
+    expect(screen.getByText(/could not be saved/)).toBeDefined();
+  });
+
+  it("keeps a value its editor cannot hold visible, and out of its reach", () => {
+    const { load } = richEditor(passage("Edited"));
+    mountRich(instance({ overrides: { body: 42 } }), {
+      loadRichTextEditor: load,
+    });
+    expect(
+      screen.getByText(/Not editable here yet \(rich text\)/).textContent
+    ).toContain("42");
+    expect(screen.queryByRole("textbox", { name: "Body" })).toBeNull();
+  });
+
+  it("shows a passage stored as plain words, rather than opening it empty", () => {
+    // The editor reads plain words as no passage at all and opens empty, so
+    // the first keystroke would replace the words the page shows.
+    const { attach, load } = richEditor(passage("Edited"));
+    mountRich(instance({ overrides: { body: "Plain words" } }), {
+      loadRichTextEditor: load,
+    });
+    expect(
+      screen.getByText(/Not editable here yet \(rich text\)/).textContent
+    ).toContain("Plain words");
+    expect(screen.queryByRole("textbox", { name: "Body" })).toBeNull();
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("is read-only on a placement locked in Layers, which holds every row", async () => {
+    // A disabled fieldset does not stop typing in a `contenteditable`, so
+    // the passage is told.
+    const { attach, load } = richEditor(passage("Edited"));
+    mountRich({ ...instance(), locked: true }, { loadRichTextEditor: load });
+    const field = screen.getByRole("textbox", { name: "Body" });
+    expect(field.getAttribute("aria-readonly")).toBe("true");
+    await act(async () => {
+      fireEvent.focus(field);
+    });
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("says it is not editable where the host lends no rich-text editor", () => {
+    // The Content tab's words for this ("edited on the canvas here") are not
+    // true of a placement, whose canvas passage is the component's.
+    mountRich(instance(), {});
+    expect(
+      screen.getByText(/Not editable here yet \(rich text\)/).textContent
+    ).toContain("The component's words");
+    expect(screen.queryByText(/edited on the canvas/)).toBeNull();
+  });
+});
+
 describe("rows with no control", () => {
   it("lists a value its control cannot hold, with the value, rather than hiding it", () => {
     // An image row chooses a file by id; a host block holding its image as
@@ -917,6 +1135,7 @@ describe("rows with no control", () => {
     });
     mount(instance(), structured);
 
+    // Mounted without the host's rich-text editor, so the passage is shown.
     expect(
       screen.getByText(/Not editable here yet \(rich text\)/).textContent
     ).toContain("“Hello world”");

@@ -17,7 +17,11 @@
  */
 import type { PaginationMeta } from "nextly";
 
-import { ENTRIES_SEARCH_MAX, ENTRIES_UNTITLED } from "./entries-contract";
+import {
+  ENTRIES_LOCALE_MAX,
+  ENTRIES_SEARCH_MAX,
+  ENTRIES_UNTITLED,
+} from "./entries-contract";
 
 /** Where the editor searches the site's pages, under this plugin's namespace. */
 export const PAGES_SEARCH_ROUTE_PATH = "/pages/search";
@@ -52,6 +56,13 @@ export const PAGES_SEARCH_MAX: typeof ENTRIES_SEARCH_MAX = ENTRIES_SEARCH_MAX;
 export const PAGES_UNTITLED: typeof ENTRIES_UNTITLED = ENTRIES_UNTITLED;
 
 /**
+ * The longest locale code the route accepts. The entries route's figure,
+ * derived rather than restated: both name the language an editor reads in.
+ */
+export const PAGES_SEARCH_LOCALE_MAX: typeof ENTRIES_LOCALE_MAX =
+  ENTRIES_LOCALE_MAX;
+
+/**
  * The query parameter names, spelled once for the client that writes them and
  * the route that reads them.
  */
@@ -61,6 +72,7 @@ export const PAGES_SEARCH_PARAMS = {
   exclude: "exclude",
   before: "before",
   order: "order",
+  locale: "locale",
 } as const;
 
 /**
@@ -110,6 +122,12 @@ export interface PageItem {
   readonly collectionPluralLabel?: string;
   /** The Page Builder field the editor opens for, by its name. */
   readonly field: string;
+  /**
+   * Where the page is served on the site (`/pricing`), resolved on the server
+   * from where the host said its pages are served. Present for the plugin's
+   * own Pages with a slug; absent for any other collection.
+   */
+  readonly path?: string;
   readonly title: string;
   /** Present only when the collection has the Draft/Published lifecycle. */
   readonly status?: PageStatus;
@@ -125,6 +143,12 @@ export interface PageItem {
    * says: a scheduled page can hold them too. Absent otherwise.
    */
   readonly pendingChange?: true;
+  /**
+   * The page's version as this answer read it, which a rename sends back so
+   * a save of the page since then refuses the rename. Absent from a server
+   * that issues no versions.
+   */
+  readonly rev?: string;
 }
 
 /**
@@ -175,6 +199,11 @@ export interface PagesSearchQuery {
   readonly before?: string;
   /** How the pages are ordered; by title when absent. */
   readonly order?: PagesSearchOrder;
+  /**
+   * The language to search and name the pages in: the one being edited, so a
+   * localized title reads as the author sees it. The default locale when absent.
+   */
+  readonly locale?: string;
 }
 
 /**
@@ -204,8 +233,48 @@ export function pagesSearchPath(query: PagesSearchQuery = {}): string {
   if (query.order === "collection") {
     params.set(PAGES_SEARCH_PARAMS.order, query.order);
   }
+  if (query.locale !== undefined && query.locale !== "") {
+    params.set(PAGES_SEARCH_PARAMS.locale, query.locale);
+  }
   const search = params.toString();
   return search === ""
     ? PAGES_SEARCH_ROUTE_PATH
     : `${PAGES_SEARCH_ROUTE_PATH}?${search}`;
+}
+
+/**
+ * Where the editor asks the address one page is served at, for Settings'
+ * address line. A read of its own rather than a search: Settings knows the
+ * page and asks only where it is, as the page is saved.
+ */
+export const PAGE_ADDRESS_ROUTE_PATH = "/pages/address";
+
+/** The address route's query parameter names, spelled once for both ends. */
+export const PAGE_ADDRESS_PARAMS = {
+  collection: "collection",
+  id: "id",
+  locale: "locale",
+} as const;
+
+/**
+ * What the address route answers: where the page is served as it is SAVED,
+ * resolved on the server from where the host said its pages are served, by
+ * the interpolation the pages search and the collection's preview use.
+ * `null` where it has none: another collection's page, a host that states no
+ * address for its pages, or a page whose saved fields cannot fill it yet.
+ */
+export interface PageAddressResponse {
+  readonly path: string | null;
+}
+
+/** The address route's path for one page, in the language being edited. */
+export function pageAddressPath(page: PageReference, locale?: string): string {
+  const params = new URLSearchParams({
+    [PAGE_ADDRESS_PARAMS.collection]: page.collection,
+    [PAGE_ADDRESS_PARAMS.id]: page.id,
+  });
+  if (locale !== undefined && locale !== "") {
+    params.set(PAGE_ADDRESS_PARAMS.locale, locale);
+  }
+  return `${PAGE_ADDRESS_ROUTE_PATH}?${params.toString()}`;
 }

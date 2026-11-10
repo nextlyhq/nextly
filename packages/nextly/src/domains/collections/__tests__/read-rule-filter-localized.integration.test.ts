@@ -183,7 +183,7 @@ describe("a read rule's filter on a field the read may show from a fallback lang
         collection: NOTES,
         id: idOf(created),
         locale: "fr",
-        data: { title },
+        data: { title, _overwrite: true },
       });
       return idOf(created);
     };
@@ -262,7 +262,10 @@ describe("a read rule's filter on a field the read may show from a fallback lang
     const t = await boot();
     const { withEnglishSecret, withoutSecret } = await seed(t);
     const onBoard = async (note: string) => {
-      await t.nextly.updateSingle({ slug: BOARD, data: { note } } as never);
+      await t.nextly.updateSingle({
+        slug: BOARD,
+        data: { note, _overwrite: true },
+      } as never);
       const read = (await t.nextly.findSingle({
         slug: BOARD,
         depth: 1,

@@ -42,7 +42,7 @@ import {
 import type { EditorState } from "./editor-state";
 import { blockLabel } from "./inserter";
 import { fieldLabel, propLabel } from "./inspector";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 
 /**
  * What the host knows about the component being edited that its document does

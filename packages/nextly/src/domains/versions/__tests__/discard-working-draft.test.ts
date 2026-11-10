@@ -99,6 +99,8 @@ describe("discardWorkingDraft", () => {
       // The update the discard was authorized for, asked again under the
       // lock the delete holds, with the scope the route authorized.
       updateUnderLock: { authenticatedScope },
+      // Told the version the discard leaves, which the answer carries.
+      onVersion: expect.any(Function),
     });
     expect(unlockedDeleteSpy).not.toHaveBeenCalled();
     // The live read precedes the deletion, so a read failure can leave the draft
@@ -106,6 +108,24 @@ describe("discardWorkingDraft", () => {
     expect(getEntrySpy.mock.invocationCallOrder[0]).toBeLessThan(
       discardSpy.mock.invocationCallOrder[0]
     );
+  });
+
+  it("answers with the version the discard left, not the one the live read carried", async () => {
+    getEntrySpy.mockResolvedValue({
+      success: true,
+      data: { id: "e1", title: "live", status: "published", _rev: "7" },
+    });
+    discardSpy.mockImplementation(
+      (params: { onVersion?: (version: string | undefined) => void }) => {
+        params.onVersion?.("8");
+        return Promise.resolve(1);
+      }
+    );
+
+    await expect(discardWorkingDraft(args)).resolves.toMatchObject({
+      document: { title: "live", _rev: "8" },
+      removed: 1,
+    });
   });
 
   it("forwards the language being discarded to the read and the delete", async () => {
@@ -129,6 +149,8 @@ describe("discardWorkingDraft", () => {
       // The update the discard was authorized for, asked again under the
       // lock the delete holds, with the scope the route authorized.
       updateUnderLock: { authenticatedScope },
+      // Told the version the discard leaves, which the answer carries.
+      onVersion: expect.any(Function),
     });
     expect(getEntrySpy).toHaveBeenCalledWith(
       expect.objectContaining({ locale: "es" })

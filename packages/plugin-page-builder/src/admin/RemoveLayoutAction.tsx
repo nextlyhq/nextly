@@ -9,9 +9,12 @@
  *
  * - **Default**: the Layout is the site's default; the reason is shown and
  *   nothing can be confirmed.
- * - **Pages use it**: the pages naming the Layout, each a link that opens the
- *   page in a new tab, so the author can choose another Layout there and come
- *   back. Pages the author may not read are counted, not named.
+ * - **Pages use it**: the pages naming the Layout, and the offer to move them
+ *   to the site default and then remove it (`RemoveLayoutMove.tsx`). Each page
+ *   is a link that opens it in a new tab, so the author can instead choose
+ *   another Layout there. Pages the author may not read are counted, not
+ *   named. When not every page could be checked, the pages found are listed
+ *   and nothing is offered.
  * - **Nothing in the way**: unpublish (when it is published) or delete.
  *
  * A confirmed removal still runs every check again on the server; a refusal
@@ -59,6 +62,8 @@ import type {
 } from "../layout-removal/remove-layout";
 import { DEFAULT_LAYOUT_REFUSAL, PAGES_USE_IT } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
+
+import { MovePagesDialog } from "./RemoveLayoutMove";
 
 /** Which Layout the action removes, and how it stands. */
 export interface RemoveLayoutActionProps {
@@ -177,6 +182,8 @@ export function RemoveLayoutAction({
   // Each opening of the dialog, numbered: an answer that arrives for an
   // earlier one, after the author closed it, changes nothing.
   const opening = useRef(0);
+  // Set once a move removed the Layout: closing the dialog then leaves it.
+  const movedAway = useRef<"delete" | "unpublish" | null>(null);
   // Nothing to remove while a Layout is being created.
   if (entryId === null || entryId === "" || entryId === "create") {
     return null;
@@ -216,6 +223,12 @@ export function RemoveLayoutAction({
 
   const toList = (): void => {
     navigateTo(`/admin/collections/${collectionSlug}`);
+  };
+
+  /** Leave a Layout a move removed: the list after a delete, else reread it. */
+  const leave = (action: "delete" | "unpublish"): void => {
+    if (action === "delete") toList();
+    else window.location.reload();
   };
 
   const confirm = (check: RemovalCheck, action: "delete" | "unpublish") => {
@@ -262,37 +275,92 @@ export function RemoveLayoutAction({
           if (next || state.kind === "removing") return;
           // The Layout is gone once deleted: closing leaves for the list.
           if (state.kind === "deleted") toList();
+          else if (movedAway.current !== null) leave(movedAway.current);
           else close();
         }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove Layout</AlertDialogTitle>
-            <AlertDialogDescription>{describe(state)}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <DialogBody state={state} />
-          <AlertDialogFooter>
-            {state.kind === "deleted" ? (
-              <Button type="button" onClick={toList}>
-                Back to Layouts
-              </Button>
-            ) : (
-              <AlertDialogCancel disabled={state.kind === "removing"}>
-                {removable(state) ? "Cancel" : "Close"}
-              </AlertDialogCancel>
-            )}
-            {removable(state) ? (
-              <ConfirmButtons
-                busy={state.kind === "removing"}
-                published={published}
-                onConfirm={action =>
-                  "check" in state ? confirm(state.check, action) : undefined
-                }
-              />
-            ) : null}
-          </AlertDialogFooter>
+        <AlertDialogContent
+          // Wider while it offers a move: its buttons name the count and what
+          // follows the move, and three of them side by side do not fit the
+          // dialog's usual width.
+          className={
+            state.kind === "checked" && movable(state.check)
+              ? "max-w-2xl"
+              : undefined
+          }
+        >
+          {state.kind === "checked" && movable(state.check) ? (
+            <MovePagesDialog
+              entryId={entryId}
+              check={state.check}
+              published={published}
+              onRemoved={action => {
+                movedAway.current = action;
+              }}
+              onFinished={leave}
+            />
+          ) : (
+            <PlainDialog
+              state={state}
+              published={published}
+              toList={toList}
+              confirm={confirm}
+            />
+          )}
         </AlertDialogContent>
       </AlertDialog>
+    </>
+  );
+}
+
+/** Whether the dry run found pages a move can take off the Layout. */
+function movable(check: RemovalCheck): boolean {
+  return (
+    !check.isDefault &&
+    check.complete &&
+    check.pages.length + check.unreadable > 0
+  );
+}
+
+/** The dialog's content in every state but the move's. */
+function PlainDialog({
+  state,
+  published,
+  toList,
+  confirm,
+}: {
+  state: DialogState;
+  published: boolean;
+  toList: () => void;
+  confirm: (check: RemovalCheck, action: "delete" | "unpublish") => void;
+}): JSX.Element {
+  return (
+    <>
+      <AlertDialogHeader>
+        <AlertDialogTitle>Remove Layout</AlertDialogTitle>
+        <AlertDialogDescription>{describe(state)}</AlertDialogDescription>
+      </AlertDialogHeader>
+      <DialogBody state={state} />
+      <AlertDialogFooter>
+        {state.kind === "deleted" ? (
+          <Button type="button" onClick={toList}>
+            Back to Layouts
+          </Button>
+        ) : (
+          <AlertDialogCancel disabled={state.kind === "removing"}>
+            {removable(state) ? "Cancel" : "Close"}
+          </AlertDialogCancel>
+        )}
+        {removable(state) ? (
+          <ConfirmButtons
+            busy={state.kind === "removing"}
+            published={published}
+            onConfirm={action =>
+              "check" in state ? confirm(state.check, action) : undefined
+            }
+          />
+        ) : null}
+      </AlertDialogFooter>
     </>
   );
 }

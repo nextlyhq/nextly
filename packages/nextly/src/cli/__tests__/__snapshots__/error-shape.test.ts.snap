@@ -37,9 +37,10 @@ exports[`a command that ends with an error > names a missing configuration file,
 exports[`a rollback refused for want of consent > ends with what it would delete and the consent that allows it, running nothing 1`] = `
 "✗ Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive).
   Why:  This would delete:
-        - 20261020_120000_add_summary.sql's DOWN, which drops a table or column, or empties a table
+        20261020_120000_add_summary.sql:
+        - column dc_posts.summary
         Nothing was changed.
-  Next: To consent: --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS=1).
+  Next: To consent: --accept-data-loss=dc_posts.summary (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts.summary).
   Docs: https://nextlyhq.com/docs/cli/errors/data-loss-consent-required  (DATA_LOSS_CONSENT_REQUIRED)"
 `;
 
@@ -379,11 +380,32 @@ exports[`each cause a documented code covers, as a command ends with it > PLUGIN
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-resolution-error  (PLUGIN_RESOLUTION_ERROR)"
 `;
 
+exports[`each cause a documented code covers, as a command ends with it > REQUIRED_COLUMN_UNCOUNTED_AT_A_STATEMENT 1`] = `
+"✗ \`20261103_101500_posts.sql\` was refused at its statement 2. ALTER TABLE \`dc_posts\` MODIFY COLUMN \`subtitle\` text NOT NU… (of 2).
+  Why:  Table 'dc_posts': the rows that would break making 'subtitle' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again. The statements that ran before it: 1. UPDATE \`dc_posts\` SET \`subtitle\` =. They ran outside a transaction, and stayed applied.
+  Next: Check the database connection and that the table can be read, and what the statements that ran before it left, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/required-column-uncounted  (REQUIRED_COLUMN_UNCOUNTED)"
+`;
+
+exports[`each cause a documented code covers, as a command ends with it > REQUIRED_COLUMN_UNCOUNTED_THROUGH_A_QUALIFIER 1`] = `
+"✗ A column could not be made required, because its table is named through a qualifier that may reach another schema.
+  Why:  Table 'archive.dc_posts': the rows that would break making 'subtitle' required could not be counted through the qualifier 'archive', which may name another schema, so that change was refused before it ran. Write the table's unqualified name, then try again.
+  Next: Write the table's unqualified name in the migration, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/required-column-uncounted  (REQUIRED_COLUMN_UNCOUNTED)"
+`;
+
 exports[`each cause a documented code covers, as a command ends with it > SQLITE_FOREIGN_KEYS_STILL_ON 1`] = `
 "✗ Foreign-key enforcement could not be switched off for this migration.
   Why:  Another transaction was open on the connection. Nothing was applied.
   Next: Re-run it once that transaction has finished.
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-migration-foreign-key-violation  (NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION)"
+`;
+
+exports[`each code, as a command ends with it > ACTION_NOT_AVAILABLE 1`] = `
+"✗ This action isn't available for this entry.
+  Why:  An action runs only on the entries its plugin declared it for, judged on each entry as its caller reads it. Nothing was run.
+  Next: Run the action on an entry the admin offers it on.
+  Docs: https://nextlyhq.com/docs/cli/errors/action-not-available  (ACTION_NOT_AVAILABLE)"
 `;
 
 exports[`each code, as a command ends with it > ADMIN_EMAIL_IN_USE 1`] = `
@@ -884,9 +906,9 @@ exports[`each code, as a command ends with it > MIGRATION_IRREVERSIBLE 1`] = `
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_MISSING 1`] = `
-"✗ \`20261020_120000_add_posts.sql\` is recorded as applied, but its file is not in the migrations folder.
-  Why:  It ran on this database and no removal of it is recorded, so the folder may be from an older build.
-  Next: Restore the file from version control, or deploy the build that has it, then run \`nextly migrate\` again.
+"✗ The ledger records 1 applied migration this build's migrations folder lacks (\`20261020_120000_add_posts.sql\`), so \`nextly migrate\` ran nothing.
+  Why:  A newer build has migrated this database, or a file was removed from the folder after it ran.
+  Next: Deploy the build that holds the files, or put them back. If a file was removed on purpose, record that with \`nextly migrate:resolve --removed <file>\`: the migration stays applied, and is never run again if its file returns.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-missing  (MIGRATION_MISSING)"
 `;
 
@@ -1068,6 +1090,21 @@ exports[`each code, as a command ends with it > PASSWORD_CLEAR_UNCONFIRMED 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/password-clear-unconfirmed  (PASSWORD_CLEAR_UNCONFIRMED)"
 `;
 
+exports[`each code, as a command ends with it > PLAN_CHANGED_AFTER_CONSENT 1`] = `
+"✗ What you agreed to changed before \`nextly prune\` could act on it, so nothing was changed.
+  Why:  You agreed to: dc_tags.
+        It would act on now: dc_tags; dc_tags_locales.
+  Next: Run \`nextly prune\` again to see what it would do now.
+  Docs: https://nextlyhq.com/docs/cli/errors/plan-changed-after-consent  (PLAN_CHANGED_AFTER_CONSENT)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_ACTION_ROW_NOT_FOUND 1`] = `
+"✗ A plugin's action named an entry that could not be found for this caller.
+  Why:  An action acts only on entries its caller may read; one they may not read is answered as one that does not exist. Nothing was run.
+  Next: Run the action on an entry the caller can open in the admin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-action-row-not-found  (PLUGIN_ACTION_ROW_NOT_FOUND)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_ADMIN_WIDGET_NOT_JSON 1`] = `
 "✗ Plugin "reviews" contributes an admin widget "stats" that is not JSON (keys: query).
   Why:  It is serialized into /api/admin-meta/workspace, so it may hold only strings, numbers, booleans, null, arrays and plain objects — no functions, class instances, Dates, Maps or bigints. A bigint in query.where throws while the whole workspace payload is serialized, which fails that request for every admin rather than just this card.
@@ -1117,6 +1154,20 @@ exports[`each code, as a command ends with it > PLUGIN_DISABLED 1`] = `
   Why:  A disabled plugin's hooks do not run, so an install or uninstall of it could record a state its hook never produced. Nothing was changed.
   Next: Enable it in the config to install or uninstall it.
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-disabled  (PLUGIN_DISABLED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_SURFACE_COLLISION 1`] = `
+"✗ Plugin "archive" overrides the "delete" action on "pages", which "layouts" already overrides.
+  Why:  One action can be drawn one way.
+  Next: Drop one of the two overrides.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-surface-collision  (PLUGIN_DOCUMENT_SURFACE_COLLISION)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_SURFACE_INVALID 1`] = `
+"✗ Plugin "layouts" replaces the "delete" action on "pages" with no component to open.
+  Why:  A plugin may hide or replace only the delete and unpublish actions; a replacement needs a component to open and a label of text if it has one, and a panel section needs a title and a component.
+  Next: Correct the override or section the message names in the plugin's \`contributes.admin.views\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-surface-invalid  (PLUGIN_DOCUMENT_SURFACE_INVALID)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_VIEW_COLLISION 1`] = `
@@ -1539,6 +1590,20 @@ exports[`each code, as a command ends with it > REFUSED_STATEMENT 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/refused-statement  (REFUSED_STATEMENT)"
 `;
 
+exports[`each code, as a command ends with it > REQUIRED_COLUMN_HAS_NULLS 1`] = `
+"✗ \`20261103_101500_posts.sql\` was refused before any of its statements ran, and nothing of it was applied.
+  Why:  Collection 'posts': field 'subtitle' cannot become required while 2 rows hold no value in it. Give those rows a value first, or keep the field optional.
+  Next: Give those rows a value in an earlier statement of the migration, or keep the field optional, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/required-column-has-nulls  (REQUIRED_COLUMN_HAS_NULLS)"
+`;
+
+exports[`each code, as a command ends with it > REQUIRED_COLUMN_UNCOUNTED 1`] = `
+"✗ A column could not be made required, because the rows in its way could not be counted.
+  Why:  Table 'dc_posts': the rows that would break making 'subtitle' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again.
+  Next: Check the database connection and that the table can be read, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/required-column-uncounted  (REQUIRED_COLUMN_UNCOUNTED)"
+`;
+
 exports[`each code, as a command ends with it > RESOLVE_FILE_NOT_FOUND 1`] = `
 "✗ Migration file not found: 20261020_120000_add_posts.sql.
   Why:  \`nextly migrate:resolve\` records a file of the project's migrations folder (\`db.migrationsDir\`), and none has this name.
@@ -1555,8 +1620,8 @@ exports[`each code, as a command ends with it > RESOLVE_LOCK_RELEASED 1`] = `
 
 exports[`each code, as a command ends with it > RESOLVE_MODE_REQUIRED 1`] = `
 "✗ \`nextly migrate:resolve\` needs exactly one thing to record.
-  Why:  It was given none of \`--applied\`, \`--rolled-back\` and \`--failed-cleanup\`.
-  Next: Provide exactly one of --applied, --rolled-back, or --failed-cleanup.
+  Why:  It was given none of \`--applied\`, \`--rolled-back\`, \`--failed-cleanup\` and \`--removed\`.
+  Next: Provide exactly one of --applied, --rolled-back, --failed-cleanup, or --removed.
   Docs: https://nextlyhq.com/docs/cli/errors/resolve-mode-required  (RESOLVE_MODE_REQUIRED)"
 `;
 

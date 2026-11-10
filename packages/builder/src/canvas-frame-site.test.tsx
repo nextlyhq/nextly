@@ -25,6 +25,7 @@ import {
 import { Canvas } from "./canvas";
 import { SITE_CHROME_ATTRIBUTE } from "./canvas-frame-sheet";
 import { CHROME_BLEED, framePaintedScale } from "./geometry-dom";
+import { nearestThemeMode } from "./nearest-theme";
 
 afterEach(() => {
   cleanup();
@@ -89,6 +90,28 @@ function arrive(frame: HTMLIFrameElement, body: string): void {
     doc.replaceChildren(doc.createElement("html"));
     doc.documentElement.innerHTML = `<head></head><body>${body}</body>`;
     frame.dispatchEvent(new Event("load"));
+  });
+}
+
+/**
+ * A site page whose layout states its own mode on `<body>` and on the wrapper
+ * around the mount point, both nearer the canvas than `<html>`, and on the
+ * mount point itself where `mountOwn` is given.
+ */
+function arriveMarked(
+  frame: HTMLIFrameElement,
+  mode: string,
+  mountOwn: string | undefined
+): void {
+  const ownMarker =
+    mountOwn === undefined ? "" : ` data-nx-theme="${mountOwn}"`;
+  arrive(
+    frame,
+    `<main id="site-main" data-nx-theme="${mode}">` +
+      `<div ${MOUNT}=""${ownMarker}></div></main>`
+  );
+  act(() => {
+    frameDocument(frame).body.setAttribute("data-nx-theme", mode);
   });
 }
 
@@ -524,6 +547,61 @@ describe("the canvas frame on a page the site serves", () => {
     expect(root.getAttribute("data-nx-theme")).toBe("dark");
   });
 
+  /*
+   * A site's tokens follow the NEAREST marker, so a marker the site's layout
+   * puts on `<body>` or a wrapper outranks the one on `<html>`. The canvas's
+   * mode is read here by `nearestThemeMode`, the rule the canvas root and the
+   * inspector both read it by. With the editor's marker on `<html>` alone the
+   * wrapper is what that rule finds, and the "named" expectation fails, while
+   * the root still shows the pick, so the red is the canvas, not the pick.
+   */
+  it.each([
+    { site: "light", named: "dark", mountOwn: undefined },
+    // The reverse, with the site's marker on the mount point itself too, so
+    // what the editor gives back there is a value, not only an absence.
+    { site: "dark", named: "light", mountOwn: "dark" },
+  ] as const)(
+    "puts the canvas in the named $named theme under a site layout marked $site, and gives the site's back",
+    async ({ site, named, mountOwn }) => {
+      const source = siteSource();
+      const { container, rerender } = render(
+        <CanvasFrame width={1280} title="Home" source={source}>
+          <Page />
+        </CanvasFrame>
+      );
+      const frame = frameIn(container);
+      arriveMarked(frame, site, mountOwn);
+      await hydrate(frame);
+      const doc = frameDocument(frame);
+      const canvas = doc.querySelector(".nx-canvas");
+      const mount = doc.querySelector(`[${MOUNT}]`);
+      if (canvas === null || mount === null) throw new Error("no canvas");
+      // The site's layout governs before the editor names anything.
+      expect(nearestThemeMode(canvas)).toBe(site);
+
+      rerender(
+        <CanvasFrame width={1280} title="Home" source={source} theme={named}>
+          <Page />
+        </CanvasFrame>
+      );
+      expect(doc.documentElement.getAttribute("data-nx-theme")).toBe(named);
+      expect(nearestThemeMode(canvas)).toBe(named);
+      // The site's own markers are left as the site wrote them.
+      expect(doc.body.getAttribute("data-nx-theme")).toBe(site);
+      expect(
+        doc.getElementById("site-main")?.getAttribute("data-nx-theme")
+      ).toBe(site);
+
+      rerender(
+        <CanvasFrame width={1280} title="Home" source={source}>
+          <Page />
+        </CanvasFrame>
+      );
+      expect(nearestThemeMode(canvas)).toBe(site);
+      expect(mount.getAttribute("data-nx-theme")).toBe(mountOwn ?? null);
+    }
+  );
+
   it("falls back when the route never loads at all", () => {
     vi.useFakeTimers();
     const onSourceFallback =
@@ -630,17 +708,15 @@ describe("the canvas frame on a page the site serves", () => {
     const root = frameDocument(frame).documentElement;
     // The site switches its own mode after hydrating, from a preference.
     root.setAttribute("data-nx-theme", "light");
-    // An unrelated change re-runs the editor's markers.
+    // An unrelated change, the page's language, re-runs the editor's markers.
     rerender(
-      <CanvasFrame
-        width={1280}
-        title="Home"
-        source={source}
-        showEmptyElements={false}
-      >
+      <CanvasFrame width={1280} title="Home" source={source} lang="fr">
         <Page />
       </CanvasFrame>
     );
+    // The language landing shows the markers really ran again, so the theme
+    // left alone below is the editor declining to write it, not a skipped run.
+    expect(root.getAttribute("lang")).toBe("fr");
     expect(root.getAttribute("data-nx-theme")).toBe("light");
   });
 

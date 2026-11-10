@@ -25,15 +25,16 @@ import * as React from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SLOTS_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { useShortcuts } from "@nextlyhq/ui";
 
 import { useNoticeQueue, useNoticeSink } from "./builder-notices";
 import { BuilderShell, type SettingsDialogState } from "./builder-shell";
 import { CanvasFrameProvider } from "./canvas-frame-context";
 import { CommandPalette } from "./command-palette";
+import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
 import {
   DEFAULT_PREFERENCES,
-  EMPTY_ELEMENTS_ATTRIBUTE,
   fitsFullShell,
   MIN_SHELL_WIDTH,
   readPreferences,
@@ -460,6 +461,49 @@ describe("the regions the shell exposes", () => {
     expect(screen.getByText("inspector content")).toBeTruthy();
     expect(screen.getByText("top bar content")).toBeTruthy();
     expect(screen.getByText("breadcrumb content")).toBeTruthy();
+  });
+});
+
+describe("the strip pinned above the canvas", () => {
+  it("draws it outside the region that scrolls the page, so it stays while the page scrolls", () => {
+    renderShell({
+      children: <p>canvas content</p>,
+      canvasStrip: <p>strip content</p>,
+    });
+    const strip = screen.getByText("strip content");
+    const region = screen.getByRole("region", { name: "Canvas" });
+    // The region is what scrolls: a strip inside it would scroll away.
+    expect(region.contains(strip)).toBe(false);
+    expect(region.contains(screen.getByText("canvas content"))).toBe(true);
+    // Above the page, beside it in the canvas's panel.
+    expect(
+      strip.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    // The page keeps its whole gutter under the strip, the top included, so
+    // what is drawn just above the first block is not cut off.
+    expect(region.style.padding).toBe("16px");
+  });
+
+  it.each([
+    ["null", null],
+    ["false", false],
+  ])(
+    "draws no band for a strip given as %s, as conditional JSX gives it",
+    (_label, strip) => {
+      renderShell({ children: <p>canvas content</p>, canvasStrip: strip });
+      // No padded slot is left above the page: the band a strip would sit in
+      // is not drawn at all, as with no strip.
+      expect(document.querySelector(".nx-canvas-strip-slot")).toBeNull();
+      const region = screen.getByRole("region", { name: "Canvas" });
+      expect(region.style.padding).toBe("16px");
+    }
+  );
+
+  it("draws none where the host gives none, with the same gutter (the control)", () => {
+    renderShell({ children: <p>canvas content</p> });
+    const region = screen.getByRole("region", { name: "Canvas" });
+    expect(document.querySelector(".nx-canvas-strip-slot")).toBeNull();
+    expect(region.style.padding).toBe("16px");
   });
 });
 
@@ -1208,21 +1252,40 @@ describe("preferences", () => {
     expect(screen.queryByText(/panel$/)).toBeNull();
   });
 
-  it("shows empty containers even when a stored preference hid them", () => {
-    // The top bar no longer offers to hide them, so an author who once did
-    // would have no way back. A stored false is read as shown: no placeholder
-    // disappears, and the chrome never carries the hiding attribute.
+  it("shows empty containers, and the rest of the record, when a stored preference hid them", () => {
+    // Records written while the editor could hide empty containers still carry
+    // `showEmptyElements: false`. The field no longer exists: the record must
+    // load whole (the stored panel opens) and empty containers still draw.
     const store = memoryStore(
-      JSON.stringify({ ...DEFAULT_PREFERENCES, showEmptyElements: false })
+      JSON.stringify({
+        ...DEFAULT_PREFERENCES,
+        leftPanel: "design",
+        showEmptyElements: false,
+      })
     );
     stubContainerFits(true);
-    render(<BuilderShell onExit={vi.fn()} store={store} />);
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+      />
+    );
 
+    expect(screen.getByText("design panel")).toBeTruthy();
     // Queried rather than assumed present: a selector that matched nothing
-    // would make the attribute assertion below pass on `undefined`.
+    // would make the match below fail for the wrong reason.
     const chrome = document.querySelector(".nx-builder-chrome");
-    expect(chrome).not.toBeNull();
-    expect(chrome?.hasAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe(false);
+    if (chrome === null) throw new Error("the shell rendered no chrome root");
+    // An empty container on a canvas inside this chrome, asked the same
+    // selector the canvas's sheet draws the placeholder box for.
+    const canvas = document.createElement("div");
+    canvas.className = "nx-canvas";
+    const container = document.createElement("div");
+    container.setAttribute(SLOTS_ATTRIBUTE, "children");
+    canvas.append(container);
+    chrome.append(canvas);
+    expect(container.matches(EMPTY_CONTAINER_SELECTOR)).toBe(true);
   });
 
   it("offers no control to hide empty containers", () => {
@@ -1231,44 +1294,6 @@ describe("preferences", () => {
       screen.queryByRole("switch", { name: "Show empty containers" })
     ).toBeNull();
     expect(screen.queryByText("Show empty containers")).toBeNull();
-  });
-
-  it("does not re-invoke onShowEmptyElementsChange when only the host's callback identity changes", () => {
-    // A host wires this the conventional way — an inline callback recreated
-    // on every one of ITS OWN renders — and if the effect reporting this
-    // preference depended on that identity, a rerender with nothing else
-    // changed would call the new callback anyway. Chained with a host whose
-    // own state update is itself a fresh render (`setState(c => ({ ...c }))`
-    // always produces a new object), that is a render loop; this asserts the
-    // narrower, safely-testable half of it: identity churn alone must not
-    // re-invoke the callback.
-    const store = memoryStore();
-    stubContainerFits(true);
-    const first = vi.fn();
-    const { rerender } = render(
-      <BuilderShell
-        onExit={vi.fn()}
-        store={store}
-        onShowEmptyElementsChange={first}
-      />
-    );
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(first).toHaveBeenCalledWith(true);
-
-    const second = vi.fn();
-    rerender(
-      <BuilderShell
-        onExit={vi.fn()}
-        store={store}
-        onShowEmptyElementsChange={second}
-      />
-    );
-    expect(second).not.toHaveBeenCalled();
-
-    // The value no longer changes (empty containers are always shown), so
-    // there is no later report for the latest callback to receive; the half
-    // that matters for a host's render loop is the one above.
-    expect(first).toHaveBeenCalledTimes(1);
   });
 });
 

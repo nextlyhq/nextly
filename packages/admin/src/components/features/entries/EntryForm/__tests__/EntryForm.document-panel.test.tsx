@@ -11,9 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { act, render, screen, within } from "@admin/__tests__/utils";
 
-const { barProps, paneProps } = vi.hoisted(() => ({
+const { barProps, paneProps, branding } = vi.hoisted(() => ({
   barProps: vi.fn(),
   paneProps: vi.fn(),
+  // What admin-meta hands the editor; empty unless a test places a section.
+  branding: { current: {} as Record<string, unknown> },
 }));
 
 vi.mock("../DocumentBar", () => ({
@@ -62,6 +64,18 @@ vi.mock("@admin/hooks/queries/useReleasesContaining", () => ({
   }),
 }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/context/providers/BrandingProvider")
+  >()),
+  useBranding: () => branding.current,
+}));
+
+import {
+  registerComponent,
+  unregisterComponent,
+  type DocumentPanelSectionProps,
+} from "@admin/lib/plugins/component-registry";
 
 import { EntryForm } from "../EntryForm";
 
@@ -119,6 +133,7 @@ const dockedPanel = () =>
 beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
+  branding.current = {};
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -194,5 +209,76 @@ describe("the entry editor's document panel under 600px", () => {
       "data-document-panel",
       "sheet"
     );
+  });
+});
+
+describe("a side panel section declared to sit above the form on a phone", () => {
+  const DESIGN = "test/designs#Design";
+
+  function Design(props: DocumentPanelSectionProps) {
+    return <p>Design of {props.entryId}</p>;
+  }
+
+  beforeEach(() => {
+    registerComponent(DESIGN, Design as never);
+    branding.current = {
+      contributions: {
+        "collection.edit": {
+          sidebarSection: [
+            {
+              id: "acme-designs.design",
+              kind: "sidebarSection",
+              plugin: "@acme/designs",
+              label: "Design",
+              component: DESIGN,
+              narrow: "above-form",
+            },
+            { builtIn: "status" },
+            { builtIn: "publishing" },
+            { builtIn: "details" },
+          ],
+        },
+      },
+    };
+  });
+  afterEach(() => unregisterComponent(DESIGN));
+
+  it("is drawn under the title, above the fields, without opening the sheet, and not again in it", () => {
+    editorWidth(390);
+    renderEditor();
+    const design = screen.getByRole("region", { name: "Design" });
+    expect(design).toHaveTextContent("Design of e1");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // After the id line under the title, so it opens the field column.
+    const idCopy = screen.getByRole("button", {
+      name: /copy id to clipboard/i,
+    });
+    expect(
+      idCopy.compareDocumentPosition(design) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+
+    run("onToggleRail");
+    const sheet = screen.getByRole("dialog", { name: "Document" });
+    const inSheet = within(sheet)
+      .getAllByRole("region")
+      .map(section => section.getAttribute("data-panel-section"));
+    expect(inSheet).not.toContain("Design");
+    expect(inSheet).toContain("Details");
+    // The open sheet is modal, so the page behind it is hidden from the
+    // accessibility tree; the one above the form still counts.
+    expect(
+      screen.getAllByRole("region", { name: "Design", hidden: true })
+    ).toHaveLength(1);
+  });
+
+  it("stays in the docked panel, where it was placed, on a wide editor", () => {
+    renderEditor();
+    expect(
+      screen.queryByTestId("document-panel-above-form")
+    ).not.toBeInTheDocument();
+    const sections = within(dockedPanel()!)
+      .getAllByRole("region")
+      .map(section => section.getAttribute("data-panel-section"));
+    expect(sections).toEqual(["Design", "Status", "Publishing", "Details"]);
   });
 });

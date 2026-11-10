@@ -9,25 +9,37 @@
  *
  * @module components/features/releases/__tests__/ScheduledReleaseBanner.test
  */
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 import type { Release } from "@admin/types/releases";
 
 import { ScheduledReleaseBanner } from "../ScheduledReleaseBanner";
 
-const { canFor, containing } = vi.hoisted(() => ({
+const { canFor, containing, removeMember } = vi.hoisted(() => ({
   canFor: vi.fn((_slug: string) => true),
   containing: vi.fn(),
+  removeMember: vi.fn(),
 }));
 
 vi.mock("@admin/hooks/useCan", () => ({ useCan: (s: string) => canFor(s) }));
-vi.mock("@admin/hooks/queries/useReleases", () => ({
+vi.mock("@admin/hooks/queries/useReleases", async importOriginal => ({
+  ...(await importOriginal<object>()),
   useReleasesContaining: (
     document: unknown,
     enabled: boolean
   ): { data: { items: Release[] } | undefined; isError: boolean } =>
     containing(document, enabled),
+  // Observed where the document is taken out: which release, and which of its
+  // documents.
+  useRemoveReleaseMember: (releaseId: string) => ({
+    mutate: (memberId: string) => removeMember(releaseId, memberId),
+    reset: vi.fn(),
+    isError: false,
+    isPending: false,
+    error: null,
+  }),
 }));
 
 const DOC = {
@@ -57,6 +69,7 @@ const showing = (items: Release[]) =>
   containing.mockReturnValue({ data: { items }, isError: false });
 
 beforeEach(() => {
+  removeMember.mockReset();
   canFor.mockReset();
   canFor.mockImplementation(() => true);
   containing.mockReset();
@@ -288,5 +301,132 @@ describe("when it should say nothing at all", () => {
     showing([]);
     render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
     expect(containing).toHaveBeenCalledWith(DOC, true);
+  });
+});
+
+/** Every capability off: each case grants the ones it is about. */
+const NOTHING: NonNullable<Release["can"]> = {
+  schedule: false,
+  cancel: false,
+  addMember: false,
+  removeMember: false,
+  publishNow: false,
+  update: false,
+  delete: false,
+};
+
+describe("what the reader can do from the document", () => {
+  /** A release this document is in, with its place in it and what the reader may do. */
+  const holding = (over: Partial<Release> = {}): Release =>
+    release({ memberId: "m1", kind: "release", ...over });
+
+  const banner = () =>
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+
+  it("offers Change time on a single-document release the reader may reschedule, and not on an ordinary one", () => {
+    // A single is the document's own schedule, so its time is changed from the
+    // document; an ordinary release's time belongs to every document in it.
+    showing([
+      holding({
+        id: "single",
+        title: "Hello",
+        kind: "single",
+        can: { ...NOTHING, schedule: true },
+      }),
+      holding({
+        id: "ordinary",
+        title: "Autumn",
+        scheduledAt: "2026-09-02T07:00:00.000Z",
+        can: { ...NOTHING, schedule: true },
+      }),
+    ]);
+    banner();
+    const changes = screen.getAllByRole("button", { name: /change time/i });
+    expect(changes).toHaveLength(1);
+    expect(changes[0].closest("li")?.textContent).toContain("on its own");
+  });
+
+  it("offers no Change time where the reader may not reschedule the single", () => {
+    showing([
+      holding({ kind: "single", can: { ...NOTHING, schedule: false } }),
+    ]);
+    banner();
+    expect(screen.queryByRole("button", { name: /change time/i })).toBeNull();
+  });
+
+  it("takes the document out of the release it names, by its place in that release", async () => {
+    showing([holding({ can: { ...NOTHING, removeMember: true } })]);
+    banner();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove from Spring launch…" })
+    );
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.textContent).toContain(
+      "Remove this document from this release?"
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Remove" })
+    );
+    expect(removeMember).toHaveBeenCalledWith("r1", "m1");
+  });
+
+  it("says that taking the document out of its single-document release cancels the release", async () => {
+    showing([
+      holding({
+        kind: "single",
+        can: { ...NOTHING, removeMember: true, cancel: true },
+      }),
+    ]);
+    banner();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove from Spring launch…" })
+    );
+    expect(screen.getByRole("alertdialog").textContent).toContain(
+      "Remove this document and cancel this release?"
+    );
+  });
+
+  it("offers no Remove where the reader may not change the release's documents", () => {
+    showing([holding({ can: { ...NOTHING, removeMember: false } })]);
+    banner();
+    expect(screen.queryByRole("button", { name: /remove/i })).toBeNull();
+  });
+
+  it("names which of two releases at one moment readers get: the one scheduled last", () => {
+    // In the server's own order, which is the engine's: the later of two at
+    // one instant is the one whose version stands.
+    showing([
+      holding({ id: "a", title: "Autumn" }),
+      holding({ id: "b", title: "Docs refresh", memberId: "m2" }),
+    ]);
+    banner();
+    expect(screen.getByRole("status").textContent).toMatch(
+      /Docs refresh was scheduled last, so its version is the one readers get/
+    );
+  });
+
+  it("says nothing about a winner when the releases act at different moments", () => {
+    showing([
+      holding({ id: "a", title: "Autumn" }),
+      holding({
+        id: "b",
+        title: "Docs refresh",
+        memberId: "m2",
+        scheduledAt: "2026-09-02T07:00:00.000Z",
+      }),
+    ]);
+    banner();
+    expect(screen.getByRole("status").textContent).not.toMatch(
+      /scheduled last/
+    );
+  });
+
+  it("reads the time on the reader's clock, with the zone it was scheduled in beside it", () => {
+    // A zone no reader's clock shares, so the scheduled reading is always shown.
+    showing([holding({ timezone: "Pacific/Kiritimati" })]);
+    banner();
+    const text = screen.getByRole("status").textContent ?? "";
+    expect(text).toContain("your time");
+    expect(text).toMatch(/Pacific\/Kiritimati \(as scheduled\)/);
   });
 });

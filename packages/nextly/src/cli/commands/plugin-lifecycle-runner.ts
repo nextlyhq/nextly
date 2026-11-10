@@ -25,6 +25,7 @@ import {
   qualifiedFilename,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import type { PluginMigrationSet } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
 import {
   asLifecycleCommandBoot,
@@ -36,24 +37,31 @@ import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-ow
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners";
+import { reportDryRun, type DryRunPlan } from "../dry-run";
+import { plannedOrRefused } from "../dry-run-refusal";
 import type { CommandContext } from "../program";
-import { createCliAdapter } from "../utils/adapter";
+import { createCliAdapter, openCommandAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 import { askToDeleteInTerminal } from "../utils/data-loss-consent";
 
 import {
   downDatabaseDeps,
-  isDestructiveDown,
+  rollbackDeletions,
   planRollback,
   refusalOf,
   rollBackOne,
   type PlannedDown,
 } from "./migrate-down";
 import {
+  previewPluginInstall,
+  previewPluginInstallAll,
+  previewPluginUninstall,
   runPluginInstallAllCommand,
   runPluginInstallCommand,
   runPluginUninstallCommand,
+  type InstallOptions,
   type LifecyclePlugin,
+  type PluginLifecycleDeps,
   type PreparedModuleDown,
   type UninstallOptions,
 } from "./plugin-lifecycle";
@@ -63,6 +71,11 @@ import { readSqliteSchemaVersion, readTableIdentities } from "./table-identity";
 interface RunnerOptions {
   config?: string;
   cwd?: string;
+  /**
+   * Show what the command would change and change nothing: the database is
+   * opened read-only, and no lock, consent, hook or write follows.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -164,7 +177,13 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     configPath: options.config,
     cwd: options.cwd,
   });
-  const adapter = await createCliAdapter({});
+  // A dry run opens the database read-only; one whose database is not there
+  // has said so, and ends here.
+  const adapter =
+    options.dryRun === true
+      ? await openCommandAdapter({ dryRun: true }, context.logger)
+      : await createCliAdapter({});
+  if (adapter === undefined) return undefined;
   const dialect = adapter.dialect;
   const plugins = toLifecyclePlugins(config.plugins ?? []);
 
@@ -323,16 +342,21 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       if (refusal !== undefined) throw refusal;
     }
     planned = new Map(plans.map(down => [down.filename, down]));
+    // Each module's DOWN judged by the reader `migrate:down` names a
+    // rollback's deletions with, every module read as one run in the order
+    // they run: a module that removes rows, converts a column or calls code
+    // that may delete is destructive, as one that drops is.
+    const deletions = await rollbackDeletions(
+      plans,
+      dialect,
+      deps.readDeletionFacts
+    );
     return plans.map((down, at) => ({
       moduleName: moduleNames[at],
       filename: down.filename,
       statements: down.statements,
       transaction: down.transaction,
-      destructive: isDestructiveDown(
-        down.statements,
-        dialect,
-        down.liveColumns
-      ),
+      deletions: deletions[at] ?? [],
     }));
   };
 
@@ -428,22 +452,16 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     );
 
   /**
-   * Apply this plugin's pending modules, through the phase `migrate` uses.
-   *
-   * Not a second implementation: `runPluginPhase` owns the ledger, the drop
-   * guard and the owner records, and an install that applied modules its own
-   * way would record them differently from every later `migrate`. Scoped to
-   * the one plugin being installed, which is the only difference.
-   *
-   * The caller holds the migrate lock (`underMigrateLock`), as `migrateCore`
-   * does around the same phase: install keeps it from before the modules
-   * apply until after `onInstall`, so an uninstall cannot run in between.
+   * The module sets an install of `plugin` applies (`applyMigrations`):
+   * none when it ships no modules. Read once for the consent and the run, so
+   * the two judge and apply the same modules.
    */
-  const applyMigrations = async (plugin: LifecyclePlugin): Promise<void> => {
+  const installSets = async (
+    plugin: LifecyclePlugin
+  ): Promise<PluginMigrationSet[]> => {
     const definition = definitions.find(d => d.name === plugin.name);
     const modules = definition?.contributes?.schema?.migrations ?? [];
-    if (definition === undefined || modules.length === 0) return;
-    const { runPluginPhase } = await import("./migrate");
+    if (definition === undefined || modules.length === 0) return [];
     const { pluginMigrationSetsFrom } = await import(
       "../../domains/schema/migrate/plugin/run-plugin-migrations"
     );
@@ -488,9 +506,37 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const sorted = await pluginMigrationSetsFrom([
       ...withDependencies.values(),
     ]);
-    const pluginMigrationSets = sorted.filter(
-      set => set.pluginName === definition.name
-    );
+    return sorted.filter(set => set.pluginName === definition.name);
+  };
+
+  /** What the modules an install of `plugin` applies delete (`PluginLifecycleDeps.installDeletions`). */
+  const installDeletions = async (plugin: LifecyclePlugin) => {
+    const sets = await installSets(plugin);
+    if (sets.length === 0) return [];
+    const { pendingPluginDeletions } = await import("./migrate");
+    return pendingPluginDeletions(sets, {
+      adapter,
+      db: drizzleAdapter.getDrizzle(),
+      dialect,
+    });
+  };
+
+  /**
+   * Apply this plugin's pending modules, through the phase `migrate` uses.
+   *
+   * Not a second implementation: `runPluginPhase` owns the ledger, the drop
+   * guard and the owner records, and an install that applied modules its own
+   * way would record them differently from every later `migrate`. Scoped to
+   * the one plugin being installed, which is the only difference.
+   *
+   * The caller holds the migrate lock (`underMigrateLock`), as `migrateCore`
+   * does around the same phase: install keeps it from before the modules
+   * apply until after `onInstall`, so an uninstall cannot run in between.
+   */
+  const applyMigrations = async (plugin: LifecyclePlugin): Promise<void> => {
+    const pluginMigrationSets = await installSets(plugin);
+    if (pluginMigrationSets.length === 0) return;
+    const { runPluginPhase } = await import("./migrate");
 
     const { compileExtensionSchema } = await import(
       "../../domains/schema/extension/publish"
@@ -745,6 +791,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     adapter,
     dialect,
     applyMigrations,
+    installDeletions,
     readLifecycle,
     recordLifecycle,
     // Read PER ACCESS, never captured. The same cast `migrate` makes —
@@ -931,14 +978,42 @@ interface SettingsDeleteDb {
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
 }
 
+/**
+ * A plugin command's dry run: connected read-only, `plan` worked out from the
+ * command's own reads and reported, or the refusal the real command would
+ * meet, connecting included (a database `nextly migrate` has not prepared).
+ */
+async function reportPluginDryRun(
+  options: RunnerOptions,
+  context: CommandContext,
+  plan: (deps: PluginLifecycleDeps) => Promise<DryRunPlan>
+): Promise<void> {
+  let deps: PluginLifecycleDeps | undefined;
+  try {
+    const report = await plannedOrRefused(async () => {
+      deps = await connect(options, context);
+      return deps === undefined ? undefined : plan(deps);
+    });
+    if (report !== undefined) reportDryRun(context.logger, report);
+  } finally {
+    await deps?.adapter.disconnect();
+  }
+}
+
 export async function runPluginInstall(
   name: string,
-  options: RunnerOptions,
+  options: RunnerOptions & InstallOptions,
   context: CommandContext
 ): Promise<void> {
+  if (options.dryRun === true) {
+    return reportPluginDryRun(options, context, deps =>
+      previewPluginInstall(name, deps)
+    );
+  }
   const deps = await connect(options, context);
+  if (deps === undefined) return;
   try {
-    await runPluginInstallCommand(name, deps);
+    await runPluginInstallCommand(name, deps, { consent: options.consent });
   } finally {
     await deps.adapter.disconnect();
   }
@@ -946,12 +1021,16 @@ export async function runPluginInstall(
 
 /** Install every configured plugin, in the config loader's dependency order. */
 export async function runPluginInstallAll(
-  options: RunnerOptions,
+  options: RunnerOptions & InstallOptions,
   context: CommandContext
 ): Promise<void> {
+  if (options.dryRun === true) {
+    return reportPluginDryRun(options, context, previewPluginInstallAll);
+  }
   const deps = await connect(options, context);
+  if (deps === undefined) return;
   try {
-    await runPluginInstallAllCommand(deps);
+    await runPluginInstallAllCommand(deps, { consent: options.consent });
   } finally {
     await deps.adapter.disconnect();
   }
@@ -962,7 +1041,17 @@ export async function runPluginUninstall(
   options: RunnerOptions & UninstallOptions,
   context: CommandContext
 ): Promise<void> {
+  if (options.dryRun === true) {
+    return reportPluginDryRun(options, context, deps =>
+      previewPluginUninstall(
+        name,
+        { keepData: options.keepData, yes: options.yes },
+        deps
+      )
+    );
+  }
   const deps = await connect(options, context);
+  if (deps === undefined) return;
   try {
     // The command takes the migrate lock itself, through `underMigrateLock`,
     // once every refusal has been decided: the DOWNs, the ledger rows and the

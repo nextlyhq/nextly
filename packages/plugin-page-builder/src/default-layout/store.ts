@@ -10,6 +10,13 @@
  */
 import type { Nextly } from "nextly";
 
+import type { ActionBy } from "../component-actions-contract";
+import {
+  asOverwrite,
+  documentVersionOf,
+  withVersionFrom,
+} from "../document-version";
+
 import { DEFAULT_LAYOUT_WRITE_CONTEXT } from "./settings-single";
 
 /**
@@ -39,10 +46,28 @@ export interface LayoutSettings {
   readonly defaultLayout: string | null;
   readonly seededLayout: string | null;
   /**
-   * Who made the current default, by user id; null for a default the plugin
-   * set itself (the seed, or the repair) or one recorded before this existed.
+   * Who made the current default, as {@link changedByOf} writes it:
+   * `user:<id>` for a person, `api-key:<id>` for an API key. A bare id is a
+   * person's, recorded before the kind was written. Null for a default the
+   * plugin set itself (the seed, or the repair) or one recorded before this
+   * existed.
    */
   readonly defaultLayoutChangedBy: string | null;
+  /**
+   * The settings document's version as read, which a write made from this
+   * read sends back; absent when the document was never stored.
+   */
+  readonly rev: string | undefined;
+}
+
+/**
+ * Who chose a default, as the settings record it: the API key itself for a
+ * key, never its owner, so a key's choice is told apart from the person's.
+ */
+export function changedByOf(by: ActionBy): string {
+  return by.kind === "api-key" && by.apiKeyId !== undefined
+    ? `api-key:${by.apiKeyId}`
+    : `user:${by.userId}`;
 }
 
 /**
@@ -93,6 +118,7 @@ export async function readLayoutSettings(
       doc.defaultLayoutChangedBy !== ""
         ? doc.defaultLayoutChangedBy
         : null,
+    rev: documentVersionOf(doc),
   };
 }
 
@@ -100,11 +126,17 @@ export async function readLayoutSettings(
  * Write the settings Single, with the marker its guard admits.
  *
  * The only function that carries the marker, so the set of sanctioned writers
- * is the set of callers of this function.
+ * is the set of callers of this function. `from` is the read the write was
+ * decided on: the write sends its version, so a change to the settings made
+ * since refuses the write rather than being overwritten. Settings never
+ * stored have no version, and nothing to overwrite, so the first write says
+ * it sets them whatever is there. `"overwrite"` is a write that sets its
+ * values whatever the settings hold, decided on no read of them.
  */
 export async function writeLayoutSettings(
   nextly: Pick<DefaultLayoutDirectApi, "updateSingle">,
   slugs: DefaultLayoutSlugs,
+  from: LayoutSettings | "overwrite",
   data: {
     defaultLayout?: string | null;
     seededLayout?: string | null;
@@ -113,7 +145,10 @@ export async function writeLayoutSettings(
 ): Promise<void> {
   await nextly.updateSingle({
     slug: slugs.settings,
-    data,
+    data:
+      from === "overwrite" || from.rev === undefined
+        ? asOverwrite(data)
+        : withVersionFrom(data, from.rev),
     overrideAccess: true,
     context: { ...DEFAULT_LAYOUT_WRITE_CONTEXT },
   });
@@ -157,7 +192,8 @@ export async function publishedLayoutIds(
  */
 export async function layoutExists(
   nextly: Pick<DefaultLayoutDirectApi, "find">,
-  slugs: DefaultLayoutSlugs,
+  // Only the Layouts slug: a page's publish asks this without the Single.
+  slugs: Pick<DefaultLayoutSlugs, "layouts">,
   id: string
 ): Promise<boolean> {
   const found = await nextly.find({

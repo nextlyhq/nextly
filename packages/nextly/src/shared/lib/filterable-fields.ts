@@ -211,19 +211,25 @@ type Position = "where" | "sort" | "groupBy";
  * branch per position stops being readable at exactly the point a third one
  * arrives.
  */
-const REFUSALS: Record<Position, { code: string; because: string }> = {
+const REFUSALS: Record<
+  Position,
+  { code: string; verb: string; because: string }
+> = {
   where: {
     code: "FIELD_NOT_FILTERABLE",
+    verb: "filter",
     because:
       "Filtering on a field you may not read would reveal its contents through the rows returned.",
   },
   sort: {
     code: "FIELD_NOT_SORTABLE",
+    verb: "sort",
     because:
       "Ordering by a field you may not read reveals how its values compare across rows.",
   },
   groupBy: {
     code: "FIELD_NOT_GROUPABLE",
+    verb: "group",
     because:
       "Grouping by a field you may not read publishes its distinct values as the buckets themselves, which redaction never sees because the value is never rendered in a row.",
   },
@@ -240,11 +246,11 @@ function refusalFor(
   fields: string[],
   at: Position
 ): Array<{ path: string; code: string; message: string }> {
-  const { code, because } = REFUSALS[at];
+  const { code, verb, because } = REFUSALS[at];
   return fields.map(field => ({
     path: `${at}.${field}`,
     code,
-    message: `"${field}" is a field you may not read, or may read only on some entries, so it cannot be used to ${at === "groupBy" ? "group" : at === "sort" ? "sort" : "filter"}. ${because}`,
+    message: `"${field}" is a field you may not read, or may read only on some entries, so it cannot be used to ${verb}. ${because}`,
   }));
 }
 
@@ -581,4 +587,103 @@ export async function filterSearchableFields(
     await unreadableFields(kind, slug, fields, opts.caller ?? {})
   );
   return fields.filter(name => !denied.has(name));
+}
+
+/**
+ * A hidden path as a query names it: a dynamic zone's member carries its
+ * component type as a `#type` segment in the declared path, which a filter, a
+ * sort or a group key does not spell.
+ */
+function queriedPath(path: string): string {
+  // The whole segment goes, with its separator: `zone.#cta.secret` is
+  // queried as `zone.secret`, not `zone..secret`.
+  return path
+    .split(".")
+    .filter(segment => !segment.startsWith("#"))
+    .join(".");
+}
+
+/**
+ * Whether `key` names a hidden field, a field inside a hidden one, or a
+ * container holding one: querying a container probes what it holds. Every
+ * spelling the query resolver accepts for a name is tried, so a snake_case
+ * alias of a camelCase field is refused with it.
+ */
+function namesHidden(key: string, hidden: ReadonlySet<string>): boolean {
+  const asked = spellings(key);
+  for (const declared of hidden) {
+    for (const path of spellings(queriedPath(declared))) {
+      for (const name of asked) {
+        if (name === path || name.startsWith(`${path}.`)) return true;
+        if (path.startsWith(`${name}.`)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * The declared paths of the fields a read leaves out of its rows, resolved
+ * only when asked. A read hands this rather than the paths so the declarations
+ * (a registry read and its components') are reached only once the read gate
+ * has let the caller through: a caller refused by the gate costs no schema
+ * read, and is answered by the gate whatever the registry would have said.
+ */
+export type HiddenFieldPaths = () => Promise<ReadonlySet<string>>;
+
+/**
+ * Refuse a filter, a sort or a group key naming a field this read leaves out
+ * of its rows (`showHiddenFields: false`, by the declared hidden paths it
+ * resolved).
+ *
+ * The rows a filter keeps, the order a sort puts them in and the buckets a
+ * grouping returns would each reveal the value every row is stripped of. A
+ * read that strips nothing passes `undefined` or an empty set and is not
+ * judged. The caller runs this after the read gate, so a caller who may not
+ * read the source learns nothing of which of its fields are hidden.
+ */
+export function assertNoHiddenFieldQueried(
+  query: {
+    readonly where?: unknown;
+    /** The sort keys, as the read parses them. */
+    readonly sort?: readonly string[];
+    readonly groupBy?: unknown;
+    /**
+     * The argument a position is reported under where the caller named it
+     * otherwise, so a refusal points at what the caller supplied: a users
+     * read's one `sortBy` travels as `sort`, and a timeline's `dateField` as
+     * `groupBy`. A position with no label is reported under its own name.
+     */
+    readonly labels?: {
+      readonly sort?: "sortBy";
+      readonly groupBy?: "dateField";
+    };
+  },
+  hidden: ReadonlySet<string> | undefined
+): void {
+  if (hidden === undefined || hidden.size === 0) return;
+  const { labels } = query;
+  const named: ReadonlyArray<readonly [Position, string, readonly string[]]> = [
+    ["where", "where", [...filterKeys(query.where)]],
+    ["sort", labels?.sort ?? "sort", query.sort ?? []],
+    [
+      "groupBy",
+      labels?.groupBy ?? "groupBy",
+      typeof query.groupBy === "string" ? [query.groupBy] : [],
+    ],
+  ];
+  const errors = named.flatMap(([at, label, keys]) =>
+    keys
+      .filter(key => key !== "" && namesHidden(key, hidden))
+      .map(key => ({
+        path: `${label}.${key}`,
+        code: REFUSALS[at].code,
+        message: `"${key}" is hidden from this read, so it cannot be used to ${REFUSALS[at].verb}.`,
+      }))
+  );
+  if (errors.length === 0) return;
+  throw NextlyError.validation({
+    errors,
+    logContext: { reason: "hidden-field-queried" },
+  });
 }

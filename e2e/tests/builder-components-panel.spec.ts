@@ -30,6 +30,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import {
   boxOf,
+  canvasRoot,
   clearSelection,
   layerRow,
   openLayers,
@@ -38,9 +39,10 @@ import {
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { settleTransitions } from "./support/axe-scan.mjs";
+import { canvasBlock } from "./support/canvas-frame";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { storedPageNodes } from "./support/stored-page";
-import { fileAccount, test } from "./support/test";
+import { fileAccount, ownSeat, test } from "./support/test";
 
 const COMPONENTS = "/admin/api/collections/components/entries";
 const PAGES = "/admin/api/collections/pages/entries";
@@ -229,6 +231,9 @@ async function selectHeading(page: Page): Promise<void> {
  * path that crossed the end of the page on its way would keep that place.
  */
 async function dragAfterHeading(page: Page, from: ReturnType<typeof row>) {
+  // On screen before it is measured: a box read for a row scrolled out of the
+  // panel is a point the pointer cannot press.
+  await from.scrollIntoViewIfNeeded();
   const start = await from.boundingBox();
   if (start === null) throw new Error("[e2e] the row rendered no box");
   const x = start.x + start.width / 2;
@@ -339,6 +344,206 @@ test.describe("the Components panel", () => {
     expect(await shape(page.request, id)).toEqual([`component:${component}`]);
   });
 
+  test("starts an empty page from the start card on it", async ({ page }) => {
+    const title = `Start ${stamp()}`;
+    const component = await createComponent(page.request, title);
+    const id = await createPage(page.request, true);
+    await openBuilder(page, id);
+
+    await expect(page.getByText("Start your page")).toBeVisible();
+    await page.getByRole("button", { name: "Add section" }).click();
+    await page.getByRole("combobox", { name: "Insert a block" }).fill(title);
+    await tile(page, title).click();
+    await saveDraft(page);
+
+    expect(await shape(page.request, id)).toEqual([`component:${component}`]);
+    await expect(page.locator(".nx-page-inserters__start")).toHaveCount(0);
+  });
+
+  test("takes a drag anywhere on an empty page", async ({ page }) => {
+    // The start card promises "drag one here": aimed low on the page, well
+    // clear of the card, the drop still lands, as the page's one section.
+    const title = `Dropped ${stamp()}`;
+    const component = await createComponent(page.request, title);
+    const id = await createPage(page.request, true);
+    await openBuilder(page, id);
+    await openPanel(page, "Add");
+    await page.getByRole("combobox", { name: "Insert a block" }).fill(title);
+
+    const from = await tile(page, title).boundingBox();
+    const to = await (await canvasRoot(page)).boundingBox();
+    if (from === null || to === null) throw new Error("[e2e] no boxes");
+    const x = from.x + from.width / 2;
+    const y = from.y + from.height / 2;
+    const aimY = to.y + to.height * 0.85;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 24, y, { steps: 4 });
+    await page.mouse.move(x + 24, aimY, { steps: 8 });
+    await page.mouse.move(to.x + to.width / 2, aimY, { steps: 12 });
+    // The start card goes while the drag is under way.
+    await expect(page.locator(".nx-page-inserters__start")).toHaveCount(0);
+    await page.mouse.up();
+    await saveDraft(page);
+
+    expect(await shape(page.request, id)).toEqual([`component:${component}`]);
+  });
+
+  test("adds a section in the gap between two from the + there", async ({
+    page,
+  }) => {
+    const title = `Between ${stamp()}`;
+    const component = await createComponent(page.request, title);
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    await clearSelection(page);
+
+    // Near the gap below the heading, off to its side, the + there shows.
+    const add = page.getByRole("button", {
+      name: "Add a section after Heading",
+    });
+    const spot = await add.boundingBox();
+    if (spot === null) throw new Error("[e2e] the + is not laid out");
+    await page.mouse.move(spot.x - 200, spot.y + spot.height / 2, { steps: 4 });
+    await expect
+      .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
+      .toBe("1");
+    await add.hover();
+    await expect(page.getByRole("tooltip")).toHaveText("Add a section here");
+    await add.click();
+
+    await expect(
+      page.locator(".nx-insert-panel__placement").first()
+    ).toHaveText("Adding after Heading");
+    await page.getByRole("combobox", { name: "Insert a block" }).fill(title);
+    await tile(page, title).click();
+    await saveDraft(page);
+
+    expect(await shape(page.request, id)).toEqual([
+      "core/heading",
+      `component:${component}`,
+      "core/section",
+    ]);
+  });
+
+  test("reaches the + between sections from the keyboard", async ({ page }) => {
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+    const add = page.getByRole("button", {
+      name: "Add a section after Heading",
+    });
+    // Into the tab order from the control before it, by Tab, so the focus
+    // is a keyboard focus and the + shows as one.
+    await add.focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(add).not.toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(add).toBeFocused();
+    await expect
+      .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
+      .toBe("1");
+  });
+
+  test("keeps the + after a section styled display: contents", async ({
+    page,
+  }) => {
+    // A section with `display: contents` draws no box of its own while its
+    // children are on the page. A browser's `checkVisibility()` answers false
+    // for it, which jsdom cannot show: the gap after it must still be there.
+    const t = stamp();
+    const created = await page.request.post(PAGES, {
+      data: {
+        title: `Contents section ${t}`,
+        slug: `contents-section-${t}`,
+        status: "draft",
+        content: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            {
+              id: HEADING,
+              type: "core/heading",
+              version: 1,
+              props: { text: "Components panel heading", level: "h2" },
+            },
+            {
+              id: SECTION,
+              type: "core/section",
+              version: 1,
+              name: "Our team",
+              props: { as: "section", contained: true },
+              styles: { base: { base: { display: "contents" } } },
+              slots: {
+                children: [
+                  {
+                    id: "00000000-0000-4000-8000-00000000d003",
+                    type: "core/text",
+                    version: 1,
+                    props: { text: "Drawn by its children alone." },
+                  },
+                ],
+              },
+            },
+            {
+              id: "00000000-0000-4000-8000-00000000d004",
+              type: "core/section",
+              version: 1,
+              name: "Contact",
+              props: { as: "section", contained: true },
+              slots: { children: [] },
+            },
+          ],
+        },
+      },
+    });
+    expect(created.ok(), `creating the page: ${created.status()}`).toBe(true);
+    const id = ((await created.json()) as { item: { id: string } }).item.id;
+    await openBuilder(page, id);
+
+    // The control: the stored style reached the canvas, so the section
+    // really is drawn without a box of its own.
+    await expect
+      .poll(() =>
+        canvasBlock(page, SECTION).evaluate(
+          element => getComputedStyle(element).display
+        )
+      )
+      .toBe("contents");
+    await expect(
+      page.getByRole("button", { name: "Add a section after Heading" })
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "Add a section after Our team" })
+    ).toHaveCount(1);
+  });
+
+  test.describe("on a touch screen", () => {
+    test.use({ hasTouch: true });
+
+    test("shows the + between sections without a pointer near it, and takes a tap", async ({
+      page,
+    }) => {
+      // No pointer moves before a tap, so the + is shown and pressable from
+      // the start where the screen's pointer is coarse.
+      const id = await createPage(page.request);
+      await openBuilder(page, id);
+      expect(
+        await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches),
+        "the browser reports a coarse pointer"
+      ).toBe(true);
+      const add = page.getByRole("button", {
+        name: "Add a section after Heading",
+      });
+      await expect
+        .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
+        .toBe("1");
+      await add.tap();
+      await expect(
+        page.locator(".nx-insert-panel__placement").first()
+      ).toHaveText("Adding after Heading");
+    });
+  });
+
   for (const way of ["click", "keyboard"] as const) {
     test(`inserts from Add and from Components by ${way}, in the same spot`, async ({
       page,
@@ -410,7 +615,14 @@ test.describe("the Components panel", () => {
           .fill(title);
         await dragAfterHeading(page, tile(page, title));
       } else {
+        // Narrowed to this component first, as the Add pass is. The suite's
+        // database holds every component the specs before it made, so the
+        // full list can put this row below the panel's fold, or move it as
+        // the list finishes loading: a drag aimed at its box then starts off
+        // it, and nothing is placed.
         await openComponents(page);
+        await searchBox(page).fill(title);
+        await expect(row(page, title)).toBeVisible();
         await dragAfterHeading(page, row(page, title));
       }
       await saveDraft(page);
@@ -423,71 +635,88 @@ test.describe("the Components panel", () => {
     }
   });
 
-  test("Edit opens the component alone, says what it reaches, and Back returns", async ({
-    page,
-  }) => {
-    const title = `Promo ${stamp()}`;
-    const component = await createComponent(page.request, title);
-    await placeOnAPublishedPage(page.request, component);
-    const id = await createPage(page.request);
-    await openBuilder(page, id);
-    await openComponents(page);
+  test.describe("editing one", () => {
+    // An account of its own: the tests before it open the editor again and
+    // again, and through the file's account this one met the REST limit.
+    ownSeat(3);
 
-    await page
-      .getByRole("button", { name: `Edit ${title}`, exact: true })
-      .click();
+    test("Edit opens the component alone, says what it reaches, and Back returns", async ({
+      page,
+    }) => {
+      const title = `Promo ${stamp()}`;
+      const component = await createComponent(page.request, title);
+      await placeOnAPublishedPage(page.request, component);
+      const id = await createPage(page.request);
+      await openBuilder(page, id);
+      await openComponents(page);
 
-    await expect(page).toHaveURL(
-      new RegExp(
-        `/admin/collections/components/${component}/builder\\?field=content&return=`
-      )
-    );
-    const banner = page.getByRole("region", { name: "Editing a component" });
-    await expect(banner).toContainText(title);
-    // A published page places it, so the banner counts the page a change
-    // reaches, in pages, never documents.
-    await expect(banner).toContainText(/Changes reach (at least )?1 page/);
+      await page
+        .getByRole("button", { name: `Edit ${title}`, exact: true })
+        .click();
 
-    // The one Back, named for the page it returns to.
-    await banner.getByRole("button", { name: /^Back to / }).click();
-    await expect(page).toHaveURL(
-      new RegExp(`/admin/collections/pages/${id}/builder\\?`)
-    );
-    await expect(banner).toHaveCount(0);
-    // Where the author came from: the page, with Components still open.
-    await expect(railButton(page, "Components")).toHaveAttribute(
-      "aria-pressed",
-      "true",
-      { timeout: 30_000 }
-    );
-    await expect(searchBox(page)).toBeVisible();
+      await expect(page).toHaveURL(
+        new RegExp(
+          `/admin/collections/components/${component}/builder\\?field=content&return=`
+        )
+      );
+      const banner = page.getByRole("region", { name: "Editing a component" });
+      await expect(banner).toContainText(title);
+      // A published page places it, so the banner counts the page a change
+      // reaches, in pages, never documents.
+      await expect(banner).toContainText(/Changes reach (at least )?1 page/);
+
+      // The one Back, named for the page it returns to.
+      await banner.getByRole("button", { name: /^Back to / }).click();
+      await expect(page).toHaveURL(
+        new RegExp(`/admin/collections/pages/${id}/builder\\?`)
+      );
+      await expect(banner).toHaveCount(0);
+      // Where the author came from: the page, with Components still open.
+      await expect(railButton(page, "Components")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+        { timeout: 30_000 }
+      );
+      await expect(searchBox(page)).toBeVisible();
+    });
   });
 
-  for (const scheme of ["light", "dark"] as const) {
-    test(`meets WCAG 2.2 AA in ${scheme}`, async ({ page }) => {
-      const title = `Promo ${stamp()}`;
-      await createComponent(page.request, title);
-      const id = await createPage(page.request);
-      await page.emulateMedia({ reducedMotion: "reduce" });
-      await gotoAdmin(
-        page,
-        `/collections/pages/${id}/builder?field=content`,
-        scheme
-      );
-      await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
-        timeout: 60_000,
-      });
-      await openComponents(page);
-      await expect(row(page, title)).toBeVisible({ timeout: 30_000 });
-      await row(page, title).hover();
-      await settleTransitions(page);
+  /*
+   * Each scheme reads through an account of its own. These run late in a file
+   * whose earlier tests seed components and open the editor again and again,
+   * and through the file's one account the dark scan's open met the REST
+   * limit's per-user budget: the builder route answered "Too many requests"
+   * and the canvas never came. A seat per scheme spends one open of a budget.
+   */
+  (["light", "dark"] as const).forEach((scheme, index) => {
+    test.describe(`in ${scheme}`, () => {
+      ownSeat(index + 1);
 
-      const results = await new AxeBuilder({ page })
-        .withTags(AA_TAGS)
-        .analyze();
-      expect(results.violations).toEqual([]);
+      test(`meets WCAG 2.2 AA in ${scheme}`, async ({ page }) => {
+        const title = `Promo ${stamp()}`;
+        await createComponent(page.request, title);
+        const id = await createPage(page.request);
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await gotoAdmin(
+          page,
+          `/collections/pages/${id}/builder?field=content`,
+          scheme
+        );
+        await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+          timeout: 60_000,
+        });
+        await openComponents(page);
+        await expect(row(page, title)).toBeVisible({ timeout: 30_000 });
+        await row(page, title).hover();
+        await settleTransitions(page);
+
+        const results = await new AxeBuilder({ page })
+          .withTags(AA_TAGS)
+          .analyze();
+        expect(results.violations).toEqual([]);
+      });
     });
-  }
+  });
 });
 
 test.describe("the Components panel, for an author who may not update components", () => {

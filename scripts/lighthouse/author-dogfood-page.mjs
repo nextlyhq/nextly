@@ -218,6 +218,18 @@ function expectedMarkers(node) {
   return markers;
 }
 
+/**
+ * The body that authors `document` into the Single's `field`. A fixture sets
+ * the page whatever is stored, so it says so with `_overwrite` rather than
+ * sending a version it never read.
+ *
+ * @param {string} field
+ * @param {unknown} document
+ */
+export function authoringBody(field, document) {
+  return { [field]: document, _overwrite: true };
+}
+
 async function main() {
   const csrf = await signIn();
   const media = await mediaByFilename();
@@ -241,7 +253,7 @@ async function main() {
         referer: `${BASE_URL}/admin`,
         cookie: cookieHeader(),
       },
-      body: JSON.stringify({ [FIELD]: document }),
+      body: JSON.stringify(authoringBody(FIELD, document)),
     }
   );
   if (!response.ok) {
@@ -274,4 +286,5 @@ async function main() {
   );
 }
 
-await main();
+// Run when executed, not when a test imports it for `authoringBody`.
+if (process.argv[1] === fileURLToPath(import.meta.url)) await main();

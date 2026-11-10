@@ -15,7 +15,8 @@
  *
  * The form is SQLite's own: create `__new_<t>` with the target definition,
  * copy the rows, drop `<t>`, rename `__new_<t>` into its place, recreate the
- * indexes the drop took with it. It relies on the migration runner's SQLite
+ * indexes the drop took with it, through the swap every SQLite rebuild shares
+ * (`sqlite-swap`), given no triggers and no views. It relies on the migration runner's SQLite
  * contract: every file runs with `PRAGMA foreign_keys = OFF` around its
  * transaction and `PRAGMA foreign_key_check` before COMMIT. With foreign keys
  * off, dropping the table deletes nothing through another table's ON DELETE
@@ -34,6 +35,13 @@
  *   rescued from here. Measured on SQLite 3.53.
  * - Triggers on the table. They are dropped with it, and the schema model
  *   does not track triggers, so nothing here could recreate them.
+ * - Views that read the table. SQLite refuses the rename back into place while
+ *   a view still names the dropped table ("error in view v: no such table"),
+ *   and no snapshot records a view, so the file cannot drop and recreate them
+ *   as the column conversion's rebuild does. A view counts when its stored SQL
+ *   names the table anywhere outside the view's own name, case-folded, as a
+ *   bare substring: a longer name or a string literal holding it counts too,
+ *   which refuses rather than risks a false "none".
  * - Foreign keys or checks the target spec does not TRACK (`undefined`, as an
  *   entity's spec leaves foreign keys) while the live table has some. The
  *   rebuilt table is declared from the spec, so it would come back without
@@ -79,11 +87,13 @@ import type {
 import { createIndexSql } from "./create-index";
 import { createTableBody, resolvePrimaryKey } from "./create-table-body";
 import { quoteIdent } from "./identifier-quoting";
+import {
+  SQLITE_FOREIGN_KEYS_ENFORCED,
+  literalOf,
+  sqliteSwapStatements,
+} from "./sqlite-swap";
 
 const q = (name: string) => quoteIdent(name, "sqlite");
-
-/** A SQL string literal. */
-const literalOf = (text: string): string => `'${text.replace(/'/g, "''")}'`;
 
 /** The operations SQLite can only perform by rebuilding the table. */
 const REBUILD_OPERATIONS = new Set<Operation["type"]>([
@@ -234,15 +244,14 @@ export function sqliteTableRebuildStatements(
   }
   const name = table.name;
   const literal = literalOf(name);
-  const rebuilt = `__new_${name}`;
   const guard = `__nextly_rebuild_${name}_guard`;
   const added = columnsAddedByRebuild(ops, name);
   const columns = table.columns
     .filter(column => !added.has(column.name.toLowerCase()))
-    .map(column => q(column.name))
-    .join(", ");
+    .map(column => column.name);
   const needsForeignKeysOff = `rebuilding ${name} needs foreign keys off: apply it with nextly migrate`;
   const wouldDropTriggers = `rebuilding ${name} would drop the triggers on it`;
+  const wouldBreakViews = `rebuilding ${name} would break the views that read it: drop each view that reads ${name}, migrate, then create the view again`;
   const untracked = untrackedConstraintCounts(table, ops);
   const collations = untrackedCollationCount(table);
   const keptUnique = options.keptUnique ?? [];
@@ -256,6 +265,7 @@ export function sqliteTableRebuildStatements(
     // The guard: one row, checked on insert, before anything is dropped.
     `CREATE TABLE ${q(guard)} ("foreign_keys" INTEGER NOT NULL, ` +
       `"triggers" INTEGER NOT NULL, ` +
+      `"views" INTEGER NOT NULL, ` +
       `"untracked_foreign_keys" INTEGER NOT NULL, ` +
       `"untracked_checks" INTEGER NOT NULL, ` +
       `"untracked_collations" INTEGER NOT NULL, ` +
@@ -267,6 +277,7 @@ export function sqliteTableRebuildStatements(
       `"comments" INTEGER NOT NULL, ` +
       `CONSTRAINT ${q(needsForeignKeysOff)} CHECK ("foreign_keys" = 0), ` +
       `CONSTRAINT ${q(wouldDropTriggers)} CHECK ("triggers" = 0), ` +
+      `CONSTRAINT ${q(wouldBreakViews)} CHECK ("views" = 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "foreign keys"))} CHECK ("untracked_foreign_keys" <= 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "checks"))} CHECK ("untracked_checks" <= 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "collations"))} CHECK ("untracked_collations" <= 0), ` +
@@ -276,20 +287,30 @@ export function sqliteTableRebuildStatements(
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "AUTOINCREMENT keys"))} CHECK ("autoincrement" = 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "conflict clauses"))} CHECK ("conflict_clauses" = 0), ` +
       `CONSTRAINT ${q(unreadable)} CHECK ("comments" = 0))`,
-    `INSERT INTO ${q(guard)} ("foreign_keys", "triggers", ` +
+    `INSERT INTO ${q(guard)} ("foreign_keys", "triggers", "views", ` +
       `"untracked_foreign_keys", "untracked_checks", "untracked_collations", "untracked_indexes", "table_options", "generated_columns", "autoincrement", "conflict_clauses", "comments") ` +
-      `SELECT (SELECT "foreign_keys" FROM pragma_foreign_keys), ` +
+      `SELECT ${SQLITE_FOREIGN_KEYS_ENFORCED}, ` +
       `(SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ${literal}), ` +
+      // Any view whose SQL names the table, case-folded: refused rather than risk a false "none".
+      // The view's own name is taken out of its SQL first, so a view named after the table that
+      // reads another one is not counted; but not where the view's name is part of the table's,
+      // which would take the table's name out of what the view reads.
+      `(SELECT COUNT(*) FROM sqlite_master WHERE type = 'view' AND instr(CASE WHEN instr(lower(${literal}), lower(name)) > 0 THEN lower(sql) ELSE replace(lower(sql), lower(name), '') END, lower(${literal})) > 0), ` +
       `${untracked.foreignKeys}, ${untracked.checks}, ${collations}, ${indexes}, ${tableOptionsOf(table)}, ${generatedColumnsOf(table)}, ${autoincrementIn(table)}, ${conflictClausesIn(table)}, ${commentsIn(table)}`,
     `DROP TABLE ${q(guard)}`,
-    `CREATE TABLE ${q(rebuilt)} (\n${[createTableBody(table, q, "  ", "sqlite"), ...uniqueLines].join(",\n")}\n)`,
-    `INSERT INTO ${q(rebuilt)} (${columns}) SELECT ${columns} FROM ${q(name)}`,
-    `DROP TABLE ${q(name)}`,
-    `ALTER TABLE ${q(rebuilt)} RENAME TO ${q(name)}`,
-    // The drop took every index with it.
-    ...(table.indexes ?? []).map(index =>
-      createIndexSql(name, index, "sqlite", q)
-    ),
+    // The guard refused a table with triggers or a view reading it, so the
+    // swap puts back only the indexes, which the drop took with it. The UNIQUE
+    // constraints kept from the live table are declared with the columns.
+    ...sqliteSwapStatements({
+      table: name,
+      definition: `(\n${[createTableBody(table, q, "  ", "sqlite"), ...uniqueLines].join(",\n")}\n)`,
+      columns,
+      indexes: (table.indexes ?? []).map(index =>
+        createIndexSql(name, index, "sqlite", q)
+      ),
+      triggers: [],
+      views: [],
+    }),
   ];
 }
 

@@ -4,6 +4,7 @@ import {
   fontWeightOptions,
   foldedControlFor,
   lineHeightFromText,
+  lineHeightScrubOrigin,
 } from "./style-folded";
 
 describe("the folded style properties", () => {
@@ -89,5 +90,22 @@ describe("lineHeightFromText", () => {
     expect(lineHeightFromText("\u00a01.5")).toBe("\u00a01.5");
     expect(lineHeightFromText("\u00a0")).toBe("\u00a0");
     expect(lineHeightFromText("\t1.5\n")).toBe(1.5);
+  });
+});
+
+describe("where a drag on the line height's label starts", () => {
+  it("starts from the field's text, a number or a length", () => {
+    expect(lineHeightScrubOrigin("1.5", undefined)).toBe(1.5);
+    expect(lineHeightScrubOrigin("24px", undefined)).toBe("24px");
+  });
+
+  it("starts an empty field from the value it shows from another tier", () => {
+    expect(lineHeightScrubOrigin("", "1.5")).toBe(1.5);
+    expect(lineHeightScrubOrigin(" ", "24px")).toBe("24px");
+  });
+
+  it("does not start where nothing is one number or one length", () => {
+    expect(lineHeightScrubOrigin("", undefined)).toBeUndefined();
+    expect(lineHeightScrubOrigin("", "normal")).toBeUndefined();
   });
 });

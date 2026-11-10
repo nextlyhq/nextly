@@ -59,6 +59,7 @@ import {
   layoutReferencesOf,
   type LayoutComponentReference,
   type LayoutPage,
+  type LayoutReader,
   type LayoutRecord,
 } from "./layout-component-usage";
 import { unpublishes } from "./unpublish-write";
@@ -192,39 +193,7 @@ async function refuseWhileALayoutNamesIt(
 
   const usage = await layoutReferencesOf({
     componentId,
-    read: async ({ page }) => {
-      const answered = await nextly.find({
-        collection: args.layoutsCollection,
-        limit: SCAN_PAGE_SIZE,
-        page,
-        // EVERY Layout in ONE enumeration, whatever lifecycle state it is in.
-        // Asking for the states separately misses the one that matters most: a
-        // published Layout holding unpublished changes keeps its main row
-        // published, so a draft-scoped read excludes exactly the Layout whose
-        // pending edit has to be inspected.
-        status: "all",
-        // A DETERMINISTIC page order. Absent a sort the query service issues no
-        // `ORDER BY` at all, and paging by limit and offset over an unordered
-        // result may answer overlapping or disjoint pages — so a Layout naming
-        // the component can fall in the gap between two pages and never be
-        // seen, while the scan still reports that it finished.
-        sort: "id",
-        // The relationship is only ever compared as an ID here. Left to the
-        // default the read expands it per repeater row, fetching every named
-        // component's whole document — hundreds of extra reads before a
-        // delete, for a value this discards.
-        depth: 0,
-        overrideAccess: true,
-      });
-      return {
-        items: await withPendingEdits(
-          nextly,
-          args.layoutsCollection,
-          answered.items ?? []
-        ),
-        hasNext: answered.meta?.hasNext === true,
-      } satisfies LayoutPage;
-    },
+    read: layoutPageReader(nextly, args.layoutsCollection),
   });
 
   // An UNFINISHED scan refuses too. Its `references` is a prefix, so an empty
@@ -249,6 +218,51 @@ async function refuseWhileALayoutNamesIt(
         named.length === 1 ? "that Layout" : "those Layouts"
       } first.`
   );
+}
+
+/**
+ * The Layouts a scan reads, a page at a time, as the system: every stored form
+ * of each, its pending edit included. Shared by this guard and by the rewrite
+ * that converts a component's copies before it is deleted, so both ask the
+ * Layouts the same question.
+ */
+export function layoutPageReader(
+  nextly: LayoutGuardDirectApi,
+  layoutsCollection: string
+): LayoutReader {
+  return async ({ page }) => {
+    const answered = await nextly.find({
+      collection: layoutsCollection,
+      limit: SCAN_PAGE_SIZE,
+      page,
+      // EVERY Layout in ONE enumeration, whatever lifecycle state it is in.
+      // Asking for the states separately misses the one that matters most: a
+      // published Layout holding unpublished changes keeps its main row
+      // published, so a draft-scoped read excludes exactly the Layout whose
+      // pending edit has to be inspected.
+      status: "all",
+      // A DETERMINISTIC page order. Absent a sort the query service issues no
+      // `ORDER BY` at all, and paging by limit and offset over an unordered
+      // result may answer overlapping or disjoint pages — so a Layout naming
+      // the component can fall in the gap between two pages and never be
+      // seen, while the scan still reports that it finished.
+      sort: "id",
+      // The relationship is only ever compared as an ID here. Left to the
+      // default the read expands it per repeater row, fetching every named
+      // component's whole document — hundreds of extra reads before a
+      // delete, for a value this discards.
+      depth: 0,
+      overrideAccess: true,
+    });
+    return {
+      items: await withPendingEdits(
+        nextly,
+        layoutsCollection,
+        answered.items ?? []
+      ),
+      hasNext: answered.meta?.hasNext === true,
+    } satisfies LayoutPage;
+  };
 }
 
 /**

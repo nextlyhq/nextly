@@ -179,13 +179,15 @@ interface WalkContext {
 // Field types whose value is a single string diffed word by word. slug/url/phone
 // are not core field types but are string-valued (plugin field types, and the
 // admin value-display kit groups them with text), so word-diffing them is
-// correct; a type no field actually has simply never matches. richText is not
+// correct; a type no field actually has simply never matches. An icon id
+// ("lucide:star") is a single string too. richText is not
 // here because it is not a single string: it is compared block by block by
 // `rich-text-node`, which keeps its structure and its non-text properties.
 const TEXT_TYPES = new Set([
   "text",
   "textarea",
   "email",
+  "icon",
   "slug",
   "url",
   "phone",

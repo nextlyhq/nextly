@@ -287,8 +287,10 @@ function DetachForm({
       }
     >
       {plan === undefined ? (
+        // In the author's words, as the dialog's description speaks of it:
+        // "placement" is the engine's word.
         <p className="text-xs text-muted-foreground" role="status">
-          Checking what the placement draws…
+          Checking what it draws…
         </p>
       ) : null}
       {plan?.unpublishedChanges === true ? (

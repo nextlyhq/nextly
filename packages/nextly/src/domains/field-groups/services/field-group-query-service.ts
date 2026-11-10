@@ -31,6 +31,7 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   resolveLocaleChain,
   resolveRequestedLocale,
@@ -371,7 +372,9 @@ export class FieldGroupQueryService extends BaseService {
     const languages = byLanguage.filter(
       language => language.dataArray.length > 0
     );
-    if (!localization || meta.localized !== true || languages.length === 0) {
+    // Whether its values are kept per language at all: when it is translated, or under
+    // per-language storage for every component.
+    if (!localization || !storesPerLanguage(meta) || languages.length === 0) {
       return;
     }
     const companion = buildCompanionSchema({

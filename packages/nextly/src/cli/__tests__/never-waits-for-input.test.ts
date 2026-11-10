@@ -120,16 +120,31 @@ vi.mock("../utils/adapter", () => ({
 vi.mock("../utils/config-loader", () => ({
   loadConfig: () =>
     Promise.resolve({
-      config: { collections: [{ slug: "nw_posts", fields: [] }] },
+      // `db.migrationsDir` as the real loader fills it in.
+      config: {
+        collections: [{ slug: "nw_posts", fields: [] }],
+        db: { migrationsDir: "./migrations" },
+      },
     }),
 }));
 
-vi.mock("../commands/db-sync-registry", () => ({
+vi.mock("../commands/db-sync-registry", async importOriginal => ({
+  ...(await importOriginal<typeof import("../commands/db-sync-registry")>()),
   openCollectionRegistry: seen.openRegistry,
+  // The write runs as it is: these fakes have no database to lock, and what is under test here
+  // is the prompt, which comes before the lock.
+  withCollectionRegistryWrite: (_args: unknown, work: () => Promise<unknown>) =>
+    work(),
 }));
 
-vi.mock("../commands/migrate", () => ({
+// `upgrade --reconcile-core` asks the app's history before its reconcile;
+// here it holds, so the run reaches the question.
+vi.mock("../commands/migrate", async importOriginal => ({
   maybeForceUnlock: () => Promise.resolve(),
+  assertAppHistoryHolds: () => Promise.resolve(),
+  migrateExitCode: (
+    await importOriginal<typeof import("../commands/migrate")>()
+  ).migrateExitCode,
 }));
 
 vi.mock("../../domains/schema/pipeline/locks", async importOriginal => ({
@@ -256,7 +271,10 @@ describe("--non-interactive at a terminal", () => {
       close: () => {},
     }));
     seen.stepRun.mockResolvedValue(1);
-    seen.openRegistry.mockResolvedValue(seen.registry);
+    seen.openRegistry.mockResolvedValue({
+      registry: seen.registry,
+      adapter: { disconnect: vi.fn().mockResolvedValue(undefined) },
+    });
     seen.registry.getCollectionBySlug.mockResolvedValue({
       slug: "nw_posts",
       fields: [],

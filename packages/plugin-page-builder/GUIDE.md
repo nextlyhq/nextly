@@ -229,7 +229,7 @@ The builder has three areas:
 
 | Area                 | What it's for                                                                                                                                                                                                                                            |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Left — Blocks**    | The nineteen building blocks: Heading, Text, Button, Section, Box, Columns, Column, Card, Image, Gallery, Embed, List, Quote, Accordion, Accordion item, Divider, Spacer, Form and Collection loop. Click **Insert** (or drag) to add one to the canvas. |
+| **Left — Blocks**    | The nineteen building blocks: Heading, Text, Button, Section, Box, Columns, Column, Card, Image, Gallery, Embed, List, Quote, Accordion, Accordion item, Divider, Spacer, Form and Collection list. Click **Insert** (or drag) to add one to the canvas. |
 | **Middle — Canvas**  | A live preview of your page. Click any block to select it. Use the **Desktop / Tablet / Mobile** buttons on top to preview different screen sizes.                                                                                                       |
 | **Right — Settings** | When a block is selected, its options appear here (e.g. a Heading's text and level H1–H6), organized into **Content**, **Style**, and **Advanced** tabs.                                                                                                 |
 
@@ -289,7 +289,10 @@ import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
-import type { NextlyContentReader } from "nextly/runtime";
+import type {
+  NextlyContentReader,
+  PublicSiteSettingsSource,
+} from "nextly/runtime";
 
 // Adjust the number of "../" so this points at your project's nextly.config file.
 import nextlyConfig from "../../../nextly.config";
@@ -302,11 +305,16 @@ type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 // lookup.
 const instance = () => getNextly({ config: nextlyConfig });
 
-const reader: NextlyContentReader & {
-  media: Pick<NextlyInstance["media"], "findByID">;
-} = {
+const reader: NextlyContentReader &
+  PublicSiteSettingsSource & {
+    media: Pick<NextlyInstance["media"], "findByID">;
+  } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
+  // The site's name, logo and time zone your pages show, read from this
+  // instance. Leave it out and pages show the settings of the process's
+  // registered instance instead, and the route warns once in the server log.
+  publicSiteSettings: async () => (await instance()).publicSiteSettings(),
   // Images that store a media id resolve through this. Leave it out and every
   // such image renders nothing, while images with a literal URL still work —
   // which makes it look like a content problem rather than a wiring one.

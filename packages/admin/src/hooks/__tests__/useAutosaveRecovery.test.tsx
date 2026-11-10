@@ -12,7 +12,8 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor, act } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useLayoutEffect, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
 import { useForm } from "react-hook-form";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -26,6 +27,11 @@ vi.mock("@admin/services/versionApi", () => ({
 
 /** The account signed in to this tab, which a test may change. */
 const signedIn = vi.hoisted(() => ({ id: "author-1" as string | null }));
+// The site's default language, which the editor spells as no language on
+// its canonical address and as "en" under `?locale=en`.
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({ defaultLocale: "en", locales: [], enabled: true }),
+}));
 vi.mock("@admin/hooks/useCurrentUserId", () => ({
   useCurrentUserId: () => signedIn.id,
 }));
@@ -237,25 +243,57 @@ describe("useAutosaveRecovery", () => {
     );
   });
 
-  it("judges a point equal to the document only in the language it was recorded in", async () => {
-    // A point from another language can hold values equal to this one's
-    // stored document while differing from its own.
+  // A recovery point belongs to the language it was recorded in: restored
+  // into another language's form, it would put one language's text in
+  // another's fields. The plausible broken implementation offers the one
+  // point the author has wherever the editor stands.
+  it("offers a point only in the language it was recorded in", async () => {
     getSpy.mockResolvedValue({
-      snapshot: { ...STORED },
+      snapshot: { ...STORED, title: "French work" },
       updatedAt: "2026-08-17T10:00:00.000Z",
       locale: "fr",
     });
     const other = renderRecovery(SCOPE, STORED, "en");
     await waitFor(() =>
-      expect(other.result.current.recovery.offer).not.toBeNull()
+      expect(other.result.current.recovery.isResolved).toBe(true)
     );
+    expect(other.result.current.recovery.offer).toBeNull();
     other.unmount();
 
     const same = renderRecovery(SCOPE, STORED, "fr");
     await waitFor(() =>
-      expect(same.result.current.recovery.isResolved).toBe(true)
+      expect(same.result.current.recovery.offer).not.toBeNull()
     );
-    expect(same.result.current.recovery.offer).toBeNull();
+    expect(same.result.current.recovery.offer?.snapshot).toMatchObject({
+      title: "French work",
+    });
+  });
+
+  // The default language has two spellings, no language on the canonical
+  // address and its code under `?locale=en`, and a point recorded under one
+  // is offered under the other. The plausible broken implementation compares
+  // the spellings and withholds the work.
+  it("offers a point recorded in the default language under either spelling of it", async () => {
+    getSpy.mockResolvedValue({
+      snapshot: { ...STORED, title: "default work" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: "en",
+    });
+    const canonical = renderRecovery(SCOPE, STORED, null);
+    await waitFor(() =>
+      expect(canonical.result.current.recovery.offer).not.toBeNull()
+    );
+    canonical.unmount();
+
+    getSpy.mockResolvedValue({
+      snapshot: { ...STORED, title: "default work" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    const named = renderRecovery(SCOPE, STORED, "en");
+    await waitFor(() =>
+      expect(named.result.current.recovery.offer).not.toBeNull()
+    );
   });
 
   it("offers a point in another language stored in the same second with the same values, after one was put off", async () => {
@@ -265,7 +303,7 @@ describe("useAutosaveRecovery", () => {
       updatedAt: at,
       locale: "en",
     });
-    const first = renderRecovery(SCOPE);
+    const first = renderRecovery(SCOPE, undefined, "en");
     await waitFor(() =>
       expect(first.result.current.recovery.offer).not.toBeNull()
     );
@@ -277,7 +315,7 @@ describe("useAutosaveRecovery", () => {
       updatedAt: at,
       locale: "fr",
     });
-    const other = renderRecovery(SCOPE);
+    const other = renderRecovery(SCOPE, undefined, "fr");
     await waitFor(() =>
       expect(other.result.current.recovery.offer).not.toBeNull()
     );
@@ -442,6 +480,37 @@ describe("useAutosaveRecovery", () => {
     }
   });
 
+  it("offers every point from an older version as such, the author's own writes included", async () => {
+    const point = (superseded?: "by-you" | "by-another" | "unknown") => ({
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+      ...(superseded === undefined ? {} : { superseded }),
+    });
+
+    // The author's own, anyone else's, or no one the server can name: offered,
+    // and said to be older. The author's own is not withheld: a write of
+    // theirs that left the point in place, such as publishing every language,
+    // did not store it, so it is the only copy of that work.
+    for (const superseded of ["by-you", "by-another", "unknown"] as const) {
+      getSpy.mockResolvedValue(point(superseded));
+      const other = renderRecovery(SCOPE);
+      await waitFor(() =>
+        expect(other.result.current.recovery.offer).not.toBeNull()
+      );
+      expect(other.result.current.recovery.offer?.olderVersion).toBe(true);
+      other.unmount();
+    }
+
+    // Current: offered as it always was.
+    getSpy.mockResolvedValue(point());
+    const current = renderRecovery(SCOPE);
+    await waitFor(() =>
+      expect(current.result.current.recovery.offer).not.toBeNull()
+    );
+    expect(current.result.current.recovery.offer?.olderVersion).toBe(false);
+  });
+
   it("stops offering once dismissed, without discarding anything", async () => {
     getSpy.mockResolvedValue({
       snapshot: { title: "recovered" },
@@ -557,5 +626,186 @@ describe("after a save", () => {
     rerender({ entryId: "e2", savedCount: 1 });
 
     await waitFor(() => expect(result.current.offer).not.toBeNull());
+  });
+
+  describe("a current offer is asked about again before it is restored", () => {
+    const CURRENT = {
+      snapshot: { title: "recovered" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    };
+
+    it("shows it as older instead, when the document was written since", async () => {
+      // Read once when the editor opened; a write since then, here or in
+      // another tab, made it an older version.
+      getSpy
+        .mockResolvedValueOnce(CURRENT)
+        .mockResolvedValueOnce({ ...CURRENT, superseded: "by-another" });
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() =>
+        expect(result.current.recovery.offer?.olderVersion).toBe(false)
+      );
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() =>
+        expect(result.current.recovery.offer?.olderVersion).toBe(true)
+      );
+      expect(result.current.form.getValues()).toEqual(STORED);
+
+      // Asked again with the warning in front of them: taken, unasked.
+      act(() => result.current.recovery.restore());
+      await waitFor(() =>
+        expect(result.current.form.getValues()).toEqual({ title: "recovered" })
+      );
+      expect(getSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("withdraws it when the point is gone", async () => {
+      getSpy.mockResolvedValueOnce(CURRENT).mockResolvedValueOnce(null);
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() => expect(result.current.recovery.offer).toBeNull());
+      expect(result.current.form.getValues()).toEqual(STORED);
+    });
+
+    it("runs a caller's own restore steps only once the offer is confirmed", async () => {
+      // A view's steps change what it shows; run before the answer, they
+      // would act on an offer that is then refused.
+      getSpy
+        .mockResolvedValueOnce(CURRENT)
+        .mockResolvedValueOnce({ ...CURRENT, superseded: "by-another" });
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+      const apply = vi.fn();
+
+      act(() => result.current.recovery.restore(apply));
+      await waitFor(() =>
+        expect(result.current.recovery.offer?.olderVersion).toBe(true)
+      );
+      expect(apply).not.toHaveBeenCalled();
+
+      // Now shown as older: confirmed without asking, so the steps run.
+      act(() => result.current.recovery.restore(apply));
+      await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+      // In place of the take: the caller's steps write the form themselves.
+      expect(result.current.form.getValues()).toEqual(STORED);
+    });
+
+    it("draws the offer again from a point rewritten since, rather than restoring the old one", async () => {
+      // Another tab of the same author recorded newer work into the point.
+      getSpy.mockResolvedValueOnce(CURRENT).mockResolvedValueOnce({
+        ...CURRENT,
+        snapshot: { title: "newer" },
+        updatedAt: "2026-08-17T10:05:00.000Z",
+      });
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() =>
+        expect(result.current.recovery.offer?.snapshot).toEqual({
+          title: "newer",
+        })
+      );
+      expect(result.current.form.getValues()).toEqual(STORED);
+    });
+
+    it("restores nothing when it cannot be asked about again", async () => {
+      // Unchecked, it may be an older version shown without its warning.
+      getSpy
+        .mockResolvedValueOnce(CURRENT)
+        .mockRejectedValueOnce(new Error("network"));
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current.form.getValues()).toEqual(STORED);
+      // Still on offer, to be chosen again.
+      expect(result.current.recovery.offer?.snapshot).toEqual(CURRENT.snapshot);
+    });
+
+    // The re-read takes a round trip, and the author may switch language
+    // meanwhile. The answer then belongs to the language the restore was asked
+    // in, and written now it would put French work in the English fields.
+    // The re-read takes a round trip, and the author may switch language
+    // meanwhile. The answer then belongs to the language the restore was
+    // asked in: written now, it would put French work in the English fields.
+    //
+    // The answer here arrives in the narrowest gap there is: after the switch
+    // has committed and before its passive effects run. A layout effect on the
+    // new language releases it, and the switch renders outside `act`, which
+    // would otherwise flush passive effects before any promise settles. So a
+    // guard that learns the language from a passive effect still holds the
+    // old one when the answer is read, as it can in a browser.
+    it("restores nothing when the editor switched language before the answer, even before its effects ran", async () => {
+      const french = { ...CURRENT, locale: "fr" };
+      let answer: (point: typeof french) => void = () => {};
+      getSpy.mockResolvedValueOnce(french).mockReturnValueOnce(
+        new Promise(resolve => {
+          answer = resolve;
+        })
+      );
+      const seen: { current?: ReturnType<typeof useRecoveryHarness> } = {};
+      function Editor({ locale }: { locale: string }) {
+        const harness = useRecoveryHarness(SCOPE, STORED, locale);
+        seen.current = harness;
+        useLayoutEffect(() => {
+          if (locale === "en") answer(french);
+        }, [locale]);
+        return null;
+      }
+      // One client for both renders, so the switch keeps the read it made.
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const editorIn = (locale: string) => (
+        <QueryClientProvider client={client}>
+          <Editor locale={locale} />
+        </QueryClientProvider>
+      );
+      const root = createRoot(document.createElement("div"));
+      act(() => root.render(editorIn("fr")));
+      await waitFor(() => expect(seen.current?.recovery.offer).not.toBeNull());
+
+      act(() => seen.current?.recovery.restore());
+      await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(2));
+
+      const environment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+      const wasActEnvironment = environment.IS_REACT_ACT_ENVIRONMENT;
+      environment.IS_REACT_ACT_ENVIRONMENT = false;
+      try {
+        root.render(editorIn("en"));
+        // Long enough for the render, its effects, and the answer to settle.
+        await new Promise(resolve => setTimeout(resolve, 50));
+      } finally {
+        environment.IS_REACT_ACT_ENVIRONMENT = wasActEnvironment;
+      }
+
+      expect(seen.current?.form.getValues()).toEqual(STORED);
+      act(() => root.unmount());
+    });
+
+    it("restores it when it is still current, which is the control", async () => {
+      getSpy.mockResolvedValue(CURRENT);
+      const { result } = renderRecovery(SCOPE);
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+
+      await waitFor(() =>
+        expect(result.current.form.getValues()).toEqual({ title: "recovered" })
+      );
+      expect(getSpy).toHaveBeenCalledTimes(2);
+    });
   });
 });

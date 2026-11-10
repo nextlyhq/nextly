@@ -114,6 +114,60 @@ describe("runChecks (F11 PR 4)", () => {
       );
     });
 
+    it("exits 0 when the config carries the per-document columns a snapshot from before them lacks", async () => {
+      // A site's latest snapshot predates the version counter and the last
+      // changer, while the config now declares them on every content table.
+      // `nextly migrate` adds them itself, so this is no schema drift.
+      const sqlContent = "-- placeholder";
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_initial.sql"),
+        sqlContent,
+        "utf-8"
+      );
+      await writeSnapshot(
+        join(migrationsDir, "meta"),
+        "20260101_120000_001_initial",
+        POSTS_DESIRED,
+        sqlContent
+      );
+      const withDocumentColumns: NextlySchemaSnapshot = {
+        tables: [
+          {
+            ...POSTS_TABLE,
+            columns: [
+              ...POSTS_TABLE.columns,
+              {
+                name: "_revision",
+                type: "int4",
+                nullable: false,
+                default: "1",
+              },
+              { name: "_changed_by_kind", type: "varchar", nullable: true },
+              { name: "_changed_by_id", type: "text", nullable: true },
+              {
+                name: "_changed_by_principal_kind",
+                type: "varchar",
+                nullable: true,
+              },
+              { name: "_changed_at", type: "timestamp", nullable: true },
+            ],
+          },
+        ],
+      };
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: withDocumentColumns,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(logger.success).toHaveBeenCalledWith(
+        expect.stringContaining("migrate:check OK")
+      );
+    });
+
     it("exits 0 when there are zero migration files and config matches EMPTY_SNAPSHOT", async () => {
       const logger = makeLogger();
       await runChecks({
@@ -131,26 +185,102 @@ describe("runChecks (F11 PR 4)", () => {
   describe("statements a run would refuse", () => {
     /** A generated-looking file with its paired snapshot, so it passes the
      * integrity checks and only the statement check has anything to say. */
-    async function writeGenerated(name: string, content: string) {
+    async function writeGenerated(
+      name: string,
+      content: string,
+      // The schema as the file leaves it; empty unless a test needs tables.
+      snapshot: NextlySchemaSnapshot = EMPTY_DESIRED
+    ) {
       await writeFile(join(migrationsDir, `${name}.sql`), content, "utf-8");
-      await writeSnapshot(
-        join(migrationsDir, "meta"),
-        name,
-        EMPTY_DESIRED,
-        content
-      );
+      await writeSnapshot(join(migrationsDir, "meta"), name, snapshot, content);
     }
 
-    const run = async () => {
+    // The dialect and desired schema default to PostgreSQL with no tables; a
+    // SQLite rebuild test passes its own, the desired one matching the latest
+    // snapshot so no drift is reported.
+    const run = async (
+      dialect: "postgresql" | "sqlite" = "postgresql",
+      desiredSnapshot: NextlySchemaSnapshot = EMPTY_DESIRED
+    ) => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
-        dialect: "postgresql",
+        desiredSnapshot,
+        dialect,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
       return logger;
     };
+
+    /** The `notes` table with the given columns, as a snapshot records it. */
+    const notesWith = (...columns: string[]): NextlySchemaSnapshot => ({
+      tables: [
+        {
+          name: "notes",
+          columns: columns.map(name =>
+            name === "id"
+              ? { name, type: "integer", nullable: false, primaryKey: true }
+              : { name, type: "text", nullable: true }
+          ),
+        },
+      ],
+    });
+
+    /** A SQLite file creating `notes` with id, title and body. */
+    const createNotes = () =>
+      writeGenerated(
+        "20260101_120000_001_notes",
+        '-- UP\nCREATE TABLE "notes" ("id" integer PRIMARY KEY NOT NULL, "title" text, "body" text);\n\n-- DOWN\n',
+        notesWith("id", "title", "body")
+      );
+
+    /** A SQLite rebuild of `notes` whose twin declares and copies `columns`. */
+    const rebuildNotes = (columns: string[]) => {
+      const declared = columns
+        .map(name =>
+          name === "id"
+            ? '"id" integer PRIMARY KEY NOT NULL'
+            : `"${name}" text NOT NULL`
+        )
+        .join(", ");
+      const listed = columns.map(name => `"${name}"`).join(", ");
+      return (
+        `-- UP\nCREATE TABLE "__new_notes" (${declared});\n` +
+        `INSERT INTO "__new_notes" (${listed}) SELECT ${listed} FROM "notes";\n` +
+        `DROP TABLE "notes";\n` +
+        `ALTER TABLE "__new_notes" RENAME TO "notes";\n\n-- DOWN\n`
+      );
+    };
+
+    it("names the column a SQLite rebuild leaves out, read from the snapshot before the file", async () => {
+      await createNotes();
+      await writeGenerated(
+        "20260101_120000_002_drop_body",
+        rebuildNotes(["id", "title"]),
+        notesWith("id", "title")
+      );
+      const logger = await run("sqlite", notesWith("id", "title"));
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /DESTRUCTIVE: 20260101_120000_002_drop_body\.sql \(UP\) deletes data: column notes\.body\. nextly migrate runs it only with --accept-data-loss/
+        )
+      );
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it("reports nothing for a SQLite rebuild that carries every column", async () => {
+      await createNotes();
+      await writeGenerated(
+        "20260101_120000_002_tighten",
+        rebuildNotes(["id", "title", "body"]),
+        notesWith("id", "title", "body")
+      );
+      const logger = await run("sqlite", notesWith("id", "title", "body"));
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("DESTRUCTIVE")
+      );
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
 
     it("warns about a statement nextly migrate would refuse, without failing", async () => {
       await writeGenerated(
@@ -161,6 +291,47 @@ describe("runChecks (F11 PR 4)", () => {
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringMatching(
           /REFUSED_STATEMENT: 20260101_120000_001_index\.sql: .*-- nextly:no-transaction/
+        )
+      );
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it("reports a call to a function a migration file defines as DESTRUCTIVE, and leaves a built-in to the run", async () => {
+      await writeGenerated(
+        "20260101_120000_001_function",
+        "-- UP\nCREATE FUNCTION purge_old() RETURNS void AS $$ DELETE FROM t $$ LANGUAGE sql;\n\n-- DOWN\nDROP FUNCTION purge_old();\n"
+      );
+      await writeGenerated(
+        "20260101_120000_002_call",
+        "-- UP\nSELECT purge_old();\nSELECT count(*) FROM t;\n\n-- DOWN\n"
+      );
+      const logger = await run();
+      const warned = (logger.warn as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([line]) => String(line)
+      );
+      const destructive = warned.filter(line => line.includes("DESTRUCTIVE"));
+      expect(destructive).toEqual([
+        expect.stringMatching(
+          /DESTRUCTIVE: 20260101_120000_002_call\.sql \(UP\) deletes data: SELECT PURGE_OLD \(calls a function, may delete data\)\./
+        ),
+      ]);
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it("reports a file that deletes data as DESTRUCTIVE, naming each deletion per section, without failing", async () => {
+      await writeGenerated(
+        "20260101_120000_001_drop",
+        "-- UP\nDROP TABLE t;\n\n-- DOWN\nDELETE FROM u WHERE a = 1;\n"
+      );
+      const logger = await run();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /DESTRUCTIVE: 20260101_120000_001_drop\.sql \(UP\) deletes data: table t\. nextly migrate runs it only with --accept-data-loss/
+        )
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /DESTRUCTIVE: 20260101_120000_001_drop\.sql \(DOWN\) deletes data: rows of u\. migrate:down runs it only with --accept-data-loss/
         )
       );
       expect(exitSpy).not.toHaveBeenCalled();

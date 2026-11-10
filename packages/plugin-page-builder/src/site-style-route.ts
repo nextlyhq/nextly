@@ -49,16 +49,17 @@ import {
   type StoredSiteStyle,
 } from "./library-contract";
 import type { ComponentStore } from "./library-route";
-import { editorBlocksFields } from "./nested-blocks-fields";
+import { builderBlocksFields } from "./nested-blocks-fields";
 import {
   registryRecords,
   type PageCollectionsContext,
 } from "./pages-search-route";
 import {
-  readStoredSiteStyle,
+  readStoredSiteStyleVersioned,
   SITE_STYLE_SLUG,
   type SiteStyleReader,
 } from "./site-style-storage";
+import { bootedSpacingModeReader } from "./spacing-mode-booted";
 
 /**
  * What the route reads of the plugin route context: the caller, the plugin's
@@ -107,8 +108,19 @@ export interface BuilderDocumentType {
   readonly slug: string;
   /** The registry's label for it, when it has a usable one. */
   readonly label: string | undefined;
-  /** Each blocks field the builder opens on it, by its form path (`hero.body`). */
+  /**
+   * Each blocks field the builder opens on it, by its declared path:
+   * `hero.body` inside a group, `sections.body` inside a repeater's rows,
+   * whose value is stored once per row (read with `storedValuesAt`).
+   */
   readonly paths: readonly string[];
+  /**
+   * The paths of `paths` outside every repeater (`hero.body`): the ones
+   * core's stored read of a single field can name. A reader that asks for a
+   * field by its path, rather than reading the whole document, asks only
+   * these.
+   */
+  readonly fixedPaths: readonly string[];
 }
 
 /**
@@ -120,13 +132,16 @@ export interface BuilderDocumentType {
 function builderTypeOf(record: unknown): BuilderDocumentType | undefined {
   if (typeof record !== "object" || record === null) return undefined;
   const slug = slugOf(record);
-  const paths = editorBlocksFields(record).map(field => field.path);
+  const fields = builderBlocksFields(record);
+  const paths = fields.map(field => field.path);
   if (slug === undefined || paths.length === 0) return undefined;
   const label = (record as { label?: unknown }).label;
   return {
     slug,
     label: typeof label === "string" && label.trim() !== "" ? label : undefined,
     paths,
+    // Derived from the same walk: a field inside a row has no one path.
+    fixedPaths: fields.filter(field => !field.inRow).map(field => field.path),
   };
 }
 
@@ -148,7 +163,7 @@ function isLiveSingle(
 }
 
 /** The live Singles on one page of the listing that the builder opens. */
-function builderSinglesIn(
+export function builderSinglesIn(
   rows: readonly unknown[],
   declared: ReadonlySet<string> | undefined
 ): BuilderDocumentType[] {
@@ -182,9 +197,68 @@ export async function singlesTheBuilderOpens(
 export async function collectionsTheBuilderOpens(
   ctx: PageCollectionsContext
 ): Promise<BuilderDocumentType[]> {
-  return (await registryRecords(ctx))
+  return builderCollectionsIn(await registryRecords(ctx));
+}
+
+/**
+ * The collections among registry records that declare a blocks field the
+ * builder opens: one reading for the pooled listing above and for a read of
+ * the registry on a write's transaction, so both name the same documents.
+ */
+export function builderCollectionsIn(
+  records: readonly unknown[]
+): BuilderDocumentType[] {
+  return records
     .map(builderTypeOf)
     .filter((type): type is BuilderDocumentType => type !== undefined);
+}
+
+/** The app's configuration, as far as its languages go. */
+export interface LocalizedConfig {
+  readonly localization?: { readonly locales: readonly unknown[] };
+}
+
+/**
+ * The site's configured languages, by code: a locale is a code or an entry
+ * carrying one. Empty for a site with no languages configured.
+ */
+export function siteLocales(config: LocalizedConfig): string[] {
+  return (config.localization?.locales ?? []).flatMap(locale => {
+    const code =
+      typeof locale === "string"
+        ? locale
+        : (locale as { code?: unknown } | null)?.code;
+    return typeof code === "string" ? [code] : [];
+  });
+}
+
+/**
+ * Where the site's block documents may live: every collection and live Single
+ * holding a blocks field the builder opens, the Singles with the form paths of
+ * those fields, and the site's configured languages. The survey this route
+ * admits editors by, so a reader asking where blocks live gets the same
+ * answer.
+ */
+export async function blocksSurvey(
+  ctx: PageCollectionsContext &
+    Pick<SiteStyleRouteContext, "services"> & {
+      readonly config: SiteStyleRouteContext["config"] & LocalizedConfig;
+    }
+): Promise<{
+  collections: string[];
+  singles: { slug: string; paths: readonly string[] }[];
+  locales: string[];
+}> {
+  return {
+    // The site's languages, since a Single's document may exist in one of
+    // them alone.
+    locales: siteLocales(ctx.config),
+    collections: (await collectionsTheBuilderOpens(ctx)).map(type => type.slug),
+    singles: (await singlesTheBuilderOpens(ctx)).map(({ slug, paths }) => ({
+      slug,
+      paths,
+    })),
+  };
 }
 
 /**
@@ -248,12 +322,18 @@ export async function readSiteStyleForEditor(
       logContext: { reason: "site-style-read-needs-editing-rights" },
     });
   }
-  return readStoredSiteStyle({
+  const { stored, rev } = await readStoredSiteStyleVersioned({
     nextly,
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
     // Past the Single's own permission: the caller was admitted above.
     overrideAccess: true,
+    // The model of the booted instance when the route's reader has no plugin
+    // services; this route is server-only, so it may import that read.
+    bootedReader: bootedSpacingModeReader,
   });
+  // The version the same read gave, so the editor's saves made from this
+  // answer are refused rather than written over a save made in between.
+  return rev === undefined ? stored : { ...stored, _rev: rev };
 }
 
 /**

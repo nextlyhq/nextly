@@ -18,6 +18,7 @@
 
 import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { AlertCircle, CircleCheck, Split } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -29,6 +30,9 @@ import {
 import { deviceLabel } from "./breakpoint-switcher";
 import {
   CANVAS_ROOT_CLASS,
+  CONDITIONED_ATTRIBUTE,
+  ENTRY_CONTENT_ATTRIBUTE,
+  CONDITIONED_OWN_ATTRIBUTE,
   DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
   isOutermostForAddress,
@@ -40,7 +44,15 @@ import { useCanvasFrame } from "./canvas-frame-context";
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
   watchCanvasFor,
+  watchScreenBand,
 } from "./canvas-geometry-watch";
+import {
+  tabBoardOf,
+  useTabPost,
+  type TabAt,
+  type TabDraft,
+  type TabPlacement,
+} from "./canvas-tab-places";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import type { Rect } from "./geometry";
 import {
@@ -56,7 +68,27 @@ import {
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
 import { UNNAMED_COMPONENT } from "./layers";
+import { LOOK_REACH_ATTRIBUTE } from "./look-reach";
 import { TOOLBAR_GAP_PX, toolbarPlacement } from "./toolbar-actions";
+import { EDITING_ATTRIBUTE } from "./use-inline-text";
+
+/**
+ * The marks that are the marked element's outline and nothing more, by the
+ * attribute that asks for each: a block an edit to the look being edited
+ * reaches, and a drop's parent and refused target.
+ */
+const OUTLINE_MARKS = [
+  [LOOK_REACH_ATTRIBUTE, "look-reach"],
+  [DROP_PARENT_ATTRIBUTE, "drop-parent"],
+  [DROP_REFUSED_ATTRIBUTE, "drop-refused"],
+] as const;
+
+/** The outline-only marks an element asks for, drawn as `box`. */
+function outlineMarksOf(marked: Element, box: Omit<Mark, "kind">): Mark[] {
+  return OUTLINE_MARKS.filter(([attribute]) =>
+    marked.hasAttribute(attribute)
+  ).map(([, kind]) => ({ ...box, kind }));
+}
 
 /** One box to draw, in the chrome's coordinates. */
 interface Mark {
@@ -64,14 +96,23 @@ interface Mark {
     | "selected"
     | "hovered"
     | "exposed"
+    | "look-reach"
     | "drop-parent"
-    | "drop-refused";
+    | "drop-refused"
+    | "at-rest";
   /** The rest of a multi-block selection, drawn thinner than the primary. */
   readonly secondary: boolean;
   /** A component placement, drawn in the component colour. */
   readonly component: boolean;
   /** A block locked in Layers, by its own lock or one around it: dashed. */
   readonly locked: boolean;
+  /**
+   * An exposed part being edited in place on the canvas: a solid ring, so the
+   * passage the caret is in reads apart from the placement's other parts.
+   */
+  readonly editing?: boolean;
+  /** Another exposed part of a placement while one of its parts is edited. */
+  readonly dimmed?: boolean;
   /**
    * A selected block the page hides on the device shown, drawn because it is
    * selected: hatched, and tagged as hidden.
@@ -97,6 +138,11 @@ interface Mark {
   readonly tagEdge: "right" | "left";
   /** Cut to the part a clipping ancestor leaves visible, with no halo band. */
   readonly clipped: boolean;
+  /**
+   * Around a block its own `clip-path` shapes: no halo band, the ring still
+   * outside the box.
+   */
+  readonly shaped?: boolean;
   /** The placement a component frame is drawn around, by its address. */
   readonly placement?: string;
   /**
@@ -111,6 +157,21 @@ interface Mark {
    * too close to the top of what is on screen for a tag above it to show.
    */
   readonly hoverTagInside?: boolean;
+  /**
+   * An at-rest mark's condition tab: a conditioned block's, conditional,
+   * with conditions it can't check, or, while conditions are applied, shown
+   * for the previewed entry.
+   */
+  readonly condition?: ConditionMarkKind;
+  /**
+   * An at-rest mark's Entry content tab, by its words: an Entry content
+   * block's, naming the field it draws ("Entry content · Body").
+   */
+  readonly entryContent?: string;
+  /** Where an at-rest mark's tabs go: above the block, below it, or inside its top. */
+  readonly tabsAt?: TabAt;
+  /** Whether the block is selected, so its ring stands for the outline. */
+  readonly atRestSelected?: boolean;
   readonly rect: Rect;
   /** The block's own corners, in the chrome's coordinates, as `border-radius`. */
   readonly radius: string;
@@ -137,6 +198,9 @@ function tagWidthOf(label: string): number {
   return label.length * 7 + 12;
 }
 
+/** The room a condition tab's icon and its gap take beside the words. */
+const CONDITION_ICON_ROOM = 16;
+
 /** @experimental */
 export interface CanvasMarksProps {
   /**
@@ -157,6 +221,11 @@ export interface CanvasMarksProps {
    * does not name is tagged as a component.
    */
   readonly nameOf?: (address: string) => string | undefined;
+  /**
+   * What a block shown for the previewed entry is badged with while
+   * conditions are applied: "Shown for this post".
+   */
+  readonly shownLabel?: string;
 }
 
 /**
@@ -188,10 +257,17 @@ function markKey(mark: Mark): string {
     tagEdge,
     tagInset,
     clipped,
+    shaped,
+    editing,
+    dimmed,
     placement,
     placementTagInside,
     hoveredAddress,
     hoverTagInside,
+    condition,
+    entryContent,
+    tabsAt,
+    atRestSelected,
     radius,
     rect,
   } = mark;
@@ -206,10 +282,17 @@ function markKey(mark: Mark): string {
     tagInset.bottom,
     tagInset.side,
     clipped,
+    shaped === true,
+    editing === true,
+    dimmed === true,
     placement,
     placementTagInside,
     hoveredAddress,
     hoverTagInside,
+    condition,
+    entryContent,
+    tabsAt,
+    atRestSelected === true,
     radius,
     rect.x,
     rect.y,
@@ -239,6 +322,14 @@ function markStyle(mark: Mark): React.CSSProperties {
     height: mark.rect.height,
     borderRadius: mark.radius,
   };
+  if (mark.kind === "hovered" || mark.kind === "at-rest") {
+    // The hovered block's name tag, and an at-rest mark's tabs, move in
+    // from the side the screen cuts.
+    return {
+      ...box,
+      "--nx-tag-inset-side": `${String(mark.tagInset.side)}px`,
+    } as React.CSSProperties;
+  }
   if (!mark.hidden) return box;
   return {
     ...box,
@@ -268,6 +359,8 @@ interface Outline {
   readonly radius: string;
   readonly radii: CornerRadii;
   readonly clipped: boolean;
+  /** Shaped by the block's own `clip-path`: no halo band, ring outside. */
+  readonly shaped?: boolean;
 }
 
 /**
@@ -313,6 +406,24 @@ function outlineOf(
       clipped: true,
     };
   }
+  /*
+   * A block its OWN `clip-path` shapes — a circle cut from a square box —
+   * draws nothing of the box outside that shape. A halo band hugging the box
+   * would frame corners that show the page behind, so the ring is drawn
+   * square around the box with no band. Unlike an ancestor's clip, the
+   * block's own shape does not cut the overlay, so the ring stays OUTSIDE
+   * the box, where it covers nothing the shape shows.
+   */
+  const shape = style?.clipPath;
+  if (shape !== undefined && shape !== "" && shape !== "none") {
+    return {
+      rect: space.place(own),
+      radius: borderRadiusOf(SQUARE_CORNERS),
+      radii: SQUARE_CORNERS,
+      clipped: false,
+      shaped: true,
+    };
+  }
   const drawn = scaleCornerRadii(inRoot, { x: space.scale, y: space.scale });
   return {
     rect: space.place(own),
@@ -345,6 +456,7 @@ function ringOf(outline: Outline): Outline {
     radius: borderRadiusOf(radii),
     radii,
     clipped: false,
+    ...(outline.shaped === true ? { shaped: true } : {}),
   };
 }
 
@@ -370,6 +482,7 @@ function placementOutline(parts: readonly Outline[]): Outline {
     radius: borderRadiusOf(SQUARE_CORNERS),
     radii: SQUARE_CORNERS,
     clipped: parts.some(part => part.clipped),
+    ...(parts.some(part => part.shaped === true) ? { shaped: true } : {}),
   };
 }
 
@@ -407,6 +520,7 @@ function selectedMark(
     rect: ring.rect,
     radius: ring.radius,
     clipped: ring.clipped,
+    ...(ring.shaped === true ? { shaped: true } : {}),
     kind: "selected",
     component: placement !== undefined,
     ...look,
@@ -432,13 +546,7 @@ function gatherPlacement(
   part: Outline,
   look: RingLook
 ): void {
-  const parent = marked.parentElement;
-  let copy = copies.get(parent);
-  if (copy === undefined) {
-    copy = copies.size;
-    copies.set(parent, copy);
-  }
-  const key = `${String(copy)}\u0000${placement}`;
+  const key = `${String(copyOf(copies, marked))}\u0000${placement}`;
   const gathered = placements.get(key);
   if (gathered === undefined) {
     placements.set(key, { placement, parts: [part], ...look });
@@ -463,6 +571,23 @@ function takesTheTop(side: "above" | "below" | "pinned"): boolean {
   return side !== "below";
 }
 
+/** What a conditioned block's badge says about who sees it. */
+type ConditionMarkKind = "conditional" | "unchecked" | "shown";
+
+/** Whether a conditioned block's attribute names a kind its tab can say. */
+function isConditionMarkKind(value: string | null): value is ConditionMarkKind {
+  return value === "conditional" || value === "unchecked" || value === "shown";
+}
+
+/** The words on a conditioned block's badge. */
+function conditionWords(
+  condition: ConditionMarkKind,
+  shownLabel: string
+): string {
+  if (condition === "unchecked") return "Can’t be checked";
+  return condition === "shown" ? shownLabel : "Conditional";
+}
+
 /** What the marks are drawn for besides what the canvas marks on the page. */
 interface MarkInputs {
   /** The block a Layers row points at, or `null`. */
@@ -474,12 +599,27 @@ interface MarkInputs {
   readonly revealed: ReadonlySet<string>;
   /** About how wide a hidden block's tag is drawn, in the chrome's pixels. */
   readonly tagWidth: number;
+  /** What a shown block's badge says while conditions are applied. */
+  readonly shownLabel: string;
 }
 
+/**
+ * What a measure of the canvas finds: the marks drawn as measured, and the
+ * at-rest marks, whose tabs the board places with every other layer's
+ * (`placedAtRest`), over the canvas drawn at `root`.
+ */
+interface Measured {
+  readonly root: HTMLElement | null;
+  readonly marks: readonly Mark[];
+  readonly atRest: readonly AtRestDraft[];
+}
+
+const NOTHING_MEASURED: Measured = { root: null, marks: NO_MARKS, atRest: [] };
+
 /** The marked elements of a canvas root, as the boxes to draw over them. */
-function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
+function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
   const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
-  if (space === null) return NO_MARKS;
+  if (space === null) return NOTHING_MEASURED;
   const { root } = space;
   const onScreen = onScreenOf(space);
   const screenBottom = onScreen.y + onScreen.height;
@@ -542,7 +682,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const copies = new Map<Element | null, number>();
   root
     .querySelectorAll(
-      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
+      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${LOOK_REACH_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
     )
     .forEach(marked => {
       // A canvas rendered inside a block of this one marks its own elements.
@@ -584,14 +724,15 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         marked.hasAttribute(EXPOSED_ATTRIBUTE) &&
         (selected === null || placement !== "")
       ) {
-        found.push({ ...outline, ...plain, kind: "exposed" });
+        found.push({
+          ...outline,
+          ...plain,
+          kind: "exposed",
+          ...(marked.hasAttribute(EDITING_ATTRIBUTE) ? { editing: true } : {}),
+        });
       }
-      if (marked.hasAttribute(DROP_PARENT_ATTRIBUTE)) {
-        found.push({ ...outline, ...plain, kind: "drop-parent" });
-      }
-      if (marked.hasAttribute(DROP_REFUSED_ATTRIBUTE)) {
-        found.push({ ...outline, ...plain, kind: "drop-refused" });
-      }
+      // The marks drawn as the element's outline alone, one per attribute.
+      found.push(...outlineMarksOf(marked, { ...outline, ...plain }));
     });
   placements.forEach(({ placement, parts, ...look }) => {
     const ring = ringOf(placementOutline(parts));
@@ -625,15 +766,357 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         locked: false,
         hidden: false,
         tag: "below",
-        tagEdge: "right",
-        tagInset: NO_INSET,
+        tagEdge: "left",
+        // In from the screen's left edge as far as the outline runs past it,
+        // so a block scrolled partly off the side keeps its name in view. Not
+        // for one wholly off it: there is nothing on screen to tag.
+        tagInset: {
+          bottom: 0,
+          side:
+            outline.rect.x + outline.rect.width > onScreen.x
+              ? Math.max(0, onScreen.x - outline.rect.x)
+              : 0,
+        },
         hoveredAddress: hovered,
         // From the top of what is on screen, as the placement's tag is.
         hoverTagInside: outline.rect.y - onScreen.y < MARK_TAG_HEIGHT,
       });
     });
   }
-  return found;
+  return {
+    root,
+    marks: dimmedBesideEditing(found),
+    atRest: atRestMarks(root, space, onScreen, toolbarAbove, inputs.shownLabel),
+  };
+}
+
+/** What an element asks an at-rest mark to say, read off its attributes. */
+interface AtRestTabs {
+  readonly condition?: ConditionMarkKind;
+  readonly entryContent?: string;
+}
+
+/**
+ * The at-rest tabs an element asks for: a conditioned block's condition, and
+ * an Entry content block's words. Nothing where it asks for neither.
+ */
+function atRestTabsOf(element: Element): AtRestTabs | undefined {
+  const condition = element.getAttribute(CONDITIONED_ATTRIBUTE);
+  const entry = element.getAttribute(ENTRY_CONTENT_ATTRIBUTE);
+  const tabs: AtRestTabs = {
+    ...(isConditionMarkKind(condition) ? { condition } : {}),
+    ...(entry !== null && entry !== "" ? { entryContent: entry } : {}),
+  };
+  return tabs.condition === undefined && tabs.entryContent === undefined
+    ? undefined
+    : tabs;
+}
+
+/**
+ * The at-rest mark on every block the canvas says something about whether or
+ * not it is selected: a conditioned block, which the canvas draws whoever the
+ * page would show it to, and an Entry content block, which draws the entry's
+ * own content rather than the template's. One faint dashed outline round the
+ * block with its tabs on the outline's edge, a block that is both carrying
+ * both tabs on the one outline. Placed outside the block, above it where
+ * there's room and below it where there isn't, so the tabs never cover what
+ * the block draws; where they go apart from every other tab drawn over the
+ * canvas is the board's to say (`placedAtRest`).
+ */
+function atRestMarks(
+  root: HTMLElement,
+  space: OverlaySpace,
+  onScreen: Rect,
+  toolbarAbove: (rect: Rect) => boolean,
+  shownLabel: string
+): AtRestDraft[] {
+  const badges = new Map<string, ConditionBadge>();
+  const copies = new Map<Element | null, number>();
+  root
+    .querySelectorAll(
+      `[${CONDITIONED_ATTRIBUTE}], [${ENTRY_CONTENT_ATTRIBUTE}]`
+    )
+    .forEach(element => {
+      if (element.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return;
+      const tabs = atRestTabsOf(element);
+      if (tabs === undefined) return;
+      const outline = outlineOf(element, root, space);
+      if (outline === null) return;
+      const key = badgeKey(element, copies, badges.size);
+      const selected = element.getAttribute(SELECTED_ATTRIBUTE);
+      const gathered = badges.get(key);
+      if (gathered === undefined) {
+        badges.set(key, {
+          tabs,
+          parts: [outline],
+          selected: selected !== null,
+          primary: selected === "primary",
+          placement: (element.getAttribute(INSTANCE_ATTRIBUTE) ?? "") !== "",
+        });
+      } else {
+        gathered.parts.push(outline);
+        gathered.selected ||= selected !== null;
+        gathered.primary ||= selected === "primary";
+      }
+    });
+  return [...badges.values()].map(badge =>
+    atRestMark(badge, onScreen, toolbarAbove, shownLabel)
+  );
+}
+
+/** A marked block's parts, gathered to draw one outline and its tabs. */
+interface ConditionBadge {
+  readonly tabs: AtRestTabs;
+  readonly parts: Outline[];
+  selected: boolean;
+  primary: boolean;
+  readonly placement: boolean;
+}
+
+/**
+ * Which badge an element's outline joins: a block of a placed component's
+ * definition its own, by its composed id within one drawn copy; the roots of one copy of a
+ * conditioned placement one together, as one frame is drawn round a selected
+ * one; any other block its own.
+ */
+function badgeKey(
+  element: Element,
+  copies: Map<Element | null, number>,
+  index: number
+): string {
+  if (element.hasAttribute(CONDITIONED_OWN_ATTRIBUTE)) {
+    // By copy as well: a list drawing the component once per entry draws
+    // the block once per entry, each with the same composed id.
+    // The roots of one placement nested in a component share its badge, as
+    // a page placement's roots share theirs.
+    const nested = element.getAttribute(CONDITIONED_OWN_ATTRIBUTE) ?? "";
+    const id =
+      nested === ""
+        ? (element.getAttribute(NODE_ID_ATTRIBUTE) ?? String(index))
+        : `placed\u0000${nested}`;
+    return `own\u0000${String(copyOf(copies, element))}\u0000${id}`;
+  }
+  const placement = element.getAttribute(INSTANCE_ATTRIBUTE) ?? "";
+  return placement === ""
+    ? `block\u0000${String(index)}`
+    : `${String(copyOf(copies, element))}\u0000${placement}`;
+}
+
+/**
+ * One marked block's at-rest mark before its tabs are placed: the mark, and
+ * its tabs as the board places them (`canvas-tab-places.ts`).
+ */
+interface AtRestDraft {
+  readonly mark: Mark;
+  readonly tab: TabDraft;
+}
+
+/** One marked block's at-rest mark: its outline and where its tabs may go. */
+function atRestMark(
+  badge: ConditionBadge,
+  onScreen: Rect,
+  toolbarAbove: (rect: Rect) => boolean,
+  shownLabel: string
+): AtRestDraft {
+  const outline = placementOutline(badge.parts);
+  // The top is taken by a selected placement's name, or by the block
+  // toolbar above the primary block: the tab then takes the bottom edge.
+  const topTaken =
+    (badge.selected && badge.placement) ||
+    (badge.primary && toolbarAbove(outline.rect));
+  const places = tabPlacesOf(outline.rect, onScreen, topTaken);
+  const side = tabInset(outline.rect, onScreen, badge.tabs, shownLabel);
+  return {
+    mark: {
+      ...outline,
+      kind: "at-rest",
+      secondary: false,
+      component: false,
+      locked: false,
+      hidden: false,
+      tag: "below",
+      tagEdge: "right",
+      tagInset: { bottom: 0, side },
+      ...badge.tabs,
+      tabsAt: places[0] ?? "inside",
+      ...(badge.selected ? { atRestSelected: true } : {}),
+    },
+    tab: {
+      block: outline.rect,
+      edge: outline.rect,
+      places,
+      side,
+      // No wider than the outline, as the stylesheet keeps them.
+      width: Math.min(tabsWidthOf(badge.tabs, shownLabel), outline.rect.width),
+      height: AT_REST_TAB_HEIGHT,
+      // Measured from the edge they stand on: their foot shares the dash.
+      foot: 0,
+      leftmost: onScreen.x,
+    },
+  };
+}
+
+/**
+ * The height an at-rest mark's tabs take, as the stylesheet draws them: a
+ * 16px line, with 1px of padding and a 1px border above and below it.
+ */
+const AT_REST_TAB_HEIGHT = 20;
+
+/**
+ * The at-rest marks with their tabs where the board places them: apart from
+ * each other, from the "Visitors won't see this" badges and from the block
+ * toolbar, all placed by the one pass (`tabsApart` in `canvas-tab-places.ts`).
+ * With no board (no canvas), each keeps its tabs where they go alone.
+ */
+function placedAtRest(
+  drafts: readonly AtRestDraft[],
+  placements: readonly TabPlacement[]
+): Mark[] {
+  return drafts.map(({ mark, tab }, index) => {
+    const { at, side } = placements[index] ?? {
+      at: tab.places[0] ?? "inside",
+      side: tab.side,
+    };
+    return { ...mark, tabsAt: at, tagInset: { ...mark.tagInset, side } };
+  });
+}
+
+/**
+ * How far the right-anchored tab moves in from the block's right edge so it
+ * is on screen: in by what the screen cuts off the right, or out past the
+ * edge, a negative inset, when the screen cuts the block's left so little of
+ * it shows that the tab would run off the left.
+ */
+function tabInset(
+  rect: Rect,
+  onScreen: Rect,
+  tabs: AtRestTabs,
+  shownLabel: string
+): number {
+  const right = rect.x + rect.width;
+  // A block wholly off the screen to either side keeps its tab with it,
+  // rather than leaving one stranded at the screen's edge.
+  if (right <= onScreen.x || rect.x >= onScreen.x + onScreen.width) return 0;
+  const cutRight = Math.max(0, right - (onScreen.x + onScreen.width));
+  const width = tabsWidthOf(tabs, shownLabel);
+  const fitsLeft = right - onScreen.x - width;
+  return Math.min(cutRight, fitsLeft);
+}
+
+/** About how wide an at-rest mark's tabs are drawn, side by side. */
+function tabsWidthOf(
+  { condition, entryContent }: AtRestTabs,
+  shownLabel: string
+): number {
+  const conditionWidth =
+    condition === undefined
+      ? 0
+      : tagWidthOf(conditionWords(condition, shownLabel)) + CONDITION_ICON_ROOM;
+  const entryWidth = entryContent === undefined ? 0 : tagWidthOf(entryContent);
+  return conditionWidth + entryWidth;
+}
+
+/** Which copy of a placement an element is part of: its parent, numbered. */
+function copyOf(copies: Map<Element | null, number>, element: Element): number {
+  const parent = element.parentElement;
+  let copy = copies.get(parent);
+  if (copy === undefined) {
+    copy = copies.size;
+    copies.set(parent, copy);
+  }
+  return copy;
+}
+
+/**
+ * Where an at-rest mark's tabs may go, in order of preference: above the
+ * block where there's room on screen and nothing else takes that corner,
+ * below it where there's room, and inside its top edge, which is always on
+ * screen. The first is where they go alone, so a block taller than what's on
+ * screen carries them inside; `tabsApart` takes a later one where another
+ * block's tabs, a visitor badge or the block toolbar are in the way.
+ */
+function tabPlacesOf(
+  rect: Rect,
+  onScreen: Rect,
+  topTaken: boolean
+): readonly TabAt[] {
+  const above = !topTaken && rect.y - onScreen.y >= MARK_TAG_HEIGHT;
+  const below =
+    rect.y + rect.height + MARK_TAG_HEIGHT <= onScreen.y + onScreen.height;
+  return [
+    ...(above ? (["above"] as const) : []),
+    ...(below ? (["below"] as const) : []),
+    "inside",
+  ];
+}
+
+/**
+ * An at-rest mark's tabs, side by side on the outline's edge: what the canvas
+ * says about the block, the Entry content block's words before a condition's.
+ * A block shown for the previewed entry while conditions are applied says so
+ * (`shownLabel`) with a tick.
+ */
+function AtRestTabsView({
+  mark,
+  shownLabel,
+}: {
+  mark: Mark;
+  shownLabel: string;
+}): React.JSX.Element {
+  const { condition, entryContent } = mark;
+  const Icon =
+    condition === "unchecked"
+      ? AlertCircle
+      : condition === "shown"
+        ? CircleCheck
+        : Split;
+  return (
+    <span className="nx-canvas-mark__tabs">
+      {entryContent === undefined ? null : (
+        <span className="nx-canvas-mark__tab" data-tab="entry-content">
+          {entryContent}
+        </span>
+      )}
+      {condition === undefined ? null : (
+        <span className="nx-canvas-mark__tab" data-tab={condition}>
+          <Icon aria-hidden="true" size={12} />
+          {conditionWords(condition, shownLabel)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** An at-rest mark's state, as the stylesheet reads it. */
+function atRestAttributes(mark: Mark): Record<string, string> {
+  return {
+    ...(mark.condition === undefined
+      ? {}
+      : { "data-condition": mark.condition }),
+    ...(mark.tabsAt === undefined ? {} : { "data-tab-at": mark.tabsAt }),
+    ...(mark.atRestSelected === true ? { "data-at-rest-selected": "" } : {}),
+  };
+}
+
+/** An exposed part's editing state, as the stylesheet reads it. */
+function editingAttributes(mark: Mark): Record<string, string> {
+  return {
+    ...(mark.editing === true ? { "data-editing": "" } : {}),
+    ...(mark.dimmed === true ? { "data-dimmed": "" } : {}),
+  };
+}
+
+/**
+ * The marks with every other exposed part dimmed while one is being edited,
+ * so the passage the caret is in is the one that stands out.
+ */
+function dimmedBesideEditing(marks: Mark[]): Mark[] {
+  if (!marks.some(mark => mark.editing === true)) return marks;
+  return marks.map(mark =>
+    mark.kind === "exposed" && mark.editing !== true
+      ? { ...mark, dimmed: true }
+      : mark
+  );
 }
 
 /**
@@ -650,6 +1133,7 @@ export function CanvasMarks({
   revealed = NO_IDS,
   device,
   nameOf,
+  shownLabel = "Shown for this entry",
 }: CanvasMarksProps = {}): React.JSX.Element {
   const shownOn =
     device === undefined
@@ -665,18 +1149,40 @@ export function CanvasMarks({
   // unambiguously.
   const revealedKey = JSON.stringify(revealed);
 
+  // The last measure, which placing the at-rest tabs again reads: another
+  // layer's post moves where they go, not what the canvas marks.
+  const measured = React.useRef<Measured>(NOTHING_MEASURED);
+
+  // The marks as last measured, the at-rest tabs where the board puts them
+  // now: placed again whenever another layer's post changes the board.
+  const placeTabs = React.useCallback(() => {
+    const { root, marks: drawn, atRest } = measured.current;
+    const next = [
+      ...drawn,
+      ...placedAtRest(
+        atRest,
+        root === null ? [] : tabBoardOf(root).placesOf("at-rest")
+      ),
+    ];
+    setMarks(current => (sameMarks(current, next) ? current : next));
+  }, []);
+  const postTabs = useTabPost("at-rest", placeTabs);
+
   const measure = React.useCallback(() => {
     const element = layer.current;
-    const next =
+    measured.current =
       element === null
-        ? NO_MARKS
+        ? NOTHING_MEASURED
         : marksOf(element, {
             hovered,
             revealed: new Set(JSON.parse(revealedKey) as string[]),
             tagWidth: tagWidthOf(hiddenLabel),
+            shownLabel,
           });
-    setMarks(current => (sameMarks(current, next) ? current : next));
-  }, [hovered, revealedKey, hiddenLabel]);
+    const { root, atRest } = measured.current;
+    postTabs(root, { tabs: atRest.map(({ tab }) => tab), taken: [] });
+    placeTabs();
+  }, [hovered, revealedKey, hiddenLabel, shownLabel, postTabs, placeTabs]);
 
   React.useLayoutEffect(() => {
     measure();
@@ -686,6 +1192,17 @@ export function CanvasMarks({
     () => watchCanvasFor(() => layer.current, measure),
     [measure, canvasFrame]
   );
+
+  // And the scrolls that move what of the canvas is on screen, which the tags
+  // keep to: the host's scroller around a zoomed frame among them, which no
+  // listener in the frame hears.
+  React.useEffect(() => {
+    const element = layer.current;
+    const space =
+      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) return;
+    return watchScreenBand(space.root, space.frame, measure);
+  }, [measure, canvasFrame]);
 
   return (
     // Hidden from assistive technology: the selection is announced by the
@@ -707,6 +1224,7 @@ export function CanvasMarks({
           data-secondary={mark.secondary ? "" : undefined}
           data-component={mark.component ? "" : undefined}
           data-locked={mark.locked ? "" : undefined}
+          {...editingAttributes(mark)}
           data-hidden={mark.hidden ? "" : undefined}
           // The tag a hidden block's ring carries, drawn by the stylesheet
           // from this attribute; the layer is hidden from assistive
@@ -715,6 +1233,7 @@ export function CanvasMarks({
           data-tag={mark.hidden ? mark.tag : undefined}
           data-tag-edge={mark.hidden ? mark.tagEdge : undefined}
           data-clipped={mark.clipped ? "" : undefined}
+          data-shaped={mark.shaped === true ? "" : undefined}
           // The tag a placement's frame carries, drawn by the stylesheet from
           // this attribute: the layer is hidden from assistive technology,
           // and the inspector names the placement in words.
@@ -734,8 +1253,13 @@ export function CanvasMarks({
               : nameOf?.(mark.hoveredAddress)?.trim() || undefined
           }
           data-hover-tag-inside={mark.hoverTagInside === true ? "" : undefined}
+          {...atRestAttributes(mark)}
           style={markStyle(mark)}
-        />
+        >
+          {mark.kind === "at-rest" ? (
+            <AtRestTabsView mark={mark} shownLabel={shownLabel} />
+          ) : null}
+        </div>
       ))}
     </div>
   );

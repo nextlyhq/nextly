@@ -22,8 +22,18 @@
 import { fetcher } from "../lib/api/fetcher";
 import { protectedApi } from "../lib/api/protectedApi";
 import type { BulkResponse, ListResponse } from "../lib/api/response-types";
+import {
+  DOCUMENT_REVS_KEY,
+  everyLanguageBody,
+  type EveryLanguageVersion,
+} from "../lib/document-version";
 import type { HookWarning, MutationResult } from "../lib/mutation-warnings";
 import type { Entry, EntryValue, FieldDefinition } from "../types/collection";
+
+import type {
+  PublishAllLanguageOutcome,
+  PublishAllPreview,
+} from "./publishAllPreview";
 
 /** The canonical mutation envelope, exactly as the server sends it. */
 interface MutationResponse<T> {
@@ -764,11 +774,14 @@ export const entryApi = {
     params: {
       ids: string[];
       data: UpdateEntryPayload;
+      /** Each document's version by id; see `BulkUpdateVariables`. */
+      revs?: Record<string, string>;
     }
   ): Promise<BulkResponse<Entry>> => {
+    const { revs, ...rest } = params;
     return protectedApi.post<BulkResponse<Entry>>(
       `/collections/${collectionSlug}/entries/bulk-update`,
-      params
+      revs ? { ...rest, [DOCUMENT_REVS_KEY]: revs } : rest
     );
   },
 
@@ -870,14 +883,46 @@ export const entryApi = {
    */
   publishAllLocales: async (
     collectionSlug: string,
-    id: string
-  ): Promise<{ id: string; status?: string }> => {
+    id: string,
+    /**
+     * The version of every language, as a read of every language gives it: a
+     * publish of every language is refused when any of them changed since.
+     * Or the overwrite choice, from a caller refused that read.
+     */
+    version?: EveryLanguageVersion
+  ): Promise<{
+    id: string;
+    status?: string;
+    languages?: PublishAllLanguageOutcome[];
+  }> => {
+    // The publish reports each language's outcome beside the entry, which
+    // the result message names language by language.
     const result = await protectedApi.post<{
       message: string;
-      item: { id: string; status?: string };
-    }>(`/collections/${collectionSlug}/entries/${id}/publish-all`, {});
+      item: {
+        id: string;
+        status?: string;
+        languages?: PublishAllLanguageOutcome[];
+      };
+    }>(
+      `/collections/${collectionSlug}/entries/${id}/publish-all`,
+      everyLanguageBody(version)
+    );
     return result.item;
   },
+
+  /**
+   * What publishing every language of an entry would do, language by
+   * language, without doing it: asked as the publish is, and writing nothing.
+   * Hits `GET /api/collections/{slug}/entries/{id}/publish-all`.
+   */
+  previewPublishAllLocales: async (
+    collectionSlug: string,
+    id: string
+  ): Promise<PublishAllPreview> =>
+    protectedApi.get<PublishAllPreview>(
+      `/collections/${collectionSlug}/entries/${id}/publish-all`
+    ),
 
   // ===========================================================================
   // Legacy Methods (for backwards compatibility with internal table components)

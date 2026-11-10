@@ -12,6 +12,8 @@
  * @module domains/i18n/companion-columns
  */
 
+import { MIGRATE_STEP_COLUMN_NAMES } from "../../lib/system-columns";
+
 /**
  * The status a companion row takes when one is created without an explicit `_status` — the DDL
  * default. Read from here by write paths that need to know what a freshly-upserted locale row
@@ -107,6 +109,9 @@ export const COMPANION_STRUCTURAL_COLUMNS: ReadonlySet<string> = new Set([
   ...COMPANION_KEY_COLUMNS,
   COMPANION_STATUS_COLUMN,
   COMPANION_UPDATED_AT_COLUMN,
+  // Each translation row's own version counter and last changer, the same
+  // columns a document's main row carries.
+  ...MIGRATE_STEP_COLUMN_NAMES,
 ]);
 
 /**
@@ -129,6 +134,13 @@ export const COMPANION_STRUCTURAL_COLUMNS: ReadonlySet<string> = new Set([
  *   healthy-but-unstamped. Its absence already has a defined meaning to the only thing that reads
  *   it (UNKNOWN, never "up to date"), so refusing the table would be strictly worse than the
  *   answer the staleness comparison already gives for a NULL.
+ * - The version counter and last changer — added to an EXISTING companion by a step of
+ *   `nextly migrate`, which covers the translation tables of collections and Singles. A field
+ *   group's companion is no document of its own and is not versioned, so it may never have them.
  */
 export const COMPANION_OPTIONAL_STRUCTURAL_COLUMNS: ReadonlySet<string> =
-  new Set([COMPANION_STATUS_COLUMN, COMPANION_UPDATED_AT_COLUMN]);
+  new Set([
+    COMPANION_STATUS_COLUMN,
+    COMPANION_UPDATED_AT_COLUMN,
+    ...MIGRATE_STEP_COLUMN_NAMES,
+  ]);

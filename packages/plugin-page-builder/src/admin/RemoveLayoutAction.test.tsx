@@ -13,9 +13,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RemovalCheck } from "../layout-removal/remove-layout";
 
-const calls: unknown[] = [];
-let answer: (body: { dryRun: boolean }) => Promise<unknown> = async () =>
-  undefined;
+/** A request body, as the dialog sends it to the route. */
+interface Body {
+  readonly action?: string;
+  readonly dryRun?: boolean;
+  readonly move?: true;
+  readonly token?: string;
+  readonly after?: string;
+  readonly stop?: true;
+}
+
+const calls: { body: Body }[] = [];
+let answer: (body: Body) => Promise<unknown> = async () => undefined;
 const navigated: string[] = [];
 
 let identity: { kind: string; slug: string; documentId?: string } | null = null;
@@ -30,7 +39,7 @@ let editorActions: {
 let resolved = { pagesCollection: "pages", layoutsCollection: "layouts" };
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  writePluginRoute: (args: { body: { dryRun: boolean } }) => {
+  writePluginRoute: (args: { body: Body }) => {
     calls.push(args);
     return answer(args.body);
   },
@@ -59,6 +68,8 @@ function check(overrides: Partial<RemovalCheck> = {}): RemovalCheck {
     unreadable: 0,
     complete: true,
     pagesCollection: "pages",
+    liveRows: 0,
+    siteDefault: "Main",
     ...overrides,
   };
 }
@@ -111,27 +122,12 @@ describe("Remove Layout…", () => {
     expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
   });
 
-  it("lists the pages that use it as links that open each page, counting the unreadable", async () => {
+  it("says 'at least' when the check could not reach every page, offering no move", async () => {
     dryRunAnswers(
-      check({ pages: [{ id: "p1", title: "Home" }], unreadable: 2 })
-    );
-    openDialog();
-
-    expect(
-      await screen.findByText(
-        "These pages use this Layout. Choose another Layout for them first."
-      )
-    ).toBeTruthy();
-    const link = screen.getByRole("link", { name: "Home" });
-    expect(link.getAttribute("href")).toBe("/admin/collections/pages/p1");
-    expect(link.getAttribute("target")).toBe("_blank");
-    expect(screen.getByText("And 2 pages you can't view.")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Delete Layout" })).toBeNull();
-  });
-
-  it("says 'at least' when the check could not reach every page", async () => {
-    dryRunAnswers(
-      check({ pages: [{ id: "p1", title: "Home" }], complete: false })
+      check({
+        pages: [{ id: "p1", title: "Home", state: "published" }],
+        complete: false,
+      })
     );
     openDialog();
 
@@ -140,6 +136,12 @@ describe("Remove Layout…", () => {
         "At least 1 page uses this Layout. Not every page could be checked."
       )
     ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "These pages use this Layout. Choose another Layout for them first."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Move / })).toBeNull();
   });
 
   it("offers unpublish and delete when nothing is in the way, and deletes on confirm", async () => {
@@ -337,5 +339,283 @@ describe("a delete that a page published meanwhile still names", () => {
     expect(navigated).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "Back to Layouts" }));
     expect(navigated).toEqual(["/admin/collections/layouts"]);
+  });
+});
+
+describe("moving the pages to the site default first", () => {
+  /** Forty pages: three named, two of them published, one edited. */
+  const forty = () =>
+    check({
+      pages: [
+        { id: "p1", title: "Pricing", state: "published" },
+        { id: "p2", title: "About us", state: "unpublished" },
+        { id: "p3", title: "Home", state: "edited" },
+        ...Array.from({ length: 37 }, (_, i) => ({
+          id: `q${String(i)}`,
+          title: `Page ${String(i)}`,
+          state: "unpublished" as const,
+        })),
+      ],
+      liveRows: 12,
+    });
+
+  /** The route: a dry run answering `found`, and each move tick `ticks` asks. */
+  function moveAnswers(
+    found: RemovalCheck,
+    ticks: (body: Body) => Promise<unknown>
+  ) {
+    answer = async body => {
+      if (body.dryRun === true) return { message: "", item: { check: found } };
+      if (body.stop === true) {
+        return { message: "", item: { move: { state: "stopped", moved: 0 } } };
+      }
+      return { message: "", item: { move: await ticks(body) } };
+    };
+  }
+
+  const moving = (moved: number, after: string) => ({
+    state: "moving",
+    token: "11111111-1111-4111-8111-111111111111",
+    moved,
+    left: 40 - moved,
+    after,
+    refused: [],
+  });
+
+  it("offers the move, naming the first pages with their state, the rest counted, and the published ones' switch", async () => {
+    moveAnswers(forty(), async () => moving(0, "p1"));
+    openDialog();
+
+    expect(
+      await screen.findByText(
+        (_text, element) =>
+          element?.tagName === "P" &&
+          element.textContent ===
+            "40 pages use this Layout. Move them to the site default, Main, and then delete or unpublish it, or close and choose another Layout for them yourself."
+      )
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Pricing" })).toBeTruthy();
+    expect(screen.getByText("Published")).toBeTruthy();
+    expect(screen.getByText("Unpublished")).toBeTruthy();
+    expect(screen.getByText("Published · unsaved edits")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Page 0" })).toBeNull();
+    expect(screen.getByText("and 37 more")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "12 published pages switch to Main's header and footer right away."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Move 40 pages, then delete" })
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Move 40 pages, then unpublish" })
+    ).toBeTruthy();
+  });
+
+  it("shows the bar while it moves, ticking with the token and cursor each answer gives", async () => {
+    let release: (value: unknown) => void = () => {};
+    moveAnswers(forty(), body =>
+      body.token === undefined
+        ? Promise.resolve(moving(12, "q8"))
+        : new Promise(resolve => {
+            release = resolve;
+          })
+    );
+    openDialog();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move 40 pages, then delete" })
+    );
+
+    expect(await screen.findByText("Moved 12 of 40 pages…")).toBeTruthy();
+    expect(screen.getByText("Moving pages")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Moving…" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    await waitFor(() => expect(calls).toHaveLength(3));
+    expect(calls[2]?.body).toEqual({
+      action: "delete",
+      move: true,
+      token: "11111111-1111-4111-8111-111111111111",
+      after: "q8",
+    });
+    release(moving(0, "q9"));
+  });
+
+  it("stops between ticks, keeping what moved, and offers to move the rest", async () => {
+    let release: (value: unknown) => void = () => {};
+    moveAnswers(forty(), body =>
+      body.token === undefined
+        ? new Promise(resolve => {
+            release = resolve;
+          })
+        : Promise.resolve(moving(0, "q9"))
+    );
+    openDialog();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move 40 pages, then delete" })
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+
+    release(moving(12, "q8"));
+
+    expect(
+      await screen.findByText(
+        (_text, element) =>
+          element?.tagName === "P" &&
+          element.textContent ===
+            "12 pages now use the site default, Main. 28 still use this Layout, so it was not deleted."
+      )
+    ).toBeTruthy();
+    expect(screen.getByText("Moved 12 of 40 pages")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Move the other 28, then delete" })
+    ).toBeTruthy();
+    // No next tick: the only call after the first is the Stop.
+    expect(calls.slice(1).map(call => call.body)).toEqual([
+      { action: "delete", move: true },
+      {
+        action: "delete",
+        move: true,
+        token: "11111111-1111-4111-8111-111111111111",
+        stop: true,
+      },
+    ]);
+  });
+
+  it("says every page moved and the Layout was deleted, leaving for the list on Close", async () => {
+    moveAnswers(forty(), async body =>
+      body.token === undefined
+        ? moving(25, "q20")
+        : { state: "done", moved: 15 }
+    );
+    openDialog();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move 40 pages, then delete" })
+    );
+
+    expect(
+      await screen.findByText(
+        "40 pages moved to the site default, Main, and the Layout was deleted."
+      )
+    ).toBeTruthy();
+    // The outcome is marked by an icon beside the title, not by colouring
+    // the sentence.
+    expect(
+      screen
+        .getByText("Layout deleted")
+        .querySelector('svg[aria-hidden="true"]')
+    ).not.toBeNull();
+    expect(navigated).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(navigated).toEqual(["/admin/collections/layouts"]);
+  });
+
+  it("names a page it could not move, with why, and offers to try again", async () => {
+    moveAnswers(forty(), async body =>
+      body.token === undefined
+        ? {
+            ...moving(25, "q20"),
+            refused: [
+              {
+                id: "p1",
+                title: "Pricing",
+                reason: "You can't edit this page.",
+              },
+            ],
+          }
+        : {
+            state: "refused",
+            moved: 14,
+            pages: [{ id: "p1", title: "Pricing", reason: null }],
+            unreadable: 0,
+            complete: true,
+          }
+    );
+    openDialog();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move 40 pages, then delete" })
+    );
+
+    expect(
+      await screen.findByText(
+        (_text, element) =>
+          element?.tagName === "P" &&
+          element.textContent ===
+            "39 of 40 pages moved to the site default, Main. The Layout was not deleted, because one page still uses it:"
+      )
+    ).toBeTruthy();
+    expect(screen.getByText("Some pages couldn't be moved")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Pricing" })).toBeTruthy();
+    // The reason an earlier tick gave, kept by the dialog.
+    expect(screen.getByText("You can't edit this page.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Ask someone who can edit it to choose another Layout, then try again."
+      )
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
+  it("still leaves for the list when the tick in flight as the dialog closed deleted the Layout", async () => {
+    let release: (value: unknown) => void = () => {};
+    moveAnswers(forty(), body =>
+      body.token === undefined
+        ? Promise.resolve(moving(25, "q20"))
+        : new Promise(resolve => {
+            release = resolve;
+          })
+    );
+    openDialog();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move 40 pages, then delete" })
+    );
+    await screen.findByText("Moved 25 of 40 pages…");
+
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(navigated).toEqual([]);
+    release({ state: "done", moved: 15 });
+
+    await waitFor(() =>
+      expect(navigated).toEqual(["/admin/collections/layouts"])
+    );
+  });
+
+  it("stops the move when the dialog is closed while pages move", async () => {
+    let release: (value: unknown) => void = () => {};
+    moveAnswers(forty(), body =>
+      body.token === undefined
+        ? Promise.resolve(moving(12, "q8"))
+        : new Promise(resolve => {
+            release = resolve;
+          })
+    );
+    openDialog();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move 40 pages, then delete" })
+    );
+    await screen.findByText("Moved 12 of 40 pages…");
+
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+    // Stopped at once, not when the tick in flight comes back.
+    const stops = calls.filter(call => call.body.stop === true);
+    expect(stops.length).toBeGreaterThan(0);
+    expect(stops[0]?.body.token).toBe("11111111-1111-4111-8111-111111111111");
+    release(moving(10, "q18"));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    // No tick after the one in flight when it closed.
+    expect(
+      calls.filter(call => call.body.move === true && call.body.stop !== true)
+    ).toHaveLength(2);
   });
 });

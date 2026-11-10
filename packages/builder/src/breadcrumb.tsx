@@ -54,6 +54,13 @@ export interface SelectionBreadcrumbProps {
    * author placed. The library holds the titles, and the host read it.
    */
   componentTitle?: ComponentTitleOf;
+  /**
+   * What the trail's first crumb, the document's root, is called. The page
+   * by default; a host editing a field below the top level of its document
+   * names where that field sits (`Sections · Hero banner · Body`), so the
+   * bar says which of several such fields this is.
+   */
+  rootLabel?: string;
 }
 
 /** One crumb: a block, or the page itself at the trail's root. */
@@ -67,6 +74,7 @@ export function SelectionBreadcrumb({
   editor,
   hints = {},
   componentTitle,
+  rootLabel = EDITOR_WORDS.page,
 }: SelectionBreadcrumbProps): React.JSX.Element {
   /*
    * The page first, always, then the selected block's ancestors.
@@ -81,7 +89,7 @@ export function SelectionBreadcrumb({
   const crumbs: Crumb[] = [
     {
       key: "root:page",
-      label: EDITOR_WORDS.page,
+      label: rootLabel,
       select: () => editor.select(null),
     },
     ...path.map(node => ({

@@ -25,6 +25,7 @@ import {
   type ServiceErrorEnvelope,
 } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { StaleVersionPublicData } from "../../../errors/public-data";
 import {
   isStatusOnlyWrite,
   writeGateFor,
@@ -38,6 +39,11 @@ import { BaseService } from "../../../shared/base-service";
 import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
+import { DOCUMENT_VERSION_KEY } from "../../versions/document-revision";
+import {
+  sameValuesVersionRequirement,
+  versionRequiredFor,
+} from "../../versions/stale-version";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -79,7 +85,7 @@ function legacyEnvelopeToFailureFields(result: {
   statusCode?: number;
   code?: string;
   message?: string;
-}): { code: string; message: string } {
+}): ReturnType<typeof failureFieldsOf> {
   // Rebuilt through the shared converter so a per-item failure reports the same
   // code the single-item endpoint reports for the identical failure. This kept
   // its own status table, which sent anything outside 400/403/404/409 to
@@ -96,9 +102,22 @@ function legacyEnvelopeToFailureFields(result: {
  * failure shape in this file derives from this, so a bulk item, a legacy
  * batch item and the single-item endpoint agree on the code for one failure.
  */
-function failureFieldsOf(error: unknown): { code: string; message: string } {
+function failureFieldsOf(error: unknown): {
+  code: string;
+  message: string;
+  data?: StaleVersionPublicData;
+} {
   if (NextlyError.is(error)) {
-    return { code: String(error.code), message: error.publicMessage };
+    return {
+      code: String(error.code),
+      message: error.publicMessage,
+      // An item refused as out of date says its current version (and, to a
+      // caller who may read it, who changed it and when), as the refusal of
+      // a single save does, so the caller can read it again and retry.
+      ...(error.code === "STALE_VERSION" && error.publicData
+        ? { data: error.publicData as StaleVersionPublicData }
+        : {}),
+    };
   }
   return { code: "INTERNAL_ERROR", message: "An unexpected error occurred." };
 }
@@ -128,7 +147,12 @@ type PerItemOutcome<T> =
     }
   | {
       kind: "failure";
-      failure: { id: string; code: string; message: string };
+      failure: {
+        id: string;
+        code: string;
+        message: string;
+        data?: StaleVersionPublicData;
+      };
       /**
        * Set when the item committed its row + outbox event but a post-commit
        * hook then threw, so it is reported as a failure yet still owes a
@@ -152,7 +176,7 @@ type PerItemOutcome<T> =
 function failureFromThrown(
   id: string,
   error: unknown
-): { id: string; code: string; message: string } {
+): { id: string } & ReturnType<typeof failureFieldsOf> {
   return { id, ...failureFieldsOf(error) };
 }
 
@@ -188,6 +212,14 @@ function batchErrorMessage(error: unknown): string {
   return failureFieldsOf(error).message;
 }
 
+/** The code, and any conflict's data, a failed batch item reports. */
+function batchFailureFields(
+  error: unknown
+): Omit<ReturnType<typeof failureFieldsOf>, "message"> {
+  const { message: _message, ...fields } = failureFieldsOf(error);
+  return fields;
+}
+
 /**
  * Rebuild a rolled-back batch's accounting as exactly one error per
  * requested item, in index order. The per-id invariant is asserted here
@@ -206,12 +238,18 @@ function rebuildRolledBackErrors(
   }
   state.errors = [];
   for (let i = 0; i < ids.length; i += 1) {
-    // An item that recorded its own failure keeps its message and code; one
-    // the rollback undid reports the abort, with the abort's code.
+    // An item that recorded its own failure keeps its message, code and data
+    // (a conflict's current version); one the rollback undid reports the
+    // abort, with the abort's code.
     const own = byIndex.get(i);
     state.errors.push(
       own
-        ? { index: i, error: own.error, code: own.code }
+        ? {
+            index: i,
+            error: own.error,
+            code: own.code,
+            ...(own.data ? { data: own.data } : {}),
+          }
         : { index: i, ...rollbackNote }
     );
   }
@@ -431,7 +469,7 @@ async function runLegacyBatchItem<TItem>(
         error instanceof Error
           ? batchErrorMessage(error)
           : "Unknown error occurred",
-      code: failureFieldsOf(error).code,
+      ...batchFailureFields(error),
     };
     state.errors.push({ index, ...failure });
 
@@ -472,7 +510,7 @@ async function runLegacyBatchItem<TItem>(
   });
   const failure = {
     error: verdict.message,
-    code: failureFieldsOf(answer).code,
+    ...batchFailureFields(answer),
   };
   state.errors.push({ index, ...failure });
 
@@ -940,10 +978,25 @@ export class CollectionBulkService extends BaseService {
      * gate for a key whose owner could publish but whose scope cannot.
      */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Each id's own version, `{ "<id>": "<_rev>" }`: the update is judged per
+     * document, as each document's own save would be. One for every id, or
+     * none (see `sameValuesVersionRequirement`).
+     */
+    revs?: unknown;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     // Refused whole, before any row is read, when the collection is removed
     // from code, rather than once for each entry it names.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // One set of values for every id names no one document's version, so it
+    // is judged per id only on the version given for each; decided, and a
+    // request that cannot be judged refused, before any row is read.
+    const requirement = sameValuesVersionRequirement(params.data, {
+      ids: params.ids,
+      revs: params.revs,
+    });
+    if (requirement.kind === "required") throw versionRequiredFor("ids");
+    const revs = requirement.kind === "per-document" ? requirement.revs : {};
     // Phase 4.5: successes carry full mutated records (caller needs the
     // post-update values); failures carry canonical NextlyErrorCode.
     // Per-id updates run concurrently via Promise.allSettled. See
@@ -972,7 +1025,10 @@ export class CollectionBulkService extends BaseService {
                 authenticatedScope: params.authenticatedScope,
                 goingLiveBatch,
               },
-              params.data
+              // Judged on this document's own version where one was given.
+              Object.hasOwn(revs, entryId)
+                ? { ...params.data, [DOCUMENT_VERSION_KEY]: revs[entryId] }
+                : params.data
             );
 
             if (updateResult.success && updateResult.data) {
@@ -985,11 +1041,12 @@ export class CollectionBulkService extends BaseService {
                 revalidationIntent: updateResult.revalidationIntent,
               };
             }
-            const { code, message } =
-              legacyEnvelopeToFailureFields(updateResult);
             return {
               kind: "failure",
-              failure: { id: entryId, code, message },
+              failure: {
+                id: entryId,
+                ...legacyEnvelopeToFailureFields(updateResult),
+              },
               // An update that committed its row + event but failed a post-commit
               // hook still owes a delivery.
               eventRecorded: updateResult.eventRecorded,
@@ -1064,6 +1121,12 @@ export class CollectionBulkService extends BaseService {
        * each per-row transition on a scoped API key's OWN grants.
        */
       authenticatedScope?: AuthenticatedScope;
+      /**
+       * Versions by id, which an update by query cannot take: it names no
+       * ids. Accepted here only to be refused, so a caller sending them is
+       * told rather than having them ignored.
+       */
+      revs?: unknown;
     },
     options?: BulkOperationOptions & {
       /**
@@ -1123,6 +1186,15 @@ export class CollectionBulkService extends BaseService {
       }
       throw NextlyError.forbidden({ logContext });
     }
+    // One set of values for every match names no one document's version, and
+    // a query names no ids to give each one's. Decided after the access gate,
+    // so a caller who may not write here is refused for that whatever the body
+    // says, and before any row is found.
+    const requirement = sameValuesVersionRequirement(data, {
+      ids: undefined,
+      revs: params.revs,
+    });
+    if (requirement.kind === "required") throw versionRequiredFor("query");
     await assertCallerFilterReadable(params, this.queryService);
 
     // 2. Enumerate the target rows under the UPDATE rule. The collection-level
@@ -1524,16 +1596,24 @@ export class CollectionBulkService extends BaseService {
     // behind.
     const state = newLegacyBatchState();
     try {
-      await this.adapter.transaction(async tx => {
-        await this.runCreateBatch(
-          tx,
-          params,
-          transitionAuth,
-          entries,
-          { batchSize, stopOnError, skipHooks },
-          state
-        );
-      });
+      // Read committed on every dialect, as updateEntries is, so an
+      // in-transaction handler that serializes an entry's write with a row
+      // lock then reads what committed before it took it. MySQL's default,
+      // REPEATABLE READ, would answer each later read from the snapshot the
+      // batch's first read took.
+      await this.adapter.transaction(
+        async tx => {
+          await this.runCreateBatch(
+            tx,
+            params,
+            transitionAuth,
+            entries,
+            { batchSize, stopOnError, skipHooks },
+            state
+          );
+        },
+        { isolationLevel: "read committed" }
+      );
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case). Any outbox events an
       // item recorded before the abort were rolled back too, so clear the

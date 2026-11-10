@@ -11,7 +11,10 @@ import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const toastError = vi.fn();
-vi.mock("@nextlyhq/ui", () => ({ toast: { error: toastError } }));
+const toastWarning = vi.fn();
+vi.mock("@nextlyhq/ui", () => ({
+  toast: { error: toastError, warning: toastWarning },
+}));
 
 /**
  * The site style's read, as the editor's query on the plugin's route holds
@@ -26,7 +29,11 @@ vi.mock("../site-style-read", () => ({
   useStoredSiteStyle: () => read,
 }));
 
-/** What the Single was asked to store, in order. */
+/**
+ * What the Single was asked to store, in order. Each write is saved over
+ * whatever the style holds and says so with `_overwrite: true`, which the
+ * expectations state.
+ */
 const singleWrites: Record<string, unknown>[] = [];
 // No `useSingleDocument`: the editor reads the style only through the route,
 // so a read of the Single fails here.
@@ -77,6 +84,7 @@ const step = (stored: boolean): Step => ({
 
 beforeEach(() => {
   toastError.mockReset();
+  toastWarning.mockReset();
   refetch.mockClear();
   singleWrites.length = 0;
   read = { data: { tokens: null }, refetch };
@@ -124,6 +132,8 @@ describe("useSiteStyleHistory", () => {
     expect(result.current.replay.revision).toBe(before + 1);
     expect(result.current.replay.settling).toBe(false);
     expect(toastError).not.toHaveBeenCalled();
+    // A replay that met nothing newer says nothing.
+    expect(toastWarning).not.toHaveBeenCalled();
   });
 
   it("is settling while a replay is in flight", async () => {
@@ -153,6 +163,54 @@ describe("useSiteStyleHistory", () => {
     });
     // Refused: nothing changed, so nothing waits for a read.
     expect(result.current.replay.settling).toBe(false);
+  });
+
+  it("says where an undo or redo met a change made since, and kept it", async () => {
+    // Stored, but the merge kept theirs for Brand: that part could not be
+    // taken back, or put forward again, and the author is told which.
+    const brand = {
+      name: "color.brand",
+      kind: "color",
+      values: { light: "#1" },
+    };
+    const conflicts = {
+      entries: [
+        {
+          key: "color.brand",
+          setting: false,
+          kind: "changed" as const,
+          kept: "theirs" as const,
+          base: brand,
+          mine: { ...brand, values: { light: "#2" } },
+          theirs: { ...brand, values: { light: "#3" } },
+        },
+      ],
+      refusal: { changedBy: { name: "Sam" }, oneSaveBetween: true },
+    };
+    const half = () =>
+      Promise.resolve({
+        stored: true,
+        section: "tokens" as const,
+        value: REPLAYED,
+        conflicts,
+      });
+    const { result } = renderHook(() => useSiteStyleHistory());
+    const recorded: EditorStep[] = [];
+    act(() => result.current.connect(record(recorded)));
+    act(() => result.current.history.record({ undo: half, redo: half }));
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    expect(toastWarning).toHaveBeenLastCalledWith(
+      "Sam changed Brand since, so your change to it could not be undone."
+    );
+    await act(async () => {
+      await recorded[0]?.redo();
+    });
+    expect(toastWarning).toHaveBeenLastCalledWith(
+      "Sam changed Brand since, so your change to it could not be redone."
+    );
+    expect(toastError).not.toHaveBeenCalled();
   });
 
   it("says so when the write taking a change back is refused", async () => {
@@ -265,7 +323,7 @@ describe("a Design writer's save and its undo, through the editor's read", () =>
       await writer.result.current.save("tokens", AFTER);
     });
     // The Single stored it, and the editor's read was asked again.
-    expect(singleWrites).toEqual([{ tokens: AFTER }]);
+    expect(singleWrites).toEqual([{ _overwrite: true, tokens: AFTER }]);
     expect(refetch).toHaveBeenCalledTimes(1);
     read = { data: { tokens: AFTER }, refetch };
     history.rerender();
@@ -277,7 +335,10 @@ describe("a Design writer's save and its undo, through the editor's read", () =>
       undone = await recorded[0]?.undo();
     });
     expect(undone).toBe(true);
-    expect(singleWrites).toEqual([{ tokens: AFTER }, { tokens: BEFORE }]);
+    expect(singleWrites).toEqual([
+      { _overwrite: true, tokens: AFTER },
+      { _overwrite: true, tokens: BEFORE },
+    ]);
     // Waiting on the route's read, which still holds the undone value.
     expect(history.result.current.replay.settling).toBe(true);
     expect(history.result.current.replay.revision).toBe(before);

@@ -64,8 +64,13 @@ Layout or one of its components has changes that are not published yet, the tag 
 "Draft changes not live" and names which. Layers lists the regions as locked rows
 above and below the page's blocks; selecting one shows it on the canvas.
 
-Publishing a page that names an unpublished Layout publishes the page only, and you
-are told that the site default shows until that Layout is published.
+Publishing a page that names an unpublished Layout asks first: **Publish page only**
+leaves the Layout as it is, and the site default shows until it is published;
+**Publish both** publishes the Layout too, if you may update and publish Layouts. See
+[Publishing a page whose parts aren't published](/docs/page-builder/editor#publishing-a-page-whose-parts-arent-published).
+
+Publishing a Layout whose header or footer component isn't published tells you so
+afterwards, the same way a page is told.
 
 ## The default Layout
 
@@ -93,10 +98,15 @@ Only a published Layout can be the default. The caller needs three permissions:
 - **update** on Layouts, and
 - **publish** on Layouts.
 
+In the editor, choose it under **Settings**, **Site**, **Default Layout**. If the
+Layout's header or footer is a component that isn't published, you're asked first:
+**Make default anyway**, or publish it, then make the Layout the default.
+
 The default changes every page that names no Layout, so it is treated like publishing.
 Send `{ "dryRun": true }` to see what would change without changing it. The answer is
-the usual `{ message, item }` shape, where `item` holds `defaultLayout` and
-`previousDefaultLayout`.
+the usual `{ message, item }` shape, where `item` holds `defaultLayout`,
+`previousDefaultLayout` and `by`, who made the change: `{ kind: "user", userId }`, or
+`{ kind: "api-key", userId, apiKeyId }` for a call made with an API key.
 
 ### The default is protected
 
@@ -132,14 +142,42 @@ unpublish a Layout.
 Remove Layout first checks what stands in the way:
 
 - **The site's default** can't be removed. Make another Layout the default first.
-- **Pages that use the Layout** stop the removal: published pages, unpublished pages, and
-  unpublished edits of published pages. The dialog lists them, each a link that opens the
-  page, so you can choose another Layout for each one. Pages you can't view are counted but
-  not named.
+- **Pages that use the Layout**: published pages, unpublished pages, and unpublished edits
+  of published pages. The dialog lists them, each a link that opens the page, tagged
+  **Published**, **Unpublished** or **Published · unsaved edits**. Pages you can't view are
+  counted but not named. Either choose another Layout for each one yourself, or move them
+  all to the site default first (below).
 - **A site with many pages**: one removal checks up to 2,000 pages. Past that it says "at
-  least" how many it found and refuses, rather than guessing that the rest are clear.
+  least" how many it found and refuses, rather than guessing that the rest are clear, and
+  offers no move.
 
 With nothing in the way, choose **Unpublish** or **Delete Layout**.
+
+### Moving the pages to the site default
+
+When pages use the Layout, the dialog offers **Move N pages, then delete** (and, for a
+published Layout, **Move N pages, then unpublish**). It moves every page to the site's
+default Layout, then removes the Layout:
+
+- An unpublished page, and the unsaved edits of a published page, have their choice of
+  Layout cleared, so they use the site default.
+- A published page's live version is not changed, since that would publish its unsaved
+  edits along with it. It switches to the site default's header and footer as soon as the
+  Layout is gone, and the dialog says how many pages this affects before you start. A
+  published page with no unsaved edits keeps naming the removed Layout in its live
+  version until it is next published, which clears the choice so it names the site
+  default. Until then it draws the site default, and nothing on the page breaks.
+
+Pages are moved as you: a page you can't edit is left on the Layout and named, with the
+reason ("You can't edit this page."), and the Layout is not removed while any unpublished
+page or unsaved edit still uses it. Ask someone who can edit it to choose another Layout,
+then choose **Try again**.
+
+The dialog moves the pages a batch at a time, with a progress bar, and needs to stay open.
+**Stop**, or closing the dialog, stops the move: the pages already moved stay on the site
+default, the rest stay on the Layout, and the Layout is kept. Open Remove Layout again to
+move the others. While the move runs, no page can be put on the Layout and it can't be made
+the default; the Layout itself can still be edited.
 
 While a removal runs, which takes moments:
 
@@ -152,7 +190,8 @@ A Layout unpublished with Remove Layout can't be made the default, or chosen for
 until it is published again. A page's Layout picker shows such a Layout greyed out, with
 the reason beside its name. If a page save lands at the very moment its Layout is removed,
 the page's choice is cleared and it uses the site's default Layout; a published page's live
-version keeps its choice and draws the default until it is next published.
+version keeps its choice and draws the default until it is next published, which clears
+a choice of a deleted Layout.
 
 The same action is a route, for scripts and other tools. It runs as the caller: the route
 admits anyone who may read Layouts, and the delete or unpublish itself is judged by the
@@ -166,22 +205,45 @@ Content-Type: application/json
 ```
 
 `action` is `delete` or `unpublish`. A dry run changes nothing. Its `item.check` holds
-`isDefault`, `pages` (`{ id, title }`), `unreadable` and `complete`. A real removal that
-something stops answers `409 CONFLICT`, with the reason in the message.
+`isDefault`, `pages` (`{ id, title, state }`, where `state` is `published`,
+`unpublished` or `edited`), `unreadable`, `complete`, `liveRows` (how many of the pages
+have a published version naming the Layout) and `siteDefault` (the default Layout's
+title, or `null`), and every answer's `item.by` says who asked, as make-default's does.
+A real removal that something stops answers `409 CONFLICT`, with the
+reason in the message.
+
+A move runs as repeated calls with `"move": true`. The first starts it; each answer's
+`item.move` says where it stands, and while `state` is `moving` the next call sends back
+its `token` and `after`:
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/:id/remove
+Content-Type: application/json
+
+{ "action": "delete", "move": true, "token": "…", "after": "…" }
+```
+
+Each call moves up to 25 pages and reports how many it `moved` and how many are `left`.
+The last answers `done` once the Layout is removed, or `refused` with the `pages` that
+could not be moved and why. Send `"stop": true` with the token to stop; a move whose calls
+stop for five minutes is stopped by the background check.
 
 If a Layout is made the default at the very moment it is being deleted, the delete loses:
 the Layout comes back from a copy taken just before, under a new id, and the default
 points at it. Unpublishing in that race leaves the default to the background repair,
 which points it back at the Layout the plugin created.
 
-Some writes skip collection hooks: a batch write with hooks turned off, and publishing or
-unpublishing every language at once (`POST
-/admin/api/collections/layouts/entries/:id/unpublish-all` or `publish-all`). None of
-the checks above reach them, so unpublishing every language of a Layout takes it down
-without Remove Layout's checks. This is a known limit until core runs collection hooks
-there. Two things are repaired afterwards: the background repair points the site's default
-back at a published Layout if the default was taken down this way, and a Layout published
-again this way can be made the default once the next background check has run.
+Publishing or unpublishing every language at once (`POST
+/admin/api/collections/layouts/entries/:id/unpublish-all` or `publish-all`) runs the
+collection's hooks as a status change of one language does, so the checks above refuse
+it too (see [Publishing or unpublishing every
+language](/docs/configuration/collections#publishing-or-unpublishing-every-language)).
+
+A batch write with hooks turned off skips them. None of the checks above reach it, so
+such a write can take a Layout down without Remove Layout's checks. Two things are
+repaired afterwards: the background repair points the site's default back at a
+published Layout if the default was taken down this way, and a Layout published again
+this way can be made the default once the next background check has run.
 
 ## Existing sites: run a migration
 

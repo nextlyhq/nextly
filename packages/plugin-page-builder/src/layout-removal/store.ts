@@ -33,11 +33,14 @@ export const REMOVAL_LEASE_MS: number = 5 * 60_000;
 export type RemovalAction = "delete" | "unpublish";
 
 /**
- * Where a removal has got to. `restoring` is held only while a Layout a
- * promotion raced is put back from its copy (`restore.ts`).
+ * Where a removal has got to. `moving` is held while a removal that moves its
+ * pages to the site default clears them, a tick at a time (`move-pages.ts`).
+ * `restoring` is held only while a Layout a promotion raced is put back from
+ * its copy (`restore.ts`).
  */
 export type RemovalStep =
   | "marked"
+  | "moving"
   | "checked"
   | "final"
   | "removed"
@@ -62,11 +65,27 @@ export interface LayoutRemoval {
   readonly step: RemovalStep;
   readonly token: string;
   readonly startedBy: string | null;
+  /**
+   * How many unpublished pages and working drafts a removal that moves its
+   * pages had left to move at its last tick; `null` for a removal that moves
+   * none. Set from the first tick on, so it also says, at every later step,
+   * that this removal moved its pages ({@link movesPages}).
+   */
   readonly pagesLeft: number | null;
   readonly copy: LayoutCopy | null;
   readonly copyVersion: string | null;
   readonly settledAt: Date | null;
   readonly updatedAt: Date;
+}
+
+/**
+ * Whether a removal moves its pages to the site default before it removes the
+ * Layout. Such a removal leaves a published page's live row naming the Layout,
+ * which draws the site default once the Layout is gone, so its checks before
+ * and after the write look only at unpublished pages and working drafts.
+ */
+export function movesPages(removal: Pick<LayoutRemoval, "pagesLeft">): boolean {
+  return removal.pagesLeft !== null;
 }
 
 /** What a mark answers: the fence is this request's, or another's holds it. */
@@ -81,21 +100,28 @@ export interface StepValues {
   readonly pagesLeft?: number | null;
 }
 
+/** What a mark is asked to put up. */
+export interface MarkInput {
+  readonly layoutId: string;
+  readonly action: RemovalAction;
+  readonly token: string;
+  readonly startedBy: string | null;
+  readonly now: Date;
+  /** Whether the starter's own stopped move may be taken over. */
+  readonly resumeMove?: boolean;
+}
+
 /** The fence's operations. Every write but the first insert is fenced by token. */
 export interface LayoutRemovalStore {
   /** The row for one Layout, or `null` when it is not being removed. */
   removalOf(layoutId: string): Promise<LayoutRemoval | null>;
   /**
    * Put the fence up for `token`. A row already there answers `busy`, unless
-   * it is a settled tombstone or older than the lease, which this takes over.
+   * it is a settled tombstone or older than the lease, which this takes over;
+   * or, with `resumeMove`, a move the same person started and stopped
+   * watching (`moving`, started by `startedBy`), which they may take up again.
    */
-  mark(input: {
-    layoutId: string;
-    action: RemovalAction;
-    token: string;
-    startedBy: string | null;
-    now: Date;
-  }): Promise<MarkOutcome>;
+  mark(input: MarkInput): Promise<MarkOutcome>;
   /** Move `token`'s row from one step to the next. False when it is not there. */
   advance(change: {
     layoutId: string;
@@ -148,6 +174,7 @@ type StoredRow = Awaited<
 const ACTIONS: readonly RemovalAction[] = ["delete", "unpublish"];
 const STEPS: readonly RemovalStep[] = [
   "marked",
+  "moving",
   "checked",
   "final",
   "removed",
@@ -222,17 +249,33 @@ function toRemoval(row: NonNullable<StoredRow>): LayoutRemoval {
 
 /**
  * Whether a row another request left may be taken over: a tombstone whose
- * check after the write passed, or any row older than the lease.
+ * check after the write passed, any row older than the lease, or, for a mark
+ * that resumes a move, a move the same person started. That last lets the
+ * starter pick a move up again at once after closing its dialog, rather than
+ * waiting out the lease; anyone else still waits for it.
  */
-export function mayTakeOver(removal: LayoutRemoval, now: Date): boolean {
+export function mayTakeOver(
+  removal: LayoutRemoval,
+  input: Pick<MarkInput, "now" | "startedBy" | "resumeMove">
+): boolean {
   if (removal.step === "removed" && removal.settledAt !== null) return true;
-  return now.getTime() - removal.updatedAt.getTime() > REMOVAL_LEASE_MS;
+  if (
+    input.resumeMove === true &&
+    removal.step === "moving" &&
+    removal.startedBy !== null &&
+    removal.startedBy === input.startedBy
+  ) {
+    return true;
+  }
+  return input.now.getTime() - removal.updatedAt.getTime() > REMOVAL_LEASE_MS;
 }
 
 /**
  * Whether a removal still holds its Layout: it is between its mark and its
  * write, and inside its lease. A settled one, one past its write, and one a
- * stopped request left past the lease hold nothing.
+ * stopped request left past the lease hold nothing. Nor does one moving its
+ * pages: its copy is taken only once they have moved, so an edit made while
+ * they move is kept, and a move can run for as long as its dialog stays open.
  */
 export function holdsTheLayout(removal: LayoutRemoval, now: Date): boolean {
   const running =
@@ -275,7 +318,7 @@ export function layoutRemovalStore(
    */
   const takeOver = async (
     held: LayoutRemoval,
-    input: Parameters<LayoutRemovalStore["mark"]>[0]
+    input: MarkInput
   ): Promise<boolean> => {
     const changed = await db
       .update(layoutRemovals, {
@@ -317,7 +360,7 @@ export function layoutRemovalStore(
       }
       const held = await removalOf(input.layoutId);
       if (held === null) continue;
-      if (mayTakeOver(held, input.now) && (await takeOver(held, input))) {
+      if (mayTakeOver(held, input) && (await takeOver(held, input))) {
         return { kind: "marked" };
       }
       return {

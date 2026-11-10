@@ -139,16 +139,28 @@ function restatedNullability(op: ChangeColumnNullableOp): string[] {
  * A column the database does not have, or an expression default a `NO_BACKSLASH_ESCAPES` session
  * cannot read back, leaves the variable holding a sentence saying so, which PREPARE rejects with
  * that sentence in its message.
+ *
+ * `characterSet: "left-out"` writes no character set or collation, for a new type that has no place
+ * for them: MySQL refuses `json CHARACTER SET ..` as a syntax error. Restated when not given, so a
+ * caller that does not ask builds the statement it always has.
  */
 export function restatedColumn(
   tableName: string,
   columnName: string,
-  change: { type?: string; nullable?: boolean }
+  change: {
+    type?: string;
+    nullable?: boolean;
+    characterSet?: "restated" | "left-out";
+  }
 ): string[] {
   const definition = [
     literal(`ALTER TABLE ${q(tableName)} MODIFY COLUMN ${q(columnName)} `),
     change.type === undefined ? "COLUMN_TYPE" : literal(change.type),
-    "IF(CHARACTER_SET_NAME IS NULL, '', CONCAT(' CHARACTER SET ', CHARACTER_SET_NAME, ' COLLATE ', COLLATION_NAME))",
+    ...(change.characterSet === "left-out"
+      ? []
+      : [
+          "IF(CHARACTER_SET_NAME IS NULL, '', CONCAT(' CHARACTER SET ', CHARACTER_SET_NAME, ' COLLATE ', COLLATION_NAME))",
+        ]),
     "IF(COALESCE(GENERATION_EXPRESSION, '') = '', '', CONCAT(' GENERATED ALWAYS AS (', GENERATION_EXPRESSION, ')', IF(EXTRA LIKE '%STORED GENERATED%', ' STORED', ' VIRTUAL')))",
     change.nullable === undefined
       ? "IF(IS_NULLABLE = 'YES', ' NULL', ' NOT NULL')"

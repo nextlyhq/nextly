@@ -85,6 +85,9 @@ async function prune(
     registry: db.registry as never,
     adapter: db.adapter as never,
     currentSlugs: [],
+    // Runs the drop as it is: these fakes have no database to lock, and what
+    // is under test here is the consent, not the schema lock.
+    lock: work => work(),
     approve,
   });
   return { result, db };
@@ -128,6 +131,8 @@ describe("nextly prune and the data-loss consent", () => {
       registry: db.registry as never,
       adapter: db.adapter as never,
       currentSlugs: [],
+      // Runs the drop as it is, as above: no database to lock.
+      lock: work => work(),
       approve,
       countArchived: async slug => (slug === "a" ? 3 : 0),
     });

@@ -65,6 +65,21 @@ export function isInput(value: unknown): value is HTMLInputElement {
   return isHTMLElement(value) && value.localName === "input";
 }
 
+/**
+ * Whether a value is a form field whose value lives outside the DOM: an
+ * `<input>`, a `<textarea>` or a `<select>`, from any realm.
+ */
+export function isFormField(
+  value: unknown
+): value is HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement {
+  return (
+    isHTMLElement(value) &&
+    (value.localName === "input" ||
+      value.localName === "textarea" ||
+      value.localName === "select")
+  );
+}
+
 /** Whether a value is an `<iframe>`, from any realm. */
 export function isIFrame(value: unknown): value is HTMLIFrameElement {
   return isHTMLElement(value) && value.localName === "iframe";

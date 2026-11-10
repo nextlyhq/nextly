@@ -133,7 +133,8 @@ test.describe("blocks a plugin contributes", () => {
     // The generated control for its one declared prop.
     const label = page
       .getByRole("tabpanel", { name: "Content" })
-      .getByLabel("Label");
+      // Exact: the Bind button beside the field is labelled for it too.
+      .getByLabel("Label", { exact: true });
     await label.fill("Edited plain");
     await label.press("Enter");
     await expect(fixture(page, "plain")).toHaveText("Edited plain");

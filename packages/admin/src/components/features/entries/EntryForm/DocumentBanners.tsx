@@ -42,7 +42,7 @@ export interface DocumentBannersProps {
   /** The editor's claim on the document, which says why it is held. */
   lock: Pick<
     DocumentLockSurface,
-    "notice" | "takeOver" | "requestAccess" | "retryLoad"
+    "notice" | "takeOver" | "requestAccess" | "retryLoad" | "answerChange"
   >;
   /** The editor's recovery state. */
   recovery: UseAutosaveRecoveryResult;
@@ -67,6 +67,7 @@ export function DocumentBanners({
         onTakeOver={lock.takeOver}
         onRequestAccess={lock.requestAccess}
         onRetry={lock.retryLoad}
+        onChoose={lock.answerChange}
         className={BAND}
       />
       <LiveDocumentRecoveryOffer

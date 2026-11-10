@@ -39,12 +39,12 @@ import {
 } from "./content-control-types";
 import type { RefusalWording } from "./drag-refusal";
 import type { EditorState } from "./editor-state";
-import { blockLabel } from "./inserter";
+import { blockLabel, insertionPropSets } from "./inserter";
 import { layerLabel } from "./layers";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked, lockBlockingEdit, lockedAncestorOf } from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp, NodePatch } from "./ops";
+import type { BuilderOp, NodePatch } from "./op-vocabulary";
 
 /**
  * The prop types this inspector can draw a control for.
@@ -184,6 +184,12 @@ export interface BlockInspection {
    * refused edit give one reason.
    */
   readonly designLock: RefusalWording | undefined;
+  /**
+   * Every set of props the block can be placed with (its defaults under its
+   * example, then each variation's), for a control that must tell a value an
+   * author set from one the block started with.
+   */
+  readonly placedWith: ReadonlyArray<Readonly<Record<string, unknown>>>;
 }
 
 /** The selected node together with the definition that describes it. */
@@ -316,7 +322,7 @@ function offered(
         ? without
         : [];
   const setHere = (name: unknown): boolean =>
-    typeof name === "string" && isSet(declared[name], values[name]);
+    typeof name === "string" && propIsSet(declared[name], values[name]);
   const hidden = entries.some(entry =>
     Array.isArray(entry)
       ? entry.length > 0 && entry.every(setHere)
@@ -324,16 +330,20 @@ function offered(
   );
   if (hidden) return false;
   if (schema.type !== "select" || options.length >= 2) return true;
-  return isSet(undefined, value) && !options.includes(String(value));
+  return propIsSet(undefined, value) && !options.includes(String(value));
 }
 
 /**
  * Whether a stored prop value is there: anything but absent or empty text,
  * and for a URL, only one a page can follow. The engine's rule, the one the
  * renderer reads, so a refused `javascript:` link that renders no link
- * leaves the block offering what it does without one.
+ * leaves the block offering what it does without one. Exported so the
+ * link group asks the same question of whether a link is set.
  */
-function isSet(schema: PropSchema | undefined, value: unknown): boolean {
+export function propIsSet(
+  schema: PropSchema | undefined,
+  value: unknown
+): boolean {
   if (schema?.type === "url") return isLinkableUrl(value);
   return value !== undefined && value !== null && value !== "";
 }
@@ -457,6 +467,7 @@ export function inspectSelection(
     props,
     inspector: inspectorOf(definition),
     designLock,
+    placedWith: insertionPropSets(definition),
   };
 }
 

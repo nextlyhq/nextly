@@ -30,7 +30,8 @@
  *
  * Every write that carries a blocks value has the retired values of the
  * components it places taken out before validation sees it, so a page saved
- * after the removal never stores them again. It covers Singles and writes made
+ * after the removal never stores them again: at the top level and inside named
+ * groups, wherever a field's value has a fixed path. It covers Singles and writes made
  * inside a transaction, which the post-commit hooks decline: this changes only
  * the data being written, and needs no read of the document itself.
  *
@@ -55,7 +56,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { HookContext } from "nextly";
 
-import { blocksFieldsOf } from "./class-usage-blocks-fields";
+import { blocksFieldReach } from "./class-usage-blocks-fields";
 import { leavesDocumentPublished } from "./component-readiness-hook";
 import { asDocument } from "./component-store-source";
 import {
@@ -66,6 +67,7 @@ import {
   type ReconcileArgs,
   type RetiredHistoryMemo,
 } from "./retired-history";
+import type { RetiredPins } from "./retired-pins";
 import type { RetiredStore } from "./retired-store";
 import { requestContextFor, SINGLE_HOOK_NAMESPACE } from "./write-target";
 
@@ -109,6 +111,17 @@ export interface RetiredExposureHooksArgs {
   limits: () => DocumentLimits;
   /** What the repair has read of each component's history already. */
   memo?: RetiredHistoryMemo;
+  /**
+   * The versions a lost removal is derived from, held against retention
+   * until a repair records it (`retired-pins`).
+   */
+  pins?: RetiredPins;
+  /**
+   * The wait before each look for a removal written inside a caller's
+   * transaction to commit. Short at first, then a second; a test waits for
+   * nothing.
+   */
+  commitWait?: (look: number) => Promise<void>;
 }
 
 /**
@@ -171,7 +184,129 @@ async function recordRetirements(
         "values until they are recorded, and the ids could be minted again.",
       { componentId, retired, error }
     );
-    await repair(args, live, componentId);
+    if (live?.live === true && componentId !== undefined) {
+      await hold(args, context, componentId, retired, live.lifecycle);
+    }
+    await repair(args, live, componentId, inCallersTransaction(context));
+  }
+}
+
+/**
+ * Pin the versions either side of the removal before the repair, so that if
+ * the repair fails too, retention cannot prune the only record of it before
+ * a later one is made. The repair releases them when it records the ids.
+ *
+ * Inside a caller's transaction the removal is not yet visible, and the pin
+ * would wait on the component's write lock, which that transaction holds. It
+ * is then made once the removal shows in history, which is when the
+ * transaction has committed (`holdOnceCommitted`).
+ */
+async function hold(
+  args: RetiredExposureHooksArgs,
+  context: HookContext<unknown>,
+  componentId: string,
+  retired: RetiredExposures,
+  lifecycle: boolean
+): Promise<void> {
+  const pins = args.pins;
+  if (pins === undefined) return;
+  if (inCallersTransaction(context)) {
+    void holdOnceCommitted(args, pins, componentId, retired, lifecycle);
+    return;
+  }
+  try {
+    await pins.hold(componentId, retired, lifecycle);
+  } catch (error) {
+    args.ctx.logger.error(
+      `[page-builder] the versions behind component "${componentId}"'s lost ` +
+        "retirement could not be held against retention; a repair records it " +
+        "while history still has them.",
+      { componentId, retired, error }
+    );
+  }
+}
+
+/** How many times a removal in a caller's transaction is looked for. */
+const COMMIT_LOOKS = 70;
+
+/**
+ * The wait before a look: short at first, since the caller usually commits
+ * right after the hook returns and a store keeping few versions may prune the
+ * one before the removal at its next save, then a second at most, for about
+ * a minute in all. Never keeps the process alive.
+ */
+function soon(look: number): Promise<void> {
+  const ms = Math.min(1000, 25 * 2 ** look);
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, ms);
+    if (typeof timer === "object" && "unref" in timer) timer.unref();
+  });
+}
+
+/**
+ * Hold a removal written inside a caller's transaction once it commits, then
+ * repair: the history the pool reads shows the removal only then. Looked for
+ * once a second for a minute; a transaction that rolled back never shows it,
+ * and nothing is held for a removal that did not happen. Never raises: it
+ * runs after the hook has returned.
+ */
+async function holdOnceCommitted(
+  args: RetiredExposureHooksArgs,
+  pins: RetiredPins,
+  componentId: string,
+  retired: RetiredExposures,
+  lifecycle: boolean
+): Promise<void> {
+  const wait = args.commitWait ?? soon;
+  // What history showed before the transaction committed: the removal is
+  // newer, and an earlier removal of the same id must not end the wait. Read
+  // now, while the transaction is open; read later it would already show the
+  // removal. Without it, a hold cannot tell this removal from an earlier one,
+  // so every look holds what it finds and the wait runs its whole course.
+  const visible = await lookOrNull(args, componentId, retired, () =>
+    pins.newestVersion(componentId)
+  );
+  for (let look = 0; look < COMMIT_LOOKS; look += 1) {
+    await wait(look);
+    const held = await lookOrNull(args, componentId, retired, () =>
+      pins.hold(componentId, retired, lifecycle, visible ?? 0)
+    );
+    if (held === true && visible !== null) {
+      await repair(args, { live: true, lifecycle }, componentId);
+      return;
+    }
+  }
+  if (visible === null) {
+    await repair(args, { live: true, lifecycle }, componentId);
+    return;
+  }
+  args.ctx.logger.warn(
+    `[page-builder] component "${componentId}"'s removal, written in a ` +
+      "transaction, was not held: it never showed in its history, as when " +
+      "the transaction rolled back, or every look failed.",
+    { componentId, retired }
+  );
+}
+
+/**
+ * One look of the wait, its failure logged and answered as `null`, so one
+ * failed read does not end the wait.
+ */
+async function lookOrNull<T>(
+  args: RetiredExposureHooksArgs,
+  componentId: string,
+  retired: RetiredExposures,
+  look: () => Promise<T>
+): Promise<T | null> {
+  try {
+    return await look();
+  } catch (error) {
+    args.ctx.logger.error(
+      `[page-builder] a look for component "${componentId}"'s removal in its ` +
+        "history failed; it is looked for again.",
+      { componentId, retired, error }
+    );
+    return null;
   }
 }
 
@@ -187,12 +322,16 @@ async function recordRetirements(
 async function repair(
   args: RetiredExposureHooksArgs,
   live: Live | undefined,
-  componentId: string | undefined
+  componentId: string | undefined,
+  inTransaction = false
 ): Promise<void> {
   if (live?.live !== true || componentId === undefined) return;
   const lifecycle = live.lifecycle;
   try {
-    await reconcileRetired(repairArgs(args, lifecycle), componentId);
+    await reconcileRetired(
+      repairArgs(args, lifecycle, inTransaction),
+      componentId
+    );
   } catch (error) {
     args.ctx.logger.error(
       `[page-builder] the retired fields of component "${componentId}" ` +
@@ -206,7 +345,13 @@ async function repair(
 /** What a repair of this store's retired ids reads and writes through. */
 function repairArgs(
   args: RetiredExposureHooksArgs,
-  lifecycle: boolean
+  lifecycle: boolean,
+  /**
+   * Whether the repair runs inside a caller's transaction. A release then
+   * waits: it takes the component's write lock, which that transaction holds,
+   * and a later repair makes it.
+   */
+  inTransaction = false
 ): ReconcileArgs {
   return {
     history: args.ctx.services.versions,
@@ -216,6 +361,7 @@ function repairArgs(
     store: args.store,
     logger: args.ctx.logger,
     ...(args.memo === undefined ? {} : { memo: args.memo }),
+    ...(args.pins === undefined || inTransaction ? {} : { pins: args.pins }),
   };
 }
 
@@ -292,16 +438,20 @@ async function stripWrite(
   if (!isPlainRecord(data)) return undefined;
   // Asked of the values before the configuration, so a write carrying no
   // document, which is most of them, costs no registry read.
-  const candidates = Object.keys(data).filter(
-    key => asDocument(data[key]) !== null
-  );
-  if (candidates.length === 0) return undefined;
+  if (!Object.values(data).some(value => mayHoldDocument(value, 0))) {
+    return undefined;
+  }
   const slug = fields.collection;
   if (typeof slug !== "string") return undefined;
 
   try {
-    const blocks = await blocksFieldNames(args.ctx, slug, context);
-    const written = candidates.filter(name => blocks.has(name));
+    const written = (await blocksFieldPaths(args.ctx, slug, context)).flatMap(
+      path => {
+        const raw = valueAt(data, path);
+        const document = asDocument(raw);
+        return document === null ? [] : [{ path, raw, document }];
+      }
+    );
     if (written.length === 0) return undefined;
     return await stripped(args, slug, fields, data, written);
   } catch (error) {
@@ -314,9 +464,71 @@ async function stripWrite(
   }
 }
 
+/**
+ * How deep a write's named groups are looked into for a blocks value, as deep
+ * as the walk of a declaration follows them.
+ */
+const MAX_GROUP_DEPTH = 16;
+
+/**
+ * Whether a written value is, or inside its named groups holds, something a
+ * blocks value could be. Text is decoded only at the top level, where a value
+ * may arrive as JSON text; a group's own values arrive decoded.
+ */
+function mayHoldDocument(value: unknown, depth: number): boolean {
+  if (depth === 0 ? asDocument(value) !== null : isDocumentShaped(value)) {
+    return true;
+  }
+  return (
+    depth < MAX_GROUP_DEPTH &&
+    isPlainRecord(value) &&
+    Object.values(value).some(inner => mayHoldDocument(inner, depth + 1))
+  );
+}
+
+/** Whether a decoded value has a document's shape. */
+function isDocumentShaped(value: unknown): boolean {
+  return isPlainRecord(value) && Array.isArray(value.nodes);
+}
+
+/** The value at a path of a write's data, or `undefined` where none is. */
+function valueAt(
+  data: Record<string, unknown>,
+  path: readonly string[]
+): unknown {
+  let value: unknown = data;
+  for (const key of path) {
+    if (!isPlainRecord(value) || !Object.hasOwn(value, key)) return undefined;
+    value = value[key];
+  }
+  return value;
+}
+
+/**
+ * The data with `value` at `path`, every record on the way copied, so the
+ * write's own objects are never changed.
+ */
+function withValueAt(
+  data: Record<string, unknown>,
+  path: readonly string[],
+  value: unknown
+): Record<string, unknown> {
+  const [key, ...rest] = path;
+  if (key === undefined) return data;
+  const inner = data[key];
+  return {
+    ...data,
+    [key]:
+      rest.length === 0 || !isPlainRecord(inner)
+        ? value
+        : withValueAt(inner, rest, value),
+  };
+}
+
 /** One blocks value a write carries, decoded, with the form it arrived in. */
 interface WrittenDocument {
-  readonly name: string;
+  /** Where it is in the write: one key, or the named groups leading to it. */
+  readonly path: readonly string[];
   readonly raw: unknown;
   readonly document: BlockDocument;
 }
@@ -327,13 +539,9 @@ async function stripped(
   slug: string,
   fields: Record<string, unknown>,
   data: Record<string, unknown>,
-  names: readonly string[]
+  written: readonly WrittenDocument[]
 ): Promise<Record<string, unknown> | undefined> {
   const limits = args.limits();
-  const written = names.flatMap(name => {
-    const document = asDocument(data[name]);
-    return document === null ? [] : [{ name, raw: data[name], document }];
-  });
   const own =
     slug === args.componentCollection
       ? (idOf(fields.originalData) ?? idOf(data))
@@ -353,17 +561,21 @@ async function stripped(
   for (const entry of written) {
     const placements = stripRetiredExposures(entry.document, retired, limits);
     const self =
-      own !== undefined && entry.name === args.componentField
+      own !== undefined &&
+      entry.path.length === 1 &&
+      entry.path[0] === args.componentField
         ? withoutOwnRetired(placements.document, retired.get(own))
         : { document: placements.document, removed: 0 };
     if (placements.removed + self.removed === 0) continue;
-    next ??= { ...data };
     // In the encoding it arrived in: a value written as JSON text is stored as
     // text, and handing back an object would change what the write stores.
-    next[entry.name] =
+    next = withValueAt(
+      next ?? data,
+      entry.path,
       typeof entry.raw === "string"
         ? JSON.stringify(self.document)
-        : self.document;
+        : self.document
+    );
   }
   return next;
 }
@@ -392,7 +604,11 @@ async function ownRetired(
     )) as { localized?: unknown; status?: unknown } | null;
     if (collection?.localized === true) return undefined;
     const repaired = await repairRetired(
-      repairArgs(args, collection?.status === true),
+      repairArgs(
+        args,
+        collection?.status === true,
+        inCallersTransaction(context)
+      ),
       componentId
     );
     return repaired.retired;
@@ -426,17 +642,20 @@ function placedComponentIds(
 }
 
 /**
- * The names of the blocks fields the written collection or Single declares.
+ * Where the written collection or Single stores each blocks field it
+ * declares: one key at the top level, or the named groups leading to it. A
+ * field with no fixed path (inside a repeater) is not reached; its values are
+ * never drawn, and the cleanup reports where it found them.
  *
  * A Single's hooks are namespaced `single:<slug>`, and its declaration comes
  * from the Singles registry, which is the one place a plugin can read it
  * without creating the Single's row.
  */
-async function blocksFieldNames(
+export async function blocksFieldPaths(
   ctx: RetiredExposurePluginContext,
   slug: string,
   context: HookContext<unknown>
-): Promise<ReadonlySet<string>> {
+): Promise<readonly (readonly string[])[]> {
   const declaration = slug.startsWith(SINGLE_HOOK_NAMESPACE)
     ? (
         await ctx.services.singles.list({
@@ -448,9 +667,9 @@ async function blocksFieldNames(
         slug,
         requestContextFor(context)
       );
-  return new Set(
-    blocksFieldsOf(declaration as { fields?: unknown }).map(field => field.name)
-  );
+  return blocksFieldReach(
+    declaration as { fields?: unknown; localized?: unknown }
+  ).fields.map(field => field.path);
 }
 
 /**
@@ -461,7 +680,7 @@ async function blocksFieldNames(
  * when a field is removed in the editor. Hands the same document back when
  * there is nothing to remove, and never changes the one passed in.
  */
-function withoutOwnRetired(
+export function withoutOwnRetired(
   document: BlockDocument,
   retired: RetiredExposures | undefined
 ): { document: BlockDocument; removed: number } {
@@ -545,6 +764,14 @@ function removeOwnKeys(
     if (apply) delete record[key];
   }
   return removed;
+}
+
+/**
+ * Whether the hook runs inside a transaction its caller owns: core hands it
+ * that transaction's executor only then.
+ */
+function inCallersTransaction(context: HookContext<unknown>): boolean {
+  return (context as { executor?: unknown }).executor !== undefined;
 }
 
 /** A field of a row that may be absent. */

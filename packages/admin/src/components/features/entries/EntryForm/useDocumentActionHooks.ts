@@ -93,7 +93,8 @@ function publishedAction(action: EditorDocumentAction): DocumentAction {
  * Runs `handler` before every action that stores the editor's work — Save and
  * Publish, from any control, the shortcut or a plugin — while the calling
  * component is mounted. It may be asynchronous, and the action waits for it;
- * throwing refuses the action with the error's message.
+ * throwing refuses the action with the error's message, and throwing an
+ * `AbortError` cancels it, as an author's "no" to a question does.
  *
  * The latest `handler` is the one run, so it may close over render state
  * without re-registering on every render.
@@ -106,7 +107,7 @@ export function useBeforeDocumentAction(handler: BeforeDocumentAction): void {
   });
   useEffect(() => {
     if (register === undefined) return undefined;
-    return register(action => latest.current(action));
+    return register((action, store) => latest.current(action, store));
   }, [register]);
 }
 

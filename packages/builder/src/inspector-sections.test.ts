@@ -22,8 +22,10 @@ const placed = INSPECTOR_SECTIONS.flatMap(section =>
 );
 
 describe("the placement table", () => {
-  it("orders the sections Layout, Spacing, Size, Position, Typography, Background, Border, Effects", () => {
+  it("orders the sections Icon, Layout, Spacing, Size, Position, Typography, Background, Border, Effects", () => {
+    // Icon first, shown only by a block offering it: an Accordion.
     expect(INSPECTOR_SECTIONS.map(section => section.label)).toEqual([
+      "Icon",
       "Layout",
       "Spacing",
       "Size",
@@ -107,6 +109,16 @@ describe("which tier shows without being asked", () => {
     expect(tierShows("flex-or-grid", { ...plain, display: "block" })).toBe(
       false
     );
+  });
+
+  it("puts an image's fit and ratio first in Size, before its width and height", () => {
+    // What an author changes first on an image is how it fills its box.
+    const fit = placementOf("objectFit", "dimensions");
+    const ratio = placementOf("aspectRatio", "dimensions");
+    const width = placementOf("width", "dimensions");
+    expect(fit.section).toBe("size");
+    expect(fit.order).toBeLessThan(ratio.order);
+    expect(ratio.order).toBeLessThan(width.order);
   });
 
   it("shows the media controls on a replaced element, and transition in a state", () => {

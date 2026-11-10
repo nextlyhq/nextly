@@ -23,11 +23,16 @@ import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity
 import {
   bindTransitionRecorder,
   resolveTransitionStore,
+  transitionDefaultLocale,
 } from "../../domains/i18n/migration/transition-recorder";
 import {
   beginI18nTransition,
   settleI18nTransition,
 } from "../../domains/i18n/migration/transition-state";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../domains/i18n/per-language-storage";
 import type { Deletion } from "../../domains/schema/migrate/data-loss-consent";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import {
@@ -1098,7 +1103,10 @@ export async function ensureLocalizedCompanions(
   // The same store, plus the locale a newly created companion gets recorded with. Undefined when
   // the app configures no default locale, in which case no entity can be localized and nothing
   // reaches the create below.
-  const transitions = bindTransitionRecorder(transitionStore, config);
+  const transitions = bindTransitionRecorder(
+    transitionStore,
+    await transitionDefaultLocale(adapter as unknown as DrizzleAdapter, config)
+  );
   // Each kind's entities and how its table is named, as the boot reads them too.
   const { localizableConfigEntities } = await import(
     "../../domains/i18n/runtime/localizable-config-entities"
@@ -1109,7 +1117,8 @@ export async function ensureLocalizedCompanions(
   for (const [kind, group, resolveTableName] of groups) {
     for (const entity of group) {
       if (!entity.slug) continue;
-      if (entity.localized !== true) {
+      // Restored only when its translatable values no longer belong in a companion (`storesPerLanguage`).
+      if (!storesPerLanguage(entity)) {
         // Turning localization off is a transition too, and until now only the Schema Builder
         // performed it: this pass skipped everything not currently localized, so a companion
         // created from configuration was simply abandoned. Reads fall back to the main table and
@@ -1158,7 +1167,8 @@ export async function ensureLocalizedCompanions(
         tableName,
         fields: entity.fields ?? [],
         dialect,
-        status: entity.status === true,
+        // A per-language `_status` only where the entity publishes each language on its own.
+        status: publishesPerLanguage(entity),
       };
 
       // How both companion calls report a failure, differing only in what they were doing and

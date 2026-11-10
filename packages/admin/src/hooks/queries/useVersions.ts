@@ -23,6 +23,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+import { refusedAsChangedSince } from "@admin/lib/document-version";
 import { entryKeys } from "@admin/services/entryApi";
 import {
   versionApi,
@@ -318,8 +319,20 @@ export function useVersionDiff({
 
 export interface UseRestoreVersionOptions {
   scope: VersionScope;
+  /**
+   * The version of the document, as the editor holds it in `locale`, that a
+   * restore writing that language sends: a restore is refused when the
+   * document changed since. Without it, a restore sends none.
+   */
+  versionFor?: (locale: string | null) => Promise<string | undefined>;
   onSuccess?: (result: RestoreVersionResponse) => void;
   onError?: (error: Error) => void;
+}
+
+/** The version to restore, and the language it writes: its own. */
+export interface RestoreVersionInput {
+  versionNo: number;
+  locale: string | null;
 }
 
 /** Options for renaming a version. */
@@ -384,18 +397,33 @@ export function useSetVersionLabel({
  */
 export function useRestoreVersion({
   scope,
+  versionFor,
   onSuccess,
   onError,
 }: UseRestoreVersionOptions): UseMutationResult<
   RestoreVersionResponse,
   Error,
-  number,
+  number | RestoreVersionInput,
   unknown
 > {
   const queryClient = useQueryClient();
 
-  return useMutation<RestoreVersionResponse, Error, number>({
-    mutationFn: versionNo => versionApi.restore(scope, versionNo),
+  return useMutation<
+    RestoreVersionResponse,
+    Error,
+    number | RestoreVersionInput
+  >({
+    // A bare number restores without naming its language, and so without a
+    // version.
+    mutationFn: async input => {
+      const { versionNo, locale } =
+        typeof input === "number"
+          ? { versionNo: input, locale: undefined }
+          : input;
+      const version =
+        locale === undefined ? undefined : await versionFor?.(locale);
+      return versionApi.restore(scope, versionNo, version);
+    },
     // Mutations retry twice by default. A restore is not idempotent — each
     // attempt is a fresh write that records another version and another outbox
     // event — so a dropped response would otherwise multiply into several
@@ -405,6 +433,14 @@ export function useRestoreVersion({
       // A refusal because the entity was removed from code reads its schema
       // again, so a screen opened before the removal turns read-only.
       refreshRemovedFromCodeSchema(queryClient, error);
+      // A refusal because the document changed since reads it again, so the
+      // editor shows the version a second restore would write over.
+      if (refusedAsChangedSince(error)) {
+        void queryClient.invalidateQueries({ queryKey: entryKeys.all });
+        void queryClient.invalidateQueries({
+          queryKey: singleDocumentKeys.all(),
+        });
+      }
       onError?.(error);
     },
     onSuccess: result => {

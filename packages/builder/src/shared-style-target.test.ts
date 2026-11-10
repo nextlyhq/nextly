@@ -5,6 +5,7 @@
 import {
   compilePageCss,
   nodeClassName,
+  overlaidStyles,
   type BlockDocument,
   type BreakpointSet,
   type NamedClass,
@@ -16,7 +17,7 @@ import {
   hasOwnStyles,
   newSharedStyleName,
   nodeSharedStyles,
-  overlaidStyles,
+  DETACH_LOOK_NOT_KEPT,
   planDetachSharedStyle,
   moveToSharedStyleClear,
   planMoveToSharedStyle,
@@ -311,28 +312,48 @@ function shown(
   document: BlockDocument,
   library: NamedClass[],
   property: string,
-  width: number
+  width: number,
+  /** The pseudo-class active, as the sheet wraps it: `:hover`. */
+  pseudo?: string,
+  /**
+   * The site's breakpoints, and the width of the query container the block
+   * sits in, if any: a container rule applies only inside one.
+   */
+  frame: { breakpoints?: BreakpointSet; container?: number } = {}
 ): string | undefined {
   const { css, classes } = compilePageCss(document, {
-    breakpoints: BREAKPOINTS,
+    breakpoints: frame.breakpoints ?? BREAKPOINTS,
     namedClasses: library,
   });
   const tokens = new Set((classes.get("a") ?? "").split(" "));
   let value: string | undefined;
-  let limit = Infinity;
+  let applies = true;
   for (const line of css.split("\n")) {
     const media = /@media \(max-width: (\d+)px\)/.exec(line);
     if (media) {
-      limit = Number(media[1]);
+      applies = width <= Number(media[1]);
+      continue;
+    }
+    const query =
+      /@container \((max|min)-width: (\d+)px\)|@container \(min-width: 0\)/.exec(
+        line
+      );
+    if (query) {
+      const inside = frame.container;
+      applies =
+        inside !== undefined &&
+        (query[1] !== "max" || inside <= Number(query[2]));
       continue;
     }
     if (line.trim() === "}") {
-      limit = Infinity;
+      applies = true;
       continue;
     }
     const rule = /\.([\w-]+)(?::where\([^)]*\))? \{ (.*) \}/.exec(line);
-    if (!rule || !tokens.has(rule[1] ?? "") || width > limit) continue;
-    if (line.includes(":where(")) continue;
+    if (!rule || !tokens.has(rule[1] ?? "") || !applies) continue;
+    // A state's rule applies only while that state is active; base always.
+    const state = /:where\(([^)]*)\)/.exec(line)?.[1];
+    if (state !== undefined && state !== pseudo) continue;
     for (const declaration of (rule[2] ?? "").split(";")) {
       const [name, ...rest] = declaration.split(":");
       if (name?.trim() === property) value = rest.join(":").trim();
@@ -468,6 +489,244 @@ describe("detaching and removing a block's style", () => {
       desktop: "#aa0000",
       tablet: "#0000aa",
       opacity: "0.5",
+    });
+  });
+
+  describe("keeps the look in every state and at every width", () => {
+    /** A block's colour at desktop and tablet, at rest and hovered. */
+    const look = (document: BlockDocument, library: NamedClass[]) => ({
+      desktop: shown(document, library, "color", 1280),
+      desktopHover: shown(document, library, "color", 1280, ":hover"),
+      tablet: shown(document, library, "color", 800),
+      tabletHover: shown(document, library, "color", 800, ":hover"),
+    });
+    const detached = (
+      before: BlockDocument,
+      style: NamedClass,
+      worn: NamedClass[]
+    ) => {
+      const plan = planDetachSharedStyle(
+        before,
+        "a",
+        style,
+        worn,
+        undefined,
+        BREAKPOINTS
+      );
+      if (!plan.ok) throw new Error(plan.reason);
+      return applied(before, plan.ops);
+    };
+    const early = (styles: NodeStyles): NamedClass => ({
+      id: "c-early",
+      slug: "early",
+      orderIndex: 0,
+      styles,
+    });
+    const late = (styles: NodeStyles): NamedClass => ({
+      id: "c-late",
+      slug: "late",
+      orderIndex: 1,
+      styles,
+    });
+
+    it("keeps a later style's hover over the detached style's base", () => {
+      // The block's own rules come after every style's, and a state's rule
+      // is weightless, so a base value copied onto the block would beat the
+      // later style's hover while hovered.
+      const styleA = early({ base: { base: { color: "#aa0000" } } });
+      const styleB = late({ hover: { base: { color: "#0000aa" } } });
+      const before = page({ classes: ["c-early", "c-late"] });
+      const was = look(before, [styleA, styleB]);
+      // The population first: the two styles really do differ by state.
+      expect(was).toEqual({
+        desktop: "#aa0000",
+        desktopHover: "#0000aa",
+        tablet: "#aa0000",
+        tabletHover: "#0000aa",
+      });
+      expect(
+        look(detached(before, styleA, [styleA, styleB]), [styleB])
+      ).toEqual(was);
+    });
+
+    it("keeps the block's own tablet value over a later style's hover", () => {
+      const styleA = early({ base: { base: { color: "#aa0000" } } });
+      const styleB = late({ hover: { base: { color: "#0000aa" } } });
+      const before = page({
+        classes: ["c-early", "c-late"],
+        styles: { base: { md: { color: "#00aa00" } } },
+      });
+      const was = look(before, [styleA, styleB]);
+      expect(was.tabletHover).toBe("#00aa00");
+      expect(was.desktopHover).toBe("#0000aa");
+      expect(
+        look(detached(before, styleA, [styleA, styleB]), [styleB])
+      ).toEqual(was);
+    });
+
+    it("keeps the block's own wider value over a later style's narrower one", () => {
+      const styleA = early({ base: { base: { color: "#aa0000" } } });
+      const styleB = late({ base: { md: { color: "#0000aa" } } });
+      const before = page({
+        classes: ["c-early", "c-late"],
+        styles: { base: { base: { color: "#00aa00" } } },
+      });
+      const was = look(before, [styleA, styleB]);
+      // The block's own value wins at every width, the later style's tablet
+      // value included.
+      expect(was.tablet).toBe("#00aa00");
+      expect(
+        look(detached(before, styleA, [styleA, styleB]), [styleB])
+      ).toEqual(was);
+    });
+
+    it("keeps a later style's container value over the detached style's viewport one", () => {
+      // The browser applies both axes at once: a tablet-wide page with the
+      // block in a small container shows the later style's container value,
+      // and a viewport value copied onto the block would beat it there.
+      const set: BreakpointSet = {
+        viewport: [
+          { id: "base", label: "Base" },
+          { id: "md", label: "Medium", maxWidth: 900 },
+        ],
+        container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+      };
+      const styleA = early({ base: { md: { color: "#aa0000" } } });
+      const styleB = late({ base: { "cq-sm": { color: "#0000aa" } } });
+      const before = page({ classes: ["c-early", "c-late"] });
+      const everywhere = (document: BlockDocument, library: NamedClass[]) =>
+        [1280, 800].flatMap(width =>
+          [undefined, 300, 600].map(container =>
+            shown(document, library, "color", width, undefined, {
+              breakpoints: set,
+              container,
+            })
+          )
+        );
+      const was = everywhere(before, [styleA, styleB]);
+      // The population first: the small container shows the later style.
+      // Desktop: no container, a small one, a wide one; then tablet.
+      expect(was).toEqual([
+        undefined,
+        "#0000aa",
+        undefined,
+        "#aa0000",
+        "#0000aa",
+        "#aa0000",
+      ]);
+      const plan = planDetachSharedStyle(
+        before,
+        "a",
+        styleA,
+        [styleA, styleB],
+        undefined,
+        set
+      );
+      if (!plan.ok) throw new Error(plan.reason);
+      expect(everywhere(applied(before, plan.ops), [styleB])).toEqual(was);
+    });
+
+    it("refuses, leaving the style worn, a look the block's own rules can't hold", () => {
+      // The detached style's small-container value shows only where the
+      // later style's tablet value does not: "small container and not
+      // tablet" is a combined query the block's own rules have no way to say.
+      const set: BreakpointSet = {
+        viewport: [
+          { id: "base", label: "Base" },
+          { id: "md", label: "Medium", maxWidth: 900 },
+        ],
+        container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+      };
+      const styleA = early({ base: { "cq-sm": { color: "#aaaa00" } } });
+      const styleB = late({ base: { md: { color: "#0000aa" } } });
+      const before = page({ classes: ["c-early", "c-late"] });
+      expect(
+        planDetachSharedStyle(
+          before,
+          "a",
+          styleA,
+          [styleA, styleB],
+          undefined,
+          set
+        )
+      ).toEqual({ ok: false, reason: DETACH_LOOK_NOT_KEPT });
+    });
+
+    it("keeps the look for any mix of styles, states and widths", () => {
+      // Seeded, so a failure names a case that can be run again.
+      // mulberry32: 32-bit integer steps, so no bits are lost to floats.
+      let seed = 7;
+      const next = (n: number): number => {
+        seed = (seed + 0x6d2b79f5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) % n;
+      };
+      const states = ["base", "hover", "focus", "active"] as const;
+      const pseudos = [undefined, ":hover", ":focus-visible", ":active"];
+      const colours = ["#aa0000", "#00aa00", "#0000aa", "#aaaa00"];
+      const anEnvelope = (): NodeStyles => {
+        let styles: NodeStyles = {};
+        for (let count = next(4); count > 0; count -= 1) {
+          const state = states[next(4)] ?? "base";
+          const breakpoint = next(2) === 0 ? "base" : "md";
+          const values =
+            next(2) === 0
+              ? { color: colours[next(4)] }
+              : {
+                  padding: {
+                    [next(2) === 0 ? "blockStart" : "inlineStart"]:
+                      `${next(4) * 8}px`,
+                  },
+                };
+          styles = overlaidStyles(styles, {
+            [state]: { [breakpoint]: values },
+          } as NodeStyles);
+        }
+        return styles;
+      };
+      const everyLook = (document: BlockDocument, library: NamedClass[]) =>
+        pseudos.flatMap(pseudo =>
+          [1280, 800].flatMap(width =>
+            ["color", "padding-block-start", "padding-inline-start"].map(
+              property => shown(document, library, property, width, pseudo)
+            )
+          )
+        );
+      for (let run = 0; run < 150; run += 1) {
+        const worn: NamedClass[] = Array.from(
+          { length: 2 + next(2) },
+          (_, index) => ({
+            id: `c-${index}`,
+            slug: `s${index}`,
+            orderIndex: index,
+            styles: anEnvelope(),
+          })
+        );
+        const before = page({
+          classes: worn.map(row => row.id),
+          styles: anEnvelope(),
+        });
+        const style = worn[next(worn.length)] as NamedClass;
+        const rest = worn.filter(row => row.id !== style.id);
+        expect({
+          run,
+          look: everyLook(detached(before, style, worn), rest),
+        }).toEqual({ run, look: everyLook(before, worn) });
+      }
+    });
+
+    it("keeps the detached style's hover over an earlier style's", () => {
+      const styleA = early({ hover: { base: { color: "#aa0000" } } });
+      const styleB = late({
+        base: { base: { color: "#111111" } },
+        hover: { md: { color: "#0000aa" } },
+      });
+      const before = page({ classes: ["c-early", "c-late"] });
+      const was = look(before, [styleA, styleB]);
+      expect(
+        look(detached(before, styleB, [styleA, styleB]), [styleA])
+      ).toEqual(was);
     });
   });
 

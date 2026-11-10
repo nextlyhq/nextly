@@ -38,16 +38,22 @@ import { createElement } from "react";
 
 import {
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
   PAGE_ROOT_CLASS,
   previewStateClass,
   registerBlocks,
   STYLE_STATES,
   type BlockDocument,
+  type DefinitionsById,
   type SiteSheetInput,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 
-import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import {
+  INSTANCE_ATTRIBUTE,
+  LIST_ACTION_ATTRIBUTE,
+  NODE_ID_ATTRIBUTE,
+} from "@nextlyhq/blocks-react";
 
 import { markedElementOf } from "./style-subject";
 
@@ -58,6 +64,8 @@ import {
   DRAG_SOURCE_ATTRIBUTE,
   DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
+  CONDITIONED_ATTRIBUTE,
+  CONDITIONED_OWN_ATTRIBUTE,
   LOCKED_ATTRIBUTE,
   lockMarksOf,
   SELECTED_ATTRIBUTE,
@@ -66,6 +74,7 @@ import {
   isOutermostForAddress,
   nodeElement,
   nodeIdFromEvent,
+  outermostElementsOf,
 } from "./canvas";
 import type { CanvasDragState } from "./canvas-drag";
 
@@ -1329,6 +1338,24 @@ describe("the drag in flight is drawn on the canvas", () => {
           render: ({ className }: { className: string }) =>
             createElement("div", { className }),
         },
+        {
+          // Draws a part the way a component placement's definition does: a
+          // re-minted node id the page does not hold, carrying the
+          // placement's address as its instance.
+          name: "acme/placement",
+          version: 1,
+          description: "A block drawn from a definition.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className },
+              createElement("div", {
+                [NODE_ID_ATTRIBUTE]: "minted-part",
+                [INSTANCE_ATTRIBUTE]: "card",
+              })
+            ),
+        },
       ] as never,
       { source: "canvas-drag-marks-test" }
     );
@@ -1567,6 +1594,441 @@ describe("the drag in flight is drawn on the canvas", () => {
     expect(locked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
   });
 
+  it("draws a conditioned block, marked, whoever the page would show it to", async () => {
+    // The published page leaves a block whose conditions fail out; the
+    // canvas draws it so the author can see and select it, and the mark
+    // says it isn't shown to everyone.
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "gated",
+                type: "acme/leaf",
+                version: 1,
+                props: {},
+                visibility: { conditions: vip },
+              },
+              {
+                id: "broken",
+                type: "acme/leaf",
+                version: 1,
+                props: {},
+                visibility: { conditions: vip },
+              },
+              { id: "plain", type: "acme/leaf", version: 1, props: {} },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        conditionsUnchecked={new Set(["broken"])}
+      />
+    );
+    await act(async () => undefined);
+
+    const markOf = (id: string) =>
+      container
+        .querySelector(`[${NODE_ID_ATTRIBUTE}="${id}"]`)
+        ?.getAttribute(CONDITIONED_ATTRIBUTE);
+    expect(markOf("gated")).toBe("conditional");
+    expect(markOf("broken")).toBe("unchecked");
+    // CONTROL: drawn, and an ordinary block beside them is not marked.
+    expect(
+      container.querySelector(`[${NODE_ID_ATTRIBUTE}="plain"]`)
+    ).not.toBeNull();
+    expect(markOf("plain")).toBeNull();
+  });
+
+  it("draws a conditioned block of a component an override places, marked", async () => {
+    // The page places "frame", whose nested placement stores "plain" but is
+    // exposed; the page's override repoints it to "gated", the component the
+    // renderer then draws, whose own block has conditions.
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const definitions: DefinitionsById = new Map([
+      [
+        "frame",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "nested",
+              type: COMPONENT_INSTANCE_TYPE,
+              version: 1,
+              props: { componentId: "plain" },
+            },
+          ],
+          exposed: [
+            {
+              id: "swap",
+              label: "Which",
+              nodeId: "nested",
+              propPath: "componentId",
+              type: "select",
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+      [
+        "plain",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [{ id: "stored", type: "acme/leaf", version: 1, props: {} }],
+        } as unknown as BlockDocument,
+      ],
+      [
+        "gated",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "inner",
+              type: "acme/leaf",
+              version: 1,
+              props: {},
+              visibility: { conditions: vip },
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "card",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "frame", overrides: { swap: "gated" } },
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        render={{ definitions }}
+      />
+    );
+    await act(async () => undefined);
+
+    // Drawn, though the page would leave it out, and marked as conditioned.
+    const marked = container.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.getAttribute(CONDITIONED_ATTRIBUTE)).toBe("conditional");
+  });
+
+  it("draws a conditioned block of a component a nested placement's rewritten variant selects", async () => {
+    // "outer" exposes its nested placement's variant; the page picks "alt",
+    // and "mid"'s "alt" variant repoints its own nested placement to "gated".
+    // No stored id names "gated": only the settings the resolver rewrites do.
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const component = (nodes: unknown[], envelope: object = {}) =>
+      ({
+        formatVersion: 1,
+        kind: "component",
+        nodes,
+        ...envelope,
+      }) as unknown as BlockDocument;
+    const placing = (id: string, componentId: string) => ({
+      id,
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId },
+    });
+    const definitions: DefinitionsById = new Map([
+      [
+        "outer",
+        component([placing("inner", "mid")], {
+          exposed: [
+            {
+              id: "look",
+              label: "Look",
+              nodeId: "inner",
+              propPath: "variant",
+              type: "select",
+            },
+          ],
+        }),
+      ],
+      [
+        "mid",
+        component([placing("slot", "plain")], {
+          exposed: [
+            {
+              id: "pick",
+              label: "Which",
+              nodeId: "slot",
+              propPath: "componentId",
+              type: "select",
+            },
+          ],
+          variants: { alt: { label: "Alt", overrides: { pick: "gated" } } },
+        }),
+      ],
+      [
+        "plain",
+        component([{ id: "stored", type: "acme/leaf", version: 1, props: {} }]),
+      ],
+      [
+        "gated",
+        component([
+          {
+            id: "inner-leaf",
+            type: "acme/leaf",
+            version: 1,
+            props: {},
+            visibility: { conditions: vip },
+          },
+        ]),
+      ],
+    ]);
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "card",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "outer", overrides: { look: "alt" } },
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        render={{ definitions }}
+      />
+    );
+    await act(async () => undefined);
+
+    const marked = container.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.getAttribute(CONDITIONED_ATTRIBUTE)).toBe("conditional");
+  });
+
+  it("marks the root of a placement that can't be checked so, though the root has valid conditions of its own", async () => {
+    // Visitors see the root only when both hold; the placement's can't be
+    // checked, so neither can the block.
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const definitions: DefinitionsById = new Map([
+      [
+        "promo",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "root",
+              type: "acme/leaf",
+              version: 1,
+              props: {},
+              visibility: { conditions: vip },
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "card",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "promo" },
+                visibility: { conditions: vip },
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        render={{ definitions }}
+        conditionsUnchecked={new Set(["card"])}
+      />
+    );
+    await act(async () => undefined);
+
+    const marked = container.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.getAttribute(CONDITIONED_ATTRIBUTE)).toBe("unchecked");
+  });
+
+  it("marks the blocks a conditioned placement nested in a component expands to", async () => {
+    // "frame" places "promo" with conditions of its own; once composed, only
+    // the drawn tree carries that gate, on promo's block.
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const definitions: DefinitionsById = new Map([
+      [
+        "frame",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "nested",
+              type: COMPONENT_INSTANCE_TYPE,
+              version: 1,
+              props: { componentId: "promo" },
+              visibility: { conditions: vip },
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+      [
+        "promo",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            { id: "first", type: "acme/leaf", version: 1, props: {} },
+            { id: "second", type: "acme/leaf", version: 1, props: {} },
+          ],
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "card",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "frame" },
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        render={{ definitions }}
+      />
+    );
+    await act(async () => undefined);
+
+    // Drawn, and badged, where it used to be drawn without one: both of
+    // promo's roots, named as one placement's, so they share one badge.
+    const marked = Array.from(
+      container.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`)
+    );
+    expect(marked).toHaveLength(2);
+    expect(
+      marked.map(element => element.getAttribute(CONDITIONED_ATTRIBUTE))
+    ).toEqual(["conditional", "conditional"]);
+    const placements = marked.map(element =>
+      element.getAttribute(CONDITIONED_OWN_ATTRIBUTE)
+    );
+    expect(placements[0]).not.toBe("");
+    expect(placements[0]).not.toBeNull();
+    expect(placements[1]).toBe(placements[0]);
+  });
+
+  it("marks nothing for a placement gate stored in a definition, which the renderer removes", async () => {
+    // Only the resolver writes `within`; one a definition stores, as
+    // hand-edited data may, restricts nobody on the page.
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const definitions: DefinitionsById = new Map([
+      [
+        "promo",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "leaf",
+              type: "acme/leaf",
+              version: 1,
+              props: {},
+              visibility: { within: [{ conditions: vip }] },
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "card",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "promo" },
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        render={{ definitions }}
+      />
+    );
+    await act(async () => undefined);
+
+    // CONTROL: drawn, under the placement's address.
+    expect(
+      container.querySelector(`[${INSTANCE_ATTRIBUTE}="card"]`)
+    ).not.toBeNull();
+    expect(
+      container.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`)
+    ).toHaveLength(0);
+  });
+
+  it("marks a locked placement's parts by its address, so their ring is the locked one", async () => {
+    /*
+     * A placement's parts carry a re-minted node id plus the placement's
+     * address. Read by the raw id, the lock finds nothing for them and the
+     * selection ring the marks draw from a part is solid, as for an unlocked
+     * block; read by the address, as the selection is, they are locked.
+     */
+    const { container } = draw(undefined, {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "card",
+          type: "acme/placement",
+          version: 1,
+          props: {},
+          locked: true,
+        },
+        { id: "leaf", type: "acme/leaf", version: 1, props: {} },
+      ],
+    });
+    await act(async () => undefined);
+
+    const part = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="minted-part"]`
+    );
+    expect(part?.getAttribute(LOCKED_ATTRIBUTE)).toBe("own");
+    // The control: an unlocked block beside it is not marked.
+    expect(
+      container
+        .querySelector(`[${NODE_ID_ATTRIBUTE}="leaf"]`)
+        ?.hasAttribute(LOCKED_ATTRIBUTE)
+    ).toBe(false);
+  });
+
   it("marks a block's own lock and a lock it is held by from around it apart", async () => {
     // A block inside a locked one is locked too: it is marked `inherited`,
     // so the canvas can say so without claiming a lock of its own. The marks
@@ -1766,6 +2228,30 @@ describe("the site's dark-mode strategy on the canvas root", () => {
 
   it("states nothing when the host serves no site sheet", () => {
     expect(strategyOf(false)).toBeNull();
+  });
+});
+
+describe("the elements standing for an address", () => {
+  it("leaves out a nested canvas's elements, whose ids are its own document's", () => {
+    // Component edit mode draws a canvas inside a block. Ids are scoped per
+    // document, so the inner one may hold the same address as a block out
+    // here; it is not this canvas's to measure.
+    const root = document.createElement("div");
+    root.className = CANVAS_ROOT_CLASS;
+    root.innerHTML = `
+      <div data-nx-node="a" id="outer"></div>
+      <div data-nx-node="host">
+        <div class="${CANVAS_ROOT_CLASS}">
+          <div data-nx-node="a" id="inner"></div>
+        </div>
+      </div>`;
+    document.body.append(root);
+    try {
+      const found = outermostElementsOf(root, new Set(["a"])).get("a") ?? [];
+      expect(found.map(element => element.id)).toEqual(["outer"]);
+    } finally {
+      root.remove();
+    }
   });
 });
 
@@ -2124,9 +2610,211 @@ describe("the site's ground and text on the canvas root", () => {
     expect(opaque("var(--elsewhere)")).toBe(false);
   });
 
+  it("judges the ground by the colour it resolves to, which host CSS can change", () => {
+    /*
+     * The tokens say opaque, but the host's own CSS sets the token's
+     * property to a half-transparent colour. What the canvas paints is the
+     * resolved value, so that is what decides whether the page repeats it.
+     */
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") return "rgba(0, 0, 0, 0.5)";
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff" },
+            },
+          ],
+        },
+      });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("reads the alpha of a wide-gamut colour the ground resolves to", () => {
+    // A browser can keep `color(display-p3 …)` in the computed value; a
+    // half-transparent one must not be taken for the opaque token.
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor")
+              return "color(display-p3 0 0 0 / 0.5)";
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff" },
+            },
+          ],
+        },
+      });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("judges the ground again when the canvas frame resizes", () => {
+    // A site can override the background token under a width or height
+    // query, which a frame resized past it crosses with no render.
+    let narrow = false;
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") {
+              return narrow ? "rgba(255, 255, 255, 0.5)" : "rgb(255, 255, 255)";
+            }
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({ breakpoints, tokens: { tokens: [] } });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(true);
+      narrow = true;
+      window.dispatchEvent(new Event("resize"));
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("judges the ground again when the site's theme changes, with no render", async () => {
+    // The theme marker writes the root's theme without a render; a light
+    // ground that is opaque and a dark one that is not must each be judged.
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        const dark = element.getAttribute("data-nx-site-theme") === "dark";
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") {
+              return dark ? "rgba(11, 15, 25, 0.5)" : "rgb(255, 255, 255)";
+            }
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({ breakpoints, tokens: { tokens: [] } });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(true);
+      root?.setAttribute("data-nx-site-theme", "dark");
+      await act(async () => undefined);
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("names nothing when the host serves no site sheet", () => {
     const root = rootOf(false);
     expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe("");
     expect(root?.hasAttribute("data-nx-site-dark-ground")).toBe(false);
+  });
+});
+
+describe("a list note's action", () => {
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/noted",
+          version: 1,
+          description: "A list with a note to its author.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className },
+              createElement(
+                "div",
+                { "data-nx-list-diagnostic": "sort-fallback" },
+                createElement("span", { "data-testid": "words" }, "Fell back."),
+                createElement(
+                  "button",
+                  {
+                    type: "button",
+                    [LIST_ACTION_ATTRIBUTE]: "choose-sort-field",
+                  },
+                  "Choose a field"
+                )
+              )
+            ),
+        },
+      ] as never,
+      { source: "canvas-list-action-test" }
+    );
+  });
+
+  afterAll(clearBlocks);
+
+  it("asks the host to take the author to the list's sort, in place of a plain selection", () => {
+    const onSelect = vi.fn();
+    const onListSortField = vi.fn();
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "list", type: "acme/noted", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        onSelect={onSelect as never}
+        onListSortField={onListSortField}
+      />
+    );
+    // A button's Enter and Space arrive as this same click.
+    fireEvent.click(screen.getByRole("button", { name: "Choose a field" }));
+    expect(onListSortField).toHaveBeenCalledWith("list");
+    expect(onSelect).not.toHaveBeenCalled();
+    // Anywhere else in the note selects the list, as before.
+    fireEvent.click(screen.getByTestId("words"));
+    expect(onSelect).toHaveBeenCalledWith("list", "replace");
+    expect(onListSortField).toHaveBeenCalledTimes(1);
   });
 });

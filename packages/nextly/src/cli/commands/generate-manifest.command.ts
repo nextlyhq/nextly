@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -12,11 +13,17 @@ import { lazyAction } from "../lazy-action";
  * @param program - Commander program instance
  */
 export function registerGenerateManifestCommand(program: Command): void {
-  program
-    .command("generate:manifest")
-    .description(
-      "Generate the block manifest from plugin declarations, or check it is current"
-    )
+  // `--dry-run` carries the one meaning and help line it has everywhere;
+  // `--check` stays the CI gate that exits non-zero on drift.
+  withDryRun(
+    program
+      .command("generate:manifest")
+      .description(
+        "Generate the block manifest from plugin declarations, or check it is current"
+      ),
+    // Each sets its own exit code, so the two together are refused.
+    { conflicts: ["check"] }
+  )
     .option(
       "-o, --output <path>",
       "Types output path the manifest is written beside"

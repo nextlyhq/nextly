@@ -73,6 +73,8 @@ import {
 } from "drizzle-orm/better-sqlite3";
 import { getTableConfig, type SQLiteTable } from "drizzle-orm/sqlite-core";
 
+import { registerSqliteFunctions } from "./sql-functions";
+
 // Re-export types for convenience
 export type {
   SqliteAdapterConfig,
@@ -183,7 +185,8 @@ function sanitizeSqliteValue(v: unknown): unknown {
  * - No connection pooling (single file/connection)
  * - RETURNING clause supported (SQLite 3.35+)
  * - Savepoints supported via nested transactions
- * - No native ILIKE (uses LOWER() LIKE workaround)
+ * - No native ILIKE (both sides case-folded, then LIKE; the fold is Nextly's own
+ *   `nextly_fold_case`, registered on connect, since SQLite's `lower()` folds ASCII only)
  * - JSON support (not JSONB)
  * - No array types
  *
@@ -309,6 +312,10 @@ export class SqliteAdapter extends DrizzleAdapter {
         readonly: this.config.readonly ?? false,
         timeout: this.config.busyTimeout ?? DEFAULT_CONFIG.busyTimeout,
       });
+
+      // Before anything runs on the connection: the case fold the text matches that ignore
+      // case call here, whose absence would refuse every such statement.
+      registerSqliteFunctions(this.db);
 
       // Configure WAL mode for better concurrency (unless in-memory or readonly)
       if (
@@ -502,7 +509,7 @@ export class SqliteAdapter extends DrizzleAdapter {
    * Note: SQLite uses DEFERRED, IMMEDIATE, or EXCLUSIVE transaction modes
    * rather than isolation levels. This adapter uses IMMEDIATE.
    */
-  async transaction<T>(
+  transaction<T>(
     work: (tx: TransactionContext) => Promise<T>,
     options?: TransactionOptions
   ): Promise<T> {
@@ -521,30 +528,20 @@ export class SqliteAdapter extends DrizzleAdapter {
     // caller through the inner promise.
     // A call made inside an open transaction's work joins it as a savepoint;
     // see `joinableFrame` for which frame it joins.
-    const frame = this.beginTransactionCall();
-    if (frame) {
-      // Nested calls of one frame are serialized among themselves too
-      // (`runJoined`): two interleaved savepoints would release or roll back
-      // each other.
-      try {
-        return await this.runJoined(
-          frame,
-          depth => this.savepointSteps(depth),
-          work,
-          options
-        );
-      } catch (error) {
-        if (isApplicationError(error)) throw error;
-        throw this.classifyError(error);
-      }
-    }
-    const { result, effects } = await this.takeTurn(() =>
-      this.runTransaction(work, options)
-    );
-    // After the queue has moved on rather than inside it: an effect that opens
-    // a transaction of its own would otherwise wait behind the one running it.
-    await this.runHeldEffects(effects);
-    return result;
+    // Nested calls of one frame are serialized among themselves too
+    // (`runJoined`): two interleaved savepoints would release or roll back
+    // each other.
+    return this.openOrJoin(work, options, {
+      // After the queue has moved on rather than inside it, the base runs
+      // what the transaction held: an effect that opens a transaction of its
+      // own would otherwise wait behind the one running it.
+      run: () => this.takeTurn(() => this.runTransaction(work, options)),
+      // SQLite raises no serialization failure: an attempt is tried again
+      // only when `retryWhen` accepts the error that ended it.
+      retryable: () => false,
+      describe: () => ({ label: "a retryable error", detail: {} }),
+      logger: this.config.logger,
+    });
   }
 
   /**
@@ -589,28 +586,6 @@ export class SqliteAdapter extends DrizzleAdapter {
     return next;
   }
 
-  /**
-   * Hold `effect` until the transaction enclosing this async context commits,
-   * or run it now when none does ({@link holdEffect}).
-   *
-   * The effect belongs to the scope this async context runs in, even one
-   * that has already released or rolled back: a service whose own
-   * transaction nested as a savepoint registers from its caller's scope once
-   * that savepoint has released, and the change is undoable for as long as
-   * any scope around it is. The outermost transaction runs the effect once
-   * its COMMIT succeeds, unless a scope between the effect's scope and the
-   * outermost transaction rolled back, and drops every effect on ROLLBACK or
-   * a failed COMMIT. A context whose outermost transaction has already
-   * finished is outside any transaction, so its effect runs now, unless what
-   * it announces was undone and it has run no transaction since.
-   */
-  override afterCommit(
-    effect: () => unknown,
-    onDeferredFailure?: (error: unknown) => void
-  ): Promise<void> {
-    return this.holdEffect(effect, onDeferredFailure);
-  }
-
   /** A held effect's failure that no reporter took goes to the adapter's logger. */
   protected override logHeldEffectFailure(failure: Error): void {
     if (this.config.logger?.error) {
@@ -618,16 +593,6 @@ export class SqliteAdapter extends DrizzleAdapter {
     } else {
       super.logHeldEffectFailure(failure);
     }
-  }
-
-  /**
-   * Whether a `transaction()` call made here would join an open transaction
-   * as a savepoint. On SQLite it would: the connection is the only one, so a
-   * transaction open on it encloses whatever the async chain that opened it
-   * starts.
-   */
-  override inTransaction(): boolean {
-    return this.joinableFrame() !== undefined;
   }
 
   /**
@@ -653,54 +618,47 @@ export class SqliteAdapter extends DrizzleAdapter {
   }
 
   /**
-   * Inner transaction body. Kept private so callers always go through
-   * the serialized `transaction()` queue above and the BEGIN/COMMIT
-   * pair is never invoked outside of it.
+   * One attempt's transaction body, settled rather than rejected for the
+   * transaction's own failure (`runOutermost`). Kept private so callers always
+   * go through the serialized `transaction()` queue above and the
+   * BEGIN/COMMIT pair is never invoked outside of it.
    */
   private async runTransaction<T>(
     work: (tx: TransactionContext) => Promise<T>,
     options: TransactionOptions | undefined
   ) {
     const db = this.ensureDb();
-    const startTime = Date.now();
 
     try {
       // Since better-sqlite3's db.transaction() doesn't support async functions,
       // we manually manage the transaction with BEGIN/COMMIT/ROLLBACK
-      const committed = await this.runOutermost(
+      return await this.settleOutermost(
         {
-          connection: db,
           context: this.createTransactionContext(db),
+          // A call made inside the transaction joins it as a savepoint.
+          join: { adapter: depth => this.savepointSteps(depth) },
           begin: () => {
             db.exec("BEGIN IMMEDIATE");
           },
           commit: () => {
             db.exec("COMMIT");
           },
-          // Errors are ignored: the transaction may already be aborted.
+          // SQLite may already have rolled the transaction back itself; the
+          // ROLLBACK is unconfirmed only when the connection is still in one.
           rollback: () => {
-            db.exec("ROLLBACK");
+            try {
+              db.exec("ROLLBACK");
+            } catch (error) {
+              if (db.inTransaction) throw error;
+            }
           },
         },
         work,
         options
       );
-
-      // Log success
-      if (this.config.logger?.debug) {
-        const durationMs = Date.now() - startTime;
-        this.config.logger.debug("Transaction committed", {
-          durationMs,
-        });
-      }
-
-      return committed;
     } catch (error) {
-      // Work inside a transaction may throw to roll the write back — a refused
-      // value, a denied permission — and that is the application's verdict, not
-      // the driver's failure. Classifying it would replace its code and payload
-      // with a generic database error, so a caller that asked for a refusal is
-      // handed an unexplained failure and the per-field detail never arrives.
+      // Building the transaction's context failed before it began: as
+      // `transaction()` reports an attempt's failure.
       if (isApplicationError(error)) throw error;
       throw this.classifyError(error);
     }
@@ -726,7 +684,7 @@ export class SqliteAdapter extends DrizzleAdapter {
       supportsArrays: false, // SQLite doesn't support array types
       supportsGeneratedColumns: true, // SQLite 3.31+
       supportsFts: true, // SQLite FTS5
-      supportsIlike: false, // No native ILIKE, use LOWER() LIKE
+      supportsIlike: false, // No native ILIKE: both sides case-folded, then LIKE
       supportsReturning: true, // SQLite 3.35+
       supportsSavepoints: true, // SQLite supports savepoints
       supportsOnConflict: true, // ON CONFLICT clause

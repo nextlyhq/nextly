@@ -41,6 +41,16 @@
       "nextly/reserved-filter-keys": [
         "../../packages/nextly/src/domains/collections/query/reserved-filter-keys.ts"
       ],
+      // The same again: the page builder's loop collections route names a
+      // field by this humaniser, and the seed loads that route through tsx.
+      "nextly/field-label": [
+        "../../packages/nextly/src/collections/fields/field-label.ts"
+      ],
+      // And again: the page builder reads which repeaters give their rows a
+      // saved id from the field catalog, and the seed loads it through tsx.
+      "nextly/field-catalog": [
+        "../../packages/nextly/src/collections/fields/catalog.ts"
+      ],
       "nextly/*": ["../../packages/nextly/src/*"],
       "@nextlyhq/adapter-drizzle": [
         "../../packages/adapter-drizzle/src/index.ts"

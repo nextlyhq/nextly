@@ -20,6 +20,7 @@ import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "./blocks";
 import {
+  pageBindingRun,
   prepareDocumentAsDrawn,
   prepareDocumentForRead,
   prepareDocumentReadStages,
@@ -86,6 +87,54 @@ describe("read stages keep reference identity when a pass changes nothing", () =
 
     expect(stages.deduped).toBe(stages.gated);
     expect(stages.prepared).not.toBe(stages.deduped);
+  });
+
+  it("a document with no binding keeps the stage by reference", () => {
+    // Given a binding pass, as a published page always is: the bound stage
+    // must still be the stage before it, or every page reads as repaired.
+    const document = untouchedDocument();
+    const bindings = pageBindingRun(
+      { entry: { title: "Bound" } },
+      "en",
+      resolver
+    );
+    const stages = prepareDocumentReadStages(document, { resolver, bindings });
+
+    expect(stages).not.toBeNull();
+    if (stages === null) return;
+    expect(stages.bound).toBe(stages.deduped);
+    expect(stages.prepared).toBe(stages.bound);
+    expect(stages.boundValues.size).toBe(0);
+  });
+
+  it("returns a DIFFERENT object for the bound stage when a binding filled a prop", () => {
+    // The control for the case above: a pass that returned its input
+    // unconditionally would pass it, and fill nothing.
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Own" },
+          bindings: { text: { $bind: "title" } },
+        },
+      ],
+    };
+    const bindings = pageBindingRun(
+      { entry: { title: "Bound" } },
+      "en",
+      resolver
+    );
+    const stages = prepareDocumentReadStages(document, { resolver, bindings });
+
+    expect(stages).not.toBeNull();
+    if (stages === null) return;
+    expect(stages.bound).not.toBe(stages.deduped);
+    expect(stages.bound.nodes[0]?.props.text).toBe("Bound");
+    expect(stages.deduped.nodes[0]?.props.text).toBe("Own");
   });
 });
 
@@ -176,7 +225,7 @@ describe("prepareDocumentAsDrawn", () => {
     const stages = prepareDocumentReadStages(document, { resolver });
 
     expect(prepareDocumentAsDrawn(document, { resolver })).toEqual(
-      stages?.deduped
+      stages?.bound
     );
   });
 

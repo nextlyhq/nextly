@@ -20,6 +20,7 @@
  * @module admin/BlocksField.breakpoints.test
  */
 import { cleanup, render } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,6 +54,34 @@ const seen: {
 let clientConfig: Record<string, unknown> | undefined;
 /** The device the shell restores on load, as an author left it. */
 let storedDevice: string | null = null;
+/** Every device the editor asked the shell for, in order. */
+const deviceRequests: Array<string | null> = [];
+/** Whether the shell draws its Settings dialog open. */
+let settingsOpen = false;
+/** What the Site tab's read answers with; nothing until a case sets it. */
+let siteSettingsRead: Record<string, unknown> | undefined;
+/** What the stored site style's read answers with for the test in hand. */
+let storedRead: {
+  data: unknown;
+  isPending: boolean;
+  error: Error | null;
+  /** Whether the answer is the site as it is now, as the real read reports. */
+  current: boolean;
+} = { data: undefined, isPending: false, error: null, current: true };
+/** A current answer from the route, holding `data`. */
+const answered = (data: unknown): typeof storedRead => ({
+  data,
+  isPending: false,
+  error: null,
+  current: true,
+});
+/** The stored set without Mobile, as a removal elsewhere leaves it. */
+const TABLET_ONLY = {
+  breakpoints: {
+    viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+    container: [],
+  },
+};
 
 // The editor asks the session's grants for shared styles; this file is not
 // about them, so the author holds the right to change the site's design.
@@ -93,6 +122,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       renderPanel,
       editingBreakpointRequest,
       onEditingBreakpointChange,
+      renderSettings,
     }: {
       inspector: React.ReactNode;
       title?: string;
@@ -103,6 +133,11 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       renderPanel?: (panel: string) => React.ReactNode;
       editingBreakpointRequest?: { breakpoint: string | null; count: number };
       onEditingBreakpointChange?: (breakpoint: string | null) => void;
+      renderSettings?: (dialog: {
+        open: boolean;
+        onOpenChange: (open: boolean) => void;
+        returnFocus: () => HTMLElement | null;
+      }) => React.ReactNode;
     }): React.JSX.Element => {
       /*
        * The device half of the real shell: it holds what a request asks for
@@ -115,6 +150,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       }, [onEditingBreakpointChange]);
       React.useEffect(() => {
         if (editingBreakpointRequest === undefined) return;
+        deviceRequests.push(editingBreakpointRequest.breakpoint);
         onEditingBreakpointChange?.(editingBreakpointRequest.breakpoint);
       }, [editingBreakpointRequest, onEditingBreakpointChange]);
       return (
@@ -131,11 +167,20 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
           panel wired wrongly, or wired not at all.
         */}
           {renderPanel?.("layers")}
+          {/* Asked for on every pass, open or not, as the real shell asks. */}
+          {renderSettings?.({
+            open: settingsOpen,
+            onOpenChange: () => {},
+            returnFocus: () => null,
+          })}
           {children}
         </div>
       );
     },
-    BreakpointManager: nothing,
+    // Drawn as a marker, so where the editor mounts it can be found.
+    BreakpointManager: (): React.JSX.Element => (
+      <div data-recorder="breakpoint-manager" />
+    ),
     BreakpointSwitcher: record("switcher"),
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
@@ -200,9 +245,8 @@ const refetchStoredStyle = async () => ({ isError: false });
 // route; that read's request is asserted in `site-style-read.test`.
 vi.mock("./site-style-read", () => ({
   useStoredSiteStyle: () => ({
-    data: undefined,
-    isPending: false,
     error: null,
+    ...storedRead,
     refetch: refetchStoredStyle,
   }),
 }));
@@ -214,6 +258,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
     read => () =>
       read
   )(() => Promise.resolve(null)),
+  // The Fallback picker's library search, finding nothing: no case here
+  // opens it. One function for every call, as the admin's own hook keeps it.
+  useMediaSearcher: (
+    search => () =>
+      search
+  )(() => Promise.resolve([])),
   // The host's font table, which the real entry re-exports from core.
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The editor mount asks for the variant-use writer; no case here opens a
@@ -247,9 +297,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
    * nothing, which is the site with an empty library — the state every one of
    * these cases was written against.
    */
-  usePluginRoute: () => ({
-    data: undefined,
+  usePluginRoute: ({ path }: { path: string }) => ({
+    data: path === "/site/settings" ? siteSettingsRead : undefined,
     pending: false,
+    fetching: false,
     error: null,
     refetch: () => {},
   }),
@@ -356,6 +407,10 @@ beforeEach(() => {
   seen.switcher = undefined;
   clientConfig = { siteStyle: SITE };
   storedDevice = null;
+  deviceRequests.length = 0;
+  storedRead = answered(undefined);
+  settingsOpen = false;
+  siteSettingsRead = undefined;
 });
 
 afterEach(() => {
@@ -440,6 +495,51 @@ describe("the top bar's history", () => {
   });
 });
 
+describe("where the breakpoints are edited", () => {
+  /** The breakpoint editors mounted anywhere in the editor. */
+  const managers = (): Element[] => [
+    ...document.querySelectorAll('[data-recorder="breakpoint-manager"]'),
+  ];
+
+  it("offers no breakpoint editor in the top bar", async () => {
+    const { screen } = await import("@testing-library/react");
+    openEditor();
+
+    // The top bar is drawn: its device buttons are there.
+    expect(seen.switcher).toBeDefined();
+    expect(managers()).toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: /edit breakpoints/i })
+    ).toBeNull();
+  });
+
+  it("edits them in Settings, on the Site tab", async () => {
+    /*
+     * The control on the case above: the marker is found where the editor
+     * does mount the manager, so its absence there is not a marker that
+     * cannot be found.
+     */
+    const { screen } = await import("@testing-library/react");
+    settingsOpen = true;
+    siteSettingsRead = {
+      mayManageSite: true,
+      mayChooseDefaultLayout: false,
+      defaultLayout: null,
+      breakpoints: null,
+      layouts: [],
+    };
+    openEditor();
+    expect(managers()).toHaveLength(0);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+
+    expect(managers()).toHaveLength(1);
+    expect(screen.getByRole("dialog").contains(managers()[0] ?? null)).toBe(
+      true
+    );
+  });
+});
+
 describe("the device being edited", () => {
   it("lays the canvas out at the device the author chooses", () => {
     openEditor();
@@ -498,10 +598,12 @@ describe("the device being edited", () => {
 });
 
 describe("a device the site stops offering", () => {
-  it("goes back to Desktop when the chosen breakpoint is removed", () => {
+  it("goes back to Desktop when no breakpoint wider than the removed one remains", () => {
     /*
      * Deterministic, and never a breakpoint nothing draws: an edit stored
      * under an id the site no longer defines would never reach the page.
+     * Mobile remains, and is narrower, so the edit goes to the base rather
+     * than to it.
      */
     const view = openEditor();
     choose("tablet");
@@ -520,6 +622,158 @@ describe("a device the site stops offering", () => {
     expect(seen.inspector?.breakpoint).toBe("base");
     expect(seen.switcher?.selected).toBe("base");
     expect(box().width).toBe(1280);
+  });
+
+  it("moves to the next wider breakpoint when one remains, and shows it chosen", () => {
+    /*
+     * Mobile removed while it is being edited: Tablet, the next one up, is
+     * where the edits go, and the device buttons show it as the device chosen.
+     * The base would also be a defined breakpoint, so only the next wider one
+     * separates this from going back to Desktop.
+     */
+    const view = openEditor();
+    choose("mobile");
+    expect(seen.inspector?.breakpoint).toBe("mobile");
+
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+          container: [],
+        },
+      },
+    };
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("tablet");
+    expect(seen.switcher?.selected).toBe("tablet");
+    expect(box().width).toBe(991);
+    // Chosen through the shell, so it is stored as the author's device.
+    expect(deviceRequests.at(-1)).toBe("tablet");
+  });
+
+  it("keeps a device that was restored on load for a breakpoint already gone at the base", () => {
+    /*
+     * The fallback answers a removal seen in this session. A device stored
+     * for a breakpoint the site had already removed has no width to compare
+     * against, so it is edited at the base, and a later change to the set
+     * does not move it to some other breakpoint.
+     */
+    storedDevice = "watch";
+    const view = openEditor();
+    expect(seen.inspector?.breakpoint).toBe("base");
+
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+          container: [],
+        },
+      },
+    };
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(seen.switcher?.selected).toBe("base");
+    // Nothing was asked of the shell: the stored choice is left as it was.
+    expect(deviceRequests).toEqual([]);
+  });
+
+  it("does not take the stored set's arrival for a removal", () => {
+    /*
+     * Until the stored style answers, the set in hand is the host's config
+     * defaults. A device restored on load that the stored set does not have
+     * was removed before this session, so it goes to the base, and the
+     * arrival of the read is not a removal to fall back from.
+     */
+    storedDevice = "mobile";
+    storedRead = {
+      data: undefined,
+      isPending: true,
+      error: null,
+      current: false,
+    };
+    const view = openEditor();
+
+    storedRead = answered(TABLET_ONLY);
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(deviceRequests).toEqual([]);
+  });
+
+  it("does not take a retried read's answer, after the first failed, for a removal", () => {
+    /*
+     * A failed first read leaves the host's config defaults in hand, as a
+     * pending one does. A device restored on load that the stored set does not
+     * have was removed before this session, so when a retry answers it goes to
+     * the base rather than to the next wider breakpoint.
+     */
+    storedDevice = "mobile";
+    storedRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("offline"),
+      current: false,
+    };
+    const view = openEditor();
+
+    storedRead = answered(TABLET_ONLY);
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(deviceRequests).toEqual([]);
+  });
+
+  it("does not take a stale cached answer, shown while a new read runs, for the set before", () => {
+    /*
+     * Reopened after the cache went stale: the cached answer still has Mobile,
+     * which another author removed meanwhile. It is shown while the editor
+     * reads again, and is not current, so the read's answer is a removal made
+     * while this author was away: the base, not the next wider breakpoint.
+     */
+    storedDevice = "mobile";
+    storedRead = {
+      data: undefined,
+      isPending: false,
+      error: null,
+      current: false,
+    };
+    const view = openEditor();
+    expect(seen.inspector?.breakpoint).toBe("mobile");
+
+    storedRead = answered(TABLET_ONLY);
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(deviceRequests).toEqual([]);
+  });
+
+  it("keeps the last current set across a read that fails, for the removal a retry confirms", () => {
+    /*
+     * Mobile chosen against a current answer; a later read fails, keeping that
+     * answer beside the failure; a retry then answers without Mobile. The
+     * removal is compared with the set before the failure, so it moves to
+     * Tablet rather than to the base.
+     */
+    const view = openEditor();
+    choose("mobile");
+    expect(seen.inspector?.breakpoint).toBe("mobile");
+
+    storedRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("offline"),
+      current: false,
+    };
+    view.rerender();
+    expect(seen.inspector?.breakpoint).toBe("mobile");
+
+    storedRead = answered(TABLET_ONLY);
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("tablet");
+    expect(deviceRequests.at(-1)).toBe("tablet");
   });
 
   it("shows Desktop when the site removes its last breakpoint", () => {

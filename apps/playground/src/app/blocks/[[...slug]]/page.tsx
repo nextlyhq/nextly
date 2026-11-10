@@ -1,8 +1,8 @@
 /**
  * Public route for the CODE-FIRST blocks renderer.
  *
- * The whole route is `createBlocksPage` plus the re-exports Next wants — there
- * is no per-request wiring here, which is the point of the helper.
+ * The whole route is `createPublicBlocksPage` plus the re-exports Next wants —
+ * there is no per-request wiring here, which is the point of the helper.
  *
  * ## What makes this different from the page-builder route
  *
@@ -19,110 +19,32 @@
  * Keeping both is deliberate: converting this collection's field would leave
  * nothing covering the code-authored path.
  *
+ * ## Public, and the same for every visitor
+ *
+ * A published block page reads its content as the public does, so it is the
+ * same page whoever asks: it is pre-rendered, refreshed by its cache tags, and
+ * never shows a draft. Drafts are previewed at `/preview/blocks/...`, the
+ * access-enforced route beside this one, which is where the collection's
+ * preview links point.
+ *
+ * Pre-rendering reads the database during `next build`, which is what the
+ * public posture costs.
+ *
  * @module app/blocks/[[...slug]]
  */
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { createBlocksPage } from "@nextlyhq/blocks-react/next";
-import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
-import { previewDraftGate } from "nextly/runtime";
+import { createPublicBlocksPage } from "@nextlyhq/blocks-react/next";
 
-import { siteReader, SITE_STYLE_CONTEXT } from "../../../lib/site-content";
-import { SITE_STYLE_DEFAULTS } from "../../../lib/site-style-defaults";
+import { blockPagesRoute } from "../../../lib/block-pages-route";
+import { pathsOrRoot } from "../../../lib/static-params";
 
-/**
- * Where this route is mounted, for canonical URLs.
- *
- * `derived.canonical` is the entry's path within its collection, already
- * rooted (`/about/team`, or `/` for the collection's root entry), because the
- * helper resolves slugs and does not know which segment of the app it was
- * wired under. Prefixing is the host's job, and getting it wrong is how a page
- * comes to claim it lives somewhere nothing is served.
- */
-const MOUNT = "/blocks";
+const route = createPublicBlocksPage(blockPagesRoute);
 
-/**
- * The mount plus the entry's own path.
- *
- * The root entry's path is `/`, and concatenating it would emit `/blocks/` for
- * a page Next serves at `/blocks` — a canonical that names a redirect rather
- * than the page describing itself.
- */
-function canonicalFor(path: string): string {
-  return path === "/" ? MOUNT : `${MOUNT}${path}`;
+/** The paths built ahead of time: every published block page, or the root when there is none. */
+export async function generateStaticParams(): Promise<
+  Array<{ slug: string[] }>
+> {
+  return pathsOrRoot(route);
 }
 
-/**
- * No `force-dynamic`, and nothing to pre-render.
- *
- * `createBlocksPage` reads access-enforced content — the secure default — so
- * the answer depends on who is asking and no path can be pre-rendered. It hands
- * back no `generateStaticParams` at all, Next classifies the route dynamic
- * because nothing claims otherwise, and the build reads no database.
- *
- * It used to need `export const dynamic = "force-dynamic"` to survive a build
- * box with no database. That is now handled by the shape of what the helper
- * returns rather than by a flag the host has to remember.
- *
- * A site whose content IS public calls `createPublicBlocksPage` instead, which
- * reads trusted and returns a `generateStaticParams` to export alongside these
- * two. The posture is the factory you call — there is no option for it.
- */
-const { ContentPage, generateMetadata } = createBlocksPage({
-  collections: ["block-pages"],
-  field: "content",
-  nextly: siteReader,
-  // Without this the route serves published entries only, so a preview link
-  // verifies, redirects, and then answers 404 from a page that looks entirely
-  // correct — indistinguishable, to the reviewer who opened it, from a link
-  // that had expired.
-  //
-  // The gate grants exactly the ONE entry the visitor's token names, which is
-  // the part Next's own draft mode cannot express: `draftMode()` is a single
-  // boolean for the whole host, so enabling it alone would turn a link meant
-  // for one unpublished page into a key to every unpublished page on the site.
-  draft: previewDraftGate(),
-  // Stated even though it is this site's default language, because the read is
-  // not the only thing it feeds. An omitted locale still serves the right page
-  // — the read defaults it internally — but it is also what a `draft` decision
-  // compares a preview token against, and a token always names a resolved
-  // locale rather than a blank one. Omitting it here would leave the next route
-  // that adds a preview gate refusing every default-language preview, behind a
-  // published page that looks entirely correct.
-  locale: "en",
-  // An explicit set, not the process registry. `registeredBlocks()` reads the
-  // engine's global registry, which is populated by whatever booted the
-  // editor — so a public route depending on it renders the unknown-block
-  // placeholder whenever this request arrived before the admin did.
-  blocks: createBlockResolver(coreBlocks),
-  // No `data`: a `core/collection-loop` reads through the route's public
-  // reader, published entries and public fields only, as any visitor would.
-  styleContext: SITE_STYLE_CONTEXT,
-  // Resolved per request: defaults with the stored Site Style layered on top.
-  // The same statement the page-builder route makes, because both routes serve
-  // documents of one engine and a site sheet that differed between them would
-  // style one page two ways depending on its URL.
-  siteStyles: {
-    read: () =>
-      loadSiteStyle({ nextly: siteReader, defaults: SITE_STYLE_DEFAULTS }),
-    // What that read depends on. This route is cacheable, so the whole render
-    // is what is cached and only a tag it carries rebuilds it — and the Direct
-    // API read inside `read` contributes none. Without naming the single, an
-    // admin's save would invalidate a tag no cache entry here holds and the
-    // page would keep serving the old sheet.
-    singles: [SITE_STYLE_SLUG],
-  },
-  metadata: (entry, context, derived) => ({
-    title: derived.title ?? (entry.title as string | undefined),
-    description: derived.description,
-    ...(derived.canonical
-      ? { alternates: { canonical: canonicalFor(derived.canonical) } }
-      : {}),
-    ...(derived.image
-      ? { openGraph: { images: [{ url: derived.image }] } }
-      : {}),
-  }),
-});
-
-export { generateMetadata };
-export default ContentPage;
+export const { generateMetadata } = route;
+export default route.ContentPage;

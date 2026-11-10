@@ -160,7 +160,7 @@ describe.each(getConfiguredTestDialects())(
       // row as a draft rather than edit it in place.
       await handler.updateEntry(
         { ...asActor("posts"), entryId: id },
-        { title: "draft edit" }
+        { title: "draft edit", _overwrite: true }
       );
 
       const updated = (await activity(current)).find(
@@ -200,7 +200,7 @@ describe.each(getConfiguredTestDialects())(
       // Status-less, so it accumulates as a working draft.
       await handler.updateEntry(
         { ...asActor("posts"), entryId: id },
-        { title: "first draft edit" }
+        { title: "first draft edit", _overwrite: true }
       );
       // A SECOND draft save, editing only the relationship. This is the case
       // that needs the prior DRAFT as its baseline: the live row is unchanged by
@@ -209,7 +209,7 @@ describe.each(getConfiguredTestDialects())(
       // title edit as changing again.
       await handler.updateEntry(
         { ...asActor("posts"), entryId: id },
-        { tags: [tagId] }
+        { tags: [tagId], _overwrite: true }
       );
 
       const rows = (await activity(current)).filter(
@@ -263,7 +263,8 @@ describe.each(getConfiguredTestDialects())(
       await handler.bulkUpdateEntries({
         collectionName: "posts",
         ids: [id],
-        data: { title: "edited in bulk" },
+        // The activity recorded is under test, not versions.
+        data: { title: "edited in bulk", _overwrite: true },
         overrideAccess: true,
         user: { id: ACTOR.id, email: ACTOR.email },
         actor: { type: "user", id: ACTOR.id },
@@ -298,7 +299,8 @@ describe.each(getConfiguredTestDialects())(
       await handler.bulkUpdateEntries({
         collectionName: "posts",
         ids: [id],
-        data: { title: "by the key" },
+        // The activity recorded is under test, not versions.
+        data: { title: "by the key", _overwrite: true },
         overrideAccess: true,
         user: { id: ACTOR.id, email: ACTOR.email },
         actor: { type: "apiKey", id: "key_bulk_probe" },
@@ -353,7 +355,8 @@ describe.each(getConfiguredTestDialects())(
       await handler.bulkUpdateEntries({
         collectionName: "posts",
         ids: [id],
-        data: { tags: [tagId] },
+        // The activity recorded is under test, not versions.
+        data: { tags: [tagId], _overwrite: true },
         overrideAccess: true,
         user: { id: ACTOR.id, email: ACTOR.email },
         actor: { type: "user", id: ACTOR.id },
@@ -376,7 +379,7 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       await handler.updateEntry(
         { ...asActor("posts"), entryId: id },
-        { title: "after" }
+        { title: "after", _overwrite: true }
       );
 
       const rows = await activity(current);

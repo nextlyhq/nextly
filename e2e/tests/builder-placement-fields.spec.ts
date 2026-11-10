@@ -84,6 +84,54 @@ function headerDefinition() {
   };
 }
 
+/** A passage, as the rich-text editor stores one. */
+function passage(text: string) {
+  return {
+    root: {
+      type: "root",
+      children: [
+        { type: "paragraph", children: [{ type: "text", text, format: 0 }] },
+      ],
+    },
+  };
+}
+
+/** The header with a rich-text intro under its headline, the intro exposed. */
+function introDefinition() {
+  const header = headerDefinition();
+  return {
+    ...header,
+    nodes: [
+      header.nodes[0],
+      {
+        id: "intro",
+        type: "core/rich-text",
+        version: 1,
+        props: { content: passage("The component's intro.") },
+      },
+    ],
+    exposed: [
+      header.exposed[0],
+      {
+        id: "intro",
+        label: "Intro",
+        nodeId: "intro",
+        propPath: "content",
+        type: "richText",
+      },
+    ],
+  };
+}
+
+/** A stored passage's words, its text nodes joined in order. */
+function textOf(value: unknown): string {
+  if (value === null || typeof value !== "object") return "";
+  const node = value as { text?: unknown; root?: unknown; children?: unknown };
+  if (typeof node.text === "string") return node.text;
+  const children = Array.isArray(node.children) ? node.children : [];
+  return [node.root, ...children].map(textOf).join("");
+}
+
 function placement(id: string, extra: Record<string, unknown> = {}) {
   return {
     id,
@@ -97,14 +145,15 @@ function placement(id: string, extra: Record<string, unknown> = {}) {
 /** Seed a published header and a page placing it; returns the page's id. */
 async function seed(
   page: Page,
-  placements: readonly ReturnType<typeof placement>[]
+  placements: readonly ReturnType<typeof placement>[],
+  definition: unknown = headerDefinition()
 ): Promise<{ pageId: string; componentId: string }> {
   const tag = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
   const component = await page.request.post(COMPONENTS, {
     data: {
       title: COMPONENT_TITLE,
       slug: `placement-header-${tag}`,
-      content: headerDefinition(),
+      content: definition,
       status: "published",
     },
   });
@@ -343,6 +392,116 @@ test.describe("a placement's exposed fields", () => {
       page.getByRole("switch", { name: "Button shown" })
     ).not.toBeChecked();
     await expect(row(page, "Heading level")).toContainText("H3");
+  });
+
+  test("an exposed passage is edited on the canvas, held in the panel meanwhile, on that placement only", async ({
+    page,
+  }) => {
+    const { pageId } = await seed(
+      page,
+      [placement("p1"), placement("p2")],
+      introDefinition()
+    );
+    await openBuilder(page, pageId);
+
+    const passageOnCanvas = await part(page, "p1", "content");
+    await passageOnCanvas.dblclick();
+    // Editable once the shared editor has attached to the canvas's element.
+    await expect(passageOnCanvas).toHaveAttribute("contenteditable", "true");
+    // The placement's panel holds the same passage while the canvas has it.
+    const held = page.locator('.nx-inspector p[data-held="canvas"]');
+    await expect(held).toBeVisible();
+
+    for (let line = 0; line < 12; line += 1) {
+      await page.keyboard.press("ArrowDown");
+    }
+    await page.keyboard.press("End");
+    await page.keyboard.type(" Ours.");
+    await page.keyboard.press("Escape");
+
+    await expect(await part(page, "p1", "content")).toContainText(
+      "The component's intro. Ours."
+    );
+    await expect(await part(page, "p2", "content")).toHaveText(
+      "The component's intro."
+    );
+    await expect(held).toHaveCount(0);
+    await expect(row(page, "Intro")).toContainText("Set on this page");
+
+    // One step: a single undo takes the whole edit back, and redo restores it.
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    await expect(await part(page, "p1", "content")).toHaveText(
+      "The component's intro."
+    );
+    await page.getByRole("button", { name: "Redo", exact: true }).click();
+    await expect(await part(page, "p1", "content")).toContainText("Ours.");
+
+    await save(page, pageId);
+    const stored = await storedPlacements(page, pageId);
+    const overrides = stored.p1?.props.overrides as
+      | Record<string, unknown>
+      | undefined;
+    expect(textOf(overrides?.intro)).toBe("The component's intro. Ours.");
+    expect(stored.p2?.props.overrides).toBeUndefined();
+
+    await page.reload();
+    await expect(await part(page, "p1", "content")).toContainText("Ours.", {
+      timeout: 30_000,
+    });
+  });
+
+  test("an exposed passage is edited in the panel with the rich-text editor, on that placement only", async ({
+    page,
+  }) => {
+    const { pageId } = await seed(
+      page,
+      [placement("p1"), placement("p2")],
+      introDefinition()
+    );
+    await openBuilder(page, pageId);
+    await selectPlacement(page, "p1");
+
+    const intro = page
+      .locator(".nx-inspector")
+      .getByRole("textbox", { name: "Intro" });
+    await expect(intro).toContainText("The component's intro.");
+    await intro.click();
+    // Editable once the shared editor has attached to it.
+    await expect(intro).toHaveAttribute("contenteditable", "true");
+    // The passage's end, not its first line's: the panel's field wraps, and
+    // no one key reaches a passage's end on every platform.
+    for (let line = 0; line < 12; line += 1) {
+      await page.keyboard.press("ArrowDown");
+    }
+    await page.keyboard.press("End");
+    await page.keyboard.type(" Ours.");
+    await intro.blur();
+
+    // Drawn on the canvas for this placement, and only this one.
+    await expect(await part(page, "p1", "content")).toContainText(
+      "The component's intro. Ours."
+    );
+    await expect(await part(page, "p2", "content")).toHaveText(
+      "The component's intro."
+    );
+    await expect(row(page, "Intro")).toContainText("Set on this page");
+
+    await save(page, pageId);
+    const stored = await storedPlacements(page, pageId);
+    const overrides = stored.p1?.props.overrides as
+      | Record<string, unknown>
+      | undefined;
+    expect(textOf(overrides?.intro)).toBe("The component's intro. Ours.");
+    expect(stored.p2?.props.overrides).toBeUndefined();
+
+    await page.reload();
+    await expect(await part(page, "p1", "content")).toContainText("Ours.", {
+      timeout: 30_000,
+    });
+    await selectPlacement(page, "p1");
+    await expect(
+      page.locator(".nx-inspector").getByRole("textbox", { name: "Intro" })
+    ).toContainText("The component's intro. Ours.");
   });
 
   test("clearing and resetting are different: Cleared shows nothing, Reset brings back the inherited value", async ({

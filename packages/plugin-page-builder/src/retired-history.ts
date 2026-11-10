@@ -33,6 +33,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { asDocument } from "./component-store-source";
+import type { RetiredPins } from "./retired-pins";
 import type { RetiredStore } from "./retired-store";
 
 /** The document a component's versions belong to. */
@@ -148,12 +149,14 @@ export interface DerivedRetired {
    * ids are then the ones found, never more.
    */
   readonly complete: boolean;
+  /** The newest version number read: what the answer is true as of. */
+  readonly through: number;
 }
 
 const NONE: RetiredExposures = { properties: [], slots: [] };
 
 /** What one published version says about the definition. */
-type Exposure = RetiredExposures | "absent" | "unreadable";
+export type Exposure = RetiredExposures | "absent" | "unreadable";
 
 /** The ids a component's published history retired. */
 export async function deriveRetired(
@@ -177,7 +180,7 @@ export async function deriveRetired(
   // derivation cannot say which.
   const complete = walk.reached && !walk.served.includes("unreadable");
   if (complete && folded.through > 0) args.memo?.set(key, folded);
-  return { retired: folded.retired, complete };
+  return { retired: folded.retired, complete, through: folded.through };
 }
 
 /** A walk down one component's history, newest first. */
@@ -323,7 +326,7 @@ function union(all: readonly RetiredExposures[]): RetiredExposures {
  * nothing about which ids went), or `unreadable` when it holds one this cannot
  * read.
  */
-function exposedIn(snapshot: unknown, field: string): Exposure {
+export function exposedIn(snapshot: unknown, field: string): Exposure {
   const row = typeof snapshot === "string" ? parsed(snapshot) : snapshot;
   if (!isPlainRecord(row)) return "unreadable";
   const value = row[field];
@@ -359,6 +362,11 @@ export function exposureIdsOf(document: BlockDocument): RetiredExposures {
 /** What the repair reads and writes through. */
 export interface ReconcileArgs extends RetiredHistoryArgs {
   readonly store: RetiredStore;
+  /**
+   * The versions held for removals whose records were lost, released once a
+   * repair has read history whole and recorded what it found.
+   */
+  readonly pins?: Pick<RetiredPins, "release">;
   readonly logger: {
     warn(message: string, meta?: Record<string, unknown>): void;
     error(message: string, meta?: Record<string, unknown>): void;
@@ -393,16 +401,13 @@ export async function repairRetired(
     ),
     slots: derived.retired.slots.filter(id => !held.slots.includes(id)),
   };
-  if (missing.properties.length > 0 || missing.slots.length > 0) {
-    try {
-      await args.store.retire(componentId, missing);
-    } catch (error) {
-      args.logger.error(
-        `[page-builder] the fields component "${componentId}" retired could ` +
-          "not be recorded; they stay reserved, and the next read records them.",
-        { componentId, retired: missing, error }
-      );
-    }
+  const recorded = await recordMissing(args, componentId, missing);
+  // Only a component that has retired something can hold versions for a lost
+  // removal: what a pin holds is read here like the rest of history.
+  const retiredAny =
+    derived.retired.properties.length > 0 || derived.retired.slots.length > 0;
+  if (recorded && derived.complete && retiredAny) {
+    await releasePins(args, componentId, derived.through);
   }
   return {
     retired: {
@@ -411,6 +416,53 @@ export async function repairRetired(
     },
     complete: derived.complete,
   };
+}
+
+/**
+ * Record the derived ids the table lacks. Answers whether the table now holds
+ * them all; a record that fails is logged, and the next repair makes it.
+ */
+async function recordMissing(
+  args: ReconcileArgs,
+  componentId: string,
+  missing: RetiredExposures
+): Promise<boolean> {
+  if (missing.properties.length === 0 && missing.slots.length === 0) {
+    return true;
+  }
+  try {
+    await args.store.retire(componentId, missing);
+    return true;
+  } catch (error) {
+    args.logger.error(
+      `[page-builder] the fields component "${componentId}" retired could ` +
+        "not be recorded; they stay reserved, and the next read records them.",
+      { componentId, retired: missing, error }
+    );
+    return false;
+  }
+}
+
+/**
+ * Free the versions held for the component's lost removals: the table holds
+ * every retirement history shows, so history is no longer the only copy. A
+ * release that fails keeps them held, which costs only retention room.
+ */
+async function releasePins(
+  args: ReconcileArgs,
+  componentId: string,
+  through: number
+): Promise<void> {
+  try {
+    await args.pins?.release(componentId, through);
+  } catch (error) {
+    args.logger.warn(
+      `[page-builder] the versions held for component "${componentId}"'s ` +
+        "removed fields were not released; they stay held, and the next " +
+        "repair releases them.",
+      { componentId, error }
+    );
+  }
 }
 
 /**

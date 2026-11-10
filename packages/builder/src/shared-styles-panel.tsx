@@ -31,6 +31,7 @@ import type {
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import {
+  Button,
   Input,
   Popover,
   PopoverAnchor,
@@ -41,6 +42,13 @@ import {
 import { Lock, Moon, Search } from "lucide-react";
 import * as React from "react";
 
+import {
+  blockLookGroups,
+  lookKeyOf,
+  type BlockLookGroup,
+  type LookKey,
+} from "./block-look-rows";
+import { BlockLooksGroup } from "./block-looks-group";
 import { useSurvivingReport } from "./builder-notices";
 import { ChromeTooltip } from "./chrome-tooltip";
 import { EDITOR_WORDS } from "./editor-words";
@@ -50,6 +58,7 @@ import {
   Refusal,
   ShowMore,
   useRefusableWrite,
+  withOpenRow,
 } from "./panel-actions";
 import { usePrefersDark } from "./prefers-dark";
 import {
@@ -71,25 +80,44 @@ import {
   sharedStyleReachChip,
   sharedStyleReachSentence,
   sharedStyleRows,
+  sharedStylesOnly,
   sharedStyleSearchText,
-  SHARED_STYLE_NOT_WHOLE_NOTE,
   SHARED_STYLE_NOT_WHOLE_REMOVAL,
   SHARED_STYLE_RENAME_PENDING,
   SHARED_STYLE_COUNTING_NOTE,
   SHARED_STYLE_UNCOUNTABLE_NOTE,
   SHARED_STYLE_UNCOUNTABLE_REMOVAL,
+  SHARED_STYLE_UNCOUNTED_USES,
   SHARED_STYLE_UNUSED_UNCERTAIN,
   SHARED_STYLES_WORD,
   type BlocksOnThisPage,
   type SharedStyleFilter,
   type SharedStyleReach,
   type SharedStyleRefusal,
+  type SharedStylesCount,
   type SharedStyleRow,
   type SharedStyleTile,
   type SharedStylesUsage,
   type SharedStyleUsesPage,
 } from "./shared-style-library";
 import { activeTokenMode } from "./style-colour";
+import {
+  BackgroundJobsLink,
+  CountedByJobs,
+  countNowWords,
+  idsKey,
+  idsOf,
+  useUsageReads,
+  type CountNow,
+  type UsageRead,
+  type UsageSource,
+} from "./usage-reads";
+
+/*
+ * The recount timing lives with the reads it times; said here too, where the
+ * tab's hosts and tests have always found it.
+ */
+export { USAGE_RECOUNT_IDLE_MAX, USAGE_RECOUNT_MS } from "./usage-reads";
 
 /** What the host answers a rename with. */
 export type ClassRenameOutcome =
@@ -123,6 +151,14 @@ export interface SharedStylesAccess {
   readonly removeWithReason?: (
     ids: readonly string[]
   ) => Promise<SharedStyleRefusal | undefined>;
+  /**
+   * Count the site's pages now, for a bounded time, rather than waiting for
+   * the site's background jobs. Optional: without it the tab only says the
+   * jobs count them.
+   *
+   * @experimental Settles with the Shared styles tab.
+   */
+  readonly count?: () => Promise<SharedStylesCount>;
 }
 
 /** The blocks on the open page carrying each style, by id. */
@@ -165,25 +201,32 @@ export interface SharedStylesPanelProps {
   currentRenameAttempt?: (classId: string) => number;
   /** The name each style is being renamed to while its write is open. */
   pendingNames?: Readonly<Record<string, string>>;
+  /**
+   * Choosing a look to edit in the inspector, with no block selected. Absent:
+   * the Block looks group is listed, not chosen.
+   *
+   * @experimental
+   */
+  looks?: PanelLookEditing;
+  /**
+   * The style whose details are open as the tab mounts, as when the Variables
+   * tab sends the author to a style that uses a variable. Read once.
+   *
+   * @experimental Settles with the Variables tab's usage.
+   */
+  initialOpenId?: string;
 }
 
-/** How many rows mount before the author asks for more; also one usage read. */
+/** How the Block looks group's rows choose the look the inspector edits. */
+export interface PanelLookEditing {
+  /** Edit a look in the inspector. */
+  readonly onEdit: (look: LookKey) => void;
+  /** The look the inspector is editing, whose row shows as chosen. */
+  readonly editing: LookKey | null;
+}
+
+/** How many rows mount before the author asks for more. */
 const PAGE_SIZE = 50;
-
-/**
- * How long the rows on screen wait before their usage is asked again while
- * some pages are still being counted, so the counts become whole, and Remove
- * unused becomes possible, without reopening the tab.
- */
-export const USAGE_RECOUNT_MS = 15_000;
-
-/**
- * How many times the rows are asked again when the host does not say whether
- * the site is still being counted: five minutes of recounts, so a host
- * written before `counting` existed neither stops while counting nor polls
- * for ever where the counts cannot finish.
- */
-export const USAGE_RECOUNT_UNKNOWN_MAX = 20;
 
 /** The words for a refusal that came with none. */
 const UNEXPLAINED_REFUSAL = "This shared style could not be renamed.";
@@ -209,38 +252,164 @@ interface Issue {
   readonly reason: string;
 }
 
-/**
- * A list of ids as one string an effect or a memo can depend on. JSON, since
- * a class id is any string up to 128 characters, a newline or a comma
- * included, so no separator could be told apart from an id.
- */
-function idsKey(ids: readonly string[]): string {
-  return JSON.stringify(ids);
-}
-
-/** The ids a key made by {@link idsKey} holds. */
-function idsOf(key: string): string[] {
-  const parsed: unknown = JSON.parse(key);
-  return Array.isArray(parsed)
-    ? parsed.filter((id): id is string => typeof id === "string")
-    : [];
-}
-
 /** The rows the library gives, kept while the library and the code's ids are. */
 function useRows(
   library: readonly NamedClass[] | undefined,
   suppliedClassIds: readonly string[] | undefined
-): SharedStyleRow[] {
+): { rows: SharedStyleRow[]; lookIds: string[] } {
   // Keyed by the ids rather than the array, which a host may build afresh on
   // every render: the search text compiles every style, once per library,
   // not once per render.
   const suppliedKey = idsKey(suppliedClassIds ?? []);
-  return React.useMemo(
+  return React.useMemo(() => {
+    if (library === undefined) return { rows: [], lookIds: [] };
+    const supplied = new Set(idsOf(suppliedKey));
+    return {
+      rows: sharedStyleRows(sharedStylesOnly(library), supplied),
+      // The worn looks, whose counts are read with the styles' in one read,
+      // so the tab's counting and failure notes speak for both.
+      lookIds: wornLookIds(blockLookGroups(library, supplied)),
+    };
+  }, [library, suppliedKey]);
+}
+
+/**
+ * The rows, those the search finds by name, property or value, and what
+ * their tiles are drawn from. Each row's search text compiles its style, so
+ * it is kept per library and context rather than made again on every render.
+ */
+function useListedRows({
+  library,
+  suppliedClassIds,
+  styleContext,
+  tokens,
+  query,
+}: {
+  library: readonly NamedClass[] | undefined;
+  suppliedClassIds: readonly string[] | undefined;
+  styleContext: StyleCompileContext | undefined;
+  tokens: SiteTokenSet | undefined;
+  query: string;
+}): {
+  rows: SharedStyleRow[];
+  lookIds: string[];
+  found: SharedStyleRow[];
+  paint: TilePaint;
+} {
+  const paint = usePaint(tokens);
+  const { rows, lookIds } = useRows(library, suppliedClassIds);
+  const texts = React.useMemo(
+    () =>
+      new Map(
+        rows.map(row => [row.id, sharedStyleSearchText(row, styleContext)])
+      ),
+    [rows, styleContext]
+  );
+  const found = searchSharedStyles(rows, query, row => texts.get(row.id) ?? "");
+  return { rows, lookIds, found, paint };
+}
+
+/**
+ * The site's looks by block type, narrowed by the search to the looks whose
+ * name holds it; a type with none left is not listed.
+ */
+function useLookGroups(
+  library: readonly NamedClass[] | undefined,
+  suppliedClassIds: readonly string[] | undefined,
+  query: string,
+  styleContext: StyleCompileContext | undefined
+): BlockLookGroup[] {
+  const suppliedKey = idsKey(suppliedClassIds ?? []);
+  const groups = React.useMemo(
     () =>
       library === undefined
         ? []
-        : sharedStyleRows(library, new Set(idsOf(suppliedKey))),
+        : blockLookGroups(library, new Set(idsOf(suppliedKey))),
     [library, suppliedKey]
+  );
+  // Each look's search text, as each shared style's is: its name and every
+  // property and value it declares, so a search the box promises finds both.
+  // Keyed by look, its type with its id, since two types' own looks may
+  // share an id and each is found by its own text.
+  const texts = React.useMemo(
+    () =>
+      new Map(
+        groups.flatMap(group =>
+          group.rows.map(row => [
+            lookKeyOf(row),
+            sharedStyleSearchText(row, styleContext),
+          ])
+        )
+      ),
+    [groups, styleContext]
+  );
+  if (query.trim() === "") return groups;
+  return groups
+    .map(group => ({
+      ...group,
+      rows: searchSharedStyles(
+        group.rows,
+        query,
+        row => texts.get(lookKeyOf(row)) ?? ""
+      ),
+    }))
+    .filter(group => group.rows.length > 0);
+}
+
+/**
+ * The Block looks group above the shared styles: the site's looks by block
+ * type, found by the same search, with the worn looks' counts read as the
+ * shared styles' are. An own look has no count of its own.
+ */
+function PanelLooks({
+  library,
+  suppliedClassIds,
+  query,
+  paint,
+  editing,
+  styleContext,
+  reaches,
+  blocksOf,
+}: {
+  library: readonly NamedClass[];
+  suppliedClassIds: readonly string[] | undefined;
+  query: string;
+  styleContext: StyleCompileContext | undefined;
+  paint: TilePaint;
+  editing: PanelLookEditing | undefined;
+  /** Each worn look's reach, from the tab's one usage read. */
+  reaches: ReadonlyMap<string, SharedStyleReach>;
+  /** The open page's blocks carrying a class, as the shared styles read them. */
+  blocksOf: (id: string) => BlocksOnThisPage;
+}): React.JSX.Element | null {
+  const groups = useLookGroups(library, suppliedClassIds, query, styleContext);
+  return (
+    <BlockLooksGroup
+      groups={groups}
+      library={library}
+      tokens={paint.tokens}
+      mode={paint.mode}
+      editing={editing?.editing}
+      onEdit={editing?.onEdit}
+      reachOf={row => reaches.get(row.id)}
+      blocksOf={row => blocksOf(row.id)}
+      chip={reach => <ReachChip reach={reach} />}
+    />
+  );
+}
+
+/** Whether a style may be renamed here: the tab is writable and a rename has a host. */
+function mayRename(
+  readOnly: boolean,
+  onRename: SharedStylesPanelProps["onRename"]
+): boolean {
+  return !readOnly && onRename !== undefined;
+}
+
+/** The worn looks among the groups, whose counts are read. */
+function wornLookIds(groups: readonly BlockLookGroup[]): string[] {
+  return groups.flatMap(group =>
+    group.rows.filter(row => !row.own).map(row => row.id)
   );
 }
 
@@ -256,25 +425,27 @@ export function SharedStylesPanel({
   onRename,
   currentRenameAttempt,
   pendingNames = NO_NAMES,
+  looks,
+  initialOpenId,
 }: SharedStylesPanelProps): React.JSX.Element {
-  const paint = usePaint(tokens);
   const [query, setQuery] = React.useState("");
   const [filter, setFilter] = React.useState<SharedStyleFilter>("all");
   const [pages, setPages] = React.useState(1);
   const [issue, setIssue] = React.useState<Issue | null>(null);
-  const [openId, setOpenId] = React.useState<string | null>(null);
-  const rows = useRows(library, suppliedClassIds);
-  const texts = React.useMemo(
-    () =>
-      new Map(
-        rows.map(row => [row.id, sharedStyleSearchText(row, styleContext)])
-      ),
-    [rows, styleContext]
+  const [openId, setOpenId] = React.useState<string | null>(
+    openFirst(initialOpenId)
   );
-  const found = searchSharedStyles(rows, query, row => texts.get(row.id) ?? "");
+  const { rows, lookIds, found, paint } = useListedRows({
+    library,
+    suppliedClassIds,
+    styleContext,
+    tokens,
+    query,
+  });
   // Every style's usage is read, so each filter can be counted: the rows the
   // search puts first, then the rest, fifty to a read.
-  const usage = useUsage(access, usageOrder(rows, found, pages));
+  const usage = useUsage(access, usageOrder(rows, found, pages, lookIds));
+  const { counter } = usage;
   const exact = countsExact(usage, pageBlocks, rows);
 
   const usageOf = (row: SharedStyleRow) =>
@@ -284,7 +455,7 @@ export function SharedStylesPanel({
   const filtered = found.filter(row =>
     inSharedStyleFilter(row, filter, usageOf(row))
   );
-  const shown = filtered.slice(0, pages * PAGE_SIZE);
+  const shown = shownWithOpen(filtered, pages, openId);
   const rename = useRename({
     library,
     onRename,
@@ -298,7 +469,7 @@ export function SharedStylesPanel({
 
   const blocksOf = (id: string): BlocksOnThisPage =>
     pageBlocksOf(pageBlocks, id);
-  const writable = !readOnly && onRename !== undefined;
+  const writable = mayRename(readOnly, onRename);
   // Any rename still being stored. A rename writes the whole list of styles,
   // and so do Lock, Remove and Remove unused, so each waits for every
   // pending rename, not only its own row's: whichever landed second would put
@@ -333,6 +504,16 @@ export function SharedStylesPanel({
           usageFailed={usage.failed}
           issue={issueBesideList(issue, openId)}
         />
+        <PanelLooks
+          library={library}
+          suppliedClassIds={suppliedClassIds}
+          query={query}
+          paint={paint}
+          editing={looks}
+          styleContext={styleContext}
+          reaches={usage.styles}
+          blocksOf={blocksOf}
+        />
         <section
           className="nx-vars__group"
           aria-labelledby="nx-shared-styles-all"
@@ -347,13 +528,19 @@ export function SharedStylesPanel({
             blocksOf={blocksOf}
             onRemoved={() => search.current?.focus()}
           />
+          <TopNote
+            note={notes.top}
+            says={notes.one}
+            jobs={notes.jobs}
+            counter={counter}
+          />
           <StyleList
             rows={rows}
             found={filtered}
             filter={filter}
             query={query.trim()}
             withheld={notes.withheld}
-            note={notes.note}
+            covered={notes.top !== undefined}
           >
             {shown.map(row => (
               <StyleRow
@@ -391,11 +578,27 @@ export function SharedStylesPanel({
             onMore={() => setPages(count => count + 1)}
           />
         </section>
-        {/* Said by the one counting note when that is showing. */}
-        <FloorNote note={notes.floor} />
       </div>
     </div>
   );
+}
+
+/** The style whose details open first: the one another tab asked for, or none. */
+function openFirst(initialOpenId: string | undefined): string | null {
+  return initialOpenId ?? null;
+}
+
+/**
+ * The rows the pages show, with the open style's row: a style opened from
+ * another tab can lie past the pages, and its row is drawn all the same, so
+ * its details have a row to open beside.
+ */
+function shownWithOpen(
+  rows: readonly SharedStyleRow[],
+  pages: number,
+  openId: string | null
+): readonly SharedStyleRow[] {
+  return withOpenRow(rows, pages * PAGE_SIZE, row => row.id === openId);
 }
 
 /** The tab's read-only mark, for the styles that draw a read-only tab. */
@@ -474,11 +677,17 @@ function pageBlocksOf(
 function usageOrder(
   rows: readonly SharedStyleRow[],
   found: readonly SharedStyleRow[],
-  pages: number
+  pages: number,
+  lookIds: readonly string[] = []
 ): string[] {
   const first = found.slice(0, pages * PAGE_SIZE).map(row => row.id);
   const listed = new Set(first);
-  return [...first, ...rows.map(row => row.id).filter(id => !listed.has(id))];
+  // The worn looks after the styles: few, and listed above the styles.
+  return [
+    ...first,
+    ...rows.map(row => row.id).filter(id => !listed.has(id)),
+    ...lookIds,
+  ];
 }
 
 /**
@@ -553,14 +762,75 @@ function issueBesideList(
   return issue === null || issue.id === openId ? null : issue.reason;
 }
 
-/** The note under the list while every count is a floor, in its reason's words. */
-function FloorNote({
+/**
+ * The one note while counts are floors, at the top of the list, and while
+ * pages are still being counted, what counts them, with Count now. Carries
+ * the id Remove unused points at when it says why that waits.
+ */
+function TopNote({
   note,
+  says,
+  jobs,
+  counter,
 }: {
   note: string | undefined;
+  /** Whether it says why Remove unused waits. */
+  says: boolean;
+  jobs: boolean;
+  counter: CountNow | undefined;
 }): React.JSX.Element | null {
   if (note === undefined) return null;
-  return <p className="nx-vars__note">{note}</p>;
+  return (
+    <div className="nx-shared-styles__counting">
+      <p
+        className="nx-vars__note"
+        id={says ? "nx-shared-styles-withheld" : undefined}
+      >
+        {note}
+      </p>
+      {jobs ? <CountedBy counter={counter} /> : null}
+    </div>
+  );
+}
+
+/**
+ * Who counts the pages, beside a note that some are not counted yet. The
+ * counts are filled in by one of the site's background jobs, which nothing
+ * runs on a site with no scheduler, so there the counts never finish; this
+ * says so, and links to how the jobs are run, rather than promising a wait.
+ */
+function CountedBy({
+  counter,
+}: {
+  /** Counting the pages now, when this author may and the host can. */
+  counter: CountNow | undefined;
+}): React.JSX.Element {
+  if (counter === undefined) return <CountedByJobs />;
+  // One line under the note: the count, what it found, and how the jobs
+  // that would have counted run. A button, since it does work; the docs are
+  // a link, since they go somewhere.
+  return (
+    <div className="nx-shared-styles__count-row">
+      {/* None once a count said another cannot get further. */}
+      {counter.final ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="nx-shared-styles__count-now"
+          disabled={counter.busy}
+          onClick={counter.run}
+        >
+          {countNowWords(counter)}
+        </Button>
+      )}
+      {/* What the last count found, said as it changes. */}
+      <span className="nx-vars__note" role="status">
+        {counter.said ?? ""}
+      </span>
+      <BackgroundJobsLink />
+    </div>
+  );
 }
 
 /** The read-only line, a usage read that failed, and a refused rename. */
@@ -610,36 +880,35 @@ function floorReason(
 }
 
 /**
- * Which notes the tab says about floors, in their reason's words. When Unused
- * holds rows back while every count is a floor, ONE note says it all rather
- * than three paragraphs that each begin the same way. Rows held back while
- * every page is counted (one style's count cut short) get no such note: the
- * proven rows are listed, and nothing is waiting.
+ * Which notes the tab says about floors. While counts are floors, ONE note
+ * says why, at the top of the list, where the counts first read as
+ * minimums. It covers the minimums, the rows Unused holds back and Remove
+ * unused waiting, so neither the head nor the list says it again. Rows held back while every page is counted (one
+ * style's count cut short) get their own line in the list: nothing is
+ * waiting, and the proven rows are listed.
  */
 function countingNotes(
   withheld: boolean,
   reason: FloorReason
 ): {
   withheld: boolean;
+  /** Whether the top note says why Remove unused waits. */
   one: boolean;
-  /** The one note's words, when it is showing. */
-  note: string | undefined;
-  /** The floor note's words: nothing while the one note says it. */
-  floor: string | undefined;
+  /** The top note's words, while counts are floors. */
+  top: string | undefined;
+  /** Whether that note says pages are not counted yet, so who counts them. */
+  jobs: boolean;
 } {
-  const one = withheld && reason !== undefined;
-  const words =
-    reason === "permanent"
-      ? {
-          one: SHARED_STYLE_UNCOUNTABLE_NOTE,
-          floor: SHARED_STYLE_UNCOUNTABLE_NOTE,
-        }
-      : { one: SHARED_STYLE_COUNTING_NOTE, floor: SHARED_STYLE_NOT_WHOLE_NOTE };
   return {
     withheld,
-    one,
-    note: one ? words.one : undefined,
-    floor: one || reason === undefined ? undefined : words.floor,
+    one: reason !== undefined,
+    top:
+      reason === "counting"
+        ? SHARED_STYLE_COUNTING_NOTE
+        : reason === "permanent"
+          ? SHARED_STYLE_UNCOUNTABLE_NOTE
+          : undefined,
+    jobs: reason === "counting",
   };
 }
 
@@ -656,27 +925,24 @@ function unusedWithheld(
 }
 
 /**
- * Unused while it holds rows back: why, then the rows proven unused. The
- * counting note carries the id Remove unused points at; without one, the
- * words say a count was cut short.
+ * Unused while it holds rows back: the rows proven unused, and, when the top
+ * note does not already say why (every page counted, but one style's count
+ * cut short), a line that says so.
  */
 function WithheldList({
-  note,
+  covered,
   listed,
   children,
 }: {
-  note: string | undefined;
+  covered: boolean;
   listed: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
     <>
-      <p
-        className="nx-vars__empty"
-        id={note === undefined ? undefined : "nx-shared-styles-withheld"}
-      >
-        {note ?? SHARED_STYLE_UNUSED_UNCERTAIN}
-      </p>
+      {covered ? null : (
+        <p className="nx-vars__empty">{SHARED_STYLE_UNUSED_UNCERTAIN}</p>
+      )}
       {listed ? <ul className="nx-vars__list">{children}</ul> : null}
     </>
   );
@@ -689,7 +955,7 @@ function StyleList({
   filter,
   query,
   withheld,
-  note,
+  covered,
   children,
 }: {
   rows: readonly SharedStyleRow[];
@@ -702,20 +968,14 @@ function StyleList({
    * rows proven unused are still listed, each judged on its own.
    */
   withheld: boolean;
-  /**
-   * The tab's one counting note, said here in place of the withheld rows'
-   * own; Remove unused points at it for why it waits.
-   */
-  note: string | undefined;
+  /** Whether the top note already says why rows are held back. */
+  covered: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
-  if (
-    withheld &&
-    rows.length > 0 &&
-    (note !== undefined || found.length === 0)
-  ) {
+  // Whenever Unused holds a row back it says so, beside the rows it lists.
+  if (withheld && rows.length > 0) {
     return (
-      <WithheldList note={note} listed={found.length > 0}>
+      <WithheldList covered={covered} listed={found.length > 0}>
         {children}
       </WithheldList>
     );
@@ -770,206 +1030,61 @@ interface UsageState {
    * Undefined until a read has answered.
    */
   readonly whole: boolean | undefined;
-  /** Whether floors among them may still become whole; see {@link countingOf}. */
+  /** Whether floors among them may still become whole. */
   readonly counting: "yes" | "unknown" | "no";
   readonly mayLock: boolean;
+  /** Whether this author may ask for the pages to be counted now. */
+  readonly mayCount: boolean;
   readonly failed: boolean;
   /** Ask about these styles again, as after a removal the server refused. */
   readonly reread: (ids: readonly string[]) => void;
+  /**
+   * Counting the pages now, when this author may and the host can; its
+   * answer reads the rows on screen again.
+   */
+  readonly counter: CountNow | undefined;
 }
 
-/** The health a style's usage was read under: its read's `whole` and `counting`. */
-interface Reading {
-  readonly whole: boolean;
-  /** Undefined where the host did not say. */
-  readonly counting: boolean | undefined;
-}
+/** A shared-style usage read, in the shape the usage reads take. */
+type SharedStylesRead = UsageRead<SharedStyleReach> & SharedStylesUsage;
 
-/**
- * Whether the listed styles' floors are worth asking for again: "yes" when a
- * style read before the count was whole was read while the site was still
- * being counted, "unknown" when such a reading did not say, "no" otherwise.
- * Per style, like {@link wholeOf}, since one scan is several reads and the
- * count can finish between them: a later read saying it is done says nothing
- * of the floors an earlier read left.
- */
-function countingOf(
-  readings: ReadonlyMap<string, Reading>,
-  ids: readonly string[]
-): "yes" | "unknown" | "no" {
-  const floors = ids.flatMap(id => {
-    const reading = readings.get(id);
-    return reading === undefined || reading.whole ? [] : [reading.counting];
-  });
-  if (floors.includes(true)) return "yes";
-  return floors.includes(undefined) ? "unknown" : "no";
+/** The tab's access as a usage source: each read's styles are its values. */
+function sharedStylesSource(
+  access: SharedStylesAccess
+): UsageSource<SharedStyleReach, SharedStylesRead> {
+  return {
+    usage: async (ids, signal) => {
+      const read = await access.usage(ids, signal);
+      return { ...read, values: read.styles };
+    },
+    ...(access.count === undefined ? {} : { count: access.count }),
+  };
 }
 
 /**
- * Whether the rows on screen are due another read on the recount timer: while
- * their counts are floors the site is still counting, or may be, the latter
- * only {@link USAGE_RECOUNT_UNKNOWN_MAX} times.
- */
-function recountDue(args: {
-  access: SharedStylesAccess | undefined;
-  whole: boolean | undefined;
-  counting: "yes" | "unknown" | "no";
-  failed: boolean;
-  recounts: number;
-}): boolean {
-  if (args.access === undefined || args.whole !== false || args.failed) {
-    return false;
-  }
-  return (
-    args.counting === "yes" ||
-    (args.counting === "unknown" && args.recounts < USAGE_RECOUNT_UNKNOWN_MAX)
-  );
-}
-
-/** What the reads kept: each style's usage, and the health it was read under. */
-interface UsageReads {
-  readonly styles: ReadonlyMap<string, SharedStyleReach>;
-  /** Per style, the health of the read that counted it. */
-  readonly readings: ReadonlyMap<string, Reading>;
-  readonly mayLock: boolean;
-  readonly failed: boolean;
-}
-
-/**
- * Whether the counts of `ids` are whole: every one read so far was read under
- * a whole index. Derived per style rather than from the last read, since one
- * scan is several reads and the index can finish counting between them: an
- * earlier read's floors stay floors until that style is read again. Only the
- * styles listed now are asked, so a style since removed cannot hold it false.
- */
-function wholeOf(
-  readings: ReadonlyMap<string, Reading>,
-  ids: readonly string[]
-): boolean | undefined {
-  const read = ids.flatMap(id => {
-    const reading = readings.get(id);
-    return reading === undefined ? [] : [reading.whole];
-  });
-  return read.length === 0 ? undefined : read.every(Boolean);
-}
-
-/** Usage for some styles, read fifty at a time, each read handed on as it answers. */
-async function readUsage(
-  access: SharedStylesAccess,
-  ids: readonly string[],
-  signal: AbortSignal,
-  onRead: (read: SharedStylesUsage) => void
-): Promise<void> {
-  for (let at = 0; at < ids.length; at += PAGE_SIZE) {
-    const read = await access.usage(ids.slice(at, at + PAGE_SIZE), signal);
-    if (signal.aborted) return;
-    onRead(read);
-  }
-}
-
-/**
- * How widely the rows on screen are used: each id is read once, fifty to a
- * read, as rows come on screen; a row already read is not asked again while
- * the counts are whole. While some pages are still being counted, every row
- * on screen is asked again each {@link USAGE_RECOUNT_MS}, until they are.
+ * How widely the rows on screen are used, through the usage reads every
+ * Design tab shares, with whether this author may lock from the latest read.
  */
 function useUsage(
   access: SharedStylesAccess | undefined,
   ids: readonly string[]
 ): UsageState {
-  const [state, setState] = React.useState<UsageReads>({
-    styles: new Map(),
-    readings: new Map(),
-    mayLock: false,
-    failed: false,
-  });
-  const known = React.useRef(state.styles);
-  known.current = state.styles;
-  const key = idsKey(ids);
-  const whole = wholeOf(state.readings, ids);
-  const counting = countingOf(state.readings, ids);
-  const [recount, setRecount] = React.useState(0);
-  const recounted = React.useRef(recount);
-  React.useEffect(() => {
-    // Only while the site is still being counted, or may be: floors that
-    // nothing will make whole (content the index cannot reach) are not asked
-    // for again.
-    const due = recountDue({
-      access,
-      whole,
-      counting,
-      failed: state.failed,
-      recounts: recount,
-    });
-    if (!due) return;
-    const timer = setTimeout(
-      () => setRecount(count => count + 1),
-      USAGE_RECOUNT_MS
-    );
-    return () => clearTimeout(timer);
-  }, [access, whole, counting, state, recount]);
-  React.useEffect(() => {
-    if (access === undefined) return;
-    // A recount asks for every row on screen; otherwise only the rows that
-    // have come on screen since the last read.
-    const again = recounted.current !== recount;
-    recounted.current = recount;
-    // An empty id names no style, and the route refuses one.
-    const unread = idsOf(key).filter(
-      id => id !== "" && (again || !known.current.has(id))
-    );
-    if (unread.length === 0) return;
-    return readInto(access, unread, setState);
-  }, [access, key, recount]);
-  // Styles asked about again on their own, after a write the server refused.
-  const [asked, reread] = React.useState<readonly string[]>([]);
-  React.useEffect(() => {
-    if (access === undefined || asked.length === 0) return;
-    return readInto(access, asked, setState);
-  }, [access, asked]);
+  const source = React.useMemo(
+    () => (access === undefined ? undefined : sharedStylesSource(access)),
+    [access]
+  );
+  const reads = useUsageReads(source, ids);
   return {
-    styles: state.styles,
-    whole,
-    counting,
-    mayLock: state.mayLock,
-    failed: state.failed,
-    reread,
+    styles: reads.values,
+    whole: reads.whole,
+    counting: reads.counting,
+    // Absent until a read answers: no lock is offered before one.
+    mayLock: reads.latest?.mayLock ?? false,
+    mayCount: reads.mayCount,
+    failed: reads.failed,
+    reread: reads.reread,
+    counter: reads.counter,
   };
-}
-
-/** One read's answer folded into what the reads kept. */
-function mergedReads(current: UsageReads, read: SharedStylesUsage): UsageReads {
-  return {
-    styles: new Map([...current.styles, ...read.styles]),
-    readings: new Map([
-      ...current.readings,
-      ...[...read.styles.keys()].map(
-        id => [id, { whole: read.whole, counting: read.counting }] as const
-      ),
-    ]),
-    mayLock: read.mayLock,
-    failed: false,
-  };
-}
-
-/**
- * Read some styles' usage into the kept reads, a failure marked; answers the
- * effect's cleanup, which drops a read the effect no longer wants.
- */
-function readInto(
-  access: SharedStylesAccess,
-  ids: readonly string[],
-  setState: React.Dispatch<React.SetStateAction<UsageReads>>
-): () => void {
-  const controller = new AbortController();
-  readUsage(access, ids, controller.signal, read =>
-    setState(current => mergedReads(current, read))
-  ).catch(() => {
-    if (!controller.signal.aborted) {
-      setState(current => ({ ...current, failed: true }));
-    }
-  });
-  return () => controller.abort();
 }
 
 /**
@@ -1177,6 +1292,8 @@ function RowContent({
         style={tile.page}
         data-dark-unreadable={tile.darkUnreadable ? "" : undefined}
       >
+        {/* Outlined: its outline is inline, chosen against its own
+            background; the class marks it. */}
         <span
           className={
             tile.outlined
@@ -1205,12 +1322,28 @@ function RowContent({
           In code
         </span>
       ) : null}
-      {reach === undefined ? null : (
-        <span className="nx-vars__chip" aria-hidden="true">
-          {sharedStyleReachChip(reach)}
-        </span>
-      )}
+      {reach === undefined ? null : <ReachChip reach={reach} />}
     </>
+  );
+}
+
+/** A row's count, muted while it is a zero not counted yet. */
+function ReachChip({ reach }: { reach: SharedStyleReach }): React.JSX.Element {
+  const chip = sharedStyleReachChip(reach);
+  return (
+    <span
+      className={
+        chip.uncounted
+          ? "nx-vars__chip nx-shared-styles__count--uncounted"
+          : "nx-vars__chip"
+      }
+      aria-hidden="true"
+      // Each kind in words on hover, which "5 places" totals; the row's
+      // name says the same to a screen reader.
+      title={sharedStyleReachSentence(undefined, reach) || undefined}
+    >
+      {chip.words}
+    </span>
   );
 }
 
@@ -1481,7 +1614,8 @@ function ConfirmUnused({
       role="group"
       aria-label={`Remove ${unusedCount(count)}`}
     >
-      <p>{`Remove ${unusedCount(count)}? No page uses them.`}</p>
+      <p>{`Remove ${unusedCount(count)}? No page uses them in the editor.`}</p>
+      <p className="nx-shared-styles__meta">{SHARED_STYLE_UNCOUNTED_USES}</p>
       {/* Stacked, so a long name and its class both read in full. */}
       <ul className="nx-shared-styles__uses nx-shared-styles__uses--stacked">
         {left.map(row => (

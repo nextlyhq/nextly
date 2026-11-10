@@ -10,12 +10,16 @@
  *
  * @module cli/utils/data-loss-consent
  */
+import { createHash } from "node:crypto";
+
 import * as clack from "@clack/prompts";
 
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   ACCEPT_DATA_LOSS_ENV,
+  deletionKey,
   deprecationNotices,
+  describeDeletion,
   judgeDataLoss,
   resolveDataLossConsent,
   type DataLossConsent,
@@ -23,6 +27,8 @@ import {
   type Deletion,
   type EarlierSpelling,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { NextlyError } from "../../errors/nextly-error";
+import type { DryRunChange } from "../dry-run";
 import { CliError } from "../errors/cli-error";
 import { dataLossRefusal } from "../errors/index";
 
@@ -73,7 +79,7 @@ export async function askToDeleteInTerminal(
  * a deletion: nothing changed, and it names the consent that deletes without
  * asking. It exits 1, as a run with no consent and no terminal does.
  */
-export function dataLossDeclined(): CliError {
+function dataLossDeclined(): CliError {
   return new CliError("DATA_LOSS_DECLINED", {
     what: "Nothing was changed: the deletion was not confirmed.",
     why: "The prompt that listed what would be deleted was not answered yes.",
@@ -135,4 +141,134 @@ export async function judgeDataLossWithGrace(args: {
     return;
   }
   requireConsented(verdict);
+}
+
+/**
+ * What a dry run of a deleting command names: each deletion the real run
+ * would ask consent for, in the words the consent's listing uses.
+ */
+export function deletionChanges(
+  deletions: readonly Deletion[]
+): DryRunChange[] {
+  return deletions.map(deletion => ({
+    action: "remove",
+    target: describeDeletion(deletion),
+  }));
+}
+
+/**
+ * The file a deletion comes from: `label`, its name as the listing shows it,
+ * and `identity`, its name and a digest of its text, which an agreement binds
+ * to, so a yes to one file's deletion never stands for another file's, nor
+ * for the same file once its text changed.
+ */
+export interface DeletionSource {
+  label: string;
+  identity: string;
+}
+
+/** The source of a deletion from the file `label` whose statements are `text`. */
+export function deletionSource(label: string, text: string): DeletionSource {
+  return { label, identity: `${label}\u0000${textDigest(text)}` };
+}
+
+/** The sha256 of a file's text, as an agreement binds the file and as a run checks it before running it. */
+export function textDigest(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** What a person agreed to: each deletion of each file, by the file's identity. */
+export type Agreement = ReadonlySet<string>;
+
+/** A deletion as an agreement holds it: bound to the identity of its file. */
+function agreed(source: DeletionSource, deletion: Deletion): string {
+  return `${source.identity}\u0000${deletionKey(deletion)}`;
+}
+
+/**
+ * A run's deletions judged once, each listed under the file it comes from
+ * (`sources`, keyed by identity). The first judgement (`agreed` absent) may
+ * ask the person at a terminal and prints the listing; a later one, under the
+ * command's lock, accepts without asking only a deletion of a file agreed to
+ * as it stands now. A refusal throws, its listing naming each file, and a no
+ * at the terminal throws `dataLossDeclined`: both before anything changes.
+ * Returns what this judgement agreed to.
+ */
+export async function judgeRunDeletions(args: {
+  sources: ReadonlyMap<Deletion, DeletionSource>;
+  consent: DataLossConsent;
+  agreed: Agreement | undefined;
+  interactive: boolean | undefined;
+  askToDelete: ((question: string) => Promise<boolean>) | undefined;
+  warn: (line: string) => void;
+  /** What the run cannot list, told beside its deletions (`eventTriggerNotice`); never judged. */
+  notice?: string;
+}): Promise<Agreement> {
+  const first = args.agreed === undefined;
+  const sources = [...args.sources];
+  // Under the lock only what no agreement binds goes to the verdict, which
+  // compares deletions by kind and table alone: an agreement is kept here,
+  // by file, so one file's agreed deletion never covers another's.
+  const judged = first
+    ? sources
+    : sources.filter(
+        ([deletion, source]) =>
+          args.agreed?.has(agreed(source, deletion)) !== true
+      );
+  // Told only beside deletions: a question at a terminal follows it, and a
+  // refusal carries it.
+  const notice = judged.length > 0 ? args.notice : undefined;
+  if (first && notice !== undefined && args.interactive === true) {
+    args.warn(notice);
+  }
+  const verdict = await judgeDataLoss({
+    deletions: judged.map(([deletion]) => deletion),
+    consent: args.consent,
+    interactive: first && args.interactive === true,
+    ask: question => args.askToDelete?.(question) ?? Promise.resolve(false),
+    print: first ? args.warn : () => {},
+    sourceOf: deletion => args.sources.get(deletion)?.label,
+  });
+  if (verdict.kind === "refused") {
+    throw NextlyError.invalidInput({
+      message: withNotice(verdict.message, notice),
+      logContext: {
+        files: [...new Set(sources.map(([, source]) => source.label))],
+        reason: `data-loss-${verdict.reason}`,
+      },
+    });
+  }
+  if (verdict.kind === "declined") throw dataLossDeclined();
+  if (first && notice !== undefined && args.interactive !== true) {
+    args.warn(notice);
+  }
+  return new Set(sources.map(([deletion, source]) => agreed(source, deletion)));
+}
+
+/** A refusal's message with the notice after it, when there is one. */
+function withNotice(message: string, notice: string | undefined): string {
+  return notice === undefined ? message : `${message}\n${notice}`;
+}
+
+/**
+ * What a run tells of the database's DDL event triggers, from `read`
+ * (`readDdlEventTriggers`): each by name, since Nextly cannot see what one
+ * does on the schema changes a migration makes; that the read failed, when it
+ * did; undefined when there are none. Told, never judged: no consent covers
+ * code nobody can read, and asking for blanket consent on every run of a
+ * database that has one would make that consent meaningless.
+ */
+export async function eventTriggerNotice(
+  read: () => Promise<readonly string[]>
+): Promise<string | undefined> {
+  let names: readonly string[];
+  try {
+    names = await read();
+  } catch {
+    return "Nextly could not read whether this database has DDL event triggers, which run on schema changes; what they delete is not listed.";
+  }
+  if (names.length === 0) return undefined;
+  return names.length === 1
+    ? `This database has the DDL event trigger ${names[0]}: it runs on schema changes, and Nextly cannot see what it does, so what it deletes is not listed.`
+    : `This database has the DDL event triggers ${names.join(", ")}: they run on schema changes, and Nextly cannot see what they do, so what they delete is not listed.`;
 }

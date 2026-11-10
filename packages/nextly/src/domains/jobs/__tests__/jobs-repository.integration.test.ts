@@ -404,4 +404,89 @@ describe.each(getConfiguredTestDialects())("JobsRepository (%s)", dialect => {
     });
     expect(again.deduped).toBe(true);
   });
+
+  it("says which job no runner holds, and withdraws only that one", async () => {
+    // Work done another way first withdraws its job; a runner already holding
+    // one finishes it, so its outcome is still recorded.
+    const app = await boot(dialect);
+    const repo = new JobsRepository(app.adapter);
+    const job = () =>
+      repo.enqueue({
+        slug: "test:noop",
+        input: {},
+        runAt: null,
+        runAsUserId: null,
+        dedupeKey: null,
+        now: NOW,
+      });
+    const free = await job();
+    const held = await job();
+    const finished = await job();
+    expect(await repo.claim(held.id, "runner-a", NOW, 30_000)).not.toBeNull();
+    expect(
+      await repo.claim(finished.id, "runner-b", NOW, 30_000)
+    ).not.toBeNull();
+    expect(
+      await repo.finalize({
+        id: finished.id,
+        runnerId: "runner-b",
+        outcome: "done",
+        nextAttemptAt: null,
+        lastError: null,
+        now: NOW,
+      })
+    ).toBe(true);
+
+    // Asked first: only the free one is still waiting.
+    expect(await repo.isUnclaimed(free.id)).toBe(true);
+    expect(await repo.isUnclaimed(held.id)).toBe(false);
+    expect(await repo.isUnclaimed(finished.id)).toBe(false);
+
+    expect(await repo.withdrawUnclaimed(free.id)).toBe(true);
+    expect(await repo.isUnclaimed(free.id)).toBe(false);
+    expect(await repo.withdrawUnclaimed(held.id)).toBe(false);
+    expect(await repo.withdrawUnclaimed(finished.id)).toBe(false);
+
+    const left = await app.adapter.select<{ id: string }>("nextly_jobs", {
+      columns: ["id"],
+    });
+    expect(left.map(row => row.id).sort()).toEqual(
+      [held.id, finished.id].sort()
+    );
+  });
+
+  it("withdraws the waiting jobs that hold any of the given keys, and only those", async () => {
+    // A chain of work under known keys, confirmed another way: the links still
+    // waiting go, one a runner holds stays, and a job under another key stays.
+    const app = await boot(dialect);
+    const repo = new JobsRepository(app.adapter);
+    const keyed = (dedupeKey: string) =>
+      repo.enqueue({
+        slug: "test:noop",
+        input: {},
+        runAt: null,
+        runAsUserId: null,
+        dedupeKey,
+        now: NOW,
+      });
+    const waiting = await keyed("chain:0");
+    const held = await keyed("chain:1");
+    const other = await keyed("elsewhere:0");
+    expect(await repo.claim(held.id, "runner-a", NOW, 30_000)).not.toBeNull();
+
+    expect(
+      await repo.withdrawUnclaimedByDedupeKeys([
+        "chain:0",
+        "chain:1",
+        "chain:2",
+      ])
+    ).toBe(1);
+    expect(await repo.withdrawUnclaimedByDedupeKeys([])).toBe(0);
+
+    const left = await app.adapter.select<{ id: string }>("nextly_jobs", {
+      columns: ["id"],
+    });
+    expect(left.map(row => row.id).sort()).toEqual([held.id, other.id].sort());
+    expect(left.map(row => row.id)).not.toContain(waiting.id);
+  });
 });

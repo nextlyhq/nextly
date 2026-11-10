@@ -50,7 +50,7 @@ const arrow = () =>
   screen.queryByRole("button", { name: "More ways to publish" });
 
 describe("the Publish split", () => {
-  it("offers Schedule publish… and Add to release… on the primary's arrow, in that order", async () => {
+  it("offers Publish now, then the other ways, on the primary's arrow, in that order", async () => {
     render(
       <DocumentActionBar
         actions={[PRIMARY, VIEW_API, SCHEDULE, ADD]}
@@ -63,7 +63,42 @@ describe("the Publish split", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map(item => item.textContent)
-    ).toEqual(["Schedule publish…", "Add to release…"]);
+    ).toEqual(["Publish now", "Schedule publish…", "Add to release…"]);
+  });
+
+  it("runs Publish now as the press does", async () => {
+    const publish = vi.fn();
+    render(
+      <DocumentActionBar
+        actions={[PRIMARY, SCHEDULE]}
+        bindings={bindings({ publish: { onSelect: publish } })}
+      />
+    );
+    await userEvent.click(arrow() as HTMLElement);
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Publish now" })
+    );
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("hangs the arrow on Save where Save leads, so a clean live document can still be scheduled", async () => {
+    // Nothing to publish, so no Publish now: only the ways to do it later.
+    render(
+      <DocumentActionBar
+        actions={[
+          { id: "save", label: "Save", placement: "primary" },
+          SCHEDULE,
+        ]}
+        bindings={bindings({ save: { onSelect: vi.fn() } })}
+      />
+    );
+    await userEvent.click(arrow() as HTMLElement);
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map(item => item.textContent)
+    ).toEqual(["Schedule publish…"]);
   });
 
   it("keeps them out of More, which keeps its own rows", async () => {
@@ -173,9 +208,11 @@ describe("the arrow by keyboard", () => {
     trigger.focus();
     await userEvent.keyboard("{Enter}");
     const first = await screen.findByRole("menuitem", {
-      name: "Schedule publish…",
+      name: "Publish now",
     });
     expect(document.activeElement).toBe(first);
+    await userEvent.keyboard("{ArrowDown}");
+    expect(document.activeElement?.textContent).toBe("Schedule publish…");
     await userEvent.keyboard("{ArrowDown}");
     expect(document.activeElement?.textContent).toBe("Add to release…");
     await userEvent.keyboard("{Enter}");

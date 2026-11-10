@@ -252,7 +252,7 @@ describe.each(getConfiguredTestDialects())(
 
       await trusted.updateSingle({
         slug: "upsite",
-        data: { title: "s" },
+        data: { title: "s", _overwrite: true },
       } as never);
       const [site] = await t.adapter.select<Doc>("single_upsite", {});
       await storeRaw("single_upsite", { id: site?.id }, "own", {
@@ -268,7 +268,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "uplocal",
         id: localId,
         locale: "es",
-        data: { wrap: { held: { heading: "w", pin: "x" } } },
+        data: { wrap: { held: { heading: "w", pin: "x" } }, _overwrite: true },
       } as never);
       for (const code of ["en", "es"]) {
         await storeRaw(
@@ -603,7 +603,7 @@ describe.each(getConfiguredTestDialects())(
       await trusted.update({
         collection: "upretarget",
         id,
-        data: { title: "r2" },
+        data: { title: "r2", _overwrite: true },
       } as never);
       const versions = await versionsOf(id);
       for (const version of versions) {
@@ -641,7 +641,7 @@ describe.each(getConfiguredTestDialects())(
       await trusted.update({
         collection: "upversioned",
         id,
-        data: { title: "v2" },
+        data: { title: "v2", _overwrite: true },
       } as never);
       // Each snapshot as an earlier release could leave one: with the
       // password a field group held inline in a group carried.

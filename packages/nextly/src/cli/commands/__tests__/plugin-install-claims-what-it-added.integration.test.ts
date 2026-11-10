@@ -36,6 +36,10 @@ import {
   migrationChecksum,
   type PluginMigration,
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
+import {
+  resolveDataLossConsent,
+  type DataLossConsent,
+} from "../../../domains/schema/migrate/data-loss-consent";
 import type { OwnerRecord } from "../../../domains/schema/ownership/owner-registry";
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
 import type { TableSpec } from "../../../domains/schema/pipeline/diff/types";
@@ -493,7 +497,12 @@ describe.each(getConfiguredTestDialects())(
       await handle?.destroy();
     });
 
-    const install = (name: string) => runPluginInstall(name, {}, context);
+    const install = (name: string, consent?: DataLossConsent) =>
+      runPluginInstall(name, { consent }, context);
+    // A module that stops adding the column drops it: the install takes the
+    // data-loss consent for it, as `nextly migrate` would.
+    const droppingExtra = () =>
+      resolveDataLossConsent({ flag: "hs__items.extra", env: {} });
 
     /** The owner rows naming `owner`, as `kind table.name` lines. */
     async function claimsOf(owner: string): Promise<string[]> {
@@ -638,7 +647,7 @@ describe.each(getConfiguredTestDialects())(
         adderExtends: false,
         adderMigrations: [modules.adder, later.adder],
       });
-      await install(ADDER);
+      await install(ADDER, droppingExtra());
       expect(await columnsOf("hs__items")).not.toContain("extra");
 
       // Then the host adds a column of its own by that name, and indexes it.
@@ -671,7 +680,7 @@ describe.each(getConfiguredTestDialects())(
         adderMigrations: [modules.adder, later.adder],
         takerMigrations: taker.shipped,
       });
-      await install(ADDER);
+      await install(ADDER, droppingExtra());
       expect(await columnsOf("hs__items")).not.toContain("extra");
 
       // Its first module adds the column, its second indexes it.

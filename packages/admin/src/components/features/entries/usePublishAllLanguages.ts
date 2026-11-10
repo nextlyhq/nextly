@@ -19,6 +19,7 @@
  * @module components/features/entries/usePublishAllLanguages
  */
 
+import type { PublishAllPreviewSource } from "@admin/hooks/queries/usePublishAllPreview";
 import { useCanRequest } from "@admin/hooks/useCanRequest";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
@@ -31,6 +32,11 @@ export interface PublishAllLanguages {
   pending: boolean;
   /** Publish every language of the current document. */
   publishAll: () => void;
+  /**
+   * Where the server's preview of that publish is read, which the confirm
+   * lists language by language; absent where no document can be published.
+   */
+  preview: PublishAllPreviewSource | undefined;
 }
 
 export function usePublishAllLanguages({
@@ -62,5 +68,11 @@ export function usePublishAllLanguages({
     available,
     pending: publishAllLanguages?.pending ?? false,
     publishAll: () => publishAllLanguages?.publish(),
+    preview: publishAllLanguages
+      ? {
+          fetch: publishAllLanguages.preview,
+          key: publishAllLanguages.previewKey,
+        }
+      : undefined,
   };
 }

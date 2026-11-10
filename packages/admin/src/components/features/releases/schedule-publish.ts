@@ -1,7 +1,7 @@
 /**
- * Scheduling one document to go live, as rules without React: when the
- * editor's "Schedule publish…" is usable, what the release it makes is
- * called, and what is wrong with a time someone picked.
+ * Scheduling one document, as rules without React: when the editor's
+ * "Schedule…" is usable, what a release of one is called, what is wrong with a
+ * time someone picked, and how a refusal's problems are said.
  *
  * Scheduling in Nextly is a release. A document scheduled from its editor
  * goes into a release holding only it, at the chosen time, so the same
@@ -9,21 +9,83 @@
  *
  * @module components/features/releases/schedule-publish
  */
+import { isApiError } from "@admin/lib/api/parseApiError";
+import type {
+  HiddenReleaseMembers,
+  ReleaseMemberAction,
+  ReleaseReadinessFinding,
+} from "@admin/types/releases";
+
+import { describeHiddenNeedFix, hiddenTotal } from "./release-hidden";
+import { refusalProblemText } from "./release-problems";
 import { wallTimeIn } from "./release-timezone";
 
 /** The action's id in the editor's action model. */
 export const SCHEDULE_PUBLISH_ACTION_ID = "schedule-publish";
 
 /** What the action says: it opens a dialog, so it ends in an ellipsis. */
-export const SCHEDULE_PUBLISH_LABEL = "Schedule publish…";
+export const SCHEDULE_PUBLISH_LABEL = "Schedule…";
+
+/** How a document goes out: on its own, with a release, or in a new one. */
+export type ScheduleWay = "own" | "existing" | "new";
+
+/** Why "on its own" is held for a person who may not schedule releases. */
+export const OWN_NEEDS_SCHEDULING =
+  "Scheduling on its own needs permission to schedule releases.";
+
+/**
+ * "Every language moves together: English, Spanish and the shared fields." A
+ * release moves the whole document, every language at once.
+ */
+export function languagesSentence(languages: readonly string[]): string {
+  const named =
+    languages.length < 2
+      ? languages.join("")
+      : `${languages.slice(0, -1).join(", ")} and ${languages[languages.length - 1]}`;
+  return `Every language moves together: ${named}, and the shared fields.`;
+}
+
+/**
+ * The hard problems a refusal named, one line each in the release page's
+ * words, said to the reader, then how many more are on documents they may not
+ * view. Empty for a refusal that names none.
+ */
+export function refusalLines(
+  error: unknown,
+  action: ReleaseMemberAction
+): string[] {
+  if (!isApiError(error) || error.data === undefined) return [];
+  const problems = Array.isArray(error.data.problems)
+    ? (error.data.problems as Array<{
+        code?: unknown;
+        detail?: ReleaseReadinessFinding["detail"];
+      }>)
+    : [];
+  const lines = problems
+    .filter(
+      (
+        problem
+      ): problem is {
+        code: string;
+        detail?: ReleaseReadinessFinding["detail"];
+      } => typeof problem.code === "string"
+    )
+    .map(problem => refusalProblemText(problem, action));
+  const hidden = Array.isArray(error.data.hidden)
+    ? (error.data.hidden as HiddenReleaseMembers[])
+    : [];
+  const unseen = hiddenTotal(hidden);
+  return unseen > 0 ? [...lines, describeHiddenNeedFix(unseen)] : lines;
+}
 
 /**
  * Why scheduling is refused for THIS person and document, or undefined when
  * it is not.
  *
- * Order matters: the reason someone could act on last. Permission over
- * releases comes first, since switching language would not help a person who
- * may not schedule at all.
+ * Order matters: the reason someone could act on last. Permission over the
+ * document comes first, since switching language would not help a person who
+ * may neither publish nor unpublish it. A person who may not create releases
+ * is offered nothing at all (`useScheduleDocumentAction`).
  */
 export function schedulePublishRefusal(facts: {
   /**
@@ -32,28 +94,25 @@ export function schedulePublishRefusal(facts: {
    * the first has every permission the rest ask about.
    */
   scheduling: boolean;
-  /** May create a release and schedule it: the two the server asks. */
-  canSchedule: boolean;
-  /** May publish this document, which the release does for them later. */
-  canPublish: boolean;
+  /**
+   * May publish or unpublish this document: what the release does for them
+   * later, going live or coming down.
+   */
+  canChangeDocument: boolean;
   onDefaultLocale: boolean;
 }): string | undefined {
   if (facts.scheduling) {
     return "This document is being scheduled. Wait for it to finish.";
   }
-  if (!facts.canSchedule) {
-    return "You do not have permission to schedule releases.";
-  }
-  if (!facts.canPublish) {
-    return "You do not have permission to publish this document.";
+  if (!facts.canChangeDocument) {
+    return "You do not have permission to publish or unpublish this document.";
   }
   /*
    * A release publishes the whole document, so scheduling from a translation
    * would put every language live while the screen is about one of them.
-   * The same rule, in the same words, as Add to release beside it.
    */
   if (!facts.onDefaultLocale) {
-    return "Schedule publishing from the document's default locale.";
+    return "Schedule from the document's default language.";
   }
   return undefined;
 }

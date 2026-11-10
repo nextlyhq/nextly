@@ -2,9 +2,12 @@ import {
   compileSiteSheet,
   compileSiteTokenSheet,
   DOCUMENT_FORMAT_VERSION,
+  isDefaultLook,
+  ownLooksRead,
   PAGE_ROOT_CLASS,
   resolveSiteTokens,
   type BlockDocument,
+  type NamedClass,
   type DefinitionsById,
   type DocumentLimits,
   type SiteSheetInput,
@@ -13,31 +16,44 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement, ReactNode } from "react";
 
-import { BlockList } from "./block-boundary";
+import {
+  BlockList,
+  type BoundaryBindings,
+  type BoundaryConditions,
+  type ItemHiddenAs,
+} from "./block-boundary";
 import {
   createStandaloneContext,
+  type BindingIssuesHandler,
   type BlockHostPolicy,
+  type PageBindings,
   type PageContext,
+  type PageIssue,
 } from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import {
-  prepareDocumentReadStages,
+  heldConditionsOf,
+  pageBindingRun,
+  readStagesFor,
   rendersOwnMarkup,
+  type PreparedDocument,
 } from "./prepare-document";
 import { registeredBlocks, type BlockResolver } from "./resolver";
 import {
+  blockPartsFor,
   drawlessTestFor,
   effectiveCompile,
   gatedEntriesCoverRemovedNodes,
   gatedMapCoversPrunedNodes,
   hasDuplicateNodeIds,
   migrationChangedWhatDraws,
+  itemDecidedRules,
   readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
   type PageStyles,
 } from "./styles";
-import { pruneNodes } from "./visibility";
+import { pruneNodes, type EntryJudgement } from "./visibility";
 
 export interface PageRendererProps {
   /** The stored document to render. */
@@ -145,6 +161,83 @@ export interface PageRendererProps {
    * compiled styles receives only the block-TYPE class.
    */
   nodeAttribute?: boolean;
+  /**
+   * What the page's bindings read, already read with the public's access.
+   *
+   * Absent, no binding is filled and every bound prop shows its own value,
+   * which is what an editor drawing a document without its data wants. Given,
+   * each binding is checked and filled before blocks render, from these
+   * sources only: never from `context.entry`, which a route may have read with
+   * more access than a visitor has.
+   *
+   * @experimental
+   */
+  bindings?: PageBindings;
+  /**
+   * Told about each binding this render could not use as stored. A throw from
+   * it is contained.
+   *
+   * @experimental
+   */
+  onBindingIssues?: BindingIssuesHandler;
+  /**
+   * The document as this package's route already prepared it, so a page is
+   * prepared once per render. Used only when it is one the package made, for
+   * this document object under these blocks, definitions and caps; anything
+   * else, a hand-built or copied value included, is ignored and the whole
+   * pipeline runs.
+   *
+   * @internal Set by this package's route.
+   * @experimental
+   */
+  prepared?: PreparedDocument;
+  /**
+   * What to draw in place of a block a list's item hides, for an editor
+   * showing where such blocks sit: the node it returns is drawn in the
+   * block's place, and nothing is drawn when it returns nothing.
+   *
+   * Absent, a block an item hides is not drawn, as on every published page.
+   * It is never called for a block the item shows, nor outside a list.
+   *
+   * @experimental
+   */
+  itemHiddenAs?: ItemHiddenAs;
+  /**
+   * Judge the page's conditions for an entry as an editor shows the page to a
+   * visitor reading it: every block, a placed component's own among them,
+   * judged as the page's route judges it, one they hide drawn as the node the
+   * judgement gives. Absent, as on every published page, nothing changes.
+   *
+   * @experimental
+   */
+  entryJudged?: EntryJudgement;
+}
+
+/**
+ * A report of binding problems that tells its handler about each one once,
+ * however many list items meet it, and never lets the handler fail the page.
+ */
+function bindingIssueReport(
+  handler: BindingIssuesHandler | undefined
+): (issues: readonly PageIssue[]) => void {
+  const seen = new Set<string>();
+  return issues => {
+    if (handler === undefined) return;
+    const fresh = issues.filter(issue => {
+      // A binding is placed by its prop, a condition by where it is stored.
+      const at = "prop" in issue ? issue.prop : issue.path;
+      const key = `${issue.nodeId}\u0000${at}\u0000${issue.code}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (fresh.length === 0) return;
+    try {
+      handler(fresh);
+    } catch {
+      // A report is the host's code; a failing one costs the report, not the page.
+    }
+  };
 }
 
 /**
@@ -215,6 +308,7 @@ interface SiteInputRoles {
   tokenPrefix: "reconciled-here";
   previewContainer: "reconciled-here";
   previewStates: "reconciled-here";
+  spacingMode: "reconciled-here";
   mayFetchUrl: "reconciled-elsewhere";
   fonts: "sheet-only";
   tokens: "sheet-only";
@@ -332,6 +426,7 @@ export function withoutStatedNulls(
     tokenPrefix: shared.tokenPrefix ?? undefined,
     previewContainer: shared.previewContainer ?? undefined,
     previewStates: shared.previewStates ?? undefined,
+    spacingMode: shared.spacingMode ?? undefined,
   };
 }
 
@@ -396,7 +491,10 @@ export function sharedStyleInputs(
   const stored: Partial<SiteSheetInput> = site ?? {};
   return defined({
     breakpoints: firstStated(stored.breakpoints, route.breakpoints),
-    namedClasses: firstStated(route.namedClasses, stored.classes),
+    namedClasses: withSiteOwnLooks(
+      firstStated(route.namedClasses, stored.classes),
+      stored.classes
+    ),
     blockBases: firstStated(stored.blockBases, route.blockBases),
     tokenPrefix: firstStated(
       stored.tokenPrefix,
@@ -419,7 +517,33 @@ export function sharedStyleInputs(
     // stored tier describes the site. A site record has no business turning
     // forceable states on for a published page.
     previewStates: firstStated(route.previewStates, stored.previewStates),
+    // The site's spacing model is a fact about the site, so the stored tier
+    // wins, as it does for the block defaults the model decides.
+    spacingMode: firstStated(stored.spacingMode, route.spacingMode),
   });
+}
+
+/**
+ * The page context's classes with the site's own looks in place of any the
+ * context states: a block type's own look edits its base for every page on
+ * the site, so it is a fact about the site, as the stored bases are, and a
+ * route stating its own classes for attribution must not lose it. An own look
+ * is never written as a class, so this changes no class rule, only the bases.
+ */
+function withSiteOwnLooks(
+  classes: StyleCompileContext["namedClasses"],
+  site: SiteSheetInput["classes"]
+): StyleCompileContext["namedClasses"] {
+  if (classes === site || !Array.isArray(classes) || !Array.isArray(site)) {
+    return classes;
+  }
+  const siteOwn = ownLooksRead(site);
+  // Unchanged where neither tier holds one, so the stamp keeps its identity.
+  if (siteOwn.length === 0 && !classes.some(isDefaultLook)) return classes;
+  return [
+    ...classes.filter((entry: NamedClass) => !isDefaultLook(entry)),
+    ...siteOwn,
+  ];
 }
 
 /**
@@ -537,6 +661,11 @@ export function PageRenderer({
   blockFallback,
   limits,
   hostPolicy,
+  bindings,
+  onBindingIssues,
+  prepared,
+  itemHiddenAs,
+  entryJudged,
 }: PageRendererProps): ReactElement {
   const resolver = blocks ?? registeredBlocks();
   // Passed through untouched. The policy travels beside the context rather than
@@ -592,12 +721,35 @@ export function PageRenderer({
   // their order live in one place now; what stays here is the artifact question
   // this file alone can answer — whether a stored stylesheet still describes the
   // tree that renders — which reads those states rather than recomputing them.
-  const stages = prepareDocumentReadStages(document, {
-    resolver,
-    limits,
-    styleContext,
-    definitions,
-  });
+  // One pass for the whole render, shared by the page's bindings and every
+  // list item's, so each formatter is built once.
+  const bindingRun =
+    bindings === undefined
+      ? undefined
+      : pageBindingRun(
+          bindings,
+          pageContext.locale,
+          resolver,
+          pageContext.namedQueries
+        );
+  const stages = readStagesFor(
+    document,
+    {
+      resolver,
+      limits,
+      styleContext,
+      definitions,
+      ...(bindingRun === undefined ? {} : { bindings: bindingRun }),
+      // An editor drawing a list item's hidden block keeps such blocks for
+      // the list to judge; a published page's route decides them itself.
+      ...(itemHiddenAs === undefined ? {} : { itemsDecided: true }),
+      // An editor showing the page as a visitor reading an entry judges
+      // every block for it, the route's way, drawing its own node in place of
+      // one hidden.
+      ...(entryJudged === undefined ? {} : { entryJudged }),
+    },
+    prepared
+  );
   // `null` here means only an unreadable ENVELOPE, which the two guards above
   // already answered. Kept because unreachability is a property of the current
   // call graph rather than of the code, and this guard costs a comparison over a
@@ -615,7 +767,21 @@ export function PageRenderer({
     migrated: doc,
     gated: pruned,
     deduped: visible,
+    bound,
   } = stages;
+
+  // What the boundary needs to hand blocks their bound values and to fill the
+  // list items' bindings, with the page's own problems reported first.
+  const report = bindingIssueReport(onBindingIssues);
+  report(stages.bindingIssues);
+  const boundaryBindings: BoundaryBindings | undefined =
+    bindingRun === undefined
+      ? undefined
+      : {
+          run: bindingRun,
+          bound: stages.boundValues,
+          report,
+        };
 
   // The scope comes from whichever input supplied the stylesheet, never from a
   // separate prop. Two inputs would have to agree, and when they did not the
@@ -696,22 +862,26 @@ export function PageRenderer({
   // `rendersNothing` over the whole tree to reach a conclusion already known.
   // That is the standalone compile path, where the compiler holds those rules
   // back at the source and nothing here needs to.
+  //
+  // Asked of the BOUND tree, because whether a block draws is a question about
+  // the props it renders with: an image waiting for its picture that a binding
+  // fills draws, and its rules must ship.
   const drawsNothing = drawlessTestFor(resolver);
   const drawlessDropped =
     gatedRules === undefined
-      ? visible
-      : pruneNodes(visible, node => !drawsNothing(node));
+      ? bound
+      : pruneNodes(bound, node => !drawsNothing(node));
   const drawlessCoveredByArtifact =
-    drawlessDropped !== visible &&
+    drawlessDropped !== bound &&
     gatedRules !== undefined &&
-    gatedEntriesCoverRemovedNodes(visible, drawlessDropped, gatedRules) &&
+    gatedEntriesCoverRemovedNodes(bound, drawlessDropped, gatedRules) &&
     !hasDuplicateNodeIds(doc);
-  const drawlessInput = drawlessCoveredByArtifact ? drawlessDropped : visible;
+  const drawlessInput = drawlessCoveredByArtifact ? drawlessDropped : bound;
   // Compiled from a tree with the knowable placeholders removed, while the
   // render keeps them so their placeholders still appear.
   const styleInput = pruneRenderedPlaceholders(drawlessInput, resolver);
 
-  // Whether a knowable placeholder was removed AT ALL, asked of `visible` rather
+  // Whether a knowable placeholder was removed AT ALL, asked of `bound` rather
   // than of what the drawless drop left. The two passes can reject the SAME node
   // — a migration-failed node whose last stored props also make its block declare
   // it draws nothing — and then the drawless drop takes it first, the placeholder
@@ -720,10 +890,10 @@ export function PageRenderer({
   // the drop is honest; what it cannot cover is the rest of what a placeholder
   // means for the sheet, and that answer must not depend on which pass reached
   // the node first.
-  const placeholderDropped = pruneRenderedPlaceholders(visible, resolver);
+  const placeholderDropped = pruneRenderedPlaceholders(bound, resolver);
 
   // Each pass contributes against the SAME base for the same reason. Folding
-  // them into one `styleInput !== visible` would let a covered drawless drop
+  // them into one `styleInput !== bound` would let a covered drawless drop
   // excuse a placeholder removal in the same step, and only a recompile can
   // answer for that one.
   const repairedDocument =
@@ -741,8 +911,12 @@ export function PageRenderer({
     resolved !== sanitized ||
     (pruned !== doc && !gatingCoveredByArtifact) ||
     visible !== pruned ||
-    (drawlessInput !== visible && !drawlessCoveredByArtifact) ||
-    placeholderDropped !== visible ||
+    // Filling bindings is deliberately NOT among them. It changes props only,
+    // never an id, a class or a style, so the stored sheet still describes
+    // every node; the two comparisons below are made against the bound tree
+    // for that reason, rather than against the tree before it.
+    (drawlessInput !== bound && !drawlessCoveredByArtifact) ||
+    placeholderDropped !== bound ||
     // Asked through the SAME function the exported read path uses. A migration
     // can turn a node that drew into one that draws nothing, and no comparison
     // above can see it: every pass returns what it was given, because nothing
@@ -773,7 +947,7 @@ export function PageRenderer({
     remotePatterns: hostPolicy?.remotePatterns,
   });
 
-  const { css, classes, scope } = resolvePageStyles(
+  const resolvedStyles = resolvePageStyles(
     styleInput,
     styles,
     compileContext,
@@ -782,6 +956,9 @@ export function PageRenderer({
     {
       fetchPolicyId,
       ...(mayFetchUrl === undefined ? {} : { mayFetchUrl }),
+      // This tree is the one drawn: a conditioned block still in it was kept
+      // because its conditions held, so a compile serves its rules.
+      drawn: true,
       // The tree the stored artifact describes. This render prunes before it
       // resolves — a gated drop and a drawless drop are both covered by the
       // artifact and licensed to keep it — and both can remove the last node of
@@ -791,6 +968,22 @@ export function PageRenderer({
       storedDocument: doc,
     }
   );
+  const { css, classes, scope } = resolvedStyles;
+  // The rules of each block a list's item decides, served beside the first
+  // instance a list draws, so a block no item shows publishes nothing.
+  const itemRules = itemDecidedRules(resolvedStyles, styleInput, drawsNothing);
+  // Threaded apart from the bindings, so a page drawn with list data and no
+  // bindings still decides its items' conditions and serves their rules.
+  const boundaryConditions: BoundaryConditions = {
+    // The blocks the route kept because their conditions held for the page's
+    // entry, drawn where any other conditioned block is not.
+    held: heldConditionsOf(prepared),
+    report,
+    ...(itemHiddenAs === undefined ? {} : { hiddenAs: itemHiddenAs }),
+    ...(itemRules.size === 0
+      ? {}
+      : { itemRules, itemRulesServed: new Set<string>() }),
+  };
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 
   // Tokens LAYERED over the defaults, never replacing them: a site supplying
@@ -885,10 +1078,13 @@ export function PageRenderer({
         ? css === ""
           ? undefined
           : compileSiteTokenSheet(siteSheetInput)
-        : compileSiteSheet({
-            ...siteSheetInput,
-            breakpoints: siteBreakpoints,
-          });
+        : compileSiteSheet(
+            { ...siteSheetInput, breakpoints: siteBreakpoints },
+            // The parts of the types this page draws, over the composed tree
+            // the page sheet reads, so the classes in the shared sheet route a
+            // wrapped image's corners to its picture as the page sheet does.
+            blockPartsFor(doc, resolver, pageStyleContext?.blockParts)
+          );
 
   return (
     <div className={rootClassName}>
@@ -915,13 +1111,20 @@ export function PageRenderer({
         />
       ) : null}
       <BlockList
-        nodes={visible.nodes}
+        nodes={bound.nodes}
         context={pageContext}
         blocks={resolver}
         classes={classes}
         fallback={blockFallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
+        {...(shared.spacingMode == null
+          ? {}
+          : { spacingMode: shared.spacingMode })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+        {...(boundaryBindings === undefined
+          ? {}
+          : { bindings: boundaryBindings })}
+        conditions={boundaryConditions}
       />
     </div>
   );

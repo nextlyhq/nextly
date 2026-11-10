@@ -28,6 +28,7 @@ import {
 
 import type { ComponentLevel, FieldReadable } from "./binding-field-shapes";
 import {
+  expandedDeclaration,
   expandedFields,
   hiddenFieldPaths,
   type SourceEntity,
@@ -45,11 +46,16 @@ export interface VisitorFields {
  * configured language when none is named, as core tells an operation that
  * names none. Set here rather than inherited, so the answer is the same
  * whatever frame the caller happens to be running in.
+ *
+ * The instance is booted first. The languages are read from its registry,
+ * which knows none until it boots, so on a cold process a frame opened before
+ * the boot would tell the first call's rules no language at all.
  */
-export function inReadLanguage<T>(
+export async function inReadLanguage<T>(
   locale: string | undefined,
-  operation: () => T
-): T {
+  operation: () => Promise<T>
+): Promise<T> {
+  await getCachedNextly();
   const language =
     locale === undefined ? everyLanguage() : registeredReadLanguagesFor(locale);
   return withRuleLanguage(language, operation);
@@ -140,6 +146,24 @@ function fieldReader(
       ? readableAlong(own, path)
       : readableAlong(componentLevel(within.component), within.path);
   };
+}
+
+/**
+ * The source's declared fields, expanded as a binding reads them (a group's
+ * own fields, a component field's component), whoever may read them, and
+ * the timestamps a read of it returns; or `undefined` when there is no such
+ * source. What an editor may bind, as opposed to what a visitor may read
+ * ({@link visitorFields}).
+ */
+export async function declaredSource(source: SourceEntity): Promise<
+  | {
+      readonly fields: VisitorFields["fields"];
+      readonly timestamps: readonly ("createdAt" | "updatedAt")[];
+    }
+  | undefined
+> {
+  await getCachedNextly();
+  return expandedDeclaration(source);
 }
 
 /**

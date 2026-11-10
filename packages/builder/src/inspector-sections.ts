@@ -32,6 +32,7 @@ import type { StyleGroup, StyleState } from "@nextlyhq/blocks-engine";
 
 /** The Style tab's sections, by key. */
 export type InspectorSectionKey =
+  | "icon"
   | "layout"
   | "spacing"
   | "size"
@@ -48,6 +49,12 @@ export type InspectorSectionKey =
  * - `more`: only from "+ More", or once it holds a value.
  * - `flex`, `grid`, `flex-or-grid`: while the block is that kind of container.
  * - `media`: on a replaced element (an image, a video, an embed).
+ * - `framed-media`: on a replaced element whose fit leaves a choice of where
+ *   it sits: Cover (which part stays in view), Contain, None or Scale down
+ *   (where it sits in its box). Fill stretches it to the box, so there is
+ *   nothing to place.
+ * - `icon-drawn`: while a disclosure draws an icon of its own (not the
+ *   browser's marker, and not none), which is what a position moves.
  * - `state`: while a state other than Normal is being edited.
  */
 export type PropertyTier =
@@ -57,6 +64,8 @@ export type PropertyTier =
   | "grid"
   | "flex-or-grid"
   | "media"
+  | "framed-media"
+  | "icon-drawn"
   | "state";
 
 export interface InspectorSectionDef {
@@ -77,6 +86,16 @@ export interface InspectorSectionDef {
  * weight, then size.
  */
 export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
+  // First, where a block has it: an Accordion's icon is the look an author
+  // sets on one before any other. Only a block offering it shows the section.
+  {
+    key: "icon",
+    label: "Icon",
+    properties: [
+      ["disclosureIcon", "common"],
+      ["disclosurePosition", "icon-drawn"],
+    ],
+  },
   {
     key: "layout",
     label: "Layout",
@@ -107,13 +126,16 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
   {
     key: "size",
     label: "Size",
+    // An image's fit and ratio first: how it fills its box is what an author
+    // changes first on one. Both show only on a replaced element.
     properties: [
+      ["objectFit", "media"],
+      ["objectPosition", "framed-media"],
+      ["aspectRatio", "media"],
       ["width", "common"],
       ["height", "common"],
       ["minWidth", "common"],
       ["maxWidth", "common"],
-      ["aspectRatio", "media"],
-      ["objectFit", "media"],
       ["minHeight", "more"],
       ["maxHeight", "more"],
       ["overflow", "more"],
@@ -196,6 +218,7 @@ const SECTION_OF_GROUP: Readonly<Record<StyleGroup, InspectorSectionKey>> = {
   position: "position",
   container: "layout",
   list: "typography",
+  disclosure: "icon",
 };
 
 /** Where one property is placed. */
@@ -231,15 +254,34 @@ export function placementOf(
   return { section, tier: "more", order: index * 100 + 99 };
 }
 
+/** The fits that leave a choice of where the content sits. */
+const FRAMED_FITS: ReadonlySet<string> = new Set([
+  "cover",
+  "contain",
+  "none",
+  // None or Contain, whichever is smaller: either way it sits in its box.
+  "scale-down",
+]);
+
 /** What the block is, as far as a tier needs to know. */
 export interface TierContext {
   /** The display the block is given here, if it is given one. */
   readonly display: string | undefined;
   /** Whether the block renders a replaced element: an image, a video, an embed. */
   readonly media: boolean;
+  /** The fit the block is given here, if it is given one. */
+  readonly objectFit?: string | undefined;
+  /** The disclosure icon the block draws here, if it is given one. */
+  readonly disclosureIcon?: string | undefined;
   /** The state being edited. */
   readonly state: StyleState;
 }
+
+/**
+ * The disclosure icons that draw nothing a position could move: the browser's
+ * own marker, which stays where the browser puts it, and none.
+ */
+const UNDRAWN_ICONS: ReadonlySet<string> = new Set(["browser", "none"]);
 
 /** Whether a property of this tier shows without being asked for. */
 export function tierShows(tier: PropertyTier, context: TierContext): boolean {
@@ -259,6 +301,12 @@ export function tierShows(tier: PropertyTier, context: TierContext): boolean {
       return flex || grid;
     case "media":
       return context.media;
+    case "framed-media":
+      return context.media && FRAMED_FITS.has(context.objectFit ?? "");
+    // Shown where the icon in force is unknown too: the block's default
+    // draws one.
+    case "icon-drawn":
+      return !UNDRAWN_ICONS.has(context.disclosureIcon ?? "");
     case "state":
       return context.state !== "base";
   }

@@ -28,3 +28,16 @@ export const PAGE_BUILDER_DOCS: readonly DocsLink[] = [
  * inside its own layout: the page a fallback's Details link opens.
  */
 export const CANVAS_ROUTE_DOCS_HREF: string = `${DOCS_BASE}/page-builder#draw-the-canvas-in-your-sites-layout`;
+
+/**
+ * Where the docs explain how the site's background jobs are run: the usage
+ * counts are filled in by one, and on a site nothing runs them for they never
+ * finish, so the counting note links here.
+ */
+export const BACKGROUND_JOBS_DOCS_HREF: string = `${DOCS_BASE}/jobs#running-the-queue`;
+
+/**
+ * Where the docs explain how site code meets the site's Content Security
+ * Policy: the link beside what Settings says to add to that policy.
+ */
+export const SITE_CODE_POLICY_DOCS_HREF: string = `${DOCS_BASE}/page-builder/site-code#your-content-security-policy`;

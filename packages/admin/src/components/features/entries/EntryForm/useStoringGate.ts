@@ -18,10 +18,11 @@ import { useCallback, useRef, useState } from "react";
 import { toast } from "@admin/components/ui";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 
-import { MOVED_MESSAGE } from "./submit-outcome";
+import { MOVED_MESSAGE, submitBusy } from "./submit-outcome";
 import type {
   BeforeDocumentAction,
   DocumentActionOutcome,
+  StoreReadiness,
 } from "./useDocumentActionBindings";
 
 /** What the last storing action came to. */
@@ -61,6 +62,12 @@ export interface StoringGate {
  */
 const MAX_WRITE_PASSES = 5;
 
+/**
+ * How many times a store readies the work, a handler having found it changed
+ * just before the write. Work still changing after this many is refused.
+ */
+const MAX_READY_PASSES = 3;
+
 const stillWriting: DocumentActionOutcome = {
   ok: false,
   reason: "busy",
@@ -90,6 +97,33 @@ function reportedAfterMove(
 ): DocumentActionOutcome {
   toast.error(outcome.message, { id: "store-after-move" });
   return { ...outcome, reported: true };
+}
+
+/**
+ * A storing action started while another readies or stores: it would run the
+ * handlers again over the first one's question, and store the work twice.
+ */
+const storeBusy: DocumentActionOutcome = {
+  ok: false,
+  reason: "busy",
+  message: submitBusy.ok ? "" : submitBusy.message,
+  beforeWrite: true,
+};
+
+/** What an action comes to when a before-action handler called it off. */
+const BEFORE_CANCELLED: DocumentActionOutcome = {
+  ok: false,
+  reason: "cancelled",
+  message: "Cancelled.",
+};
+
+/** Whether `error` is an `AbortError`, however it was raised. */
+function isAbort(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
 }
 
 export function useStoringGate(scope: string): StoringGate {
@@ -139,26 +173,12 @@ export function useStoringGate(scope: string): StoringGate {
   }, []);
 
   /**
-   * Readies the editor's work for an action that stores it: every open edit
-   * committed, every tracked write settled and none failed. Answers with the
-   * refusal when it is not ready, or null when it is.
+   * Every tracked write settled, including one started while an earlier one
+   * was being waited for, and none failed: the refusal when one did, or null.
+   * Bounded, so writes that keep starting refuse the store rather than hold it
+   * forever.
    */
-  const readyToStore = async (
-    action: string
-  ): Promise<DocumentActionOutcome | null> => {
-    try {
-      for (const before of [...beforeActions.current]) await before(action);
-    } catch (error) {
-      return {
-        ok: false,
-        reason: "failed",
-        message: apiErrorMessage(error, "An open edit couldn't be committed."),
-        beforeWrite: true,
-      };
-    }
-    // Every write registered before the store is awaited, including one
-    // started while an earlier one was being waited for. Bounded, so writes
-    // that keep starting refuse the store rather than hold it forever.
+  const writesSettled = async (): Promise<DocumentActionOutcome | null> => {
     for (let pass = 0; writes.current.pending.size > 0; pass++) {
       if (pass === MAX_WRITE_PASSES) return stillWriting;
       await Promise.allSettled([...writes.current.pending.values()]);
@@ -172,6 +192,74 @@ export function useStoringGate(scope: string): StoringGate {
           message: `${failure.label} wasn't saved, so this page wasn't either: ${failure.message}`,
           beforeWrite: true,
         };
+  };
+
+  /**
+   * Readies the editor's work for an action that stores it: every open edit
+   * committed, every tracked write settled and none failed. Answers with the
+   * refusal when it is not ready, or null when it is.
+   *
+   * The handlers run first, so an open edit is committed at once, and the
+   * tracked writes are settled after them. A handler that acts on the server
+   * for the store (publishing what the document needs) waits for them itself,
+   * through `writesSettled`, and does not act when one failed: the store is
+   * then refused, and what it did would stand without it. That refusal is the
+   * store's answer, though the writes have settled by the time it would ask
+   * again: a write retried meanwhile must not let the store go ahead without
+   * what the handler did not do.
+   */
+  const readyOnce = async (
+    action: string,
+    checks: (() => boolean)[]
+  ): Promise<DocumentActionOutcome | null> => {
+    let refused: DocumentActionOutcome | null = null;
+    try {
+      const store: StoreReadiness = {
+        writesSettled: async () => {
+          const outcome = await writesSettled();
+          refused ??= outcome;
+          return outcome === null;
+        },
+        checkBeforeWrite: check => {
+          checks.push(check);
+        },
+      };
+      for (const before of [...beforeActions.current]) {
+        await before(action, store);
+      }
+    } catch (error) {
+      // A handler that asked the author a question and was told no: the
+      // action is cancelled, not failed, so the save state is left as it was
+      // and nothing is announced. `AbortError` is the platform's own name for
+      // an operation its caller called off.
+      if (isAbort(error)) return BEFORE_CANCELLED;
+      return {
+        ok: false,
+        reason: "failed",
+        message: apiErrorMessage(error, "An open edit couldn't be committed."),
+        beforeWrite: true,
+      };
+    }
+    return refused ?? writesSettled();
+  };
+
+  /**
+   * Readies the work, then makes each handler's check before the write, with
+   * nothing awaited between them and the store: the handlers ran with awaits
+   * between them, and a later one's write is settled after an earlier one has
+   * judged the work, so the work may have changed since. A check that finds
+   * it has runs every handler again, so each judges the work as stored. Work
+   * still changing after a few rounds is refused rather than chased.
+   */
+  const readyToStore = async (
+    action: string
+  ): Promise<DocumentActionOutcome | null> => {
+    for (let pass = 0; pass < MAX_READY_PASSES; pass++) {
+      const checks: (() => boolean)[] = [];
+      const outcome = await readyOnce(action, checks);
+      if (outcome !== null || checks.every(check => check())) return outcome;
+    }
+    return stillWriting;
   };
 
   /*
@@ -213,9 +301,15 @@ export function useStoringGate(scope: string): StoringGate {
    * Inside the performer, so the control and `run` cannot differ about what
    * a store waits for.
    */
+  // One storing action at a time. The control is withheld while one is in
+  // flight, but only once that renders, and `run` can be called twice before
+  // it does.
+  const storingNow = useRef(false);
   const storing =
     (action: string, perform: () => Promise<DocumentActionOutcome>) =>
     async (): Promise<DocumentActionOutcome> => {
+      if (storingNow.current) return storeBusy;
+      storingNow.current = true;
       const startedIn = currentVisit.current;
       setReadying(n => n + 1);
       try {
@@ -233,6 +327,7 @@ export function useStoringGate(scope: string): StoringGate {
           ? outcome
           : reportedAfterMove(outcome);
       } finally {
+        storingNow.current = false;
         setReadying(n => n - 1);
       }
     };

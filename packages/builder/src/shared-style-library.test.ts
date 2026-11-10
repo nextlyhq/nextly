@@ -297,19 +297,61 @@ describe("a row's tile in dark mode", () => {
   });
 
   it("does not count a background it cannot measure as readable", () => {
-    // `white` and oklch are valid CSS the contrast verdict cannot read. The
-    // page's near-white text must not be taken as readable on them.
+    // `white` and oklch are valid CSS the contrast verdict cannot read here
+    // (no canvas). No text is taken as readable on them: the tile falls back
+    // to the light page, marked, and the "Aa" is outlined.
     for (const backgroundColor of ["white", "oklch(0.98 0 0)"]) {
       const tile = sharedStyleTile(tokens, "dark", { backgroundColor });
-      expect(tile.specimen.color).toBe("#111827");
       expect(tile.darkUnreadable).toBe(true);
       expect(tile.page).toEqual(LIGHT_PAGE);
+      expect(tile.outlined).toBe(true);
     }
-    // A dark one it cannot measure gets light text.
-    const night = sharedStyleTile(tokens, "light", {
-      backgroundColor: "oklch(0.2 0.02 260)",
+  });
+
+  it("does not guess two near-identical colours apart by their lightness", () => {
+    // 0.59 and 0.60 sit either side of any light/dark line, and read as one.
+    const tile = sharedStyleTile(tokens, "light", {
+      color: "oklch(0.59 0 0)",
+      backgroundColor: "oklch(0.60 0 0)",
     });
-    expect(night.specimen.color).toBe("#f9fafb");
+    expect(tile.outlined).toBe(true);
+  });
+
+  it("outlines in a colour that shows on the style's own background", () => {
+    // A site whose page is black, and a style black on black: an outline in
+    // the page colour would be black too.
+    const black = {
+      tokens: [
+        {
+          name: "color.background",
+          kind: "color" as const,
+          values: { light: "#000000" },
+        },
+      ],
+    };
+    const tile = sharedStyleTile(black, "light", {
+      color: "#000000",
+      backgroundColor: "#000000",
+    });
+    expect(tile.outlined).toBe(true);
+    const stroke = String(tile.specimen.WebkitTextStroke ?? "");
+    const outline = stroke.replace(/^2px /, "");
+    expect(ratio(outline, "#000000")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("gives a background it cannot measure a light and a dark outline", () => {
+    const tile = sharedStyleTile(tokens, "light", {
+      color: "navy",
+      backgroundColor: "navy",
+    });
+    expect(tile.outlined).toBe(true);
+    const shadow = String(tile.specimen.textShadow ?? "");
+    expect(shadow).toContain("#111827");
+    expect(shadow).toContain("#f9fafb");
+    // And no stroke over them: one would hide the inner dark halo, and could
+    // itself be the colour of a background it cannot measure. Set inline, so
+    // it wins over any stroke a class supplies.
+    expect(tile.specimen.WebkitTextStroke).toBe("0");
   });
 
   it("outlines text it cannot show reads on a colour it cannot measure", () => {
@@ -318,10 +360,7 @@ describe("a row's tile in dark mode", () => {
     // risk the same colour as its ground.
     const navy = sharedStyleTile(tokens, "light", { backgroundColor: "navy" });
     expect(navy.outlined).toBe(true);
-    expect(navy.specimen).toMatchObject({
-      WebkitTextStroke: "2px #ffffff",
-      paintOrder: "stroke fill",
-    });
+    expect(navy.specimen.textShadow).toBeDefined();
     const hsl = sharedStyleTile(tokens, "dark", {
       backgroundColor: "hsl(220 60% 20%)",
     });
@@ -409,9 +448,37 @@ describe("how widely a style is used, in words", () => {
     ).toBe("No uses counted yet");
   });
 
-  it("puts a plus on a count that is a floor", () => {
-    expect(sharedStyleReachChip(reachOf({ pages: 4 }))).toBe("4");
-    expect(sharedStyleReachChip(reachOf({ pages: 4 }, false))).toBe("4+");
+  it("says what a count counts, with a plus on one that is a floor", () => {
+    // A bare number read as uses: 17 blocks on 2 pages read "2". The chip
+    // names what it counts, so the number is not taken for blocks.
+    const words = (reach: SharedStyleReach) =>
+      sharedStyleReachChip(reach).words;
+    expect(words(reachOf({ pages: 4 }))).toBe("4 pages");
+    expect(words(reachOf({ pages: 1 }))).toBe("1 page");
+    expect(words(reachOf({ pages: 4 }, false))).toBe("4+ pages");
+    expect(words(reachOf({ pages: 1 }, false))).toBe("1+ pages");
+    expect(words(reachOf({ components: 2 }))).toBe("2 components");
+    // Several kinds: one total, in a word that covers them; the row's name
+    // and hover say each kind.
+    expect(words(reachOf({ pages: 4, layouts: 1 }))).toBe("5 places");
+    // Nothing used, counted in full: pages, the kind a style is most often on.
+    expect(sharedStyleReachChip(reachOf({}))).toEqual({
+      words: "0 pages",
+      uncounted: false,
+    });
+  });
+
+  it("says a zero is not counted yet while it is a floor, rather than 0+", () => {
+    // "0+ pages" is a number that says nothing: no use found so far, on a
+    // site not counted in full. Said as what it is, and marked so the row
+    // can mute it.
+    expect(sharedStyleReachChip(reachOf({}, false))).toEqual({
+      words: "Not counted yet",
+      uncounted: true,
+    });
+    expect(sharedStyleReachChip(reachOf({ pages: 1 }, false)).uncounted).toBe(
+      false
+    );
   });
 });
 

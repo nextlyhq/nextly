@@ -103,7 +103,7 @@ export function lengthInPx(value: string): number | undefined {
  * percentage. A shadow, a fixed `calc(1rem + 2px)` and any value of several
  * parts are not, and read as themselves.
  */
-function isFluidLength(variable: SiteVariable): boolean {
+function isFluidLength(variable: ValueOfKind): boolean {
   if (variable.kind !== "dimension") return false;
   const value = variable.value.trim();
   return (
@@ -113,11 +113,18 @@ function isFluidLength(variable: SiteVariable): boolean {
 }
 
 /**
+ * What reading a value's words needs: its kind and the value. Narrower than
+ * {@link SiteVariable}, so the Variables tab, which lists the site's tokens
+ * rather than picker records, words its rows through the same rule.
+ */
+export type ValueOfKind = Pick<SiteVariable, "kind" | "value">;
+
+/**
  * A variable's value in words short enough for a row: the value itself, or
  * "Fluid" for a length that changes with the page, whose whole text crowded
  * the name out of a list row. The whole value stays in the row's tooltip.
  */
-export function variableValueText(variable: SiteVariable): string {
+export function variableValueText(variable: ValueOfKind): string {
   return isFluidLength(variable) ? "Fluid" : variable.value;
 }
 

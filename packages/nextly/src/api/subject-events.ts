@@ -213,13 +213,14 @@ export async function readSubjectEvents(
   // Loaded when history is read, not with this route module: boot loads the
   // route, and naming a holder reads the users table through the version
   // author reader, which nothing else at boot needs.
-  const { nameTakeoverHolders } = await import(
-    "../domains/content-events/named-takeovers"
+  const { nameEventPeople } = await import(
+    "../domains/content-events/named-event-people"
   );
   return {
-    // A takeover keeps its displaced holder by id; they are named here, as
-    // they are now, so a deleted account is never named from the record.
-    items: await nameTakeoverHolders(items),
+    // A takeover and an overwrite keep the person they displaced or replaced
+    // by id; they are named here, as they are now, so a deleted account is
+    // never named from the record.
+    items: await nameEventPeople(items),
     // A cursor walk: page and total describe the window returned, and the
     // next page passes the last item's id as `before`.
     meta: {

@@ -21,7 +21,7 @@ exercised it in production** (against a real database, not just the SQLite test 
 
 The `@public` surface is the **semver-protected contract**. Once Nextly reaches `1.0`,
 **breaking a `@public` export requires a major version bump** (D40). During the current
-`0.x` alpha it is *stable-in-intent*: changes follow the deprecation policy below rather
+`0.x` alpha it is _stable-in-intent_: changes follow the deprecation policy below rather
 than landing as silent breaks — but **pin your versions** while we're pre-`1.0`.
 `@experimental` exports carry **no** compatibility guarantee.
 
@@ -71,13 +71,16 @@ These ship today but carry no guarantee yet — use them, but expect change:
   `VersionPinHolderDefinition` and `VersionRef`
 - `PluginMigration.transaction` — `false` runs a migration module outside a
   transaction, statement by statement
-- `onInstall` / `onUninstall`, called by `nextly plugins install` and
-  `nextly plugins uninstall`, never at boot
+- `onReady`, run once per boot after every plugin has initialised and routes
+  are registered, and `onInstall` / `onUninstall`, called by
+  `nextly plugins install` and `nextly plugins uninstall`, never at boot
 - `contributes.transforms` — changing entities another plugin declared
 - `ctx.db.contributed(table, columns)` — reading and writing the hidden
   columns a plugin contributed to a table it does not own
 - `createTestNextly`'s `pluginConsent` option
 - `ctx.hooks` plugin registration (`PluginHookRegistry`, `HookType`, `HookHandler`)
+- The in-transaction hook phase: `ctx.hooks.onInTransaction` / `offInTransaction`,
+  `InTransactionHandler`, `InTransactionContext`
 - Filters & actions (D63): `ctx.filters` / `ctx.actions` + seam types
 - Secrets (D37): `secret`, `Secret`, `isSecret`
 - Client UX (`@nextlyhq/plugin-sdk/client`): `useCan`, `<Can>`
@@ -86,8 +89,35 @@ These ship today but carry no guarantee yet — use them, but expect change:
 - Schema extensibility: `contributes.schema` (`tables`, `extend`,
   `migrations`), the `defineTable` / `col.*` DSL, `schema.extendTable`,
   `schema.adoptTable` and `db.schema.afterDrizzle`
-- Collection `db` options: `db.idType`, `db.allowIdOnCreate`
+- Collection `db` options: `db.idType`, `db.allowIdOnCreate`, `db.slugPaths`
 - `db.postgres.schema` (accepts only `"public"` for now)
+- The manifest's declaration of reach: `capabilities` (`net.outbound`,
+  `db.rawSql`, `secrets`, `auth.login`), `provides` and `requires`
+- The stateful runtime surfaces, each present only once declared:
+  `contributes.settings` / `ctx.settings`, `capabilities.net.outbound` /
+  `ctx.fetch`, and `contributes.audit` / `ctx.audit`
+- The route options `rateLimit`, `limitKey`, `rawBody`, `csrf` and `noStore`
+- Auth extensibility (D71/D57): `contributes.auth` (auth-flow hooks,
+  challenges, sign-in UI), `auth.strategies`, and finishing an external
+  sign-in with `ctx.auth.completeLogin`
+- Typed hook points: `contributes.hookPoints`, `ctx.filters.decide` and the
+  `HookPointPayloads` map
+- Admin places: `CORE_ADMIN_PLACES`, `AdminPlaces`, `AdminPlaceId`,
+  `CoreAdminPlaceId`, `PluginAdminPlaceDeclaration` and
+  `contributes.admin.places`
+- Entry-list filters: `contributes.admin.filters`,
+  `PluginListFilterDeclaration` and `PluginListFilterOption`
+- Admin contributions: `contributes.admin.contributions`, `AdminContribution`
+  and its kinds, `AdminContributionAction`, `AdminContributionKind`,
+  `RowPredicate` and `RowPredicateValue`
+- `ctx.security`: the password helpers, and the opaque and one-purpose secret
+  stores
+- Account events: `UserEvents` — core emits `user.created` and `user.deleted`
+  with `{ userId }` after the change commits; a plugin subscribes and cannot
+  emit either
+- The `/db` query operators, and `collectDeclarations` for reading what other
+  plugins declared
+- Sign-in challenge views: `ChallengeViewProps`, `ChallengeResolveResult`
 
 Each graduates once a first-party plugin exercises it.
 
@@ -97,7 +127,10 @@ When a `@public` export must change incompatibly:
 
 1. It's marked `@deprecated` with the replacement and removal version.
 2. A one-time runtime warning is emitted at first use where practical.
-3. It's kept for **≥ 1 major version** (the support window).
+3. It keeps working for **at least two minor releases** after the one that deprecates it,
+   and is removed only at the next major release after those (the support window).
+   Deprecated in 1.3, it still works in 1.4 and 1.5, and 2.0 is the earliest it can be
+   removed; if 2.0 comes before two minor releases have passed, removal waits for 3.0.
 4. A migration guide ships before removal.
 
 Promotion (`@experimental` → `@public`) is **not** a breaking change.

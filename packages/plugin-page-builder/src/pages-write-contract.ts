@@ -35,9 +35,14 @@ export interface CreatePageRequest {
   readonly title: string;
 }
 
-/** What renames a page: its new title, and nothing else. */
+/**
+ * What renames a page: its new title, and nothing else, with the version of
+ * the page the author renamed (the `rev` the search gave it), so a save of
+ * the page since refuses the rename rather than being lost under it.
+ */
 export interface RenamePageRequest {
   readonly title: string;
+  readonly rev?: string;
 }
 
 /**

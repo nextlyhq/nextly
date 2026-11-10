@@ -48,11 +48,21 @@ vi.mock("../../utils/adapter", () => ({
     databaseUrl: ":memory:",
     errors: [],
   }),
-  createCliAdapter: async () => ({ disconnect: async () => {} }),
+  createCliAdapter: async () => ({
+    disconnect: async () => {},
+  }),
+  openCommandAdapter: async () => ({ disconnect: async () => {} }),
 }));
 
 vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => ({ config: {} }),
+}));
+
+// The cleanup runs as it is: the adapter here is a fake with no database to lock, and what is
+// under test is the consent, which comes before the lock.
+vi.mock("../../../domains/field-groups/migration/sync-guard", () => ({
+  withMigrationExcluded: (_options: unknown, work: () => Promise<unknown>) =>
+    work(),
 }));
 
 vi.mock("../../../domains/auth/services/permission-seed-service", () => ({

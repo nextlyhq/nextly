@@ -8,9 +8,16 @@ import {
   isRichTextValue,
   TEXT_FORMAT,
   type RichTextNode,
+  type SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import type { CSSProperties, ReactNode } from "react";
 
+import {
+  anchorAllocator,
+  anchorIds,
+  headingRank,
+  type HeadingAnchor,
+} from "./blocks/heading-anchors";
 import { fetchableUrl, oneOf, relFor, text, url } from "./blocks/props";
 import type { BlockHostPolicy } from "./context";
 
@@ -231,9 +238,30 @@ function formatted(
   return out;
 }
 
+/**
+ * What a passage is drawn under: the host's policy for the media inside it,
+ * and the site's spacing model, which decides a media wrapper's margin.
+ */
+interface DrawSettings {
+  readonly host: BlockHostPolicy | undefined;
+  readonly spacingMode: SpacingMode | undefined;
+  /**
+   * What each node draws of its children, read once per node for the whole
+   * render: the views take their children only from it, and so does the walk
+   * that finds the passage's headings ({@link passageHeadings}).
+   */
+  readonly parts: PartsReader;
+  /**
+   * The id each heading is drawn with, by the node drawn, when the caller asked
+   * for anchors; found by {@link passageHeadings}'s walk with this render's own
+   * `parts`, the reading a table of contents links by.
+   */
+  readonly anchors?: ReadonlyMap<RichTextNode, string>;
+}
+
 function children(
   nodes: readonly RichTextNode[] | undefined,
-  policy: BlockHostPolicy | undefined
+  draw: DrawSettings
 ): ReactNode {
   // Array-checked, not undefined-checked. `children` is stored JSON like
   // everything else here, so it can arrive as `{}` or `"oops"`, and calling
@@ -245,7 +273,7 @@ function children(
     // node carries no identity, and a rich-text tree is replaced wholesale on
     // every edit rather than reordered in place, so React never has to match a
     // node across renders.
-    <RichTextNodeView key={i} node={node} policy={policy} />
+    <RichTextNodeView key={i} node={node} draw={draw} />
   ));
 }
 
@@ -439,9 +467,6 @@ export function holdsBlockContent(
   return anyDescendant(nodes, node => BLOCK_LEVEL.has(node.type));
 }
 
-/** Heading levels Lexical serializes; anything else is a document from a version this does not know. */
-const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
-
 /**
  * What a `summary` may hold besides phrasing content.
  *
@@ -607,6 +632,198 @@ export function partitionPhrasing(
 }
 
 /**
+ * What the renderer draws of a node's children: those it draws inside the
+ * node's own element, and those it draws after it, as its siblings (the block
+ * content a heading or a disclosure label cannot hold).
+ */
+interface DrawnParts {
+  readonly inside: readonly RichTextNode[];
+  readonly after: readonly RichTextNode[];
+}
+
+/** How the views that draw children draw them. */
+type ChildrenDrawn = "inside" | "heading" | "summary";
+
+/**
+ * The views in {@link NODE_VIEWS} that draw their node's children, and how.
+ *
+ * Every other view draws none: its content is in its own fields (an image, a
+ * button) or it has none (a rule, a line break), so a child stored on it is
+ * never drawn. A view takes its children only through `drawnParts`, so a view
+ * added there that draws children and is not named here draws none, which its
+ * own tests see at once, rather than drawing children the walk for a
+ * passage's headings never reads.
+ */
+// Exported for its test only: the package entries export `RichText` alone.
+export const VIEWS_DRAWING_CHILDREN: Readonly<Record<string, ChildrenDrawn>> = {
+  heading: "heading",
+  "collapsible-title": "summary",
+  "collapsible-container": "inside",
+  link: "inside",
+  autolink: "inside",
+  list: "inside",
+  code: "inside",
+  table: "inside",
+  tablecell: "inside",
+};
+
+const DRAWS_NOTHING: DrawnParts = { inside: [], after: [] };
+
+/** A phrasing-only container's children: what it keeps, and what follows it. */
+function phrasingParts(
+  node: RichTextNode,
+  permits: ReadonlySet<string>
+): DrawnParts {
+  const kids = kidsOf(node);
+  if (!holdsBlockContent(kids)) return { inside: kids, after: [] };
+  const { keeps, moves } = partitionPhrasing(kids, permits);
+  return { inside: keeps, after: moves };
+}
+
+/**
+ * What the renderer draws of one node's children, decided as
+ * {@link RichTextNodeView} dispatches it: a simple element and the
+ * unknown-node fallback draw all of them, a view draws what
+ * {@link VIEWS_DRAWING_CHILDREN} says, and a text leaf draws none.
+ */
+function drawnParts(node: RichTextNode): DrawnParts {
+  if (Object.hasOwn(SIMPLE_ELEMENTS, node.type))
+    return { inside: kidsOf(node), after: [] };
+  if (Object.hasOwn(NODE_VIEWS, node.type)) {
+    const drawn = Object.hasOwn(VIEWS_DRAWING_CHILDREN, node.type)
+      ? VIEWS_DRAWING_CHILDREN[node.type]
+      : undefined;
+    if (drawn === "heading") return phrasingParts(node, PERMITS_NOTHING);
+    if (drawn === "summary") return phrasingParts(node, SUMMARY_PERMITS);
+    if (drawn === "inside") return { inside: kidsOf(node), after: [] };
+    return DRAWS_NOTHING;
+  }
+  if (typeof node.text === "string") return DRAWS_NOTHING;
+  return { inside: kidsOf(node), after: [] };
+}
+
+/** `drawnParts`, read once per node. */
+type PartsReader = (node: RichTextNode) => DrawnParts;
+
+/**
+ * A reader of `drawnParts` that answers each node once.
+ *
+ * Once, and not merely for speed: a heading's partition rebuilds the nodes it
+ * keeps (a heading inside a disclosure label is copied with the children it
+ * may hold), so two partitions of one node give two different copies. The
+ * render and the walk for its headings share one reader, so the heading the
+ * walk gave an id is the very node the render draws.
+ */
+function partsReader(): PartsReader {
+  const read = new WeakMap<RichTextNode, DrawnParts>();
+  return node => {
+    const known = read.get(node);
+    if (known !== undefined) return known;
+    const parts = drawnParts(node);
+    read.set(node, parts);
+    return parts;
+  };
+}
+
+/**
+ * How many nodes one reading of a passage's headings visits at most, the
+ * words of each heading included. A stored passage has no size of its own;
+ * past this the reading keeps the headings it found, and the headings after
+ * them are drawn without ids, as the table of contents leaves them out.
+ */
+const MAX_HEADING_VISITS = 50_000;
+
+/** What one reading of a passage's headings may still visit. */
+interface VisitBudget {
+  left: number;
+}
+
+/** Puts nodes on a walk's stack so they pop in their order. */
+function pushInOrder(stack: unknown[], nodes: readonly RichTextNode[]): void {
+  for (let i = nodes.length - 1; i >= 0; i -= 1) stack.push(nodes[i]);
+}
+
+/** The words a leaf draws: its text, a line break's space, or none. */
+function leafWords(node: RichTextNode): string {
+  if (node.type === "linebreak") return " ";
+  if (typeof node.text !== "string") return "";
+  // A code token draws its text; any other view keeps a `text` field of its
+  // own (a button's label) that is not a heading's words.
+  return node.type === "code-highlight" || !Object.hasOwn(NODE_VIEWS, node.type)
+    ? node.text
+    : "";
+}
+
+/**
+ * Visits nodes in the order they are drawn, within the budget. `visit` names
+ * what comes after a node, in order: the lists it returns are walked first to
+ * last before the nodes that followed it.
+ */
+function walkDrawn(
+  nodes: readonly RichTextNode[],
+  budget: VisitBudget,
+  visit: (node: RichTextNode) => readonly (readonly RichTextNode[])[]
+): void {
+  const stack: unknown[] = [];
+  pushInOrder(stack, nodes);
+  while (stack.length > 0 && budget.left > 0) {
+    const node = stack.pop();
+    budget.left -= 1;
+    if (!isRichTextNode(node)) continue;
+    const next = visit(node);
+    for (let i = next.length - 1; i >= 0; i -= 1) pushInOrder(stack, next[i]);
+  }
+}
+
+/** The words a heading draws, read through the same parts the render draws. */
+function drawnWords(
+  nodes: readonly RichTextNode[],
+  parts: PartsReader,
+  budget: VisitBudget
+): string {
+  const words: string[] = [];
+  walkDrawn(nodes, budget, node => {
+    words.push(leafWords(node));
+    return [parts(node).inside];
+  });
+  return words.join("").replace(/\s+/g, " ").trim();
+}
+
+/** Every heading a passage's nodes draw, in the order they are drawn. */
+function headingsOf(
+  nodes: readonly RichTextNode[],
+  parts: PartsReader
+): HeadingAnchor[] {
+  const anchors: HeadingAnchor[] = [];
+  const ids = anchorAllocator();
+  const budget: VisitBudget = { left: MAX_HEADING_VISITS };
+  walkDrawn(nodes, budget, node => {
+    const { inside, after } = parts(node);
+    const text =
+      node.type === "heading" ? drawnWords(inside, parts, budget) : "";
+    // A heading with no words has no anchor: a link to it would have none.
+    if (text !== "")
+      anchors.push({ node, id: ids.take(text), text, rank: headingRank(node) });
+    // Walked as the render draws them: the node's own children, then what it
+    // moved out after itself.
+    return [inside, after];
+  });
+  return anchors;
+}
+
+/**
+ * Every heading a stored passage draws, in order, each with its id and the
+ * words it draws, read by the walk `RichText` draws the passage with.
+ *
+ * Takes `unknown` because it reads a block prop, which holds whatever was
+ * stored: anything that is not rich text draws no headings.
+ */
+export function passageHeadings(value: unknown): readonly HeadingAnchor[] {
+  if (!isRichTextValue(value)) return [];
+  return headingsOf(value.root.children, partsReader());
+}
+
+/**
  * A container that may hold only phrasing content, with the rest moved AFTER it.
  *
  * `h1`-`h6` take phrasing content, and `summary` takes phrasing content or a
@@ -641,50 +858,57 @@ export function partitionPhrasing(
 function PhrasingOnly({
   tag: Tag,
   node,
-  policy,
+  draw,
+  id,
 }: {
   tag: "h1" | "summary";
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
+  /** The element's anchor, for a heading drawn with one. */
+  id?: string;
 }): ReactNode {
-  const kids = Array.isArray(node.children) ? node.children : [];
-  if (!holdsBlockContent(kids)) return <Tag>{children(kids, policy)}</Tag>;
-  const { keeps, moves } = partitionPhrasing(
-    kids,
-    Tag === "summary" ? SUMMARY_PERMITS : PERMITS_NOTHING
-  );
+  const anchor = id === undefined ? {} : { id };
+  // Its kept children, and its block content after it: `phrasingParts`.
+  const { inside, after } = draw.parts(node);
+  if (after.length === 0)
+    return <Tag {...anchor}>{children(inside, draw)}</Tag>;
   return (
     <>
-      <Tag>{children(keeps, policy)}</Tag>
-      {children(moves, policy)}
+      <Tag {...anchor}>{children(inside, draw)}</Tag>
+      {children(after, draw)}
     </>
   );
 }
 
 function HeadingView({
   node,
-  policy,
+  draw,
 }: {
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
   // `h2` rather than `h1` when the tag is unrecognised: guessing `h1` invents a
   // second top-level heading and breaks the page outline, which is worse than
   // rendering one level too deep.
-  const tag =
-    typeof node.tag === "string" && HEADING_TAGS.has(node.tag)
-      ? node.tag
-      : "h2";
-  const Heading = tag as "h1";
-  return <PhrasingOnly tag={Heading} node={node} policy={policy} />;
+  // The level is read by the same rule a table of contents lists it by.
+  const Heading = `h${headingRank(node)}` as "h1";
+  const id = draw.anchors?.get(node);
+  return (
+    <PhrasingOnly
+      tag={Heading}
+      node={node}
+      draw={draw}
+      {...(id === undefined ? {} : { id })}
+    />
+  );
 }
 
 function LinkView({
   node,
-  policy,
+  draw,
 }: {
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
   // Sanitized, not merely read: the destination is stored text that lands in an
   // `href`. `url()` is the same boundary the URL props cross, so a scheme
@@ -700,7 +924,7 @@ function LinkView({
   // not a tidy failure: it leaves a second, empty anchor in the middle of the
   // row, which is focusable and announced with no name.
   if (href === undefined || holdsInteractive(node.children))
-    return <>{children(node.children, policy)}</>;
+    return <>{children(draw.parts(node).inside, draw)}</>;
 
   // Only `_blank` is honoured. It is the one target the editor writes, and it
   // is the one that needs the `rel` below; passing an arbitrary stored string
@@ -708,23 +932,23 @@ function LinkView({
   const target = node.target === "_blank" ? "_blank" : undefined;
   return (
     <a href={href} target={target} rel={relFor(target, node.rel)}>
-      {children(node.children, policy)}
+      {children(draw.parts(node).inside, draw)}
     </a>
   );
 }
 
 function TableCellView({
   node,
-  policy,
+  draw,
 }: {
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
   // Lexical marks a header cell with `headerState`, a bitfield where any set bit
   // means the cell heads its row or its column.
   const header = typeof node.headerState === "number" && node.headerState !== 0;
   const Cell = header ? "th" : "td";
-  return <Cell>{children(node.children, policy)}</Cell>;
+  return <Cell>{children(draw.parts(node).inside, draw)}</Cell>;
 }
 
 /**
@@ -793,6 +1017,20 @@ const MAX_IMAGE_EDGE = 20000;
  * inline style.
  */
 const MEDIA_FIGURE_STYLE: CSSProperties = { marginInline: 0 };
+
+/**
+ * The same wrapper's margin under the classic spacing model, where nothing
+ * spaces a passage's elements but their own margins: the editor's own `my-4`
+ * above and below, and the inline reset.
+ */
+const CLASSIC_MEDIA_FIGURE_STYLE: CSSProperties = { margin: "1rem 0" };
+
+/** A rich-media wrapper's margin under the spacing model in force. */
+function mediaFigureStyle(draw: DrawSettings): CSSProperties {
+  return draw.spacingMode === "classic"
+    ? CLASSIC_MEDIA_FIGURE_STYLE
+    : MEDIA_FIGURE_STYLE;
+}
 
 function ImageElement({
   src,
@@ -879,15 +1117,15 @@ function CaptionView({ value }: { value: unknown }): ReactNode {
  */
 function ImageView({
   node,
-  policy,
+  draw,
 }: {
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
-  const src = fetchableUrl(node.src, policy?.remotePatterns);
+  const src = fetchableUrl(node.src, draw.host?.remotePatterns);
   if (src === undefined) return null;
   return (
-    <figure className="nextly-rich-text-image" style={MEDIA_FIGURE_STYLE}>
+    <figure className="nextly-rich-text-image" style={mediaFigureStyle(draw)}>
       <ImageElement src={src} node={node} />
       <CaptionView value={node.caption} />
     </figure>
@@ -939,17 +1177,17 @@ const GALLERY_NARROW_CSS = `@media not all and (min-width: 40rem){.nextly-rich-t
  */
 function GalleryView({
   node,
-  policy,
+  draw,
 }: {
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
   if (!Array.isArray(node.images)) return null;
   const images = node.images
     .map(entry => {
       if (entry === null || typeof entry !== "object") return undefined;
       const item: Readonly<Record<string, unknown>> = entry;
-      const src = fetchableUrl(item.src, policy?.remotePatterns);
+      const src = fetchableUrl(item.src, draw.host?.remotePatterns);
       // The WHOLE entry travels on, not a `{ src, alt }` reduction of it. The
       // shared element below reads the title and the dimensions off it, and a
       // projection that kept two fields is what dropped them here before.
@@ -1000,7 +1238,7 @@ function GalleryView({
     gap: "0.5rem",
   };
   return (
-    <figure className="nextly-rich-text-gallery" style={MEDIA_FIGURE_STYLE}>
+    <figure className="nextly-rich-text-gallery" style={mediaFigureStyle(draw)}>
       {/*
        * HOISTED and DEDUPED by React: `href` plus `precedence` lifts this out
        * of the figure and collapses every gallery on the page to one copy —
@@ -1270,30 +1508,27 @@ function ButtonGroupView({ node }: { node: RichTextNode }): ReactNode {
  * list, where a chain of `if`s hides it in control flow.
  */
 const NODE_VIEWS: Readonly<
-  Record<
-    string,
-    (node: RichTextNode, policy: BlockHostPolicy | undefined) => ReactNode
-  >
+  Record<string, (node: RichTextNode, draw: DrawSettings) => ReactNode>
 > = {
-  heading: (node, policy) => <HeadingView node={node} policy={policy} />,
+  heading: (node, draw) => <HeadingView node={node} draw={draw} />,
   // `open` is serialized by the editor, default included, so a section the
   // author left expanded publishes expanded.
-  "collapsible-container": (node, policy) => (
+  "collapsible-container": (node, draw) => (
     <details open={node.open === true}>
-      {children(node.children, policy)}
+      {children(draw.parts(node).inside, draw)}
     </details>
   ),
   // A `summary` is phrasing-only and cannot be swapped for a `div` — it has to
   // be the first child of its `details` or the disclosure stops working — so it
   // takes the same treatment as a heading rather than the paragraph's.
-  "collapsible-title": (node, policy) => (
-    <PhrasingOnly tag="summary" node={node} policy={policy} />
+  "collapsible-title": (node, draw) => (
+    <PhrasingOnly tag="summary" node={node} draw={draw} />
   ),
-  link: (node, policy) => <LinkView node={node} policy={policy} />,
-  autolink: (node, policy) => <LinkView node={node} policy={policy} />,
-  list: (node, policy) => {
+  link: (node, draw) => <LinkView node={node} draw={draw} />,
+  autolink: (node, draw) => <LinkView node={node} draw={draw} />,
+  list: (node, draw) => {
     if (node.listType !== "number")
-      return <ul>{children(node.children, policy)}</ul>;
+      return <ul>{children(draw.parts(node).inside, draw)}</ul>;
     // A list imported from `<ol start="5">` keeps its first number. Dropped,
     // the published list silently restarts at 1 and the prose around it —
     // "step 5" — stops matching. Only a positive integer is forwarded;
@@ -1304,31 +1539,31 @@ const NODE_VIEWS: Readonly<
       node.start > 0
         ? node.start
         : undefined;
-    return <ol start={start}>{children(node.children, policy)}</ol>;
+    return <ol start={start}>{children(draw.parts(node).inside, draw)}</ol>;
   },
   linebreak: () => <br />,
   horizontalrule: () => <hr />,
-  code: (node, policy) => (
+  code: (node, draw) => (
     <pre>
-      <code>{children(node.children, policy)}</code>
+      <code>{children(draw.parts(node).inside, draw)}</code>
     </pre>
   ),
   // `tbody` rather than bare rows: a browser inserts one anyway, and a React
   // tree that omits it does not match the DOM that results.
-  table: (node, policy) => (
+  table: (node, draw) => (
     <table>
-      <tbody>{children(node.children, policy)}</tbody>
+      <tbody>{children(draw.parts(node).inside, draw)}</tbody>
     </table>
   ),
-  tablecell: (node, policy) => <TableCellView node={node} policy={policy} />,
+  tablecell: (node, draw) => <TableCellView node={node} draw={draw} />,
   "code-highlight": node => <CodeTokenView node={node} />,
   // The MEDIA leaves. Each keeps its content in its OWN fields rather than in
   // `children`, which is why the unknown-node fallback below cannot draw them:
   // it descends into children, finds none, and renders nothing at all. An
   // author who placed an image in their prose saw it in the editor and lost it
   // on the page, with nothing anywhere reporting the loss.
-  image: (node, policy) => <ImageView node={node} policy={policy} />,
-  gallery: (node, policy) => <GalleryView node={node} policy={policy} />,
+  image: (node, draw) => <ImageView node={node} draw={draw} />,
+  gallery: (node, draw) => <GalleryView node={node} draw={draw} />,
   "button-link": node => <ButtonLinkView node={node} />,
   "button-group": node => <ButtonGroupView node={node} />,
 };
@@ -1349,10 +1584,10 @@ function CodeTokenView({ node }: { node: RichTextNode }): ReactNode {
 
 function RichTextNodeView({
   node,
-  policy,
+  draw,
 }: {
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
   // A stored document can hold anything JSON can express, including a null in a
   // `children` array. Reading `.text` off that throws, and it would throw during
@@ -1388,19 +1623,19 @@ function RichTextNodeView({
     // {@link PhrasingOnly} instead of by this table.
     const Element =
       declared === "p" && holdsBlockContent(node.children) ? "div" : declared;
-    return <Element>{children(node.children, policy)}</Element>;
+    return <Element>{children(draw.parts(node).inside, draw)}</Element>;
   }
 
   if (Object.hasOwn(NODE_VIEWS, node.type)) {
     const view = NODE_VIEWS[node.type];
-    if (view !== undefined) return view(node, policy);
+    if (view !== undefined) return view(node, draw);
   }
 
   if (typeof node.text === "string")
     return formatted(node.text, node.format, node.style);
 
   // Unknown node: keep the words, lose the wrapper. See the module docblock.
-  return <>{children(node.children, policy)}</>;
+  return <>{children(draw.parts(node).inside, draw)}</>;
 }
 
 export interface RichTextProps {
@@ -1423,6 +1658,18 @@ export interface RichTextProps {
    * operator's decision to make.
    */
   hostPolicy?: BlockHostPolicy;
+  /**
+   * The site's spacing model. Under `classic` an image or gallery in the
+   * passage keeps the vertical margin it carried before container gaps.
+   * Absent is the engine's default, `gaps`.
+   */
+  spacingMode?: SpacingMode;
+  /**
+   * Whether each heading is drawn with an id, so a link (a table of contents
+   * among them) can reach it. Absent is none: a passage drawn somewhere other
+   * than a page, such as an email, keeps its markup as it was.
+   */
+  anchorHeadings?: boolean;
 }
 
 /**
@@ -1434,7 +1681,23 @@ export interface RichTextProps {
  * one place instead of one at every call site, and it means a prop holding the
  * wrong thing renders nothing rather than throwing on a live page.
  */
-export function RichText({ value, hostPolicy }: RichTextProps): ReactNode {
+export function RichText({
+  value,
+  hostPolicy,
+  spacingMode,
+  anchorHeadings,
+}: RichTextProps): ReactNode {
   if (!isRichTextValue(value)) return null;
-  return <>{children(value.root.children, hostPolicy)}</>;
+  // One reader for the render and for its headings' ids, so each id is found
+  // on the node the render draws (see `partsReader`).
+  const parts = partsReader();
+  const draw: DrawSettings = {
+    host: hostPolicy,
+    spacingMode,
+    parts,
+    ...(anchorHeadings === true
+      ? { anchors: anchorIds(headingsOf(value.root.children, parts)) }
+      : {}),
+  };
+  return <>{children(value.root.children, draw)}</>;
 }

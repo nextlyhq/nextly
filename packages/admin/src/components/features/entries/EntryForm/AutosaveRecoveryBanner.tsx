@@ -19,6 +19,8 @@ import type { JSX } from "react";
 
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
 import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
+import { formatDateTime } from "@admin/lib/dates/format";
+import { changerName, type StaleVersion } from "@admin/lib/document-version";
 import { cn } from "@admin/lib/utils";
 
 import { formatTimeAgo } from "./time-ago";
@@ -30,13 +32,49 @@ export interface AutosaveRecoveryBannerProps {
   onRestore: () => void;
   /** Stop offering for this session, without deleting anything. */
   onDismiss: () => void;
+  /**
+   * Whether the changes are from an older version, written over since by
+   * someone else or by no one in particular: the offer then says restoring
+   * them replaces those changes.
+   */
+  olderVersion?: boolean;
+  /**
+   * What changed in the document since the version the point's edits began
+   * from: who changed it and when, as a refused save says it. The offer then
+   * says so in place of the plain older-version warning.
+   */
+  changedSince?: StaleVersion;
+  /** The point was saved without its starting version, before versions. */
+  startingVersionUnknown?: boolean;
   className?: string;
 }
+
+/** What an offer from an older version adds, in one place for every surface. */
+export const OLDER_VERSION_WARNING =
+  "These changes were made to an older version. Restoring them replaces changes made since.";
+
+/** Who changed the document since a point's edits began, as the offer says it. */
+function changedSinceSentence(changedSince: StaleVersion): string {
+  const { changedBy, changedAt } = changedSince;
+  const changed = changedBy
+    ? `${changerName(changedBy)} changed the document${
+        changedAt ? ` at ${formatDateTime(changedAt)}` : ""
+      }.`
+    : "The document changed since.";
+  return `These edits began from an older version. ${changed} Restoring them replaces those changes.`;
+}
+
+/** What an offer of a point saved without its starting version adds. */
+const STARTING_VERSION_UNKNOWN =
+  "The version these edits began from is unknown.";
 
 export function AutosaveRecoveryBanner({
   savedAt,
   onRestore,
   onDismiss,
+  olderVersion = false,
+  changedSince,
+  startingVersionUnknown = false,
   className,
 }: AutosaveRecoveryBannerProps): JSX.Element {
   return (
@@ -51,10 +89,22 @@ export function AutosaveRecoveryBanner({
       )}
     >
       <RotateCcw className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <p className="flex-1 text-foreground">
-        You have unsaved changes from{" "}
-        <span className="font-medium">{formatTimeAgo(savedAt)}</span>.
-      </p>
+      <div className="flex-1 space-y-0.5">
+        <p className="text-foreground">
+          You have unsaved changes from{" "}
+          <span className="font-medium">{formatTimeAgo(savedAt)}</span>.
+        </p>
+        {changedSince ? (
+          <p className="text-muted-foreground">
+            {changedSinceSentence(changedSince)}
+          </p>
+        ) : olderVersion ? (
+          <p className="text-muted-foreground">{OLDER_VERSION_WARNING}</p>
+        ) : null}
+        {startingVersionUnknown ? (
+          <p className="text-muted-foreground">{STARTING_VERSION_UNKNOWN}</p>
+        ) : null}
+      </div>
       <div className="flex items-center gap-2">
         <Button type="button" size="sm" variant="outline" onClick={onRestore}>
           Restore
@@ -102,8 +152,13 @@ export function LiveDocumentRecoveryOffer({
   return (
     <AutosaveRecoveryBanner
       savedAt={offer.savedAt}
-      onRestore={recovery.restore}
+      // Called with nothing: the recovery's restore takes an optional step of
+      // its own, and the click's event passed through would become that step.
+      onRestore={() => recovery.restore()}
       onDismiss={recovery.dismiss}
+      olderVersion={offer.olderVersion}
+      {...(offer.changedSince ? { changedSince: offer.changedSince } : {})}
+      startingVersionUnknown={offer.startingVersionUnknown}
       className={className}
     />
   );

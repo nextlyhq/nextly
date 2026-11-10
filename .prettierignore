@@ -25,9 +25,14 @@ coverage/
 # map out of date.
 **/plugin-admin-imports.generated.ts
 **/plugin-admin-components.generated.ts
+# The vendored icon set, written by packages/blocks-react/scripts/update-lucide.mjs:
+# kept as the script writes it, so regenerating it is a diff of data alone.
+packages/blocks-react/src/icons/lucide-data.ts
 
 # Template files (contain {{placeholder}} markers that aren't valid syntax)
 packages/create-nextly-app/templates/
 # Vitest file snapshots — byte-exact fixtures, must not be reformatted
 **/__tests__/v1-golden/__fixtures__/
+# A stylesheet captured from an earlier compiler, compared byte for byte
+packages/blocks-react/src/blocks/__fixtures__/
 AGENTS.measured.md

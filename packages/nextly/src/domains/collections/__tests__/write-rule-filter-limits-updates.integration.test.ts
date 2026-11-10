@@ -18,6 +18,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { MIGRATE_STEP_COLUMN_NAMES } from "../../../lib/system-columns";
+
 import {
   grantTo,
   userWhoMay,
@@ -172,7 +174,13 @@ const update = (
   collection: string,
   id: string,
   data: Record<string, unknown>
-) => t.nextly.update({ collection, id, data, ...asAuthor } as never);
+) =>
+  t.nextly.update({
+    collection,
+    id,
+    data: { ...data, _overwrite: true },
+    ...asAuthor,
+  } as never);
 
 /** The entry as the author reads it with its held edit, where it has one. */
 const readWithDraft = (t: TestNextly, collection: string, id: string) =>
@@ -207,7 +215,7 @@ const updateInTransaction = (
       entries.updateEntryInTransaction(
         tx,
         { collectionName, entryId, user: { id: AUTHOR } },
-        data
+        { ...data, _overwrite: true }
       )
     )
     .then(
@@ -486,7 +494,7 @@ describe("an update rule's filter on a collection with languages", () => {
         collection: LOCALIZED,
         id: others,
         locale: "de",
-        data: { title: "shown" },
+        data: { title: "shown", _overwrite: true },
       } as never);
 
       const refused = await errorOf(() =>
@@ -494,7 +502,7 @@ describe("an update rule's filter on a collection with languages", () => {
           collection: LOCALIZED,
           id: others,
           locale: "de",
-          data: { title: "renamed" },
+          data: { title: "renamed", _overwrite: true },
           ...asAuthor,
         } as never)
       );
@@ -542,7 +550,7 @@ describe("an update rule's filter on a collection with languages", () => {
         collection: FALLBACK,
         id,
         locale: "fr",
-        data: { note: "changed in French" },
+        data: { note: "changed in French", _overwrite: true },
         ...asAuthor,
       } as never)
     );
@@ -554,7 +562,7 @@ describe("an update rule's filter on a collection with languages", () => {
       collection: FALLBACK,
       id,
       locale: "en",
-      data: { note: "changed in English" },
+      data: { note: "changed in English", _overwrite: true },
       ...asAuthor,
     } as never);
     expect((await stored(t, FALLBACK, id))?.note).toBe("changed in English");
@@ -641,7 +649,7 @@ describe("a publish or unpublish rule that answers a filter", () => {
     await t.nextly.update({
       collection: DRAFTED,
       id: others,
-      data: { title: "their edit" },
+      data: { title: "their edit", _overwrite: true },
     } as never);
     // POPULATION CONTROL: both edits were held, not written to the live rows.
     expect((await stored(t, DRAFTED, own))?.title).toBe("mine");
@@ -658,7 +666,16 @@ describe("a publish or unpublish rule that answers a filter", () => {
 
     await update(t, DRAFTED, own, { title: "edited" });
 
-    expect(await stored(t, DRAFTED, own)).toEqual(live);
+    // The live content is as it was. Only the version and its changer moved:
+    // a held edit is a change another editor must not overwrite unseen.
+    const content = (row: Record<string, unknown> | undefined) =>
+      row &&
+      Object.fromEntries(
+        Object.entries(row).filter(
+          ([key]) => !MIGRATE_STEP_COLUMN_NAMES.includes(key)
+        )
+      );
+    expect(content(await stored(t, DRAFTED, own))).toEqual(content(live));
     expect((await readWithDraft(t, DRAFTED, own))?.title).toBe("edited");
   });
 
@@ -714,7 +731,7 @@ describe("a publish or unpublish rule that answers a filter", () => {
     await t.nextly.update({
       collection: DRAFTED,
       id: own,
-      data: { title: "given away", owner: OTHER },
+      data: { title: "given away", owner: OTHER, _overwrite: true },
     } as never);
     const live = await stored(t, DRAFTED, own);
     // POPULATION CONTROL: the edit was held, not written to the live row, so

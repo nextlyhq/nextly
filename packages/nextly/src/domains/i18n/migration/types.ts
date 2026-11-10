@@ -111,4 +111,18 @@ export interface CompanionMigrationSpec {
    * a value twice or the server cannot build the index. Present only on a `unique` file.
    */
   unique?: { field: string; column: string }[];
+  /**
+   * The settings fields leaving translation take on once their default language's values are on
+   * the main table: the Required ones, and those a one-column unique index covers, each with its
+   * companion column. Recorded so `nextly migrate` can refuse the move, before its first file runs,
+   * where those values cannot take them. Present only on an `archive` or `shared` file whose fields
+   * carry one.
+   */
+  settings?: LeavingSettingsSpec;
+}
+
+/** The settings a move out of translation applies after its copy, as `CompanionMigrationSpec` records them. */
+export interface LeavingSettingsSpec {
+  required: { field: string; column: string }[];
+  unique: { field: string; column: string }[];
 }

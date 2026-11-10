@@ -68,9 +68,17 @@ import { createPortal } from "react-dom";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
+// The one test of two rectangles sharing pixels the canvas's chrome uses.
+import { overlaps } from "./canvas-tab-places";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
 import { canvasPointerPoints, overlaySpaceOf } from "./geometry-dom";
+import {
+  followScrub,
+  scrubModifiersOf,
+  type ScrubSession,
+  type ScrubTravel,
+} from "./scrub-gesture";
 import type { SideOrientation } from "./side-orientation";
 import type {
   EdgeLengths,
@@ -88,7 +96,6 @@ import {
   spacingSidesFor,
   spacingStart,
   spacingValue,
-  SPACING_ACTIVATION_PX,
   type SpacingModifiers,
   type SpacingScales,
 } from "./spacing-drag";
@@ -207,13 +214,8 @@ interface Gesture {
   readonly starts: ReadonlyMap<SpacingSide, number>;
   /** Why each remaining side has none. See `commit`. */
   readonly refusals: ReadonlyMap<SpacingSide, string>;
-  readonly originX: number;
-  readonly originY: number;
-  active: boolean;
-  readonly pointerId: number;
-  readonly host: HTMLElement;
-  /** Take the document listeners back off. See `onPointerDown`. */
-  readonly detach: () => void;
+  /** The pointer's part: threshold, capture and listeners. See `onPointerDown`. */
+  readonly session: ScrubSession;
   /**
    * The modifiers the last preview was drawn with.
    *
@@ -277,16 +279,6 @@ function applied(editor: EditorState, result: StyleWrite): string | undefined {
   return editor.apply(result.op) === null
     ? "That spacing change was not applied."
     : undefined;
-}
-
-/** Whether two rectangles share any pixels. */
-function overlaps(a: Rect, b: Rect): boolean {
-  return (
-    a.x < b.x + b.width &&
-    b.x < a.x + a.width &&
-    a.y < b.y + b.height &&
-    b.y < a.y + a.height
-  );
 }
 
 /**
@@ -486,14 +478,6 @@ function blockingRefusal(
     if (reason !== undefined) return reason;
   }
   return undefined;
-}
-
-/** What is held down, from whichever event is in hand. */
-function modifiersOf(event: {
-  readonly shiftKey: boolean;
-  readonly altKey: boolean;
-}): SpacingModifiers {
-  return { shift: event.shiftKey, alt: event.altKey };
 }
 
 export function SpacingHandles({
@@ -938,11 +922,8 @@ export function SpacingHandles({
     setPreview(null);
     setHeld(null);
     setDraggedResponse(null);
-    if (live === null) return;
-    live.detach();
-    if (live.active && live.host.hasPointerCapture?.(live.pointerId) === true) {
-      live.host.releasePointerCapture(live.pointerId);
-    }
+    // Ends the session too; a session ending itself comes back here, once.
+    live?.session.end();
   }, []);
 
   /**
@@ -987,8 +968,6 @@ export function SpacingHandles({
       event.preventDefault();
 
       const host = event.currentTarget;
-      const owner = host.ownerDocument;
-      const pointerId = event.pointerId;
       const originX = event.clientX;
       const originY = event.clientY;
 
@@ -1010,15 +989,13 @@ export function SpacingHandles({
         root === null ? null : canvasPointerPoints(pressed.x, pressed.y, root);
 
       /**
-       * How far the pointer has moved, in both spaces, because the two answer
-       * different questions.
+       * How far the pointer has moved in the root's own CONTENT space, which is
+       * what the VALUE comes from. The activation threshold is the shared
+       * gesture's, in client pixels: whether a press was meant as a drag is a
+       * property of the hand, and measured in canvas pixels it would shrink
+       * with the zoom.
        *
-       * `hand` is CLIENT pixels and decides the activation threshold: whether a
-       * press was meant as a drag is a property of the hand, and measured in
-       * canvas pixels it would shrink with the zoom.
-       *
-       * `canvas` is the root's own CONTENT space and is what the VALUE comes
-       * from. The two differ by the root's painted scale, which `renderedScale`
+       * The two differ by the root's painted scale, which `renderedScale`
        * deliberately stops below — the bands are children of the root and are
        * drawn through its transform already, so their rectangles need no such
        * factor. A pointer does: its coordinates come from the screen with the
@@ -1031,125 +1008,68 @@ export function SpacingHandles({
        * free to disagree with the one every other gesture on this canvas uses.
        */
       const travelled = (
-        moved: PointerEvent
-      ): {
-        readonly hand: { dx: number; dy: number };
-        readonly canvas: { dx: number; dy: number };
-      } => {
-        const hand = {
-          dx: moved.clientX - originX,
-          dy: moved.clientY - originY,
-        };
-        if (root === null || origin === null) return { hand, canvas: hand };
+        moved: PointerEvent,
+        hand: ScrubTravel
+      ): { readonly dx: number; readonly dy: number } => {
+        if (root === null || origin === null) return hand;
         const at = inCanvas(moved.clientX, moved.clientY);
         const now = canvasPointerPoints(at.x, at.y, root);
         return {
-          hand,
-          canvas: {
-            dx: now.content.x - origin.content.x,
-            dy: now.content.y - origin.content.y,
-          },
+          dx: now.content.x - origin.content.x,
+          dy: now.content.y - origin.content.y,
         };
       };
 
-      const onMove = (moved: PointerEvent): void => {
-        const live = gesture.current;
-        if (live === null || moved.pointerId !== pointerId) return;
-        const { hand, canvas } = travelled(moved);
-        const { dx, dy } = hand;
-        if (!live.active) {
-          /*
-           * CLIENT pixels, matching the canvas: the threshold separates a click
-           * from an intent to move, which is a property of the hand rather than
-           * of the canvas's zoom. Measured in content pixels it would shrink
-           * with the canvas, and a zoomed-out editor would start drags on a
-           * click.
-           */
-          if (Math.hypot(dx, dy) < SPACING_ACTIVATION_PX) return;
-          live.active = true;
-          /*
-           * Captured HERE rather than on the press, for the canvas's reason: the
-           * browser derives a click's target from where the press and the
-           * release landed, so capturing on `pointerdown` would make every press
-           * on a handle report the handle as the target of a click the author
-           * may have meant for the block underneath.
-           *
-           * Delivery no longer depends on it — the listeners above are on the
-           * document — so this is what keeps the cursor and the hover states of
-           * everything under the pointer still for the rest of the drag.
-           */
-          host.setPointerCapture?.(pointerId);
-        }
-        const delta = spacingDelta(
-          live.band.box,
-          live.band.side,
-          canvas,
-          subject.scales,
-          live.valueOutward
-        );
-        if (delta === undefined) return;
-        const shown = modifiersOf(moved);
-        live.shown = shown;
-        showPreview(live.band, live.starts, live.refusals, delta, shown);
-      };
-
-      const onUp = (lifted: PointerEvent): void => {
-        const live = gesture.current;
-        if (live === null || lifted.pointerId !== pointerId) return;
-        if (live.active) {
-          const delta = spacingDelta(
-            live.band.box,
-            live.band.side,
-            travelled(lifted).canvas,
-            subject.scales,
-            live.valueOutward
-          );
-          if (delta !== undefined) {
+      /*
+       * The press, its threshold, capture, Escape and the document listeners
+       * are the shared scrub gesture's, which the inspector's labels use too:
+       * see `scrub-gesture.ts` for why each is where it is.
+       */
+      const session = followScrub(
+        {
+          pointerId: event.pointerId,
+          clientX: originX,
+          clientY: originY,
+          host,
+        },
+        {
+          onMove: (moved, hand) => {
+            const live = gesture.current;
+            if (live === null) return;
+            const delta = spacingDelta(
+              live.band.box,
+              live.band.side,
+              travelled(moved, hand),
+              subject.scales,
+              live.valueOutward
+            );
+            if (delta === undefined) return;
+            const shown = scrubModifiersOf(moved);
+            live.shown = shown;
+            showPreview(live.band, live.starts, live.refusals, delta, shown);
+          },
+          onRelease: (lifted, hand) => {
+            const live = gesture.current;
+            if (live === null) return;
+            const delta = spacingDelta(
+              live.band.box,
+              live.band.side,
+              travelled(lifted, hand),
+              subject.scales,
+              live.valueOutward
+            );
+            if (delta === undefined) return;
             /*
              * `live.shown`, not the release event's modifiers. See `shown`:
              * releasing Shift before the button is ordinary, and reading the
              * release would commit a different edit from the one on screen.
              */
             commit(live.band, live.starts, live.refusals, delta, live.shown);
-          }
+          },
+          onEscape: () => setMessage("Spacing drag cancelled."),
+          onEnd: endGesture,
         }
-        endGesture();
-      };
-
-      const onCancel = (cancelled: PointerEvent): void => {
-        /*
-         * Filtered like `onMove` and `onUp`. A second touch or pen being
-         * cancelled says nothing about the pointer driving this gesture, and
-         * ending on it erases the preview and leaves the real release with
-         * nothing to commit.
-         */
-        if (cancelled.pointerId !== pointerId) return;
-        endGesture();
-      };
-
-      /*
-       * Escape, on the DOCUMENT, for the life of the gesture.
-       *
-       * The handle's own `onKeyDown` cannot be relied on to see it: the press
-       * calls `preventDefault`, which suppresses the browser's focus action, so
-       * a drag begun on a handle that was not already focused leaves focus
-       * wherever it was. Escape then goes to that element, the gesture is never
-       * cancelled, and releasing still commits the edit the author was trying
-       * to abandon.
-       */
-      const onEscape = (pressed: KeyboardEvent): void => {
-        if (pressed.key !== "Escape" || gesture.current === null) return;
-        pressed.preventDefault();
-        endGesture();
-        setMessage("Spacing drag cancelled.");
-      };
-
-      const detach = (): void => {
-        owner.removeEventListener("pointermove", onMove);
-        owner.removeEventListener("pointerup", onUp);
-        owner.removeEventListener("pointercancel", onCancel);
-        owner.removeEventListener("keydown", onEscape);
-      };
+      );
 
       setHeld(band);
       /*
@@ -1162,18 +1082,9 @@ export function SpacingHandles({
         valueOutward: valueOutwardOf(band),
         starts,
         refusals,
-        shown: modifiersOf(event),
-        originX,
-        originY,
-        active: false,
-        pointerId,
-        host,
-        detach,
+        shown: scrubModifiersOf(event),
+        session,
       };
-      owner.addEventListener("pointermove", onMove);
-      owner.addEventListener("pointerup", onUp);
-      owner.addEventListener("pointercancel", onCancel);
-      owner.addEventListener("keydown", onEscape);
     },
     [commit, endGesture, showPreview, startsFor, subject.scales, valueOutwardOf]
   );
@@ -1202,7 +1113,7 @@ export function SpacingHandles({
    * document would then commit against a node nobody is editing — or leak one
    * pair per press for the life of the editor.
    */
-  React.useEffect(() => () => gesture.current?.detach(), []);
+  React.useEffect(() => () => gesture.current?.session.end(), []);
 
   const onKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLElement>, band: SpacingBand): void => {
@@ -1247,7 +1158,7 @@ export function SpacingHandles({
        * handle there loses half the range as well.
        */
       setHeld(band);
-      commit(band, starts, refusals, delta, modifiersOf(event));
+      commit(band, starts, refusals, delta, scrubModifiersOf(event));
     },
     [commit, startsFor, valueOutwardOf]
   );

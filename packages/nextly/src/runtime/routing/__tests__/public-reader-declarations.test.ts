@@ -97,6 +97,43 @@ describe("a reader given its declarations", () => {
     ]);
   });
 
+  // A failure that reads like a miss, from the declarations rather than the
+  // read: a schema service refusing access, or not finding the source.
+  it.each([
+    ["refused", NextlyError.forbidden()],
+    ["not found", NextlyError.notFound()],
+  ])(
+    "lets declarations that fail as %s through from every read, a Single's too",
+    async (_, failure) => {
+      const reader = createPublicReader(source(), {
+        declarations: {
+          hiddenFields: async () => {
+            throw failure;
+          },
+        },
+      });
+      await expect(reader.find({ collection: "posts" })).rejects.toBe(failure);
+      await expect(reader.count({ collection: "posts" })).rejects.toBe(failure);
+      await expect(reader.findSingle({ slug: "banner" })).rejects.toBe(failure);
+    }
+  );
+
+  it("CONTROL: still answers null for a Single the read itself misses", async () => {
+    const hiddenFields = vi.fn(() => []);
+    const reader = createPublicReader(
+      {
+        find: vi.fn(),
+        findSingle: vi.fn(async () => {
+          throw NextlyError.notFound();
+        }),
+      } as unknown as PublicReaderSource,
+      { declarations: { hiddenFields } }
+    );
+    await expect(reader.findSingle({ slug: "banner" })).resolves.toBeNull();
+    // Nothing was read, so nothing was asked of the declarations.
+    expect(hiddenFields).not.toHaveBeenCalled();
+  });
+
   it("refuses declarations that are not field paths", async () => {
     const reader = createPublicReader(source(), {
       declarations: {

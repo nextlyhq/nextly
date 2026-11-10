@@ -24,6 +24,7 @@ import {
   type AutosaveStatus,
   DEFAULT_AUTOSAVE_DEBOUNCE_MS,
 } from "@admin/hooks/useSnapshotAutosave";
+import { DOCUMENT_VERSION_KEY } from "@admin/lib/document-version";
 import { versionApi, type VersionScope } from "@admin/services/versionApi";
 
 /**
@@ -53,6 +54,26 @@ export function autosaveScopeFor(
   return kind === "single"
     ? { kind: "single", slug, documentId }
     : { kind: "collection", slug, entryId: documentId };
+}
+
+/**
+ * The document a recording belongs to, as the recording machinery groups it,
+ * or `null` when there is none to record against.
+ *
+ * One spelling for every recorder of a document: the form's, and a field
+ * recording its own state. A save waits for that document's recordings in
+ * flight, and two spellings of one document would let it miss one.
+ *
+ * @param scope - the document's address, as `autosaveScopeFor` gives it
+ * @returns the document's key, without its language: an author has one
+ *   recovery point per document, whichever language it was recorded in
+ */
+export function documentRecordingKey(
+  scope: VersionScope | null
+): string | null {
+  if (!scope) return null;
+  const id = "entryId" in scope ? scope.entryId : scope.documentId;
+  return `${scope.kind}:${scope.slug}:${id}`;
 }
 
 /**
@@ -90,6 +111,13 @@ export interface UseDocumentAutosaveOptions {
    * recovery point written now would describe a state that never existed.
    */
   enabled?: boolean;
+
+  /**
+   * The version the form's copy started from, recorded with each point so its
+   * read can say what changed since, and a save of its restored edits is
+   * judged by it.
+   */
+  version?: () => string | undefined;
 }
 
 export interface UseDocumentAutosaveResult {
@@ -114,6 +142,7 @@ export function useDocumentAutosave({
   locale = null,
   debounceMs = DEFAULT_AUTOSAVE_DEBOUNCE_MS,
   enabled = true,
+  version,
 }: UseDocumentAutosaveOptions): UseDocumentAutosaveResult {
   /*
    * The snapshot, read at flush time rather than captured when the recording
@@ -127,8 +156,15 @@ export function useDocumentAutosave({
    */
   const save = useCallback(async () => {
     if (!scope) throw new Error("autosave: no scope");
-    return versionApi.saveAutosave(scope, form.getValues(), locale);
-  }, [scope, form, locale]);
+    const startedFrom = version?.();
+    return versionApi.saveAutosave(
+      scope,
+      startedFrom === undefined
+        ? form.getValues()
+        : { ...form.getValues(), [DOCUMENT_VERSION_KEY]: startedFrom },
+      locale
+    );
+  }, [scope, form, locale, version]);
 
   /*
    * The identity the core keys a pending recording to.
@@ -137,9 +173,8 @@ export function useDocumentAutosave({
    * compares identity for change, and an object rebuilt each render would look
    * like a different document every time.
    */
-  const identity = scope
-    ? `${scope.kind}:${scope.slug}:${"entryId" in scope ? scope.entryId : scope.documentId}:${locale ?? ""}`
-    : null;
+  const document = documentRecordingKey(scope);
+  const identity = document === null ? null : `${document}:${locale ?? ""}`;
 
   /*
    * Whether the editor holds uncommitted changes, as the form last reported.
@@ -150,6 +185,7 @@ export function useDocumentAutosave({
 
   const { status, lastSavedAt, schedule, cancel } = useSnapshotAutosave({
     identity,
+    document,
     save,
     debounceMs,
     enabled,

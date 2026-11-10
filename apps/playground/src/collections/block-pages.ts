@@ -39,9 +39,12 @@ export const BlockPages = defineCollection({
   // nowhere to send the reviewer — it verifies, then refuses, which is
   // indistinguishable from an expired link.
   //
-  // `/blocks/` because that is where this collection's route is mounted, in
-  // `src/app/blocks/[[...slug]]/page.tsx`. The mount is the application's
-  // choice, so the path is stated here rather than guessed anywhere else.
+  // `/preview/blocks/` because that is where this collection's previewable
+  // route is mounted, in `src/app/preview/blocks/[[...slug]]/page.tsx`. The
+  // public route at `/blocks/` serves published pages only, pre-rendered and
+  // the same for every visitor, so it can never show a draft. The mount is
+  // the application's choice, so the path is stated here rather than guessed
+  // anywhere else.
   admin: {
     // Built through the shared helper rather than interpolated here. A slug
     // holding a URL-significant character — `?`, `#`, `%`, a space — changes the
@@ -51,7 +54,7 @@ export const BlockPages = defineCollection({
     // encoding a stored `urlTemplate` gets, so both spellings resolve one entry
     // to one address.
     preview: {
-      url: previewUrlFromTemplate("/blocks/{slug}"),
+      url: previewUrlFromTemplate("/preview/blocks/{slug}"),
       /*
        * The viewports the preview pane offers come from THIS SITE's own
        * breakpoints rather than from a list invented here. A site whose tablet

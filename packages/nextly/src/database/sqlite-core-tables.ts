@@ -54,6 +54,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "email_verified_via" TEXT,
       "password_updated_at" INTEGER,
       "image" TEXT,
+      "interface_language" TEXT,
       "password_hash" TEXT,
       "is_active" INTEGER NOT NULL DEFAULT 0,
       "deactivated_at" INTEGER,
@@ -406,7 +407,9 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_by" TEXT,
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL,
-      "revision" INTEGER NOT NULL DEFAULT 0
+      "revision" INTEGER NOT NULL DEFAULT 0,
+      "base_version_no" INTEGER,
+      "base_draft_revision" INTEGER
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_versions_seq_uidx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "version_no")`,
@@ -491,6 +494,16 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_workflow_settings_workflow_uidx"
       ON "nextly_workflow_settings" ("workflow")`,
+    // A plugin schedule's windows. Columns match schemas/schedule-windows/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_schedule_windows" (
+      "schedule_key" TEXT NOT NULL,
+      "window_at" INTEGER NOT NULL,
+      "job_id" TEXT,
+      "created_at" INTEGER NOT NULL,
+      PRIMARY KEY ("schedule_key", "window_at")
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_schedule_windows_window_idx"
+      ON "nextly_schedule_windows" ("window_at")`,
     // The record of content events. Columns match
     // schemas/content-events/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_content_events" (

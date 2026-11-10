@@ -660,9 +660,10 @@ const LABEL_LIMIT = 60;
  * dollar-quoted body or `(`. A string literal can hold row data, so nothing
  * from one ever reaches a label; an unterminated quoted name, which runs over
  * whatever follows it, stops the label too. A `. ` is closed up because the
- * command line reads it as the end of a sentence.
+ * command line reads it as the end of a sentence. Exported so a refusal that
+ * names the statements of a file labels them as this judgement does.
  */
-function labelOf(statement: string, dialect: SupportedDialect): string {
+export function labelOf(statement: string, dialect: SupportedDialect): string {
   let text = "";
   for (const segment of scanSql(statement, dialect)) {
     if (segment.kind === "line-comment" || segment.kind === "block-comment") {

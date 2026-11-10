@@ -6,6 +6,10 @@
     "placement",
     "locked-areas",
     "layouts",
+    "site-code",
+    "moving-between-sites",
+    "compose-through-the-api",
+    "named-queries",
     "contributed-blocks"
   ]
 }

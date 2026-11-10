@@ -32,6 +32,33 @@ describe("sanitizeConfig — webhook audit seam", () => {
   });
 });
 
+describe("sanitizeConfig — per-language storage", () => {
+  it("is off unless experimental.perLanguageStorage is true", () => {
+    expect(sanitizeConfig({}).perLanguageStorage).toBe(false);
+    expect(sanitizeConfig({ experimental: {} }).perLanguageStorage).toBe(false);
+    expect(
+      sanitizeConfig({ experimental: { perLanguageStorage: true } })
+        .perLanguageStorage
+    ).toBe(true);
+    // A stray value from an untyped config never moves a site's storage.
+    expect(
+      sanitizeConfig({
+        experimental: { perLanguageStorage: "yes" as unknown as boolean },
+      }).perLanguageStorage
+    ).toBe(false);
+  });
+
+  // The CLI sanitizes the config export again, and an export written with `defineConfig` is
+  // sanitized already: the setting must survive that, or the CLI lays tables out without it.
+  it("keeps the setting when an already-sanitized config is sanitized again", () => {
+    const once = sanitizeConfig({ experimental: { perLanguageStorage: true } });
+    expect(
+      sanitizeConfig(once as unknown as Parameters<typeof sanitizeConfig>[0])
+        .perLanguageStorage
+    ).toBe(true);
+  });
+});
+
 describe("preview config survives the boot pipeline", () => {
   // The unit test for the minting endpoint mocks the container directly, so it
   // proves the endpoint READS `config.preview` and says nothing about whether

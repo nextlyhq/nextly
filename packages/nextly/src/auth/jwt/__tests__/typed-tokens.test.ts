@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-
 import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
 
@@ -25,10 +23,15 @@ describe("typed tokens", () => {
     expect(header.typ).toBe(TOKEN_TYP.session);
   });
 
-  it("accepts a legacy session token with no typ header (release 1)", async () => {
+  it("refuses a session token with no typ header", async () => {
+    // The named release. Tokens signed before the header existed were
+    // accepted while they could still be in circulation; this release stops
+    // accepting them, and a token without the header is refused wherever a
+    // session is read — Direct API tokens from before the header included,
+    // which lived 30 days and have had longer than that to expire.
     const legacy = await signUnmarkedToken({ sub: "u1" }, secret, 60);
     const r = await verifyToken(legacy, secret, "session");
-    expect(r.valid).toBe(true);
+    expect(r).toEqual({ valid: false, reason: "invalid" });
   });
 
   it("refuses a pending token presented as a session", async () => {
@@ -42,13 +45,27 @@ describe("typed tokens", () => {
   });
 
   it("refuses a LEGACY pending token, which carries no typ header, as a session", async () => {
-    // The case the payload-claim check exists for. A pending token minted
-    // before the header existed is accepted by the header rule, which lets an
-    // absent typ through, so only the claim stands between it and a session.
+    // A pending token minted before the header existed carries no header typ,
+    // so the required-header rule refuses it before its claim is read; the
+    // payload-claim check behind that still refuses a token carrying the
+    // session header alongside a pending claim.
     const legacyPending = await signUnmarkedPendingToken("u1", secret);
     expect((await verifyToken(legacyPending, secret, "session")).valid).toBe(
       false
     );
+  });
+
+  it("refuses a token with no typ header for the pending purpose", async () => {
+    // A pending token signed before the header existed is marked only by its
+    // claim. The header is required now, so one is refused as a pending token
+    // too, before the claim is read: it expired within minutes of being
+    // minted, and no reader needs the claim's word for what the header no
+    // longer names.
+    const legacyPending = await signUnmarkedPendingToken("u1", secret);
+    expect(await verifyToken(legacyPending, secret, "pending")).toEqual({
+      valid: false,
+      reason: "invalid",
+    });
   });
 
   it("refuses a token of an unknown typ as a session", async () => {
@@ -108,28 +125,20 @@ describe("typed tokens", () => {
 });
 
 describe("the window for session tokens with no typ header", () => {
-  /** `major.minor` of this package's version, prerelease tags ignored. */
-  function packageMinorVersion(): [number, number] {
-    const pkg = JSON.parse(
-      readFileSync(new URL("../../../../package.json", import.meta.url), "utf8")
-    ) as { version: string };
-    const [major, minor] = pkg.version
-      .split(".")
-      .map(part => parseInt(part, 10));
-    return [major, minor];
-  }
-
-  it("closes at 0.1.0", async () => {
-    // The acceptance of untyped tokens is a transition, and nothing but this
-    // test ends it: once the package reaches 0.1.0 an untyped token must stop
-    // verifying, so reaching that version with the allowance still in place
-    // fails here rather than leaving the window open until someone remembers.
-    const [major, minor] = packageMinorVersion();
-    const windowClosed = major > 0 || minor >= 1;
+  it("is closed: the header is required", async () => {
+    // This is the release the typed-tokens change named in advance. While
+    // tokens signed before the header existed could still be live, a session
+    // token carrying no purpose was accepted, watched by a test that failed
+    // once the named release arrived with the allowance still in place. That
+    // release stops accepting one, so the allowance is gone from the verifier
+    // and this test holds its place: an unmarked token is refused, and the
+    // test beside the verifier's other refusals keeps the release honest if
+    // anyone restores the allowance.
     const untyped = await signUnmarkedToken({ sub: "u1" }, secret, 60);
 
-    expect((await verifyToken(untyped, secret, "session")).valid).toBe(
-      !windowClosed
-    );
+    expect(await verifyToken(untyped, secret, "session")).toEqual({
+      valid: false,
+      reason: "invalid",
+    });
   });
 });

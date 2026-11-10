@@ -180,6 +180,107 @@ describe("events between versions", () => {
   });
 });
 
+/**
+ * A time-ordered event id, as the server makes them (UUIDv7), for a moment
+ * `ms` milliseconds into minute `minutes`.
+ */
+function eventId(minutes: number, ms: number): string {
+  const hex = (Date.parse(at(minutes)) + ms).toString(16).padStart(12, "0");
+  return `${hex.slice(0, 8)}-${hex.slice(8)}-7000-8000-000000000000`;
+}
+
+/** The story of lists already newest first, as the server sends them. */
+function served(versions: VersionMeta[], events: DocumentEvent[]) {
+  return allRows(
+    buildStory({
+      versions,
+      events,
+      lifecycle: true,
+      localized: true,
+      view: { kind: "all" },
+      filter: "everything",
+    })
+  );
+}
+
+describe("versions and events in one second", () => {
+  // SQLite keeps history in whole seconds, so a version and an event a
+  // moment apart carry the same time; their ids still say which came first.
+  it("puts an event recorded after a version in its second above it", () => {
+    const rows = served(
+      [version(1, 1)],
+      [
+        event("taken-over", 1, { id: eventId(1, 800) }),
+        event("created", 1, { id: eventId(1, 100), versionNo: 1 }),
+      ]
+    );
+    expect(rows).toEqual(["e:taken-over", "v1"]);
+  });
+
+  it("keeps a version recorded after an event in its second above it", () => {
+    const rows = served(
+      [version(2, 1), version(1, 0)],
+      [
+        event("saved", 1, { id: eventId(1, 800), versionNo: 2 }),
+        event("taken-over", 1, { id: eventId(1, 100) }),
+        event("created", 0, { id: eventId(0, 0), versionNo: 1 }),
+      ]
+    );
+    expect(rows).toEqual(["v2", "e:taken-over", "v1"]);
+  });
+
+  it("puts a withdrawal above the save made just before it", () => {
+    const rows = served(
+      [version(2, 1), version(1, 0, { status: "published" })],
+      [
+        event("unpublished", 1, { id: eventId(1, 600), parts: ["en"] }),
+        event("saved", 1, { id: eventId(1, 100), versionNo: 2 }),
+        event("published", 0, {
+          id: eventId(0, 0),
+          versionNo: 1,
+          parts: ["en"],
+        }),
+      ]
+    );
+    expect(rows).toEqual(["e:unpublished", "v2", "v1"]);
+  });
+
+  it("keeps a version whose recording event is gone above its second's events", () => {
+    const rows = served(
+      [version(1, 1)],
+      [event("taken-over", 1, { id: eventId(1, 800) })]
+    );
+    expect(rows).toEqual(["v1", "e:taken-over"]);
+  });
+
+  it("keeps a second's versions in their own order around an event", () => {
+    // Version 1's recording event is gone: it stays below version 2, which
+    // the server orders by number within the second.
+    const rows = served(
+      [version(2, 1), version(1, 1)],
+      [
+        event("taken-over", 1, { id: eventId(1, 800) }),
+        event("saved", 1, { id: eventId(1, 300), versionNo: 2 }),
+      ]
+    );
+    expect(rows).toEqual(["e:taken-over", "v2", "v1"]);
+  });
+
+  it("orders by time where the events' id order and time disagree", () => {
+    // A clock stepped back gives an older event the higher id, so the server
+    // sends it first; the list still shows each row at its own time.
+    const rows = served(
+      [version(2, 4), version(1, 0)],
+      [
+        event("draft-discarded", 3, { id: eventId(7, 0) }),
+        event("unpublished", 5, { id: eventId(6, 0), parts: ["en"] }),
+        event("created", 0, { id: eventId(0, 0), versionNo: 1 }),
+      ]
+    );
+    expect(rows).toEqual(["e:unpublished", "v2", "e:draft-discarded", "v1"]);
+  });
+});
+
 describe("filters", () => {
   const versions = [
     version(1, 1),

@@ -27,7 +27,10 @@ import type {
   DuplicateResult,
   UpdatePatternResult,
 } from "./component-actions-contract";
-import type { CompositionRouteContext } from "./composition-route-kit";
+import type {
+  CompositionRouteContext,
+  StoredPageRead,
+} from "./composition-route-kit";
 import type { OriginStore } from "./origin-store";
 
 const heading = (id: string, text: string): BlockNode => ({
@@ -143,16 +146,31 @@ function contextOver(
   return { ctx, journal, services };
 }
 
+/** A stored page as a read gives it: the document and the read's version. */
+function pageRead(document: BlockDocument, rev?: string): StoredPageRead {
+  return { document, rev };
+}
+
 function readsOver(
   options: {
     shown?: Record<string, ReadComponent>;
     published?: Record<string, ReadComponent>;
     stored?: BlockDocument | null;
+    /** The version each successive page read gives, the last one repeated. */
+    revs?: readonly string[];
     pattern?: unknown;
   } = {}
 ): ComponentActionReads {
+  let reads = 0;
   return {
-    page: () => Promise.resolve(options.stored ?? null),
+    page: () => {
+      const revs = options.revs ?? [];
+      const rev = revs[Math.min(reads, revs.length - 1)];
+      reads += 1;
+      return Promise.resolve(
+        options.stored ? pageRead(options.stored, rev) : null
+      );
+    },
     shown: id => Promise.resolve(options.shown?.[id] ?? null),
     published: id => Promise.resolve(options.published?.[id] ?? null),
     pattern: () => Promise.resolve(options.pattern ?? null),
@@ -349,7 +367,7 @@ describe("detaching a placement", () => {
       }),
       page: () => {
         read += 1;
-        return Promise.resolve(read === 1 ? doc : edited);
+        return Promise.resolve(pageRead(read === 1 ? doc : edited));
       },
     };
 
@@ -534,7 +552,7 @@ describe("duplicating a component", () => {
       page: () => {
         read += 1;
         return Promise.resolve(
-          read === 1 ? twoPlacements : page([placement("p2", "card")])
+          pageRead(read === 1 ? twoPlacements : page([placement("p2", "card")]))
         );
       },
     };
@@ -671,5 +689,100 @@ describe("updating a pattern from a selection", () => {
       )
     );
     expect(error.statusCode).toBe(404);
+  });
+});
+
+describe("the version each write sends", () => {
+  // A write made from a read sends the version that read gave, so a save of
+  // the page made in between refuses the write instead of being overwritten.
+  // A stored page is read twice, to plan and again just before the write; the
+  // second read is the one the write is made from.
+  const detachable = page([
+    heading("before", "Before"),
+    placement("p", "card"),
+  ]);
+  const duplicable = page([placement("p1", "card"), placement("p2", "card")]);
+
+  it("detaching on a stored page sends the version read just before the write", async () => {
+    const { ctx, services } = contextOver();
+    await detachPlacement(
+      request({
+        apply: "stored",
+        page: { collection: "pages", id: "page-1" },
+        instanceId: "p",
+      }),
+      ctx,
+      {
+        reads: readsOver({
+          stored: detachable,
+          revs: ["7", "8"],
+          shown: { card: card(CARD) },
+          published: { card: card(CARD) },
+        }),
+      }
+    );
+    expect(services.updateEntry.mock.calls[0]?.[2]).toMatchObject({
+      _rev: "8",
+    });
+  });
+
+  it("re-pointing a stored placement after a duplicate sends the version read just before the write", async () => {
+    const { ctx, services } = contextOver({ params: { id: "card" } });
+    await duplicateComponent(
+      request({
+        placement: {
+          apply: "stored",
+          page: { collection: "pages", id: "page-1" },
+          instanceId: "p2",
+        },
+      }),
+      ctx,
+      {
+        reads: readsOver({
+          stored: duplicable,
+          revs: ["7", "8"],
+          published: { card: card(CARD) },
+        }),
+      }
+    );
+    expect(services.updateEntryInTransaction.mock.calls[0]?.[3]).toMatchObject({
+      _rev: "8",
+    });
+  });
+
+  it("updating a pattern sends the version the pattern was read at", async () => {
+    const { ctx, services } = contextOver({ params: { id: "pat-1" } });
+    await updatePatternFromSelection(
+      request({
+        document: page([heading("a", "New hero")]),
+        selectedIds: ["a"],
+      }),
+      ctx,
+      { reads: readsOver({ pattern: { id: "pat-1", _rev: "3" } }) }
+    );
+    expect(services.updateEntry.mock.calls[0]?.[2]).toMatchObject({
+      _rev: "3",
+    });
+  });
+
+  it("sends no version when the read gave none", async () => {
+    // A server that issues no versions is written to as before.
+    const { ctx, services } = contextOver();
+    await detachPlacement(
+      request({
+        apply: "stored",
+        page: { collection: "pages", id: "page-1" },
+        instanceId: "p",
+      }),
+      ctx,
+      {
+        reads: readsOver({
+          stored: detachable,
+          shown: { card: card(CARD) },
+          published: { card: card(CARD) },
+        }),
+      }
+    );
+    expect(services.updateEntry.mock.calls[0]?.[2]).not.toHaveProperty("_rev");
   });
 });

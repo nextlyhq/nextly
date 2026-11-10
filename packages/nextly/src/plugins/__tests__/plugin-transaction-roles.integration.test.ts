@@ -145,7 +145,7 @@ describe.each(getConfiguredTestDialects())(
           tx,
           NOTES,
           id,
-          { guarded: "after" },
+          { guarded: "after", _overwrite: true },
           { as: "user", user }
         )
       );
@@ -170,7 +170,7 @@ describe.each(getConfiguredTestDialects())(
           tx,
           NOTES,
           id,
-          { guarded: "after", title: "edited" },
+          { guarded: "after", title: "edited", _overwrite: true },
           { as: "user", user }
         );
       });
@@ -194,7 +194,7 @@ describe.each(getConfiguredTestDialects())(
       await collections.updateEntry(
         NOTES,
         id,
-        { guarded: "after" },
+        { guarded: "after", _overwrite: true },
         {
           as: "user",
           user: {

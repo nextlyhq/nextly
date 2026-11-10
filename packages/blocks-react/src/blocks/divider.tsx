@@ -14,6 +14,7 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
+import { libraryDefinition } from "./classic-spacing";
 
 export type DividerProps = Record<string, never>;
 
@@ -56,32 +57,35 @@ const DIVIDER_BASE_STYLES = {
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
-export const divider: BlockDefinition<DividerProps, PageContext> = defineBlock({
-  name: "core/divider",
-  version: 1,
-  // What an author reads, in the Add panel and the block card: one plain line.
-  // What the block does, for whoever maintains it: A thematic break between
-  // sections, announced as a separator rather than drawn as a decorative line.
-  description: "A line between parts of a page.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Divider",
-    icon: "divider",
-    category: LAYOUT,
-    keywords: ["hr", "rule", "separator", "break"],
-  },
-  props: {},
-  defaultProps: {},
-  example: { props: {} },
-  supports: {
-    border: true,
-    color: true,
-    spacing: true,
-    dimensions: true,
-    effects: true,
-  },
-  baseStyles: DIVIDER_BASE_STYLES,
-  render: renderDivider,
-});
+export const divider: BlockDefinition<DividerProps, PageContext> =
+  libraryDefinition(
+    defineBlock({
+      name: "core/divider",
+      version: 1,
+      // What an author reads, in the Add panel and the block card: one plain line.
+      // What the block does, for whoever maintains it: A thematic break between
+      // sections, announced as a separator rather than drawn as a decorative line.
+      description: "A line between parts of a page.",
+      // Palette metadata. The category is imported rather than spelled here so
+      // nineteen blocks cannot drift into nineteen headings; keywords are what
+      // let a search for a word the description never uses still find this.
+      editor: {
+        label: "Divider",
+        icon: "divider",
+        category: LAYOUT,
+        keywords: ["hr", "rule", "separator", "break"],
+      },
+      props: {},
+      defaultProps: {},
+      example: { props: {} },
+      supports: {
+        border: true,
+        color: true,
+        spacing: true,
+        dimensions: true,
+        effects: true,
+      },
+      baseStyles: DIVIDER_BASE_STYLES,
+      render: renderDivider,
+    })
+  );

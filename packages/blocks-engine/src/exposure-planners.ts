@@ -40,7 +40,6 @@ import type {
   BlockDocument,
   ComponentDocument,
   ExposedProperty,
-  ExposedPropertyType,
 } from "./document";
 import {
   DEFAULT_LIMITS,
@@ -48,8 +47,8 @@ import {
   type DocumentLimits,
 } from "./limits";
 import { isPlainRecord } from "./plain-record";
+import { exposureTypeForProp } from "./prop-exposure";
 import type { RetiredExposures } from "./retired-exposures";
-import { RICH_TEXT_PROP_TYPE } from "./rich-text";
 import { boundedOwnKeys } from "./safe-record";
 import { contentPropsOf } from "./slot-lock";
 import type { SlotDefaultSource } from "./tree";
@@ -195,40 +194,9 @@ export interface ExposureEditRefusal {
  */
 export type ExposureEditResult = ExposureEdit | ExposureEditRefusal;
 
-/**
- * The exposure type that edits a prop of this schema, or `undefined` for none.
- *
- * By the prop's declared field type: a text field is edited as text, rich text
- * as rich text, a media reference as an image, a URL as a link, and a select
- * as a select. Anything else (a number, a checkbox, a list) has no exposure
- * control, so it is not offered.
- *
- * An image exposes the MEDIA prop, the value the image control writes as its
- * source of truth; the block resolves its address from that, so one exposure
- * drives one path.
- *
- * @experimental Settles when the component editor that uses it ships.
- */
-export function exposureTypeForProp(
-  schema: PropSchema | undefined
-): Exclude<ExposedPropertyType, "visibility"> | undefined {
-  switch (schema?.type) {
-    case "text":
-    case "textarea":
-    case "email":
-      return "text";
-    case RICH_TEXT_PROP_TYPE:
-      return "richText";
-    case "media":
-      return "image";
-    case "url":
-      return "link";
-    case "select":
-      return "select";
-    default:
-      return undefined;
-  }
-}
+// Declared in its own module, which imports nothing that validates, so the
+// binding rules can derive their prop kinds from it without a cycle.
+export { exposureTypeForProp };
 
 /**
  * Expose a prop of a node, or the node's visibility, as a new field.

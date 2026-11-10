@@ -12,6 +12,9 @@
  * - Locking from the card's menu makes every control read-only and says so;
  *   Unlock from the same menu gives them back.
  * - With the inspector open on each tab, axe finds nothing at WCAG 2.2 AA.
+ * - A Style section's header opens it from anywhere on it, its label's text
+ *   included, and a click on a header while the section above it is still
+ *   opening lands on that header, not on the opening section's fields.
  *
  * Each test makes its own page, named uniquely, so no lock is needed.
  */
@@ -35,8 +38,22 @@ const HEADING = "00000000-0000-4000-8000-00000000a001";
 const IMAGE = "00000000-0000-4000-8000-00000000a002";
 const SECTION = "00000000-0000-4000-8000-00000000a003";
 
-/** The page this spec edits: a heading with an id and attributes, an image, a section. */
-function document(): unknown {
+const SITE_STYLE = "/admin/api/singles/site-style";
+
+/** The shared style the lock test's heading wears, so it has a chip to hold. */
+const CARD = {
+  id: "e2e-inspector-card",
+  slug: "inspector-card",
+  label: "Inspector card",
+  orderIndex: 0,
+  styles: { base: { base: { color: "#112233" } } },
+};
+
+/**
+ * The page this spec edits: a heading with an id and attributes, an image, a
+ * section. The heading wears the given shared styles, when there are any.
+ */
+function pageDocument(headingClasses: readonly string[] = []): unknown {
   const pad = "24px";
   return {
     formatVersion: 1,
@@ -49,6 +66,7 @@ function document(): unknown {
         props: { text: "Inspector heading", level: "h2" },
         cssId: "intro",
         attributes: { "data-track": "hero" },
+        ...(headingClasses.length === 0 ? {} : { classes: headingClasses }),
       },
       {
         id: IMAGE,
@@ -84,14 +102,17 @@ function document(): unknown {
 }
 
 /** A draft page of its own, holding the document above, and its id. */
-async function createPage(request: APIRequestContext): Promise<string> {
+async function createPage(
+  request: APIRequestContext,
+  headingClasses: readonly string[] = []
+): Promise<string> {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const created = await request.post(ENTRIES, {
     data: {
       title: `Inspector ${stamp}`,
       slug: `inspector-${stamp}`,
       status: "draft",
-      content: document(),
+      content: pageDocument(headingClasses),
     },
   });
   if (!created.ok()) {
@@ -190,6 +211,87 @@ async function moreProperties(page: Page, label: string): Promise<string[]> {
   const items = await page.getByRole("menuitem").allTextContents();
   await page.keyboard.press("Escape");
   return items;
+}
+
+/** The reason a locked block is held, as the inspector says it. */
+const LOCKED_REASON = /^Locked: it can't be moved, deleted or edited/;
+
+/**
+ * Lock the selected heading from its card's menu, check that it reads as
+ * locked with every control read-only, and unlock it again.
+ */
+async function lockAndUnlock(page: Page): Promise<void> {
+  const content = page.getByRole("tabpanel", { name: "Content" });
+  await expect(content.getByLabel("Text", { exact: true })).toBeEnabled();
+  await page.getByRole("tab", { name: "Style" }).click();
+  const style = page.locator(".nx-style-inspector");
+  // A control of the open section, enabled before the lock, so its being
+  // disabled after is the lock's doing.
+  const field = style
+    .locator('[data-section][data-state="open"]')
+    .first()
+    .getByRole("textbox")
+    .first();
+  await expect(field).toBeEnabled();
+  await page.getByRole("tab", { name: "Content" }).click();
+
+  await page.getByRole("button", { name: "Actions for Heading" }).click();
+  await page.getByRole("menuitem", { name: "Lock", exact: true }).click();
+
+  // The reason is said once, on the card; the Style tab does not repeat it.
+  const lock = page.locator('[data-lock="layers"]');
+  await expect(lock).toContainText("Locked");
+  await expect(content.getByLabel("Text", { exact: true })).toBeDisabled();
+  await page.getByRole("tab", { name: "Style" }).click();
+  await expect(field).toBeDisabled();
+  await expect(page.getByText(LOCKED_REASON)).toHaveCount(1);
+  // The shared style's chip is held, and its tooltip says why.
+  const chip = page.locator(`[data-target-chip="${CARD.id}"]`);
+  await expect(chip).toHaveAttribute("aria-disabled", "true");
+  await chip.focus();
+  await expect(page.getByRole("tooltip")).toContainText(LOCKED_REASON);
+  await chip.blur();
+
+  await page.getByRole("button", { name: "Actions for Heading" }).click();
+  await page.getByRole("menuitem", { name: "Unlock", exact: true }).click();
+  await expect(lock).toHaveCount(0);
+  await expect(field).toBeEnabled();
+  await page.getByRole("tab", { name: "Content" }).click();
+  await expect(content.getByLabel("Text", { exact: true })).toBeEnabled();
+}
+
+/** A Style section's header, by catalog key. */
+function sectionHeader(page: Page, section: string) {
+  return page.locator(
+    `.nx-style-inspector [data-section="${section}"] .nx-style-inspector__section-trigger`
+  );
+}
+
+/** The Style sections open now, by catalog key. */
+async function openSections(page: Page): Promise<string[]> {
+  return page
+    .locator('.nx-style-inspector [data-section][data-state="open"]')
+    .evaluateAll(nodes =>
+      nodes.map(node => node.getAttribute("data-section") ?? "")
+    );
+}
+
+/** The Style tab on the section block, settled, with Layout open. */
+async function sectionStyleTab(page: Page): Promise<void> {
+  const id = await createPage(page.request);
+  await openBuilder(page, id);
+  await select(page, SECTION, "corner");
+  await page.getByRole("tab", { name: "Style" }).click();
+  await expect
+    .poll(async () => (await openSections(page)).includes("layout"))
+    .toBe(true);
+  // The tab's own opening motion done, so the first click starts the only one.
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector(".nx-style-inspector")
+        ?.getAnimations({ subtree: true }).length === 0
+  );
 }
 
 async function axe(page: Page): Promise<unknown[]> {
@@ -361,26 +463,35 @@ test.describe("the inspector", () => {
   test("locks from the card's menu, reads as locked with every control read-only, and unlocks", async ({
     page,
   }) => {
-    const id = await createPage(page.request);
-    await openBuilder(page, id);
-    await select(page, HEADING);
-
-    const content = page.getByRole("tabpanel", { name: "Content" });
-    await expect(content.getByLabel("Text")).toBeEnabled();
-
-    await page.getByRole("button", { name: "Actions for Heading" }).click();
-    await page.getByRole("menuitem", { name: "Lock", exact: true }).click();
-
-    await expect(page.locator('[data-lock="layers"]')).toContainText("Locked");
-    await expect(content.getByLabel("Text")).toBeDisabled();
-    await page.getByRole("tab", { name: "Style" }).click();
-    await expect(page.locator("[data-read-only]")).toContainText("Locked");
-
-    await page.getByRole("button", { name: "Actions for Heading" }).click();
-    await page.getByRole("menuitem", { name: "Unlock", exact: true }).click();
-    await expect(page.locator('[data-lock="layers"]')).toHaveCount(0);
-    await page.getByRole("tab", { name: "Content" }).click();
-    await expect(content.getByLabel("Text")).toBeEnabled();
+    // The site's shared styles, restored after: the heading wears one, so the
+    // Style tab has a chip for the lock to hold.
+    const before = await page.request.get(SITE_STYLE);
+    expect(before.ok(), `reading the site style: ${before.status()}`).toBe(
+      true
+    );
+    const site = (await before.json()) as Record<string, unknown>;
+    const classes =
+      ((site.item ?? site) as Record<string, unknown>).classes ?? [];
+    const storeClasses = async (value: unknown): Promise<void> => {
+      const stored = await page.request.patch(SITE_STYLE, {
+        data: { classes: value, _overwrite: true },
+      });
+      expect(stored.ok(), `storing shared styles: ${stored.status()}`).toBe(
+        true
+      );
+    };
+    await storeClasses([CARD]);
+    let id: string | undefined;
+    try {
+      id = await createPage(page.request, [CARD.id]);
+      await openBuilder(page, id);
+      await select(page, HEADING);
+      await lockAndUnlock(page);
+    } finally {
+      // The page goes first: a shared style still in use cannot be removed.
+      if (id !== undefined) await page.request.delete(`${ENTRIES}/${id}`);
+      await storeClasses(classes);
+    }
   });
 
   test("renames from a double-click on the title, shown in the card", async ({
@@ -402,6 +513,80 @@ test.describe("the inspector", () => {
     await expect(
       page.locator("[data-block-card]").getByRole("heading", { level: 2 })
     ).toHaveText("Hero title · Heading");
+  });
+
+  test("opens a Style section from its label's text", async ({ page }) => {
+    await sectionStyleTab(page);
+    await page
+      .locator(
+        '.nx-style-inspector [data-section="spacing"] .nx-style-inspector__section-label'
+      )
+      .click();
+    await expect
+      .poll(async () => (await openSections(page)).includes("spacing"))
+      .toBe(true);
+  });
+
+  test("lands a click on the header it is aimed at while the section above it opens", async ({
+    page,
+  }) => {
+    await sectionStyleTab(page);
+    const spacing = await sectionHeader(page, "spacing").boundingBox();
+    if (spacing === null) throw new Error("the Spacing header has no box");
+    // A mouse click, not a locator's: a locator waits for the motion to end,
+    // and the motion is what this is about. Spacing opens as Layout closes.
+    await page.mouse.click(spacing.x + 20, spacing.y + spacing.height / 2);
+    // Mid-motion: the 150ms opening and closing have started, not ended.
+    await page.waitForTimeout(40);
+    const moving = await page.evaluate(
+      () =>
+        document
+          .querySelector(".nx-style-inspector")
+          ?.getAnimations({ subtree: true }).length ?? 0
+    );
+    expect(moving, "a section is still moving").toBeGreaterThan(0);
+
+    // The header below the opening section, where it is drawn now. An
+    // opening section's fields left unclipped while it grows are drawn over
+    // it, and take the click.
+    //
+    // Measured and hit-tested in ONE evaluation, so in one frame: the header
+    // moves throughout the motion, and two round trips — its box, then the
+    // element at that point — let it move between them, which under a loaded
+    // machine sent the probe to where the header had been.
+    //
+    // And pressed in that same frame, by the element found at that point, so
+    // the press happens while the section above is still opening and cannot
+    // lag behind the header it was aimed at.
+    const hit = await page.evaluate(() => {
+      const header = document.querySelector(
+        '.nx-style-inspector [data-section="size"] .nx-style-inspector__section-trigger'
+      );
+      if (header === null) throw new Error("the Size header is not drawn");
+      const box = header.getBoundingClientRect();
+      const under = document.elementFromPoint(
+        box.x + 20,
+        box.y + box.height / 2
+      );
+      const trigger = under?.closest(".nx-style-inspector__section-trigger");
+      const section =
+        trigger?.closest("[data-section]")?.getAttribute("data-section") ??
+        null;
+      // Read BEFORE the press: the press starts Size's own animation, which
+      // would otherwise answer "still moving" for a section above that had
+      // already come to rest.
+      const stillMoving =
+        (document
+          .querySelector(".nx-style-inspector")
+          ?.getAnimations({ subtree: true }).length ?? 0) > 0;
+      if (trigger instanceof HTMLElement) trigger.click();
+      return { section, stillMoving };
+    });
+    expect(hit.section).toBe("size");
+    expect(hit.stillMoving, "pressed while the section above opens").toBe(true);
+    await expect
+      .poll(async () => (await openSections(page)).includes("size"))
+      .toBe(true);
   });
 
   test("has no WCAG 2.2 AA violations with the inspector open on each tab", async ({

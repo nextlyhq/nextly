@@ -50,6 +50,7 @@ import {
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
   validateFieldTypeShared,
+  validateIconDefaultShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
   validatePluginFieldOptionsShared,
@@ -61,14 +62,16 @@ import {
   validateSiblingFieldsShared,
 } from "../../shared/base-validator";
 import { isPlainObject } from "../../shared/lib/plain-copy";
-// RESERVED_SLUGS and SQL_RESERVED_KEYWORDS used to live in this file. They
-// moved to shared/sql-reserved.ts to break a circular dependency with
-// base-validator. Re-exported so existing consumers that import them from this file's
-// path continue to work unchanged.
 import {
   RESERVED_SLUGS,
   SQL_RESERVED_KEYWORDS,
 } from "../../shared/sql-reserved";
+import { consoleLogger } from "../../shared/types";
+import { declaresOwnId } from "../fields/repeater-row-identity";
+// RESERVED_SLUGS and SQL_RESERVED_KEYWORDS used to live in this file. They
+// moved to shared/sql-reserved.ts to break a circular dependency with
+// base-validator. Re-exported so existing consumers that import them from this file's
+// path continue to work unchanged.
 // C7/D16 — accept plugin-registered custom field types (must be registered
 // before the config is validated; see field-type-registry).
 
@@ -126,6 +129,7 @@ export type ValidationErrorCode =
   | "DECIMAL_PRECISION_INVALID"
   | "DECIMAL_SCALE_INVALID"
   | "DECIMAL_SCALE_EXCEEDS_PRECISION"
+  | "ICON_DEFAULT_INVALID"
   | "BLOCKS_REQUIRED"
   | "BLOCKS_EMPTY"
   | "BLOCK_SLUG_REQUIRED"
@@ -149,7 +153,8 @@ export type ValidationErrorCode =
   | "DB_OPTIONS_INVALID_TYPE"
   | "DB_OPTION_UNKNOWN"
   | "DB_ID_TYPE_INVALID"
-  | "DB_ALLOW_ID_ON_CREATE_INVALID";
+  | "DB_ALLOW_ID_ON_CREATE_INVALID"
+  | "DB_SLUG_PATHS_INVALID";
 
 /**
  * A single validation error with path and context.
@@ -467,6 +472,7 @@ function validateField(
       break;
 
     case "repeater":
+      warnOfAuthoredRowId(f, path);
       validateContainerFieldsShared(
         f,
         path,
@@ -497,7 +503,28 @@ function validateField(
     case "number":
       validateNumberDecimalDimensionsShared(f, path, errsBase);
       break;
+
+    case "icon":
+      validateIconDefaultShared(f, path, errsBase);
+      break;
   }
+}
+
+/**
+ * Say, while developing, that a repeater declaring its own `id` field takes
+ * that value from its author: rows saved before the field existed carry the
+ * id the system gave them there. A warning, never an error, since schemas
+ * that declare one already work.
+ */
+function warnOfAuthoredRowId(
+  field: Record<string, unknown>,
+  path: string
+): void {
+  if (process.env.NODE_ENV === "production") return;
+  if (!Array.isArray(field.fields) || !declaresOwnId(field.fields)) return;
+  consoleLogger.warn(
+    `[nextly] ${path}: this repeater's rows declare their own 'id' field. Rows saved before this field existed keep their saved row id as its value.`
+  );
 }
 
 /**
@@ -696,6 +723,15 @@ function validateDbOptions(db: unknown, errors: ValidationError[]): void {
       path: "db.allowIdOnCreate",
       code: "DB_ALLOW_ID_ON_CREATE_INVALID",
       message: "db.allowIdOnCreate must be true or false.",
+    });
+  }
+  // Read leniently by the write path, which stores paths only for `true`,
+  // so a misspelt value would quietly keep one-segment slugs.
+  if (db.slugPaths !== undefined && typeof db.slugPaths !== "boolean") {
+    errors.push({
+      path: "db.slugPaths",
+      code: "DB_SLUG_PATHS_INVALID",
+      message: "db.slugPaths must be true or false.",
     });
   }
 }

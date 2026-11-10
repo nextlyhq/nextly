@@ -13,7 +13,9 @@
  * `draft: true`. So every published page is read once more by id, one at a
  * time, and the answer counts only when it IS a working draft
  * (`_isWorkingDraft`); without one the read falls back to the live row, which
- * the first query already judged.
+ * the first query already judged. A page whose live row names the Layout is
+ * read too: its working draft naming it as well is a second place, which a
+ * removal that moves its pages has to clear ({@link namesItOffTheLiveRow}).
  *
  * ## By id, never by offset
  *
@@ -59,6 +61,18 @@ export interface PageReference {
   readonly id: string;
   readonly title: string;
   readonly place: ReferencePlace;
+  /** On a `live` reference: the page's working draft names the Layout too. */
+  readonly draftToo?: true;
+}
+
+/**
+ * Whether a page names the Layout somewhere other than its live row: its only
+ * row, or its working draft. Those are what a removal that moves its pages
+ * clears; a live row is left, and draws the site default once the Layout is
+ * gone.
+ */
+export function namesItOffTheLiveRow(reference: PageReference): boolean {
+  return reference.place !== "live" || reference.draftToo === true;
 }
 
 /** What one scan found. */
@@ -333,7 +347,8 @@ export async function scanLayoutReferences(args: {
     };
   }
 
-  // Every published page's working draft, read one at a time.
+  // Every published page's working draft, read one at a time, those whose
+  // live row names the Layout included.
   const draftsDone = await walkPages({
     describe: "the published pages",
     maxPages,
@@ -362,13 +377,17 @@ export async function scanLayoutReferences(args: {
         }
         spent += 1;
         const id = relationId(row);
-        if (id !== null && !found.has(id)) {
-          toRead.push({ id, title: textOf(row, "title") });
-        }
+        if (id !== null) toRead.push({ id, title: textOf(row, "title") });
       }
       const drafts = await workingDraftsNaming(nextly, pages, toRead, layoutId);
       for (const draft of drafts.naming) {
-        found.set(draft.id, { ...draft, place: "draft" });
+        const live = found.get(draft.id);
+        found.set(
+          draft.id,
+          live === undefined
+            ? { ...draft, place: "draft" }
+            : { ...live, draftToo: true }
+        );
       }
       unreadIds.push(...drafts.unread);
       // Incomplete when a row went unread: on this page past the budget, on a

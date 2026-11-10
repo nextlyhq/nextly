@@ -44,23 +44,71 @@ class FrameAdapter extends DrizzleAdapter {
     if (frame) {
       return this.runJoined(
         frame,
-        depth =>
-          this.steps(
-            `SAVEPOINT ${depth}`,
-            `RELEASE ${depth}`,
-            `ROLLBACK TO ${depth}`
-          ),
+        depth => frame.join.adapter(depth),
         work,
         options
       );
     }
-    const { result, effects } = await this.runOutermost(
-      { connection: this, ...this.steps("BEGIN", "COMMIT", "ROLLBACK") },
+    const settled = await this.settleOutermost(
+      {
+        ...this.steps("BEGIN", "COMMIT", "ROLLBACK"),
+        join: {
+          adapter: depth =>
+            this.flatJoin
+              ? { ...this.steps("", "", ""), dooms: () => true }
+              : this.steps(
+                  `SAVEPOINT ${depth}`,
+                  `RELEASE ${depth}`,
+                  `ROLLBACK TO ${depth}`
+                ),
+        },
+      },
       work,
       options
     );
-    await this.runHeldEffects(effects);
-    return result;
+    await this.runHeldEffects(settled.effects);
+    if (settled.committed) return settled.result;
+    throw settled.error;
+  }
+
+  /** Join flat, as MySQL does: no savepoint, and a part's failure dooms the transaction. */
+  flatJoin = false;
+
+  /** Make COMMIT, or ROLLBACK, fail. */
+  failCommit = false;
+  failRollback = false;
+
+  /** What the adapter logged as a held effect's failure. */
+  readonly logged: Error[] = [];
+
+  protected override logHeldEffectFailure(failure: Error): void {
+    this.logged.push(failure);
+  }
+
+  /** An outermost transaction through `runOutermost`, the contract a dialect may call. */
+  outermost<T>(work: () => Promise<T>) {
+    return this.runOutermost(
+      { ...this.steps("BEGIN", "COMMIT", "ROLLBACK") },
+      work
+    );
+  }
+
+  /** A transaction through the base's attempt loop, as the dialects run theirs. */
+  throughBase<T>(work: () => Promise<T>, options?: TransactionOptions) {
+    return this.openOrJoin(work, options, {
+      run: () =>
+        this.settleOutermost(
+          {
+            ...this.steps("BEGIN", "COMMIT", "ROLLBACK"),
+            join: { adapter: () => this.steps("", "", "") },
+          },
+          work,
+          options
+        ),
+      retryable: () => false,
+      describe: () => ({ label: "an error", detail: {} }),
+      logger: undefined,
+    });
   }
 
   /** The frame a call made here would join. */
@@ -94,17 +142,25 @@ class FrameAdapter extends DrizzleAdapter {
     throw new Error("These tests run no Drizzle queries.");
   }
 
+  /** Steps that record their statements; a flat join's send none. */
   private steps(begin: string, commit: string, rollback: string) {
+    const record = (statement: string) => {
+      if (statement !== "") this.statements.push(statement);
+    };
     return {
       context: CONTEXT,
-      begin: () => {
-        this.statements.push(begin);
-      },
+      begin: () => record(begin),
       commit: () => {
-        this.statements.push(commit);
+        if (commit === "COMMIT" && this.failCommit) {
+          throw new Error("COMMIT failed, its outcome unknown");
+        }
+        record(commit);
       },
       rollback: () => {
-        this.statements.push(rollback);
+        if (rollback === "ROLLBACK" && this.failRollback) {
+          throw new Error("ROLLBACK failed");
+        }
+        record(rollback);
       },
     };
   }
@@ -278,5 +334,126 @@ describe("transaction frames", () => {
       "RELEASE 1",
       "COMMIT",
     ]);
+  });
+
+  it("fails the whole transaction when a flat part fails, though the outer caught it", async () => {
+    const adapter = new FrameAdapter();
+    adapter.flatJoin = true;
+    const refusal = new Error("the part refuses");
+    let later: unknown;
+
+    const outcome = await adapter
+      .transaction(async () => {
+        await adapter
+          .transaction(async () => {
+            throw refusal;
+          })
+          .catch(() => undefined);
+        later = await adapter
+          .transaction(async () => "ran")
+          .catch((error: unknown) => error);
+      })
+      .then(
+        () => "committed",
+        (error: unknown) => error
+      );
+
+    expect(outcome).toBe(refusal);
+    expect(later).toBe(refusal);
+    expect(adapter.statements).toEqual(["BEGIN", "ROLLBACK"]);
+  });
+
+  it("runs rollback effects once the outermost transaction rolls back, and drops them when it commits", async () => {
+    const adapter = new FrameAdapter();
+    const ran: string[] = [];
+
+    await adapter.transaction(async () => {
+      await adapter.afterRollback(() =>
+        ran.push("from a committed transaction")
+      );
+      await adapter
+        .transaction(async () => {
+          await adapter.afterRollback(() =>
+            ran.push("from a rolled-back part")
+          );
+          throw new Error("undo the part");
+        })
+        .catch(() => undefined);
+    });
+    let ranBeforeRollback: string[] = [];
+    await adapter
+      .transaction(async () => {
+        await adapter.transaction(async () => {
+          await adapter.afterRollback(() => ran.push("from a part"));
+        });
+        await adapter.afterRollback(() => ran.push("from the outer"));
+        ranBeforeRollback = [...ran];
+        throw new Error("undo everything");
+      })
+      .catch(() => undefined);
+
+    expect(ranBeforeRollback).toEqual([]);
+    expect(ran).toEqual(["from a part", "from the outer"]);
+  });
+
+  it("keeps runOutermost's contract: resolves with the result and held effects, rejects with the work's error", async () => {
+    const adapter = new FrameAdapter();
+    const refusal = new Error("the work refuses");
+
+    const committed = await adapter.outermost(async () => {
+      await adapter.hold(() => undefined);
+      return "done";
+    });
+    const rejected = await adapter
+      .outermost(async () => {
+        throw refusal;
+      })
+      .catch((error: unknown) => error);
+
+    expect(committed.result).toBe("done");
+    expect(committed.effects).toHaveLength(1);
+    expect(rejected).toBe(refusal);
+  });
+
+  it("drops rollback effects, and says so, when the ROLLBACK cannot be confirmed", async () => {
+    const adapter = new FrameAdapter();
+    adapter.failCommit = true;
+    adapter.failRollback = true;
+    const ran: string[] = [];
+
+    await adapter
+      .transaction(async () => {
+        await adapter.afterRollback(() => ran.push("compensation"));
+      })
+      .catch(() => undefined);
+
+    expect(ran).toEqual([]);
+    expect(adapter.logged.map(failure => failure.message)).toEqual([
+      expect.stringContaining("outcome is unknown"),
+    ]);
+  });
+
+  it("still runs an attempt's rollback effects when retryWhen throws, then rethrows", async () => {
+    const adapter = new FrameAdapter();
+    const ran: string[] = [];
+    const question = new Error("retryWhen could not decide");
+
+    const outcome = await adapter
+      .throughBase(
+        async () => {
+          await adapter.afterRollback(() => ran.push("compensation"));
+          throw new Error("the attempt fails");
+        },
+        {
+          retryCount: 1,
+          retryWhen: () => {
+            throw question;
+          },
+        }
+      )
+      .catch((error: unknown) => error);
+
+    expect(outcome).toBe(question);
+    expect(ran).toEqual(["compensation"]);
   });
 });

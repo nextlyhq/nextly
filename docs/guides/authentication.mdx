@@ -195,10 +195,12 @@ Session tokens and the pending tokens of a second-factor exchange carry a
 so a pending token cannot be presented as a session, whatever else it carries.
 Preview tokens are kept apart by their own derived key and audience.
 
-This release still accepts a session token with no `typ` header, so tokens
-already in circulation keep working. A later release will require it, which
-will stop Direct API tokens minted before this change; browser sessions are
-unaffected, because access tokens rotate every fifteen minutes.
+A session token with no `typ` header no longer verifies. This is the release
+the header's introduction named in advance, and it stops accepting a token
+that carries no purpose wherever a session is read. A Direct API token minted
+before the header existed stops working: mint a new one with `nextly.login()`.
+Browser sessions are unaffected, because access tokens rotate every fifteen
+minutes, so none older than the change survives.
 
 ## Signing in with an external provider
 

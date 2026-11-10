@@ -29,6 +29,7 @@
 import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
+  MIGRATE_STEP_COLUMN_NAMES,
   SYSTEM_COLUMNS,
   systemColumnDefaultSql,
   systemColumnDialectType,
@@ -641,7 +642,9 @@ export function classifyFieldKind(
     case "text":
       return textKindFor(field, builtBy);
 
+    // An icon id ("lucide:star") is a short string, stored like an email.
     case "email":
+    case "icon":
     case "password":
     case "select":
     case "radio":
@@ -1066,6 +1069,24 @@ export function getSystemColumnDescriptors(
       ...(shape.default !== undefined ? { defaultValue: shape.default } : {}),
     };
   });
+}
+
+/**
+ * The per-document columns — a document's version counter and last changer — as descriptors.
+ *
+ * Every content table carries them, and so does every translation table, whose rows are
+ * versioned one language at a time. Read from here by everything that creates or adds them, so a
+ * translation table, a main table and a column added to an existing table cannot differ in shape.
+ */
+export function migrateStepColumnDescriptors(
+  dialect: SupportedDialect
+): SystemColumnDescriptor[] {
+  return getSystemColumnDescriptors(dialect, {
+    hasTitleField: true,
+    hasSlugField: true,
+    hasStatus: false,
+    isSingle: false,
+  }).filter(descriptor => MIGRATE_STEP_COLUMN_NAMES.includes(descriptor.name));
 }
 
 /**

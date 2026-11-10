@@ -201,18 +201,26 @@ export async function judgeSharedValues(
     });
     if (fields.length > 0) outOfDate.set(draft.locale, fields);
   }
+  // A shared part kept per language is unmergeable only where the changes
+  // holding it disagree with each other: each language's copy goes live as
+  // that language saved it, so changes that agree leave the same shared part
+  // in every copy whichever goes last, and one that edited it alone is the
+  // only copy to win.
   const unmergeable =
     pending.length < 2
       ? []
-      : [...byHand].filter(name =>
-          pending.some(draft => {
-            const values = snapshotRecord(draft.snapshot);
-            return (
-              name in values &&
-              differingFields([name], values, live, views).length > 0
-            );
-          })
-        );
+      : [...byHand].filter(name => {
+          const holding = pending
+            .map(draft => snapshotRecord(draft.snapshot))
+            .filter(values => name in values);
+          const [first] = holding;
+          return (
+            first !== undefined &&
+            holding.some(
+              values => differingFields([name], values, first, views).length > 0
+            )
+          );
+        });
   // A translated component's shared parts are judged above but not merged:
   // each language's component also holds its own translated values, so it
   // goes live as that language saved it.

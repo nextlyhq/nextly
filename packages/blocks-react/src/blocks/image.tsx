@@ -16,18 +16,41 @@ import {
   type BlockDefinition,
   blockTypeClassName,
   defineBlock,
+  type BoundValues,
+  type ImageValue,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
-import type { BlockRenderArgs, PageContext } from "../context";
+import type {
+  BlockRenderArgs,
+  PageContext,
+  ReadClaim,
+  ResolvedMedia,
+} from "../context";
 
 import { MEDIA } from "./categories";
-import { fetchableUrl, flag, isAuthoredText, oneOf, text, url } from "./props";
+import { imageLooks } from "./looks";
+import {
+  boundImage,
+  fetchableUrl,
+  type BoundImage,
+  flag,
+  canLink,
+  isAuthoredText,
+  LINK_PROPS,
+  linkFor,
+  oneOf,
+  readClaimOf,
+  text,
+  url,
+  type LinkAttributes,
+  type LinkProps,
+} from "./props";
 
 /** How the browser should schedule the image. */
 export const IMAGE_LOADING = ["lazy", "eager"] as const;
 
-export interface ImageProps {
+export interface ImageProps extends LinkProps {
   /** The media record's id, resolved through the host. */
   mediaId?: string;
   /** A direct URL, for a host with no media library. */
@@ -42,19 +65,51 @@ export interface ImageProps {
   caption?: string;
 }
 
+/**
+ * Whether an image may have anything to draw, and so a link to follow: a
+ * media id or an address, the two props its picture candidates are drawn
+ * from (`pictureCandidates`; a bound image fills `mediaId`). `has` says
+ * whether a prop holds a value or, for a list reading its links ahead, is
+ * bound to one. A list asks it before it reads this image's link ahead, so
+ * an image with neither, which the render draws as nothing and links
+ * nowhere, reads no link.
+ */
+export function imageMayDraw(has: (prop: string) => boolean): boolean {
+  return has("mediaId") || has("src");
+}
+
+/**
+ * The media record an image reads first as it is drawn, by its id: its
+ * first picture candidate, where that holds a media record. None where it
+ * draws an address, a bound URL field's or a fallback's, which takes no
+ * read. What a list reads ahead for its images, from the same candidates
+ * the render draws from, so a list never reads a record its image will not.
+ */
+export function firstMediaRead(
+  props: Readonly<Record<string, unknown>>,
+  bound: BoundValues | undefined
+): string | undefined {
+  const [first] = pictureCandidates(
+    text(props.mediaId),
+    props.src,
+    boundImage(bound?.mediaId)
+  );
+  return first?.holds === "media" ? first.value : undefined;
+}
+
 export async function renderImage({
   props,
   className,
   ctx,
+  node,
   hostPolicy,
   partClass,
+  bound,
 }: BlockRenderArgs<ImageProps>): Promise<ReactElement | null> {
+  // Each read this block makes is claimed as its own, so a page past its
+  // allowance names it among the blocks drawn without their data.
+  const claim = readClaimOf(node);
   const mediaId = text(props.mediaId);
-  // A resolver that throws must not take the page with it: media lives behind
-  // a network call for a signed-URL host, and one unreachable image is not a
-  // reason to lose the article around it.
-  const record =
-    mediaId === "" ? null : await ctx.resolveMedia(mediaId).catch(() => null);
 
   // A candidate has to clear BOTH filters, and both are asked before the two are
   // chosen between rather than after.
@@ -76,15 +131,16 @@ export async function renderImage({
   const fetchable = (value: unknown): string | undefined =>
     fetchableUrl(value, patterns);
 
-  // A record whose url either filter refused is dropped WHOLE, not just for its
-  // url. Its alt text and intrinsic size describe the asset that was refused, so
-  // keeping them beside the fallback announces one image to a screen reader
-  // while reserving the other one's space.
-  const usable = fetchable(record?.url) === undefined ? null : record;
-  const src = fetchable(usable?.url) ?? fetchable(props.src);
+  const picture = await firstDrawable(
+    pictureCandidates(mediaId, props.src, boundImage(bound?.mediaId)),
+    ctx,
+    fetchable,
+    claim
+  );
   // Nothing to show. An `<img>` with no `src` still requests the current page
   // in some browsers, so render nothing rather than a broken element.
-  if (src === undefined) return null;
+  if (picture === undefined) return null;
+  const { src, record: usable } = picture;
 
   const decorative = flag(props.decorative);
   // Three states, not two, and `text()` collapses two of them: it answers `""`
@@ -105,12 +161,17 @@ export async function renderImage({
       ? text(props.alt)
       : (usable?.alt ?? "");
   const caption = text(props.caption);
+  // Where the picture links, read as the button reads it; the alt text is
+  // what names the link.
+  const link = await linkFor(props, (collection, id) =>
+    ctx.resolveEntryPath(collection, id, claim)
+  );
 
   const image = (
     <img
       /*
-       * The block-type class rides the `<img>` in BOTH branches, and only the
-       * node's own classes move to the figure below.
+       * The block-type class rides the `<img>` in EVERY branch, and only the
+       * node's own classes move to a figure or a link around it.
        *
        * The type class is where this block's default sizing lands, and that
        * sizing has to reach the IMAGE: a figure held to its column still
@@ -119,7 +180,7 @@ export async function renderImage({
        * the wrapper around it looks correct. Handing the figure the whole
        * class string put the rule one element above the thing it constrains.
        */
-      className={caption === "" ? className : blockTypeClassName(IMAGE_BLOCK)}
+      className={pictureClass(className, caption, link, partClass)}
       src={src}
       alt={alt}
       loading={oneOf(props.loading, IMAGE_LOADING, "lazy")}
@@ -130,13 +191,151 @@ export async function renderImage({
       {...(decorative ? { role: "presentation" } : {})}
     />
   );
+  return wrapPicture(image, {
+    className,
+    caption,
+    link,
+    partClass,
+    // A picture with no alt text names no link; its caption, then where it
+    // goes, does instead, so the link is never unnamed.
+    linkName: alt !== "" ? undefined : caption !== "" ? caption : link?.href,
+  });
+}
 
-  // A caption belongs to the image, and `figure`/`figcaption` is what says so.
-  // The block's own class moves to the figure, because that is then the root.
-  if (caption === "") return image;
+/** One place a picture may come from: a media id, or an address. */
+type PictureCandidate = ImageValue;
+
+/** The picture drawn: its address, and the media record it came from. */
+interface Picture {
+  readonly src: string;
+  readonly record: ResolvedMedia | null;
+}
+
+/**
+ * Where the picture may come from, in order.
+ *
+ * Unbound: the picked media, then the typed address. Bound: what the binding
+ * filled `mediaId` with, a media id resolved exactly as a picked one is or an
+ * image address, then the binding's fallback, and nothing after it. The
+ * typed address is not a fallback for a binding, which names its own.
+ */
+function pictureCandidates(
+  mediaId: string,
+  typed: unknown,
+  image: BoundImage | undefined
+): PictureCandidate[] {
+  if (image === undefined) {
+    return [
+      ...(mediaId === "" ? [] : [{ holds: "media" as const, value: mediaId }]),
+      ...(typeof typed === "string" && typed !== ""
+        ? [{ holds: "address" as const, value: typed }]
+        : []),
+    ];
+  }
+  return [
+    ...(mediaId === "" ? [] : [{ holds: image.holds, value: mediaId }]),
+    ...(image.fallback === undefined ? [] : [image.fallback]),
+  ];
+}
+
+/**
+ * The first candidate actually allowed, asked in order.
+ *
+ * A media record whose url either filter refused is dropped WHOLE, not just
+ * for its url. Its alt text and intrinsic size describe the asset that was
+ * refused, so keeping them beside the next candidate announces one image to a
+ * screen reader while reserving the other one's space. A record the host
+ * cannot find, deleted since it was picked or bound, moves on the same way.
+ */
+async function firstDrawable(
+  candidates: readonly PictureCandidate[],
+  ctx: PageContext,
+  fetchable: (value: unknown) => string | undefined,
+  claim: ReadClaim | undefined
+): Promise<Picture | undefined> {
+  for (const candidate of candidates) {
+    if (candidate.holds === "address") {
+      const src = fetchable(candidate.value);
+      if (src !== undefined) return { src, record: null };
+      continue;
+    }
+    // A resolver that throws must not take the page with it: media lives
+    // behind a network call for a signed-URL host, and one unreachable image
+    // is not a reason to lose the article around it.
+    const record = await ctx
+      .resolveMedia(candidate.value, claim)
+      .catch(() => null);
+    const src = fetchable(record?.url);
+    if (record !== null && src !== undefined) return { src, record };
+  }
+  return undefined;
+}
+
+/**
+ * The picture's classes: the node's own where it is the root, else the type
+ * class and the part that takes the corners, proportion, fit and focal point
+ * from the root (where the node's classes land), plus the part that fills a
+ * link's box when it is linked.
+ */
+function pictureClass(
+  className: string,
+  caption: string,
+  link: LinkAttributes | undefined,
+  partClass: (part: string) => string
+): string {
+  if (caption === "" && link === undefined) return className;
+  return [
+    blockTypeClassName(IMAGE_BLOCK),
+    partClass("picture"),
+    ...(link === undefined ? [] : [partClass("linked")]),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * The picture in its link and its figure, as it has them.
+ *
+ * Only the picture is linked: a caption inside the link would be read as part
+ * of its name, and is text a visitor may want to select. A caption belongs to
+ * the image, and `figure`/`figcaption` is what says so; the block's own class
+ * moves to whichever is the root.
+ */
+function wrapPicture(
+  image: ReactElement,
+  {
+    className,
+    caption,
+    link,
+    partClass,
+    linkName,
+  }: {
+    className: string;
+    caption: string;
+    link: LinkAttributes | undefined;
+    partClass: (part: string) => string;
+    linkName: string | undefined;
+  }
+): ReactElement {
+  const rootClass = caption === "" ? className : "";
+  const linked =
+    link === undefined ? (
+      image
+    ) : (
+      <a
+        {...link}
+        className={[rootClass, partClass("link")].filter(Boolean).join(" ")}
+        {...(linkName === undefined ? {} : { "aria-label": linkName })}
+      >
+        {image}
+      </a>
+    );
+  if (caption === "") return linked;
   return (
-    <figure className={className}>
-      {image}
+    <figure
+      className={[className, partClass("frame")].filter(Boolean).join(" ")}
+    >
+      {linked}
       <figcaption className={partClass("caption")}>{caption}</figcaption>
     </figure>
   );
@@ -170,7 +369,9 @@ export async function renderImage({
  * definition below registers under it. Two literals would be one contract with
  * two spellings, and the rule that missed would simply not apply.
  */
-const IMAGE_BLOCK = "core/image";
+/** The image block's type, which a list reading its links ahead asks by. */
+export const IMAGE_TYPE = "core/image";
+const IMAGE_BLOCK = IMAGE_TYPE;
 
 const IMAGE_BASE_STYLES = {
   base: {
@@ -189,12 +390,82 @@ const IMAGE_BASE_STYLES = {
  * the two things that make it read as a caption instead.
  */
 const IMAGE_PARTS = {
+  // A captioned picture's figure: the picture and its caption in a column,
+  // so a height set on the block is shared between them rather than
+  // overflowed.
+  frame: {
+    baseStyles: {
+      base: {
+        base: {
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-start",
+          // As wide as its picture unless the block says otherwise, so the
+          // picture can fill the figure without stretching past its size.
+          width: "fit-content",
+        },
+      },
+    },
+  },
+  // The picture inside a wrapper (a figure, a link) takes its corners,
+  // proportion, fit and focal point from the root, from every tier that styles
+  // it (a look, a shared style, the node's own values), so the wrapper's box,
+  // and a caption inside it, is never rounded or squared by them. It may
+  // shrink to the room the wrapper leaves it, where the fit crops or fits it.
+  picture: {
+    takesFromRoot: {
+      properties: [
+        "borderRadius",
+        "aspectRatio",
+        "objectFit",
+        "objectPosition",
+      ],
+      whenRootIs: ["frame", "link"],
+    },
+    baseStyles: {
+      base: {
+        base: {
+          // The wrapper's width, which the block's width sets: the box the fit
+          // crops or fits the picture to.
+          width: "100%",
+          minHeight: "0",
+        },
+      },
+    },
+  },
+  // Inside a link, the picture fills the link's box, so a size set on the
+  // block sizes the picture; as a block, so no line gap sits under it.
+  linked: {
+    baseStyles: {
+      base: { base: { display: "block", width: "100%", height: "100%" } },
+    },
+  },
+  // A link wrapping a captioned picture: as wide as what it holds, and free
+  // to shrink to the room the figure leaves it, as the picture is.
+  link: {
+    baseStyles: {
+      base: {
+        base: {
+          display: "inline-block",
+          maxWidth: "100%",
+          minHeight: "0",
+          // Clipped, so nothing the picture draws past its corners shows.
+          overflow: "hidden",
+        },
+      },
+    },
+  },
   caption: {
     baseStyles: {
       base: {
         base: {
           fontSize: "0.875em",
           margin: { blockStart: "0.5em" },
+          // As wide as the figure, which is as wide as its picture: no width
+          // of its own to give, so a long caption wraps under a small picture
+          // rather than widening the figure and the picture with it.
+          width: "0",
+          minWidth: "100%",
         },
       },
     },
@@ -217,6 +488,8 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     icon: "image",
     category: MEDIA,
     keywords: ["picture", "photo", "img", "media"],
+    // Its looks, offered as tiles on a block already on the page.
+    variations: imageLooks(),
   },
   baseStyles: IMAGE_BASE_STYLES,
   parts: IMAGE_PARTS,
@@ -226,6 +499,9 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
       role: "content",
       type: "media",
       accept: "image/*",
+      // An image kept by its address, as an unbound one a visitor saw by
+      // address is, belongs in `src`: `mediaId` holds a library id only.
+      addressProp: "src",
     },
     src: { label: "Image address", role: "content", type: "url" },
     alt: { label: "Alt text", role: "content", type: "text" },
@@ -236,12 +512,25 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
         lazy: "Load when near the screen",
         eager: "Load immediately",
       },
+      // Drawn as one switch named by `eager`'s words: two states with a safe
+      // default are a yes-or-no question. The stored values stay as they are.
+      display: "switch",
+      switchOn: "eager",
+      hint: "Turn on for images at the top of the page.",
       type: "select",
       options: [...IMAGE_LOADING],
     },
     caption: { label: "Caption", role: "content", type: "text" },
+    // The button's link props, by the same names, so the inspector draws the
+    // one link control for both and the renderer follows both the same way.
+    ...LINK_PROPS,
   },
-  defaultProps: { alt: "", loading: "lazy" },
+  // No `alt`: an image placed with none takes its library file's alt text,
+  // which is what an author picking a described file expects. A stored `""`
+  // would say "decorative" instead and silence that description, so it is
+  // left to an author to choose. Only what new blocks are placed with
+  // changes; a stored alt, empty or not, reads exactly as before.
+  defaultProps: { loading: "lazy" },
   // Both candidates, in the order the render prefers them: the resolved media
   // first, the directly-typed URL as the fallback the render itself falls back
   // to when the record is missing.
@@ -250,17 +539,23 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
   // id came from `mediaId` and the address from `src`, and no inspection of the
   // text can tell them apart — a UUID is a valid relative URL and a bare word
   // is a valid src.
-  seo: props => {
-    const mediaId = text(props.mediaId);
-    const src = url(props.src) ?? "";
-    return {
-      image: [
-        ...(mediaId === "" ? [] : [{ media: mediaId }]),
-        ...(src === "" ? [] : [{ url: src }]),
-      ],
-    };
-  },
-  example: { props: { src: "/example.jpg", alt: "An example image" } },
+  // A bound image offers what the page draws for it, from the same
+  // candidates, so metadata never names a picture the page does not show.
+  seo: (props, read) => ({
+    image: pictureCandidates(
+      text(props.mediaId),
+      url(props.src),
+      boundImage(read?.bound?.mediaId)
+    ).map(candidate =>
+      candidate.holds === "media"
+        ? { media: candidate.value }
+        : { url: candidate.value }
+    ),
+  }),
+  // The address only, for the same reason: blocks are placed with their
+  // example, and an example alt would be stored as the page's own words in
+  // place of the library's.
+  example: { props: { src: "/example.jpg" } },
   supports: {
     spacing: true,
     dimensions: true,
@@ -268,6 +563,11 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
+  // Interactive content while it links, so a link (a linked box or card)
+  // cannot hold it, which would nest one link in another.
+  contentModel: (props: ImageProps) => ({
+    is: canLink(props) ? ["flow", "interactive"] : ["flow"],
+  }),
   render: renderImage,
   // A media id may still resolve to nothing, and that is settled by a call to
   // the host — so only the case decidable from the props alone is claimed here:

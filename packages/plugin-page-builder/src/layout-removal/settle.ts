@@ -26,6 +26,10 @@
  * so a row older than the lease belongs to a request that stopped:
  *
  * - at `marked` or `checked` nothing was changed yet, so the row is removed;
+ * - at `moving`, the person moving the Layout's pages stopped watching it (its
+ *   dialog closed): the row is removed and the Layout kept. The pages already
+ *   moved stay on the site default, and the rest stay on the Layout; starting
+ *   the move again picks them up;
  * - at `final`, the Layout as it is says whether the write landed: still there
  *   (or still published, for an unpublish) and the row is removed; gone and it
  *   is settled as the request would have, an unpublish first looking for pages
@@ -41,7 +45,7 @@
  * renewed its lease during a long scan, is left to the request that holds it.
  *
  * It also drops an unpublish tombstone whose Layout is published again by a
- * write that ran no collection hooks (core's all-languages publish).
+ * write that ran no collection hooks (a batch with `skipHooks`).
  *
  * @module layout-removal/settle
  */
@@ -54,6 +58,7 @@ import {
 
 import {
   idChunks,
+  namesItOffTheLiveRow,
   scanLayoutReferences,
   stoppedAtBudget,
   type PageReference,
@@ -67,7 +72,7 @@ import {
   resumeRestore,
   type RestoreDeps,
 } from "./restore";
-import { REMOVAL_LEASE_MS, type LayoutRemoval } from "./store";
+import { movesPages, REMOVAL_LEASE_MS, type LayoutRemoval } from "./store";
 
 /** What the check after the write did. */
 export type SettleOutcome =
@@ -100,6 +105,10 @@ export type SettleDeps = RestoreDeps & {
  * Layout is published again from its copy, with the removal's token, and the
  * fence comes down. Answers the scan that found the pages, or `null` when
  * nothing names the Layout and the unpublish stands.
+ *
+ * For a removal that moved its pages (`movedPages`), a live row naming the
+ * Layout was confirmed: the person was told those pages switch to the site
+ * default. Only an unpublished page or a working draft counts then.
  */
 export async function undoUnpublishIfPagesNameIt(
   deps: Pick<
@@ -107,14 +116,21 @@ export async function undoUnpublishIfPagesNameIt(
     "nextly" | "slugs" | "pagesSlug" | "store" | "warn" | "budget"
   >,
   layoutId: string,
-  token: string
+  token: string,
+  movedPages: boolean
 ): Promise<ReferenceScan | null> {
-  const scan = await scanLayoutReferences({
+  const scanned = await scanLayoutReferences({
     nextly: deps.nextly,
     pages: deps.pagesSlug,
     layoutId,
     ...(deps.budget === undefined ? {} : { budget: deps.budget }),
   });
+  const scan = movedPages
+    ? {
+        ...scanned,
+        references: scanned.references.filter(namesItOffTheLiveRow),
+      }
+    : scanned;
   if (scan.complete && scan.references.length === 0) return null;
   const removal = await deps.store.removalOf(layoutId);
   await republishFromCopy(deps, layoutId, removal?.copy ?? null, {
@@ -190,7 +206,8 @@ async function clearPagesLeftOnIt(
     for (const reference of scan.references) {
       if (reference.place === "live") {
         live.push(reference);
-        continue;
+        // A live row is left; a working draft beside it is cleared.
+        if (reference.draftToo !== true) continue;
       }
       if (await clearOne(deps, reference.id, removal.layoutId)) {
         deps.warn(
@@ -313,7 +330,8 @@ async function finishFinal(
     (await undoUnpublishIfPagesNameIt(
       deps,
       removal.layoutId,
-      removal.token
+      removal.token,
+      movesPages(removal)
     )) !== null
   ) {
     return;
@@ -334,7 +352,10 @@ async function sweepOne(
 ): Promise<void> {
   switch (removal.step) {
     case "marked":
+    case "moving":
     case "checked":
+      // Nothing of the Layout's was changed yet. A move's pages already moved
+      // stay moved: the move is stopped, never undone.
       await deps.store.stopStale(removal);
       return;
     case "final":
@@ -371,8 +392,8 @@ export async function settleLayoutRemovals(deps: SweepDeps): Promise<void> {
 
 /**
  * Drop each unpublish tombstone whose Layout is published again. A publish
- * normally drops it from the Layout's own after-write hook, but core's
- * all-languages publish runs no collection hooks, and would otherwise leave a
+ * normally drops it from the Layout's own after-write hook, but a write that
+ * skips hooks (a batch with `skipHooks`) runs none, and would otherwise leave a
  * published Layout that make-default refuses as being removed.
  *
  * Asked in chunks ({@link idChunks}), each released on its own, so however many

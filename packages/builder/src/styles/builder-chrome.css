@@ -125,11 +125,18 @@
  * above it, and the chrome it draws (a Layout's region badge and tag) reads
  * these tokens too. It takes them only when nothing above it declares them,
  * and at zero specificity, so inside the shell it inherits the shell's values
- * untouched and its own rules below still win where they apply.
+ * untouched and its own rules below still win where they apply. The layer the
+ * editor draws over the canvas is the fourth, for the same reason: it is in
+ * the host's document, beside the frame rather than inside it, and the empty
+ * section prompt's plate on it reads these tokens. It takes no part in the
+ * dark picks below: its editing hues follow the page's own scheme
+ * (`.nx-canvas-layer[data-nx-page-scheme]`), and the surface, border and text
+ * tokens here follow the admin's `.dark` through the `--nx-*` they name.
  */
 .nx-builder-tokens,
 .nx-builder-chrome,
-:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
+:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
+:where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
   /* The frame behind rail, panels and bars. Deliberately not `--nx-background`:
      raised surfaces use that, and the frame must read as a layer behind them. */
   --nx-builder-surface: var(--nx-muted);
@@ -152,9 +159,54 @@
    * admin's from here.
    */
   --nx-builder-scheme: light;
+  /*
+   * What a collection list's note on the canvas is drawn in: amber where its
+   * sort fell back, red where its read failed. Builder names, so the frame
+   * can hand them to the note alone without a site's own token of the same
+   * name being replaced.
+   */
+  --nx-builder-warning: var(--nx-warning);
+  --nx-builder-danger: var(--nx-destructive);
+  /*
+   * The badge on a block a visitor will not see filled: amber words on an
+   * amber-tinted plate of the editor's raised surface. The words are the
+   * warning mixed toward the admin's own text colour, darker in the light
+   * theme and lighter in the dark one, so they hold 4.5:1 on the plate in
+   * both.
+   */
+  --nx-builder-warning-text: color-mix(
+    in oklch,
+    var(--nx-warning) 55%,
+    var(--nx-foreground)
+  );
+  --nx-builder-warning-ground: color-mix(
+    in oklch,
+    var(--nx-warning) 12%,
+    var(--nx-builder-surface-raised)
+  );
+  /*
+   * The admin's destructive pair, for a reading past a limit (the page reads
+   * meter over its allowance): the deep red its Delete confirmation uses in
+   * the light theme (destructive-700), on that red's palest tint. Mixed here
+   * from the one token, as the admin's scale mixes them, since that scale is
+   * declared `@theme inline` and emits no property this sheet could read. The
+   * dark theme takes the solid red, below.
+   */
+  --nx-builder-destructive-text: color-mix(
+    in srgb,
+    var(--nx-destructive),
+    black 30%
+  );
+  --nx-builder-destructive-ground: color-mix(
+    in srgb,
+    var(--nx-destructive),
+    white 95%
+  );
   /* The editing colours, picked for the admin's theme — see below. */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
+  /* A prop bound to a field: its chip, its bind button while open. */
+  --nx-builder-bound: var(--nx-builder-bound-on-light);
   /* The "what you're editing" target: this block (pink), a shared style (green). */
   --nx-builder-local: var(--nx-builder-local-on-light);
   --nx-builder-shared: var(--nx-success);
@@ -212,6 +264,9 @@
   --nx-builder-select-on-dark: #60a5fa; /* design-lint-ok: blue 400; no runtime variable */
   --nx-builder-component-on-light: #7a00df; /* design-lint-ok: component purple; no admin token */
   --nx-builder-component-on-dark: #c99bff; /* design-lint-ok: component purple; no admin token */
+  /* A bound prop's violet, apart from a component's purple: 5.9:1 on white, 8.9:1 on #15171c (AA). */
+  --nx-builder-bound-on-light: #7a3ce0; /* design-lint-ok: bound violet; no admin token */
+  --nx-builder-bound-on-dark: #c9a6ff; /* design-lint-ok: bound violet; no admin token */
   /* This block's pink: 5.9:1 on the light ground, 9.4:1 on the dark (AA). */
   --nx-builder-local-on-light: #c2185b; /* design-lint-ok: this-block pink; no admin token */
   --nx-builder-local-on-dark: #f48fb1; /* design-lint-ok: this-block pink; no admin token */
@@ -238,10 +293,19 @@
   --nx-builder-scheme: dark;
   --nx-builder-select: var(--nx-builder-select-on-dark);
   --nx-builder-component: var(--nx-builder-component-on-dark);
+  --nx-builder-bound: var(--nx-builder-bound-on-dark);
   --nx-builder-local: var(--nx-builder-local-on-dark);
   --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
   --nx-builder-select-text: var(--nx-builder-select-text-on-dark);
   --nx-builder-ink: #0b0c0f; /* design-lint-ok: the action bar's fixed dark ink */
+  /* The admin's destructive pair in the dark theme: the solid red, on a
+     ground tinted from the editor's raised surface. */
+  --nx-builder-destructive-text: var(--nx-destructive-solid);
+  --nx-builder-destructive-ground: color-mix(
+    in oklch,
+    var(--nx-destructive) 12%,
+    var(--nx-builder-surface-raised)
+  );
 }
 
 .nx-builder-chrome {
@@ -267,7 +331,8 @@
    */
   .nx-builder-tokens,
   .nx-builder-chrome,
-  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
+  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
+  :where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
     --nx-builder-border: var(--nx-foreground);
     --nx-builder-text-muted: var(--nx-foreground);
   }
@@ -1201,6 +1266,162 @@
 }
 
 /*
+ * A chip's menu, held to a readable width, so a held item's reason wraps
+ * under its label rather than stretching the menu across the canvas.
+ */
+.nx-editing-bar__menu {
+  max-width: 20rem;
+}
+
+.nx-editing-bar__item-words {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.nx-editing-bar__item-reason {
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  white-space: normal;
+}
+
+/*
+ * The Style tab's "Look" row: one tile per look of the selected block's type,
+ * each drawn as the block would be, its own look first. Two to a row, three
+ * when there are three, so a tile is wide enough to draw its specimen.
+ */
+.nx-look-tiles {
+  display: grid;
+  gap: 0.5rem;
+  margin-block-end: 0.75rem;
+}
+
+.nx-look-tiles__label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-look-tiles__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.nx-look-tiles__grid[data-count="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.nx-look-tile {
+  position: relative;
+  display: grid;
+  padding: 0;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  text-align: start;
+  font: inherit;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.nx-look-tile:hover {
+  border-color: var(--nx-muted-foreground);
+}
+
+.nx-look-tile[aria-checked="true"] {
+  border-color: var(--nx-builder-select);
+  box-shadow: inset 0 0 0 1px var(--nx-builder-select);
+}
+
+.nx-look-tile:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}
+
+.nx-look-tiles[data-held] .nx-look-tile {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* The chosen tile's mark, beside its ring: a cue that needs no colour. */
+.nx-look-tile__check {
+  position: absolute;
+  inset-block-start: 0.375rem;
+  inset-inline-end: 0.375rem;
+  display: grid;
+  place-items: center;
+  inline-size: 1rem;
+  block-size: 1rem;
+  border-radius: 999px;
+  background: var(--nx-builder-select);
+  color: var(--nx-builder-select-text);
+}
+
+.nx-look-tile__stage {
+  display: grid;
+  place-items: center;
+  block-size: 3.5rem;
+  background: var(--nx-muted);
+  border-block-end: 1px solid var(--nx-border);
+}
+
+/* The specimen draws only what a look sets: colour, border, corners,
+   decoration and proportion. Its size is the tile's, so tiles line up. */
+.nx-look-tile__specimen {
+  display: inline-grid;
+  place-items: center;
+  font-size: 0.6875rem;
+  line-height: 1;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.nx-look-tile__specimen[data-kind="button"] {
+  padding: 0.375rem 0.625rem;
+}
+
+.nx-look-tile__specimen[data-kind="image"] {
+  /* The height follows the proportion, so a look's own (a circle's 1 / 1)
+     shows. */
+  inline-size: 2.5rem;
+  aspect-ratio: 4 / 3;
+  background: linear-gradient(135deg, var(--nx-chart-2), var(--nx-chart-3));
+}
+
+.nx-look-tile__specimen[data-kind="band"] {
+  inline-size: 4.375rem;
+  block-size: 2.375rem;
+  border: 1px dashed var(--nx-border);
+  font-size: var(--text-xs);
+}
+
+.nx-look-tile__name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  column-gap: 0.25rem;
+  padding: 0.375rem 0.5rem;
+  font-size: var(--text-xs);
+  min-inline-size: 0;
+}
+
+.nx-look-tile__tag {
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+.nx-look-tiles__held {
+  margin: 0;
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+}
+
+/*
  * The "what you're editing" bar: line one the target chips, line two the
  * device and the state, from the canvas. A box set apart from the panel, so it
  * reads as the frame the controls below sit in. Kept at the top of the Style tab while its
@@ -1287,6 +1508,114 @@
   cursor: default;
 }
 
+/* A shared style chip held with the block's design: reachable, so its
+   tooltip can say why, but drawn as a press that will not land, as a held
+   toolbar verb is. */
+.nx-editing-bar__chip[aria-disabled="true"] {
+  color: color-mix(in srgb, var(--nx-builder-shared) 55%, transparent);
+  cursor: not-allowed;
+}
+
+/*
+ * The inspector while a look is edited on its own: the look's name, then a bar
+ * in the shared colour saying who the edit reaches and the way back, then the
+ * Style controls. A chip is text and a border, as the editing bar's are.
+ */
+.nx-look-inspector__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding-block-end: 0.75rem;
+  border-block-end: 1px solid var(--nx-border);
+  margin-block-end: 0.75rem;
+}
+
+.nx-look-inspector__name {
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-look-inspector__kind {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-look-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.375rem;
+  padding: 0.625rem;
+  margin-block-end: 0.875rem;
+  border: 1px solid var(--nx-builder-shared);
+  border-radius: 0.625rem;
+  background: color-mix(in srgb, var(--nx-builder-shared) 7%, transparent);
+  font-size: var(--text-xs);
+}
+
+.nx-look-bar__line,
+.nx-look-bar__note {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.nx-look-bar__label,
+.nx-look-bar__reach {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-look-bar__chip {
+  display: inline-block;
+  padding: 1px 0.4375rem;
+  border: 1px solid currentColor;
+  border-radius: 0.3125rem;
+  box-shadow: inset 0 0 0 1px currentColor;
+  color: var(--nx-builder-shared);
+  font-weight: 600;
+}
+
+.nx-look-bar__note {
+  color: var(--nx-foreground);
+}
+
+/* Why the look's values can't be changed, beside the held controls. */
+.nx-look-bar__held {
+  margin: 0;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-look-bar__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nx-look-bar__back:hover {
+  background: var(--nx-muted);
+}
+
+.nx-look-bar__back:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: 2px;
+}
+
+.nx-look-bar__key {
+  padding: 0 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-block-end-width: 2px;
+  border-radius: 0.25rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
 .nx-editing-bar__chip-wrap {
   display: inline-flex;
   min-inline-size: 0;
@@ -1344,6 +1673,17 @@
   color: var(--nx-muted-foreground);
   text-decoration: none;
   cursor: default;
+}
+
+/* A worn look's line, while the block is the target. */
+.nx-editing-bar__look-line {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--nx-foreground);
 }
 
 .nx-editing-bar__banner {
@@ -2749,21 +3089,20 @@
  * seen and what is announced reading off one value.
  */
 /*
- * The chosen one in the panel's text colour at 600, beside the others' muted
- * 500: the accent fill alone measured about 1.7:1 against the unselected
- * background in dark, under 3:1.
+ * The chosen one filled with the panel's own text colour, its label in the
+ * panel's background, at 600: the most contrast either mode has, for the
+ * label and for the fill against the panel. Not the accent, which is the
+ * site's brand colour, set at run time with a foreground only when the site
+ * names one, so a fill of it can sit under any label at any contrast (an
+ * orange brand measured 1.83:1 under white in dark).
  */
 .nx-style-inspector__toggle > button[aria-pressed="true"],
-.nx-style-inspector__toggle > button[aria-checked="true"] {
-  background: var(--nx-accent);
-  color: var(--nx-foreground);
+.nx-style-inspector__toggle > button[aria-checked="true"],
+.nx-segment__option[aria-checked="true"],
+.nx-icon-choice__option[aria-checked="true"] {
+  background: var(--nx-foreground);
+  color: var(--nx-background);
   font-weight: 600;
-}
-
-/* A step lighter in dark, so its fill is told from the panel's black too. */
-.dark .nx-style-inspector__toggle > button[aria-pressed="true"],
-.dark .nx-style-inspector__toggle > button[aria-checked="true"] {
-  background: color-mix(in oklch, var(--nx-accent) 82%, var(--nx-foreground));
 }
 
 /*
@@ -3125,9 +3464,11 @@
 
 /*
  * A list's chosen value stays on one line, cut with an ellipsis, rather than
- * wrapping its row to twice the height of every other ("Semibold 600").
+ * wrapping its row to twice the height of every other ("Semibold 600"). A
+ * bound prop's Format reads the same ("Set elsewhere").
  */
-.nx-style-inspector__select [data-slot="select-value"] {
+.nx-style-inspector__select [data-slot="select-value"],
+.nx-binding__format [data-slot="select-value"] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3421,7 +3762,8 @@
  * `prefers-color-scheme` follows the scheme of the iframe ELEMENT, so an
  * inherited dark scheme would turn a site that darkens with the system dark
  * on the canvas whenever the ADMIN was dark. `normal` leaves it to the
- * system, as a visitor's browser does.
+ * system, as a visitor's browser does. A mode the author picks to preview
+ * the page in is stated over this on the element itself (`canvas-frame.tsx`).
  */
 .nx-canvas-frame__page {
   display: block;
@@ -3465,6 +3807,19 @@
   position: absolute;
   left: 0;
   top: 0;
+}
+
+/*
+ * Chrome held at the frame's viewport (`pinned` in `canvas-frame.tsx`): over
+ * the viewport, inset from the layer's bleed there, and not moved with the
+ * page's scroll as the content box is, so a long page scrolls under it. Above
+ * the content's marks; it takes no presses of its own, so the page under it
+ * is still reached, and the controls in it claim theirs back.
+ */
+.nx-canvas-layer__pinned {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
 }
 
 /*
@@ -3607,6 +3962,113 @@
 }
 
 /*
+ * The at-rest mark: a faint dashed outline round a block the canvas says
+ * something about whether or not it is selected, with its tabs on the top
+ * edge, so they read as this block's and never cover what it draws. A block
+ * whose visibility conditions decide who sees it ("Conditional", red when
+ * its conditions can't be checked, since visitors then never see it, and
+ * "Shown for this post" while conditions are applied for the entry), and
+ * an Entry content block, which draws the entry's own content
+ * ("Entry content · Body"). A block that is both carries both tabs.
+ */
+.nx-canvas-mark[data-mark="at-rest"] {
+  box-sizing: border-box;
+  border: 1px dashed
+    color-mix(in oklch, var(--nx-muted-foreground) 55%, transparent);
+  border-radius: 2px;
+  outline: none;
+  box-shadow: none;
+}
+
+.nx-canvas-mark[data-mark="at-rest"][data-condition="unchecked"] {
+  border-color: color-mix(in oklch, var(--nx-destructive) 70%, transparent);
+}
+
+/* Selected, the selection ring outlines the block, and the dash steps back:
+   after the red rule, so it wins on order at the same specificity. */
+.nx-canvas-mark[data-mark="at-rest"][data-at-rest-selected] {
+  border-color: transparent;
+}
+
+/* The tabs: on the outline's top edge, their feet on the dash, so they read
+   as this block's mark and not the one above. */
+.nx-canvas-mark__tabs {
+  position: absolute;
+  right: calc(var(--nx-tag-inset-side, 0px) - 1px);
+  bottom: 100%;
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.nx-canvas-mark__tab {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 1px 8px;
+  border: 1px solid var(--nx-border);
+  border-radius: 4px 4px 0 0;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The Entry content tab gives way first on a narrow block: its words are
+   the longer, and the field is named in Layers and the inspector too. */
+.nx-canvas-mark__tab[data-tab="entry-content"] {
+  flex: 0 1 auto;
+}
+
+.nx-canvas-mark__tab > svg {
+  flex: none;
+}
+
+/* At the top of what's on screen, or where the block above's tabs take the
+   top edge (a block shorter than a tab under another): tabs on the
+   outline's bottom edge. */
+.nx-canvas-mark[data-tab-at="below"] > .nx-canvas-mark__tabs {
+  top: 100%;
+  bottom: auto;
+  align-items: flex-start;
+}
+
+.nx-canvas-mark[data-tab-at="below"] .nx-canvas-mark__tab {
+  border-radius: 0 0 4px 4px;
+}
+
+/* A block taller than what's on screen: inside its top corner, the outer
+   corner square with the dash, so they're seen. */
+.nx-canvas-mark[data-tab-at="inside"] > .nx-canvas-mark__tabs {
+  top: -1px;
+  bottom: auto;
+  align-items: flex-start;
+}
+
+.nx-canvas-mark[data-tab-at="inside"] .nx-canvas-mark__tab {
+  border-radius: 0 0 0 4px;
+}
+
+.nx-canvas-mark__tab[data-tab="unchecked"] {
+  border-color: var(--nx-destructive);
+  color: var(--nx-destructive);
+}
+
+/* Shown for the previewed entry while conditions apply: a tick in the
+   success colour, the words in the foreground's. */
+.nx-canvas-mark__tab[data-tab="shown"] > svg {
+  color: var(--nx-success);
+}
+
+/*
  * A selected block locked in Layers, by its own lock or one around it: the
  * ring is dashed, so the canvas says it is held before anything is tried on
  * it.
@@ -3624,6 +4086,24 @@
   box-shadow: none;
 }
 
+/* As specific as a secondary selection's own halo rule, which it overrides. */
+.nx-canvas-mark[data-mark="selected"][data-secondary][data-clipped] {
+  box-shadow: none;
+}
+
+/*
+ * A mark around a block its own clip-path shapes: the halo band would hug the
+ * box's corners, which the shape leaves showing the page behind, so only the
+ * ring is drawn, still outside the box.
+ */
+.nx-canvas-mark[data-shaped] {
+  box-shadow: none;
+}
+
+.nx-canvas-mark[data-mark="selected"][data-secondary][data-shaped] {
+  box-shadow: none;
+}
+
 /*
  * The parts of a selected component placement an author can edit: its exposed
  * values, dashed in the component colour, so they stand apart from the
@@ -3634,6 +4114,16 @@
 .nx-canvas-mark[data-mark="exposed"] {
   outline: 1px dashed var(--nx-builder-component);
   outline-offset: -2px;
+}
+
+/*
+ * The blocks an edit to the look being edited reaches, while a look is edited
+ * on its own from the Design panel: dashed in the shared colour, outside each
+ * block, as a reach rather than a selection.
+ */
+.nx-canvas-mark[data-mark="look-reach"] {
+  outline: 2px dashed var(--nx-builder-shared);
+  outline-offset: 3px;
 }
 
 .nx-canvas-mark[data-mark="drop-parent"] {
@@ -3662,6 +4152,19 @@
 }
 
 /*
+ * A hovered block an ancestor clips, or its own clip-path shapes, draws no
+ * halo band either: the hover rule above is as specific as the plain no-halo
+ * rules and comes later, so it would put the band back.
+ */
+.nx-canvas-mark[data-mark="hovered"][data-clipped] {
+  box-shadow: none;
+}
+
+.nx-canvas-mark[data-mark="hovered"][data-shaped] {
+  box-shadow: none;
+}
+
+/*
  * The hovered block's name, as a small tag over its outline's top left
  * corner, outside it, in the outline's colour; inside it at the top of what
  * is on screen, where it still shows. The selected block's toolbar takes that
@@ -3670,9 +4173,10 @@
 .nx-canvas-mark[data-mark="hovered"][data-hover-label]::before {
   content: attr(data-hover-label);
   position: absolute;
-  left: 0;
+  /* In from the left edge as far as the screen cuts the outline off there. */
+  left: var(--nx-tag-inset-side, 0px);
   bottom: 100%;
-  max-width: 100%;
+  max-width: calc(100% - var(--nx-tag-inset-side, 0px));
   overflow: hidden;
   padding: 1px 6px;
   border-radius: 4px 4px 0 0;
@@ -4394,6 +4898,13 @@
 .nx-block-toolbar {
   position: absolute;
   z-index: 3;
+  /*
+   * Only the buttons take the pointer: the bar sits over the block above the
+   * selection, and a press in a gap between two buttons, or on the bar's
+   * edge, reaches that block instead of landing on nothing.
+   */
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
   display: flex;
   align-items: center;
   gap: 0.125rem;
@@ -4418,6 +4929,25 @@
   color: var(--nx-builder-ink-text);
   box-shadow: 0 1px 3px
     color-mix(in srgb, var(--nx-builder-ink) 40%, transparent);
+}
+
+.nx-block-toolbar button {
+  pointer-events: auto;
+}
+
+/*
+ * Faded while the pointer is over another block, so the block it points at is
+ * not covered; still there to press, and back once the pointer is on it or the
+ * keyboard is in it.
+ */
+.nx-block-toolbar[data-faded]:not(:focus-within) {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-block-toolbar {
+    transition: none;
+  }
 }
 
 /*
@@ -4816,6 +5346,34 @@
   border-radius: var(--radius-sm);
 }
 
+/* A save that was stored but met someone else's change: a warning-tinted
+   plate and edge, as a removed variant's line uses, with the words in the
+   admin's own text colour so they read in both themes, and the Reload
+   beside them. */
+.nx-vars__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid color-mix(in oklch, var(--nx-warning) 45%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--nx-warning) 10%, transparent);
+}
+
+.nx-vars__notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--nx-foreground);
+}
+
+.nx-vars__notice-reload {
+  flex: none;
+}
+
 .nx-vars__group {
   display: flex;
   flex-direction: column;
@@ -4835,6 +5393,62 @@
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
+  color: var(--nx-muted-foreground);
+}
+
+/* "Space between blocks": two answers, each a radio with its one-line hint. */
+.nx-vars-spacing__options {
+  display: grid;
+  gap: 2px;
+}
+
+.nx-vars-spacing__option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.nx-vars-spacing__option:hover {
+  background: var(--nx-accent);
+}
+
+.nx-vars-spacing__option[data-chosen] {
+  border-color: var(--nx-border);
+  background: var(--nx-muted);
+}
+
+.nx-vars-spacing__option:has(input:disabled) {
+  cursor: default;
+}
+
+.nx-vars-spacing__option input {
+  margin: 0.125rem 0 0;
+  accent-color: var(--nx-primary);
+}
+
+.nx-vars-spacing__option:has(input:focus-visible) {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-vars-spacing__words {
+  display: grid;
+  gap: 2px;
+}
+
+.nx-vars-spacing__label {
+  font-size: 13px;
+  color: var(--nx-foreground);
+}
+
+.nx-vars-spacing__hint {
+  font-size: var(--text-xs);
+  line-height: 1.4;
   color: var(--nx-muted-foreground);
 }
 
@@ -4878,7 +5492,8 @@
 }
 
 .nx-vars__row:hover,
-.nx-vars__row[data-state="open"] {
+.nx-vars__row[data-state="open"],
+.nx-vars__row[data-open] {
   background: var(--nx-muted);
 }
 
@@ -4886,6 +5501,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A row's kind beside its name, said only when another row shares the name:
+   muted, so it reads as telling the two apart rather than as the name. */
+.nx-vars__name-kind {
+  color: var(--nx-muted-foreground);
 }
 
 .nx-vars__swatch {
@@ -4969,6 +5590,13 @@
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
+}
+
+/* While its work is under way ("Counting…"): muted, and no press. */
+.nx-vars__link:disabled {
+  color: var(--nx-muted-foreground);
+  text-decoration: none;
+  cursor: progress;
 }
 
 .nx-vars__report {
@@ -5144,6 +5772,110 @@
   margin: 0;
   font-size: var(--text-xs);
   line-height: 1.5;
+}
+
+/* A row whose usage is read takes a fourth column, its count. */
+.nx-vars__row[data-counted] {
+  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+}
+
+/* The count of places: a bare number, right-aligned in figures of one
+   width, so a column of counts reads down the list. Muted for nothing found
+   and for a floor, which the words on hover explain. */
+.nx-vars__count {
+  min-width: 1.25rem;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  text-align: end;
+  white-space: nowrap;
+  color: var(--nx-foreground);
+}
+
+.nx-vars__count[data-zero],
+.nx-vars__count[data-floor] {
+  color: var(--nx-muted-foreground);
+}
+
+/* How widely the variable is used, on the left of the editor's actions. */
+.nx-vars-editor__status {
+  align-self: center;
+  margin-inline-end: auto;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* Why Remove cannot go ahead, opened under the actions in place of the
+   confirm: a muted panel, so it reads as the editor's answer. */
+.nx-vars-refusal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.625rem;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  background: var(--nx-muted);
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+}
+
+.nx-vars-refusal__heading {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.nx-vars-refusal__heading:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-vars-refusal__text {
+  margin: 0;
+}
+
+/* Each place on its own ruled line: its name, with what kind of place it is
+   beside it, then what it is or does at the end. Two classes, to keep the
+   Shared styles list's own spacing from the line. */
+.nx-shared-styles__uses.nx-vars-refusal__uses li {
+  flex-wrap: wrap;
+  align-items: baseline;
+  padding-block: 4px;
+  border-top: 1px solid var(--nx-border);
+}
+
+/* The name keeps its width: what it does goes to the next line rather than
+   cutting the name short. A name too long for the line alone is still cut. */
+.nx-vars-refusal__place {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* What kind of place a shared style or a block default is: a small label. */
+.nx-vars-refusal__kind {
+  flex: none;
+  padding: 0 4px;
+  font-size: var(--text-xs);
+  line-height: 16px;
+  white-space: nowrap;
+  color: var(--nx-muted-foreground);
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+}
+
+/* What a place does with the variable, at the line's end, or on a line of
+   its own when the name leaves no room. */
+.nx-vars-refusal__uses .nx-shared-styles__meta {
+  margin-inline-start: auto;
+  text-align: end;
+}
+
+/* Empty until a count says something: takes no room in the box. */
+.nx-vars-refusal__said:empty {
+  display: none;
 }
 
 .nx-vars-import__body {
@@ -5408,15 +6140,20 @@ fieldset.nx-inspector__fields {
 /*
  * Where an inherited value comes from, in brief, always in sight: the value
  * the control shows greyed is half an answer without it. Muted and small, at
- * the end of the label's row, and cut short rather than wrapped, its whole
- * sentence in its `title`.
+ * the end of the label's row. Up to two lines, since one line of the label
+ * column cut "From section · Tablet" short; past two it ends in an ellipsis,
+ * its whole sentence in its `title`.
  */
 .nx-style-inspector__provenance-source {
+  display: -webkit-box;
   min-width: 0;
   margin-inline-start: auto;
   overflow: hidden;
+  overflow-wrap: anywhere;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   font-size: var(--text-xs);
   font-weight: 400;
   color: var(--nx-builder-text-muted);
@@ -5431,6 +6168,22 @@ fieldset.nx-inspector__fields {
 .nx-style-inspector .nx-inspector__field > label {
   flex-wrap: wrap;
   row-gap: 0.125rem;
+}
+
+/*
+ * A number field's label drags its value: the resize cursor says so, and the
+ * words are not selected by the drag. Touch is left to scroll and tap.
+ *
+ * A plain declaration is enough: a draggable label carries no
+ * `data-slot="label"` (`label-scrub.tsx`), so the admin's pointer cursor for
+ * every such label does not reach it.
+ */
+.nx-style-inspector .nx-inspector__field > label[data-scrub] {
+  cursor: ew-resize;
+  user-select: none;
+  /* A pen's horizontal drag is the scrub's, where the browser would take it
+     and cancel the pointer; a finger still scrolls the panel and taps. */
+  touch-action: pan-y;
 }
 
 .nx-style-inspector
@@ -5687,13 +6440,196 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 0.375rem;
+  min-width: 0;
   pointer-events: auto;
-  padding: 0;
+  padding: 0 0.5rem;
+  font:
+    400 0.78125rem/1 var(--font-sans, system-ui),
+    sans-serif;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--nx-muted-foreground);
   cursor: pointer;
+}
+
+/*
+ * The controls that add a section to the page: a start card on an empty page,
+ * and a "+" in each gap between two top-level sections. The layer spans the
+ * canvas and takes no pointer events itself, so the page under it stays
+ * clickable; each control opts back in. Editor chrome, in the admin's own
+ * surface and the select colour, so it reads on any page.
+ */
+.nx-page-inserters {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* Centred on the part of the canvas on screen, where the component puts it. */
+.nx-page-inserters__start {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: grid;
+  justify-items: center;
+  gap: 0.25rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-card);
+  color: var(--nx-card-foreground);
+  text-align: center;
+  font-family: var(--font-sans, system-ui), sans-serif;
+}
+
+.nx-page-inserters__title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.nx-page-inserters__hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.78125rem;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-page-inserters__start-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 2rem;
+  padding: 0 0.75rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-select);
+  color: var(--nx-builder-select-text);
+  font:
+    500 0.8125rem/1 var(--font-sans, system-ui),
+    sans-serif;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.nx-page-inserters__start-button:focus-visible,
+.nx-page-inserters__add:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}
+
+/* A gap: a zero-height row across the page, at the gap's middle. */
+.nx-page-inserters__gap {
+  position: absolute;
+  height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The line across the gap, drawn while its "+" is pointed at or focused. */
+.nx-page-inserters__line {
+  position: absolute;
+  inset-inline: 0;
+  top: -1px;
+  height: 2px;
+  background: var(--nx-builder-select);
+  opacity: 0;
+}
+
+/*
+ * 1.5rem is 24px, the WCAG 2.2 SC 2.5.8 floor. Not drawn at rest, and taking
+ * no pointer events then, so an unseen "+" never takes a press meant for the
+ * block beside its gap; still in the tab order. Shown, and pressable, while
+ * the pointer is near its gap or on it, and on keyboard focus.
+ */
+.nx-page-inserters__add {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--nx-builder-select);
+  color: var(--nx-builder-select-text);
+  cursor: pointer;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.nx-page-inserters__gap[data-near] .nx-page-inserters__add {
+  pointer-events: auto;
+  opacity: 1;
+}
+
+.nx-page-inserters__add:focus-visible {
+  opacity: 1;
+}
+
+/*
+ * A touch screen has no pointer moving near a gap to reveal its "+", and a tap
+ * is hit-tested before any movement, so there the "+" stays shown and
+ * pressable: seen, it cannot take a tap meant for something else unawares.
+ * `any-pointer`, not `pointer`: a touchscreen laptop's PRIMARY pointer is
+ * its trackpad, and its screen still takes taps.
+ */
+@media (any-pointer: coarse) {
+  .nx-page-inserters__add {
+    pointer-events: auto;
+    opacity: 1;
+  }
+}
+
+.nx-page-inserters__gap:has(.nx-page-inserters__add:hover)
+  .nx-page-inserters__line,
+.nx-page-inserters__gap:has(.nx-page-inserters__add:focus-visible)
+  .nx-page-inserters__line {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-page-inserters__add {
+    transition: none;
+  }
+}
+
+/* The words shorten in a narrow container, and the "+" stays whole. */
+/*
+ * The words and the "+" sit on a plate of the editor's raised surface, never
+ * on the box's own ground: the box is drawn over the site's page, whose colour
+ * the editor does not choose, and its muted text holds its contrast only
+ * against the editor's own surface, in either theme. Opaque for that reason.
+ */
+.nx-empty-container-appenders__plate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text-muted);
+}
+.nx-empty-container-appenders__plate > svg {
+  flex: none;
+}
+.nx-empty-container-appenders__button:hover
+  .nx-empty-container-appenders__plate,
+.nx-empty-container-appenders__button:focus-visible
+  .nx-empty-container-appenders__plate {
+  color: var(--nx-builder-text);
+}
+
+.nx-empty-container-appenders__words {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nx-empty-container-appenders__button:hover {
@@ -5964,8 +6900,10 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 /* An "Aa" not shown to read on its background: an outline painted under its
    fill, so it shows on any colour. The site's page colour overrides this
    inline where the tab has it. */
+/* The outline itself is the specimen's inline style, chosen against its own
+   background: a stroke, or two halos where the background can't be
+   measured. The class only paints a stroke under the fill. */
 .nx-shared-styles__lead--outlined {
-  -webkit-text-stroke: 2px var(--nx-background);
   paint-order: stroke fill;
 }
 
@@ -6025,6 +6963,97 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-shared-styles__lock {
   color: var(--nx-muted-foreground);
+}
+
+/* The Block looks group above the shared styles: one heading per block type,
+   then its looks, each drawn as a small block of its type on the row's left.
+   A chosen row (the look the inspector edits) is ringed in the selection
+   colour, as a chosen look tile is. */
+.nx-block-looks__type-head {
+  margin: 0.5rem 0 0.125rem;
+  padding: 0 2px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-block-looks__type-count {
+  font-weight: 400;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-block-looks__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-block-looks__row {
+  grid-template-columns: 4rem minmax(0, 1fr) auto;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  border-radius: var(--radius-sm);
+  border-bottom: 0;
+}
+
+.nx-block-looks__row[aria-pressed="true"] {
+  background: var(--nx-muted);
+  box-shadow: inset 0 0 0 1px var(--nx-builder-select);
+}
+
+.nx-block-looks__row:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: -2px;
+}
+
+/* The specimen's stage, at the row's size rather than a tile's. */
+.nx-block-looks__specimen .nx-look-tile__stage {
+  block-size: 2.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+}
+
+/* The own look's chip: what it covers is its tooltip and description. */
+.nx-block-looks__default {
+  color: var(--nx-foreground);
+}
+
+/* The note that counts are minimums, under the list's head, and the row
+   that counts them now. */
+.nx-shared-styles__counting {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding-block: 0.25rem 0.5rem;
+}
+
+.nx-shared-styles__count-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+
+/* The design system's small button, at the panel's scale: the panel's
+   other controls are 24px rows in its extra-small type. */
+.nx-shared-styles__count-row .nx-shared-styles__count-now {
+  height: 1.5rem;
+  padding-inline: 0.5rem;
+  font-size: var(--text-xs);
+}
+
+/* Empty until a count says something: takes no room in the row. */
+.nx-shared-styles__count-row [role="status"]:empty {
+  display: none;
+}
+
+/* A zero not counted yet is words, not a count: no box, the panel's own
+   type, and room for the whole phrase. */
+.nx-vars__chip.nx-shared-styles__count--uncounted {
+  max-width: none;
+  padding: 0;
+  border-color: transparent;
+  font-family: inherit;
 }
 
 .nx-shared-styles__meta,
@@ -6542,6 +7571,23 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-font-pick__option[data-current] {
   box-shadow: inset 2px 0 0 var(--nx-foreground);
+}
+
+/* A choice listed but not to be had yet: its name drawn muted, its row's own
+   words saying why, and a click doing nothing. Still reached by the arrow
+   keys, so a keyboard reader hears the reason too. Its row wraps rather than
+   cutting the reason short: the reason is the point of listing it. */
+.nx-font-pick__option[aria-disabled="true"] {
+  white-space: normal;
+  cursor: not-allowed;
+}
+
+.nx-font-pick__option[aria-disabled="true"] .nx-binding-option {
+  flex-wrap: wrap;
+}
+
+.nx-font-pick__option[aria-disabled="true"] .nx-binding-option__name {
+  color: var(--nx-muted-foreground);
 }
 
 .nx-font-pick__none {
@@ -7348,11 +8394,364 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
- * A chosen option longer than the menu button ("Load when near the screen")
- * stays on one line, cut with an ellipsis, rather than wrapping the button
- * to two lines in a row of one-line fields.
+ * A block's link group: the link, and under a set link its new-tab switch
+ * and its Link options, spaced as the rows around them are.
  */
-.nx-inspector__field[data-content-control="select"] [data-slot="select-value"] {
+.nx-link-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nx-builder-row-gap);
+}
+
+/*
+ * The link control: one field the height of every other row, holding the
+ * empty trigger or the chosen link's chip, with the chip's clear button
+ * inside it on the right, as a select's chevron sits inside a select.
+ */
+.nx-link-pick {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: var(--nx-control-height);
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+}
+
+.nx-link-pick:hover,
+.nx-link-pick:has(> .nx-link-pick__trigger[data-state="open"]) {
+  background: var(--nx-muted);
+}
+
+.nx-link-pick__trigger {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  height: 100%;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--nx-foreground);
+  font: inherit;
+  font-size: var(--nx-builder-font-size);
+  text-align: start;
+  cursor: pointer;
+}
+
+.nx-link-pick__trigger:focus-visible,
+.nx-link-pick__clear:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-link-pick__trigger:disabled,
+.nx-link-pick__clear:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.nx-link-pick__icon {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * The title keeps its width and the address beside it gives way first: the
+ * title is what tells two links apart, the address what confirms one.
+ */
+.nx-link-pick__placeholder,
+.nx-link-pick__title,
+.nx-link-pick__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-link-pick__placeholder {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-link-pick__title {
+  flex: 0 1 auto;
+  font-weight: 500;
+}
+
+.nx-link-pick__detail {
+  flex: 1 1 0;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-link-pick__clear {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 1.5rem;
+  height: 100%;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-link-pick__clear:hover {
+  color: var(--nx-foreground);
+}
+
+/* Two classes, to outrank the popover's own width and padding. */
+[data-slot="popover-content"].nx-link-pick__popover {
+  width: max(var(--radix-popover-trigger-width), 17rem);
+  padding: 0;
+}
+
+.nx-link-pick__body {
+  display: flex;
+  flex-direction: column;
+  max-height: 340px;
+}
+
+.nx-link-pick__list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0.25rem;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.nx-link-pick__heading {
+  display: block;
+  padding: 0.5rem 0.5rem 0.125rem;
+}
+
+.nx-link-pick__group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-link-pick__option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.3125rem 0.5rem;
+  border-radius: calc(var(--radius-sm) - 2px);
+  color: var(--nx-foreground);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+/* The row Enter picks, marked as the font list marks it. */
+.nx-link-pick__option[aria-selected="true"] {
+  background: var(--nx-muted);
+  outline: 1px solid var(--nx-ring);
+  outline-offset: -1px;
+}
+
+/* A page this block cannot link to: listed, so it is not mistaken for
+   missing, with the reason where its address would be. */
+.nx-link-pick__option[aria-disabled="true"] {
+  color: var(--nx-muted-foreground);
+  cursor: default;
+}
+
+.nx-link-pick__option-title,
+.nx-link-pick__option-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The title keeps its whole width while the row has room for it. */
+.nx-link-pick__option-title {
+  flex: 0 1 auto;
+}
+
+/*
+ * A page's address, at the row's end, taking only the room the title leaves:
+ * from a basis of nothing, so it is the one cut short.
+ */
+.nx-link-pick__option-detail {
+  flex: 1 1 0;
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+  text-align: end;
+}
+
+/* The Enter hint, on the active row only. */
+.nx-link-pick__enter {
+  flex: none;
+  margin-inline-start: auto;
+  color: var(--nx-muted-foreground);
+  visibility: hidden;
+}
+
+.nx-link-pick__option[aria-selected="true"] > .nx-link-pick__enter {
+  visibility: visible;
+}
+
+/* After an address the hint needs no push of its own. */
+.nx-link-pick__option-detail + .nx-link-pick__enter {
+  margin-inline-start: 0;
+}
+
+/*
+ * The address after a list of pages: kept at the list's foot as it scrolls,
+ * on the popover's own fill, with a rule above it. Offset by the list's
+ * padding so it sits flush with the list's edge.
+ */
+.nx-link-pick__option--pinned {
+  position: sticky;
+  bottom: -0.25rem;
+  margin-top: 0.25rem;
+  background: var(--nx-popover);
+  box-shadow: 0 -1px 0 var(--nx-border);
+}
+
+.nx-link-pick__status {
+  padding: 0.375rem 0.5rem;
+}
+
+/*
+ * Link options: a quiet disclosure under the link, its chevron turning as
+ * Advanced's does, with what is set said beside it while it is closed.
+ */
+.nx-link-options {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.nx-link-options__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  justify-self: start;
+  max-width: 100%;
+  min-width: 0;
+  height: var(--nx-control-height);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nx-foreground);
+  font: inherit;
+  font-size: var(--nx-builder-font-size);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.nx-link-options__toggle:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-link-options__chevron {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-link-options__toggle[aria-expanded="true"] > .nx-link-options__chevron {
+  rotate: 90deg;
+}
+
+.nx-link-options__summary {
+  min-width: 0;
+  margin-inline-start: 0.25rem;
+  overflow: hidden;
+  color: var(--nx-muted-foreground);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Indented to the toggle's words, so the flags read as belonging to it. */
+.nx-link-options__body {
+  display: grid;
+  gap: 0.5rem;
+  padding-inline-start: 1.125rem;
+}
+
+/* One flag a line: three wrapped into a ragged two lines in the rail. */
+.nx-link-options__flags {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.nx-link-options__flag {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.nx-link-options__flag > label {
+  font-size: var(--nx-builder-font-size);
+  font-weight: 400;
+  cursor: pointer;
+}
+
+/* A stored token none of the checkboxes names, as a chip with its remove. */
+.nx-link-options__others {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-link-options__token {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  height: 1.375rem;
+  padding: 0 0.125rem 0 0.375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  font-size: var(--text-xs);
+}
+
+.nx-link-options__token > button {
+  display: grid;
+  place-items: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  padding: 0;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-link-options__token > button:hover {
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+}
+
+.nx-link-options__token > button:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/*
+ * A chosen option longer than the menu button ("Load when near the screen",
+ * Entry content's "Members Only (removed)") stays on one line, cut with an
+ * ellipsis, rather than wrapping the button to two lines in a row of
+ * one-line fields. Entry content's Field names the whole of it in its
+ * trigger's title.
+ */
+.nx-inspector__field[data-content-control="select"] [data-slot="select-value"],
+.nx-inspector__field[data-content-control="entryField"]
+  [data-slot="select-value"] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -7373,7 +8772,9 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   margin-top: 1rem;
 }
 
-.nx-variants__header {
+/* Also the head of Show when, its title and whose fields it reads. */
+.nx-variants__header,
+.nx-show-when__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -7605,6 +9006,89 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
+ * The one row the canvas's preview tags share, where the variant's tag sits
+ * alone: the variant previewed and the site mode picked, side by side and
+ * never over each other. Inside it the row places each tag, so the variant's
+ * tag gives up its own position. Drawn in the frame's pinned chrome, so its
+ * top right is the viewport's and it stays there while the page scrolls.
+ */
+.nx-canvas-tags {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 3;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.375rem;
+  pointer-events: none;
+}
+
+.nx-canvas-tags > .nx-variant-preview-tag {
+  position: static;
+}
+
+/*
+ * The variant's tag is drawn on the admin's card, so it takes the admin's
+ * component purple, keyed on the admin's `.dark` as the card is, not the
+ * page's: the layer it sits in follows the canvas page's scheme
+ * (`.nx-canvas-layer[data-nx-page-scheme]`), and a dark page under a light
+ * admin would otherwise draw the dark page's light purple on a white card.
+ */
+.nx-variant-preview-tag {
+  --nx-builder-component: var(--nx-builder-component-on-light);
+}
+
+.dark .nx-variant-preview-tag {
+  --nx-builder-component: var(--nx-builder-component-on-dark);
+}
+
+/*
+ * "Dark preview · Use device": a pill in the admin's own colours, at rest as
+ * the variant's tag is, whose one control takes presses back from the layer.
+ */
+.nx-mode-preview-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0.1875rem 0.25rem 0.1875rem 0.625rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 999px;
+  background: var(--nx-card);
+  color: var(--nx-foreground);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.nx-mode-preview-tag__dot {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-mode-preview-tag__clear {
+  padding: 0 0.375rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.nx-mode-preview-tag__clear:hover {
+  background: var(--nx-muted);
+}
+
+.nx-mode-preview-tag__clear:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/*
  * A placement's variant, under its title in the placement's inspector: one
  * field row, laid out by the fields' own rules, set off from the fields below.
  */
@@ -7649,12 +9133,372 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * An on/off row's switch at the start of the control column, its own size,
  * rather than stretched across it.
  */
-.nx-inspector__field[data-content-control="checkbox"] > [role="switch"] {
+.nx-inspector__field[data-content-control="checkbox"] > [role="switch"],
+.nx-inspector__field[data-display="switch"] > [role="switch"] {
   justify-self: start;
+}
+
+/*
+ * A loop's sort on one row: the field menu takes the room, the direction
+ * toggle beside it keeps its own square.
+ */
+.nx-inspector__sort {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-inspector__sort > .nx-font-pick {
+  flex: 1;
+}
+
+.nx-inspector__sort-direction {
+  flex: none;
 }
 
 .nx-inspector__exposed [role="switch"] {
   align-self: flex-start;
+}
+
+/*
+ * Text decoration: its line's icons, then Style… for the line's style,
+ * thickness and colour, in a popover laid out as label and control rows.
+ */
+.nx-style-inspector__decoration {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+/* A square "…" at the control height: a decoration's style, a focal point's CSS. */
+.nx-focal__more,
+.nx-style-inspector__decoration-style {
+  display: grid;
+  place-items: center;
+  block-size: var(--nx-builder-control-height);
+  inline-size: var(--nx-builder-control-height);
+  padding: 0;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size);
+  cursor: pointer;
+}
+
+/*
+ * The popover is mounted outside the inspector, so it takes the inspector's
+ * density itself: 12px text, and the shared controls at the control height.
+ */
+[data-slot="popover-content"].nx-style-inspector__decoration-popover {
+  --nx-control-height: var(--nx-builder-control-height);
+  --nx-control-height-sm: var(--nx-builder-control-height);
+  --nx-control-height-md: var(--nx-builder-control-height);
+  --nx-control-height-lg: var(--nx-builder-control-height);
+  inline-size: auto;
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+}
+
+.nx-style-inspector__decoration-popover
+  :is(input, button, label, [data-slot="select-trigger"]) {
+  font-size: var(--nx-builder-font-size);
+}
+
+.nx-style-inspector__decoration-parts {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 14rem;
+}
+
+.nx-style-inspector__decoration-part {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--nx-builder-font-size);
+}
+
+/*
+ * A focal point: nine points over the block's own picture, a readout of the
+ * point beside them, and "…" for a point written as CSS under them. The
+ * frame is a square three points across, each point a 24px target.
+ */
+/*
+ * The points on the left with "…" at the top right of the same row, and the
+ * readout under them at the field's full width, so its words read on one or
+ * two natural lines whatever the column's width.
+ */
+.nx-focal {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "frame more"
+    "readout readout"
+    "css css";
+  align-items: start;
+  column-gap: 0.5rem;
+  row-gap: 0.375rem;
+  min-width: 0;
+}
+
+.nx-focal__frame {
+  grid-area: frame;
+}
+
+.nx-focal__readout {
+  grid-area: readout;
+}
+
+.nx-focal__more {
+  grid-area: more;
+  justify-self: end;
+}
+
+.nx-focal__frame {
+  position: relative;
+  inline-size: 4.5rem;
+  block-size: 4.5rem;
+  overflow: hidden;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-muted);
+}
+
+.nx-focal__picture,
+.nx-focal__swatch {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+/* No picture to aim over: a quiet field of the muted surface. */
+.nx-focal__swatch {
+  background: linear-gradient(
+    135deg,
+    var(--nx-muted) 0 50%,
+    var(--nx-builder-border) 50% 100%
+  );
+}
+
+.nx-focal__points {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+}
+
+.nx-focal__point {
+  display: grid;
+  place-items: center;
+  min-inline-size: 24px;
+  min-block-size: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* Each point a dot with a ring, legible over any picture. */
+.nx-focal__point::after {
+  content: "";
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: 50%;
+  background: var(--nx-background);
+  box-shadow: 0 0 0 1px var(--nx-foreground);
+  opacity: 0.75;
+}
+
+.nx-focal__point[aria-checked="true"]::after,
+.nx-focal__point[data-inherited]::after {
+  inline-size: 12px;
+  block-size: 12px;
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--nx-foreground);
+}
+
+/* Inherited: drawn, but hollow, so it never reads as set here. */
+.nx-focal__point[data-inherited]::after {
+  background: transparent;
+}
+
+.nx-focal__point:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: -2px;
+}
+
+.nx-focal__point:disabled {
+  cursor: default;
+}
+
+.nx-focal__readout {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+}
+
+.nx-focal__readout b {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.nx-focal__readout span {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-focal__css {
+  grid-area: css;
+}
+
+/*
+ * A Columns row's layout tiles: four to a line at the panel's width, each a
+ * glyph of its tracks over its name. The glyphs are muted foreground, enough
+ * contrast as graphics in both schemes, and filled where chosen.
+ */
+/* The tiles take the panel's width, under their label, so each reads whole. */
+.nx-inspector__field.nx-columns-layout__layout {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.375rem;
+}
+
+.nx-columns-layout__tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-columns-layout__tile {
+  display: grid;
+  justify-items: stretch;
+  gap: 0.125rem;
+  min-block-size: 2.75rem;
+  padding: 0.25rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nx-builder-text-muted);
+  font-size: 0.6875rem;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+}
+
+.nx-columns-layout__tile[aria-checked="true"] {
+  border-color: var(--nx-foreground);
+  box-shadow: 0 0 0 1px var(--nx-foreground);
+  color: var(--nx-foreground);
+}
+
+.nx-columns-layout__tile[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.nx-columns-layout__tile:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 1px;
+}
+
+.nx-columns-layout__glyph {
+  display: flex;
+  gap: 2px;
+  block-size: 0.875rem;
+}
+
+.nx-columns-layout__glyph i {
+  min-inline-size: 0;
+  border: 1px solid var(--nx-builder-text-muted);
+  border-radius: 2px;
+}
+
+.nx-columns-layout__tile[aria-checked="true"] .nx-columns-layout__glyph i {
+  border-color: var(--nx-foreground);
+  background: var(--nx-foreground);
+}
+
+/* Auto's track that wraps: dashed, where the next column would go. */
+.nx-columns-layout__glyph i.nx-columns-layout__wraps,
+.nx-columns-layout__tile[aria-checked="true"]
+  .nx-columns-layout__glyph
+  i.nx-columns-layout__wraps {
+  flex-grow: 1;
+  border-style: dashed;
+  background: transparent;
+}
+
+.nx-segment {
+  display: inline-flex;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.nx-segment__option {
+  block-size: var(--nx-builder-control-height);
+  padding: 0 0.625rem;
+  border: 0;
+  border-inline-end: 1px solid var(--nx-builder-border);
+  background: transparent;
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size);
+  cursor: pointer;
+}
+
+.nx-segment__option:last-child {
+  border-inline-end: 0;
+}
+
+.nx-segment__option:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: -2px;
+}
+
+/*
+ * An aspect ratio: the menu, and under it a custom ratio's width and height
+ * on one line, split by a colon as the ratio is written.
+ */
+.nx-style-inspector__ratio {
+  display: grid;
+  row-gap: 0.375rem;
+  min-width: 0;
+}
+
+.nx-style-inspector__ratio-custom {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.375rem;
+  color: var(--nx-builder-text-muted);
+}
+
+/*
+ * Opacity: the slider across the row for "more or less", then the number for
+ * an exact value, holding three digits, and its percent sign.
+ */
+.nx-style-inspector__opacity {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-style-inspector__opacity > .nx-style-inspector__numeric {
+  flex: 0 0 3.5rem;
+}
+
+.nx-style-inspector__percent {
+  margin-inline-start: -0.25rem;
+  font-size: var(--nx-builder-font-size);
+  color: var(--nx-builder-text-muted);
 }
 
 /*
@@ -7805,8 +9649,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  */
 .nx-icon-choice {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
+}
+
+/* What the value that applies does, on its own line under the icons. */
+.nx-icon-choice__help {
+  flex-basis: 100%;
+  margin: 0;
 }
 
 .nx-icon-choice__strip {
@@ -7852,15 +9703,11 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: none;
 }
 
-.nx-icon-choice__option:not(:disabled):hover,
+/* Not over the chosen one, whose fill says which is chosen. */
+.nx-icon-choice__option:not(:disabled):not([aria-checked="true"]):hover,
 .nx-icon-choice .nx-icon-choice__more:not(:disabled):hover {
   color: var(--nx-foreground);
   background: var(--nx-muted);
-}
-
-.nx-icon-choice__option[aria-checked="true"] {
-  color: var(--nx-accent-foreground);
-  background: var(--nx-accent);
 }
 
 /*
@@ -7894,4 +9741,2299 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 /* A text icon for lines that run down the page, turned a quarter. */
 .nx-icon-choice__rotated {
   rotate: 90deg;
+}
+
+/*
+ * An image's alt text field: one line tall, growing with its words up to six
+ * lines and scrolling past them, so a short alt does not hold a tall box and
+ * a long one is never cut off.
+ */
+.nx-inspector textarea.nx-inspector__growing {
+  min-height: 0;
+  max-height: 9em;
+  overflow-y: auto;
+  resize: none;
+}
+
+/* A note with the action it offers beside it, wrapping when the rail is narrow. */
+.nx-inspector__note-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/*
+ * A collection list's query, as one group in the Content tab: Source, then a
+ * titled group each for Filters, Sort, How many and When nothing matches,
+ * titled as the Advanced summary is, a rule above each.
+ */
+.nx-list-query {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.nx-list-query__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--nx-border);
+}
+
+.nx-list-query__title {
+  margin: 0;
+  font-size: var(--nx-builder-font-size);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-list-query__hint {
+  margin-top: -0.25rem;
+}
+
+/* Under a field's control rather than under its label. */
+.nx-list-query__indented {
+  padding-inline-start: calc(6.5rem + 0.5rem);
+}
+
+/* Show when: a block's visibility conditions, built from the list's filters.
+   Its head shares the variants header's row, above. Whose fields the
+   conditions read: "This post", "Each post in the list". */
+.nx-show-when__source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* Said once, above the rows, while the page leaves the block out. */
+.nx-show-when__notice {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--nx-destructive);
+  border-radius: var(--radius-md);
+  background: color-mix(
+    in srgb,
+    var(--nx-destructive) 8%,
+    var(--nx-background)
+  );
+  color: var(--nx-destructive);
+  font-size: var(--nx-builder-font-size);
+  line-height: 1.45;
+}
+
+.nx-show-when__notice > svg {
+  flex: none;
+  margin-top: 0.125rem;
+}
+
+.nx-show-when__notice > p {
+  margin: 0;
+}
+
+/* Groups set through the API, shown as they read. */
+.nx-show-when__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.nx-show-when__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+  font-size: var(--nx-builder-font-size);
+}
+
+/* Wrapped, never cut: an API group's condition reads whole. */
+.nx-show-when__line {
+  overflow-wrap: anywhere;
+}
+
+.nx-show-when__or {
+  align-self: center;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-show-when__keep {
+  align-self: flex-start;
+}
+
+/* A condition wraps to two lines rather than cutting off its rule: a long
+   field name must never hide the operator and value an author has to read,
+   least of all on the row the page can't check. */
+.nx-show-when .nx-list-filter__line {
+  height: auto;
+  min-height: 28px;
+  padding-block: 0.25rem;
+}
+
+.nx-show-when .nx-list-filter__sentence {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+/* A refused value spans its row when the row has no label column. */
+.nx-list-query__group > .nx-list-query__error,
+.nx-list-filter > .nx-list-query__error,
+.nx-list-sort > .nx-list-query__error {
+  grid-column: 1 / -1;
+}
+
+.nx-list-query__icon {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+/* A value after a source's mark takes the room the trigger's space-between
+   would leave around it, so it starts right after the mark whatever its
+   length, as a value with no mark starts at the trigger's start. */
+.nx-font-pick__trigger > .nx-list-query__icon + .nx-font-pick__value {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A refused value's control, marked as the field the error names. */
+.nx-font-pick[data-invalid] .nx-font-pick__trigger,
+.nx-list-query input[aria-invalid="true"],
+.nx-list-query [data-slot="select-trigger"][aria-invalid="true"] {
+  border-color: var(--nx-destructive);
+}
+
+/* Add filter, Add sort: a quiet action at the start of its group. */
+.nx-list-query__add {
+  align-self: flex-start;
+  gap: 0.375rem;
+  padding-inline: 0.25rem;
+  font-weight: 500;
+}
+
+/* The field menu's rows: the field, and the kind of value on the right. */
+.nx-list-query__field-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.nx-list-query__field-kind {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* What a menu leaves out, said once at its foot; a group with nothing. */
+.nx-list-query__menu-foot,
+.nx-list-query__menu-note {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-list-query__menu-foot {
+  border-top: 1px solid var(--nx-border);
+}
+
+/* Inset as the list below it is, so its heading, set in from there as a
+   group's heading is, lines up with "Collections". */
+.nx-list-query__menu-note {
+  padding-inline: 0.25rem;
+  border-bottom: 1px solid var(--nx-border);
+}
+
+/* The note's words, set in from the inset as an option's words are. */
+.nx-list-query__menu-text {
+  margin: 0;
+  padding-inline: 0.5rem;
+}
+
+.nx-list-query__kbd {
+  margin-inline-start: auto;
+  padding-inline-start: 1rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-list-query__filters,
+.nx-list-query__sort {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * One filter, closed: its sentence on one 28px line, the field in medium
+ * weight, the operator muted and the value in full ink, cut short with the
+ * whole sentence in its title; the remove button beside it.
+ */
+.nx-list-filter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.25rem;
+  row-gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-list-filter__line {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  height: 28px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  font-size: var(--nx-builder-font-size);
+  text-align: left;
+  cursor: pointer;
+}
+
+.nx-list-filter__line:hover {
+  background: var(--nx-muted);
+}
+
+.nx-list-filter__line:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-list-filter__line > svg {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-list-filter[data-invalid] > .nx-list-filter__line {
+  border-color: var(--nx-destructive);
+}
+
+.nx-list-filter__sentence {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-list-filter__field {
+  font-weight: 500;
+}
+
+.nx-list-filter__op {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-list-filter__said[data-missing] {
+  color: var(--nx-destructive);
+}
+
+/*
+ * One filter, open: a bordered card holding exactly its controls, the field
+ * on its first line and the operator and value on its second.
+ */
+.nx-list-filter[data-open] {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.375rem;
+  padding: 0.375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+}
+
+.nx-list-filter[data-open][data-invalid] {
+  border-color: var(--nx-destructive);
+}
+
+.nx-list-filter__head {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-list-filter__head > .nx-font-pick {
+  flex: 1;
+}
+
+.nx-list-filter__body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.375rem;
+  min-width: 0;
+  padding-inline-start: calc(24px + 0.25rem);
+}
+
+.nx-list-filter__op-pick {
+  flex: none;
+  width: 7.5rem;
+}
+
+/* "has a value" and "is empty" take no value, so the operator takes the line. */
+.nx-list-filter__op-pick[data-wide] {
+  flex: 1;
+  width: auto;
+}
+
+.nx-list-filter__body > :not(.nx-list-filter__op-pick) {
+  flex: 1;
+  min-width: 0;
+}
+
+.nx-list-filter__chips,
+.nx-list-filter__entries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-list-filter__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.125rem 0.25rem 0.125rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+  font-size: var(--text-xs);
+}
+
+.nx-list-filter__chip > button {
+  display: inline-flex;
+  padding: 0.125rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-list-filter__chip > button:focus-visible {
+  outline: 2px solid var(--nx-ring);
+}
+
+.nx-list-filter__checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 10rem;
+  overflow-y: auto;
+  font-size: var(--nx-builder-font-size);
+}
+
+.nx-list-filter__check {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--nx-foreground);
+}
+
+/* The entry picker takes the row under the operator, named for a screen
+   reader by the field it chooses for, as the row already shows it. */
+.nx-list-filter__entry {
+  flex-basis: 100%;
+  min-width: 0;
+}
+
+/* The picker is stacked, one column; its name is said by the row already,
+   so it is kept for a screen reader only. */
+.nx-list-filter__entry .nx-inspector__field-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/*
+ * One sort key: its handle, its field, its direction in words and its menu,
+ * on one row. Dragged, the row it would land at is marked.
+ */
+.nx-list-sort {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 7.25rem auto;
+  align-items: center;
+  column-gap: 0.25rem;
+  row-gap: 0.25rem;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+}
+
+.nx-list-sort[data-dragging] {
+  background: var(--nx-muted);
+}
+
+.nx-list-sort__handle {
+  display: inline-flex;
+  color: var(--nx-muted-foreground);
+  cursor: grab;
+  touch-action: none;
+}
+
+.nx-list-sort[data-dragging] .nx-list-sort__handle {
+  cursor: grabbing;
+}
+
+.nx-list-sort__direction {
+  width: 100%;
+  white-space: nowrap;
+}
+
+/* The group's icons, at the inspector's icon size, over a control's own. */
+.nx-list-query .lucide {
+  width: 14px;
+  height: 14px;
+}
+
+/* The window: a number with what it counts after it, inside the field. */
+.nx-list-query__bound {
+  position: relative;
+  min-width: 0;
+}
+
+.nx-list-query__bound[data-suffixed] input {
+  padding-inline-end: 3.75rem;
+}
+
+.nx-list-query__suffix {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0.75rem;
+  display: flex;
+  align-items: center;
+  font-size: var(--nx-builder-font-size);
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+
+/*
+ * A collection list's custom sources in the Source menu: wider than its
+ * control, for rows of two lines, and still aligned to the control's end.
+ */
+[data-slot="popover-content"].nx-font-pick__popover[data-wide] {
+  width: max(var(--radix-popover-trigger-width), 18rem);
+}
+
+/* A custom source's row: its label, which wraps rather than being cut, and
+   its developer's line under it, the "Needs input" tag at that line's end. */
+.nx-list-source {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  white-space: normal;
+}
+
+.nx-list-source__label {
+  overflow-wrap: anywhere;
+}
+
+.nx-list-source__line {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-list-source__description {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  color: var(--nx-muted-foreground);
+  overflow-wrap: anywhere;
+}
+
+.nx-list-source__tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 1.125rem;
+  padding: 0 0.375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  line-height: 1;
+  color: var(--nx-muted-foreground);
+  white-space: nowrap;
+}
+
+/* The Source hint's lines under a custom source: its line, then cautions. */
+.nx-list-query__hints {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+/*
+ * A caution: what a save warns about rather than refuses, in the theme's
+ * warning tone, drawn toward the text colour so it reads as text on the
+ * panel in either scheme, with its triangle beside the first line.
+ */
+.nx-list-query__caution {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--nx-warning), var(--nx-foreground) 22%);
+}
+
+.nx-list-query .nx-list-query__caution > .lucide {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-top: 0.1875rem;
+}
+
+.nx-list-query__group > .nx-list-query__caution {
+  grid-column: 1 / -1;
+}
+
+/* An input of a custom source: a field of the Content tab. A needed one's
+   dot, where the group's note says the dot means needed. */
+.nx-list-input__needed {
+  color: var(--nx-foreground);
+}
+
+.nx-list-input__choice {
+  width: 100%;
+}
+
+/* A day, which shows what empty means ("Today") until it is focused, with a
+   calendar mark at its end where the platform draws none. */
+.nx-list-input__day {
+  position: relative;
+  min-width: 0;
+}
+
+.nx-list-input__day:not([data-dated]) input {
+  padding-inline-end: 2rem;
+}
+
+.nx-list-input__day-icon {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0.625rem;
+  margin-block: auto;
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+
+/* An entry input is the entry picker, stacked, as it is in a filter. */
+.nx-list-input__entry {
+  min-width: 0;
+}
+
+/* Canvas shows: two words, taking the control column. */
+.nx-inspector__field[data-content-control="canvasShows"]
+  > .nx-style-inspector__toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+/*
+ * A collection list's region in Layers: "Each entry" and "When empty",
+ * muted, as regions rather than blocks, with how many blocks each holds.
+ */
+.nx-layer-row[data-nx-layer-slot] .nx-layer-row__label,
+.nx-layer-row__slot-mark {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-layer-row__count {
+  margin-inline-start: auto;
+  padding-inline-end: 0.5rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * The exposed part being edited in place: a solid ring in the component
+ * colour, so the passage the caret is in reads apart from the placement's
+ * other parts, which dim while it is open.
+ */
+.nx-canvas-mark[data-mark="exposed"][data-editing] {
+  outline: 2px solid var(--nx-builder-component);
+  outline-offset: 0;
+}
+
+.nx-canvas-mark[data-mark="exposed"][data-dimmed] {
+  opacity: 0.4;
+}
+
+/*
+ * A passage field that cannot be edited here (held while the canvas edits it,
+ * or with no editor to open): a muted fill and border, so it does not look
+ * like a field waiting for input. Its focus ring stays for the keyboard.
+ */
+.nx-inspector__rich-text[aria-readonly="true"] {
+  border-color: var(--nx-border);
+  background: var(--nx-muted);
+  color: var(--nx-muted-foreground);
+  cursor: default;
+}
+
+/*
+ * The badges on blocks whose bound value a visitor will not see. The layer
+ * spans the canvas and is never a pointer target itself, as the empty
+ * containers' layer is not; each badge opts back in. Above the marks and the
+ * appenders, below the floating toolbar.
+ */
+.nx-visitor-unreadable {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/*
+ * Anchored by its right edge to the block's: placed at the box's right edge
+ * and drawn leftwards from it, so no width has to be guessed.
+ */
+/*
+ * The marked block's outline: a faint amber dash just outside its box, so the
+ * badge on its edge reads as this block's mark. Drawn only, never a target.
+ */
+.nx-visitor-unreadable__outline {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed color-mix(in oklch, var(--nx-warning) 70%, transparent);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.nx-visitor-unreadable__badge {
+  position: absolute;
+  transform: translateX(-100%);
+  pointer-events: auto;
+}
+
+/* On the outline's top edge, a tab of it: its top corners round, its foot
+   sits on the dash. */
+.nx-visitor-unreadable__badge[data-above] .nx-visitor-unreadable__button {
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+}
+
+/* On the outline's bottom edge, where another tab or the block toolbar takes
+   the top: hanging from the dash, its bottom corners round. */
+.nx-visitor-unreadable__badge[data-below] .nx-visitor-unreadable__button {
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
+}
+
+/* Inside the outline's top corner, its outer corner square with the dash. */
+.nx-visitor-unreadable__badge[data-inside] .nx-visitor-unreadable__button {
+  border-start-end-radius: 0;
+}
+
+.nx-visitor-unreadable__button {
+  display: inline-flex;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 0.25rem;
+  block-size: 1.375rem;
+  padding: 0 0.4375rem;
+  border: 1px solid
+    color-mix(in oklch, var(--nx-warning) 50%, var(--nx-builder-border));
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-warning-ground);
+  color: var(--nx-builder-warning-text);
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.nx-visitor-unreadable__button > svg {
+  flex: none;
+}
+
+.nx-visitor-unreadable__button:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: 2px;
+}
+
+/*
+ * The tooltip: under the badge, right-aligned with it, in the editor's own
+ * popover surface. Shown while the badge is hovered or focused, and put away
+ * by Escape until it is left.
+ */
+.nx-visitor-unreadable__tip {
+  position: absolute;
+  inset-block-start: calc(100% + 0.375rem);
+  inset-inline-end: 0;
+  display: none;
+  flex-direction: column;
+  gap: 0.25rem;
+  inline-size: max-content;
+  max-inline-size: 18rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md, 0.375rem);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: normal;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+
+/* Near the screen's left edge: from the badge's left edge, running right. */
+.nx-visitor-unreadable__badge[data-tip-start] .nx-visitor-unreadable__tip {
+  inset-inline-start: 0;
+  inset-inline-end: auto;
+}
+
+/* Near the screen's foot, as a badge on its block's bottom edge can be: the
+   tooltip opens upwards, where the canvas does not clip it. */
+.nx-visitor-unreadable__badge[data-tip-up] .nx-visitor-unreadable__tip {
+  inset-block-start: auto;
+  inset-block-end: calc(100% + 0.375rem);
+}
+
+.nx-visitor-unreadable__badge:hover .nx-visitor-unreadable__tip,
+.nx-visitor-unreadable__button:focus ~ .nx-visitor-unreadable__tip {
+  display: flex;
+}
+
+.nx-visitor-unreadable__badge[data-dismissed] .nx-visitor-unreadable__tip {
+  display: none;
+}
+
+/* A line naming a library fallback: its small picture before the words. */
+.nx-visitor-unreadable__pictured {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+}
+
+.nx-visitor-unreadable__thumb {
+  flex: none;
+  inline-size: 2rem;
+  block-size: 1.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+}
+
+/*
+ * The inspector's note under a prop whose bound value a visitor will not see:
+ * the badge's amber, on the same tinted plate, with the field and what the
+ * published page shows instead in words.
+ */
+.nx-inspector__visitor-unreadable {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  margin-block-start: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid
+    color-mix(in oklch, var(--nx-warning) 45%, var(--nx-builder-border));
+  border-radius: var(--radius-md, 0.375rem);
+  background: var(--nx-builder-warning-ground);
+  color: var(--nx-builder-warning-text);
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.45;
+}
+
+.nx-inspector__visitor-unreadable > svg {
+  flex: none;
+  margin-block-start: 0.125rem;
+}
+
+.nx-inspector__visitor-unreadable-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.nx-inspector__visitor-unreadable-lines > p {
+  margin: 0;
+}
+
+/*
+ * The Previewing strip, pinned along the top of a template's canvas: the
+ * entry the template is drawn with, chosen from a chip. Drawn as a header on
+ * the page it sits over (the editor's surface, its border below), outside
+ * the region that scrolls, so it stays while the page scrolls under it.
+ *
+ * Only the chip's title gives way to a narrow canvas: "Previewing" never
+ * does, since it keeps the template's own status and the entry's apart, and
+ * the room after the chip is left for what else the strip comes to hold.
+ */
+.nx-preview-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border-bottom: 1px solid var(--nx-builder-border);
+  background: var(--nx-builder-surface);
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs, 0.75rem);
+}
+
+.nx-preview-strip > * {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* The chip holds the full title; only past the strip's width does it cut. */
+.nx-preview-strip > .nx-preview-strip__chip {
+  flex: 0 1 auto;
+}
+
+.nx-preview-strip__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  max-width: 100%;
+  height: 1.5rem;
+  padding: 0 0.375rem 0 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nx-preview-strip__chip:hover {
+  background: var(--nx-muted);
+}
+
+/* An own design's one entry: named, not chosen, so not drawn as pressable. */
+.nx-preview-strip__chip[data-fixed] {
+  cursor: default;
+}
+
+.nx-preview-strip__chip[data-fixed]:hover {
+  background: var(--nx-background);
+}
+
+.nx-preview-strip__chip:focus-visible,
+.nx-preview-strip__chip[data-state="open"] {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/* The rule between the entry and the switch that applies conditions to it. */
+.nx-preview-strip__sep {
+  width: 1px;
+  height: 1rem;
+  background: var(--nx-border);
+}
+
+/* What the conditions do for the entry, at the strip's far end. The one part
+   besides the chip that gives way on a narrow canvas: cut short, with the
+   whole sentence in its title and announced whole. */
+.nx-preview-strip > .nx-preview-strip__count {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-inline-start: auto;
+  color: var(--nx-foreground);
+}
+
+/* Why the switch can't apply conditions here, beside it, and the name of
+   what is edited: both give way on a narrow canvas, cut short, the whole of
+   each in its title. */
+.nx-preview-strip > .nx-preview-strip__why,
+.nx-preview-strip > .nx-preview-strip__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nx-preview-strip__why {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-preview-strip__name {
+  color: var(--nx-foreground);
+  font-weight: 500;
+}
+
+.nx-preview-strip__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nx-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nx-preview-strip__switch:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.nx-preview-strip__switch:disabled {
+  cursor: not-allowed;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-preview-strip__track {
+  position: relative;
+  width: 1.75rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: var(--nx-input);
+  transition: background-color 120ms;
+}
+
+.nx-preview-strip__track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  background: var(--nx-background);
+  box-shadow: 0 1px 2px
+    color-mix(in oklch, var(--nx-foreground) 30%, transparent);
+  transition: transform 120ms;
+}
+
+.nx-preview-strip__switch[aria-checked="true"] > .nx-preview-strip__track {
+  background: var(--nx-primary);
+}
+
+.nx-preview-strip__switch[aria-checked="true"]
+  > .nx-preview-strip__track::after {
+  transform: translateX(0.75rem);
+}
+
+.nx-preview-strip__switch:disabled > .nx-preview-strip__track {
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-preview-strip__track,
+  .nx-preview-strip__track::after {
+    transition: none;
+  }
+}
+
+.nx-preview-strip__chip > * {
+  flex: none;
+}
+
+.nx-preview-strip__title {
+  flex: 0 1 auto;
+  min-width: 2.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-preview-strip__none {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-preview-strip__chevron {
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * The strip's second row, while there is no entry to preview or the one
+ * chosen could not be read: editor chrome, so drawn on the strip's own
+ * surface below its hairline, in its muted words, never as a band of colour
+ * over the page. Pinned with the strip.
+ */
+.nx-preview-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--nx-builder-border);
+  background: var(--nx-builder-surface);
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.45;
+}
+
+.nx-preview-notice > svg {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-preview-notice > p {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+/* Its action, a small outline button: New, or Try again. */
+.nx-preview-notice__action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.nx-preview-notice__action:hover {
+  background: var(--nx-muted);
+}
+
+.nx-preview-notice__action:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/* The chip's mark for an entry that could not be read: words, not colour. */
+.nx-preview-strip__unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * The picker under the chip: a search, the entries newest first, and the
+ * keys and New along its foot.
+ */
+.nx-preview-picker {
+  display: flex;
+  flex-direction: column;
+  width: min(26.25rem, calc(100vw - 2rem));
+  max-height: 28.75rem;
+  padding: 0;
+  overflow: hidden;
+}
+
+.nx-preview-picker__list {
+  max-height: 20rem;
+  padding: 0.25rem;
+  overflow-y: auto;
+}
+
+.nx-preview-picker__row {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr) auto 4.75rem;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+}
+
+.nx-preview-picker__row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-preview-picker__row[data-current] .nx-preview-picker__row-title {
+  font-weight: 500;
+}
+
+.nx-preview-picker__when {
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs, 0.75rem);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.nx-preview-picker__empty {
+  padding: 1rem 0.75rem;
+  color: var(--nx-muted-foreground);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.nx-preview-picker__footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0.375rem 0.375rem 0.375rem 0.75rem;
+  border-top: 1px solid var(--nx-border);
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs, 0.75rem);
+}
+
+.nx-preview-picker__keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.nx-preview-picker__new {
+  margin-inline-start: auto;
+}
+
+/*
+ * The keys in the picker's foot, drawn as keycaps. The modifier glyphs are
+ * not in the editor's mono face, so the system face draws them at size.
+ */
+.nx-preview-picker__keys kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 1.25rem;
+  padding: 0 0.3125rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    sans-serif;
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+}
+
+/*
+ * The Entry content block's Content tab: under its Field menu, the line
+ * saying whose content it draws, and Open entry beside it, a quiet action at
+ * the line's start, as the proposal draws them.
+ */
+.nx-inspector__entry-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-block-start: 0.5rem;
+}
+
+.nx-inspector__entry-content > button {
+  gap: 0.375rem;
+}
+
+/* A field the collection no longer has, still chosen: marked as the field
+   the canvas's red note names, its value in the same red. */
+[data-content-control="entryField"]
+  [data-slot="select-trigger"][aria-invalid="true"] {
+  border-color: var(--nx-destructive);
+  color: var(--nx-destructive);
+}
+
+/*
+ * A row marking a problem with its block: an Entry content block whose field
+ * the collection no longer has. In the destructive ink, as the canvas's note
+ * and the inspector's Field say it, the words read out beside the icon.
+ */
+.nx-layer-row__badge[data-problem] {
+  color: var(--nx-destructive);
+}
+
+/*
+ * The page reads meter in the top bar: a count and a short bar at the
+ * editor's control height. Quiet within the limit; amber from 80% of it;
+ * red over it. Each state also changes the mark and the words, so colour is
+ * never the only sign.
+ */
+.nx-read-meter {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.375rem;
+  height: var(--nx-builder-control-height, 1.75rem);
+  padding: 0 var(--nx-builder-control-padding-x, 0.5rem);
+  border: 1px solid var(--nx-builder-border);
+  border-radius: 0.375rem;
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text-muted);
+  font-size: var(--nx-builder-font-size, 0.75rem);
+  /* The count changes as the page is edited; fixed-width digits keep the
+     control from shifting while it is read. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.nx-read-meter:hover {
+  background: var(--nx-muted);
+}
+
+.nx-read-meter[data-state="open"] {
+  background: var(--nx-muted);
+  border-color: var(--nx-ring);
+}
+
+.nx-read-meter:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-read-meter__mark {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.nx-read-meter__count {
+  color: var(--nx-builder-text);
+}
+
+.nx-read-meter__of,
+.nx-read-meter__unit {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-read-meter__track {
+  position: relative;
+  flex: none;
+  width: 2rem;
+  height: 0.25rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(
+    in oklch,
+    var(--nx-builder-text-muted) 22%,
+    transparent
+  );
+}
+
+/* The share of the allowance used, in the trigger's bar and the panel's. */
+.nx-read-meter__fill,
+.nx-read-panel__fill {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  border-radius: inherit;
+  background: var(--nx-builder-text-muted);
+}
+
+.nx-read-meter[data-standing="counting"] .nx-read-meter__count {
+  color: var(--nx-builder-text-muted);
+}
+
+/* A count that could not be made: quiet, as counting is, its alert mark in
+   the editor's warning ink, and the way to count again in the text's own
+   colour. */
+.nx-read-meter[data-standing="failed"] .nx-read-meter__count {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-read-meter[data-standing="failed"] .nx-read-meter__mark {
+  color: var(--nx-builder-warning-text);
+}
+
+.nx-read-meter[data-standing="failed"] .nx-read-meter__retry {
+  color: var(--nx-builder-text);
+  font-weight: 500;
+}
+
+.nx-read-meter[data-standing="near"] {
+  border-color: color-mix(in oklch, var(--nx-warning) 55%, transparent);
+  background: var(--nx-builder-warning-ground);
+  color: var(--nx-builder-warning-text);
+}
+
+/* The trigger's words (`nx-read-meter__words`) take the standing's colour. */
+.nx-read-meter[data-standing="near"] .nx-read-meter__words {
+  color: var(--nx-builder-warning-text);
+}
+
+.nx-read-meter[data-standing="near"] .nx-read-meter__fill {
+  background: var(--nx-warning);
+}
+
+.nx-read-meter[data-standing="over"] {
+  border-color: color-mix(in oklch, var(--nx-destructive) 55%, transparent);
+  background: var(--nx-builder-destructive-ground);
+  color: var(--nx-builder-destructive-text);
+}
+
+.nx-read-meter[data-standing="over"] .nx-read-meter__words {
+  color: var(--nx-builder-destructive-text);
+}
+
+.nx-read-meter[data-standing="over"] .nx-read-meter__count {
+  font-weight: 600;
+}
+
+.nx-read-meter[data-standing="over"] .nx-read-meter__fill {
+  background: var(--nx-destructive);
+}
+
+/*
+ * Where the top bar is crowded (up to 1300px, so the editor's narrowest
+ * width), the meter gives way before anything else in its column: to its
+ * mark and its number. The document's own chips beside it stay whole, and
+ * only then does the title shorten, which the bar's start column does by
+ * letting the title alone shrink.
+ */
+.nx-read-meter__short {
+  display: none;
+}
+
+@container topbar (max-width: 81.25rem) {
+  .nx-read-meter__full,
+  .nx-read-meter__track {
+    display: none;
+  }
+
+  .nx-read-meter__short {
+    display: inline;
+  }
+}
+
+/* The panel the meter opens. */
+[data-slot="popover-content"].nx-read-panel {
+  width: 20rem;
+  padding: 0;
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+}
+
+.nx-read-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem 1rem;
+  font-size: var(--nx-builder-font-size, 0.75rem);
+  line-height: var(--nx-builder-line-height, 1rem);
+}
+
+.nx-read-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.nx-read-panel__title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.nx-read-panel__verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: 999px;
+  color: var(--nx-builder-text-muted);
+  font-size: 0.75rem;
+}
+
+.nx-read-panel__body[data-standing="near"] .nx-read-panel__verdict {
+  border-color: color-mix(in oklch, var(--nx-warning) 55%, transparent);
+  background: var(--nx-builder-warning-ground);
+  color: var(--nx-builder-warning-text);
+}
+
+.nx-read-panel__body[data-standing="over"] .nx-read-panel__verdict {
+  border-color: color-mix(in oklch, var(--nx-destructive) 55%, transparent);
+  background: var(--nx-builder-destructive-ground);
+  color: var(--nx-builder-destructive-text);
+}
+
+.nx-read-panel__figure {
+  margin: 0;
+  color: var(--nx-builder-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.nx-read-panel__used {
+  color: var(--nx-builder-text);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.5rem;
+}
+
+.nx-read-panel__bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.nx-read-panel__track {
+  position: relative;
+  height: 0.375rem;
+  border-radius: 999px;
+  background: color-mix(
+    in oklch,
+    var(--nx-builder-text-muted) 20%,
+    transparent
+  );
+}
+
+.nx-read-panel__body[data-standing="near"] .nx-read-panel__fill {
+  background: var(--nx-warning);
+}
+
+.nx-read-panel__body[data-standing="over"] .nx-read-panel__fill {
+  background: var(--nx-destructive);
+}
+
+/* Where the warning starts: 80% along the bar. */
+.nx-read-panel__tick {
+  position: absolute;
+  inset-block: -0.1875rem;
+  inset-inline-start: 80%;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--nx-builder-text);
+}
+
+.nx-read-panel__scale {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  color: var(--nx-builder-text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.nx-read-panel__kinds {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid var(--nx-builder-border);
+}
+
+.nx-read-panel__kind {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.nx-read-panel__kind dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--nx-builder-text);
+}
+
+.nx-read-panel__kind dd {
+  margin: 0;
+  color: var(--nx-builder-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.nx-read-panel__kind-mark {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-read-panel__note,
+.nx-read-panel__foot {
+  margin: 0;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-read-panel__foot {
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid var(--nx-builder-border);
+}
+
+.nx-read-panel__unread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid color-mix(in oklch, var(--nx-destructive) 40%, transparent);
+  border-radius: 0.5rem;
+  background: var(--nx-builder-destructive-ground);
+}
+
+.nx-read-panel__unread-title {
+  margin: 0;
+  color: var(--nx-builder-destructive-text);
+  font-weight: 600;
+}
+
+.nx-read-panel__unread .nx-read-panel__note {
+  color: var(--nx-builder-text);
+}
+
+.nx-read-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  /* A page can leave many blocks unread: the list scrolls inside the panel,
+     never past the window. */
+  max-height: min(18rem, 40vh);
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.nx-read-panel__block {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.5rem;
+  align-items: center;
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.5rem;
+  border: none;
+  border-radius: 0.375rem;
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  text-align: start;
+  cursor: pointer;
+}
+
+.nx-read-panel__block:hover:not(:disabled) {
+  background: var(--nx-muted);
+}
+
+.nx-read-panel__block:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-read-panel__block:disabled {
+  cursor: default;
+}
+
+.nx-read-panel__block .nx-read-panel__kind-mark {
+  grid-row: span 2;
+}
+
+.nx-read-panel__block-name {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-read-panel__block-what {
+  color: var(--nx-builder-text-muted);
+  font-size: 0.75rem;
+}
+
+/* A Layout region's block: named with its Layout, and the way to edit that
+   Layout at the row's end, since the page's editor cannot select it. */
+.nx-read-panel__block[data-source="layout"] {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  cursor: default;
+}
+
+.nx-read-panel__block-edit {
+  grid-row: 1 / span 2;
+  grid-column: 3;
+  color: var(--nx-builder-text);
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.nx-read-panel__block-edit:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+  border-radius: 0.25rem;
+}
+
+/*
+ * A prop's binding controls (binding-controls.tsx): a bind button beside a
+ * bindable field, the picker it opens, and a bound prop's chip, its
+ * fallback and the note an unbind leaves.
+ */
+
+/* The field and its bind button: the button in a column of its own. */
+.nx-binding-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1.5rem;
+  column-gap: 0.25rem;
+  align-items: start;
+}
+
+.nx-binding-row > .nx-binding-note {
+  grid-column: 1 / -1;
+}
+
+/* The bind button, and the image Fallback's library button drawn as it. */
+.nx-binding-row__bind,
+.nx-image-fallback__library {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 1.5rem;
+  block-size: var(--nx-control-height);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--nx-muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.nx-binding-row__bind:hover,
+.nx-binding-row__bind[data-open] {
+  color: var(--nx-builder-bound);
+  border-color: color-mix(in oklch, var(--nx-builder-bound) 35%, transparent);
+  background: color-mix(in oklch, var(--nx-builder-bound) 8%, transparent);
+}
+
+.nx-binding-row__bind:focus-visible,
+.nx-binding-chip:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-binding-row__bind:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* A bound prop: the chip on the control's line, its fallback under it. */
+.nx-binding.nx-inspector__field {
+  align-items: start;
+}
+
+.nx-binding > .nx-inspector__field-name {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--nx-control-height);
+  margin: 0;
+}
+
+.nx-binding__value {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-inline-size: 0;
+}
+
+.nx-binding-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  inline-size: 100%;
+  min-block-size: var(--nx-control-height);
+  padding: 0 0.25rem 0 0.5rem;
+  border: 1px solid
+    color-mix(in oklch, var(--nx-builder-bound) 35%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  background: color-mix(
+    in oklch,
+    var(--nx-builder-bound) 8%,
+    var(--nx-background)
+  );
+  font-size: 0.8125rem;
+  text-align: start;
+  cursor: pointer;
+}
+
+.nx-binding-chip > svg {
+  flex: none;
+  color: var(--nx-builder-bound);
+}
+
+.nx-binding-chip > svg:last-child {
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * One line. Where the panel is narrow the source goes first, then the field
+ * is cut; the whole of both is on the chip's tooltip and in its name.
+ */
+.nx-binding-chip__text {
+  display: flex;
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* The field stays whole while it fits, and is cut only when it alone can't. */
+.nx-binding-chip__field {
+  flex: none;
+  max-inline-size: 100%;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+/* The source takes what room is left, cut with an ellipsis before the field. */
+.nx-binding-chip__source {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+}
+
+/*
+ * Fallback and Format, one under the other: their names in a column of the
+ * same width, so the two controls start at the same edge.
+ */
+.nx-binding__fallback {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.25rem;
+}
+
+.nx-binding__fallback-label {
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+}
+
+/* The Format menu shrinks with its column, its value cut rather than wrapped. */
+.nx-binding__format [data-slot="select-trigger"] {
+  min-width: 0;
+}
+
+/* Why a value was refused, or what an unset Format means: under its control. */
+.nx-binding__fallback > .nx-inspector__error,
+.nx-binding__fallback > .nx-inspector__note {
+  grid-column: 2;
+  margin: 0;
+}
+
+/*
+ * An image's Fallback: its name above it rather than beside it, so a file's
+ * picture, its name and the row's buttons have the whole width of the value.
+ */
+.nx-binding__fallback.nx-image-fallback {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.nx-image-fallback > .nx-inspector__error,
+.nx-image-fallback > .nx-inspector__note {
+  grid-column: 1;
+}
+
+/* An image's fallback: the address, its picture inside the field's start. */
+.nx-image-fallback__value {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-inline-size: 0;
+}
+
+.nx-image-fallback__address {
+  position: relative;
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.nx-image-fallback__thumb {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 0.375rem;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--nx-muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.nx-image-fallback__address[data-pictured] > input {
+  padding-inline-start: 2rem;
+}
+
+/* A long address is cut with an ellipsis until the field is being edited. */
+.nx-image-fallback__address > input:not(:focus) {
+  text-overflow: ellipsis;
+}
+
+/* The place kept for more ways to fill it, drawn only once it holds one. */
+.nx-image-fallback__actions:empty {
+  display: none;
+}
+
+.nx-image-fallback__actions {
+  display: flex;
+  flex: none;
+}
+
+/* The library button's hover: neutral, since it binds nothing. */
+.nx-image-fallback__library:hover,
+.nx-image-fallback__library[data-open] {
+  color: var(--nx-foreground);
+  border-color: var(--nx-border);
+  background: var(--nx-muted);
+}
+
+.nx-image-fallback__library:focus-visible,
+.nx-image-fallback__clear:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-image-fallback__library:disabled,
+.nx-image-fallback__clear:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/*
+ * A fallback chosen from the library, in the address field's place: its
+ * picture and its file name in a box of the field's height, a clear button
+ * at its end.
+ */
+.nx-image-fallback__media {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  /* Tight, so the name keeps the width the library button gave up outside. */
+  gap: 0.375rem;
+  min-inline-size: 0;
+  block-size: var(--nx-control-height);
+  padding-inline: 0.375rem 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font-size: 0.8125rem;
+}
+
+.nx-image-fallback__media-thumb {
+  flex: none;
+  inline-size: 1.5rem;
+  block-size: 1.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--nx-muted);
+}
+
+/*
+ * A file name cut in its middle (the row's chosen file):
+ * the start shrinks with an ellipsis, the end (the extension and a few
+ * letters before it) is never cut.
+ */
+.nx-middle-cut {
+  display: flex;
+  min-inline-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.nx-middle-cut__head {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nx-middle-cut__tail {
+  flex: none;
+}
+
+.nx-image-fallback__media-name {
+  flex: 1;
+}
+
+/*
+ * The library button inside the chosen file's box, at its end, against
+ * Remove with no gap between them: the pair take no more of the row than
+ * Remove and the button outside the box did, less the space between them,
+ * which goes to the name.
+ */
+.nx-image-fallback__media > .nx-image-fallback__library {
+  flex: none;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  margin-inline-start: -0.375rem;
+}
+
+/* A file the library no longer has: said in the muted voice of a note. */
+.nx-image-fallback__media[data-missing] .nx-image-fallback__media-name {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-image-fallback__clear {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--nx-muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.nx-image-fallback__clear:hover {
+  color: var(--nx-foreground);
+  background: var(--nx-muted);
+}
+
+/*
+ * The library picker under the Fallback row: a search, a three-column grid of
+ * the images it finds, each captioned with its file name, and the hint with
+ * the way to the full library below.
+ */
+.nx-library-pick__body {
+  display: flex;
+  flex-direction: column;
+  max-block-size: 26rem;
+}
+
+.nx-library-pick__search {
+  position: relative;
+  padding: 0.5rem 0.625rem;
+  border-block-end: 1px solid var(--nx-border);
+}
+
+.nx-library-pick__search > svg {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 1.125rem;
+  transform: translateY(-50%);
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+
+.nx-library-pick__search input {
+  block-size: 2rem;
+  padding-inline-start: 1.75rem;
+  font-size: 0.8125rem;
+  /* A placeholder longer than a narrow popover is cut, never clipped. */
+  text-overflow: ellipsis;
+}
+
+.nx-library-pick__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.375rem;
+  min-block-size: 0;
+  padding: 0.5rem;
+  overflow-y: auto;
+}
+
+/* Nothing found or not read: the message below says so in its place. */
+.nx-library-pick__grid:empty {
+  display: none;
+}
+
+.nx-library-pick__tile {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-muted);
+  cursor: pointer;
+}
+
+/* Standing in for the images while they are read. */
+.nx-library-pick__tile[data-loading] {
+  cursor: default;
+  animation: nx-library-pick-loading 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes nx-library-pick-loading {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-library-pick__tile[data-loading] {
+    animation: none;
+  }
+}
+
+.nx-library-pick__image {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+
+/* The file name over the tile's foot, on a plate of the surface it sits on. */
+.nx-library-pick__caption {
+  position: absolute;
+  inset-inline-start: 0.25rem;
+  inset-block-end: 0.1875rem;
+  max-inline-size: calc(100% - 0.5rem);
+  padding: 0 0.1875rem;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-background) 85%, transparent);
+  /* The admin's smallest text: a tile's name is how it is told apart. */
+  font-size: 0.75rem;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * The tile the arrows moved to, which Enter picks, and one under the pointer:
+ * a firmer edge. None is drawn before either, so no tile reads as chosen.
+ */
+.nx-library-pick__tile[data-active],
+.nx-library-pick__tile:hover,
+.nx-library-pick__address[data-active] {
+  border-color: var(--nx-foreground);
+}
+
+/* The file the row stores: ringed, as a chosen option is across the editor. */
+.nx-library-pick__tile[aria-selected="true"] {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/* An address typed into the search, offered as the fallback across the grid. */
+.nx-library-pick__address {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 0.5rem;
+  min-inline-size: 0;
+  padding: 0.375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.nx-library-pick__address[data-active] {
+  background: var(--nx-muted);
+}
+
+.nx-library-pick__address-thumb {
+  flex: none;
+  inline-size: 2.5rem;
+  block-size: 1.875rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--nx-muted);
+}
+
+.nx-library-pick__address-text {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  color: var(--nx-foreground);
+  font-size: 0.8125rem;
+}
+
+.nx-library-pick__address-text > small {
+  overflow: hidden;
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-library-pick__note {
+  margin: 0;
+  padding: 0.75rem;
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+}
+
+.nx-library-pick__foot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 0.5rem 0.625rem;
+  border-block-start: 1px solid var(--nx-border);
+}
+
+.nx-library-pick__hint {
+  margin: 0;
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+/* A link in look: the way out to the full library dialog. */
+.nx-library-pick__browse {
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  background: transparent;
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.nx-library-pick__browse:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}
+
+/* An unbind's note: what was kept, or why it could not be. */
+.nx-binding-note {
+  display: flex;
+  gap: 0.375rem;
+  align-items: flex-start;
+  margin: 0.25rem 0 0;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid color-mix(in oklch, var(--nx-success) 35%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-success) 8%, var(--nx-background));
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.nx-binding-note > svg {
+  flex: none;
+  margin-block-start: 0.0625rem;
+  color: var(--nx-success);
+}
+
+/* Kept in place of a field visitors can't read: amber, with its eye-off mark. */
+.nx-binding-note[data-tone="private"] > svg {
+  color: var(--nx-warning);
+}
+
+.nx-binding-note[data-tone="private"],
+.nx-binding-note[data-tone="refused"] {
+  border-color: color-mix(in oklch, var(--nx-warning) 45%, transparent);
+  background: color-mix(in oklch, var(--nx-warning) 10%, var(--nx-background));
+}
+
+/* The picker: the fields by source, each with its value as the author reads it. */
+/* Two classes, to outrank the popover's own width and padding. */
+[data-slot="popover-content"].nx-binding-popover {
+  inline-size: min(20rem, calc(100vw - 2rem));
+  padding: 0;
+}
+
+/* A long list scrolls inside the picker, its hint kept in view below it. */
+.nx-binding-picker {
+  display: flex;
+  flex-direction: column;
+  max-block-size: 24rem;
+}
+
+.nx-binding-picker__hint,
+.nx-binding-picker__note {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+}
+
+.nx-binding-picker__hint {
+  border-block-start: 1px solid var(--nx-border);
+}
+
+/* A source the host could not read, said above the fields that did list. */
+.nx-binding-picker__failed {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-block-end: 1px solid var(--nx-border);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-warning) 10%, var(--nx-background));
+  font-size: 0.75rem;
+}
+
+.nx-binding-option {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+.nx-binding-option__name {
+  flex: none;
+}
+
+.nx-binding-option__parent {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-binding-option__preview {
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-binding-option__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.nx-binding-option__tag[data-tone="private"] {
+  border-color: color-mix(in oklch, var(--nx-warning) 45%, transparent);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-warning) 10%, var(--nx-background));
 }

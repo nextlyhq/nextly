@@ -78,6 +78,7 @@ import { describe, expect, it } from "vitest";
 // changes — leaving the guard silent for exactly the edit it exists to catch.
 import * as blocksEntry from "./blocks/index";
 import * as environmentEntry from "./environment";
+import * as iconsEntry from "./icons/lucide";
 import * as rootEntry from "./index";
 import * as nextEntry from "./next";
 
@@ -94,6 +95,7 @@ const SENTINELS: Readonly<Record<string, string>> = {
   "./next": "createBlocksPage",
   "./blocks": "coreBlocks",
   "./environment": "useBlockEnvironment",
+  "./icons/lucide": "resolveLucideIcon",
 };
 
 /** The same entries as modules, keyed the way the manifest spells them. */
@@ -102,6 +104,7 @@ const ENTRY_MODULES: Readonly<Record<string, Record<string, unknown>>> = {
   "./next": nextEntry,
   "./blocks": blocksEntry,
   "./environment": environmentEntry,
+  "./icons/lucide": iconsEntry,
 };
 
 /**

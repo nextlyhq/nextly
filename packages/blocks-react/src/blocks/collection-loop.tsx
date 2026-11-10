@@ -9,10 +9,12 @@
  * duplicate JS template for live preview. Here the canvas and the page run the
  * same function.
  *
- * Failure is contained rather than fatal: a query that throws renders nothing
- * and the page survives. That is the "strict at publish, forgiving at render"
- * half of the migration policy applied to data — a page that cannot reach its
- * database should degrade, not disappear.
+ * Failure is contained rather than fatal: a query that throws draws the list's
+ * empty state and the page survives, and an author looking (the editor, a
+ * preview) is told what failed. That is the "strict at publish, forgiving at
+ * render" half of the migration policy applied to data — a page that cannot
+ * reach its database should degrade, not disappear. How the stored query
+ * becomes reads is `list-read`'s.
  *
  * The template is drawn once per entry rather than drawn once and copied, with
  * the entry named on the context each time. That is the whole reason a slot is
@@ -26,88 +28,89 @@ import {
   type BlockDefinition,
   blockTypeClassName,
   CHILD_GAP_CLASS,
+  COLLECTION_LIST_TYPE,
   defineBlock,
+  NAMED_QUERY_TEXT,
+  type ListFilter,
+  type ListNamedQuery,
+  type ListRelation,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
-import type { BlockRenderArgs, PageContext } from "../context";
+import type { BlockRenderArgs, ListPageContext, PageContext } from "../context";
+import { LIST_ACTION_ATTRIBUTE, LIST_REF_ATTRIBUTE } from "../editor-markers";
 
 import { CONTENT } from "./categories";
 import { CONTAINER_CHILD_GAP } from "./container";
+import { withReadAhead } from "./list-batch";
+import { ListPages } from "./list-pages";
+import {
+  listPagesOf,
+  listPageWindow,
+  namedListBase,
+  readList,
+  wholeCount,
+  type ListOutcome,
+} from "./list-read";
+import { readNamedList } from "./named-read";
+import { readClaimOf } from "./props";
 
 export interface CollectionLoopProps {
-  /** The collection queried. */
+  /** The collection queried, or the collection a related source's entries are in. */
   collection?: string;
-  /** How many entries at most. */
+  /** How many entries at most: 1 to 100. */
   limit?: number;
   /**
-   * Sort keys, comma-separated, `-field` descending. A key the reader refuses
-   * lists in id order instead.
+   * Sort keys, comma-separated, `-field` descending. The id breaks ties, and
+   * empty values come last either way. A key the reader refuses lists in id
+   * order instead, and an author is told.
    */
   sort?: string;
+  /** Filter rows, all of which an entry must meet. */
+  filters?: ListFilter[];
+  /** How many matching entries to skip, from 0. */
+  offset?: number;
+  /** The to-many relation of the page's entry or the outer item to list. */
+  relation?: ListRelation;
+  /**
+   * Split into pages of `limit` entries, each at its own address
+   * (`/news/page/2`), with links between them. One list on a page may be.
+   */
+  paginate?: boolean;
+  /**
+   * A custom source: a named query a developer registered, and a literal for
+   * each of its inputs. The list's whole source, so `collection`,
+   * `relation`, `filters` and `sort` are absent beside it.
+   *
+   * @experimental
+   */
+  namedQuery?: ListNamedQuery;
 }
 
 /**
  * The key for one iteration.
  *
- * An entry's own id when it has one, of either type a database hands back, and
- * its position otherwise. Falling back for a numeric id would give every row in
- * a numerically-keyed collection a positional key, which is exactly the case
- * where reordering silently reuses the wrong DOM node.
+ * The row's own key when it has one, of either type a database hands back,
+ * and its position otherwise: an entry's id, or the field a named query
+ * declares its rows keyed by. Falling back for a numeric key would give every
+ * row in a numerically-keyed collection a positional key, which is exactly
+ * the case where reordering silently reuses the wrong DOM node.
  */
-function keyFor(item: Record<string, unknown>, index: number): string | number {
-  const id = item.id;
-  return typeof id === "string" || typeof id === "number" ? id : index;
-}
-
-/** The prop schema's bounds, applied to what was actually stored. */
-const MIN_LIMIT = 1;
-const MAX_LIMIT = 100;
-const DEFAULT_LIMIT = 10;
-
-/**
- * The number of entries to ask for.
- *
- * The schema's bounds describe what an editor offers, not what a document
- * holds: props are validated as an object and nothing more, so a stored or
- * migrated node can carry a limit of zero, of minus one, or of a million. The
- * value goes straight to a host-supplied data source, which may honour a huge
- * one or reject a malformed one and take the block with it.
- */
-function safeLimit(limit: number | undefined): number {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) {
-    return DEFAULT_LIMIT;
-  }
-  return Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, Math.floor(limit)));
-}
-
-/**
- * Whether a read failed because its sort was refused, and nothing else.
- *
- * Recognized by its shape, not its class, because this package does not
- * import the CMS: a refusal lists its problems, and every one is a sort key
- * the reader would not order by. That refusal comes before any read, so a
- * retry in id order costs no second read; any other failure, a timeout
- * included, may have reached the database and is not retried.
- */
-function sortWasRefused(error: unknown): boolean {
-  const errors = (error as { publicData?: { errors?: unknown } } | null)
-    ?.publicData?.errors;
-  return (
-    Array.isArray(errors) &&
-    errors.length > 0 &&
-    errors.every(
-      problem =>
-        (problem as { code?: unknown } | null)?.code === "FIELD_NOT_SORTABLE"
-    )
-  );
+export function listItemKey(
+  item: Readonly<Record<string, unknown>>,
+  index: number,
+  keyField = "id"
+): string | number {
+  const key = item[keyField];
+  return typeof key === "string" || typeof key === "number" ? key : index;
 }
 
 /**
  * This block's registered name, used for the definition and for the class each
- * entry's wrapper wears.
+ * entry's wrapper wears. The engine's, so the validator and the renderer name
+ * one block.
  */
-const COLLECTION_LOOP_BLOCK = "core/collection-loop";
+const COLLECTION_LOOP_BLOCK = COLLECTION_LIST_TYPE;
 
 /**
  * The classes an entry's wrapper wears: the block-type class and the gap
@@ -123,12 +126,318 @@ const COLLECTION_LOOP_BLOCK = "core/collection-loop";
  */
 const ENTRY_CLASS = `${blockTypeClassName(COLLECTION_LOOP_BLOCK)} ${CHILD_GAP_CLASS}`;
 
+/**
+ * The note an author sees about a list's read, and a visitor never: drawn
+ * only when the context says an author is looking. Unstyled here; the
+ * editor's chrome styles it by its data attribute.
+ */
+function diagnosticNote(
+  outcome: ListOutcome,
+  ctx: PageContext
+): ReactElement | null {
+  if (ctx.diagnostics !== true || outcome.diagnostic === undefined) return null;
+  const { kind, message, ref } = outcome.diagnostic;
+  // One action, on the editor's canvas only: a sort that fell back is fixed
+  // by choosing another field, which the canvas takes the author to. A failed
+  // read has no one fix, so its note stays words alone, except that the log
+  // reference a failed run names can be copied, to quote to a developer.
+  const offersChoice = ctx.listNoteActions === true && kind === "sort-fallback";
+  const offersCopy = ctx.listNoteActions === true && ref !== undefined;
+  return (
+    <div role="status" data-nx-list-diagnostic={kind}>
+      <span>
+        <NoteWords message={message} reference={ref} /> Only you see this
+        message.
+      </span>
+      {offersChoice ? (
+        <button
+          type="button"
+          {...{ [LIST_ACTION_ATTRIBUTE]: "choose-sort-field" }}
+        >
+          Choose a field
+        </button>
+      ) : null}
+      {offersCopy ? (
+        <button
+          type="button"
+          aria-label={`${NAMED_QUERY_TEXT.copyRef} ${ref}`}
+          {...{
+            [LIST_ACTION_ATTRIBUTE]: "copy-ref",
+            [LIST_REF_ATTRIBUTE]: ref,
+          }}
+        >
+          {/* Both words drawn, one shown: the canvas marks the button copied
+              for a moment, and its sheet shows the second word then. */}
+          <span data-nx-list-copy="ready">{NAMED_QUERY_TEXT.copyRef}</span>
+          <span data-nx-list-copy="done">{NAMED_QUERY_TEXT.copiedRef}</span>
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A note's words, the log reference among them set apart as code, so it
+ * reads as the exact text to quote and selects as one word.
+ */
+function NoteWords({
+  message,
+  reference,
+}: {
+  message: string;
+  reference: string | undefined;
+}): ReactElement {
+  const at = reference === undefined ? -1 : message.indexOf(reference);
+  if (reference === undefined || at < 0) return <>{message}</>;
+  return (
+    <>
+      {message.slice(0, at)}
+      <code data-nx-list-ref="">{reference}</code>
+      {message.slice(at + reference.length)}
+    </>
+  );
+}
+
+/**
+ * The marks on a list's root an editor tags it with, while an author is
+ * looking: that its author chose a new source that waits for an input, and
+ * that it draws what a visitor reads, each with the tag's words.
+ */
+function tagMarks(ctx: PageContext, nodeId: string): Record<string, string> {
+  if (ctx.diagnostics !== true) return {};
+  const still = ctx.listsStillShowing?.get(nodeId);
+  const visitors = ctx.listsShowingVisitors?.get(nodeId);
+  return {
+    ...(still === undefined ? {} : { "data-nx-list-still": still }),
+    ...(visitors === undefined ? {} : { "data-nx-list-visitors": visitors }),
+  };
+}
+
+/**
+ * Tell an editor that asks how many entries a list drew, only while an
+ * author is looking, and only for a list drawn once: one inside another
+ * list's entries is drawn once per entry, under one id, which no single
+ * count describes. A throw from the editor's handler is contained, so it
+ * never fails the list.
+ */
+function reportShown(ctx: PageContext, nodeId: string, shown: number): void {
+  if (ctx.diagnostics !== true || ctx.listShown === undefined) return;
+  if (ctx.item !== undefined) return;
+  try {
+    ctx.listShown(nodeId, shown);
+  } catch {
+    // The editor's own concern; the list is drawn regardless.
+  }
+}
+
+/**
+ * Why a list an author is looking at draws its empty state: they chose to
+ * see it, no entry matched, or the read failed. Written on the list's root
+ * for the editor's chrome, which tags the list with it, and only while an
+ * author is looking.
+ */
+type EmptyBecause = "chosen" | "none" | "failed";
+
+/** The marks on a list's root saying it draws its empty state, and why. */
+function emptyMarks(
+  ctx: PageContext,
+  because: EmptyBecause | undefined
+): Record<string, string> {
+  return ctx.diagnostics === true && because !== undefined
+    ? { "data-nx-list-shows": "empty", "data-nx-list-empty-because": because }
+    : {};
+}
+
+/**
+ * The context a list's template is drawn with when the list reads nothing:
+ * with NO item, not the item of a list around this one. What this list's
+ * item decides inside it would otherwise be judged, and shown, by an
+ * unrelated entry; with none, it fails closed instead.
+ */
+function withoutItem(ctx: PageContext): PageContext {
+  const {
+    item: _outerItem,
+    itemSource: _outerSource,
+    itemQuery: _outerQuery,
+    itemFollowed: _outerRows,
+    ...rest
+  } = ctx;
+  return rest;
+}
+
+/**
+ * The entries a list draws, and the context each is drawn with: the list's
+ * read for a collection or a relation, or its named query's run.
+ */
+interface ListRead {
+  readonly outcome: ListOutcome;
+  readonly itemContext: (item: Record<string, unknown>) => PageContext;
+  /** The field each row is keyed by; an entry's id when absent. */
+  readonly rowKey?: string;
+  /** How many entries match before the window, where the read says. */
+  readonly matching?: number;
+  /**
+   * The collection the entries are entries of, when they are one's: what
+   * their item bindings' relations are read ahead in.
+   */
+  readonly entriesOf?: string;
+}
+
+/**
+ * The page this render draws of the list `nodeId`, when the route pages it:
+ * the one list it names, so no other list on the page is paged by its
+ * address.
+ */
+function pagingOf(
+  props: CollectionLoopProps,
+  ctx: PageContext,
+  nodeId: string
+): ListPageContext | undefined {
+  return props.paginate === true && ctx.listPage?.nodeId === nodeId
+    ? ctx.listPage
+    : undefined;
+}
+
+/**
+ * A list whose source is a named query, read; `undefined` for any other
+ * list. Claims nothing up front: each read the query makes claims its own.
+ * Where the route pages the list, its run is asked for the page drawn, and
+ * must say how many rows match, which its links are counted from.
+ */
+async function readNamedSource(
+  props: CollectionLoopProps,
+  ctx: PageContext,
+  nodeId: string,
+  paging: ListPageContext | undefined
+): Promise<ListRead | "template" | undefined> {
+  const base = namedListBase(props);
+  if (base === undefined) return undefined;
+  if (ctx.namedQueries === undefined) return "template";
+  const itemOf =
+    (rowsCollection: string | undefined, query: string) =>
+    (item: Record<string, unknown>): PageContext => ({
+      ...ctx,
+      item,
+      itemQuery: query,
+      // A collection's entries bind as that collection's; rows of a declared
+      // schema bind as the query's, never as the outer list's collection.
+      itemSource: rowsCollection,
+    });
+  if ("blocking" in base) {
+    return {
+      outcome: {
+        items: [],
+        failed: true,
+        diagnostic: {
+          kind: "query-failed",
+          message: `This list couldn't load its entries, so visitors see its empty state. ${base.blocking}`,
+        },
+      },
+      itemContext: item => ({ ...ctx, item }),
+    };
+  }
+  const outcome = await readNamedList(
+    base.named,
+    listPageWindow(
+      { limit: base.limit, offset: base.offset },
+      paging?.page ?? 1
+    ),
+    { ...ctx, namedQueries: ctx.namedQueries },
+    nodeId,
+    { counted: paging !== undefined }
+  );
+  return {
+    outcome,
+    itemContext: itemOf(outcome.rowsCollection, base.named.name),
+    ...(outcome.rowsCollection === undefined
+      ? {}
+      : { entriesOf: outcome.rowsCollection }),
+    ...(outcome.rowKey === undefined ? {} : { rowKey: outcome.rowKey }),
+    ...(outcome.total === undefined ? {} : { matching: outcome.total }),
+  };
+}
+
+/**
+ * The links between a list's pages, under its entries, when the route pages
+ * it and its read succeeded: counted by the route where it served this page
+ * by a count, and otherwise from the read's own count of matching entries.
+ */
+function pageLinks(
+  paging: ListPageContext | undefined,
+  read: Pick<ListRead, "outcome" | "matching">,
+  props: CollectionLoopProps,
+  partClass: BlockRenderArgs<CollectionLoopProps>["partClass"]
+): ReactElement | null {
+  if (paging === undefined || read.outcome.failed) return null;
+  return (
+    <ListPages
+      page={paging.page}
+      pages={
+        // The route's own count where it served this page by one, so the
+        // links never depend on a total this read may not report.
+        paging.pages ??
+        (read.matching === undefined ? 1 : listPagesOf(props, read.matching))
+      }
+      href={paging.href}
+      parts={{
+        nav: partClass("pages"),
+        link: partClass("page-link"),
+        current: partClass("current-page"),
+        gap: partClass("page-gap"),
+      }}
+    />
+  );
+}
+
 export async function renderCollectionLoop({
   props,
+  node,
   renderSlot,
+  spacingMode,
   className,
+  partClass,
   ctx,
 }: BlockRenderArgs<CollectionLoopProps>): Promise<ReactElement> {
+  // An author asked to design what visitors see when nothing matches: the
+  // empty state alone, with nothing read. Only where an author is looking.
+  if (
+    ctx.diagnostics === true &&
+    ctx.listsShowingEmpty?.has(node.id) === true
+  ) {
+    return (
+      <div
+        className={className}
+        {...emptyMarks(ctx, "chosen")}
+        {...tagMarks(ctx, node.id)}
+      >
+        {renderSlot("empty")}
+      </div>
+    );
+  }
+  // The page this render draws, when the route pages this list.
+  const paging = pagingOf(props, ctx, node.id);
+  // A custom source runs the developer's named query, as the page builder
+  // registered it, with a reader limited to what it declares.
+  const named = await readNamedSource(props, ctx, node.id, paging);
+  if (named === "template") {
+    // No host runs named queries here, as no data source answers a
+    // collection: the template, once, so an author still sees it, with no
+    // item, as an unconfigured list draws it.
+    return (
+      <div className={className} {...tagMarks(ctx, node.id)}>
+        {renderSlot("children", withoutItem(ctx))}
+      </div>
+    );
+  }
+  if (named !== undefined) {
+    // Rows that are a collection's entries read ahead as a list of that
+    // collection's entries does, drawn with the query's own item context.
+    return drawList(
+      await withReadAhead(named, node, ctx, named.entriesOf),
+      { className, renderSlot, spacingMode, ctx, nodeId: node.id },
+      pageLinks(paging, named, props, partClass)
+    );
+  }
   // A cleared text field persists as an empty string, which is a collection
   // nobody named rather than a collection called "". Querying for it fails, the
   // failure is swallowed below, and the block renders empty instead of showing
@@ -142,64 +451,228 @@ export async function renderCollectionLoop({
     // Nothing to query against, so the block renders its template once rather
     // than vanishing: an author placing a loop before choosing a collection
     // still sees what they are building.
-    return <div className={className}>{renderSlot("children")}</div>;
+    return (
+      <div className={className} {...tagMarks(ctx, node.id)}>
+        {renderSlot("children", withoutItem(ctx))}
+      </div>
+    );
   }
-  let items: Record<string, unknown>[] = [];
   // A loop inside a loop runs once per entry of the outer one, so depth in a
   // document becomes multiplication in queries. Claiming from a shared
   // allowance before reading is what keeps a page bounded; without one the
   // renderer is not counting, which is the editor drawing a single block.
-  if (ctx.queries?.take() === false) {
-    return <div className={className} />;
+  // The list a route pages had its first read claimed for it before any
+  // block was drawn, so it does not claim again.
+  // Past the allowance the list draws what visitors see when nothing
+  // matches, its designed empty state, as a list whose data is missing does,
+  // with no item: not the item of a list around this one.
+  const claim = { ...readClaimOf(node), kind: "entries" } as const;
+  if (paging?.claimed !== true && ctx.queries?.take(claim) === false) {
+    // Refused its read, it draws no entry, and says so as a list that drew.
+    reportShown(ctx, node.id, 0);
+    return (
+      <div
+        className={className}
+        {...emptyMarks(ctx, "none")}
+        {...tagMarks(ctx, node.id)}
+      >
+        {renderSlot("empty", withoutItem(ctx))}
+      </div>
+    );
   }
-  const sort =
-    typeof props.sort === "string" && props.sort.trim() !== ""
-      ? props.sort.trim()
-      : undefined;
-  const read = (sortKeys: string | readonly string[]) =>
-    data.find({
-      collection,
-      limit: safeLimit(props.limit),
-      // Always sent, so a loop with no sort lists in id order, the same on
-      // every read, rather than in whatever order a database returns.
-      sort: sortKeys,
-      // The locale the page is being rendered in. Without it the provider reads
-      // the default one, so a French page embeds English rows — the surrounding
-      // blocks translate and the looped content silently does not. Taken from
-      // the context rather than from a prop: which locale a page is in is the
-      // route's decision, not a per-block one an editor could contradict.
-      ...(ctx.locale === undefined ? {} : { locale: ctx.locale }),
-    });
-  try {
-    let result;
-    try {
-      result = await read(sort ?? []);
-    } catch (error) {
-      // A stored sort the reader refuses (a field since removed, or one the
-      // public may not read) would otherwise empty a published list. Once
-      // more in id order: the refusal comes before any read, so the one
-      // claim above still covers it. Any other failure is contained below.
-      if (sort === undefined || !sortWasRefused(error)) throw error;
-      result = await read([]);
-    }
-    items = Array.isArray(result.items) ? [...result.items] : [];
-  } catch {
-    // A page that cannot reach its data renders empty rather than failing.
-    items = [];
-  }
+  // The count of matching entries, as the read reports it, for the links.
+  let matching: number | undefined;
+  // Never throws: a page that cannot reach its data draws the list's empty
+  // state rather than failing, and an author is told why.
+  const outcome = await readList(
+    props,
+    collection,
+    ctx,
+    {
+      find: async query => {
+        const result = await data.find(query);
+        // A provider's own answer, held to what a count can be, as the
+        // route's count holds it: anything else draws no links, rather than
+        // links to `/page/NaN` the route would never serve.
+        matching = wholeCount(result.total);
+        return Array.isArray(result.items) ? [...result.items] : [];
+      },
+      claim: () => ctx.queries?.take(claim) !== false,
+    },
+    paging?.page
+  );
+  // What the entries' template reads, read ahead for all of them at once, so
+  // the list's cost does not grow with its length.
+  // An ordinary entry: the item is no named query's row, whatever the list
+  // around this one shows. Read ahead and drawn with the same context, so the
+  // read-ahead asks only for what each entry draws.
+  const contextOf = (item: Record<string, unknown>): PageContext => ({
+    ...ctx,
+    item,
+    itemSource: collection,
+    itemQuery: undefined,
+  });
+  const read = await withReadAhead(
+    { outcome, itemContext: contextOf },
+    node,
+    ctx,
+    collection
+  );
+  // The links between pages, under the entries, when the route pages this
+  // list and its read said how many entries it matches.
+  const pages = pageLinks(
+    paging,
+    { outcome, ...(matching === undefined ? {} : { matching }) },
+    props,
+    partClass
+  );
+  return drawList(
+    read,
+    { className, renderSlot, spacingMode, ctx, nodeId: node.id },
+    pages
+  );
+}
+
+/**
+ * A list drawn from its read: each entry with the template, or the empty
+ * state, then the links between its pages when it has them.
+ */
+function drawList(
+  read: ListRead,
+  args: Pick<
+    BlockRenderArgs<CollectionLoopProps>,
+    "className" | "renderSlot" | "spacingMode" | "ctx"
+  > & { readonly nodeId: string },
+  pages: ReactElement | null = null
+): ReactElement {
+  const { outcome, itemContext } = read;
+  const { className, renderSlot, spacingMode, ctx } = args;
+  // How many entries this list drew, told to an editor that asks, so what
+  // it says of the list is of what is drawn, never of a read made again.
+  reportShown(ctx, args.nodeId, outcome.items.length);
+  const note = diagnosticNote(outcome, ctx);
+  const marks = {
+    ...emptyMarks(
+      ctx,
+      outcome.items.length > 0 ? undefined : outcome.failed ? "failed" : "none"
+    ),
+    ...tagMarks(ctx, args.nodeId),
+  };
+  // Nothing matched, or the read failed: the designable empty state, as a
+  // visitor sees it. Otherwise each entry, drawn with the template.
+  const content =
+    outcome.items.length === 0
+      ? renderSlot("empty")
+      : outcome.items.map((item, index) => (
+          <div
+            key={listItemKey(item, index, read.rowKey)}
+            // Under the classic model no gap is written, so an entry wears
+            // nothing: its blocks space themselves with their own margins.
+            {...(spacingMode === "classic" ? {} : { className: ENTRY_CLASS })}
+          >
+            {/* Drawn again per entry, with this entry on the context, so
+                anything inside the template reads its own values rather than
+                the first entry's. Its source goes with it, so an item
+                binding is checked against that source's fields. */}
+            {renderSlot("children", itemContext(item))}
+          </div>
+        ));
+  // The note, when an author is looking, goes above what visitors see.
   return (
-    <div className={className}>
-      {items.map((item, index) => (
-        <div key={keyFor(item, index)} className={ENTRY_CLASS}>
-          {/* Drawn again per entry, with this entry on the context, so anything
-              inside the template reads its own values rather than the first
-              entry's. */}
-          {renderSlot("children", { ...ctx, item })}
-        </div>
-      ))}
+    <div className={className} {...marks}>
+      {note}
+      {content}
+      {pages}
     </div>
   );
 }
+
+/** A page link's own colours, in both themes, from the site's tokens. */
+const PAGE_LINK_BORDER = {
+  width: {
+    blockStart: "1px",
+    blockEnd: "1px",
+    inlineStart: "1px",
+    inlineEnd: "1px",
+  },
+  style: "solid",
+} as const;
+
+/**
+ * The links between a list's pages, named so a site styles them as it
+ * styles the list. They must read as controls in a host whose reset strips
+ * a link of everything but its text, so each states a box, a border a person
+ * can see (`color.border-strong`, the one that clears 3:1 against the page)
+ * and a size a finger can hit; the current page is filled with the primary
+ * colour. Colours are tokens, so both themes hold.
+ */
+const COLLECTION_LOOP_PARTS = {
+  pages: {
+    baseStyles: {
+      base: {
+        base: {
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "0.5rem",
+          margin: { blockStart: "2rem" },
+        },
+      },
+    },
+  },
+  "page-link": {
+    baseStyles: {
+      base: {
+        base: {
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          boxSizing: "border-box",
+          minWidth: "2.5rem",
+          minHeight: "2.5rem",
+          padding: { inlineStart: "0.75rem", inlineEnd: "0.75rem" },
+          borderRadius: "6px",
+          border: {
+            ...PAGE_LINK_BORDER,
+            color: { $token: "color.border-strong" },
+          },
+          backgroundColor: { $token: "color.background" },
+          color: { $token: "color.text" },
+          textDecoration: "none",
+        },
+      },
+      hover: {
+        base: { backgroundColor: { $token: "color.surface" } },
+      },
+    },
+  },
+  "current-page": {
+    baseStyles: {
+      base: {
+        base: {
+          border: { ...PAGE_LINK_BORDER, color: { $token: "color.primary" } },
+          backgroundColor: { $token: "color.primary" },
+          color: { $token: "color.background" },
+        },
+      },
+      // Kept filled under the pointer, which the plain link's hover would
+      // otherwise repaint.
+      hover: {
+        base: { backgroundColor: { $token: "color.primary" } },
+      },
+    },
+  },
+  "page-gap": {
+    baseStyles: {
+      base: {
+        base: {
+          padding: { inlineStart: "0.25rem", inlineEnd: "0.25rem" },
+          color: { $token: "color.text" },
+        },
+      },
+    },
+  },
+} as const;
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
@@ -218,16 +691,52 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
+    // Named "Collection list" for authors; the stored type keeps its old
+    // name, so pages already saved still name this block, and "loop" stays a
+    // keyword so a search for the old name finds it.
     editor: {
-      label: "Collection loop",
+      label: "Collection list",
       icon: "loop",
       category: CONTENT,
-      keywords: ["repeat", "query", "entries", "dynamic"],
+      keywords: ["repeat", "query", "entries", "dynamic", "loop"],
     },
     props: {
-      collection: { label: "Collection", type: "text" },
+      // Still text, as stored: `display` asks the editor to offer the site's
+      // collections, and the sort keys of the collection `collectionProp`
+      // names, rather than a field to type a slug or a key into. The editor
+      // draws all of a list's query as one group where `collection` sits,
+      // asked for by `display: "listFilters"`; the shapes are the engine's
+      // `readListQuery`, which every reader shares.
+      collection: { label: "Source", type: "text", display: "collection" },
+      relation: {
+        label: "Related entries",
+        type: "object",
+        display: "listRelation",
+        collectionProp: "collection",
+      },
+      filters: {
+        label: "Filters",
+        type: "array",
+        display: "listFilters",
+        collectionProp: "collection",
+      },
+      sort: {
+        label: "Sort by",
+        type: "text",
+        display: "sort",
+        collectionProp: "collection",
+      },
       limit: { label: "Number of items", type: "number", min: 1, max: 100 },
-      sort: { label: "Sort by", type: "text" },
+      offset: { label: "Skip the first", type: "number", min: 0 },
+      // A custom source: a named query a developer registered, and a value
+      // for each of its inputs, `{ name, params }`. Drawn by the same group
+      // as the rest of the query, in its Source menu and Inputs.
+      namedQuery: {
+        label: "Custom source",
+        type: "object",
+        display: "listNamedQuery",
+      },
+      paginate: { label: "Split into pages", type: "checkbox" },
     },
     defaultProps: { limit: 10 },
     example: { props: { collection: "posts", limit: 3 } },
@@ -244,7 +753,12 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       // a property of the collection being looped, which this block cannot see
       // from its own declaration.
       children: {},
+      // Drawn in place of the entries when none match, or when the read
+      // failed, so a visitor sees a designed "nothing here yet" rather than
+      // a gap. Left empty, the list shows nothing, as it always did.
+      empty: {},
     },
+    parts: COLLECTION_LOOP_PARTS,
     // Spaces one entry from the next, as any container spaces its blocks.
     childGap: CONTAINER_CHILD_GAP,
     supports: {
@@ -261,6 +775,8 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
     // them ZERO times. A reader of the stored document sees the template either
     // way and cannot tell which happened without running the query, so it is told
     // here instead — otherwise an empty loop's heading speaks for the page.
-    conditionalSlots: ["children"],
+    //
+    // The empty state is the other half: drawn only when no entry is.
+    conditionalSlots: ["children", "empty"],
     render: renderCollectionLoop,
   });

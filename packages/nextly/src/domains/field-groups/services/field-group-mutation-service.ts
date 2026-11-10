@@ -50,6 +50,10 @@ import {
   reachesPasswordField,
   storedPasswordValues,
 } from "../../../shared/lib/password-fields";
+import {
+  assignRepeaterRowIds,
+  reachesRepeaterField,
+} from "../../../shared/lib/repeater-row-ids";
 import { issuesTheReaderMaySee } from "../../../shared/lib/unreadable-field-issues";
 import type { Logger } from "../../../shared/types";
 import {
@@ -61,6 +65,7 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { resolveRequestedLocale } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
@@ -472,7 +477,7 @@ export class FieldGroupMutationService extends BaseService {
     /** Whether the companion physically exists, so callers can reuse it without re-probing. */
     companionExists: boolean;
   }> {
-    if (!this.localization || meta.localized !== true) {
+    if (!this.localization || !storesPerLanguage(meta)) {
       return {
         schema: null,
         main: data,
@@ -821,7 +826,7 @@ export class FieldGroupMutationService extends BaseService {
         if (resolved.has(slug)) continue;
         resolved.add(slug);
         const meta = await this.registryService.getComponentBySlug(slug);
-        if (!meta || meta.localized !== true) continue;
+        if (!meta || !storesPerLanguage(meta)) continue;
         // Reuse the same split the write performs: it raises the 409 when the
         // companion is missing and the fallback is unavailable, which is exactly the
         // decision needed here — and on the pooled adapter, outside any transaction.
@@ -841,7 +846,7 @@ export class FieldGroupMutationService extends BaseService {
    */
   private async resolveComponentReadiness(slug: string): Promise<void> {
     const meta = await this.registryService.getComponentBySlug(slug);
-    if (!meta || meta.localized !== true) return;
+    if (!meta || !storesPerLanguage(meta)) return;
     const schema = buildCompanionSchema({
       slug: meta.slug,
       tableName: meta.tableName,
@@ -2120,28 +2125,37 @@ export class FieldGroupMutationService extends BaseService {
     }
     // After validation, which judges what the writer sent: each password an
     // update left out of a container keeps its stored hash, whoever writes.
+    // The same stored containers are what its repeater rows keep their ids
+    // against, below; read once, and only where either step can use them.
     const keep = new Set(restoredHashes);
-    if (mode === "update" && slug !== undefined && storedId !== undefined) {
-      const reach = reachOf(nested);
-      if (reachesPasswordField(componentFields, reach)) {
-        const carried = carryStoredPasswords(
-          instance,
-          await this.storedContainerValues(slug, storedId, componentFields),
-          componentFields,
-          reach
-        );
-        for (const hash of carried) keep.add(hash);
-      }
+    const reach = reachOf(nested);
+    const carriesPasswords = reachesPasswordField(componentFields, reach);
+    const stored =
+      mode === "update" &&
+      slug !== undefined &&
+      storedId !== undefined &&
+      (carriesPasswords || reachesRepeaterField(componentFields, reach))
+        ? await this.storedContainerValues(slug, storedId, componentFields)
+        : undefined;
+    if (carriesPasswords && stored) {
+      const carried = carryStoredPasswords(
+        instance,
+        stored,
+        componentFields,
+        reach
+      );
+      for (const hash of carried) keep.add(hash);
     }
     // Through the field groups held inline in this one's containers too: their
     // passwords are stored in those containers, which no save of their own
     // reaches.
-    await hashPasswordFieldValues(
-      instance,
-      componentFields,
-      reachOf(nested),
-      keep
-    );
+    await hashPasswordFieldValues(instance, componentFields, reach, keep);
+    // Last, once the field rules and the password pass have decided the
+    // value: every repeater row in the instance gets its saved id, paired
+    // with the stored instance's rows on an update and fresh on a create.
+    // The instance's own id is not a field and is left as the save path set
+    // it.
+    assignRepeaterRowIds(instance, stored, componentFields, reach);
   }
 
   /**
@@ -2350,7 +2364,7 @@ export class FieldGroupMutationService extends BaseService {
       return undefined;
     }
     const meta = await this.registryService.getComponent(slug, scope.executor);
-    if (meta.localized !== true) return undefined;
+    if (!storesPerLanguage(meta)) return undefined;
     const schema = buildCompanionSchema({
       slug: meta.slug,
       tableName: meta.tableName,

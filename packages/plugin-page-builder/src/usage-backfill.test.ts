@@ -19,7 +19,13 @@ import {
 import { backfillScopeKey, type BackfillScope } from "./usage-backfill-scope";
 
 function scope(field: string): BackfillScope {
-  return { entity: "pages", field, locale: "", variant: "published" };
+  return {
+    scope: "collection",
+    entity: "pages",
+    field,
+    locale: "",
+    variant: "published",
+  };
 }
 
 /** What a rebuild that walked its scope to the end answers. */

@@ -22,9 +22,11 @@ import type {
   BreakpointSet,
   NamedClass,
   NodeStyles,
+  SiteTokenSet,
   StyleState,
+  TokenMode,
 } from "@nextlyhq/blocks-engine";
-import { findNode } from "@nextlyhq/blocks-engine";
+import { findNode, getBlock } from "@nextlyhq/blocks-engine";
 import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -34,7 +36,9 @@ import { ClassSelector } from "./class-selector";
 import { EditingBar, type EditTarget } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { designReadOnlyReason, lockViewOf } from "./inspector";
-import type { BuilderOp } from "./ops";
+import { lookLineWords, looksOfType, wornLook } from "./look-tiles";
+import { LookTiles } from "./look-tiles-view";
+import type { BuilderOp } from "./op-vocabulary";
 import {
   sharedStyleReachSentence,
   type SharedStyleReach,
@@ -116,6 +120,12 @@ export function useStyleTarget(
 ): {
   target: StyleTarget;
   choose: (id: string | null) => void;
+  /**
+   * Why the selected block's design is held, or `undefined`: the one
+   * reading the target falls back on and the bar holds its chips by, so
+   * what an author may choose and where an edit goes cannot disagree.
+   */
+  held: string | undefined;
 } {
   const nodeId = editor.selectedId;
   const [chosen, setChosen] = React.useState<{
@@ -134,13 +144,24 @@ export function useStyleTarget(
     },
     [nodeId]
   );
+  // A block whose design is held (locked, or inside contentOnly) keeps the
+  // block as the target: its shared style's values are its design here, and
+  // editing them from this block would change that design all the same. A
+  // choice made before the hold landed falls back with it.
+  const held =
+    nodeId === null
+      ? undefined
+      : designReadOnlyReason(editor.document, nodeId, lockViewOf(editor));
   const read =
-    chosen !== null && chosen.nodeId === nodeId && host !== undefined
+    chosen !== null &&
+    chosen.nodeId === nodeId &&
+    host !== undefined &&
+    held === undefined
       ? worn.find(row => row.id === chosen.id)
       : undefined;
   const queued = useQueuedStyles(read, host);
   if (read === undefined || host === undefined || queued === undefined) {
-    return { target: { kind: "block", worn }, choose };
+    return { target: { kind: "block", worn }, choose, held };
   }
   return {
     target: {
@@ -155,6 +176,35 @@ export function useStyleTarget(
       write: queued.write,
     },
     choose,
+    held,
+  };
+}
+
+/**
+ * The target for a look edited on its own, with no block selected: the look,
+ * read and written as a shared style is, its edits queued the same way.
+ * `undefined` while there is no look, or no host to store it.
+ *
+ * @experimental Settles with the Design panel's Block looks group.
+ */
+export function useLookTarget(
+  look: SharedStyleRow | undefined,
+  host: SharedStylesHost | undefined
+): StyleTarget | undefined {
+  const queued = useQueuedStyles(look, host);
+  if (look === undefined || host === undefined || queued === undefined) {
+    return undefined;
+  }
+  return {
+    kind: "shared",
+    worn: NONE,
+    style: queued.style,
+    readOnly: !host.mayChange
+      ? NO_DESIGN_RIGHT
+      : look.locked
+        ? lockedStyleReason(look.name)
+        : undefined,
+    write: queued.write,
   };
 }
 
@@ -273,7 +323,13 @@ export interface StyleTargetBarProps {
   readonly editor: EditorState;
   readonly target: StyleTarget;
   readonly onChoose: (id: string | null) => void;
+  /** Why the block's design is held, as {@link useStyleTarget} read it. */
+  readonly held: string | undefined;
   readonly library: readonly NamedClass[] | undefined;
+  /** The site's tokens, for drawing the look tiles as the canvas shows them. */
+  readonly tokens?: SiteTokenSet;
+  /** The mode the selected block is drawn in, which the tiles draw in. */
+  readonly tokenMode: TokenMode;
   readonly libraryAbsence?: "pending" | "failed";
   readonly host: SharedStylesHost | undefined;
   /** The shared block verbs, for "Save as shared style…". */
@@ -317,6 +373,7 @@ function chipActions(
 ): {
   onRemove?: (id: string) => void;
   onDetach?: (id: string) => void;
+  detachHeld?: (id: string) => string | undefined;
 } {
   if (nodeId === null) return {};
   return {
@@ -328,23 +385,33 @@ function chipActions(
         report
       ),
     onDetach: id => {
-      const style = worn.find(row => row.id === id);
-      if (style === undefined) return;
+      const plan = detachPlan(id);
+      if (plan === undefined) return;
       applyPlan(
         editor,
-        planDetachSharedStyle(
-          editor.document,
-          nodeId,
-          style,
-          worn,
-          lockViewOf(editor),
-          breakpoints
-        ),
-        `${style.name} could not be detached from this block: the page could not take the change.`,
+        plan,
+        `${nameOf(worn, id)} could not be detached from this block: the page could not take the change.`,
         report
       );
     },
+    // The same plan, read before the click, so a refusal holds the item.
+    detachHeld: id => {
+      const plan = detachPlan(id);
+      return plan === undefined || plan.ok ? undefined : plan.reason;
+    },
   };
+  function detachPlan(id: string) {
+    const style = worn.find(row => row.id === id);
+    if (style === undefined || nodeId === null) return undefined;
+    return planDetachSharedStyle(
+      editor.document,
+      nodeId,
+      style,
+      worn,
+      lockViewOf(editor),
+      breakpoints
+    );
+  }
 }
 
 /** A worn style's name by its id, for words about it. */
@@ -357,6 +424,7 @@ export function StyleTargetBar({
   editor,
   target,
   onChoose,
+  held,
   library,
   libraryAbsence,
   host,
@@ -365,6 +433,8 @@ export function StyleTargetBar({
   breakpoints,
   state,
   stateControl,
+  tokens,
+  tokenMode,
 }: StyleTargetBarProps): React.JSX.Element {
   const nodeId = editor.selectedId;
   // The bar has no line of its own for a refusal, so it speaks through the
@@ -375,38 +445,106 @@ export function StyleTargetBar({
     target.kind === "shared" ? target.style.id : undefined,
     host
   );
-  const held =
-    nodeId === null
-      ? undefined
-      : designReadOnlyReason(editor.document, nodeId, lockViewOf(editor));
   const worn = target.worn;
   return (
-    <EditingBar
-      target={editTargetOf(target, reach)}
-      chips={worn.map(row => ({
-        id: row.id,
-        name: row.name,
-        className: row.className,
-        locked: row.locked,
-      }))}
-      onTargetChange={host === undefined ? undefined : onChoose}
-      {...chipActions(editor, nodeId, worn, report, breakpoints)}
-      chipActionsHeld={held}
-      sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
-      actions={
-        nodeId === null || worn.length > 0 || held !== undefined ? null : (
-          <BarActions
-            editor={editor}
-            nodeId={nodeId}
-            library={library}
-            libraryAbsence={libraryAbsence}
-            verbs={verbs}
-          />
-        )
-      }
-      device={device}
-      state={state}
-      stateControl={stateControl}
+    <>
+      <LookTiles
+        editor={editor}
+        library={library}
+        held={held}
+        tokens={tokens}
+        mode={tokenMode}
+        onRefused={report}
+      />
+      <EditingBar
+        target={editTargetOf(target, reach)}
+        chips={worn.map(row => ({
+          id: row.id,
+          name: row.name,
+          className: row.className,
+          locked: row.locked,
+        }))}
+        onTargetChange={host === undefined ? undefined : onChoose}
+        {...chipActions(editor, nodeId, worn, report, breakpoints)}
+        {...wornLookLine(editor, nodeId, worn, library)}
+        chipActionsHeld={held}
+        // The shared chips too: choosing one would edit the held design.
+        targetHeld={held}
+        sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
+        actions={offeredActions({
+          editor,
+          nodeId,
+          worn,
+          held,
+          library,
+          libraryAbsence,
+          verbs,
+        })}
+        device={device}
+        state={state}
+        stateControl={stateControl}
+      />
+    </>
+  );
+}
+
+/**
+ * The bar's line about the look the block wears, if it wears one: that an
+ * edit here changes this block only, and how to change the look everywhere.
+ */
+function wornLookLine(
+  editor: EditorState,
+  nodeId: string | null,
+  worn: readonly SharedStyleRow[],
+  library: readonly NamedClass[] | undefined
+): { wornLook?: { id: string; here: string; everywhere: string } } {
+  const node =
+    nodeId === null ? undefined : findNode(editor.document.nodes, nodeId);
+  if (node === undefined || library === undefined) return {};
+  // The look the canvas applies, as the tiles read it: one answer for both.
+  const id = wornLook(node.classes, looksOfType(library, node.type));
+  const look = worn.find(row => row.id === id);
+  if (look === undefined) return {};
+  const label = getBlock(node.type)?.editor?.label ?? "block";
+  return {
+    wornLook: {
+      id: look.id,
+      ...lookLineWords(look.name, label),
+    },
+  };
+}
+
+/**
+ * Line one's actions, or none: only for a block that wears no shared style
+ * and whose design isn't held. A look is worn beside a shared style, so
+ * "Apply" and "Save as" stay on offer while the block wears only a look.
+ */
+function offeredActions({
+  editor,
+  nodeId,
+  worn,
+  held,
+  library,
+  libraryAbsence,
+  verbs,
+}: {
+  editor: EditorState;
+  nodeId: string | null;
+  worn: readonly SharedStyleRow[];
+  held: string | undefined;
+  library: readonly NamedClass[] | undefined;
+  libraryAbsence: "pending" | "failed" | undefined;
+  verbs: CardVerbs | undefined;
+}): React.JSX.Element | null {
+  const wearsSharedStyle = worn.some(row => row.look !== true);
+  if (nodeId === null || wearsSharedStyle || held !== undefined) return null;
+  return (
+    <BarActions
+      editor={editor}
+      nodeId={nodeId}
+      library={library}
+      libraryAbsence={libraryAbsence}
+      verbs={verbs}
     />
   );
 }

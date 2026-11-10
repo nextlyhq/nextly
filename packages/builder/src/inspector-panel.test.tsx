@@ -17,6 +17,7 @@
  * @module inspector-panel.test
  */
 import {
+  act,
   cleanup,
   createEvent,
   fireEvent,
@@ -29,13 +30,16 @@ import * as React from "react";
 
 import { createBlockResolver } from "@nextlyhq/blocks-react";
 import {
+  BASE_BREAKPOINT,
   clearBlocks,
   hasBlock,
   registerBlocks,
   type BlockDocument,
   type BlockNode,
+  type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 
+import type { ContentServices } from "./content-controls";
 import { editedStyleState, InspectorPanel } from "./inspector-panel";
 import { applyOp } from "./ops";
 import type { EditorState } from "./editor-state";
@@ -388,6 +392,65 @@ function openAdvanced(): void {
   }
 }
 
+describe("the picture the canvas draws, carried to the focal point", () => {
+  it("previews a contextual point where the canvas resolves it", () => {
+    /*
+     * The whole chain, from the canvas to the preview: the panel reads where
+     * the canvas places the picture and lends it, through the style tab and
+     * the panel's sections, to the focal point. A point the inspector cannot
+     * resolve itself (a variable) previews where the canvas put it, and a
+     * link dropped anywhere on the way previews the inspector's default.
+     */
+    // A block whose style tab offers only its dimensions, opened first.
+    registerBlocks(
+      [
+        {
+          name: "acme/picture",
+          version: 1,
+          description: "A picture.",
+          example: { props: {} },
+          editor: { label: "Picture" },
+          props: {},
+          supports: { dimensions: true },
+          render: () => null,
+        },
+      ] as never,
+      { source: "inspector-panel-test" }
+    );
+    const canvas = document.createElement("div");
+    canvas.innerHTML =
+      '<img data-nx-node="a" src="/team.png" alt="" style="object-position: 100% 0%">';
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: {
+          objectFit: "cover",
+          objectPosition: "var(--image-focus)",
+        },
+      },
+    } as NodeStyles;
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({ type: "acme/picture", styles }))}
+        canvasRoot={canvas}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    const backdrop = document.querySelector(
+      ".nx-focal__picture"
+    ) as HTMLImageElement | null;
+    expect(backdrop?.getAttribute("src")).toBe("/team.png");
+    expect(backdrop?.style.objectPosition).toBe("100% 0%");
+  });
+});
+
+/** The block card's title; a section under it draws a heading of its own. */
+function cardTitle(): HTMLElement {
+  const card = document.querySelector("[data-block-card]") as HTMLElement;
+  return within(card).getByRole("heading");
+}
+
 describe("InspectorPanel block card", () => {
   it("shows the icon, the author's label beside the type, and the description", () => {
     mount({ name: "Hero title" });
@@ -459,7 +522,7 @@ describe("InspectorPanel block card", () => {
 
   it("renames from a double-click on the title too", () => {
     const editor = mount({ name: "Hero title" });
-    fireEvent.doubleClick(screen.getByRole("heading"));
+    fireEvent.doubleClick(cardTitle());
 
     const field = screen.getByLabelText("Label");
     fireEvent.change(field, { target: { value: "Intro" } });
@@ -477,23 +540,21 @@ describe("InspectorPanel block card", () => {
     // the field and straight out of it. Writing there would put an op with no
     // effect on the undo stack, so one press of undo would appear to do nothing.
     const editor = mount({ name: "Hero title" });
-    fireEvent.doubleClick(screen.getByRole("heading"));
+    fireEvent.doubleClick(cardTitle());
     fireEvent.blur(screen.getByLabelText("Label"));
 
-    fireEvent.doubleClick(screen.getByRole("heading"));
+    fireEvent.doubleClick(cardTitle());
     const field = screen.getByLabelText("Label");
     fireEvent.change(field, { target: { value: "Something else" } });
     fireEvent.keyDown(field, { key: "Escape" });
 
     expect(editor.apply).not.toHaveBeenCalled();
-    expect(screen.getByRole("heading").textContent).toBe(
-      "Hero title · Heading"
-    );
+    expect(cardTitle().textContent).toBe("Hero title · Heading");
   });
 
   it("clears the label by unsetting the field", () => {
     const editor = mount({ name: "Hero title" });
-    fireEvent.doubleClick(screen.getByRole("heading"));
+    fireEvent.doubleClick(cardTitle());
     const field = screen.getByLabelText("Label");
     fireEvent.change(field, { target: { value: "  " } });
     fireEvent.blur(field);
@@ -541,6 +602,19 @@ describe("InspectorPanel block card", () => {
       patch: {},
       unset: ["locked"],
     });
+  });
+
+  it("says why a locked block is held once, in its card, in one wording", () => {
+    // The card's lock line already says it, and so does a held control's
+    // tooltip: a line under the Style tab's bar said it a third time, and
+    // in other words.
+    mount({ locked: true, props: { text: "Hi" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(document.querySelector('[data-lock="layers"]')?.textContent).toBe(
+      "Locked: it can't be moved, deleted or edited. Unlock it from the block's menu."
+    );
+    expect(document.querySelector('[data-read-only="style"]')).toBeNull();
   });
 
   it("says a block inside a locked one is locked by it, withholds Rename, and offers Lock", () => {
@@ -874,9 +948,7 @@ describe("InspectorPanel advanced fields", () => {
     // answers "which of six headings is this" under every tab.
     mount({ name: "Hero title" });
     openAdvanced();
-    expect(screen.getByRole("heading").textContent).toBe(
-      "Hero title · Heading"
-    );
+    expect(cardTitle().textContent).toBe("Hero title · Heading");
   });
 });
 
@@ -2234,3 +2306,46 @@ describe("a block inside an area locked to its content", () => {
 function document_(): Document {
   return globalThis.document;
 }
+
+describe("Show when, as the selection moves", () => {
+  it("keeps a condition not yet finished with the block it was added to", async () => {
+    register();
+    const two = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/heading", version: 1, props: {} },
+        { id: "b", type: "acme/heading", version: 1, props: {} },
+      ],
+    } as unknown as BlockDocument;
+    const services: ContentServices = {
+      listLoopCollections: async () => [
+        {
+          slug: "posts",
+          label: "Posts",
+          fields: [{ name: "title", label: "Title", kind: "text" }],
+        },
+      ],
+      entryCollection: "posts",
+    };
+    const on = (id: string): EditorState => ({
+      ...editorFor(two),
+      selectedId: id,
+      selection: { ids: [id], primary: id },
+    });
+    const { rerender } = render(
+      <InspectorPanel editor={on("a")} contentServices={services} />
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => {
+      screen.getByRole("button", { name: "Add condition" }).click();
+    });
+    // CONTROL: the new row is open on block a.
+    expect(screen.queryByText("Always shown.")).toBeNull();
+
+    rerender(<InspectorPanel editor={on("b")} contentServices={services} />);
+    expect(screen.getByText("Always shown.")).toBeTruthy();
+  });
+});

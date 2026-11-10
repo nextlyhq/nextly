@@ -68,6 +68,7 @@ export function renderRichText({
   className,
   markProp,
   hostPolicy,
+  spacingMode,
 }: BlockRenderArgs<RichTextBlockProps>): ReactElement {
   /*
    * The wrapper carries both the class and the mark, so the element an author
@@ -77,7 +78,18 @@ export function renderRichText({
    */
   return (
     <div className={className} {...markProp?.("content")}>
-      <RichText value={props.content} hostPolicy={hostPolicy} />
+      {/*
+       * Every heading carries its anchor, the id a table of contents bound to
+       * the same passage links to, so the two blocks agree without either
+       * being told about the other. Ids are unique within this passage;
+       * another passage on the page with the same heading repeats its id.
+       */}
+      <RichText
+        value={props.content}
+        hostPolicy={hostPolicy}
+        anchorHeadings={true}
+        {...(spacingMode === undefined ? {} : { spacingMode })}
+      />
     </div>
   );
 }

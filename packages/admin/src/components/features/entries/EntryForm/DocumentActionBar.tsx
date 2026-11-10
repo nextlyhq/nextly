@@ -32,7 +32,7 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import { ChevronDown, Loader2, MoreHorizontal } from "lucide-react";
-import type { JSX } from "react";
+import { Fragment, type JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -67,6 +67,18 @@ export interface ActionBinding {
    * permissions on every keystroke.
    */
   disabledReason?: string;
+  /**
+   * A way out of the reason, drawn as its own row directly under the held
+   * one: the held row cannot be focused, so what ends the hold has to be a
+   * control of its own to be reached by keyboard.
+   */
+  recovery?: ActionRecovery;
+}
+
+/** A control that ends what holds an action, such as Retry. */
+export interface ActionRecovery {
+  label: string;
+  onSelect: () => void;
 }
 
 /**
@@ -95,6 +107,8 @@ export interface ContributedBinding extends Omit<ActionBinding, "onSelect"> {
 /** The document as the editor holds it, unsaved edits included. */
 export interface DocumentAsEdited {
   values: Record<string, unknown>;
+  /** Whether those values hold edits not saved yet; absent where unknown. */
+  dirty?: boolean;
 }
 
 /** What a host with no form to read hands a contribution. */
@@ -124,7 +138,9 @@ export function acceptContributions(
    * The form's values, read at the moment a contribution is chosen rather
    * than when the editor drew, so an edit made since the last render counts.
    */
-  currentValues: () => Record<string, unknown> = NO_VALUES
+  currentValues: () => Record<string, unknown> = NO_VALUES,
+  /** Whether the form holds unsaved edits, read at the same moment. */
+  currentDirty?: () => boolean
 ): {
   actions: EditorDocumentAction[];
   bindings: Record<string, ActionBinding | undefined>;
@@ -140,7 +156,11 @@ export function acceptContributions(
     if (actions.includes(entry.action))
       bindings[entry.action.id] = {
         ...entry.binding,
-        onSelect: () => entry.binding.onSelect({ values: currentValues() }),
+        onSelect: () =>
+          entry.binding.onSelect({
+            values: currentValues(),
+            ...(currentDirty === undefined ? {} : { dirty: currentDirty() }),
+          }),
       };
   }
   return { actions, bindings };
@@ -285,14 +305,20 @@ export function DocumentActionBar({
   const toolbar = bound(actionsAt(available, "toolbar"), bindings);
   const groups = menuGroups(available);
   const publishItems = bound(actionsAt(available, "publish-menu"), bindings);
-  // The other ways to publish hang off the primary action only when it is
-  // Publish. Where saving leads (a clean published document) or nothing
-  // does, they lead More's document rows instead: an arrow on Save would
-  // offer scheduling as a kind of saving.
+  // The other ways to publish hang off whatever action leads, so a clean
+  // published document, where Save leads, can still be scheduled to come
+  // down. "Publish now" heads them where Publish leads: the press itself,
+  // named in the menu beside the ways to do it later. With nothing leading,
+  // they lead More's document rows instead.
   const publishLeads = primary?.action.id === PUBLISH_ACTION_ID;
-  const documentItems = publishLeads
-    ? bound(groups.document, bindings)
-    : [...publishItems, ...bound(groups.document, bindings)];
+  const arrowItems =
+    primary === undefined || publishItems.length === 0
+      ? []
+      : [...(publishLeads ? [publishNow(primary)] : []), ...publishItems];
+  const documentItems =
+    primary === undefined
+      ? [...publishItems, ...bound(groups.document, bindings)]
+      : bound(groups.document, bindings);
   const dangerItems = bound(groups.danger, bindings);
   const wideMenu = documentItems.length > 0 || dangerItems.length > 0;
   // A menu is drawn when it has a row to hold, folded controls included.
@@ -334,7 +360,7 @@ export function DocumentActionBar({
       {primary === undefined ? null : (
         <PrimaryAction
           primary={primary}
-          options={publishLeads ? publishItems : []}
+          options={arrowItems}
           pending={pending}
         />
       )}
@@ -353,6 +379,25 @@ export function DocumentActionBar({
 
 /** The built-in Publish's id, under both "Publish" and "Publish changes". */
 const PUBLISH_ACTION_ID = "publish";
+
+/**
+ * Publish, as the arrow's first row: the same binding as the press, and so the
+ * same reason when it is held.
+ */
+function publishNow(primary: Bound): Bound {
+  return {
+    action: {
+      ...primary.action,
+      id: PUBLISH_NOW_ACTION_ID,
+      label: "Publish now",
+      placement: "publish-menu",
+    },
+    binding: primary.binding,
+  };
+}
+
+/** The arrow's row for publishing at once. */
+const PUBLISH_NOW_ACTION_ID = "publish-now";
 
 /** What the arrow beside the primary action is called, and opens. */
 const PUBLISH_OPTIONS_LABEL = "More ways to publish";
@@ -452,15 +497,35 @@ function OptionRow({
 }) {
   const reason = reasonFor(action, binding);
   return (
-    <DropdownMenuItem
-      disabled={reason !== undefined}
-      // `onSelect`, which Radix withholds from a disabled item.
-      onSelect={binding.onSelect}
-      data-action={action.id}
-      className={cn(danger && "text-destructive focus:text-destructive")}
-      {...reasonAttributes(reason)}
-    >
-      <ActionRow label={action.label} reason={reason} />
+    <>
+      <DropdownMenuItem
+        disabled={reason !== undefined}
+        // `onSelect`, which Radix withholds from a disabled item.
+        onSelect={binding.onSelect}
+        data-action={action.id}
+        className={cn(danger && "text-destructive focus:text-destructive")}
+        {...reasonAttributes(reason)}
+      >
+        <ActionRow label={action.label} reason={reason} />
+      </DropdownMenuItem>
+      <RecoveryRow entry={{ action, binding }} />
+    </>
+  );
+}
+
+/**
+ * The way out of a held row, directly under it, where its binding offers one
+ * and it is held: an enabled row of its own, so the menu's keyboard reaches
+ * it as it skips the held one.
+ */
+function RecoveryRow({ entry: { action, binding } }: { entry: Bound }) {
+  const { recovery } = binding;
+  if (recovery === undefined || reasonFor(action, binding) === undefined) {
+    return null;
+  }
+  return (
+    <DropdownMenuItem onSelect={recovery.onSelect} data-retry-for={action.id}>
+      {recovery.label}
     </DropdownMenuItem>
   );
 }
@@ -589,12 +654,12 @@ function DocumentMenu({
         ))}
         {narrowItems.length > 0 && wideMenu ? <DropdownMenuSeparator /> : null}
         {documentItems.map(({ action, binding }) => (
-          <DropdownMenuItem
-            key={action.id}
-            disabled={reasonFor(action, binding) !== undefined}
-            onClick={binding.onSelect}
-            data-action={action.id}
-            /*
+          <Fragment key={action.id}>
+            <DropdownMenuItem
+              disabled={reasonFor(action, binding) !== undefined}
+              onClick={binding.onSelect}
+              data-action={action.id}
+              /*
               The reason travels with the item, not just the buttons. A
               permission an author lacks makes this the ONLY place the
               refusal is visible, and a menu row that is grey and silent
@@ -602,13 +667,15 @@ function DocumentMenu({
               pointer and `aria-description` reaches a screen reader; the
               label alone reaches neither.
             */
-            {...reasonAttributes(reasonFor(action, binding))}
-          >
-            <ActionRow
-              label={action.label}
-              reason={reasonFor(action, binding)}
-            />
-          </DropdownMenuItem>
+              {...reasonAttributes(reasonFor(action, binding))}
+            >
+              <ActionRow
+                label={action.label}
+                reason={reasonFor(action, binding)}
+              />
+            </DropdownMenuItem>
+            <RecoveryRow entry={{ action, binding }} />
+          </Fragment>
         ))}
         {/*
           A separator only between two populated groups. Drawn
@@ -619,19 +686,21 @@ function DocumentMenu({
           <DropdownMenuSeparator />
         ) : null}
         {dangerItems.map(({ action, binding }) => (
-          <DropdownMenuItem
-            key={action.id}
-            disabled={reasonFor(action, binding) !== undefined}
-            onClick={binding.onSelect}
-            data-action={action.id}
-            className="text-destructive focus:text-destructive"
-            {...reasonAttributes(reasonFor(action, binding))}
-          >
-            <ActionRow
-              label={action.label}
-              reason={reasonFor(action, binding)}
-            />
-          </DropdownMenuItem>
+          <Fragment key={action.id}>
+            <DropdownMenuItem
+              disabled={reasonFor(action, binding) !== undefined}
+              onClick={binding.onSelect}
+              data-action={action.id}
+              className="text-destructive focus:text-destructive"
+              {...reasonAttributes(reasonFor(action, binding))}
+            >
+              <ActionRow
+                label={action.label}
+                reason={reasonFor(action, binding)}
+              />
+            </DropdownMenuItem>
+            <RecoveryRow entry={{ action, binding }} />
+          </Fragment>
         ))}
       </DropdownMenuContent>
     </DropdownMenu>

@@ -1,0 +1,111 @@
+/**
+ * Which ids a blocks write brings that the site does not define, told apart
+ * from the ones the stored page already held.
+ *
+ * The one comparison behind every reference a page keeps by id to something
+ * the site defines: a shared style, a breakpoint. The engine cannot make it,
+ * since a document on its own does not say whether an id is new, and a page
+ * holding an id the site has since dropped must stay savable. The write path
+ * can, by reading both stored forms and comparing by `undefined-references`,
+ * the comparison a shared style's variables are judged by too.
+ *
+ * @module fields/added-undefined-ids
+ */
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type { PluginFieldValidateArgs } from "@nextlyhq/plugin-sdk";
+
+import { newUndefinedIds } from "../undefined-references";
+
+import { readStoredForms, storedReadReaches } from "./lock-baselines";
+
+/** No stored id: what the first, cheaper comparison is made against. */
+const NOTHING_HELD: ReadonlySet<string> = new Set();
+
+/**
+ * What a reference check reads of a field's write: where the field sits, the
+ * entry write behind it, and the field's declaration where there is one. The
+ * blocks field's validation hands its whole arguments. The judgement made
+ * again inside the write's transaction (`composition-rejudge`) has no
+ * declaration to hand, and hands the stored forms it read itself instead, so
+ * nothing here reads the declaration on its behalf.
+ */
+export type JudgedField = Pick<PluginFieldValidateArgs, "path" | "write"> & {
+  readonly field?: PluginFieldValidateArgs["field"];
+};
+
+/** The page's stored forms as one read answered: both, or unreadable. */
+export interface StoredForms {
+  readonly forms: readonly BlockDocument[];
+  readonly readable: boolean;
+}
+
+/**
+ * Both stored forms of the field being written: an id either one holds is the
+ * page's already.
+ */
+export function storedFormsFor(args: JudgedField): Promise<StoredForms> {
+  return readStoredForms(
+    args.write,
+    args.path,
+    [false, true],
+    // No declaration is a field not kept per language.
+    args.field?.localized === true
+  );
+}
+
+/** Stored forms that hold nothing, which every undefined reference is new to. */
+export const NO_STORED_FORMS: StoredForms = { forms: [], readable: true };
+
+/**
+ * The stored forms a reference check compares a write with: `stored`, or the
+ * field's own by default. A field in a repeater's row has none core's stored
+ * read can name, and passing its write unjudged would let a save reintroduce
+ * a shared style or variable removed while the row's editor was open: the
+ * renderer drops the reference, and the row loses its styling unseen. So a
+ * row is judged against nothing held, refusing every reference the site no
+ * longer defines. That refuses no reference the row already held but by a
+ * race: removing a shared style or a variable is refused while any row uses
+ * it, since the removal's rescan reads every row.
+ */
+export function referenceBaseline(
+  args: JudgedField,
+  stored?: () => Promise<StoredForms>
+): () => Promise<StoredForms> {
+  if (!storedReadReaches(args.path)) {
+    return () => Promise.resolve(NO_STORED_FORMS);
+  }
+  return stored ?? (() => storedFormsFor(args));
+}
+
+/**
+ * The ids in `used` the site does not define and neither stored form holds;
+ * empty when there are none, or when the stored value cannot be read.
+ *
+ * The site is asked only when `used` names something, and the stored forms
+ * only when one of those is undefined, so a write using only what the site
+ * defines reads nothing more.
+ */
+export async function addedUndefinedIds(
+  args: JudgedField,
+  used: readonly string[],
+  /** The ids the site defines, read when asked. */
+  defined: () => Promise<ReadonlySet<string>>,
+  /** The ids one stored form holds, read the way `used` was. */
+  heldBy: (form: BlockDocument) => Iterable<string>,
+  /**
+   * The stored forms, read when asked. Shared by every check judging one
+   * write, so each judges against the same snapshot of the page.
+   */
+  stored: () => Promise<StoredForms> = () => storedFormsFor(args)
+): Promise<string[]> {
+  if (used.length === 0) return [];
+  const known = await defined();
+  // Asked first with nothing held, so the stored forms are read only when the
+  // write names something the site does not define.
+  const undefinedHere = newUndefinedIds(used, known, NOTHING_HELD);
+  if (undefinedHere.length === 0) return [];
+  const snapshot = await stored();
+  if (!snapshot.readable) return [];
+  const held = new Set(snapshot.forms.flatMap(form => [...heldBy(form)]));
+  return newUndefinedIds(undefinedHere, known, held);
+}

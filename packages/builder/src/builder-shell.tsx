@@ -40,7 +40,6 @@ import {
   BUILDER_CHROME_CLASS,
   BUILDER_TOKENS_CLASS,
   DEFAULT_PREFERENCES,
-  EMPTY_ELEMENTS_ATTRIBUTE,
   browserStore,
   fitsFullShell,
   isLeftPanel,
@@ -196,30 +195,12 @@ export interface BuilderShellProps {
     readonly count: number;
   };
   /**
-   * Reports `showEmptyElements` to a host that needs to know whether the
-   * canvas's empty-container chrome should be showing right now.
-   *
-   * The preference lives entirely inside this shell — see `store` below —
-   * and a caller drawing a SEPARATE overlay over the same canvas (the
-   * empty-container appender, mounted through `Canvas`'s own `overlay` prop
-   * rather than through this component's internals) has no way to reach it.
-   * This is the read half of that gap; `openPanelRequest` above is the
-   * write half of a different one.
-   *
-   * Called for every value the preference takes, including the very first
-   * one: a host that waited for a change would have no answer at all until
-   * the author touched the control, and would have to guess the default in
-   * the meantime — a guess that silently goes stale the day the default
-   * changes here and not at every call site that duplicated it.
-   */
-  onShowEmptyElementsChange?: (showEmptyElements: boolean) => void;
-  /**
    * Reports the canvas zoom, and takes the change back.
    *
    * The shell owns it because the shell owns preferences, and a host owns what
    * to DO with it — the canvas is the host's to render, so only it can apply a
-   * scale. Reported the same way `showEmptyElements` is, including on the first
-   * value, so a host never has to assume the default.
+   * scale. Reported on every value, including the first, so a host never has
+   * to assume the default.
    */
   onZoomChange?: (zoom: CanvasZoom) => void;
   /**
@@ -289,6 +270,17 @@ export interface BuilderShellProps {
    * and stays where it is put.
    */
   checklist?: React.ReactNode;
+  /**
+   * A strip pinned along the top of the canvas, above the page and outside
+   * the region that scrolls it, so it stays in view while the page scrolls
+   * under it: what the canvas is drawn with, where that is the author's to
+   * choose (the entry a template is previewed with). Absent, or a node that
+   * draws nothing (`null`, `false`), the canvas keeps the whole region, so
+   * conditional JSX never leaves an empty band.
+   *
+   * @experimental Settles when collection templates ship.
+   */
+  canvasStrip?: React.ReactNode;
   /**
    * Leaving the editor. Explicit and LABELLED, never an unmarked X: the author
    * is one click from losing a canvas full of work, and an ambiguous glyph is
@@ -432,8 +424,7 @@ export { useShellIsActive };
  *   monotonic, so it is already nonzero for the previous store the moment a host
  *   swaps in a new one, and a write let through in that window spreads the old
  *   store's record and persists it into the new store, replacing the layout and
- *   the `showEmptyElements` of whichever user or workspace the new store belongs
- *   to.
+ *   the zoom of whichever user or workspace the new store belongs to.
  *
  * `store` is the store OBJECT rather than a name or an index, for the reason
  * the identity is already the read's dependency: it is the thing itself, and no
@@ -556,7 +547,6 @@ const SCALAR_PREFERENCES = [
   "leftPanelHidden",
   "inspectorHidden",
   "leftPinned",
-  "showEmptyElements",
   "panelKeys",
   "editingBreakpoint",
 ] as const satisfies readonly (keyof ShellPreferences)[];
@@ -1515,6 +1505,66 @@ function CanvasRegion({
   );
 }
 
+/**
+ * Whether a host's node draws anything: `undefined`, `null` and a boolean
+ * (what `cond && <Strip />` leaves) draw nothing, so no slot is made for
+ * them.
+ */
+function drawsSomething(node: React.ReactNode): boolean {
+  return node !== undefined && node !== null && typeof node !== "boolean";
+}
+
+/**
+ * The canvas panel's contents: the strip, where the host gives one, above the
+ * canvas's region rather than inside it (the region is what scrolls, so the
+ * strip stays pinned while the page scrolls under it, inset by the canvas's
+ * own gutter so its edges line up with the page's), then the region, with the
+ * checklist floated over it.
+ */
+function CanvasPanelBody({
+  canvasStrip,
+  checklist,
+  regionRef,
+  children,
+}: {
+  canvasStrip: React.ReactNode | undefined;
+  checklist: React.ReactNode | undefined;
+  regionRef: (element: HTMLElement | null) => void;
+  children?: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <div className="flex h-full flex-col">
+      {!drawsSomething(canvasStrip) ? null : (
+        <div
+          className="nx-canvas-strip-slot shrink-0"
+          style={{
+            paddingTop: CANVAS_GUTTER,
+            paddingInline: CANVAS_GUTTER,
+          }}
+        >
+          {canvasStrip}
+        </div>
+      )}
+      {/* The canvas's region: see `CanvasRegion`. */}
+      <div className="relative min-h-0 flex-1">
+        {/*
+          The same gutter on every side, a strip above or not: a block's badge
+          drawn just above the first block has the room it has without one.
+        */}
+        <CanvasRegion regionRef={regionRef}>{children}</CanvasRegion>
+        {checklist === undefined ? null : (
+          // The positioner takes no pointer events, so it cannot swallow a
+          // click aimed at the page underneath it; the card itself takes them
+          // back.
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end p-4">
+            <div className="pointer-events-auto">{checklist}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ShellRegions({
   appliedScale = 1,
   onZoomPick,
@@ -1529,6 +1579,7 @@ function ShellRegions({
   topBarEnd,
   breadcrumb,
   checklist,
+  canvasStrip,
   onExit,
   preferences,
   update,
@@ -1626,13 +1677,6 @@ function ShellRegions({
         "flex h-full w-full flex-col overflow-hidden",
         className
       )}
-      // Absent when empty containers are shown, which is the default. A state
-      // name rather than a boolean attribute so the shown case needs nothing
-      // written: a rule that depended on an attribute being present would
-      // silently stop applying anywhere the shell had not written one yet.
-      {...(preferences.showEmptyElements
-        ? {}
-        : { [EMPTY_ELEMENTS_ATTRIBUTE]: "hidden" })}
     >
       <ShellTopBar
         headerRef={element => {
@@ -1758,24 +1802,15 @@ function ShellRegions({
           ) : null}
 
           <ResizablePanel id="canvas" minSize={MIN_CANVAS_PANEL_WIDTH}>
-            {/* The canvas's region: see `CanvasRegion`. */}
-            <div className="relative h-full">
-              <CanvasRegion
-                regionRef={element => {
-                  regionRefs.current.canvas = element;
-                }}
-              >
-                {children}
-              </CanvasRegion>
-              {checklist === undefined ? null : (
-                // The positioner takes no pointer events, so it cannot swallow
-                // a click aimed at the page underneath it; the card itself
-                // takes them back.
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end p-4">
-                  <div className="pointer-events-auto">{checklist}</div>
-                </div>
-              )}
-            </div>
+            <CanvasPanelBody
+              canvasStrip={canvasStrip}
+              checklist={checklist}
+              regionRef={element => {
+                regionRefs.current.canvas = element;
+              }}
+            >
+              {children}
+            </CanvasPanelBody>
           </ResizablePanel>
 
           {inspectorShown ? (
@@ -1831,7 +1866,6 @@ function ShellRegions({
 export function BuilderShell({
   store,
   openPanelRequest,
-  onShowEmptyElementsChange,
   onZoomChange,
   editingBreakpointRequest,
   onEditingBreakpointChange,
@@ -1888,7 +1922,7 @@ export function BuilderShell({
      *
      * - at MOUNT, `preferences` is `DEFAULT_PREFERENCES`, so a token defined on
      *   the first render persists the defaults over the author's own panel
-     *   widths and `showEmptyElements`.
+     *   widths and zoom.
      * - after a store SWAP — signing into a second workspace, promoting a
      *   memory store to a persisted one — `preferences` is the PREVIOUS store's
      *   record, so a token arriving in the same render writes one user's or
@@ -1940,34 +1974,6 @@ export function BuilderShell({
   }, [editingBreakpointRequest, update, loadedFromCurrentStore]);
 
   /*
-   * The read half of the same gap: told on every value `showEmptyElements`
-   * takes, including the first, so a host answers "should my own overlay be
-   * showing" honestly from the start rather than assuming the default and
-   * drifting from it the day that default changes here.
-   *
-   * No once-per-value guard here, unlike the token above. Reporting the same
-   * value twice is calling the host back with information it already has —
-   * inert, not incorrect — where applying the SAME token twice would have
-   * been a second unwanted forced-open.
-   */
-  // Held in a ref rather than read straight from the prop. A host passing the
-  // conventional inline callback — `value => setState(c => ({ ...c, value }))`
-  // — hands this a NEW function identity on every one of its own renders, and
-  // that identity was a dependency here: the effect re-ran even though
-  // `showEmptyElements` had not changed, called the callback again, and a host
-  // whose state update itself triggers a re-render — an ordinary spread
-  // creates a new object every time, whether or not any field actually
-  // differs — closes that into a render loop. The ref always holds the latest
-  // callback without needing to be a dependency, so the effect below runs only
-  // when the PREFERENCE changes.
-  const onShowEmptyElementsChangeRef = React.useRef(onShowEmptyElementsChange);
-  React.useEffect(() => {
-    onShowEmptyElementsChangeRef.current = onShowEmptyElementsChange;
-  });
-  React.useEffect(() => {
-    onShowEmptyElementsChangeRef.current?.(preferences.showEmptyElements);
-  }, [preferences.showEmptyElements]);
-  /*
    * A zoom chosen outside this shell, stored here.
    *
    * Compared by VALUE rather than by object identity: a host rebuilding the
@@ -1992,9 +1998,16 @@ export function BuilderShell({
   );
 
   /*
-   * The zoom, held and reported the same way and for the same reasons, plus
-   * one the value above does not have: whether a listener EXISTS is itself a
-   * dependency.
+   * The zoom, reported on every value it takes, including the first, so a host
+   * never has to assume the default.
+   *
+   * The callback is held in a ref rather than read straight from the prop. A
+   * host passing the conventional inline callback hands this a NEW function
+   * identity on every one of its own renders; as a dependency, that identity
+   * would re-run the effect with nothing changed and call the host back again,
+   * and a host whose state update itself re-renders closes that into a loop.
+   *
+   * Whether a listener EXISTS is a dependency, though.
    *
    * A host can resolve `onZoomChange` from its own state, so the prop moves
    * from `undefined` to a callback after the first render. Keyed on the value

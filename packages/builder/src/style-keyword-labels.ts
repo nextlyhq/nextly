@@ -17,6 +17,8 @@
 import {
   asciiLower,
   decodeIdentifier,
+  DISCLOSURE_ICON_PROPERTY,
+  DISCLOSURE_POSITION_PROPERTY,
   trimCssWhitespace,
 } from "@nextlyhq/blocks-engine";
 
@@ -84,6 +86,13 @@ const KEYWORD_LABELS: Readonly<
   "min-height": SIZE_KEYWORDS,
   "max-width": SIZE_KEYWORDS,
   "max-height": SIZE_KEYWORDS,
+  // Strikethrough is what an author calls a line through text.
+  "text-decoration-line": {
+    none: "None",
+    underline: "Underline",
+    "line-through": "Strikethrough",
+    overline: "Overline",
+  },
   "object-fit": {
     fill: "Stretch to fill",
     contain: "Fit inside",
@@ -131,6 +140,17 @@ const KEYWORD_LABELS: Readonly<
     uppercase: "Uppercase",
     lowercase: "Lowercase",
     capitalize: "Capitalize words",
+  },
+  // An Accordion's icon choices, traced on their own custom properties.
+  [DISCLOSURE_ICON_PROPERTY]: {
+    chevron: "Chevron",
+    plus: "Plus",
+    none: "None",
+    browser: "Browser default",
+  },
+  [DISCLOSURE_POSITION_PROPERTY]: {
+    before: "Before",
+    after: "After",
   },
   "list-style-type": {
     none: "None",
@@ -191,18 +211,26 @@ const SHARED_LABELS: Readonly<Record<string, string>> = {
  * between"), so no keyword is ever shown in its CSS spelling.
  */
 export function keywordLabel(cssProperty: string, keyword: string): string {
-  // Looked up as CSS reads a keyword: its escapes decoded, case-folded the
-  // ASCII way, with its CSS whitespace trimmed and collapsed, since the
-  // validator stores `INLINE-FLEX`, `inline\2d flex` and `row  dense` as the
-  // keywords they spell. Only the lookup is folded; the stored value and its
-  // tooltip keep the spelling they were given.
-  const folded = asciiLower(
-    decodeIdentifier(trimCssWhitespace(keyword))
-  ).replace(/[ \t\n\r\f]+/g, " ");
+  // Looked up as CSS reads a keyword; only the lookup is folded, and the
+  // stored value and its tooltip keep the spelling they were given.
+  const folded = foldKeyword(keyword);
   return (
     KEYWORD_LABELS[cssProperty]?.[folded] ??
     SHARED_LABELS[folded] ??
     inWords(folded)
+  );
+}
+
+/**
+ * A keyword as CSS reads it: its escapes decoded, case-folded the ASCII way,
+ * with its CSS whitespace trimmed and collapsed, since the validator stores
+ * `INLINE-FLEX`, `inline\2d flex` and `row  dense` as the keywords they
+ * spell. For comparing a stored value with the keywords a control offers.
+ */
+export function foldKeyword(keyword: string): string {
+  return asciiLower(decodeIdentifier(trimCssWhitespace(keyword))).replace(
+    /[ \t\n\r\f]+/g,
+    " "
   );
 }
 

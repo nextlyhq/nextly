@@ -12,6 +12,7 @@ import {
   loadLatestSnapshot,
   parseSnapshotFile,
   SnapshotFileError,
+  snapshotPathOf,
   verifyMigrationHash,
   writeSnapshot,
   type SnapshotFile,
@@ -26,6 +27,20 @@ describe("snapshot-io", () => {
 
   afterEach(async () => {
     // Cleanup is best-effort; vitest's tmpdir is auto-cleaned by the OS.
+  });
+
+  describe("snapshotPathOf", () => {
+    it("is where writeSnapshot writes a migration's snapshot", async () => {
+      // A dry run names the snapshot by this path without writing it, so the
+      // writer must put it nowhere else.
+      const written = await writeSnapshot(
+        metaDir,
+        "20260101000000_init",
+        EMPTY_SNAPSHOT,
+        "-- UP\n"
+      );
+      expect(written).toBe(snapshotPathOf(metaDir, "20260101000000_init"));
+    });
   });
 
   describe("loadLatestSnapshot", () => {

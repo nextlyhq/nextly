@@ -15,11 +15,14 @@
  *   it would not fail the build — it would produce an entry a Server Component
  *   loads and React refuses at runtime.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { importedSpecifiers } from "@nextlyhq/module-specifiers";
+import {
+  importedSpecifiers,
+  moduleSpecifierRefs,
+} from "@nextlyhq/module-specifiers";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -66,12 +69,108 @@ describe("the ops subpath is published", () => {
 });
 
 describe("the ops module stays server-safe", () => {
-  it("imports the engine and nothing else", () => {
+  it("imports the engine, its own actions module and nothing else", () => {
     // Asserted as the WHOLE import list rather than as "no react". A module
     // that grew an import of the design system, the plugin SDK or a DOM helper
     // would satisfy a react-only check and still be unloadable on a server.
     const specifiers = [...importedSpecifiers(read("src/ops.ts"), "ops.ts")];
 
+    expect([...new Set(specifiers)].sort()).toEqual([
+      "./binding-ops",
+      "./binding-services",
+      "./composition-actions",
+      "./condition-ops",
+      "./op-vocabulary",
+      "./template-actions",
+      "@nextlyhq/blocks-engine",
+    ]);
+  });
+
+  it("reaches through the op vocabulary only the engine", () => {
+    const specifiers = [
+      ...importedSpecifiers(read("src/op-vocabulary.ts"), "op-vocabulary.ts"),
+    ];
+
     expect(specifiers).toEqual(["@nextlyhq/blocks-engine"]);
+  });
+
+  it("reaches through its actions module only the engine and zod", () => {
+    // The one local module the entry re-exports is held to the same whole
+    // list: it is bundled into the entry, so what it imports, the entry loads.
+    const specifiers = [
+      ...importedSpecifiers(
+        read("src/composition-actions.ts"),
+        "composition-actions.ts"
+      ),
+    ];
+
+    expect([...new Set(specifiers)].sort()).toEqual([
+      "@nextlyhq/blocks-engine",
+      "zod",
+    ]);
+  });
+
+  it("reaches through its binding and condition ops only the engine", () => {
+    for (const module of ["binding-ops.ts", "condition-ops.ts"]) {
+      const loaded = moduleSpecifierRefs(read(`src/${module}`), module)
+        .filter(ref => !ref.typeOnly)
+        .map(ref => ref.specifier);
+      expect(loaded, module).toEqual(["@nextlyhq/blocks-engine"]);
+    }
+  });
+
+  it("names its binding services for their types alone", () => {
+    const refs = moduleSpecifierRefs(
+      read("src/binding-services.ts"),
+      "binding-services.ts"
+    );
+    expect(refs.length).toBeGreaterThan(0);
+    expect(refs.filter(ref => !ref.typeOnly)).toEqual([]);
+  });
+
+  it("reaches through its template actions only zod", () => {
+    const specifiers = [
+      ...importedSpecifiers(
+        read("src/template-actions.ts"),
+        "template-actions.ts"
+      ),
+    ];
+
+    expect(specifiers).toEqual(["zod"]);
+  });
+});
+
+describe("the editor does not load the composition schemas", () => {
+  it("imports the op vocabulary, never the published entry or the actions", () => {
+    // The client build keeps every module the shell reaches, so an editor
+    // module importing `./ops` would carry zod and every action schema into
+    // each editor load. Only the published entry may reach them.
+    const reaching = readdirSync(join(pkgRoot, "src"))
+      .filter(name => /\.(ts|tsx)$/.test(name))
+      .filter(name => !/\.test(-d)?\.(ts|tsx)$/.test(name))
+      .filter(name => name !== "ops.ts")
+      .filter(name =>
+        // What loads at runtime: an `import type` is erased before the
+        // bundle, so it carries no schema into the editor.
+        moduleSpecifierRefs(read(`src/${name}`), name).some(
+          ({ specifier, typeOnly }) =>
+            !typeOnly &&
+            (specifier === "./ops" ||
+              specifier === "./composition-actions" ||
+              specifier === "./template-actions")
+        )
+      );
+
+    // The control: the vocabulary itself is imported widely, so the scan
+    // reads real imports rather than finding nothing anywhere.
+    const vocabulary = readdirSync(join(pkgRoot, "src")).filter(
+      name =>
+        /\.(ts|tsx)$/.test(name) &&
+        importedSpecifiers(read(`src/${name}`), name).includes(
+          "./op-vocabulary"
+        )
+    );
+    expect(vocabulary.length).toBeGreaterThan(10);
+    expect(reaching).toEqual([]);
   });
 });

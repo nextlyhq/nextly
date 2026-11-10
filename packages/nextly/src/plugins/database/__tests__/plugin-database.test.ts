@@ -61,7 +61,8 @@ function harness() {
     tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
     db: () => db,
     relationalDb: () => db,
-    transaction: fn => fn({ db, relationalDb: db }),
+    transaction: fn =>
+      fn({ db, relationalDb: db, afterCommit: () => undefined }),
   });
 
   return { surface, inserted, updated };
@@ -182,7 +183,8 @@ describe("a col.serial() key", () => {
       ],
       db: () => db,
       relationalDb: () => db,
-      transaction: fn => fn({ db, relationalDb: db }),
+      transaction: fn =>
+        fn({ db, relationalDb: db, afterCommit: () => undefined }),
     });
     return { surface, inserted, updated };
   }
@@ -256,7 +258,8 @@ describe("a col.serial() key", () => {
         ],
         db: () => db,
         relationalDb: () => db,
-        transaction: fn => fn({ db, relationalDb: db }),
+        transaction: fn =>
+          fn({ db, relationalDb: db, afterCommit: () => undefined }),
       });
 
       await expect(
@@ -308,7 +311,8 @@ describe("delete", () => {
       tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
       db: () => db,
       relationalDb: () => db,
-      transaction: fn => fn({ db, relationalDb: db }),
+      transaction: fn =>
+        fn({ db, relationalDb: db, afterCommit: () => undefined }),
     });
     expect(await surface.delete(notes).where({} as never)).toBe(4);
   });
@@ -360,7 +364,8 @@ describe("a definition named by its SQL name", () => {
       tableList: () => opts.tables,
       db: () => db,
       relationalDb: () => db,
-      transaction: fn => fn({ db, relationalDb: db }),
+      transaction: fn =>
+        fn({ db, relationalDb: db, afterCommit: () => undefined }),
     });
     return { surface, written };
   }
@@ -431,7 +436,8 @@ describe("resolving an authored name several plugins share", () => {
         opts.tables.map(t => ({ ...t, authored: "notes" as string })),
       db: () => db,
       relationalDb: () => db,
-      transaction: fn => fn({ db, relationalDb: db }),
+      transaction: fn =>
+        fn({ db, relationalDb: db, afterCommit: () => undefined }),
     });
     return { surface, written };
   }
@@ -571,7 +577,7 @@ describe("transaction", () => {
       relationalDb: () => db,
       transaction: fn => {
         opened();
-        return fn({ db, relationalDb: db });
+        return fn({ db, relationalDb: db, afterCommit: () => undefined });
       },
     });
     const nestedWork = vi.fn();
@@ -625,7 +631,11 @@ describe("transaction", () => {
       relationalDb: () => db,
       transaction: async fn => {
         order.push("begin");
-        const result = await fn({ db, relationalDb: db });
+        const result = await fn({
+          db,
+          relationalDb: db,
+          afterCommit: () => undefined,
+        });
         order.push("commit");
         return result;
       },
@@ -668,7 +678,8 @@ describe("transaction", () => {
       db: () => pooled,
       relationalDb: () => pooled,
       // What the real adapters do: the work runs against the leased client.
-      transaction: fn => fn({ db: scoped, relationalDb: scoped }),
+      transaction: fn =>
+        fn({ db: scoped, relationalDb: scoped, afterCommit: () => undefined }),
     });
 
     await surface.transaction(async tx => {
@@ -716,7 +727,11 @@ describe("transaction", () => {
       db: () => builder(),
       relationalDb: () => pooled,
       transaction: fn =>
-        fn({ db: builder(), relationalDb: relational("transaction-bound") }),
+        fn({
+          db: builder(),
+          relationalDb: relational("transaction-bound"),
+          afterCommit: () => undefined,
+        }),
     });
 
     await surface.transaction(async tx => {
@@ -771,7 +786,7 @@ describe("a snapshot transaction", () => {
       relationalDb: () => db,
       transaction: (fn, ...rest) => {
         opened.push(rest);
-        return fn({ db, relationalDb: db });
+        return fn({ db, relationalDb: db, afterCommit: () => undefined });
       },
     });
     return { surface, opened, wrote };
@@ -869,7 +884,12 @@ describe("relational queries", () => {
       tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
       db: () => relational,
       relationalDb: () => relational,
-      transaction: fn => fn({ db: relational, relationalDb: relational }),
+      transaction: fn =>
+        fn({
+          db: relational,
+          relationalDb: relational,
+          afterCommit: () => undefined,
+        }),
     });
 
     return { surface, answered, relational };
@@ -922,7 +942,12 @@ describe("relational queries", () => {
       tableList: () => [],
       db: () => relational,
       relationalDb: () => relational,
-      transaction: fn => fn({ db: relational, relationalDb: relational }),
+      transaction: fn =>
+        fn({
+          db: relational,
+          relationalDb: relational,
+          afterCommit: () => undefined,
+        }),
     });
 
     const namespace = surface.query;
@@ -953,7 +978,12 @@ describe("relational queries", () => {
       tableList: () => [],
       db: () => relational,
       relationalDb: () => relational,
-      transaction: fn => fn({ db: relational, relationalDb: relational }),
+      transaction: fn =>
+        fn({
+          db: relational,
+          relationalDb: relational,
+          afterCommit: () => undefined,
+        }),
     });
 
     await surface.transaction(async tx => {
@@ -1139,7 +1169,12 @@ describe("relational queries that reach other tables", () => {
       tableList: () => [],
       db: () => handle(),
       relationalDb: () => handle(),
-      transaction: fn => fn({ db: handle(), relationalDb: handle() }),
+      transaction: fn =>
+        fn({
+          db: handle(),
+          relationalDb: handle(),
+          afterCommit: () => undefined,
+        }),
     });
     return { surface, received };
   }
@@ -1468,7 +1503,11 @@ function liveHarness() {
     db: () => handle,
     relationalDb: () => handle,
     transaction: async fn => {
-      const result = await fn({ db: handle, relationalDb: handle });
+      const result = await fn({
+        db: handle,
+        relationalDb: handle,
+        afterCommit: () => undefined,
+      });
       log.push("commit");
       return result;
     },

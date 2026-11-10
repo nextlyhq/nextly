@@ -12,6 +12,7 @@ import { createRequire } from "node:module";
 
 import {
   definePlugin,
+  type HookContext,
   NextlyError,
   type PluginDefinition,
   type PluginEmailService,
@@ -1284,14 +1285,23 @@ async function handleSubmissionCreated(
     BeforeEmailFilterContext
   >("form-builder.beforeEmail", emails, { form, submission });
 
-  // -- Send phase: send the (possibly transformed) outgoing notifications.
-  await sendNotificationEmails({
-    emails: finalEmails,
-    emailService,
-    logger: nextly.logger,
-    formSlug: form.slug,
-    fileAttachments,
-  });
+  // -- Send phase: send the (possibly transformed) outgoing notifications,
+  // once the submission is durable. An email cannot be taken back, and a
+  // submission saved inside a caller's transaction runs this hook before that
+  // transaction commits: sent here, it would go out, and its delivery be
+  // recorded, for a submission a rollback then removes. The hook context's
+  // `afterCommit` holds the send until the outermost transaction commits and
+  // drops it on rollback; outside a transaction it sends at once, as before.
+  const send = () =>
+    sendNotificationEmails({
+      emails: finalEmails,
+      emailService,
+      logger: nextly.logger,
+      formSlug: form.slug,
+      fileAttachments,
+    });
+  const { afterCommit } = context as Pick<HookContext, "afterCommit">;
+  await (afterCommit ? afterCommit(send) : send());
 }
 
 /**

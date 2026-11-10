@@ -1,197 +1,126 @@
-import { describe, expect, it } from "vitest";
+/**
+ * `nextly repair-columns` as the CLI runs it: what reaches standard output, and the exit code.
+ *
+ * With `--json` standard output holds the one document and nothing else, whatever the run met; the
+ * error shape goes to standard error only without it. These cases stop before any database is
+ * reached; the report of a database is the integration suite's.
+ */
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import type {
-  ColumnFinding,
-  ColumnLocation,
-} from "../../../domains/schema/repair-columns/types";
-import { formatFinding } from "../repair-columns";
+import type { Command } from "commander";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const location: ColumnLocation = {
-  kind: "collection",
-  slug: "posts",
-  field: "links",
-  table: "dc_posts",
-  column: "links",
-  translation: false,
-};
+import { createContext } from "../../context";
+import { repairColumnsAction } from "../repair-columns";
 
-describe("formatFinding", () => {
-  it("names the entity, field, column, both states and a legacy cause", () => {
-    const line = formatFinding({
-      kind: "differs",
-      location,
-      expected: { type: "jsonb", nullable: true },
-      live: { type: "text", nullable: true },
-      aspects: { type: true, nullability: false },
-      judgement: null,
-      cause: {
-        kind: "legacy",
-        shape: "structured-as-text",
-        before: "0.0.2-alpha.67",
-      },
+/** What the command was given, as Commander would hand it over. */
+const command = (globals: Record<string, unknown>) =>
+  ({ optsWithGlobals: () => globals }) as unknown as Command;
+
+describe("repair-columns output and exit code", () => {
+  let stdout: string[];
+  let stderr: string[];
+  const env = {
+    url: process.env.DATABASE_URL,
+    dialect: process.env.DB_DIALECT,
+  };
+
+  beforeEach(() => {
+    stdout = [];
+    stderr = [];
+    vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+      stdout.push(String(chunk));
+      return true;
     });
-    expect(line).toBe(
-      'collection "posts", field "links" (dc_posts.links): is text NULL, expected jsonb NULL; created before 0.0.2-alpha.67.'
-    );
-  });
-
-  it("names a column a current generator still creates", () => {
-    expect(
-      formatFinding({
-        kind: "differs",
-        location: { ...location, field: "author", column: "author" },
-        expected: { type: "text", nullable: true },
-        live: { type: "text", nullable: false },
-        aspects: { type: false, nullability: true },
-        judgement: null,
-        cause: { kind: "current-generator" },
-      })
-    ).toContain(
-      "is text NOT NULL, expected text NULL; created by the current version's generator."
-    );
-  });
-
-  it("prints a size PostgreSQL reports beside the type", () => {
-    expect(
-      formatFinding({
-        kind: "differs",
-        location,
-        expected: { type: "float8", nullable: true },
-        live: { type: "numeric", nullable: true, typeModifier: "10,2" },
-        aspects: { type: true, nullability: false },
-        judgement: null,
-        cause: null,
-      })
-    ).toContain("is numeric(10,2) NULL, expected float8 NULL.");
-  });
-
-  it("gives a difference's class, and each reason with its rows by key", () => {
-    const differs: ColumnFinding = {
-      kind: "differs",
-      location,
-      expected: { type: "jsonb", nullable: false },
-      live: { type: "text", nullable: true },
-      aspects: { type: true, nullability: true },
-      cause: null,
-      judgement: { class: "safe", reasons: [] },
-    };
-    expect(formatFinding(differs)).toBe(
-      'collection "posts", field "links" (dc_posts.links): is text NULL, expected jsonb NOT NULL. safe.'
-    );
-
-    const blocked = formatFinding({
-      ...differs,
-      location: { ...location, table: "dc_posts_locales", translation: true },
-      judgement: {
-        class: "blocked",
-        reasons: [
-          {
-            kind: "not-json",
-            class: "lossy",
-            rows: {
-              first: [
-                { parent: "p1", locale: "en" },
-                { parent: "p1", locale: "fr" },
-              ],
-              count: 25,
-            },
-          },
-          {
-            kind: "null-under-not-null",
-            class: "blocked",
-            rows: { first: [{ parent: "p2", locale: "en" }], count: 1 },
-          },
-        ],
-      },
+    vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      stdout.push(args.join(" "));
     });
-    expect(blocked).toContain(
-      "blocked: values that do not parse as JSON would be cleared (25 rows, first 2: parent p1 locale en, parent p1 locale fr); rows hold a null where the column is to be NOT NULL (1 row: parent p2 locale en)."
+    vi.spyOn(process.stderr, "write").mockImplementation(chunk => {
+      stderr.push(String(chunk));
+      return true;
+    });
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      stderr.push(args.join(" "));
+    });
+    delete process.env.DATABASE_URL;
+    delete process.env.DB_DIALECT;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.exitCode = undefined;
+    if (env.url !== undefined) process.env.DATABASE_URL = env.url;
+    if (env.dialect !== undefined) process.env.DB_DIALECT = env.dialect;
+  });
+
+  it("with --json, writes one document and nothing else to standard output, and exits 1 when it could not run", async () => {
+    await repairColumnsAction(createContext)(
+      { json: true },
+      command({ cwd: process.cwd() })
     );
+    expect(stdout).toHaveLength(1);
+    const document = JSON.parse(stdout[0]) as Record<string, unknown>;
+    expect(document).toMatchObject({
+      schema: "nextly.repair-columns/1",
+      command: "repair-columns",
+      ok: false,
+      exitCode: 1,
+      result: null,
+    });
+    expect(document.errors).toEqual([
+      expect.objectContaining({
+        code: expect.any(String),
+        message: expect.any(String),
+      }),
+    ]);
+    expect(process.exitCode).toBe(1);
   });
 
-  it("gives a reason the pair of types gives with no rows", () => {
-    expect(
-      formatFinding({
-        kind: "differs",
-        location,
-        expected: { type: "double", nullable: true },
-        live: { type: "bigint", nullable: true },
-        aspects: { type: true, nullability: false },
-        cause: null,
-        judgement: {
-          class: "blocked",
-          reasons: [{ kind: "late-write", class: "blocked" }],
-        },
-      })
-    ).toMatch(
-      /blocked: MySQL checks the rows and changes the column in separate transactions, so a value written meanwhile could be changed with no error\.$/
+  // Loading the configuration and opening the database log through the run's logger, which
+  // writes to standard output; under --json it keeps to errors, which go to standard error.
+  it("with --json, keeps whatever the run logs off standard output", async () => {
+    let logger: ReturnType<typeof createContext>["logger"] | undefined;
+    await repairColumnsAction(options => {
+      const context = createContext(options);
+      logger = context.logger;
+      return context;
+    })({ json: true }, command({ cwd: process.cwd() }));
+    stdout = [];
+    logger?.info("Loading the configuration");
+    logger?.warn("A notice");
+    logger?.success("Connected");
+    expect(stdout).toEqual([]);
+  });
+
+  // `--verbose` turns on the configuration loader's own diagnostics, which it writes with
+  // console.log; under --json they would come before the document.
+  it("with --json and --verbose, still writes only the document to standard output", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "repair-columns-json-"));
+    process.env.DATABASE_URL = `file:${join(dir, "site.db")}`;
+    process.env.DB_DIALECT = "sqlite";
+    try {
+      await repairColumnsAction(createContext)(
+        { json: true },
+        command({ cwd: dir, verbose: true })
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(stdout).toHaveLength(1);
+    expect(JSON.parse(stdout[0])).toMatchObject({
+      schema: "nextly.repair-columns/1",
+    });
+  });
+
+  it("without --json, prints the error shape to standard error and nothing to standard output", async () => {
+    await repairColumnsAction(createContext)(
+      {},
+      command({ cwd: process.cwd() })
     );
-  });
-
-  it("points a column that is not migrated to nextly migrate", () => {
-    const missing: ColumnFinding = {
-      kind: "not-migrated",
-      location,
-      missing: "table",
-      expected: { type: "jsonb", nullable: true },
-    };
-    expect(formatFinding(missing)).toBe(
-      'collection "posts", field "links" (dc_posts.links): not migrated, the table does not exist (expected jsonb NULL). Run `nextly migrate`.'
-    );
-  });
-
-  it("points a pending change to migrate:create and nextly migrate", () => {
-    expect(
-      formatFinding({
-        kind: "pending-migration",
-        location,
-        applied: { type: "int4", nullable: true },
-        configured: null,
-        live: { type: "int4", nullable: true },
-      })
-    ).toBe(
-      'collection "posts", field "links" (dc_posts.links): pending a migration, int4 NULL as applied, removed as configured. Run `nextly migrate:create`, then `nextly migrate`.'
-    );
-  });
-
-  it("names the plugin that owns a column and says it is never changed here", () => {
-    expect(
-      formatFinding({
-        kind: "differs",
-        location,
-        plugin: "seo-kit",
-        expected: { type: "jsonb", nullable: true },
-        live: { type: "text", nullable: true },
-        aspects: { type: true, nullability: false },
-        judgement: null,
-        cause: null,
-      })
-    ).toMatch(/Owned by plugin "seo-kit"; reported, never changed here\.$/);
-  });
-
-  it("marks a translation table and names user fields without a slug", () => {
-    expect(
-      formatFinding({
-        kind: "not-migrated",
-        location: {
-          kind: "userFields",
-          slug: "users",
-          field: "score",
-          table: "user_ext",
-          column: "score",
-          translation: false,
-        },
-        missing: "column",
-        expected: { type: "float4", nullable: true },
-      })
-    ).toMatch(/^user fields, field "score" \(user_ext\.score\)/);
-    expect(
-      formatFinding({
-        kind: "not-migrated",
-        location: { ...location, table: "dc_posts_locales", translation: true },
-        missing: "column",
-        expected: { type: "text", nullable: true },
-      })
-    ).toContain("(dc_posts_locales.links, translation table)");
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toMatch(/DATABASE_URL/);
+    expect(process.exitCode).toBe(1);
   });
 });

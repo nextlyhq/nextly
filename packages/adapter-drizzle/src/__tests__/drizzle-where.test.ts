@@ -9,9 +9,17 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { buildDrizzleWhere } from "../drizzle-where";
+import { SQLITE_FOLD_CASE_FUNCTION } from "../text-match";
 import { WHERE_OPERATORS } from "../types";
 
 import type { WhereClause, WhereCondition, WhereOperator } from "../types";
+
+/**
+ * The final sigma and the letter it folds to: PostgreSQL and MySQL fold it after `lower()`, as
+ * SQLite's registered function does, so every dialect's case-insensitive match binds the pair.
+ */
+const SIGMA = "\u03C2";
+const FOLDED_SIGMA = "\u03C3";
 
 /**
  * Every assertion here compiles the returned condition to SQL text and parameters rather than
@@ -24,9 +32,10 @@ import type { WhereClause, WhereCondition, WhereOperator } from "../types";
  * mapped to the wrong drizzle helper, a parameter dropped, or a nested clause flattened all
  * change the text or the params, and none of them can hide behind a defined object.
  *
- * Compiling through `PgDialect` fixes one rendering for the comparison; the builder itself is
- * dialect-agnostic (it composes drizzle helpers and never emits text), and `drizzle-orm` is
- * pinned to an exact version repo-wide, so the rendered spellings below are stable.
+ * Compiling through `PgDialect` fixes one rendering for the comparison, and `drizzle-orm` is
+ * pinned to an exact version repo-wide, so the rendered spellings below are stable. The builder
+ * is told its dialect only for the operators that ignore case, since SQLite folds case with a
+ * function of Nextly's own; those are compiled for SQLite as well, below.
  */
 
 const testTable = pgTable("test_table", {
@@ -42,8 +51,11 @@ const testTable = pgTable("test_table", {
  * builder that silently returned `undefined` would otherwise read here as "no filter", which is
  * the difference between selecting one row and selecting the whole table.
  */
-function compile(where: WhereClause): { sql: string; params: unknown[] } {
-  const condition = buildDrizzleWhere(testTable, where);
+function compile(
+  where: WhereClause,
+  dialect: "postgresql" | "sqlite" = "postgresql"
+): { sql: string; params: unknown[] } {
+  const condition = buildDrizzleWhere(testTable, where, dialect);
   if (condition === undefined) {
     throw new Error(
       `expected a condition for ${JSON.stringify(where)}, got undefined`
@@ -107,13 +119,13 @@ const OPERATOR_CASES: ReadonlyArray<{
     params: ["%test%"],
   },
   {
-    // Lower-cased on both sides rather than drizzle's `ilike`: only PostgreSQL has ILIKE, and
-    // the builder emits one statement for every dialect. On MySQL the comparison also stops
-    // depending on the column's collation, which a bare LIKE inherits.
+    // Lower-cased on both sides rather than drizzle's `ilike`: only PostgreSQL has ILIKE. On
+    // MySQL the comparison also stops depending on the column's collation, which a bare LIKE
+    // inherits. SQLite folds with its own function instead, compiled below.
     operator: "ILIKE",
     condition: { column: "name", op: "ILIKE", value: "%test%" },
-    sql: `lower("test_table"."name") like lower($1)`,
-    params: ["%test%"],
+    sql: `replace(lower("test_table"."name"), $1, $2) like replace(lower($3), $4, $5)`,
+    params: [SIGMA, FOLDED_SIGMA, "%test%", SIGMA, FOLDED_SIGMA],
   },
   {
     operator: "IN",
@@ -165,8 +177,8 @@ const OPERATOR_CASES: ReadonlyArray<{
     // both sides lower-cased, the value matched literally as CONTAINS matches it.
     operator: "ICONTAINS",
     condition: { column: "name", op: "ICONTAINS", value: "Test" },
-    sql: `lower("test_table"."name") like lower($1) escape '!'`,
-    params: ["%Test%"],
+    sql: `replace(lower("test_table"."name"), $1, $2) like replace(lower($3), $4, $5) escape '!'`,
+    params: [SIGMA, FOLDED_SIGMA, "%Test%", SIGMA, FOLDED_SIGMA],
   },
 ];
 
@@ -185,12 +197,14 @@ describe("buildDrizzleWhere", () => {
     // caller who asked for no filter gets one, and a caller whose filter evaporated is refused.
 
     it("returns undefined for an empty where clause", () => {
-      expect(buildDrizzleWhere(testTable, {})).toBeUndefined();
+      expect(buildDrizzleWhere(testTable, {}, "postgresql")).toBeUndefined();
     });
 
     it("returns undefined when every branch is present but empty", () => {
       // No member was named, so nothing was dropped. This is still "no filter".
-      expect(buildDrizzleWhere(testTable, { and: [], or: [] })).toBeUndefined();
+      expect(
+        buildDrizzleWhere(testTable, { and: [], or: [] }, "postgresql")
+      ).toBeUndefined();
     });
 
     it.each<[string, WhereClause]>([
@@ -205,7 +219,7 @@ describe("buildDrizzleWhere", () => {
       // would stop there and never notice that `or` named a member and lost it.
       ["an empty branch beside one that evaporated", { and: [], or: [{}] }],
     ])("refuses %s rather than matching every row", (_label, where) => {
-      expect(() => buildDrizzleWhere(testTable, where)).toThrow(
+      expect(() => buildDrizzleWhere(testTable, where, "postgresql")).toThrow(
         /produced no condition/
       );
     });
@@ -276,11 +290,39 @@ describe("buildDrizzleWhere", () => {
         expect(
           compile({ and: [{ column: "name", op: "ICONTAINS", value }] })
         ).toEqual({
-          sql: `lower("test_table"."name") like lower($1) escape '!'`,
+          sql: `replace(lower("test_table"."name"), $1, $2) like replace(lower($3), $4, $5) escape '!'`,
+          params: [SIGMA, FOLDED_SIGMA, pattern, SIGMA, FOLDED_SIGMA],
+        });
+      }
+    );
+
+    it.each(LITERAL_CASES)(
+      "on SQLite, ICONTAINS folds both sides with Nextly's function and still matches %s literally",
+      (_label, value, pattern) => {
+        // SQLite's `lower()` folds ASCII letters only; the registered function folds every letter.
+        expect(
+          compile(
+            { and: [{ column: "name", op: "ICONTAINS", value }] },
+            "sqlite"
+          )
+        ).toEqual({
+          sql: `"${SQLITE_FOLD_CASE_FUNCTION}"("test_table"."name") like "${SQLITE_FOLD_CASE_FUNCTION}"($1) escape '!'`,
           params: [pattern],
         });
       }
     );
+
+    it("on SQLite, ILIKE folds both sides with Nextly's function, its wildcards intact", () => {
+      expect(
+        compile(
+          { and: [{ column: "name", op: "ILIKE", value: "%TÉST%" }] },
+          "sqlite"
+        )
+      ).toEqual({
+        sql: `"${SQLITE_FOLD_CASE_FUNCTION}"("test_table"."name") like "${SQLITE_FOLD_CASE_FUNCTION}"($1)`,
+        params: ["%TÉST%"],
+      });
+    });
 
     it("binds a value rather than inlining it", () => {
       // A Date reaching the statement text instead of the parameter list would be both a
@@ -405,9 +447,11 @@ describe("buildDrizzleWhere", () => {
   describe("refusals", () => {
     it("refuses a column the table does not declare, and says which are available", () => {
       expect(() =>
-        buildDrizzleWhere(testTable, {
-          and: [{ column: "nonexistent", op: "=", value: "test" }],
-        })
+        buildDrizzleWhere(
+          testTable,
+          { and: [{ column: "nonexistent", op: "=", value: "test" }] },
+          "postgresql"
+        )
       ).toThrow(
         `Column "nonexistent" not found in table. Available: id, name, age, is_active, created_at`
       );
@@ -421,9 +465,11 @@ describe("buildDrizzleWhere", () => {
       "refuses the declared but unimplemented %s",
       op => {
         expect(() =>
-          buildDrizzleWhere(testTable, {
-            and: [{ column: "name", op, value: ["a"] }],
-          })
+          buildDrizzleWhere(
+            testTable,
+            { and: [{ column: "name", op, value: ["a"] }] },
+            "postgresql"
+          )
         ).toThrow(`Unsupported operator: ${op}`);
       }
     );

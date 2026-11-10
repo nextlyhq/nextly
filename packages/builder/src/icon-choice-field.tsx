@@ -50,12 +50,29 @@ import {
   ArrowRight,
   ArrowRightToLine,
   ArrowUp,
+  Ban,
   Baseline,
+  CaseLower,
+  CaseSensitive,
+  CaseUpper,
+  ChevronDown,
   Circle,
+  Crop,
+  Columns3,
+  EyeOff,
+  Grid2x2,
+  Minus,
   MoreHorizontal,
+  Play,
+  Plus,
+  RectangleHorizontal,
+  Shrink,
   StretchHorizontal,
   StretchVertical,
+  Strikethrough,
+  Underline,
   WrapText,
+  createLucideIcon,
   type LucideIcon,
 } from "lucide-react";
 import * as React from "react";
@@ -63,6 +80,20 @@ import * as React from "react";
 import { ChromeTooltip } from "./chrome-tooltip";
 import { InheritedValue } from "./inherited-value";
 import type { AlignmentGroup, AlignmentOption } from "./style-alignment-icons";
+import {
+  foldKeyword,
+  keywordLabel,
+  menuKeywords,
+} from "./style-keyword-labels";
+
+/**
+ * A line over an O, as Underline is a U over one: lucide has no overline, and
+ * a mark drawn in its own grid sits in the set as one of its own.
+ */
+const Overline = createLucideIcon("overline", [
+  ["path", { d: "M5 3h14", key: "line" }],
+  ["circle", { cx: "12", cy: "14", r: "6", key: "letter" }],
+]);
 
 /** The icons the mapping names, by their lucide export name. */
 const ICONS: Readonly<Record<string, LucideIcon>> = {
@@ -93,9 +124,26 @@ const ICONS: Readonly<Record<string, LucideIcon>> = {
   ArrowRight,
   ArrowRightToLine,
   ArrowUp,
+  Ban,
   Baseline,
+  CaseLower,
+  CaseSensitive,
+  CaseUpper,
+  ChevronDown,
+  Columns3,
+  Crop,
+  EyeOff,
+  Grid2x2,
+  Minus,
+  Play,
+  Plus,
+  RectangleHorizontal,
+  Shrink,
   StretchHorizontal,
   StretchVertical,
+  Strikethrough,
+  Underline,
+  Overline,
   WrapText,
 };
 
@@ -118,7 +166,7 @@ function inheritedMark(
   option: AlignmentOption,
   inherited: string | undefined
 ): { "aria-label": string; "data-inherited"?: "" } {
-  return option.value === inherited
+  return inherited !== undefined && option.value === foldKeyword(inherited)
     ? { "aria-label": `${option.label}, inherited`, "data-inherited": "" }
     : { "aria-label": option.label };
 }
@@ -148,7 +196,12 @@ export function IconChoiceField({
   const inherited = React.useContext(InheritedValue);
   const shownInherited = stored === undefined ? inherited : undefined;
   const { options } = group;
-  const chosen = options.findIndex(option => option.value === current);
+  // Matched as CSS reads a keyword, so an imported `FLEX` chooses Flex.
+  const iconFor = (value: string | undefined) =>
+    value === undefined
+      ? -1
+      : options.findIndex(option => option.value === foldKeyword(value));
+  const chosen = iconFor(current);
   const buttons = React.useRef<(HTMLButtonElement | null)[]>([]);
 
   // Moves and chooses together, as a radio group's arrow keys do.
@@ -176,14 +229,21 @@ export function IconChoiceField({
 
   // A refused value marks every control, so whichever is focused says so.
   const invalid = describedBy === undefined ? undefined : true;
-  // A stored spelling neither the icons nor the list carry (the engine
-  // accepts "inherit" and other spellings): listed first in More, as stored,
-  // so an active declaration never reads as unset.
-  const unknown =
-    current !== undefined && chosen === -1 && !group.rest.includes(current)
-      ? current
-      : undefined;
-  const more = unknown === undefined ? group.rest : [unknown, ...group.rest];
+  // A stored spelling the icons do not draw (the engine accepts "inherit"
+  // and other spellings): in More, as stored, in the place of a value it
+  // reads the same as or else first, so an active declaration never reads as
+  // unset and is never listed twice.
+  const more = moreValues(group, {
+    current,
+    chosen,
+    inherited: shownInherited,
+    iconFor,
+  });
+  const { help, helpId, describedByAll } = useAppliedHelp(
+    group,
+    current ?? shownInherited,
+    describedBy
+  );
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -193,7 +253,7 @@ export function IconChoiceField({
           <div
             role="radiogroup"
             aria-labelledby={labelledBy}
-            aria-describedby={describedBy}
+            aria-describedby={describedByAll}
             className="nx-icon-choice__group"
           >
             {options.map((option, index) => {
@@ -239,6 +299,7 @@ export function IconChoiceField({
           </div>
           {more.length === 0 ? null : (
             <OtherValues
+              cssProperty={group.cssProperty}
               values={more}
               current={current}
               actionName={actionName}
@@ -247,9 +308,72 @@ export function IconChoiceField({
             />
           )}
         </div>
+        {help === undefined ? null : (
+          <p className="nx-inspector__note nx-icon-choice__help" id={helpId}>
+            {help}
+          </p>
+        )}
       </div>
     </TooltipProvider>
   );
+}
+
+/**
+ * The values beside the icons: the group's list, with a stored value no icon
+ * draws in the place of the one it reads the same as, or else first. So is
+ * an inherited value no icon draws, so the field shows what the canvas uses
+ * rather than nothing at all.
+ */
+function moreValues(
+  group: AlignmentGroup,
+  {
+    current,
+    chosen,
+    inherited,
+    iconFor,
+  }: {
+    current: string | undefined;
+    chosen: number;
+    inherited: string | undefined;
+    iconFor: (value: string | undefined) => number;
+  }
+): readonly string[] {
+  const unlisted =
+    current !== undefined
+      ? chosen === -1
+        ? current
+        : ""
+      : inherited !== undefined && iconFor(inherited) === -1
+        ? inherited
+        : "";
+  return menuKeywords(group.cssProperty, group.rest, unlisted);
+}
+
+/**
+ * What the value that applies does, set here or inherited, where the group
+ * says it in words (an image's fit), and the ids the group is described by
+ * with that line among them.
+ */
+function useAppliedHelp(
+  group: AlignmentGroup,
+  applies: string | undefined,
+  describedBy: string | undefined
+): {
+  help: string | undefined;
+  helpId: string;
+  describedByAll: string | undefined;
+} {
+  const helpId = React.useId();
+  const help =
+    applies === undefined ? undefined : group.help?.[foldKeyword(applies)];
+  const ids = [describedBy, help === undefined ? undefined : helpId].filter(
+    (id): id is string => id !== undefined
+  );
+  return {
+    help,
+    helpId,
+    describedByAll: ids.length === 0 ? undefined : ids.join(" "),
+  };
 }
 
 /** The class an icon is drawn with: turned a quarter, for text down the page. */
@@ -273,12 +397,15 @@ function iconStyle(
  * of them is the value, then that value's own spelling.
  */
 function OtherValues({
+  cssProperty,
   values,
   current,
   actionName,
   describedBy,
   onCommit,
 }: {
+  /** The property the values are named for. */
+  cssProperty: string;
   values: readonly string[];
   current: string | undefined;
   actionName: string;
@@ -305,7 +432,7 @@ function OtherValues({
         aria-label={
           shows === undefined
             ? `More ${actionName} values`
-            : `More ${actionName} values, showing ${shows}`
+            : `More ${actionName} values, showing ${keywordLabel(cssProperty, shows)}`
         }
         aria-describedby={describedBy}
         aria-invalid={describedBy === undefined ? undefined : true}
@@ -315,9 +442,10 @@ function OtherValues({
         />
       </SelectTrigger>
       <SelectContent>
+        {/* In words, the CSS spelling in the tooltip; see style-keyword-labels. */}
         {values.map(other => (
-          <SelectItem key={other} value={other}>
-            {other}
+          <SelectItem key={other} value={other} title={other}>
+            {keywordLabel(cssProperty, other)}
           </SelectItem>
         ))}
       </SelectContent>

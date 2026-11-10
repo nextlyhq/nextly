@@ -5,6 +5,7 @@
  * used across all split services (access, hook, query, mutation, bulk).
  */
 
+import type { StaleVersionPublicData } from "../../../errors/public-data";
 import type { RevalidationIntent } from "../../../revalidation/types";
 
 /**
@@ -142,6 +143,14 @@ export interface BulkOperationResult<T = { id: string }> {
     code: string;
     /** Public-safe message (NextlyError.publicMessage; no identifier or value echo). */
     message: string;
+    /**
+     * For an entry refused as out of date (`STALE_VERSION`): its current
+     * version, and who changed it last and when where the caller may be told,
+     * as the refusal of a single save says.
+     *
+     * @experimental
+     */
+    data?: StaleVersionPublicData;
   }>;
   /** Total number of entries attempted. */
   total: number;
@@ -187,7 +196,18 @@ export interface BatchOperationResult {
    * write reports for the same failure. Optional so a result built before
    * codes were reported still type-checks; every legacy batch sets it.
    */
-  errors: Array<{ index: number; error: string; code?: string }>;
+  errors: Array<{
+    index: number;
+    error: string;
+    code?: string;
+    /**
+     * For an entry refused as out of date (`STALE_VERSION`): its current
+     * version, as on `BulkOperationResult.failures`.
+     *
+     * @experimental
+     */
+    data?: StaleVersionPublicData;
+  }>;
   /**
    * Whether the committed batch appended any durable outbox event, independent
    * of `successful`. A per-item delete can commit its row + event in the shared

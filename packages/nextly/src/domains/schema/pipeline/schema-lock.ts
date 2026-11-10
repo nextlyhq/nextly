@@ -1117,32 +1117,73 @@ class SchemaLockHold {
 
   /**
    * Release every lock on SIGINT or SIGTERM, then let the signal stop the process. Returns how to
-   * take the handlers off again.
+   * take this hold off the interrupt again.
+   *
+   * Every such hold in the process is served by one pair of listeners (`releasingOnInterrupt`),
+   * which stops the process only once each hold's release has settled.
    */
   installSignals(): () => void {
     if (this.options.releaseOnInterrupt !== true) return () => {};
-    const onSignal = (signal: NodeJS.Signals): void => {
-      this.interrupted = true;
-      remove();
-      void Promise.race([
-        Promise.allSettled([this.pending]).then(() => this.releaseAll()),
-        new Promise(resolve => setTimeout(resolve, SHUTDOWN_WAIT_MS).unref?.()),
-      ])
-        .catch(() => undefined)
-        .finally(() => {
-          process.kill(process.pid, signal);
-        });
+    if (releasingOnInterrupt.size === 0) {
+      process.on("SIGINT", onProcessInterrupt);
+      process.on("SIGTERM", onProcessTerminate);
+    }
+    releasingOnInterrupt.add(this);
+    return () => {
+      // A hold the interrupt already took has nothing to take off: the listeners present now
+      // belong to holds that started after it.
+      if (!releasingOnInterrupt.delete(this)) return;
+      if (releasingOnInterrupt.size === 0) detachInterruptListeners();
     };
-    const onInterrupt = (): void => onSignal("SIGINT");
-    const onTerminate = (): void => onSignal("SIGTERM");
-    const remove = (): void => {
-      process.off("SIGINT", onInterrupt);
-      process.off("SIGTERM", onTerminate);
-    };
-    process.once("SIGINT", onInterrupt);
-    process.once("SIGTERM", onTerminate);
-    return remove;
   }
+}
+
+/**
+ * The holds in this process that release their locks on an interrupt.
+ *
+ * One pair of listeners serves them all, and stops the process once every one has released or
+ * the wait for them has run out. A pair per hold would stop it as soon as the quickest finished,
+ * and a hold re-entered inside another's claim holds nothing and finishes at once: the process
+ * would end while the hold that owns the claim was still giving it back, and the claim would
+ * stand until its lease lapsed. Listeners are attached exactly while this set is not empty.
+ */
+const releasingOnInterrupt = new Set<SchemaLockHold>();
+
+function onProcessInterrupt(): void {
+  releaseThenStop("SIGINT");
+}
+
+function onProcessTerminate(): void {
+  releaseThenStop("SIGTERM");
+}
+
+function detachInterruptListeners(): void {
+  process.off("SIGINT", onProcessInterrupt);
+  process.off("SIGTERM", onProcessTerminate);
+}
+
+/**
+ * Release every hold the interrupt finds, each once its acquisition in flight has landed, and
+ * re-send `signal` once all of them have settled. A second interrupt meanwhile finds no listener
+ * and stops the process at once, as an operator pressing it twice expects.
+ */
+function releaseThenStop(signal: NodeJS.Signals): void {
+  const holds = [...releasingOnInterrupt];
+  releasingOnInterrupt.clear();
+  detachInterruptListeners();
+  for (const hold of holds) hold.interrupted = true;
+  void Promise.race([
+    Promise.allSettled(
+      holds.map(hold =>
+        Promise.allSettled([hold.pending]).then(() => hold.releaseAll())
+      )
+    ),
+    new Promise(resolve => setTimeout(resolve, SHUTDOWN_WAIT_MS).unref?.()),
+  ])
+    .catch(() => undefined)
+    .finally(() => {
+      process.kill(process.pid, signal);
+    });
 }
 
 /**
@@ -1564,6 +1605,170 @@ function refusalFor(
 
 function capitalise(text: string): string {
   return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1);
+}
+
+/**
+ * What a read of the schema lock learned. `unknown` is its own answer: a lock this run could not
+ * read (a role without SELECT on a lock table, a database another connection holds) is not a lock
+ * nothing holds, and reporting it as free would tell a reader no schema change is running when
+ * none could be ruled out.
+ */
+export type SchemaLockReading =
+  | { readonly state: "free" }
+  | { readonly state: "held"; readonly holder: SchemaLockHolder }
+  | { readonly state: "unknown"; readonly reason: string };
+
+/** The driver's code for a failed read, from the error or the first cause that names one. */
+function errorCode(error: unknown): string | null {
+  let link: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && typeof link === "object" && link !== null;
+    depth++
+  ) {
+    const code = (link as { code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) return code;
+    link = (link as { cause?: unknown }).cause;
+  }
+  return null;
+}
+
+/** One lock's holder, or what kept it from being read. */
+async function readOneLock(
+  name: string,
+  read: () => Promise<SchemaLockHolder | null>
+): Promise<SchemaLockHolder | null | { unreadable: string }> {
+  try {
+    return await read();
+  } catch (error) {
+    const code = errorCode(error);
+    return {
+      unreadable: `${name} could not be read${code === null ? "" : ` (${code})`}`,
+    };
+  }
+}
+
+/**
+ * Who holds the schema lock now, read without taking it.
+ *
+ * For a run that must write nothing, such as a report: taking the lock writes a claim, so this only
+ * reads each lock a schema change takes and creates no table. A lock table that does not exist yet
+ * is free, since the first run that claims it creates it. Any lock found held makes the answer
+ * held; otherwise any lock that could not be read makes it unknown. The answer can be stale the
+ * moment it is read; a run that acts on it takes the lock instead.
+ */
+export async function readSchemaLockState(
+  adapter: DrizzleAdapter
+): Promise<SchemaLockReading> {
+  const dialect = adapter.getCapabilities().dialect;
+  const observed = await observeMigrationLock(adapter, dialect);
+  const readings = [
+    await readOneLock("the schema lock", () =>
+      readSchemaRowHolder(adapter, dialect)
+    ),
+    await readOneLock("the earlier migrate lock", () =>
+      readEarlierLockHolder(adapter, dialect)
+    ),
+    // The field-group lock's own read already tells a free lock from one it could not read.
+    observed.kind === "unknown"
+      ? {
+          unreadable: `the field-group lock could not be read (${observed.reason})`,
+        }
+      : observed.kind === "held"
+        ? { kind: "earlier-field-group-lock" as const, owner: observed.owner }
+        : null,
+  ];
+  for (const reading of readings) {
+    if (reading !== null && !("unreadable" in reading)) {
+      return { state: "held", holder: reading };
+    }
+  }
+  const unreadable = readings
+    .filter((r): r is { unreadable: string } => r !== null && "unreadable" in r)
+    .map(r => r.unreadable);
+  return unreadable.length === 0
+    ? { state: "free" }
+    : { state: "unknown", reason: unreadable.join("; ") };
+}
+
+/** The schema lock's row while a claim on it is live; a table never created holds nothing. */
+async function readSchemaRowHolder(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect
+): Promise<SchemaLockHolder | null> {
+  let state: RowState | undefined;
+  try {
+    const rows = await adapter.queryStatement<RawState>(stateQuery(dialect, 0));
+    state = toState(rows[0]);
+  } catch (error) {
+    if (isMissingTable(error, dialect)) return null;
+    throw error;
+  }
+  return state?.live === true ? holderOf(state) : null;
+}
+
+/**
+ * The earlier migrate lock's holder, read without taking it: PostgreSQL's row while its lease runs,
+ * and MySQL's named locks, this database's and the server-wide one earlier versions took.
+ */
+async function readEarlierLockHolder(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect
+): Promise<SchemaLockHolder | null> {
+  if (dialect === "mysql") return readMysqlNamedLockHolder(adapter);
+  if (dialect === "postgresql") return readEarlierMigrateRowHolder(adapter);
+  return null;
+}
+
+/** MySQL's named locks: this database's, then the server-wide one earlier versions took. */
+async function readMysqlNamedLockHolder(
+  adapter: DrizzleAdapter
+): Promise<SchemaLockHolder | null> {
+  const [used] = toRows(
+    await adapter.queryStatement(
+      sql`SELECT IS_USED_LOCK(${MYSQL_MIGRATE_LOCK_NAME}) AS ${id("current")},
+            IS_USED_LOCK(${MYSQL_LEGACY_LOCK_NAME}) AS ${id("legacy")}`
+    )
+  );
+  const named: Array<[string, string | null]> = [
+    // The connection holding each, or null where it is free.
+    ["nextly:migrate:<this database>", connectionIdOf(used?.current)],
+    [MYSQL_LEGACY_LOCK_NAME, connectionIdOf(used?.legacy)],
+  ];
+  const held = named.find(([, connection]) => connection !== null);
+  return held === undefined
+    ? null
+    : {
+        kind: "earlier-mysql-lock",
+        name: held[0],
+        connectionId: held[1],
+      };
+}
+
+/** PostgreSQL's earlier migrate row while its lease runs; a table never created holds nothing. */
+async function readEarlierMigrateRowHolder(
+  adapter: DrizzleAdapter
+): Promise<SchemaLockHolder | null> {
+  let rows: Array<{ owner: string | null; lapses_in: unknown }>;
+  try {
+    rows = await adapter.queryStatement(
+      sql`SELECT ${id("owner")},
+            ${remainingSecondsExpression("postgresql", "expires_at")} AS ${id("lapses_in")}
+          FROM ${id(EARLIER_MIGRATE_LOCK_TABLE)}
+          WHERE ${id("id")} = ${ROW_ID} AND ${id("expires_at")} > ${nowExpression("postgresql")}`
+    );
+  } catch (error) {
+    if (isMissingTable(error, "postgresql")) return null;
+    throw error;
+  }
+  const row = rows[0];
+  return row === undefined
+    ? null
+    : {
+        kind: "earlier-migrate-lock",
+        owner: row.owner,
+        lapsesInSeconds: seconds(row.lapses_in),
+      };
 }
 
 /** An interrupt that arrived before the work began: nothing ran, and nothing is held. */

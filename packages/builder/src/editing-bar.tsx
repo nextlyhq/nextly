@@ -25,10 +25,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  TooltipProvider,
 } from "@nextlyhq/ui";
 import { ChevronDown, Lock, Monitor } from "lucide-react";
 import * as React from "react";
 
+import { ChromeTooltip } from "./chrome-tooltip";
 import { stateLabel } from "./state-switcher";
 
 /**
@@ -71,8 +73,31 @@ export interface EditingBarProps {
   readonly onRemove?: (id: string) => void;
   /** Keep the style's look on this block only. Absent withholds the item. */
   readonly onDetach?: (id: string) => void;
+  /**
+   * The look the block wears, and what the line about it says: that an edit
+   * here changes this block only, and how to edit the look for every block
+   * wearing it. Absent when the block wears no look.
+   */
+  readonly wornLook?: {
+    readonly id: string;
+    /** "Changes this button only". */
+    readonly here: string;
+    /** "Edit Outline for all 9 buttons". */
+    readonly everywhere: string;
+  };
+  /**
+   * Why one style can't be detached, when its look can't be kept exactly:
+   * asked as its menu opens, so the item is held with the reason beside it.
+   */
+  readonly detachHeld?: (id: string) => string | undefined;
   /** Why the chip's actions are held (the block's lock), shown in its menu. */
   readonly chipActionsHeld?: string;
+  /**
+   * Why a shared style can't be made the target (the block's design is held,
+   * which its shared styles' values are part of), said on each such chip.
+   * The chips stay reachable so the reason can be read.
+   */
+  readonly targetHeld?: string;
   /** What line one offers after the chips: apply or save a shared style. */
   readonly actions?: React.ReactNode;
   /** Why a shared target's values can't be changed, when they can't. */
@@ -101,7 +126,10 @@ export function EditingBar({
   onTargetChange,
   onRemove,
   onDetach,
+  detachHeld,
+  wornLook,
   chipActionsHeld,
+  targetHeld,
   actions,
   sharedReadOnly,
   device,
@@ -113,83 +141,95 @@ export function EditingBar({
   const group = React.useRef<HTMLDivElement>(null);
   const labelId = React.useId();
   return (
-    <section
-      className="nx-editing-bar"
-      aria-label="What you're editing"
-      data-target={target.kind}
-      onKeyDown={event => {
-        // Escape on a shared target goes back to this block, so leaving a
-        // site-wide edit is one key from anywhere in the bar.
-        if (event.key !== "Escape" || activeId === null) return;
-        // A key a menu inside the bar already answered (its own Escape) is
-        // left alone, and the one answered here is marked, so the editor's
-        // Escape, which skips an answered key, does not also select the
-        // parent block.
-        if (onTargetChange === undefined || event.defaultPrevented) return;
-        event.preventDefault();
-        onTargetChange(null);
-        focusChip(group.current, null);
-      }}
-    >
-      <div className="nx-editing-bar__line">
-        <span className="nx-editing-bar__label" id={labelId}>
-          Editing
-        </span>
-        <div
-          ref={group}
-          className="nx-editing-bar__targets"
-          role="group"
-          aria-labelledby={labelId}
-          onKeyDown={event => moveBetweenChips(event, group.current)}
-        >
-          <TargetChip
-            id={null}
-            name="This block"
-            tone="local"
-            active={activeId === null}
-            onSelect={onTargetChange}
-          />
-          {chips.map(chip => (
-            <span key={chip.id} className="nx-editing-bar__chip-wrap">
-              <TargetChip
-                id={chip.id}
-                name={chip.name}
-                className={chip.className}
-                locked={chip.locked === true}
-                tone="shared"
-                active={activeId === chip.id}
-                onSelect={onTargetChange}
-              />
-              <ChipMenu
-                chip={chip}
-                onRemove={onRemove}
-                onDetach={onDetach}
-                held={chipActionsHeld}
-              />
-            </span>
-          ))}
+    // Its own provider, as each surface keeps one: the bar's held chips say
+    // why in the editor's tooltip, wherever the bar is drawn.
+    <TooltipProvider delayDuration={300}>
+      <section
+        className="nx-editing-bar"
+        aria-label="What you're editing"
+        data-target={target.kind}
+        onKeyDown={event => {
+          // Escape on a shared target goes back to this block, so leaving a
+          // site-wide edit is one key from anywhere in the bar.
+          if (event.key !== "Escape" || activeId === null) return;
+          // A key a menu inside the bar already answered (its own Escape) is
+          // left alone, and the one answered here is marked, so the editor's
+          // Escape, which skips an answered key, does not also select the
+          // parent block.
+          if (onTargetChange === undefined || event.defaultPrevented) return;
+          event.preventDefault();
+          onTargetChange(null);
+          focusChip(group.current, null);
+        }}
+      >
+        <div className="nx-editing-bar__line">
+          <span className="nx-editing-bar__label" id={labelId}>
+            Editing
+          </span>
+          <div
+            ref={group}
+            className="nx-editing-bar__targets"
+            role="group"
+            aria-labelledby={labelId}
+            onKeyDown={event => moveBetweenChips(event, group.current)}
+          >
+            <TargetChip
+              id={null}
+              name="This block"
+              tone="local"
+              active={activeId === null}
+              onSelect={onTargetChange}
+            />
+            {chips.map(chip => (
+              <span key={chip.id} className="nx-editing-bar__chip-wrap">
+                <TargetChip
+                  id={chip.id}
+                  name={chip.name}
+                  className={chip.className}
+                  locked={chip.locked === true}
+                  tone="shared"
+                  active={activeId === chip.id}
+                  onSelect={onTargetChange}
+                  held={targetHeld}
+                />
+                <ChipMenu
+                  chip={chip}
+                  onRemove={onRemove}
+                  onDetach={onDetach}
+                  detachHeld={detachHeld}
+                  held={chipActionsHeld}
+                />
+              </span>
+            ))}
+          </div>
+          {actions}
         </div>
-        {actions}
-      </div>
-      {target.kind === "shared" ? (
-        <SharedBanner
+        {target.kind === "shared" ? (
+          <SharedBanner
+            target={target}
+            readOnly={sharedReadOnly}
+            onLeave={
+              onTargetChange === undefined
+                ? undefined
+                : () => {
+                    onTargetChange(null);
+                    focusChip(group.current, null);
+                  }
+            }
+          />
+        ) : null}
+        <LookLine
           target={target}
-          readOnly={sharedReadOnly}
-          onLeave={
-            onTargetChange === undefined
-              ? undefined
-              : () => {
-                  onTargetChange(null);
-                  focusChip(group.current, null);
-                }
-          }
+          look={wornLook}
+          onTargetChange={onTargetChange}
+          held={targetHeld}
         />
-      ) : null}
-      <BarContext device={device} state={state} stateControl={stateControl} />
-      <p className="nx-sr-only" role="status">
-        {announced}
-      </p>
-    </section>
+        <BarContext device={device} state={state} stateControl={stateControl} />
+        <p className="nx-sr-only" role="status">
+          {announced}
+        </p>
+      </section>
+    </TooltipProvider>
   );
 }
 
@@ -294,6 +334,7 @@ function TargetChip({
   tone,
   active,
   onSelect,
+  held,
 }: {
   id: string | null;
   name: string;
@@ -304,26 +345,51 @@ function TargetChip({
   tone: "local" | "shared";
   active: boolean;
   onSelect: ((id: string | null) => void) | undefined;
+  /** Why this chip can't become the target, said in its tooltip. */
+  held?: string | undefined;
 }): React.JSX.Element {
-  return (
+  // Held, not disabled: a disabled button can't be reached to read why.
+  const refused = held !== undefined && !active;
+  const words = chipWords({ id, name, className, locked, active });
+  const reasonId = React.useId();
+  const chip = (
     <button
       type="button"
       className="nx-editing-bar__chip"
       data-tone={tone}
       data-target-chip={id ?? ""}
-      {...chipWords({ id, name, className, locked, active })}
+      {...words}
+      // The reason replaces the native tooltip, which focus never shows, and
+      // is the chip's description, heard without opening anything.
+      {...(refused
+        ? {
+            "aria-disabled": true,
+            title: undefined,
+            "aria-describedby": reasonId,
+          }
+        : {})}
       aria-pressed={active}
       // One tab stop for the group: the target. The arrows reach the rest.
       tabIndex={active ? 0 : -1}
       disabled={onSelect === undefined && !active}
       onClick={() => {
-        if (!active) onSelect?.(id);
+        if (!active && !refused) onSelect?.(id);
       }}
     >
       {name}
       {/* The lock in words is in the chip's name, said as one phrase. */}
       {locked ? <Lock aria-hidden="true" size={11} /> : null}
     </button>
+  );
+  if (!refused) return chip;
+  // Shown on hover and on keyboard focus, as every held control's reason is.
+  return (
+    <>
+      <ChromeTooltip content={held}>{chip}</ChromeTooltip>
+      <span id={reasonId} hidden>
+        {held}
+      </span>
+    </>
   );
 }
 
@@ -365,11 +431,13 @@ function ChipMenu({
   chip,
   onRemove,
   onDetach,
+  detachHeld,
   held,
 }: {
   chip: EditingBarChip;
   onRemove: ((id: string) => void) | undefined;
   onDetach: ((id: string) => void) | undefined;
+  detachHeld: ((id: string) => string | undefined) | undefined;
   held: string | undefined;
 }): React.JSX.Element | null {
   if (onRemove === undefined && onDetach === undefined) return null;
@@ -388,17 +456,19 @@ function ChipMenu({
         </button>
       </DropdownMenuTrigger>
       {/* Kept clear of the window's edge. */}
-      <DropdownMenuContent align="start" collisionPadding={8}>
+      <DropdownMenuContent
+        align="start"
+        collisionPadding={8}
+        className="nx-editing-bar__menu"
+      >
         {onDetach === undefined ? null : (
-          <DropdownMenuItem
-            disabled={held !== undefined}
+          <DetachItem
+            held={held}
+            whyHeld={
+              detachHeld === undefined ? undefined : () => detachHeld(chip.id)
+            }
             onSelect={() => onDetach(chip.id)}
-          >
-            Detach: keep the look on this block only
-            {held === undefined ? null : (
-              <span className="nx-block-card__reason"> — {held}</span>
-            )}
-          </DropdownMenuItem>
+          />
         )}
         {onRemove === undefined ? null : (
           <DropdownMenuItem
@@ -410,6 +480,82 @@ function ChipMenu({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * "Detach", or why it is held: the block's lock, or a look that can't be
+ * kept exactly. Its own component, so the reason is asked only while the
+ * menu is open.
+ */
+function DetachItem({
+  held,
+  whyHeld,
+  onSelect,
+}: {
+  /** The block's lock, known already. */
+  held: string | undefined;
+  /** Why this style can't be detached, asked here, as the menu opens. */
+  whyHeld: (() => string | undefined) | undefined;
+  onSelect: () => void;
+}): React.JSX.Element {
+  // Asked while drawing the open menu only: answering plans the detach,
+  // which the bar's every render need not pay for.
+  const reason = held ?? whyHeld?.();
+  return (
+    <DropdownMenuItem disabled={reason !== undefined} onSelect={onSelect}>
+      <span className="nx-editing-bar__item-words">
+        <span>Detach: keep the look on this block only</span>
+        {reason === undefined ? null : (
+          <span className="nx-editing-bar__item-reason">
+            {/* Heard as one sentence; read as a line of its own. */}
+            <span className="nx-sr-only"> — </span>
+            {reason}
+          </span>
+        )}
+      </span>
+    </DropdownMenuItem>
+  );
+}
+
+/**
+ * The line a worn look adds while the block is the target: an edit here
+ * changes this block only, and the look is shared, so the way to change it
+ * for every block wearing it is one press away.
+ */
+function LookLine({
+  target,
+  look,
+  onTargetChange,
+  held,
+}: {
+  target: EditTarget;
+  look: EditingBarProps["wornLook"];
+  onTargetChange: ((id: string | null) => void) | undefined;
+  held: string | undefined;
+}): React.JSX.Element | null {
+  // Only while the block is the target: a look that is the target says
+  // where it reaches in its own banner.
+  if (target.kind !== "block" || look === undefined) return null;
+  const onEdit =
+    onTargetChange === undefined || held !== undefined
+      ? undefined
+      : () => onTargetChange(look.id);
+  return (
+    <p className="nx-editing-bar__look-line">
+      <span>{look.here}</span>
+      {/* On a line of its own: the action reads apart from the statement
+          rather than wrapping onto it after a separator. */}
+      {onEdit === undefined ? null : (
+        <button
+          type="button"
+          className="nx-editing-bar__leave"
+          onClick={onEdit}
+        >
+          {look.everywhere}
+        </button>
+      )}
+    </p>
   );
 }
 

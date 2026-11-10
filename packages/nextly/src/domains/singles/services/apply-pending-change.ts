@@ -14,6 +14,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, type Column } from "drizzle-orm";
 
+import type { RequestActor } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
@@ -142,6 +143,13 @@ export async function writeCompanionValues(args: {
   values: Record<string, unknown>;
   /** The per-locale lifecycle to stamp, when this write sets one. */
   status?: string;
+  /**
+   * Who made the save: the language row's version counter moves and its last
+   * changer is recorded, in the upsert itself.
+   */
+  savedBy: RequestActor;
+  /** Set when the save already took the row's next version (`claimCompanionRevision`). */
+  revisionClaimed?: boolean;
 }): Promise<void> {
   const txWriteAdapter = {
     dialect: args.dialect,
@@ -154,7 +162,8 @@ export async function writeCompanionValues(args: {
     args.entryId,
     args.locale,
     args.values,
-    args.status
+    args.status,
+    { savedBy: args.savedBy, revisionClaimed: args.revisionClaimed }
   );
 }
 

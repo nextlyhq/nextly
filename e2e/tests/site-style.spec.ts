@@ -218,7 +218,9 @@ test.beforeAll(async ({ playwright }, testInfo) => {
     // PATCH is idempotent, so a retried run re-writes the same document and
     // needs no duplicate handling.
     await expectOk(
-      await api.patch(SITE_STYLE, { data: STORED_STYLE }),
+      await api.patch(SITE_STYLE, {
+        data: { ...STORED_STYLE, _overwrite: true },
+      }),
       "storing the site style"
     );
 
@@ -235,6 +237,16 @@ test.beforeAll(async ({ playwright }, testInfo) => {
     if (created.status() !== 409) {
       await expectOk(created, `seeding ${PAGE_SLUG}`);
     }
+
+    // `/blocks` is public, so its pages are cached. This app installs no
+    // Nextly cache handlers, and Next's default cache serves a page its
+    // previous render once after a write expires its tags. So the tests below
+    // start once the page shows the stored style, within a bound.
+    await expect
+      .poll(async () => await (await api.get(`/blocks/${PAGE_SLUG}`)).text(), {
+        timeout: 30_000,
+      })
+      .toContain(`${TOKEN_PROPERTY}:${TOKEN_LIGHT}`);
   } finally {
     await api.dispose();
   }
@@ -368,6 +380,7 @@ test("a token value that would fetch is refused, and the page keeps the last goo
           },
         ],
       },
+      _overwrite: true,
     },
   });
   expect(refused.ok()).toBe(false);

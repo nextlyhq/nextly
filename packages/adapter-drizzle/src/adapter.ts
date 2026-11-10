@@ -44,7 +44,11 @@ import {
   undone,
   type Committed,
   type HeldEffect,
+  type JoinableFrame,
+  type JoinSteps,
   type OutermostSteps,
+  type Settled,
+  type TransactionAttempts,
   type TransactionFrame,
   type TransactionSteps,
 } from "./transaction-frame";
@@ -78,6 +82,7 @@ import type {
 } from "./types";
 import {
   createDatabaseError,
+  isApplicationError,
   isDatabaseError,
   tableNotRegisteredError,
 } from "./types";
@@ -158,6 +163,11 @@ function transactionAround(
     at = transaction.enclosing;
   }
   return undefined;
+}
+
+/** Waits `ms` before a transaction's next attempt. */
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
@@ -561,15 +571,14 @@ export abstract class DrizzleAdapter {
    * undone with it, while the effect it performs after its own savepoint
    * releases is not.
    *
-   * False here. Concrete rather than abstract so existing adapters keep
-   * working unchanged, and false is right for a pooled adapter: a call made
-   * inside another transaction's work opens its own transaction on its own
-   * connection, which commits independently.
+   * Read from the calling flow's transaction frame ({@link joinableFrame}),
+   * alike on every dialect: a call made inside another transaction's work
+   * joins it, on its connection.
    *
    * @returns True when the call would nest in an open transaction
    */
   inTransaction(): boolean {
-    return false;
+    return this.joinableFrame() !== undefined;
   }
 
   /**
@@ -619,7 +628,7 @@ export abstract class DrizzleAdapter {
    *
    * @returns The frame the call would join
    */
-  protected joinableFrame(): TransactionFrame | undefined {
+  protected joinableFrame(): JoinableFrame | undefined {
     return joinable(this.scope.getStore());
   }
 
@@ -635,7 +644,7 @@ export abstract class DrizzleAdapter {
    *
    * @returns The frame the call joins
    */
-  protected beginTransactionCall(): TransactionFrame | undefined {
+  protected beginTransactionCall(): JoinableFrame | undefined {
     const own = this.scope.getStore();
     const frame = joinable(own);
     if (own && frame !== own) own.writesAfterClosing += 1;
@@ -643,48 +652,79 @@ export abstract class DrizzleAdapter {
   }
 
   /**
+   * The stack that opens a transaction, while a test harness observes
+   * escapes; undefined otherwise. A dialect captures it at the top of its
+   * `transaction()`, before it awaits anything, so the stack still reaches
+   * the code that opened the transaction, and hands it to
+   * {@link runOutermost} as `steps.openedAt`.
+   *
+   * @returns The stack, or undefined when no harness observes escapes
+   */
+  protected captureOpeningStack(): string | undefined {
+    return openingStack();
+  }
+
+  /**
    * Run `work` as an outermost transaction: `steps.begin`, the work inside a
-   * new frame, then `steps.commit`, or `steps.rollback` when either throws.
+   * new frame, then `steps.commit`, or `steps.rollback` when any of them
+   * throws, or when a part joined to it doomed it (`TransactionSteps.dooms`).
    *
    * Work the transaction started and did not wait for is part of it: joined
    * calls still queued finish before the COMMIT or the ROLLBACK
    * (`settleNested`), so a rollback discards their writes rather than leaving
    * them to run afterwards outside any transaction.
    *
-   * Resolves once the transaction has committed, with the work's result and
-   * the effects held for it, less those a rolled-back part dropped. The caller
-   * frees the connection and then runs them ({@link runHeldEffects}), so an
-   * effect that opens a transaction of its own does not wait behind this one.
-   * On a rollback, or a COMMIT that failed, every held effect is dropped and
-   * the error is rethrown as it was thrown: classifying it is the dialect's.
+   * Never rejects for the transaction's own failure: it settles with how the
+   * transaction ended ({@link Settled}). {@link runOutermost} is the same,
+   * resolving once committed and rejecting otherwise. Committed, it hands back the work's
+   * result and the `afterCommit` effects held for it, less those a
+   * rolled-back part dropped. Rolled back, it hands back the error, as it was
+   * thrown, and the `afterRollback` effects. The caller frees the connection
+   * and then runs them ({@link runHeldEffects}), so an effect that opens a
+   * transaction of its own does not wait behind this one; a caller about to
+   * retry drops the rollback effects instead, since the attempt they belong
+   * to is not the last. Rollback effects are handed back only once the
+   * ROLLBACK is confirmed: when it fails too, nobody can say whether the
+   * transaction committed, so they are dropped and that is logged
+   * ({@link logHeldEffectFailure}). Classifying the error is the dialect's.
    *
-   * @param steps - The statements, the context and the connection
+   * @param steps - The statements, the context, and how calls inside join
    * @param work - The transaction's work
    * @param options - The options the transaction was opened with
-   * @returns The result, and the effects to run once the connection is free
+   * @returns How the transaction ended
    */
-  protected async runOutermost<T>(
-    steps: OutermostSteps,
-    work: (tx: TransactionContext) => Promise<T>,
+  protected async settleOutermost<T, C = TransactionContext>(
+    steps: OutermostSteps<C>,
+    work: (tx: C) => Promise<T>,
     options?: TransactionOptions
-  ): Promise<Committed<T>> {
-    const begun = steps.begin();
-    if (isPending(begun)) await begun;
+  ): Promise<Settled<T>> {
+    try {
+      const begun = steps.begin();
+      if (isPending(begun)) await begun;
+    } catch (error) {
+      // No frame was opened, so no effect was held for it.
+      await this.rollBackQuietly(steps);
+      return { committed: false, error, effects: [] };
+    }
     // Opened only once BEGIN has run, so a failed BEGIN leaves no frame
     // behind for a later call to join.
     const frame = openFrame({
       enclosing: this.scope.getStore(),
-      connection: steps.connection,
+      join: steps.join,
       options,
-      openedAt: openingStack(),
+      openedAt: steps.openedAt,
     });
     try {
       const result = await this.scope.run(frame, () => work(steps.context));
       await settleNested(frame);
+      // A joined part failed in a way this transaction cannot commit past.
+      if (frame.doomed) throw frame.doomed.error;
       const committed = steps.commit();
       if (isPending(committed)) await committed;
       frame.finished = true;
+      frame.rollbackHeld.length = 0;
       return {
+        committed: true,
         result,
         effects: frame.held.filter(
           held => !undone(held.frame, held.writesBefore)
@@ -697,27 +737,88 @@ export abstract class DrizzleAdapter {
       frame.rolledBack = true;
       frame.finished = true;
       frame.held.length = 0;
-      try {
-        const rolledBack = steps.rollback();
-        if (isPending(rolledBack)) await rolledBack;
-      } catch {
-        // The transaction may already have been aborted.
-      }
-      throw error;
+      const confirmed = await this.rollBackQuietly(steps);
+      const rollbackEffects = frame.rollbackHeld.splice(0);
+      return {
+        committed: false,
+        error,
+        effects: confirmed
+          ? rollbackEffects
+          : this.dropUnconfirmed(rollbackEffects),
+      };
     }
   }
 
   /**
-   * Run `work` as a part joined to `frame`: `begin` (a SAVEPOINT), the work
-   * inside a new frame one deeper, then `commit` (its RELEASE), or `rollback`
-   * when either throws.
+   * Run `work` as an outermost transaction, as {@link settleOutermost} does,
+   * resolving once it has committed and rejecting with the error that ended
+   * it, as it was thrown, otherwise.
+   *
+   * @param steps - The statements, the context, and how calls inside join
+   * @param work - The transaction's work
+   * @param options - The options the transaction was opened with
+   * @returns The result, and the `afterCommit` effects to run once the
+   *   connection is free
+   */
+  protected async runOutermost<T, C = TransactionContext>(
+    steps: OutermostSteps<C>,
+    work: (tx: C) => Promise<T>,
+    options?: TransactionOptions
+  ): Promise<Committed<T>> {
+    const settled = await this.settleOutermost(steps, work, options);
+    if (!settled.committed) throw settled.error;
+    return { result: settled.result, effects: settled.effects };
+  }
+
+  /**
+   * Run a transaction's ROLLBACK, never throwing.
+   *
+   * @returns Whether the ROLLBACK is confirmed: false when it failed, so the
+   *   transaction's outcome is unknown
+   */
+  private async rollBackQuietly<C>(
+    steps: TransactionSteps<C>
+  ): Promise<boolean> {
+    try {
+      const rolledBack = steps.rollback();
+      if (isPending(rolledBack)) await rolledBack;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Drop the rollback effects of a transaction whose ROLLBACK could not be
+   * confirmed, and say so: it may have committed, and compensation run for a
+   * change that stands would be the wrong outcome.
+   */
+  private dropUnconfirmed(effects: HeldEffect[]): HeldEffect[] {
+    if (effects.length > 0) {
+      this.logHeldEffectFailure(
+        new Error(
+          `The transaction's outcome is unknown: its ROLLBACK could not be confirmed, so ${String(effects.length)} effect(s) held for a rollback did not run.`
+        )
+      );
+    }
+    return [];
+  }
+
+  /**
+   * Run `work` as a part joined to `frame`: `begin` (a SAVEPOINT, or nothing
+   * on a flat join), the work inside a new frame one deeper, then `commit`,
+   * or `rollback` when either throws.
    *
    * Joined calls of one frame run one at a time, in the order they were made:
    * two interleaved savepoints would release or roll back each other. Their
    * steps are built only once the call's turn comes (`stepsAt`, handed the
    * part's depth). A rolled-back part is marked so, which drops every effect
    * registered from it, before or after this point; the error is rethrown as
-   * it was thrown.
+   * it was thrown. A failure the steps say the transaction cannot commit past
+   * (`dooms`) dooms the outermost transaction, and a call joined to a doomed
+   * transaction fails at once with the error that doomed it. A joined call
+   * keeps the outermost transaction's options: its own are recorded on its
+   * frame only.
    *
    * @param frame - The frame the call joins, from {@link beginTransactionCall}
    * @param stepsAt - Builds the part's steps for its depth
@@ -725,23 +826,21 @@ export abstract class DrizzleAdapter {
    * @param options - The options the part was opened with
    * @returns What `work` resolves to
    */
-  protected runJoined<T>(
-    frame: TransactionFrame,
-    stepsAt: (depth: number) => TransactionSteps,
-    work: (tx: TransactionContext) => Promise<T>,
+  protected runJoined<T, C = TransactionContext>(
+    frame: JoinableFrame,
+    stepsAt: (depth: number) => TransactionSteps<C>,
+    work: (tx: C) => Promise<T>,
     options?: TransactionOptions
   ): Promise<T> {
     return enqueueIn(frame, async () => {
+      const root = outermost(frame);
+      if (root.doomed) throw root.doomed.error;
       const steps = stepsAt(frame.depth + 1);
       const begun = steps.begin();
       if (isPending(begun)) await begun;
       // Opened only once the savepoint exists, so a failed SAVEPOINT leaves
       // no frame behind for a later call to join.
-      const part = openFrame({
-        parent: frame,
-        connection: frame.connection,
-        options,
-      });
+      const part = openFrame({ parent: frame, join: frame.join, options });
       try {
         const result = await this.scope.run(part, () => work(steps.context));
         await settleNested(part);
@@ -756,15 +855,155 @@ export abstract class DrizzleAdapter {
         // Its change is undone, so nothing registered from it, before or
         // after this point, may announce it.
         part.rolledBack = true;
-        try {
-          const rolledBack = steps.rollback();
-          if (isPending(rolledBack)) await rolledBack;
-        } catch {
-          // The enclosing transaction may already have ended.
+        if (root.doomed === undefined && steps.dooms?.(error) === true) {
+          root.doomed = { error };
         }
+        await this.rollBackQuietly(steps);
         throw error;
       }
     });
+  }
+
+  /**
+   * A dialect's `transaction()`: join the transaction the calling flow is
+   * inside, or run an outermost one, attempt by attempt.
+   *
+   * A joined call runs as a part of the open transaction, through the steps
+   * its frame offers ({@link runJoined}). An outermost one runs
+   * `attempts.run` until an attempt commits, or until one fails that is not
+   * tried again. An attempt is tried again, within `retryCount`, when
+   * `retryWhen` accepts its error, which is asked first and of every error,
+   * application ones included; otherwise when the dialect retries it of its
+   * own accord, which it never does for an application error. A committed
+   * attempt's effects run once its connection is back; a failed attempt that
+   * is retried drops its rollback effects, and the last one runs them.
+   *
+   * Whatever ends the transaction reaches the caller as it was thrown when it
+   * carries the application brand: the application refusing the write, whose
+   * code and payload must arrive intact. Every other error is classified.
+   *
+   * @param work - The transaction's work
+   * @param options - The options it was opened with
+   * @param attempts - How the dialect runs one attempt, and what it retries
+   * @returns What `work` resolves to, once it has committed
+   */
+  protected async openOrJoin<T>(
+    work: (tx: TransactionContext) => Promise<T>,
+    options: TransactionOptions | undefined,
+    attempts: TransactionAttempts<T>
+  ): Promise<T> {
+    const frame = this.beginTransactionCall();
+    if (frame) {
+      try {
+        return await this.runJoined(
+          frame,
+          depth => frame.join.adapter(depth),
+          work,
+          options
+        );
+      } catch (error) {
+        throw this.transactionError(error);
+      }
+    }
+    // Before anything is awaited, so the stack still reaches the caller.
+    const openedAt = this.captureOpeningStack();
+    const maxAttempts = (options?.retryCount ?? 0) + 1;
+    const retryDelayMs = options?.retryDelayMs ?? 100;
+    for (let attempt = 1; ; attempt++) {
+      const startTime = Date.now();
+      const settled = await attempts.run(attempt, openedAt);
+      if (settled.committed) {
+        attempts.logger?.debug?.("Transaction committed", {
+          attempt,
+          durationMs: Date.now() - startTime,
+        });
+        await this.runHeldEffects(settled.effects);
+        return settled.result;
+      }
+      const { error } = settled;
+      let retried: boolean;
+      try {
+        retried =
+          options?.retryWhen?.(error) === true ||
+          (!isApplicationError(error) && attempts.retryable(error));
+      } catch (thrown) {
+        // The attempt did roll back, whatever the question about retrying
+        // it raised: its rollback effects still run before that propagates.
+        await this.runHeldEffects(settled.effects);
+        throw thrown;
+      }
+      if (attempt < maxAttempts && retried) {
+        const { label, detail } = attempts.describe(error);
+        attempts.logger?.warn?.(
+          `Transaction failed with ${label}, retrying (${attempt}/${maxAttempts})`,
+          { ...detail, attempt }
+        );
+        // This attempt's rollback effects go with it: it is not the last.
+        await wait(retryDelayMs * attempt); // Exponential backoff
+        continue;
+      }
+      await this.runHeldEffects(settled.effects);
+      throw this.transactionError(error);
+    }
+  }
+
+  /**
+   * An error a transaction ended with, as its caller receives it: one that
+   * carries the application brand as it was thrown, any other classified.
+   */
+  private transactionError(error: unknown): unknown {
+    return isApplicationError(error) ? error : this.classifyError(error);
+  }
+
+  /**
+   * How calls made inside a transaction join it, built by a dialect over the
+   * transaction's own connection: a part each, its steps from `part`, handed
+   * a transaction context (`context`) or a Drizzle handle on the same
+   * connection (`drizzleOn`, with the calling handle's relations, memoized
+   * per transaction as a transaction context's handles are).
+   *
+   * @param context - A transaction context on the connection
+   * @param drizzleOn - A Drizzle handle on the connection, with `relations`
+   * @param part - The steps of a part joined `depth` deep, handed `context`
+   * @returns The join steps, for `OutermostSteps.join`
+   */
+  protected joinStepsOn<B extends DrizzleTransactor>(
+    context: () => TransactionContext,
+    drizzleOn: (relations?: AnyRelations) => B,
+    part: <C>(context: C, depth: number) => TransactionSteps<C>
+  ): JoinSteps {
+    const handles = this.transactionDrizzleHandles(drizzleOn);
+    return {
+      adapter: depth => part(context(), depth),
+      drizzle: (depth, relations) =>
+        part<DrizzleTransactor>(
+          relations ? handles.withRelations<B>(relations) : handles.bare(),
+          depth
+        ),
+    };
+  }
+
+  /**
+   * A pool-bound Drizzle handle whose transactions are this adapter's: each
+   * outermost one on a connection `checkout` hands it
+   * ({@link pinDrizzleTransactions}), each one made inside an open
+   * transaction joining it ({@link trackFlowTransactions}).
+   *
+   * @param db - A Drizzle handle on this adapter's pool
+   * @param checkout - Checks out a connection for one transaction, with how
+   *   calls made inside it join it
+   * @param relations - The relations the handle was built with, if any
+   * @returns The same handle, its `transaction` replaced
+   */
+  protected joiningHandle<D extends DrizzleTransactor>(
+    db: D,
+    checkout: () => Promise<PinnedConnection & { join: JoinSteps }>,
+    relations?: AnyRelations
+  ): D {
+    return this.trackFlowTransactions(
+      this.pinDrizzleTransactions(db, checkout, relations),
+      relations
+    );
   }
 
   /**
@@ -876,21 +1115,28 @@ export abstract class DrizzleAdapter {
   /**
    * Run a whole transaction, from its BEGIN until its COMMIT or ROLLBACK has
    * run, as the calling flow's open transaction, for
-   * {@link transactionOpenInFlow}. A dialect's `transaction` runs through
-   * this unless it opens its frames with {@link runOutermost}.
+   * {@link transactionOpenInFlow}.
    *
    * The transaction counts as open for its work and for anything the work
    * starts, awaited or not, until it has finished. Something the work starts
    * that outlives it then sees it closed, or the one enclosing it still open.
+   * Calls made inside it do not join it: nothing tells them how.
    *
+   * @deprecated The adapters in this repository open their transactions with
+   *   {@link runOutermost}, whose frames calls made inside can join. Kept for
+   *   an adapter that runs its own transactions and only wants them tracked.
    * @param run - The transaction, BEGIN to COMMIT or ROLLBACK
    * @returns What `run` resolves to
    */
   protected runInFlowTransaction<T>(run: () => Promise<T>): Promise<T> {
     const frame = openFrame({
       enclosing: this.scope.getStore(),
+      join: undefined,
       openedAt: openingStack(),
     });
+    // It holds no connection of its own until the dialect says so
+    // (`markFlowTransactionConnected`).
+    frame.connected = false;
     return this.scope.run(frame, async () => {
       try {
         return await run();
@@ -902,11 +1148,12 @@ export abstract class DrizzleAdapter {
   }
 
   /**
-   * Record that the calling flow's transaction now holds its own connection.
+   * Record that the calling flow's transaction now holds its own connection,
+   * so {@link notePoolAccess} can tell that checkout, which belongs to the
+   * transaction, from any later one, which escapes it.
    *
-   * A pooled dialect calls this right after checking out the connection a
-   * transaction runs on, so {@link notePoolAccess} can tell that checkout,
-   * which belongs to the transaction, from any later one, which escapes it.
+   * @deprecated For a transaction tracked with {@link runInFlowTransaction};
+   *   a frame {@link runOutermost} opens holds its connection from the start.
    */
   protected markFlowTransactionConnected(): void {
     const frame = this.scope.getStore();
@@ -915,11 +1162,13 @@ export abstract class DrizzleAdapter {
 
   /**
    * Check out, through `checkout`, the connection the calling flow's
-   * transaction runs on. A transaction opened inside another's work takes a
-   * second connection, so the checkout is reported first
-   * ({@link notePoolAccess}); once it holds its own, the transaction is
+   * transaction runs on: the checkout is reported first
+   * ({@link notePoolAccess}), and once it holds its own, the transaction is
    * marked connected, so its later checkouts are told apart from it.
    *
+   * @deprecated For a transaction tracked with {@link runInFlowTransaction};
+   *   a dialect that opens its frames with {@link runOutermost} reports its
+   *   checkout with {@link notePoolAccess} and hands the connection over.
    * @param checkout - Takes a connection from the dialect's pool
    * @returns The connection
    */
@@ -1007,53 +1256,162 @@ export abstract class DrizzleAdapter {
   }
 
   /**
-   * Run each of a pool-bound Drizzle handle's transactions on a connection
-   * `checkout` hands it, and return that connection as the adapter's own
-   * `transaction()` does: closed rather than pooled when no ROLLBACK can be
-   * confirmed on it, and never leaked by a failed BEGIN (`pinTransactions`).
+   * Run each of a pool-bound Drizzle handle's outermost transactions on a
+   * connection `checkout` hands it, as an outermost transaction of this
+   * adapter: inside a frame that later calls join, its `afterCommit` effects
+   * held until it commits and run once the connection is back.
+   *
+   * The connection goes back as the adapter's own `transaction()` returns
+   * its own: closed rather than pooled when no ROLLBACK can be confirmed on
+   * it, and never leaked by a failed BEGIN (`pinTransactions`). Drizzle runs
+   * BEGIN and COMMIT on it; the work it hands Drizzle waits for the calls
+   * joined to the transaction, and fails when one of them doomed it, before
+   * Drizzle's COMMIT. Drizzle's own `tx.transaction` joins this adapter's
+   * transaction rather than opening a SAVEPOINT of Drizzle's
+   * ({@link trackFlowTransactions}).
    *
    * For PostgreSQL's and MySQL's handles. Apply it before
    * {@link trackFlowTransactions}, which wraps whatever `transaction` the
    * handle has at that point.
    *
    * @param db - A Drizzle handle on this adapter's pool
-   * @param checkout - Checks out a connection for one transaction
+   * @param checkout - Checks out a connection for one transaction, with how
+   *   calls made inside it join it
+   * @param relations - The relations the handle was built with, if any
    * @returns The same handle, its `transaction` replaced
    */
   protected pinDrizzleTransactions<D extends DrizzleTransactor>(
     db: D,
-    checkout: () => Promise<PinnedConnection>
+    checkout: () => Promise<PinnedConnection & { join: JoinSteps }>,
+    relations?: AnyRelations
   ): D {
-    return pinTransactions(db, checkout);
+    return pinTransactions(db, async () => {
+      // Before anything is awaited, so the stack still reaches the caller.
+      const openedAt = openingStack();
+      // A checkout, taken from the pool like a query is.
+      this.notePoolAccess();
+      const connection = await checkout();
+      let effects: HeldEffect[] = [];
+      // Whether those are a rollback's, run only once its ROLLBACK is confirmed.
+      let rolledBack = false;
+      const framed: DrizzleTransactor = {
+        transaction: async (work, config) => {
+          const settled = await this.settleOutermost(
+            {
+              context: undefined,
+              join: connection.join,
+              openedAt,
+              // Drizzle sends BEGIN, COMMIT and ROLLBACK itself, and
+              // `pinTransactions` confirms the ROLLBACK.
+              begin() {},
+              commit() {},
+              rollback() {},
+            },
+            () =>
+              connection.drizzle.transaction(async tx => {
+                const result = await work(this.joining(tx, relations));
+                const frame = this.scope.getStore();
+                if (frame !== undefined) {
+                  await settleNested(frame);
+                  if (frame.doomed) throw frame.doomed.error;
+                }
+                return result;
+              }, config)
+          );
+          effects = settled.effects;
+          rolledBack = !settled.committed;
+          if (settled.committed) return settled.result;
+          throw settled.error;
+        },
+      };
+      return {
+        drizzle: framed,
+        rollback: () => connection.rollback(),
+        release: dirty => connection.release(dirty),
+        // `dirty`: no ROLLBACK could be confirmed on the connection.
+        afterRelease: dirty =>
+          this.runHeldEffects(
+            dirty && rolledBack ? this.dropUnconfirmed(effects) : effects
+          ),
+      };
+    });
   }
 
   /**
-   * Make a Drizzle handle's own `transaction` count for
-   * {@link transactionOpenInFlow}, as the adapter's does.
+   * Make a Drizzle handle's own `transaction` join a transaction the calling
+   * flow is inside, as the adapter's `transaction()` does, and open one of
+   * this adapter's otherwise.
    *
    * Core's services run their transactions through the handle on PostgreSQL
-   * and MySQL; without this, a call made inside one would be refused on
-   * SQLite, where they go through the adapter, and let through on the
-   * others. Not for SQLite's handle: its `transaction` takes only
-   * synchronous work, which no async flow can be inside.
+   * and MySQL. A call joined to an open transaction runs its work on that
+   * transaction's connection, through a Drizzle handle bound to it
+   * (`JoinSteps.drizzle`), whose own `transaction` joins in turn. A plain
+   * Drizzle handle on that connection would send BEGIN and COMMIT, which
+   * would commit the transaction it was meant to join. Not for SQLite's
+   * handle: its `transaction` takes only synchronous work, which no async
+   * flow can be inside.
    *
    * @param db - A Drizzle handle this adapter created
-   * @returns The same handle, its `transaction` tracked
+   * @param relations - The relations the handle was built with, if any
+   * @returns The same handle, its `transaction` joining
    */
-  protected trackFlowTransactions<D extends DrizzleTransactor>(db: D): D {
+  protected trackFlowTransactions<D extends DrizzleTransactor>(
+    db: D,
+    relations?: AnyRelations
+  ): D {
     const transactor: DrizzleTransactor = db;
-    const untracked = transactor.transaction.bind(transactor);
-    // Around the whole call, so the transaction stays open for the flow
-    // until Drizzle has run its COMMIT or ROLLBACK.
-    const tracked: DrizzleTransactor["transaction"] = (work, config) =>
-      this.runInFlowTransaction(() => untracked(work, config));
-    // An own property over the prototype's method, on this handle alone.
+    const own = transactor.transaction.bind(transactor);
     Object.defineProperty(db, "transaction", {
-      value: tracked,
+      value: this.joiningTransaction(own, relations),
       configurable: true,
       writable: true,
     });
     return db;
+  }
+
+  /**
+   * A Drizzle `transaction` that joins the transaction the calling flow is
+   * inside, and falls back to `own` when there is none.
+   */
+  private joiningTransaction(
+    own: DrizzleTransactor["transaction"],
+    relations: AnyRelations | undefined
+  ): DrizzleTransactor["transaction"] {
+    return (work, config) => {
+      const frame = this.beginTransactionCall();
+      const joinDrizzle = frame?.join.drizzle;
+      if (frame === undefined || joinDrizzle === undefined) {
+        return own(work, config);
+      }
+      return this.runJoined(
+        frame,
+        depth => {
+          const steps = joinDrizzle(depth, relations);
+          return { ...steps, context: this.joining(steps.context, relations) };
+        },
+        work
+      );
+    };
+  }
+
+  /**
+   * `tx`, a Drizzle transaction handle, its own `transaction` joining this
+   * adapter's transaction rather than opening a savepoint of Drizzle's: a
+   * part joined that way holds its effects, dooms the transaction where its
+   * dialect's join is flat, and is told apart by what joins it later.
+   */
+  private joining<X>(tx: X, relations: AnyRelations | undefined): X {
+    if (typeof tx !== "object" || tx === null) return tx;
+    const own: unknown = Reflect.get(tx, "transaction");
+    if (typeof own !== "function") return tx;
+    const drizzleOwn: DrizzleTransactor["transaction"] = (work, config) =>
+      Reflect.apply(own, tx, [work, config]);
+    Object.defineProperty(tx, "transaction", {
+      value: this.joiningTransaction(drizzleOwn, relations),
+      configurable: true,
+      writable: true,
+    });
+    return tx;
   }
 
   /**
@@ -1072,21 +1430,62 @@ export abstract class DrizzleAdapter {
    * handed to `onDeferredFailure` rather than failing a transaction that has
    * committed.
    *
-   * Here `effect` runs now and the returned promise settles with it, its
-   * failure included. Concrete rather than abstract, as `inTransaction` is,
-   * and right for a pooled adapter: each transaction has its own connection
-   * and has committed by the time its caller continues.
+   * Outside any transaction `effect` runs now, and the returned promise
+   * settles with it, its failure included. On every dialect a held effect
+   * runs once the outermost transaction has committed and its connection is
+   * back, so one that opens a transaction of its own does not wait behind it.
    *
    * @experimental
    * @param effect - What to run once the change is durable
    * @param onDeferredFailure - Receives the error of a held effect that fails
    * @returns Settles once `effect` has run, or once it has been held
    */
-  async afterCommit(
+  afterCommit(
     effect: () => unknown,
-    _onDeferredFailure?: (error: unknown) => void
+    onDeferredFailure?: (error: unknown) => void
   ): Promise<void> {
-    await effect();
+    return this.holdEffect(effect, onDeferredFailure);
+  }
+
+  /**
+   * Run `effect` once the transaction enclosing this async context has
+   * rolled back for good: compensation for something outside the database
+   * that was started on the change's behalf.
+   *
+   * Held from any frame of the transaction until its outermost transaction
+   * ends. When that one commits, every rollback effect is dropped, a
+   * rolled-back savepoint's included: the outcome that stands is a commit.
+   * When an attempt rolls back and is retried (`TransactionOptions.retryCount`,
+   * `retryWhen`), its effects are dropped with it, so they run once, after the
+   * last attempt has rolled back, once its connection is back, in
+   * registration order; one that then fails is handed to `onDeferredFailure`.
+   *
+   * Outside any open transaction there is nothing left to roll back: `effect`
+   * runs now when the transaction this context ran in rolled back, and is
+   * dropped otherwise.
+   *
+   * @experimental
+   * @param effect - What to run once the change has rolled back
+   * @param onDeferredFailure - Receives the error of a held effect that fails
+   * @returns Settles once `effect` has run, been held, or been dropped
+   */
+  async afterRollback(
+    effect: () => unknown,
+    onDeferredFailure?: (error: unknown) => void
+  ): Promise<void> {
+    const frame = this.scope.getStore();
+    if (!frame) return;
+    const root = outermost(frame);
+    if (!root.finished) {
+      root.rollbackHeld.push({
+        effect: this.inRegisteringContext(effect),
+        onDeferredFailure,
+        frame,
+        writesBefore: frame.writesAfterClosing,
+      });
+      return;
+    }
+    if (undone(frame, frame.writesAfterClosing)) await effect();
   }
 
   /**
@@ -1875,7 +2274,8 @@ export abstract class DrizzleAdapter {
         if (options?.where) {
           const whereCondition = buildDrizzleWhere(
             tableObj as never,
-            options.where
+            options.where,
+            this.dialect
           );
           if (whereCondition) {
             query = query.where(whereCondition);
@@ -1917,13 +2317,24 @@ export abstract class DrizzleAdapter {
             undefined
           );
         }
+        // The shared lock is refused on the pool for the same reason.
+        if (options?.forShare && !executor) {
+          throw this.createDatabaseError(
+            "query",
+            "forShare requires a transaction executor: a lock request on the pooled connection takes no durable lock and cannot prevent a concurrent write.",
+            undefined
+          );
+        }
 
         // Row-lock the selected rows for the rest of the transaction and read the
         // latest committed values (not the transaction's snapshot). SQLite has no
         // FOR UPDATE and needs none (BEGIN IMMEDIATE serializes its writers), so
-        // it is skipped there.
+        // it is skipped there. A shared lock is the same read with a lock other
+        // readers may also hold; the exclusive one wins when both are asked.
         if (options?.forUpdate && this.dialect !== "sqlite") {
           query = query.for("update");
+        } else if (options?.forShare && this.dialect !== "sqlite") {
+          query = query.for("share");
         }
 
         return (await query) as T[];
@@ -2061,7 +2472,7 @@ export abstract class DrizzleAdapter {
       const db = (executor ??
         this.getDrizzle<CountCapableDb>()) as CountCapableDb;
       const where = options?.where
-        ? buildDrizzleWhere(tableObj as never, options.where)
+        ? buildDrizzleWhere(tableObj as never, options.where, this.dialect)
         : undefined;
       const projection = this.countProjection(tableObj, table, options);
       return projection
@@ -2253,7 +2664,11 @@ export abstract class DrizzleAdapter {
         const mappedData = this.mapDataToColumnNames(tableObj, data);
         let query = db.update(tableObj).set(mappedData);
 
-        const whereCondition = buildDrizzleWhere(tableObj as never, where);
+        const whereCondition = buildDrizzleWhere(
+          tableObj as never,
+          where,
+          this.dialect
+        );
         if (whereCondition) {
           query = query.where(whereCondition);
         }
@@ -2314,7 +2729,11 @@ export abstract class DrizzleAdapter {
         const mappedData = this.mapDataToColumnNames(tableObj, data);
         const statement = db.update(tableObj).set(mappedData);
 
-        const whereCondition = buildDrizzleWhere(tableObj as never, where);
+        const whereCondition = buildDrizzleWhere(
+          tableObj as never,
+          where,
+          this.dialect
+        );
         const result = await (whereCondition
           ? statement.where(whereCondition)
           : statement);
@@ -2365,7 +2784,11 @@ export abstract class DrizzleAdapter {
         const db = executor ?? this.getDrizzle<any>();
         let query = db.delete(tableObj);
 
-        const whereCondition = buildDrizzleWhere(tableObj as never, where);
+        const whereCondition = buildDrizzleWhere(
+          tableObj as never,
+          where,
+          this.dialect
+        );
         if (whereCondition) {
           query = query.where(whereCondition);
         }
@@ -3206,6 +3629,7 @@ export abstract class DrizzleAdapter {
       tableObj,
       data,
       where,
+      dialect: this.dialect,
       bindUnmodeled: binding.bindUnmodeled,
       returning: binding.returning,
     });

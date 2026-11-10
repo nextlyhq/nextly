@@ -51,6 +51,10 @@ let storedRead: { data: unknown; isPending: boolean; error: unknown };
 let saveResult: { success: boolean } | Error;
 /** When set, every save blocks on this until the test releases it. */
 let holdSaves: Promise<void> | null;
+/**
+ * The bodies the Single was handed, each saved over whatever the style holds
+ * and saying so with `_overwrite: true`, which the expectations state.
+ */
 const saved: Array<Record<string, unknown>> = [];
 /** The shared-style routes: what was read and written. */
 const routeReads: string[] = [];
@@ -160,6 +164,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
     read => () =>
       read
   )(() => Promise.resolve(null)),
+  // The Fallback picker's library search, finding nothing: no case here
+  // opens it. One function for every call, as the admin's own hook keeps it.
+  useMediaSearcher: (
+    search => () =>
+      search
+  )(() => Promise.resolve([])),
   // The shared-style routes, recorded: the usage read answers every page
   // counted and nothing used, and the where-used read an empty list.
   readPluginRoute: async ({ path }: { path: string }) => {
@@ -395,7 +405,20 @@ describe("the Shared styles tab reaching an author", () => {
     storedClasses(CARD, HERO);
     openEditor();
     await settle();
-    expect(routeReads).toContain(sharedStyleUsagePath(["id-card", "id-hero"]));
+    // One read: the styles on screen first, then the looks blocks can wear,
+    // which the code supplies; a block's own look has no count to read.
+    const read = routeReads.find(path =>
+      path.startsWith(sharedStyleUsagePath(["id-card", "id-hero"]))
+    );
+    const ids = new URLSearchParams(read?.split("?")[1] ?? "").getAll("id");
+    expect(ids.slice(0, 2)).toEqual(["id-card", "id-hero"]);
+    expect(ids.slice(2)).toEqual(
+      expect.arrayContaining([
+        "look:core/button:outline",
+        "look:core/image:circle",
+      ])
+    );
+    expect(ids.some(id => id === "look:core/button:primary")).toBe(false);
   });
 
   it("removes an unused style through the remove route, never by writing the class list", async () => {
@@ -421,6 +444,7 @@ describe("the Shared styles tab reaching an author", () => {
     commitName(await details("card"), "Promo card");
     await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [{ ...CARD, label: "Promo card", slug: "promo-card" }],
     });
   });

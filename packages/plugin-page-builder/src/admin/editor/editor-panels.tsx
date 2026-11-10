@@ -7,13 +7,13 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-panels
  */
+import { spacingModeOf } from "@nextlyhq/blocks-engine";
 import {
   CORE_CATEGORIES,
   CORE_PALETTE_ORDER,
 } from "@nextlyhq/blocks-react/blocks";
 import {
   browserStore,
-  DEFAULT_PREFERENCES,
   type LeftPanel,
   type PreferenceStore,
   type SavedPattern,
@@ -29,19 +29,13 @@ import {
   type CanvasRegion,
   type LayersRegionRow,
   type LibraryTierState,
+  type VariablesPreview,
 } from "@nextlyhq/builder/shell";
 import {
   useDocumentIdentity,
   useEntryFieldsPanel,
 } from "@nextlyhq/plugin-sdk/admin";
-import {
-  useCallback,
-  useMemo,
-  useState,
-  type SetStateAction,
-  type ReactNode,
-  type Dispatch,
-} from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
@@ -51,7 +45,12 @@ import {
   type LibraryReadState,
 } from "../pattern-library-client";
 
+import {
+  useCanvasPreviewMode,
+  type CanvasPreviewMode,
+} from "./canvas-preview-mode";
 import { DesignPanel } from "./design-panel";
+import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
   withoutSelf,
   withoutSelfPatterns,
@@ -284,11 +283,9 @@ type PanelRequests = {
   openInsertPanel: (inside?: string) => void;
   /** The container the last "+" chose to add inside, if any. */
   insertInside: string | undefined;
-  showEmptyElements: boolean;
-  setShowEmptyElements: Dispatch<SetStateAction<boolean>>;
 };
 
-/** Requests to open a panel from the canvas, and the empty-chrome switch. */
+/** Requests to open a panel from the canvas. */
 function usePanelRequests(selectedId: string | null): PanelRequests {
   /*
    * Opens the insert panel from the canvas itself, for the empty-container
@@ -337,28 +334,11 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
   }
   const insertInside = insideRequest === selectedId ? insideRequest : undefined;
 
-  /*
-   * Whether the author wants empty-container chrome showing at all, mirrored
-   * from the shell so the appender mounted below can answer the same question
-   * the dashed placeholder box's own CSS rule already answers.
-   *
-   * Starts at the preference's own default rather than an assumed `true`: the
-   * shell reports the real value once it has read it, but that report lands
-   * one render after this component's first — an assumed value would be a
-   * SECOND declaration of the default that goes stale the day the shell's own
-   * changes and this one does not.
-   */
-  const [showEmptyElements, setShowEmptyElements] = useState(
-    DEFAULT_PREFERENCES.showEmptyElements
-  );
-
   return {
     openPanelRequest,
     requestPanel,
     openInsertPanel,
     insertInside,
-    showEmptyElements,
-    setShowEmptyElements,
   };
 }
 
@@ -427,8 +407,17 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   const [searchOpen, setSearchOpen] = useState(false);
   // The Pages panel, and the request its rows send to open Settings.
   const pages = usePagesPanel(mount.initialDocument.kind === "page");
+  // Which look the inspector edits on its own: chosen in the Design panel,
+  // left by selecting a block, by the bar's Back, or by Esc.
+  const lookEditing = useLookEditing(editor);
+  // The site mode the canvas is previewed in: picked in the Design panel and
+  // held here, above it, so it outlasts the panel; plain state, never stored,
+  // so a reload draws the page's own mode again.
+  const previewMode = useCanvasPreviewMode();
   return {
     entryFields,
+    lookEditing,
+    previewMode,
     search: { open: searchOpen, setOpen: setSearchOpen },
     pages,
     checklist,
@@ -462,6 +451,14 @@ export type EditorPanels = OfferedLibrary &
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
     pages: PagesPanelMount;
+    /** The look edited on its own from the Design panel, with no block. */
+    lookEditing: LookEditingState;
+    /**
+     * The site mode the author picked to preview the canvas in, for this
+     * editing session only: the Design panel's switch picks it, the frame is
+     * drawn in it, and the tag over the canvas clears it.
+     */
+    previewMode: CanvasPreviewMode;
   };
 
 /**
@@ -497,7 +494,16 @@ export function editorPanelRenderer({
   canvasElement,
   layerVerbs,
   documentDirty,
+  lookEditing,
+  previewMode,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
+  /** The look edited on its own, which the Design panel's Block looks choose. */
+  lookEditing?: LookEditingState;
+  /**
+   * The site mode the canvas is previewed in, which the Design panel's
+   * preview switch picks. Absent, the switch previews the swatches alone.
+   */
+  previewMode?: VariablesPreview;
   /** Whether the editor holds work not yet saved, for the Pages panel's copy note. */
   documentDirty: boolean;
   /** The regions of the page's Layout, as read-only rows in Layers. */
@@ -644,6 +650,29 @@ export function editorPanelRenderer({
               )}
               supplied={configSiteStyle?.tokens}
               pending={siteStylePending}
+              // The class surface's library, the one the Shared styles tab
+              // lists, so a style using a variable says what it sets.
+              {...(classes.library === undefined
+                ? {}
+                : { classes: classes.library })}
+              // A shared style using a variable opens in its own tab; a
+              // block look, which that tab does not list, in the inspector.
+              opens={{
+                sharedStyles: () => view.choose("classes"),
+                ...(lookEditing === undefined
+                  ? {}
+                  : { look: lookEditing.edit }),
+              }}
+              // The switch in the panel's header picks the mode the canvas is
+              // drawn in, held by the editor so it outlasts the panel.
+              preview={previewMode}
+              // Offered once the stored style is read, so the choice shows
+              // the model the canvas is compiled under and nothing earlier.
+              {...(siteStylePending || siteStyleError !== null
+                ? {}
+                : {
+                    spacingMode: spacingModeOf(canvasSiteStyle?.spacingMode),
+                  })}
             >
               {designTabs}
             </TokensStudio>
@@ -652,6 +681,14 @@ export function editorPanelRenderer({
             variables: () => <VariablesTab />,
             classes: () => (
               <SharedStylesStudio
+                {...(lookEditing === undefined
+                  ? {}
+                  : {
+                      looks: {
+                        onEdit: lookEditing.edit,
+                        editing: lookEditing.look,
+                      },
+                    })}
                 classes={classes}
                 pageBlocks={pageClassBlocks}
                 styleContext={classSummaryContext}

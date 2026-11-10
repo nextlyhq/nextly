@@ -15,6 +15,7 @@
  *
  * @module components/features/entries/EntryForm/useDocumentActionBindings
  */
+import type { OverridableDocumentAction } from "nextly/config";
 import { useRef, useState } from "react";
 
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
@@ -26,6 +27,7 @@ import {
   acceptContributions,
   reasonFor,
   type ActionBinding,
+  type ActionRecovery,
   type ContributedAction,
 } from "./DocumentActionBar";
 import { effectiveEntryStatus } from "./entry-address";
@@ -48,6 +50,37 @@ type BuiltInActionId =
   | "discard-changes"
   | "unpublish"
   | "delete";
+
+/**
+ * How the editor applies a plugin's override of one built-in action.
+ *
+ * `open` is what choosing a replaced action runs; it resolves with what the
+ * replacement came to, so a caller that leaves the document once Delete is
+ * done does not leave one the author backed out of deleting.
+ */
+export type DocumentActionOverride =
+  | { kind: "hidden" }
+  /**
+   * Offered but not runnable: while the editor cannot yet tell whether a
+   * plugin hides or replaces the action, its built-in write must not run in
+   * the meantime. `reason` is told the action's own label, so what the row
+   * says names the row; `retry`, where given, is offered beside it.
+   */
+  | {
+      kind: "held";
+      reason: (label: string) => string;
+      retry?: ActionRecovery;
+    }
+  | {
+      kind: "replaced";
+      label?: string;
+      open: () => Promise<DocumentActionOutcome>;
+    };
+
+/** The overrides for one collection's document, by built-in action. */
+export type DocumentActionOverrides = Partial<
+  Record<OverridableDocumentAction, DocumentActionOverride>
+>;
 
 /** A handler whose work is stored, and which says how that went. */
 type StoringHandler = () => void | Promise<SubmitOutcome>;
@@ -138,10 +171,20 @@ export interface DocumentActionBindingsInput {
    */
   contributedActions?: readonly ContributedAction[];
   /**
+   * What a plugin does with a built-in action on this collection's documents:
+   * hides it, or keeps its row and runs its own `open` in place of the
+   * built-in write. A replaced action is offered exactly where the built-in
+   * would be, with every reason it cannot run, so a permission, a colleague's
+   * lock or a past version on screen still holds it.
+   */
+  actionOverrides?: DocumentActionOverrides;
+  /**
    * The form's current values, unsaved edits included, which a contributed
    * action is told when it is chosen.
    */
   currentValues?: () => Record<string, unknown>;
+  /** Whether the form holds unsaved edits, told to a contributed action with its values. */
+  currentDirty?: () => boolean;
 
   /** Saves with no intent: the save of a collection with no status column. */
   onSubmit?: () => Promise<SubmitOutcome>;
@@ -293,8 +336,38 @@ export type DocumentSaveState =
       retry?: () => Promise<DocumentActionOutcome>;
     };
 
-/** Run before an action that stores the editor's work; given its id. */
-export type BeforeDocumentAction = (action: string) => void | Promise<void>;
+/**
+ * Run before an action that stores the editor's work; given its id, and how
+ * to wait for the writes the store depends on.
+ */
+export type BeforeDocumentAction = (
+  action: string,
+  store: StoreReadiness
+) => void | Promise<void>;
+
+/** What a before-action handler may ask of the store it runs before. */
+export interface StoreReadiness {
+  /**
+   * Waits for every write the document depends on but does not contain (see
+   * `useTrackedWrite`), and answers whether they all landed. A handler that
+   * acts on the server for the store, beyond committing work to the form,
+   * asks this first and acts only on `true`: on `false` the store is refused,
+   * and anything the handler did would stand without it.
+   */
+  writesSettled(): Promise<boolean>;
+  /**
+   * Gives the store a check to make once every handler has run and every
+   * tracked write has settled, immediately before it writes, with nothing
+   * awaited in between. A handler that judged the work (asked a question
+   * about it, say) checks there that the work is still what it judged: the
+   * handlers after it, and the writes the store waits for, give the author
+   * time to change it. A check answering `false` runs every handler again;
+   * work still changing after a few rounds is refused.
+   *
+   * @experimental
+   */
+  checkBeforeWrite(check: () => boolean): void;
+}
 
 const CANCELLED: DocumentActionOutcome = {
   ok: false,
@@ -421,7 +494,9 @@ export function useDocumentActionBindings({
   canEdit = true,
   writesRefused = false,
   contributedActions = [],
+  actionOverrides = {},
   currentValues,
+  currentDirty,
   onSubmit,
   onSaveDraft,
   onPublish,
@@ -506,7 +581,7 @@ export function useDocumentActionBindings({
    * which only the form knows, and about which handler a verb runs, which only
    * the host knows.
    */
-  const documentVerbs = documentActions({
+  const builtInVerbs = documentActions({
     mode,
     hasStatus,
     draftsEnabled: draftsEnabled === true,
@@ -521,14 +596,18 @@ export function useDocumentActionBindings({
     canDuplicate: onDuplicate !== undefined,
     writesRefused,
   });
+  // A plugin's overrides, applied to what the model offers and to what each
+  // verb runs, so the row, its control and `run` agree about them.
+  const documentVerbs = withActionOverrides(builtInVerbs, actionOverrides);
 
-  const { reasons, refusalFor } = refusalReasons({
+  const { reasons: momentReasons, refusalFor } = refusalReasons({
     isSubmitting,
     isInvalid,
     isDirty,
     documentLocked,
     isPublishedEditState,
   });
+  const reasons = withHeldReasons(momentReasons, actionOverrides, builtInVerbs);
 
   // Saving means three different calls depending on where the work lands, a
   // fact about this host rather than the document: a drafts-enabled published
@@ -542,28 +621,38 @@ export function useDocumentActionBindings({
     onSaveChanges,
     onSaveWorkingDraft,
   });
-  const performers = builtInPerformers({
-    hasStatus,
-    runSave,
-    onSubmit,
-    onPublish,
-    storing,
-    onDuplicate,
-    onViewApi,
-    discardDraft: offeredIf(showDiscardDraft, discardDraftConfirmation.request),
-    onCancel: leavingDeliberately(onCancel, leaveWithoutWarning),
-    unpublish: offeredIf(
-      onUnpublish !== undefined,
-      unpublishConfirmation.request
-    ),
-    onDelete,
-  });
+  const performers = overriddenPerformers(
+    builtInPerformers({
+      hasStatus,
+      runSave,
+      onSubmit,
+      onPublish,
+      storing,
+      onDuplicate,
+      onViewApi,
+      discardDraft: offeredIf(
+        showDiscardDraft,
+        discardDraftConfirmation.request
+      ),
+      onCancel: leavingDeliberately(onCancel, leaveWithoutWarning),
+      unpublish: offeredIf(
+        onUnpublish !== undefined,
+        unpublishConfirmation.request
+      ),
+      onDelete,
+    }),
+    actionOverrides
+  );
 
-  const actionBindings = bindingsFor(performers, reasons, {
-    // A submit-typed control submits the form natively and never calls back;
-    // `run` calls the performer, which submits the same way.
-    submitForm: hasStatus ? undefined : formId,
-  });
+  const actionBindings = withHeldRecoveries(
+    bindingsFor(performers, reasons, {
+      // A submit-typed control submits the form natively and never calls
+      // back; `run` calls the performer, which submits the same way.
+      submitForm: hasStatus ? undefined : formId,
+    }),
+    actionOverrides,
+    builtInVerbs
+  );
 
   /*
    * One merge for both halves. Splitting them would let the bar draw a built-in
@@ -582,8 +671,12 @@ export function useDocumentActionBindings({
     // is not offered where every write to it is refused.
     isReadingHistory || writesRefused
       ? []
-      : heldUnderLock(contributedActions, documentLocked),
-    currentValues
+      : heldUnderLock(
+          withoutHiddenIds(contributedActions, actionOverrides),
+          documentLocked
+        ),
+    currentValues,
+    currentDirty
   );
 
   const run = (id: string): Promise<DocumentActionOutcome> =>
@@ -623,6 +716,115 @@ export function useDocumentActionBindings({
     saveState,
     lastStoredAt: storedAt(gate.lastStore),
   };
+}
+
+/**
+ * The page's contributions, less any under the id of an action a plugin
+ * hides. A built-in wins an id collision, so such a contribution is dropped
+ * while the built-in stands; once hidden, the built-in no longer stands in
+ * the merge, and without this its id would pass to the contribution.
+ */
+function withoutHiddenIds(
+  contributed: readonly ContributedAction[],
+  overrides: DocumentActionOverrides
+): readonly ContributedAction[] {
+  return contributed.filter(
+    entry => overrideOf(overrides, entry.action.id)?.kind !== "hidden"
+  );
+}
+
+/**
+ * The model's actions with a plugin's overrides applied: a hidden action is
+ * not offered, and a replaced one keeps its place, its flags and every reason
+ * it cannot run, under the plugin's label where it gave one.
+ */
+function withActionOverrides(
+  actions: readonly EditorDocumentAction[],
+  overrides: DocumentActionOverrides
+): EditorDocumentAction[] {
+  return actions.flatMap(action => {
+    const override = overrideOf(overrides, action.id);
+    if (override === undefined || override.kind === "held") return [action];
+    if (override.kind === "hidden") return [];
+    return [
+      override.label === undefined
+        ? action
+        : { ...action, label: override.label },
+    ];
+  });
+}
+
+/** The override for an action id, when the id is one a plugin may override. */
+function overrideOf(
+  overrides: DocumentActionOverrides,
+  id: string
+): DocumentActionOverride | undefined {
+  return Object.hasOwn(overrides, id)
+    ? overrides[id as OverridableDocumentAction]
+    : undefined;
+}
+
+/**
+ * The moment's reasons, with a held action's own reason where nothing more
+ * decisive already holds it: a colleague's lock or a save in flight still
+ * speaks first.
+ */
+function withHeldReasons(
+  reasons: Partial<Record<BuiltInActionId, string | undefined>>,
+  overrides: DocumentActionOverrides,
+  actions: readonly EditorDocumentAction[]
+): Partial<Record<BuiltInActionId, string | undefined>> {
+  const result = { ...reasons };
+  for (const action of actions) {
+    const override = overrideOf(overrides, action.id);
+    if (override?.kind !== "held") continue;
+    const id = action.id as BuiltInActionId;
+    // Named by the row's own label, so the reason cannot name another verb.
+    result[id] = result[id] ?? override.reason(action.label);
+  }
+  return result;
+}
+
+/**
+ * Each held action's binding with its way out, where the hold offers one and
+ * is what holds it now: a lock or a save in flight is not one Retry ends.
+ */
+function withHeldRecoveries(
+  bindings: Record<string, ActionBinding | undefined>,
+  overrides: DocumentActionOverrides,
+  actions: readonly EditorDocumentAction[]
+): Record<string, ActionBinding | undefined> {
+  const result = { ...bindings };
+  for (const action of actions) {
+    const override = overrideOf(overrides, action.id);
+    const binding = result[action.id];
+    if (override?.kind !== "held" || override.retry === undefined) continue;
+    if (binding?.disabledReason !== override.reason(action.label)) continue;
+    result[action.id] = { ...binding, recovery: override.retry };
+  }
+  return result;
+}
+
+/**
+ * What each built-in action runs once a plugin's overrides apply. A hidden
+ * action runs nothing, so it is not offered and `run` refuses it as not
+ * offered; a replaced one runs the plugin's `open`, and only where the
+ * built-in would have run at all, so no permission is widened by it.
+ */
+function overriddenPerformers(
+  performers: Partial<
+    Record<BuiltInActionId, () => Promise<DocumentActionOutcome>>
+  >,
+  overrides: DocumentActionOverrides
+): Partial<Record<BuiltInActionId, () => Promise<DocumentActionOutcome>>> {
+  const result = { ...performers };
+  for (const id of Object.keys(result) as BuiltInActionId[]) {
+    const override = overrideOf(overrides, id);
+    if (override === undefined || override.kind === "held") continue;
+    if (override.kind === "hidden") delete result[id];
+    else result[id] = override.open;
+  }
+  return result;
 }
 
 /**

@@ -69,6 +69,18 @@ Without a `user`, the call is judged as a signed-out visitor: it can read where 
 
 A collection's `read` rule may also answer with a filter, which limits a list and its count to the entries it matches (experimental; see [A read rule that answers with a filter](/docs/permissions#a-read-rule-that-answers-with-a-filter-experimental)).
 
+### Hidden fields
+
+`admin.hidden: true` is a UI flag: it keeps a field out of the admin's forms, and the value is often public data your site renders. Every read returns such a field, trusted or not, unless it passes `showHiddenFields: false`. To keep a value from the people who read it, give the field a read rule (`access.read`); see [Field-level access](/docs/permissions#field-level-access).
+
+Pass `showHiddenFields: false` before you hand a trusted read to a client component, so values your server code maintains don't reach the browser. For example, in a Server Component: `const { items } = await nextly.find({ collection: "products", showHiddenFields: false })`, then pass `items` to the client component. It also covers related documents populated with `depth`: each loses its own collection's hidden fields.
+
+With `showHiddenFields: false`, filtering or sorting on a hidden field is refused with a validation error, because which rows match, and in what order, would reveal it. So are a `count`'s filter, a `group`'s `groupBy` and a `timeseries`' `dateField`. A caller who may not read the collection is refused for that first, as any read of it is.
+
+`nextly.users.find`, `findOne` and `findByID` take the option too: with `false`, custom user fields declared `admin.hidden` are left out, a `sortBy` naming one is refused, and a `search` does not match them.
+
+Password fields are never returned by any read, whatever `showHiddenFields` says.
+
 `overrideAccess`, `user`, and `context` flow through every hook the operation triggers. Anything you put in `context` is accessible inside hooks via `req.context`.
 
 To run a collection or Single operation as a plugin-defined signed-in person, pass the person as `principal` (`@experimental`). Access rules always apply, so `overrideAccess` is not needed; the call is refused if it also sets `overrideAccess: true`, `trusted` or `frameworkFilter`, or names a `user` or an API key. A person is named per call: `new Nextly({ principal })` and `requireNextly({ principal })` are refused. See [Signed-in people of your own kind](/docs/plugins/signed-in-people#let-a-person-read-and-write-your-collections).
@@ -100,23 +112,24 @@ result.meta.hasNext; // boolean
 result.meta.hasPrev; // boolean
 ```
 
-| Argument         | Type                                         | Default  | Description                                                                                                                                      |
-| ---------------- | -------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `collection`     | `string`                                     | required | Collection slug.                                                                                                                                 |
-| `where`          | `WhereFilter`                                | —        | Filter conditions (see [Querying](#querying)).                                                                                                   |
-| `limit`          | `number`                                     | `10`     | Page size.                                                                                                                                       |
-| `page`           | `number`                                     | `1`      | Page number, 1-indexed.                                                                                                                          |
-| `sort`           | `string`                                     | —        | `field` for ascending, `-field` for descending.                                                                                                  |
-| `depth`          | `number`                                     | `0`      | Relationship population depth.                                                                                                                   |
-| `select`         | `Record<string, boolean>`                    | —        | Whitelist or blacklist fields.                                                                                                                   |
-| `populate`       | `Record<string, boolean \| PopulateOptions>` | —        | Per-field population control.                                                                                                                    |
-| `pagination`     | `boolean`                                    | `true`   | Set `false` to return all matching rows without paging.                                                                                          |
-| `status`         | `"published" \| "draft" \| "all"`            | —        | Lifecycle scope on a collection with the status lifecycle. An untrusted read (`overrideAccess: false`) that states none sees public states only. |
-| `richTextFormat` | `"json" \| "html" \| "both"`                 | `"json"` | Output format for rich text fields.                                                                                                              |
-| `overrideAccess` | `boolean`                                    | `true`   | Bypass access control.                                                                                                                           |
-| `user`           | `{ id, role? }`                              | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor.                                    |
-| `context`        | `Record<string, unknown>`                    | —        | Custom data forwarded to hooks via `req.context`.                                                                                                |
-| `disableErrors`  | `boolean`                                    | `false`  | Return an empty result instead of throwing.                                                                                                      |
+| Argument           | Type                                         | Default  | Description                                                                                                                                      |
+| ------------------ | -------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `collection`       | `string`                                     | required | Collection slug.                                                                                                                                 |
+| `where`            | `WhereFilter`                                | —        | Filter conditions (see [Querying](#querying)).                                                                                                   |
+| `limit`            | `number`                                     | `10`     | Page size.                                                                                                                                       |
+| `page`             | `number`                                     | `1`      | Page number, 1-indexed.                                                                                                                          |
+| `sort`             | `string`                                     | —        | `field` for ascending, `-field` for descending.                                                                                                  |
+| `depth`            | `number`                                     | `0`      | Relationship population depth.                                                                                                                   |
+| `select`           | `Record<string, boolean>`                    | —        | Whitelist or blacklist fields.                                                                                                                   |
+| `populate`         | `Record<string, boolean \| PopulateOptions>` | —        | Per-field population control.                                                                                                                    |
+| `pagination`       | `boolean`                                    | `true`   | Set `false` to return all matching rows without paging.                                                                                          |
+| `status`           | `"published" \| "draft" \| "all"`            | —        | Lifecycle scope on a collection with the status lifecycle. An untrusted read (`overrideAccess: false`) that states none sees public states only. |
+| `richTextFormat`   | `"json" \| "html" \| "both"`                 | `"json"` | Output format for rich text fields.                                                                                                              |
+| `overrideAccess`   | `boolean`                                    | `true`   | Bypass access control.                                                                                                                           |
+| `showHiddenFields` | `boolean`                                    | `true`   | `false` leaves `admin.hidden` fields out and refuses filters and sorts on them (see [Hidden fields](#hidden-fields)).                            |
+| `user`             | `{ id, role? }`                              | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor.                                    |
+| `context`          | `Record<string, unknown>`                    | —        | Custom data forwarded to hooks via `req.context`.                                                                                                |
+| `disableErrors`    | `boolean`                                    | `false`  | Return an empty result instead of throwing.                                                                                                      |
 
 ### findByID
 
@@ -196,23 +209,30 @@ created.item.id;
 Update by ID, or update the first match of a `where` clause. Either `id` or `where` is required.
 
 ```typescript
-// By ID
+// By ID, with the version your read returned
+const post = await nextly.findByID({ collection: "posts", id: "abc-123" });
+if (!post) throw new Error("No such post");
+
 const updated = await nextly.update({
   collection: "posts",
   id: "abc-123",
-  data: { status: "published", publishedAt: new Date() },
+  data: { status: "published", publishedAt: new Date(), _rev: post._rev },
 });
 
 updated.item; // the updated Post
 updated.message; // "Posts updated."
 
-// By where (single match path — use bulk endpoints for true bulk semantics)
+// By where (single match path — use bulk endpoints for true bulk semantics).
+// A query carries no version, so it says it overwrites.
 const archived = await nextly.update({
   collection: "posts",
   where: { status: { equals: "draft" } },
-  data: { status: "archived" },
+  data: { status: "archived", _overwrite: true },
 });
 ```
+
+An update must send the `_rev` from your last read, or `_overwrite: true`; one that sends neither
+is refused with `VERSION_REQUIRED` (428). See [Versions and conflicts](#versions-and-conflicts).
 
 | Argument         | Type                      | Default  | Description                                                                                                   |
 | ---------------- | ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
@@ -225,6 +245,11 @@ const archived = await nextly.update({
 | `user`           | `{ id, role? }`           | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 
 **Returns:** `MutationResult<T>` (`{ message, item }`). Throws `NextlyError` (`NOT_FOUND`) when the where clause matches nothing.
+
+To have the update judged by the version you read, put that `_rev` in `data` and update by `id`
+(see [Versions and conflicts](#versions-and-conflicts)). An update by `where` refuses a `_rev`,
+since one version can't speak for every document the clause could match, so it needs
+`_overwrite: true`.
 
 ### delete
 
@@ -445,6 +470,23 @@ const saved = await nextly.findSingle({
 const siteName = saved === null ? "My site" : saved.siteName;
 ```
 
+**Experimental:** add `whenAbsent: "default"` beside `createIfMissing: false`
+to read, for a single that has no stored document yet, the default document a
+first read would create, without creating it. It goes through the same read:
+access rules, the draft and published filter, field rules and read hooks apply
+as they would to the stored document. Passing `whenAbsent` without
+`createIfMissing: false` is refused. A `defaultValue` written as a function is
+computed again for each such read, so one that is not deterministic may answer
+differently from what is later stored.
+
+```typescript
+const settings = await nextly.findSingle({
+  slug: "site-settings",
+  createIfMissing: false,
+  whenAbsent: "default",
+});
+```
+
 ### updateSingle
 
 Update a single's content by slug. Returns the same `{ message, item }` envelope
@@ -452,11 +494,14 @@ the collection mutations return, so every mutation reports its outcome the same
 way.
 
 ```typescript
+const current = await nextly.findSingle({ slug: "site-settings" });
+
 const { item, warnings } = await nextly.updateSingle({
   slug: "site-settings",
   data: {
     siteName: "My Awesome Site",
     maintenanceMode: false,
+    _rev: current._rev,
   },
 });
 
@@ -622,11 +667,13 @@ profile.user; // current user record (or null)
 
 const updated = await nextly.updateMe({
   user: { id: "user-123" },
-  data: { name: "New Display Name" },
+  data: { name: "New Display Name", interfaceLanguage: "fr" },
 });
 ```
 
 **Returns:** `AuthResult` — `{ user, permissions? }`. Throws `NextlyError` (`NOT_FOUND`) if the user does not exist.
+
+`interfaceLanguage` is the language this person wants the admin in, kept apart from any content language: a language tag spelled as browsers report it (`fr`, `pt-BR`), or `null` to follow the browser, then English. It is the person's own to set, through `updateMe` or `PATCH /admin/api/me`. `users.update` and `PATCH /admin/api/users/:id` refuse it with a `VALIDATION_ERROR` naming the field, and a malformed or non-canonical tag (`pt-br`) is refused the same way. `interfaceLanguage` is also a reserved name for a custom user field.
 
 ### changePassword
 
@@ -737,11 +784,13 @@ The full TypeScript surface is generated from [`packages/nextly/src/direct-api/n
 | `less_than`          | `<`                                                                          | `{ price: { less_than: 50 } }`               |
 | `less_than_equal`    | `<=`                                                                         | `{ price: { less_than_equal: 50 } }`         |
 | `like`               | SQL `LIKE` (case-sensitive)                                                  | `{ title: { like: "%hello%" } }`             |
-| `contains`           | Substring, ignoring case on every database; `%` and `_` are matched as typed | `{ title: { contains: "hello" } }`           |
+| `contains`           | Substring, ignoring case on every database, letters outside ASCII included; `%` and `_` are matched as typed | `{ title: { contains: "hello" } }`           |
 | `search`             | Alias for `contains`                                                         | `{ title: { search: "hello" } }`             |
 | `in`                 | Value in array                                                               | `{ status: { in: ["draft", "published"] } }` |
 | `not_in`             | Value not in array                                                           | `{ status: { not_in: ["archived"] } }`       |
 | `exists`             | Field is non-null when `true`, null when `false`                             | `{ image: { exists: true } }`                |
+
+`contains` ignores case the same way on PostgreSQL, MySQL and SQLite, accented and other non-ASCII letters included: `{ title: { contains: "CRÈME" } }` finds "crème brûlée". Case is folded by Unicode's default rules rather than a language's, one letter at a time: the Turkish capital "İ" matches a plain "i", so "İstanbul" and "istanbul" find each other, and "I" matches "i", never the dotless "ı". On PostgreSQL, a database created with the `C` or `POSIX` locale folds ASCII letters only.
 
 Point fields also support `near` and `within` geo operators; these are evaluated in the application layer rather than pushed to the database.
 
@@ -775,6 +824,43 @@ const posts = await nextly.find({
   },
 });
 ```
+
+## Languages
+
+On a localized collection or Single (see [Localization](/docs/localization)), a read or a
+write names its language with `locale`, and a read chooses its fallback with `fallbackLocale`.
+An `update` by `where` is the exception: it does not pass `locale` on, so it writes the
+default language whatever `locale` says. To write another language, update by `id`.
+
+```ts
+declare const id: string;
+
+// Spanish, falling back as the site configures it.
+const { items } = await nextly.find({ collection: "posts", locale: "es" });
+
+// Spanish only: an untranslated field reads empty.
+const post = await nextly.findByID({
+  collection: "posts",
+  id,
+  locale: "es",
+  fallbackLocale: false,
+});
+
+// Every language's value for each translated field, in one answer: each such field
+// holds an object keyed by language code, e.g. all.title.es.
+const all = await nextly.findByID({ collection: "posts", id, locale: "all" });
+
+// A write stores into the language it names.
+await nextly.update({ collection: "posts", id, locale: "es", data: { title: "Hola" } });
+```
+
+| Option           | Type              | What it does                                                                                                                                                              |
+| ---------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `locale`         | `string`          | The language a read returns or a write stores. Unset, the default language. `"all"` answers a read with every language's value for each translated field, as an object keyed by language code. Generated types do not model that yet and still declare the field's own type, so treat such a result as untyped.               |
+| `fallbackLocale` | `string \| false` | Where a read takes a value its language lacks. Unset, the language's own [fallback chain](/docs/localization#fallback-chains). `false` turns fallback off.               |
+
+Language filters and the per-language status overview are REST parameters; see
+[Languages](/docs/api-reference/rest-api#languages) in the REST reference.
 
 ## Sorting
 
@@ -865,6 +951,59 @@ const c = await nextly.find({ collection: "posts", richTextFormat: "both" });
 c.items[0].content; // { json: {...}, html: "<p>Hello world</p>" }
 ```
 
+## Versions and conflicts
+
+Every entry and Single carries a version, `_rev`, on every result that returns it: `find`,
+`findByID`, `findSingle`, and the `item` of `create`, `update` and `updateSingle`. Pass it back in
+`data`, and the update is applied only if nobody has saved the document since you read it:
+
+```typescript
+const post = await nextly.findByID({ collection: "posts", id: "abc-123" });
+if (!post) throw new Error("No such post");
+
+const { item } = await nextly.update({
+  collection: "posts",
+  id: "abc-123",
+  data: { title: "Hello again", _rev: post._rev },
+});
+
+item._rev; // the new version, for the next save
+```
+
+The version is judged the same way as over REST, including with `overrideAccess: true`: a trusted
+call skips access checks, never the version. See the REST API's
+[Versions and conflicts](/docs/api-reference/rest-api#versions-and-conflicts) for what `_rev`
+covers, which writes are judged, and how each language is judged.
+
+An out-of-date save throws a `NextlyError` with the code `STALE_VERSION` (409), and nothing is
+written. Its `publicData` carries `currentVersion`, and, where the caller may read the document,
+`changedBy` and `changedAt` (a trusted call may):
+
+```typescript
+import { NextlyError } from "nextly";
+
+try {
+  await nextly.update({
+    collection: "posts",
+    id: "abc-123",
+    data: { title: "Hello again", _rev: post._rev },
+  });
+} catch (err) {
+  if (NextlyError.isCode(err, "STALE_VERSION")) {
+    // Someone saved first. Read the post again and reapply the change,
+    // or save over theirs with `_overwrite: true`.
+    console.log(err.publicData); // { currentVersion, changedBy?, changedAt?, historyVersion? }
+  }
+  throw err;
+}
+```
+
+To save whatever the current version, add `_overwrite: true` to `data`. The update is applied,
+and the document's history records the overwrite. An update that sends neither `_rev` nor
+`_overwrite: true` throws `VERSION_REQUIRED` (428) and writes nothing: check it with
+`NextlyError.isCode(err, "VERSION_REQUIRED")`. Generated entry and Single types and Zod
+schemas carry `_rev?: string`, and their update inputs take `_overwrite?: boolean`.
+
 ## Errors
 
 Every Direct API failure throws a single `NextlyError` class. The error carries a public payload (safe to surface) and a log payload (for the server logger). Type guards let you narrow without `instanceof` (which can fail at package boundaries):
@@ -897,9 +1036,9 @@ async function getPost() {
 }
 ```
 
-Available type guards: `NextlyError.is`, `NextlyError.isCode`, `NextlyError.isNotFound`, `NextlyError.isValidation`, `NextlyError.isAuthRequired`, `NextlyError.isForbidden`, `NextlyError.isConflict`, `NextlyError.isRateLimited`.
+Available type guards: `NextlyError.is`, `NextlyError.isCode`, `NextlyError.isNotFound`, `NextlyError.isValidation`, `NextlyError.isAuthRequired`, `NextlyError.isForbidden`, `NextlyError.isConflict`, `NextlyError.isRateLimited`. `isConflict` matches `CONFLICT` only; check an out-of-date save with `NextlyError.isCode(err, "STALE_VERSION")`.
 
-Common `code` values you will see: `VALIDATION_ERROR` (400), `INVALID_INPUT` (422), `AUTH_REQUIRED` (401), `AUTH_INVALID_CREDENTIALS` (401), `EMAIL_NOT_VERIFIED` (403), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `DUPLICATE` (409), `PAYLOAD_TOO_LARGE` (413), `RATE_LIMITED` (429), `DATABASE_ERROR` (500), `INTERNAL_ERROR` (500), `SERVICE_UNAVAILABLE` (503).
+Common `code` values you will see: `VALIDATION_ERROR` (400), `INVALID_INPUT` (422), `AUTH_REQUIRED` (401), `AUTH_INVALID_CREDENTIALS` (401), `EMAIL_NOT_VERIFIED` (403), `FORBIDDEN` (403), `NOT_FOUND` (404), `STALE_VERSION` (409), `CONFLICT` (409), `DUPLICATE` (409), `VERSION_REQUIRED` (428), `PAYLOAD_TOO_LARGE` (413), `RATE_LIMITED` (429), `DATABASE_ERROR` (500), `INTERNAL_ERROR` (500), `SERVICE_UNAVAILABLE` (503).
 
 The same `NextlyError` is what the route handler serialises into the HTTP error envelope (`{ error: { code, message, requestId, ... } }`) — see the [REST API error response section](/docs/api-reference/rest-api#errors) for the wire format.
 

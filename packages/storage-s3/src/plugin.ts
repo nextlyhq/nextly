@@ -84,8 +84,8 @@ import type { S3StorageConfig } from "./types";
  * @param config - S3 storage configuration
  * @returns A StoragePlugin that MediaStorage can register
  *
- * @throws Error if bucket is not provided (via adapter)
- * @throws Error if region is not provided (via adapter)
+ * Constructing the plugin never requires the bucket or region: a missing
+ * one is refused when storage is first used, not while the config loads.
  */
 export function s3Storage(config: S3StorageConfig): StoragePlugin {
   // Handle disabled plugin

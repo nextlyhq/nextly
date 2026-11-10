@@ -25,7 +25,9 @@ vi.mock("@nextlyhq/plugin-sdk", async importActual => ({
   getCachedNextly: async () => nextly,
 }));
 
-const { removeLayoutRoute } = await import("./remove-route");
+const { holdsRemovalGrants, removeLayoutRoute } = await import(
+  "./remove-route"
+);
 
 describe("the Remove Layout route", () => {
   it("answers a caller whose right a coarse check would refuse, leaving the decision to the write", async () => {
@@ -77,5 +79,52 @@ describe("the Remove Layout route", () => {
       .catch((error: unknown) => error);
 
     expect((refused as { code?: unknown }).code).toBe("FORBIDDEN");
+  });
+});
+
+describe("the grants a move asks for before it writes any page", () => {
+  /** A caller whose rights are rules over rows: yes only to "any entry". */
+  const rowRuled = (granted: readonly string[]) =>
+    vi.fn(
+      async (
+        action: string,
+        _resource: string,
+        options?: { anyEntry?: boolean }
+      ) => options?.anyEntry === true && granted.includes(action)
+    );
+
+  it("admits a right expressed as a rule over Layout rows, leaving the row to the write", async () => {
+    const can = rowRuled(["delete"]);
+
+    expect(await holdsRemovalGrants({ can }, "delete", "layouts")).toBe(true);
+    expect(can).toHaveBeenCalledWith("delete", "layouts", { anyEntry: true });
+  });
+
+  it("asks an unpublish for both the update and the unpublish grant", async () => {
+    expect(
+      await holdsRemovalGrants(
+        { can: rowRuled(["update"]) },
+        "unpublish",
+        "layouts"
+      )
+    ).toBe(false);
+    expect(
+      await holdsRemovalGrants(
+        { can: rowRuled(["update", "unpublish"]) },
+        "unpublish",
+        "layouts"
+      )
+    ).toBe(true);
+  });
+
+  it("refuses a caller without the grant, and no caller at all", async () => {
+    expect(
+      await holdsRemovalGrants(
+        { can: rowRuled(["update"]) },
+        "delete",
+        "layouts"
+      )
+    ).toBe(false);
+    expect(await holdsRemovalGrants(null, "delete", "layouts")).toBe(false);
   });
 });

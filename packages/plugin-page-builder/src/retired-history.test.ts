@@ -110,7 +110,7 @@ describe("the retired ids history implies", () => {
       published(["body"], ["main"]),
     ]);
 
-    expect(await deriveRetired(args(history), "hero")).toEqual({
+    expect(await deriveRetired(args(history), "hero")).toMatchObject({
       retired: { properties: ["title"], slots: ["aside"] },
       complete: true,
     });
@@ -171,7 +171,7 @@ describe("the retired ids history implies", () => {
       { status: "published", content: "not json" },
     ]);
 
-    expect(await deriveRetired(args(history), "hero")).toEqual({
+    expect(await deriveRetired(args(history), "hero")).toMatchObject({
       retired: { properties: [], slots: [] },
       complete: false,
     });
@@ -184,7 +184,7 @@ describe("the retired ids history implies", () => {
       published(["title", "body"]),
     ]);
 
-    expect(await deriveRetired(args(history), "hero")).toEqual({
+    expect(await deriveRetired(args(history), "hero")).toMatchObject({
       retired: { properties: ["title"], slots: [] },
       complete: true,
     });
@@ -197,7 +197,7 @@ describe("the retired ids history implies", () => {
       published(["title"]),
     ]);
 
-    expect(await deriveRetired(args(history), "hero")).toEqual({
+    expect(await deriveRetired(args(history), "hero")).toMatchObject({
       retired: { properties: [], slots: [] },
       complete: true,
     });
@@ -210,7 +210,7 @@ describe("the retired ids history implies", () => {
       published(["body"]),
     ]);
 
-    expect(await deriveRetired(args(history), "hero")).toEqual({
+    expect(await deriveRetired(args(history), "hero")).toMatchObject({
       retired: { properties: ["title"], slots: [] },
       complete: false,
     });
@@ -219,7 +219,7 @@ describe("the retired ids history implies", () => {
   it("are none for a component with no history", async () => {
     const { history } = memoryHistory([]);
 
-    expect(await deriveRetired(args(history), "hero")).toEqual({
+    expect(await deriveRetired(args(history), "hero")).toMatchObject({
       retired: { properties: [], slots: [] },
       complete: true,
     });
@@ -235,7 +235,7 @@ describe("reading a long history", () => {
     ];
     const { history, lists } = memoryHistory(versions);
 
-    expect(await deriveRetired(args(history), "hero")).toEqual({
+    expect(await deriveRetired(args(history), "hero")).toMatchObject({
       retired: { properties: ["first"], slots: [] },
       complete: true,
     });
@@ -287,7 +287,7 @@ describe("reading a long history", () => {
     ];
     const { history, gets } = memoryHistory(versions);
 
-    expect(await deriveRetired(args(history), "hero")).toEqual({
+    expect(await deriveRetired(args(history), "hero")).toMatchObject({
       retired: { properties: ["older"], slots: [] },
       complete: false,
     });
@@ -452,6 +452,97 @@ describe("the repair", () => {
     expect(answer).toEqual({ properties: ["title"], slots: [] });
     expect(log.errors).toHaveLength(1);
     expect(log.errors[0]!.message).toContain('"hero"');
+  });
+
+  it("releases the held versions after a whole read whose ids are recorded", async () => {
+    const { history } = memoryHistory([published(["title"]), published([])]);
+    const { store } = memoryStore();
+    const released: string[] = [];
+
+    await reconcileRetired(
+      {
+        ...args(history),
+        store,
+        pins: {
+          release: async (id, through) =>
+            void released.push(`${id} ${through}`),
+        },
+        ...logger(),
+      },
+      "hero"
+    );
+
+    expect(released).toEqual(["hero 2"]);
+  });
+
+  it("looks for no held versions when nothing was ever retired", async () => {
+    const { history } = memoryHistory([
+      published(["title"]),
+      published(["title"]),
+    ]);
+    const { store } = memoryStore();
+    const released: string[] = [];
+
+    await reconcileRetired(
+      {
+        ...args(history),
+        store,
+        pins: { release: async id => void released.push(id) },
+        ...logger(),
+      },
+      "hero"
+    );
+
+    expect(released).toEqual([]);
+  });
+
+  it("keeps them held when the record fails", async () => {
+    const { history } = memoryHistory([published(["title"]), published([])]);
+    const { store } = memoryStore();
+    const released: string[] = [];
+
+    await reconcileRetired(
+      {
+        ...args(history),
+        store: {
+          ...store,
+          retire: async () => {
+            throw new Error("database down");
+          },
+        },
+        pins: { release: async id => void released.push(id) },
+        ...logger(),
+      },
+      "hero"
+    );
+
+    expect(released).toEqual([]);
+  });
+
+  it("keeps them held when history was not read whole", async () => {
+    // A removal found in the part read, so only the incomplete read keeps
+    // the release from running.
+    const { history } = memoryHistory([
+      published(["oldest"]),
+      ...Array.from({ length: 500 }, (_, index) =>
+        published(index === 0 ? ["older"] : [])
+      ),
+    ]);
+    const { store } = memoryStore();
+    const released: string[] = [];
+
+    await expect(
+      reconcileRetired(
+        {
+          ...args(history),
+          store,
+          pins: { release: async id => void released.push(id) },
+          ...logger(),
+        },
+        "hero"
+      )
+    ).rejects.toThrow();
+    expect(released).toEqual([]);
   });
 
   it("fails when history cannot be read, so nothing mints on a partial answer", async () => {

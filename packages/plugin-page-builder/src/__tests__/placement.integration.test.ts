@@ -202,7 +202,7 @@ describe.each(getConfiguredTestDialects())(
       return t.nextly.update({
         collection: "pages",
         id,
-        data: { content: pageOf(nodes) },
+        data: { content: pageOf(nodes), _overwrite: true },
         overrideAccess: true,
       });
     }
@@ -349,7 +349,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: "articles",
             id: String(created.item.id),
-            data: { content: pageOf([box]) },
+            data: { content: pageOf([box]), _overwrite: true },
             overrideAccess: true,
           })
         )
@@ -371,7 +371,10 @@ describe.each(getConfiguredTestDialects())(
       const saved = await t.nextly.update({
         collection: "articles",
         id: String(created.item.id),
-        data: { content: pageOf([brokenBox(), note("added")]) },
+        data: {
+          content: pageOf([brokenBox(), note("added")]),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       const content = (saved.item as { content?: { nodes?: BlockNode[] } })

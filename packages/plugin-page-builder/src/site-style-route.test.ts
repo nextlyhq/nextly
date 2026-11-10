@@ -12,12 +12,14 @@ import { describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PAGES_SLUG } from "./collections/pages";
+import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import {
   mayReadSiteStyle,
   readSiteStyleForEditor,
   type SiteStyleRouteContext,
 } from "./site-style-route";
 import { SITE_STYLE_SLUG } from "./site-style-storage";
+import { SPACING_MODE_SERVICE } from "./spacing-mode-reader";
 
 const blocks = (name: string) => ({ name, type: "blocks" });
 
@@ -116,6 +118,40 @@ describe("who may read the site style through the editor's route", () => {
     expect(
       await mayReadSiteStyle(context(["update-articles"], { collections }), {})
     ).toBe(true);
+  });
+
+  it("admits an author who may update a collection whose only blocks field is in a repeater's rows", async () => {
+    // The builder opens that field row by row, so its editors need the site
+    // style as much as an editor of a top-level field does.
+    const collections = [
+      {
+        slug: "landing",
+        fields: [
+          { name: "sections", type: "repeater", fields: [blocks("body")] },
+        ],
+      },
+    ];
+    expect(
+      await mayReadSiteStyle(context(["update-landing"], { collections }), {})
+    ).toBe(true);
+  });
+
+  it("refuses for a repeater whose rows declare their own id, which the builder cannot open", async () => {
+    const collections = [
+      {
+        slug: "landing",
+        fields: [
+          {
+            name: "sections",
+            type: "repeater",
+            fields: [{ name: "id", type: "text" }, blocks("body")],
+          },
+        ],
+      },
+    ];
+    expect(
+      await mayReadSiteStyle(context(["update-landing"], { collections }), {})
+    ).toBe(false);
   });
 
   it("admits an author who may update a Single holding a blocks field", async () => {
@@ -257,8 +293,39 @@ describe("what the editor's route answers", () => {
       fonts: null,
       classes: [],
       breakpoints: null,
+      // The model lives outside the Single; a reader offering no plugin
+      // services records none.
+      spacingMode: null,
     });
     expect(reads).toEqual([{ slug: SITE_STYLE_SLUG, overrideAccess: true }]);
+  });
+
+  it("answers the Single's version as the same read gave it", async () => {
+    // What the editor's saves send back, so a save made in between refuses
+    // them rather than being overwritten.
+    const answer = await readSiteStyleForEditor(
+      context([`update-${PAGES_SLUG}`]),
+      { findSingle: async () => ({ tokens: { tokens: [] }, _rev: "7" }) },
+      {}
+    );
+    expect(answer._rev).toBe("7");
+    expect(answer.tokens).toEqual({ tokens: [] });
+  });
+
+  it("answers the site's recorded spacing model beside the sections", async () => {
+    const answer = await readSiteStyleForEditor(
+      context([`update-${PAGES_SLUG}`]),
+      {
+        findSingle: async () => ({}),
+        plugins: {
+          [PAGE_BUILDER_PLUGIN_NAME]: {
+            [SPACING_MODE_SERVICE]: { read: async () => "classic" },
+          },
+        },
+      },
+      {}
+    );
+    expect(answer.spacingMode).toBe("classic");
   });
 
   it("refuses before reading anything", async () => {

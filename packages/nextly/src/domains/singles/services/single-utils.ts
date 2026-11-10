@@ -246,7 +246,9 @@ export function getDefaultValue(field: FieldConfig): unknown {
   switch (storageTypeToken(field) ?? field.type) {
     case "text":
     case "textarea":
+    // An icon id is a string; empty means no icon chosen yet.
     case "email":
+    case "icon":
     case "password":
     case "code":
       return "";

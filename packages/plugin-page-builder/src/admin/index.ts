@@ -31,9 +31,19 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 
 import {
+  BINDINGS_TO_FIX_CARD_COMPONENT,
+  BINDINGS_TO_FIX_PAGE_COMPONENT,
   BUILDER_VIEW_COMPONENT,
+  COMPONENT_STORE_DELETE_HOST_COMPONENT,
+  COMPONENT_LIST_TOOLS_COMPONENT,
+  DELETE_COMPONENT_REPLACEMENT_COMPONENT,
+  ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
+  TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_DESIGN_DETAILS_COMPONENT,
+  TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "../builder-view";
+import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
 /*
  * The editor's stylesheet, loaded by whatever loads this entry.
  *
@@ -50,10 +60,26 @@ import {
  */
 import "../styles/editor.css";
 
+import { BindingsToFixCard } from "./bindings-report/BindingsToFixCard";
+import { BindingsToFixPage } from "./bindings-report/BindingsToFixPage";
 import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
+import {
+  ComponentListTools,
+  ComponentStoreDeleteHost,
+  DeleteComponentReplacement,
+} from "./DeleteComponentAction";
 import { PageBuilderView } from "./editor/PageBuilderView";
+import { registerEntryDesignColumn } from "./entry-design-column";
+import { EntryDesignSection } from "./EntryDesignSection";
 import { RemoveLayoutToolbarSlot } from "./RemoveLayoutAction";
+import { TemplateAddressField } from "./TemplateAddressField";
+import { TemplateCollectionField } from "./TemplateCollectionField";
+import { TemplateDeleteAction } from "./TemplateDeleteAction";
+import { TemplateDesignDetails } from "./TemplateDesignDetails";
+import { TemplateOwnDesigns } from "./TemplateOwnDesigns";
+import { registerExportActions } from "./transfer-export-action";
+import { TransferImport } from "./transfer-import";
 
 /**
  * The blocks field's editor-form control.
@@ -76,26 +102,89 @@ const BLOCKS_FIELD_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksField";
  */
 const BLOCKS_SUMMARY_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksSummary";
 
+/**
+ * The template form's address control. Must match
+ * `TEMPLATE_ADDRESS_FIELD_COMPONENT`, for the reason `BLOCKS_FIELD_PATH`
+ * gives.
+ */
+const TEMPLATE_ADDRESS_FIELD_PATH =
+  "@nextlyhq/plugin-page-builder/admin#TemplateAddressField";
+
+/**
+ * The template form's collection control. Must match
+ * `TEMPLATE_COLLECTION_FIELD_COMPONENT`, for the reason `BLOCKS_FIELD_PATH`
+ * gives.
+ */
+const TEMPLATE_COLLECTION_FIELD_PATH =
+  "@nextlyhq/plugin-page-builder/admin#TemplateCollectionField";
+
 const COMPONENTS = {
   [BLOCKS_FIELD_PATH]: BlocksField,
   [BLOCKS_SUMMARY_PATH]: BlocksSummary,
+  [TRANSFER_IMPORT_COMPONENT]: TransferImport,
   // The editor itself, drawn by the admin as a view of the document at the
   // address the blocks field's card links to.
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
   // "Remove Layout…" in a Layout's document bar.
   [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutToolbarSlot,
+  // The "Bindings to fix" page and its dashboard card.
+  [BINDINGS_TO_FIX_PAGE_COMPONENT]: BindingsToFixPage,
+  [BINDINGS_TO_FIX_CARD_COMPONENT]: BindingsToFixCard,
+  // Above the Components list: Import from file, and the row action's
+  // Delete component dialog; for a host's component store, the same tools
+  // drawn through the header slot.
+  [COMPONENT_LIST_TOOLS_COMPONENT]: ComponentListTools,
+  [COMPONENT_STORE_DELETE_HOST_COMPONENT]: ComponentStoreDeleteHost,
+  // The component store's own Delete, opening Delete component instead.
+  [DELETE_COMPONENT_REPLACEMENT_COMPONENT]: DeleteComponentReplacement,
+  // An entry's own design: the Design section of every entry's side panel,
+  // a template's own designs, and the delete that says what it means.
+  [ENTRY_DESIGN_SECTION_COMPONENT]: EntryDesignSection,
+  [TEMPLATE_OWN_DESIGNS_COMPONENT]: TemplateOwnDesigns,
+  [TEMPLATE_DESIGN_DETAILS_COMPONENT]: TemplateDesignDetails,
+  [TEMPLATE_DELETE_COMPONENT]: TemplateDeleteAction,
+  // The template's address, editable under the routing permission.
+  [TEMPLATE_ADDRESS_FIELD_PATH]: TemplateAddressField,
+  // The template's collection, by its name.
+  [TEMPLATE_COLLECTION_FIELD_PATH]: TemplateCollectionField,
 };
 
 // Eager registration on module load.
 registerComponents(COMPONENTS);
+// "Export" on the Components, Patterns and Layouts lists.
+registerExportActions();
+// "Delete component…" on the component store's list is registered by the
+// list's own tools, under the slug the site resolved.
+
+// The Design column on the lists of collections that have a template.
+registerEntryDesignColumn();
 
 // Lazy fallback: the host can trigger registration on demand by package prefix.
 registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
   registerComponents(COMPONENTS);
+  registerExportActions();
+  registerEntryDesignColumn();
   return Promise.resolve();
 });
 
-export { BlocksField, BlocksSummary, PageBuilderView, RemoveLayoutToolbarSlot };
+export {
+  BindingsToFixCard,
+  BindingsToFixPage,
+  BlocksField,
+  BlocksSummary,
+  ComponentListTools,
+  ComponentStoreDeleteHost,
+  DeleteComponentReplacement,
+  EntryDesignSection,
+  PageBuilderView,
+  RemoveLayoutToolbarSlot,
+  TemplateAddressField,
+  TemplateCollectionField,
+  TemplateDeleteAction,
+  TemplateDesignDetails,
+  TemplateOwnDesigns,
+  TransferImport,
+};
 /**
  * Called by the app's generated component map to hand the editor the block
  * modules plugins declared (`editorEntry`, `editor.component`). Not for a

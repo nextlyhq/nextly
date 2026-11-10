@@ -21,9 +21,9 @@ const twoStep = vi.hoisted(() => ({ on: false }));
 const failJoin = vi.hoisted(() => ({ on: false }));
 vi.mock("../companion-join", async importOriginal => {
   const actual = await importOriginal<typeof import("../companion-join")>();
-  const { and, eq, inArray } = await import("drizzle-orm");
+  const { and, eq, inArray, sql } = await import("drizzle-orm");
   interface TwoStepDb {
-    select(): {
+    select(projection?: Record<string, unknown>): {
       from(table: unknown): {
         where(where: unknown): Promise<Record<string, unknown>[]> & {
           limit(count: number): Promise<Record<string, unknown>[]>;
@@ -50,8 +50,12 @@ vi.mock("../companion-join", async importOriginal => {
         .limit(1);
       if (!entry) return { entry: undefined, companionRows: [] };
       const companion = args.companionTable as Record<string, unknown>;
-      const companionRows = await db
-        .select()
+      const read = await db
+        .select({
+          translation: args.companionTable,
+          // Each row's version counter, as the joined read takes it.
+          revision: sql`${args.companionTable}.${sql.identifier("_revision")}`,
+        })
         .from(args.companionTable)
         .where(
           and(
@@ -60,6 +64,10 @@ vi.mock("../companion-join", async importOriginal => {
             inArray(companion._locale as never, args.localeChain)
           )
         );
+      const companionRows = read.map(row => ({
+        ...(row.translation as Record<string, unknown>),
+        _revision: row.revision,
+      }));
       return { entry, companionRows };
     },
   };
@@ -145,7 +153,7 @@ async function bootSite(dialect: TestDialect) {
     collection: "pages",
     id: bothId,
     locale: "de",
-    data: { heading: "Hallo" },
+    data: { heading: "Hallo", _overwrite: true },
   });
   const englishOnly = await t.nextly.create({
     collection: "pages",
@@ -156,11 +164,14 @@ async function bootSite(dialect: TestDialect) {
       status: "published",
     },
   });
-  await t.nextly.updateSingle({ slug: "site", data: { tagline: "Welcome" } });
+  await t.nextly.updateSingle({
+    slug: "site",
+    data: { tagline: "Welcome", _overwrite: true },
+  });
   await t.nextly.updateSingle({
     slug: "site",
     locale: "de",
-    data: { tagline: "Willkommen" },
+    data: { tagline: "Willkommen", _overwrite: true },
   });
   return {
     t,

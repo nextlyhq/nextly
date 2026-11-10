@@ -8,7 +8,11 @@
  */
 import { describe, expectTypeOf, it } from "vitest";
 
-import type { UserFieldConfig } from "./types";
+import type {
+  UserFieldConfig,
+  UserPhoneFieldConfig,
+  UserUrlFieldConfig,
+} from "./types";
 import { pluginUserField } from "./types";
 
 const builtIn: UserFieldConfig = { name: "company", type: "text" };
@@ -40,6 +44,28 @@ export const userFieldConfigAdmitsPluginTypes: UserFieldConfig[] = [
   withOptions,
   optionless,
   flatOptions,
+];
+
+// A url or phone field marked `admin.hidden`, which the Direct API leaves out
+// of a read passing `showHiddenFields: false` as it does a canonical field's.
+// Each written as its own configuration and as an arm of the union an app
+// declares its user fields with, so the flag type-checks wherever it is set.
+const hiddenUrl: UserUrlFieldConfig = {
+  name: "profileUrl",
+  type: "url",
+  admin: { hidden: true },
+};
+const hiddenPhone: UserPhoneFieldConfig = {
+  name: "mobile",
+  type: "phone",
+  admin: { hidden: true, description: "Kept for account recovery" },
+};
+
+export const userSurfaceFieldsAcceptHidden: UserFieldConfig[] = [
+  hiddenUrl,
+  hiddenPhone,
+  { name: "website", type: "url", admin: { hidden: true } },
+  { name: "landline", type: "phone", admin: { hidden: false } },
 ];
 
 describe("pluginUserField", () => {

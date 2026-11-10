@@ -34,9 +34,11 @@ import { column } from "./column";
 import { columns } from "./columns";
 import { divider } from "./divider";
 import { embed } from "./embed";
+import { entryContent } from "./entry-content";
 import { form } from "./form";
 import { gallery } from "./gallery";
 import { heading } from "./heading";
+import { icon } from "./icon";
 import { image } from "./image";
 import { list } from "./list";
 import { paragraph } from "./paragraph";
@@ -44,6 +46,7 @@ import { quote } from "./quote";
 import { richText } from "./rich-text";
 import { section } from "./section";
 import { spacer } from "./spacer";
+import { tableOfContents } from "./table-of-contents";
 
 // `ACCORDION_BLOCK` / `ACCORDION_ITEM_BLOCK` are deliberately NOT re-exported,
 // for the reason recorded below for the columns pair: they exist so the two
@@ -66,6 +69,10 @@ export { column } from "./column";
 export { columns } from "./columns";
 export { divider, type DividerProps } from "./divider";
 export { embed, type EmbedProps } from "./embed";
+// The Entry content block: where a collection's template draws the entry's
+// own blocks content.
+export { entryContent, type EntryContentProps } from "./entry-content";
+export { icon, type IconProps } from "./icon";
 export {
   form,
   FORM_FIELD_TYPES,
@@ -99,6 +106,12 @@ export type { RichTextValue } from "@nextlyhq/blocks-engine";
 export { section } from "./section";
 export { spacer, type SpacerProps } from "./spacer";
 export {
+  tableOfContents,
+  TABLE_OF_CONTENTS_DEPTHS,
+  type TableOfContentsDepth,
+  type TableOfContentsProps,
+} from "./table-of-contents";
+export {
   CONTAINER_TAGS,
   CONTENT_WIDTH_CLASS,
   renderContainer,
@@ -106,6 +119,26 @@ export {
   type ContainerTag,
 } from "./container";
 export type { CollectionLoopProps } from "./collection-loop";
+// The editor's count of a list's matching entries, taken from the list's own
+// read, so the count and the list cannot disagree.
+export {
+  listEntryCount,
+  listShownCount,
+  namedListBase,
+  type ListEntryCount,
+} from "./list-read";
+// A list's named query run where it is asked for, the editor's canvas route
+// among them, with the outcome the renderer draws: one run for every host.
+export {
+  carriedFailureOf,
+  namedQueryFailureLine,
+  readNamedList,
+  type CarriedNamedQueryFailure,
+  type NamedListOutcome,
+} from "./named-read";
+// The engine types a list's props name, so a consumer of the props type can
+// spell its filters and relation source without importing the engine.
+export type { ListFilter, ListRelation } from "@nextlyhq/blocks-engine";
 
 /**
  * Every block in the core library.
@@ -149,6 +182,7 @@ type CoreBlockList = [
   typeof heading,
   typeof paragraph,
   typeof richText,
+  typeof tableOfContents,
   typeof list,
   typeof image,
   typeof button,
@@ -157,7 +191,9 @@ type CoreBlockList = [
   typeof divider,
   typeof quote,
   typeof embed,
+  typeof icon,
   typeof collectionLoop,
+  typeof entryContent,
 ];
 
 export const coreBlocks: CoreBlockList[number][] = [
@@ -182,6 +218,7 @@ export const coreBlocks: CoreBlockList[number][] = [
   heading,
   paragraph,
   richText,
+  tableOfContents,
   list,
   image,
   button,
@@ -191,5 +228,9 @@ export const coreBlocks: CoreBlockList[number][] = [
   divider,
   quote,
   embed,
+  icon,
   collectionLoop,
+  // Holds no child of its own to meet first: the entry's blocks are composed
+  // into it for drawing, never stored.
+  entryContent,
 ] satisfies CoreBlockList;

@@ -243,6 +243,15 @@ describe("the dialogs' words", () => {
     expect(duplicate.textContent).toMatch(/other uses on this page included/);
     expect(duplicate.textContent).not.toMatch(/placement/i);
   });
+
+  it("say what a detach is checking in the author's words, while it checks", async () => {
+    // Held unanswered, so the line shown while the check is on its way is
+    // the one read, rather than whatever is on screen when it lands.
+    routes.detach.mockReturnValue(new Promise(() => {}));
+    mount("detach");
+    const checking = await screen.findByRole("status");
+    expect(checking.textContent).toBe("Checking what it draws…");
+  });
 });
 
 describe("updating a pattern from the editor", () => {

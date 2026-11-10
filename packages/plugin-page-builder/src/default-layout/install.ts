@@ -74,6 +74,7 @@ export function installDefaultLayout(ctx: InstallContext): DefaultLayoutSetup {
   registerPageReferenceGuard({
     ctx,
     pages: setup.pagesSlug,
+    layouts: setup.slugs.layouts,
     store: () => setup.removals,
     inTransaction: executor => fenceOnExecutor(ctx.db, executor),
     warn: setup.warn,

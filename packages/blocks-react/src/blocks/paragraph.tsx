@@ -15,7 +15,7 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { CONTENT } from "./categories";
-import { text } from "./props";
+import { boundText, text } from "./props";
 
 export interface ParagraphProps {
   /** The paragraph's text. */
@@ -26,10 +26,12 @@ export function renderParagraph({
   props,
   className,
   markProp,
+  bound,
 }: BlockRenderArgs<ParagraphProps>): ReactElement {
   return (
     <p className={className} {...markProp?.("text")}>
-      {text(props.text)}
+      {/* A bound date keeps its machine-readable value. */}
+      {boundText(text(props.text), bound?.text)}
     </p>
   );
 }

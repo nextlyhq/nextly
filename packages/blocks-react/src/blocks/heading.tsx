@@ -16,7 +16,7 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { CONTENT } from "./categories";
-import { oneOf, relFor, text, url } from "./props";
+import { boundText, oneOf, relFor, text, url } from "./props";
 
 /** The levels a heading may render. */
 export const HEADING_LEVELS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
@@ -40,9 +40,12 @@ export function renderHeading({
   props,
   className,
   markProp,
+  bound,
 }: BlockRenderArgs<HeadingProps>): ReactElement {
   const level = oneOf(props.level, HEADING_LEVELS, "h2");
-  const label = text(props.text);
+  // A bound date keeps its machine-readable value, inside the anchor or the
+  // heading itself.
+  const label = boundText(text(props.text), bound?.text);
   const href = url(props.href);
 
   // The text moves between two elements, which is why the block marks it rather

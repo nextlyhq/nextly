@@ -14,10 +14,13 @@ import {
   waitFor,
 } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import type { EditorState } from "./editor-state";
-import { SaveSharedStyleDialog } from "./shared-style-save-dialog";
+import {
+  SAVE_AS_DRAWN_WAIT_MS,
+  SaveSharedStyleDialog,
+} from "./shared-style-save-dialog";
 
 afterEach(cleanup);
 
@@ -57,9 +60,23 @@ function editorWith(
   } as unknown as EditorState & { applyAll: ReturnType<typeof vi.fn> };
 }
 
+/**
+ * A library as the host hands it, which a stored style joins once it is read
+ * again: the same array, so the dialog's next check finds it there.
+ */
+const libraryOf = (): NamedClass[] => [card];
+const storedInto =
+  (library: NamedClass[]) =>
+  async (entry: NamedClass): Promise<string | undefined> => {
+    library.push(entry);
+    return undefined;
+  };
+
 function open(
-  onAdd = vi.fn(async (_entry: NamedClass) => undefined as string | undefined)
+  onAdd?: Mock<(entry: NamedClass) => Promise<string | undefined>>
 ) {
+  const library = libraryOf();
+  const add = onAdd ?? vi.fn(storedInto(library));
   const editor = editorWith();
   const onSaved = vi.fn();
   const onClose = vi.fn();
@@ -67,13 +84,13 @@ function open(
     <SaveSharedStyleDialog
       editor={editor}
       nodeId="a"
-      offer={{ library: [card], mayChange: true }}
-      onAdd={onAdd}
+      offer={{ library, mayChange: true }}
+      onAdd={add}
       onSaved={onSaved}
       onClose={onClose}
     />
   );
-  return { editor, onAdd, onSaved, onClose };
+  return { editor, onAdd: add, onSaved, onClose };
 }
 
 const name = () => screen.getByRole("textbox", { name: "Name" });
@@ -146,18 +163,82 @@ describe("saving", () => {
     expect(onSaved).toHaveBeenCalledWith("Promo");
   });
 
+  it("keeps the block's own look until the new style can be drawn", async () => {
+    // Stored is not yet drawn: the library the canvas draws from is read
+    // again after the save. Moving the block onto the style before it is in
+    // that library would draw the block, for a moment, with neither look.
+    const onAdd = vi.fn(async (_entry: NamedClass) => undefined);
+    const editor = editorWith();
+    const props = { nodeId: "a", onAdd, onClose: vi.fn() };
+    const view = render(
+      <SaveSharedStyleDialog
+        editor={editor}
+        offer={{ library: [card], mayChange: true }}
+        {...props}
+      />
+    );
+    fireEvent.change(name(), { target: { value: "Promo" } });
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Save shared style" })
+      );
+    });
+    expect(onAdd).toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    const entry = onAdd.mock.calls[0]?.[0] as NamedClass;
+    await act(async () => {
+      view.rerender(
+        <SaveSharedStyleDialog
+          editor={editor}
+          offer={{ library: [card, entry], mayChange: true }}
+          {...props}
+        />
+      );
+    });
+    await waitFor(() => expect(editor.applyAll).toHaveBeenCalled());
+  });
+
+  it("moves the block onto a stored style it never sees drawn, once the wait is over", async () => {
+    // The style is stored; a library read that never brings it must not
+    // leave the block off it for good.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const onAdd = vi.fn(async (_entry: NamedClass) => undefined);
+      const { editor } = open(onAdd);
+      fireEvent.change(name(), { target: { value: "Promo" } });
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Save shared style" })
+        );
+      });
+      expect(editor.applyAll).not.toHaveBeenCalled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SAVE_AS_DRAWN_WAIT_MS);
+      });
+      expect(editor.applyAll).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps an edit made to the block while the style was being stored", async () => {
     let store: (refused: string | undefined) => void = () => {};
+    const library = libraryOf();
     const onAdd = vi.fn(
-      (_entry: NamedClass) =>
+      (entry: NamedClass) =>
         new Promise<string | undefined>(resolve => {
-          store = resolve;
+          // Read again once stored, as the host's library is.
+          store = refused => {
+            if (refused === undefined) library.push(entry);
+            resolve(refused);
+          };
         })
     );
     const first = editorWith();
     const props = {
       nodeId: "a",
-      offer: { library: [card], mayChange: true },
+      offer: { library, mayChange: true },
       onAdd,
       onClose: vi.fn(),
     };
@@ -193,16 +274,21 @@ describe("saving", () => {
 
   it("keeps a new value given to a moved control while the style was being stored", async () => {
     let store: (refused: string | undefined) => void = () => {};
+    const library = libraryOf();
     const onAdd = vi.fn(
-      (_entry: NamedClass) =>
+      (entry: NamedClass) =>
         new Promise<string | undefined>(resolve => {
-          store = resolve;
+          // Read again once stored, as the host's library is.
+          store = refused => {
+            if (refused === undefined) library.push(entry);
+            resolve(refused);
+          };
         })
     );
     const first = editorWith();
     const props = {
       nodeId: "a",
-      offer: { library: [card], mayChange: true },
+      offer: { library, mayChange: true },
       onAdd,
       onClose: vi.fn(),
     };

@@ -25,9 +25,13 @@ import type {
   ComponentDocument,
   ComponentExposure,
   PlanWarning,
+  SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
+
+import type { RemovalDryRun } from "./breakpoint-removal/dry-run";
+import type { CspAddition, CspCheck } from "./site-code/csp";
 
 /**
  * The name this plugin registers under, which is also how its routes are
@@ -352,6 +356,8 @@ export interface SavePatternRequest {
   /** The nodes to lift out of it, in the editor's own vocabulary. */
   readonly selectedIds: readonly string[];
   readonly fields: SavePatternFields;
+  /** Answer the pattern the save would store, and store nothing. */
+  readonly dryRun?: boolean;
 }
 
 /**
@@ -374,6 +380,25 @@ export interface SavePatternResponse {
   readonly item: { readonly id: string } & Record<string, unknown>;
   /** Side effects that failed after the row committed, when any did. */
   readonly warnings?: readonly HookWarning[];
+}
+
+/**
+ * What a save asked as a dry run answers, inside the envelope's `item`: the
+ * pattern it would store, and why the site would refuse it, empty when it
+ * would not. Nothing was stored, so there is no id.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface SavePatternDryRun {
+  readonly dryRun: true;
+  readonly pattern: Readonly<Record<string, unknown>>;
+  readonly refusals: readonly string[];
+}
+
+/** What a dry-run save answers: the envelope around {@link SavePatternDryRun}. */
+export interface SavePatternDryRunResponse {
+  readonly message: string;
+  readonly item: SavePatternDryRun;
 }
 
 /**
@@ -565,6 +590,185 @@ export const SITE_BREAKPOINTS_ROUTE_PATH = "/site/breakpoints";
  */
 export interface SiteBreakpointsRequest {
   readonly breakpoints: BreakpointSet | null;
+  /**
+   * Save nothing, and answer with what saving this set would drop: every
+   * style and hide stored under each breakpoint it removes.
+   *
+   * @experimental
+   */
+  readonly dryRun?: boolean;
+  /**
+   * Strip every style and hide stored under each breakpoint this set removes,
+   * across the site, as the person confirmed after seeing the dry run. Without
+   * it a set removing breakpoints is stored and what they held stays, unused
+   * by the stylesheet, as it would if the breakpoint were added again.
+   *
+   * @experimental
+   */
+  readonly confirmRemoval?: boolean;
+  /**
+   * With `confirmRemoval`: the `version` the dry run answered with. A
+   * confirmed removal is refused when the site style has changed since, so
+   * it removes exactly what the person was shown.
+   *
+   * @experimental
+   */
+  readonly version?: string;
+}
+
+/**
+ * What a dry run of {@link SiteBreakpointsRequest} answers inside its mutation
+ * envelope's `item`: every style and hide stored under each breakpoint the set
+ * removes, with nothing saved.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointsDryRun extends RemovalDryRun {
+  readonly dryRun: true;
+  readonly breakpoints: SiteBreakpointsRequest["breakpoints"];
+  /**
+   * The version of the site style this was counted from, which a confirmed
+   * removal sends back; absent where the site issues no versions.
+   */
+  readonly version?: string;
+}
+
+/**
+ * Where a breakpoint removal that did not finish within its save is carried
+ * on: `POST` with the run's id ({@link SiteBreakpointRemovalRequest}), under
+ * the same permission as the save.
+ *
+ * @experimental
+ */
+export const SITE_BREAKPOINT_REMOVAL_ROUTE_PATH = "/site/breakpoints/removal";
+
+/** The query parameter naming the run a removal's status is read for. */
+export const SITE_BREAKPOINT_REMOVAL_RUN_PARAM = "runId";
+
+/**
+ * Where removal `runId` stands is read: `GET` on the removal route.
+ *
+ * @experimental
+ */
+export function siteBreakpointRemovalStatusPath(runId: string): string {
+  const params = new URLSearchParams({
+    [SITE_BREAKPOINT_REMOVAL_RUN_PARAM]: runId,
+  });
+  return `${SITE_BREAKPOINT_REMOVAL_ROUTE_PATH}?${params.toString()}`;
+}
+
+/**
+ * What reading one removal answers: its status while it holds what it
+ * removed, or `null` once it holds nothing (done, leaving no document), or
+ * where there is no such run.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemovalRead {
+  readonly removal: SiteBreakpointRemovalStatus | null;
+}
+
+/**
+ * What continuing a removal sends: the run the save answered with.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemovalRequest {
+  readonly runId: string;
+}
+
+/**
+ * Where a removal stands after a save or a call to carry it on: every value
+ * under the removed breakpoints is stripped once `finished`; until then the
+ * removal route is called again with `runId`. `left` counts the documents
+ * this call had to leave as they are (a published page with a pending draft,
+ * say), which keep their values until they can be stripped.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemoval {
+  readonly runId: string;
+  readonly finished: boolean;
+  readonly left: number;
+  /** For a run undoing a removal: what it undoes, and what stayed out. */
+  readonly undo?: SiteBreakpointUndo;
+}
+
+/**
+ * Where an undo of a breakpoint removal is asked for: `POST` with the
+ * removal's id ({@link SiteBreakpointRemovalRequest}), under the same
+ * permission as the save. Only the newest removal can be undone, once, within
+ * 30 days. The breakpoints it removed are defined again, and every value it
+ * took out goes back where nothing has been set since; its walk is carried on
+ * through {@link SITE_BREAKPOINT_REMOVAL_ROUTE_PATH} like a removal's.
+ *
+ * @experimental
+ */
+export const SITE_BREAKPOINT_UNDO_ROUTE_PATH = "/site/breakpoints/removal/undo";
+
+/**
+ * The code an undo is refused with (409) when its breakpoints no longer fit
+ * the set: one is a breakpoint again, would end at another's width, or its
+ * axis is full. Editing the breakpoints is the way on; any other refusal is
+ * answered by reading Settings again.
+ *
+ * @experimental
+ */
+export const SITE_BREAKPOINT_UNDO_DOES_NOT_FIT = "BREAKPOINT_UNDO_DOES_NOT_FIT";
+
+/**
+ * Values an undo could not put back into one document, for one reason (a
+ * document may be listed once per reason):
+ * - `changed`: something else was set there after the removal;
+ * - `block-deleted`: their block (or shared style) was deleted after it;
+ * - `gone`: the document was deleted after it;
+ * - `draft-gone`: the draft they were taken from was published or discarded;
+ * - `unreadable`: the document cannot be read, so nothing is known of them.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointUndoSkipped {
+  readonly kind: "collection" | "single";
+  readonly slug: string;
+  readonly id?: string;
+  /**
+   * What the person asking knows the document by; absent for one they may
+   * not read, or one deleted since.
+   */
+  readonly name?: string;
+  /**
+   * Set on the site's shared styles, whatever slug their Single is
+   * registered under, so the person is told of them as such.
+   */
+  readonly sharedStyles?: true;
+  readonly values: number;
+  readonly reason:
+    | "changed"
+    | "block-deleted"
+    | "gone"
+    | "draft-gone"
+    | "unreadable";
+}
+
+/**
+ * What an undo did: the removal it undoes and, once its walk is finished,
+ * each document it could not put every value back into.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointUndo {
+  readonly undoes: string;
+  readonly skipped?: readonly SiteBreakpointUndoSkipped[];
+}
+
+/**
+ * What saving the site's breakpoints answers: the set stored, and, when it
+ * removed breakpoints, where the removal of their values stands.
+ */
+export interface SiteBreakpointsSaved {
+  readonly breakpoints: BreakpointSet | null;
+  /** @experimental */
+  readonly removal?: SiteBreakpointRemoval;
 }
 
 /**
@@ -582,7 +786,8 @@ export const SITE_STYLE_ROUTE_PATH = "/site/style";
 
 /**
  * The stored site style as the route answers it: the Single's four sections
- * exactly as stored, each `null` where nothing is stored, and nothing else.
+ * exactly as stored, each `null` where nothing is stored, the version the
+ * read gave, and nothing else.
  *
  * Raw rather than narrowed, so the editor narrows a stored record with the
  * same reader the published render does and can still say which stored font
@@ -593,6 +798,30 @@ export interface StoredSiteStyle {
   readonly fonts: unknown;
   readonly classes: unknown;
   readonly breakpoints: unknown;
+  /**
+   * The site's recorded spacing model, `classic` or `gaps`, or `null` when
+   * none is recorded and the engine's default applies. Kept in the plugin's own
+   * table rather than the Single; optional so a record without it reads as
+   * nothing recorded.
+   */
+  readonly spacingMode?: unknown;
+  /**
+   * The Single's version, as the same read gave it: what a save of a section
+   * made from this read sends back, so a save made in between refuses it
+   * rather than being overwritten. Absent where the server gives none.
+   */
+  readonly _rev?: string;
+}
+
+/**
+ * Where the owner chooses the site's spacing model: `POST` with
+ * `{ mode: "classic" | "gaps" }`, answered with `{ message, item: { spacingMode } }`.
+ */
+export const SPACING_MODE_ROUTE_PATH = "/site/style/spacing-mode";
+
+/** What the spacing-model route answers inside its mutation envelope's `item`. */
+export interface SpacingModeResult {
+  readonly spacingMode: SpacingMode;
 }
 
 /** Where Settings' Site tab reads what it shows and what this caller may change. */
@@ -632,6 +861,80 @@ export interface SiteSettingsRead {
    * current default, to name it, for a caller who may not choose.
    */
   readonly layouts: readonly SiteLayoutOption[];
+  /**
+   * The breakpoint removals still holding what they removed: the open one
+   * first, then the newest done ones that left documents keeping their
+   * values. Absent where the site carries no removals out, or the runs could
+   * not be read.
+   *
+   * @experimental
+   */
+  readonly removals?: readonly SiteBreakpointRemovalStatus[];
+  /**
+   * The removal Settings may still undo: the newest, within its 30 days, not
+   * undone yet. `null` when there is none; absent where the site carries no
+   * removals out.
+   *
+   * @experimental
+   */
+  readonly undoable?: SiteBreakpointUndoable | null;
+}
+
+/**
+ * The removal that can still be undone, as the Site tab offers it.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointUndoable {
+  readonly runId: string;
+  /** The breakpoints it removed, by id. */
+  readonly ids: readonly string[];
+  /** The same breakpoints, by the names the author knew them by. */
+  readonly labels: readonly string[];
+  /** When it was made, as an ISO date and time. */
+  readonly removedAt: string;
+  /** When its 30 days end, as an ISO date and time. */
+  readonly until: string;
+}
+
+/**
+ * What reading the removals alone answers (`GET` on the removal route with no
+ * run named): what the Site tab's read reports of them, without the rest of
+ * Settings, for an open Settings watching for a removal another tab started.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemovalsRead {
+  readonly removals: readonly SiteBreakpointRemovalStatus[];
+  readonly undoable: SiteBreakpointUndoable | null;
+}
+
+/**
+ * One breakpoint removal as the Site tab shows it.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemovalStatus {
+  readonly runId: string;
+  /**
+   * The breakpoints it removed, by the names the author knew them by; for an
+   * undo, the ones it puts back.
+   */
+  readonly labels: readonly string[];
+  /** For an undo: the removal it puts back. */
+  readonly undoes?: string;
+  /** Whether it is still walking the site. */
+  readonly open: boolean;
+  /**
+   * The documents it left, which keep their values under the removed
+   * breakpoints until they can be stripped; 0 while it is open.
+   */
+  readonly left: number;
+  /**
+   * Whether every document it left waits on a pending draft, which
+   * publishing or discarding resolves.
+   */
+  readonly waitingOnDrafts: boolean;
 }
 
 /**
@@ -768,7 +1071,10 @@ export interface SharedStyleUsage {
 /**
  * The code the remove route's issue carries when a stored document still uses
  * a style, so the editor can tell that refusal from one for a lock or a count
- * no longer whole.
+ * no longer whole. Carried only when every reason a removal is refused for is
+ * a use: a refusal any of whose reasons is not (a lock, a style the site's
+ * code defines, uses that could not all be counted) is a conflict naming
+ * every reason, so the code never marks one that is not a use.
  *
  * @experimental Settles when the Shared styles tab ships.
  */
@@ -792,6 +1098,12 @@ export interface SharedStylesUsageResponse {
   readonly counting: boolean;
   /** Whether this caller may lock and unlock shared styles. */
   readonly mayLock: boolean;
+  /**
+   * Whether this caller may ask for the pages to be counted now, through
+   * {@link SHARED_STYLE_COUNT_ROUTE_PATH}: whoever may change Design, the
+   * people a whole count lets remove a style.
+   */
+  readonly mayCount: boolean;
   /** Each style asked about, by id. */
   readonly styles: Readonly<Record<string, SharedStyleUsage>>;
 }
@@ -855,7 +1167,273 @@ export interface SharedStyleUseItem {
  */
 export const SHARED_STYLE_REMOVE_ROUTE_PATH = "/shared-styles/remove";
 
+/**
+ * Where the Design panel asks for the site's pages to be counted now, rather
+ * than waiting for a scheduler to run the usage backfill: it runs that job
+ * for a bounded time and answers how far the counting got.
+ *
+ * @experimental Settles when the Shared styles tab ships.
+ */
+export const SHARED_STYLE_COUNT_ROUTE_PATH = "/shared-styles/count";
+
+/**
+ * What the count route answers, as its mutation's `item`: whether it ran the
+ * counting (false when something else was already running it), and the
+ * index's health read after, in the usage read's terms.
+ */
+export interface SharedStylesCountResponse {
+  readonly ran: boolean;
+  readonly whole: boolean;
+  readonly counting: boolean;
+}
+
 /** What the remove route is sent: the shared styles to remove, by id. */
 export interface SharedStyleRemoveRequest {
   readonly ids: readonly string[];
+}
+
+/**
+ * Where the Design panel's Variables reads how widely its variables are used,
+ * a page of rows at a time, each variable named by its identity (`$token`:
+ * the token's `id`, else its name) with its own `id` parameter.
+ *
+ * @experimental Settles when the Variables panel shows usage.
+ */
+export const VARIABLE_USAGE_ROUTE_PATH = "/variables/usage";
+
+/** The query parameter naming one variable, by identity; repeated for several. */
+export const VARIABLE_ID_PARAM = "id";
+
+/** The query parameter naming which page of a where-used list, from 1. */
+export const VARIABLE_PAGE_PARAM = "page";
+
+/** The most variables one usage read or one removal answers for. */
+export const VARIABLE_USAGE_IDS_MAX = 50;
+
+/**
+ * How widely one variable is used: the documents whose blocks or page
+ * settings name it, from the variable usage index; the shared styles whose
+ * own styles name it, from the site style; and the block types whose own
+ * default styles name it, from the block registry. A shared style's reference
+ * is a use whether or not any block applies the style, and a block type's
+ * whether or not any page places the block. The places it is used are
+ * `documents` plus `sharedStyles.length` plus `blockDefaults.length`.
+ */
+export interface VariableUsage {
+  /** How many documents use it, gated and hidden content included. */
+  readonly documents: number;
+  /** The same documents, by kind. */
+  readonly byKind: Readonly<Record<SharedStyleUsageKind, number>>;
+  /** The ids of the shared styles whose styles name it, in id order. */
+  readonly sharedStyles: readonly string[];
+  /**
+   * The registered block types (`core/button`) whose own default styles
+   * (`baseStyles`) name it, in type order.
+   */
+  readonly blockDefaults: readonly string[];
+  /** False makes `documents` and `byKind` floors: "at least". */
+  readonly complete: boolean;
+}
+
+/**
+ * What the variables usage read answers: the index's health once for the
+ * screen, whether this caller may ask for a count now, and each variable.
+ *
+ * NOT A SECURITY BOUNDARY: every write is judged on its own.
+ */
+export interface VariablesUsageResponse {
+  /** Whether the usage index covers the whole site, so counts can be exact. */
+  readonly whole: boolean;
+  /** Whether counts that are not whole may still become whole. */
+  readonly counting: boolean;
+  /**
+   * Whether this caller may ask for the pages to be counted now, through
+   * {@link SHARED_STYLE_COUNT_ROUTE_PATH}: one count fills every usage index.
+   */
+  readonly mayCount: boolean;
+  /** Each variable asked about, by identity. */
+  readonly variables: Readonly<Record<string, VariableUsage>>;
+}
+
+/**
+ * Where the Variables panel lists the places a variable is used: first the
+ * shared styles naming it, then the block types whose default styles name
+ * it, then the documents, read as the caller (documents the caller may not
+ * read are counted in `meta.hiddenCount`, not named). The canonical list
+ * envelope, twenty to a page with `?page=` from 1, up to the page the longest
+ * such list ends on: every document one usage listing can name, with every
+ * shared style and block type the site has.
+ *
+ * @experimental Settles when the Variables panel shows usage.
+ */
+export const VARIABLE_WHERE_USED_ROUTE_PATH = "/variables/where-used";
+
+/**
+ * Which kind of place a variable is used in: a document's kind, a shared
+ * style, or a block type's own default style.
+ */
+export type VariableUseKind =
+  | SharedStyleUsageKind
+  | "shared-style"
+  | "block-default";
+
+/**
+ * One place a variable is used. A document is named by its collection and id,
+ * as the shared-style where-used names one. A shared style is named by its
+ * class id in `id`, with the site-style Single's slug as its `collection`, so
+ * the panel can open it in Design > Shared styles. A block type's default
+ * style is named by the type in `id` (`core/button`) and its label in
+ * `title`, with an empty `collection`: it is the block's code, not a stored
+ * document.
+ */
+export interface VariableUseItem {
+  readonly id: string;
+  readonly title: string;
+  readonly collection: string;
+  readonly kind: VariableUseKind;
+  /**
+   * For a shared style that is a block look, the block type it is bound to.
+   * Two block types' own looks may share an id, so a look is named by the
+   * pair: the panel opens the look `{ id, blockType }`. Absent for every
+   * other place.
+   *
+   * @experimental Settles when the Variables panel shows usage.
+   */
+  readonly blockType?: string;
+}
+
+/**
+ * Where the Variables panel removes variables the site added: the one write
+ * that checks first, just before it writes, that nothing uses any of them. A
+ * variable the site's code supplies cannot be removed, only reset.
+ *
+ * Refused in use with a validation error whose issues carry
+ * {@link SHARED_STYLE_IN_USE_CODE}: one issue per variable the index, a
+ * shared style or a block type's default style finds in use, its `path` that
+ * variable's identity, or one issue with an empty `path` when the stored
+ * documents themselves still use one. Refused with a conflict naming every
+ * reason when the uses cannot be counted, even if another variable asked
+ * about is in use: no issue carries the in-use code for a variable whose
+ * uses are not known. A page saved while the removal writes, that uses one
+ * of the variables, puts it back and refuses the removal as in use.
+ *
+ * @experimental Settles when the Variables panel shows usage.
+ */
+export const VARIABLE_REMOVE_ROUTE_PATH = "/variables/remove";
+
+/** What the remove route is sent: the variables to remove, by identity. */
+export interface VariableRemoveRequest {
+  readonly ids: readonly string[];
+}
+
+/** The usage route's path for some variables, each named by its own `id`. */
+export function variableUsagePath(ids: readonly string[]): string {
+  const params = new URLSearchParams();
+  for (const id of ids) params.append(VARIABLE_ID_PARAM, id);
+  return `${VARIABLE_USAGE_ROUTE_PATH}?${params.toString()}`;
+}
+
+/** The where-used route's path for one variable and one page, from 1. */
+export function variableWhereUsedPath(id: string, page: number): string {
+  const params = new URLSearchParams({
+    [VARIABLE_ID_PARAM]: id,
+    [VARIABLE_PAGE_PARAM]: String(page),
+  });
+  return `${VARIABLE_WHERE_USED_ROUTE_PATH}?${params.toString()}`;
+}
+
+/**
+ * Where the site's code is read and changed: `GET` reads it, `POST` checks it
+ * ({@link SiteCodeRequest} with `dryRun`) or saves it. Under the site settings
+ * permission; a save is a signed-in person's alone, never an API key's.
+ *
+ * @experimental
+ */
+export const SITE_CODE_ROUTE_PATH = "/site/code";
+
+/** The site's code as Settings reads it, to edit. */
+export interface SiteCodeRead {
+  /** What was written for the head, as it was saved. */
+  readonly head: string;
+  /** What was written for the end of the body. */
+  readonly body: string;
+  /** The version the read was of, which a save hands back. */
+  readonly version: string | null;
+  /** Whether the site declared its Content Security Policy to the plugin. */
+  readonly policyDeclared: boolean;
+  /**
+   * What each place holds, in plain words, from the stored entries ("A
+   * script from www.googletagmanager.com", "an inline script"): what Settings
+   * shows before the code is opened. Empty for a place with nothing in it.
+   */
+  readonly described: {
+    readonly head: readonly string[];
+    readonly body: readonly string[];
+  };
+  /** When the code was last saved, as an ISO date; `null` before any save. */
+  readonly changedAt: string | null;
+  /** The name of the person who saved it last, when it can be read. */
+  readonly changedBy: string | null;
+}
+
+/**
+ * Checking or saving the site's code. `livePolicy` is the policy the
+ * editor's browser read from the site's own response: advice, checked beside
+ * the declared policy, never trusted to admit anything.
+ */
+export interface SiteCodeRequest {
+  readonly head: string;
+  readonly body: string;
+  readonly dryRun?: boolean;
+  /** The version the code was read at; a save made since refuses this one. */
+  readonly version?: string;
+  /**
+   * The check's `cspKey`: saving code a policy would block is a choice made
+   * after seeing what it blocks, and only for those findings.
+   */
+  readonly acknowledgeCsp?: string;
+  readonly livePolicy?: {
+    readonly policy: string;
+    readonly reportOnly: boolean;
+  };
+}
+
+/** What one place's code came to: why it can't be stored, and what changed. */
+export interface SiteCodeSlotJudged {
+  readonly refusals: readonly string[];
+  readonly notes: readonly string[];
+  /** The elements it holds when it can be stored. */
+  readonly elements: number;
+}
+
+/** One policy the code was checked against: the declared one, or the live one. */
+export interface SiteCodePolicyChecked {
+  readonly source: "declared" | "live";
+  readonly check: CspCheck;
+  /**
+   * What to add to this policy for the code to run, as
+   * `mergeSiteCodeIntoCsp` adds it: per directive, the sources it lacks. A
+   * directive the policy doesn't name yet comes whole, as it must be added.
+   * Empty when nothing is blocked or nothing was checked.
+   */
+  readonly additions: readonly CspAddition[];
+  /**
+   * How many policies the checked header carries, comma-separated: an
+   * addition names which by its `policy`. `0` when no policy was known.
+   */
+  readonly policies: number;
+}
+
+/** What checking the site's code answers, and what a save answers too. */
+export interface SiteCodeChecked {
+  readonly head: SiteCodeSlotJudged;
+  readonly body: SiteCodeSlotJudged;
+  readonly csp: readonly SiteCodePolicyChecked[];
+  /** What `acknowledgeCsp` must be to save despite findings; `null` with none. */
+  readonly cspKey: string | null;
+}
+
+/** What saving the site's code answers: the check, and the version saved. */
+export interface SiteCodeSaved extends SiteCodeChecked {
+  readonly version: string | null;
 }

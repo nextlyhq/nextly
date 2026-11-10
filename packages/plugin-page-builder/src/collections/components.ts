@@ -33,7 +33,9 @@ import {
   type CollectionConfig,
 } from "nextly/config";
 
+import { COMPONENT_LIST_TOOLS_COMPONENT } from "../builder-view";
 import { blocks } from "../fields/blocksHelper";
+import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
 
 import { layoutAreaOptions } from "./areas";
 
@@ -43,11 +45,19 @@ export const COMPONENTS_SLUG = "components";
 /**
  * The plugin-owned `components` collection.
  *
- * Takes no options, for the reason patterns takes none: a component is never
- * served at an address of its own. It reaches a visitor only inside a page or
- * a Layout, so it has no preview path and nothing for a host to configure.
+ * Takes no preview options, for the reason patterns takes none: a component
+ * is never served at an address of its own. It reaches a visitor only inside
+ * a page or a Layout, so it has no preview path.
+ *
+ * `isStore` says whether this collection is where the site's components are
+ * kept, which it is unless the host names a store of its own
+ * (`componentReadiness.collection`). Only the store's deletes go through
+ * Delete component, so only then is the admin's own list Delete withheld and
+ * the delete tools drawn above the list.
  */
-export function componentsCollection(): CollectionConfig {
+export function componentsCollection(
+  { isStore }: { readonly isStore: boolean } = { isStore: true }
+): CollectionConfig {
   return defineCollection({
     slug: COMPONENTS_SLUG,
     labels: { singular: "Component", plural: "Components" },
@@ -96,6 +106,23 @@ export function componentsCollection(): CollectionConfig {
     // Hidden costs nothing else: the collection keeps its URL, its API and its
     // permissions, and only stops being offered by navigation nobody asked
     // for — this plugin's own menu links to it explicitly.
-    admin: { useAsTitle: "title", hidden: true },
+    admin: {
+      useAsTitle: "title",
+      hidden: true,
+      // The store's components are deleted only through Delete component,
+      // which turns their copies into plain blocks first: the store refuses
+      // any other delete, so its list offers no Delete of its own. The plugin
+      // offers Delete component on each list row and in the document's menu,
+      // in the built-in Delete's place, instead.
+      disableDelete: isStore,
+      // "Import from file" above the list, where a file exported from
+      // another site is brought in after its preview, and, on the store, the
+      // dialog the row action "Delete component…" opens.
+      components: {
+        BeforeListTable: isStore
+          ? COMPONENT_LIST_TOOLS_COMPONENT
+          : TRANSFER_IMPORT_COMPONENT,
+      },
+    },
   });
 }

@@ -2,6 +2,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
+import type { PublishAllPreview } from "@admin/services/publishAllPreview";
 
 import {
   EntryLocaleProvider,
@@ -84,7 +85,24 @@ const COPY_IDLE = {
   cancel: vi.fn(),
   confirm: vi.fn(),
 };
-const PUBLISH_IDLE = { available: true, pending: false, publishAll };
+/** What the server says publishing every language does here. */
+const PREVIEW: PublishAllPreview = {
+  languages: [
+    { locale: "en", outcome: "goes-live-with-pending-change" as const },
+    { locale: "de", outcome: "stays-published" as const },
+    { locale: "ar", outcome: "shows-fallback" as const, fallback: "en" },
+  ],
+  blockers: [],
+};
+const PUBLISH_IDLE = {
+  available: true,
+  pending: false,
+  publishAll,
+  preview: {
+    fetch: () => Promise.resolve(PREVIEW),
+    key: ["publish-all-preview", "test"],
+  },
+};
 
 /** A localized document: the app has languages AND this document uses them. */
 const LOCALIZED_CTX: EntryLocaleContextValue = {
@@ -381,13 +399,30 @@ describe("LanguagePanel", () => {
     expect(ar).toHaveTextContent("rtl");
   });
 
-  it("counts translations, not languages, so the default is not one of them", () => {
-    // English is the default: the source these are translated FROM. Counting it
-    // reported "2 of 3" for a document with one translation done, and disagreed
-    // with the list's badge on the very same entry.
+  it("counts every configured language, the default included", () => {
+    // English (the default) and German carry content, Arabic none: two of
+    // the three languages a reader can be shown.
     useBranding.mockReturnValue({ locales: LOCALES });
     renderPanel({ translations: TRANSLATIONS });
-    expect(screen.getByText("1 of 2 languages translated")).toBeInTheDocument();
+    expect(screen.getByText("2 of 3 languages translated")).toBeInTheDocument();
+  });
+
+  // The language being edited holds a pending change, and the panel still
+  // tells every language as it stands. The plausible broken implementation
+  // counts only languages without a pending change, or none at all.
+  it("tells every language and counts them all while the edited one holds a pending change", () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderPanel({
+      translations: {
+        en: { translated: true, status: "published", pendingChange: true },
+        de: { translated: true, status: "published" },
+      },
+    });
+    expect(screen.getByText("2 of 3 languages translated")).toBeInTheDocument();
+    const [en, de, ar] = rows();
+    expect(en).toHaveTextContent("published");
+    expect(de).toHaveTextContent("published");
+    expect(ar).toHaveTextContent("not translated");
   });
 
   it("marks the language being edited instead of offering to open it", () => {
@@ -627,7 +662,7 @@ describe("LanguagePanel", () => {
 
     // Reading is not withheld — the panel is how the author sees where the
     // document stands, and that stays true while looking at history.
-    expect(screen.getByText("1 of 2 languages translated")).toBeInTheDocument();
+    expect(screen.getByText("2 of 3 languages translated")).toBeInTheDocument();
     expect(rows()[2]).toHaveTextContent("not translated");
   });
 
@@ -720,15 +755,134 @@ describe("LanguagePanel", () => {
     expect(publishAll).not.toHaveBeenCalled();
   });
 
-  it("warns that any held change goes live where the languages' states were not read", async () => {
-    // Without the states, no count of held changes is known: the
-    // confirmation does not say every language merely goes live together.
+  it("warns that any held change goes live where neither the preview nor the languages' states were read", async () => {
+    // The server's preview could not be read and no count of held changes is
+    // known: the confirmation does not say every language merely goes live
+    // together.
     useBranding.mockReturnValue({ locales: LOCALES });
+    publishState.mockReturnValue({
+      ...PUBLISH_IDLE,
+      preview: {
+        fetch: () => Promise.reject(new Error("unreachable")),
+        key: ["publish-all-preview", "failing"],
+      },
+    });
     renderPanel({ hasStatus: true });
     await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
-    expect(screen.getByRole("alertdialog")).toHaveTextContent(
-      "Any language holding unpublished changes goes live too."
+    expect(
+      await screen.findByText(
+        "Any language holding unpublished changes goes live too."
+      )
+    ).toBeInTheDocument();
+  });
+
+  // The confirmation lists every configured language with what the server
+  // says the publish does to it. The plausible broken implementation says
+  // pending changes go live for every language, as the count-only warning
+  // once did, whatever each language holds.
+  it("lists each language with what the publish does to it, then publishes", async () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderPanel({ translations: TRANSLATIONS, hasStatus: true });
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+
+    const list = await screen.findByRole("list", {
+      name: "What happens to each language",
+    });
+    expect(
+      Array.from(list.querySelectorAll("li")).map(item => item.textContent)
+    ).toEqual([
+      "EnglishIts unpublished changes go live.",
+      "GermanStays as published.",
+      "ArabicGoes live with no content of its own, showing English.",
+    ]);
+    const dialog = screen.getByRole("alertdialog");
+    const confirm = Array.from(dialog.querySelectorAll("button")).find(
+      button => button.textContent === "Publish all"
     );
+    expect(confirm).toBeEnabled();
+    await userEvent.click(confirm!);
+    expect(publishAll).toHaveBeenCalledTimes(1);
+  });
+
+  // Each opening asks the server again, and until it answers the dialog says
+  // nothing from the earlier answer: a language saved or published since
+  // changes what the publish does. The plausible broken implementation shows
+  // the cached outcomes while it refetches and offers Publish on them.
+  it("offers no publish on an earlier answer while it asks again", async () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    let answer: (preview: typeof PREVIEW) => void = () => {};
+    const fetchPreview = vi
+      .fn()
+      .mockResolvedValueOnce(PREVIEW)
+      .mockImplementationOnce(
+        () =>
+          new Promise<typeof PREVIEW>(resolve => {
+            answer = resolve;
+          })
+      );
+    publishState.mockReturnValue({
+      ...PUBLISH_IDLE,
+      preview: { fetch: fetchPreview, key: ["publish-all-preview", "again"] },
+    });
+    renderPanel({ translations: TRANSLATIONS, hasStatus: true });
+    const confirmIn = () =>
+      Array.from(
+        screen.getByRole("alertdialog").querySelectorAll("button")
+      ).find(button => button.textContent === "Publish all");
+
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+    await screen.findByRole("list", { name: "What happens to each language" });
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+    expect(
+      await screen.findByText("Checking what publishing does to each language…")
+    ).toBeInTheDocument();
+    expect(confirmIn()).toBeDisabled();
+    expect(fetchPreview).toHaveBeenCalledTimes(2);
+
+    answer({
+      ...PREVIEW,
+      blockers: [{ reason: "pending-change-forbidden", fields: ["lockState"] }],
+    });
+    expect(
+      await screen.findByText(
+        "Unpublished changes edit lockState, which you may not publish."
+      )
+    ).toBeInTheDocument();
+    expect(confirmIn()).toBeDisabled();
+    expect(publishAll).not.toHaveBeenCalled();
+  });
+
+  it("offers no publish the server would refuse, and says why", async () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    publishState.mockReturnValue({
+      ...PUBLISH_IDLE,
+      preview: {
+        fetch: () =>
+          Promise.resolve({
+            ...PREVIEW,
+            blockers: [
+              { reason: "pending-change-forbidden", fields: ["lockState"] },
+            ],
+          }),
+        key: ["publish-all-preview", "blocked"],
+      },
+    });
+    renderPanel({ translations: TRANSLATIONS, hasStatus: true });
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+
+    expect(
+      await screen.findByText(
+        "Unpublished changes edit lockState, which you may not publish."
+      )
+    ).toBeInTheDocument();
+    const dialog = screen.getByRole("alertdialog");
+    const confirm = Array.from(dialog.querySelectorAll("button")).find(
+      button => button.textContent === "Publish all"
+    );
+    expect(confirm).toBeDisabled();
+    expect(publishAll).not.toHaveBeenCalled();
   });
 
   it("hides publish-all when the action does not apply", () => {
@@ -751,8 +905,8 @@ describe("LanguagePanel", () => {
       },
     });
 
-    // The chip, not the state text: the phrase truncates in a 277px rail and
-    // this is the fact that must survive.
+    // The chip, not the state text: the chip is the mark that reads at a
+    // glance in a 277px rail, and this is the fact that must survive.
     expect(screen.getByText("changes")).toBeInTheDocument();
     // And the language WITHOUT pending work carries no chip — without this the
     // assertion above would pass against a panel that marked every row.

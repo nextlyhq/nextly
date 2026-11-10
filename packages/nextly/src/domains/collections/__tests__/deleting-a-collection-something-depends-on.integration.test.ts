@@ -29,7 +29,7 @@ import { DELETE as deleteCollectionRoute } from "../../../api/collections-schema
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
-import { runPrune } from "../../../cli/commands/prune";
+import { pruneUnderSchemaLock, runPrune } from "../../../cli/commands/prune";
 import { defineCollection, relationship, text } from "../../../config";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -534,7 +534,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
       await t.nextly.update({
         collection: TAGS,
         id: String(tag.item.id),
-        data: { featured: post.item.id },
+        data: { featured: post.item.id, _overwrite: true },
       });
     }
   }
@@ -597,7 +597,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
         await t.nextly.update({
           collection: TAGS,
           id: String(tag.item.id),
-          data: { posts: [post.item.id] },
+          data: { posts: [post.item.id], _overwrite: true },
         });
       }
     } finally {
@@ -749,6 +749,8 @@ describeEachDialect("deleting a collection something depends on", dialect => {
       registry: registryOf(t),
       adapter: t.adapter,
       currentSlugs,
+      // The schema lock the command drops under, on this instance's database.
+      lock: pruneUnderSchemaLock(t.adapter),
       // Every drop approved, as `--accept-data-loss` approves it.
       approve: () => Promise.resolve(true),
       extensionSchema: () => Promise.resolve(getActiveExtensionSchema(dialect)),
@@ -943,6 +945,8 @@ describeEachDialect("deleting a collection something depends on", dialect => {
         registry: registryOf(current),
         adapter: current.adapter,
         currentSlugs: [],
+        // The schema lock the command drops under, as above.
+        lock: pruneUnderSchemaLock(current.adapter),
         approve: () => Promise.resolve(true),
         extensionSchema: () =>
           Promise.reject(new Error("a plugin's schema hook threw")),

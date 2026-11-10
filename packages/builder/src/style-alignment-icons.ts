@@ -21,6 +21,7 @@
 
 import {
   BASE_BREAKPOINT,
+  DISCLOSURE_ICON_PROPERTY,
   type NodeStyles,
   type StyleLeaf,
   type StyleState,
@@ -60,8 +61,15 @@ export interface AlignmentOption {
 
 /** A property's icon buttons, and the values it accepts that have none. */
 export interface AlignmentGroup {
+  /** The CSS property, which the values beside the icons are named for. */
+  readonly cssProperty: string;
   readonly options: readonly AlignmentOption[];
   readonly rest: readonly string[];
+  /**
+   * What each value does, in a line under the icons, where an icon alone
+   * cannot say it: an image's fit. Absent where the icons are the whole story.
+   */
+  readonly help?: Readonly<Record<string, string>>;
 }
 
 type Edge = "left" | "right" | "top" | "bottom";
@@ -230,6 +238,108 @@ const GROUPS: Readonly<
   },
 };
 
+/**
+ * Choices whose icons say what a value is rather than which way it points, so
+ * they are drawn the same in every flow: Display, text case and an image's
+ * fit. `help` says what each value does, where its icon cannot.
+ *
+ * `more` is what the list beside the icons offers. A value the catalog accepts
+ * and neither names, a table or ruby display mode or a two-keyword spelling, is
+ * not offered, since the icons and the list cover what a layout reaches for;
+ * one already stored still shows, as the field lists any value it does not
+ * carry.
+ */
+const FIXED_GROUPS: Readonly<
+  Record<
+    string,
+    {
+      entries: readonly { value: string; icon: string }[];
+      more: readonly string[];
+      help?: Readonly<Record<string, string>>;
+    }
+  >
+> = {
+  display: {
+    entries: [
+      { value: "block", icon: "RectangleHorizontal" },
+      { value: "flex", icon: "Columns3" },
+      { value: "grid", icon: "Grid2x2" },
+      { value: "none", icon: "EyeOff" },
+    ],
+    more: [
+      "inline",
+      "inline-block",
+      "inline-flex",
+      "inline-grid",
+      "flow-root",
+      "list-item",
+    ],
+  },
+  "text-transform": {
+    entries: [
+      { value: "none", icon: "Minus" },
+      { value: "uppercase", icon: "CaseUpper" },
+      { value: "lowercase", icon: "CaseLower" },
+      { value: "capitalize", icon: "CaseSensitive" },
+    ],
+    more: ["math-auto", "full-width", "full-size-kana"],
+  },
+  // An Accordion's icon, each drawn as itself; Browser default as the
+  // triangle a browser draws.
+  [DISCLOSURE_ICON_PROPERTY]: {
+    entries: [
+      { value: "chevron", icon: "ChevronDown" },
+      { value: "plus", icon: "Plus" },
+      { value: "none", icon: "Ban" },
+      { value: "browser", icon: "Play" },
+    ],
+    more: [],
+    help: {
+      chevron: "Turns when a section opens.",
+      plus: "Becomes a minus when a section opens.",
+      none: "No icon; the whole title still opens it.",
+      browser: "The browser's own triangle.",
+    },
+  },
+  // Cover first: the fit most images want. Original size and Shrink to fit
+  // are rarer, and wait under More.
+  "object-fit": {
+    entries: [
+      { value: "cover", icon: "Crop" },
+      { value: "contain", icon: "Shrink" },
+      { value: "fill", icon: "StretchHorizontal" },
+    ],
+    more: ["none", "scale-down"],
+    help: {
+      cover: "Fills the box; edges may be cut.",
+      contain: "Shows all of it inside the box.",
+      fill: "Stretches it to the box's shape.",
+      none: "Shows it at its own size, cut to the box.",
+      "scale-down": "Shows all of it, never larger than it is.",
+    },
+  },
+};
+
+/** A fixed group's icons and list, kept to the values the property accepts. */
+function fixedGroup(
+  cssProperty: string,
+  group: (typeof FIXED_GROUPS)[string],
+  values: readonly string[]
+): AlignmentGroup {
+  return {
+    cssProperty,
+    options: group.entries
+      .filter(entry => values.includes(entry.value))
+      .map(entry => ({
+        ...entry,
+        // In the words every keyword is offered in; see style-keyword-labels.
+        label: keywordLabel(cssProperty, entry.value),
+      })),
+    rest: group.more.filter(value => values.includes(value)),
+    ...(group.help === undefined ? {} : { help: group.help }),
+  };
+}
+
 /** The four directions, each an arrow the way it runs on the screen. */
 function directionOptions(
   values: readonly string[],
@@ -325,6 +435,10 @@ export function alignmentGroupFor(
   values: readonly string[],
   flow: Flow
 ): AlignmentGroup | undefined {
+  const fixed = FIXED_GROUPS[cssProperty];
+  if (fixed !== undefined && Object.hasOwn(FIXED_GROUPS, cssProperty)) {
+    return fixedGroup(cssProperty, fixed, values);
+  }
   let options: AlignmentOption[];
   if (cssProperty === "flex-direction") {
     options = directionOptions(values, flow);
@@ -338,7 +452,11 @@ export function alignmentGroupFor(
     return undefined;
   }
   const iconed = new Set(options.map(option => option.value));
-  return { options, rest: values.filter(value => !iconed.has(value)) };
+  return {
+    cssProperty,
+    options,
+    rest: values.filter(value => !iconed.has(value)),
+  };
 }
 
 /**
@@ -395,6 +513,7 @@ export function drawsIcons(leaf: StyleLeaf): boolean {
   return (
     property === "flex-direction" ||
     property === "flex-wrap" ||
-    Object.hasOwn(GROUPS, property)
+    Object.hasOwn(GROUPS, property) ||
+    Object.hasOwn(FIXED_GROUPS, property)
   );
 }

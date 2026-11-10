@@ -63,6 +63,7 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 import type { ValidationIssue } from "../../shared/lib/entry-validation";
+import type { HiddenFieldPaths } from "../../shared/lib/filterable-fields";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
@@ -141,6 +142,19 @@ type EveryLanguageLifecycleParams = {
   routeAuthorized?: boolean;
   /** API-key scope; gates the unconditional publish or unpublish check. */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * The request's data: only the version it was made from (`_rev`) and the
+   * overwrite choice (`_overwrite`) are read, as a save's data carries them,
+   * and every language is judged against that version.
+   */
+  data?: Readonly<Record<string, unknown>>;
+  /**
+   * The HTTP request behind this transition, when one produced it, told to
+   * its hooks.
+   */
+  request?: Request;
+  /** Seeds the context every hook of this transition shares. */
+  context?: Record<string, unknown>;
 };
 
 /**
@@ -314,9 +328,9 @@ export class CollectionEntryService extends BaseService {
       authenticatedScope?: AuthenticatedScope;
       /** A grant waiving the collection's read hooks, honoured by the query service. */
       hookExemptRead?: HookExemptRead;
-    } /** The sort and offset, as the query service reads them. */ & Pick<
+    } /** The sort, offset and hidden fields, as the query service reads them. */ & Pick<
       Parameters<CollectionQueryService["listEntries"]>[0],
-      "sort" | "offset" | "unknownSort"
+      "sort" | "offset" | "unknownSort" | "hiddenFields"
     >
   ): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return (
@@ -324,6 +338,21 @@ export class CollectionEntryService extends BaseService {
       withRuleLanguage(this.readLanguages(params), () =>
         this.queryService.listEntries(params)
       )
+    );
+  }
+
+  /**
+   * Every reason a list read would refuse this caller's query, or none. See
+   * the query service; judged in the language the read it stands for would
+   * judge its rules in, as `listEntries` is.
+   *
+   * @experimental
+   */
+  async queryReadableProblems(
+    params: Parameters<CollectionQueryService["queryReadableProblems"]>[0]
+  ): ReturnType<CollectionQueryService["queryReadableProblems"]> {
+    return withRuleLanguage(this.readLanguages(params), () =>
+      this.queryService.queryReadableProblems(params)
     );
   }
 
@@ -360,6 +389,8 @@ export class CollectionEntryService extends BaseService {
     status?: "published" | "draft" | "all";
     /** A grant waiving the collection's read hooks, honoured by the query service. */
     hookExemptRead?: HookExemptRead;
+    /** Fields the read leaves out, refused in its filter; see the query service. */
+    hiddenFields?: HiddenFieldPaths;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return (
       refusedFilter(params.where) ??
@@ -723,6 +754,44 @@ export class CollectionEntryService extends BaseService {
     locale?: string;
   }): Promise<boolean> {
     return this.mutationService.canUpdateEntry(params);
+  }
+
+  /**
+   * Whether this caller may make a write naming `nextStatus` of the entry: the
+   * lifecycle gate an update asks, only where it moves the row into or out of
+   * published, judged without writing. See the mutation service.
+   *
+   * @experimental
+   */
+  async canMoveEntryStatus(params: {
+    collectionName: string;
+    entryId: string;
+    nextStatus: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    locale?: string;
+  }): Promise<boolean> {
+    return this.mutationService.canMoveEntryStatus(params);
+  }
+
+  /**
+   * Whether this caller may delete the entry, judged by the delete's own gate
+   * in every language it holds, without deleting it or running a hook. See
+   * the mutation service.
+   *
+   * @experimental
+   */
+  async canDeleteEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    /** API-key scope; judges the delete gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<boolean> {
+    // In every language, as `deleteEntry` asks its gate.
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.canDeleteEntry(params)
+    );
   }
 
   /**
@@ -1150,6 +1219,11 @@ export class CollectionEntryService extends BaseService {
     actor?: RequestActor;
     /** API-key scope; judges each per-id transition on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Each id's own version, judged per document; see the bulk service's
+     * `bulkUpdateEntries`.
+     */
+    revs?: unknown;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await withRuleLanguage(
       writeLanguagesFor(this.localization, undefined),
@@ -1187,6 +1261,8 @@ export class CollectionEntryService extends BaseService {
       actor?: RequestActor;
       /** API-key scope; judges the collection gate + transitions on the key's own grant. */
       authenticatedScope?: AuthenticatedScope;
+      /** Refused: an update by query names no ids to give versions for. */
+      revs?: unknown;
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {

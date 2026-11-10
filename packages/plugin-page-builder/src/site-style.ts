@@ -45,6 +45,7 @@ import type {
   SiteSheetInput,
   SiteToken,
   SiteTokenSet,
+  SpacingMode,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -66,6 +67,12 @@ export interface SiteStyleData {
   classes?: readonly NamedClass[];
   /** The site's breakpoints, on both axes. */
   breakpoints?: BreakpointSet;
+  /**
+   * The site's spacing model: blocks spaced by their own margins (`classic`)
+   * or by the gap of the container holding them (`gaps`). Absent means the
+   * engine's default, `gaps`.
+   */
+  spacingMode?: SpacingMode;
 }
 
 /**
@@ -110,6 +117,8 @@ export function resolveSiteStyle(
     breakpoints: hasBreakpoints(stored?.breakpoints)
       ? stored?.breakpoints
       : defaults?.breakpoints,
+    // One site-wide choice, so the stored one wins when there is one.
+    spacingMode: stored?.spacingMode ?? defaults?.spacingMode,
   });
 }
 
@@ -149,6 +158,12 @@ function sameNamedClass(a: NamedClass, b: NamedClass): boolean {
     a.label === b.label &&
     a.locked === b.locked &&
     a.orderIndex === b.orderIndex &&
+    // The block type a look is bound to: the same styles on another type is
+    // another look.
+    a.blockType === b.blockType &&
+    // A block's own look edits its type's base; the same entry without the
+    // mark is a look blocks wear instead.
+    a.isDefault === b.isDefault &&
     sameJsonValue(a.styles, b.styles)
   );
 }
@@ -281,6 +296,9 @@ export function siteStyleOf(sections: SiteStyleData): SiteStyleData {
     ...(sections.breakpoints === undefined
       ? {}
       : { breakpoints: sections.breakpoints }),
+    ...(sections.spacingMode === undefined
+      ? {}
+      : { spacingMode: sections.spacingMode }),
   };
 }
 
@@ -296,7 +314,9 @@ function hasBreakpoints(set: BreakpointSet | undefined): boolean {
  * characters it covers. One cut in two scripts is two files, each with its
  * own `unicode-range`, and both must load.
  */
-function faceIdentity(face: FontFaceDef): string {
+export function faceIdentity(
+  face: Pick<FontFaceDef, "family" | "weight" | "style" | "unicodeRange">
+): string {
   // Weight and style default at emission (`normal` both), so an absent value
   // and the default spelled out are the same face and must collide here.
   return `${face.family} ${face.weight ?? "normal"} ${face.style ?? "normal"} ${face.unicodeRange ?? ""}`;
@@ -382,5 +402,9 @@ export function siteSheet(style?: SiteStyleData): SiteSheetInput {
     ...(style?.fonts === undefined ? {} : { fonts: style.fonts }),
     ...(style?.classes === undefined ? {} : { classes: style.classes }),
     breakpoints: siteBreakpoints(style),
+    // Carried to the renderer, which compiles the page under it.
+    ...(style?.spacingMode === undefined
+      ? {}
+      : { spacingMode: style.spacingMode }),
   };
 }

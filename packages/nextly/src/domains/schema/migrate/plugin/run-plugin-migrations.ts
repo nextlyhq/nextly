@@ -151,6 +151,16 @@ export interface RunPluginMigrationsDeps {
     statements: readonly string[]
   ) => Promise<ReadonlyMap<string, string>>;
   /**
+   * Refuses a module whose statements make a column required over rows that would break it,
+   * counted just before that module runs and before the ledger records an attempt
+   * (`refuseRequiredColumnsOverNulls`, as an app file is judged). `source` is the module's
+   * qualified name. Absent, such a change is left to the per-statement count and the database.
+   */
+  refuseRequiredColumns?: (
+    statements: readonly string[],
+    source: string
+  ) => Promise<void>;
+  /**
    * At most this many modules are applied or adopted, across every plugin,
    * in run order. Absent, or not a positive number, every pending module is.
    *
@@ -278,6 +288,34 @@ export async function runPluginMigrations(
     await runSet(set, deps, result, budget);
   }
   return result;
+}
+
+/**
+ * The modules a run over `appliedShas` applies, in the order it applies them
+ * and within `limit`: each one the history records no checksum for
+ * (`isPending`), walked as `runPluginMigrations` walks the sets
+ * (`orderedMigrations`, `moduleBudget`). What `nextly migrate` judges for
+ * the data its modules delete, before it runs them.
+ */
+export function pendingPluginModules(
+  sets: readonly PluginMigrationSet[],
+  appliedShas: ReadonlyMap<string, string | null>,
+  limit: number | undefined
+): { filename: string; migration: PluginMigration }[] {
+  const pending: { filename: string; migration: PluginMigration }[] = [];
+  let remaining = moduleBudget(limit);
+  for (const set of sets) {
+    for (const migration of orderedMigrations(set.migrations)) {
+      if (!isPending(set, migration, { appliedShas })) continue;
+      if (remaining <= 0) return pending;
+      pending.push({
+        filename: qualifiedFilename(set.pluginName, migration.name),
+        migration,
+      });
+      remaining -= 1;
+    }
+  }
+  return pending;
 }
 
 /**
@@ -1061,6 +1099,13 @@ async function applyModule(
   }
 
   await assertModuleRunnable(set, migration, earlier, deps);
+  // Counted here, right before this module runs, rather than in `assertModuleRunnable`: a
+  // fast-forward judges its whole range before any module of it runs, and a count then would
+  // refuse a module over rows an earlier module of the range fills.
+  await deps.refuseRequiredColumns?.(
+    pluginModuleStatements(migration, deps.dialect, "up"),
+    filename
+  );
 
   const { live, sides } = await reconcileSides(
     set,

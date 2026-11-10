@@ -26,7 +26,7 @@
 import type { FieldConfig } from "nextly/config";
 import type { JSX, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FormProvider, type UseFormReturn } from "react-hook-form";
+import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
 
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
@@ -38,8 +38,11 @@ import { setSearchParam } from "@admin/lib/navigation";
 import type { DocumentViewProps } from "@admin/lib/plugins/component-registry";
 import {
   resolveViewField,
+  rowContainerRoots,
   viewFieldCandidates,
+  viewFieldPathIn,
   type ViewFieldResolution,
+  type ViewFieldValues,
 } from "@admin/lib/plugins/document-view-registry";
 
 import {
@@ -170,21 +173,23 @@ function useRestoreRemount(
 } {
   const [generation, setGeneration] = useState(0);
   const [withdrawn, setWithdrawn] = useState(false);
-  const { restore } = recovery;
+  const { take } = recovery;
   useEffect(() => {
     if (!withdrawn) return;
-    restore();
+    take();
     setGeneration(count => count + 1);
     setWithdrawn(false);
-  }, [withdrawn, restore]);
+  }, [withdrawn, take]);
   const offered = useMemo(
     () => ({
       ...recovery,
-      // The view's own restore first, as an edit it can undo; drawn afresh
-      // only when it has none or declines.
-      restore: () => {
-        if (!restoreInView()) setWithdrawn(true);
-      },
+      // Once the offer is confirmed (see `restore`), the view's own restore
+      // first, as an edit it can undo; drawn afresh only when it has none or
+      // declines. Nothing changes before then.
+      restore: () =>
+        recovery.restore(() => {
+          if (!restoreInView()) setWithdrawn(true);
+        }),
     }),
     [recovery, restoreInView]
   );
@@ -199,7 +204,7 @@ function useRestoreRemount(
 function useViewRestore(
   recovery: UseAutosaveRecoveryResult,
   form: UseFormReturn<Record<string, unknown>>,
-  fieldPath: string | undefined
+  fieldPath: FieldPathIn | undefined
 ): ReturnType<typeof useRestoreRemount> & {
   restoreRegistry: DocumentRestoreRegistry;
 } {
@@ -212,33 +217,51 @@ function useViewRestore(
 }
 
 /**
+ * Where the view's field sits in a copy of the document's values — the form's
+ * own as they are at that moment when none is given: its form path, except in
+ * a repeater's row, which is found by its id in each copy, so a recovery point
+ * holding the rows in another order still gives this row's value. `undefined`
+ * where the row is not in that copy.
+ */
+type FieldPathIn = (values?: Record<string, unknown>) => string | undefined;
+
+/**
  * Restore through the view's own handler: the view applies its field's
  * recovered value as an edit it can undo, and every OTHER field is reset to
  * the recovery point here. False when the view has no handler, there is no
- * field or no offer, or the view declines; nothing has changed then.
+ * field or no offer, the field's row is missing from the recovery point or
+ * the form, or the view declines; nothing has changed then.
  */
 function useRestoreInView(
   recovery: UseAutosaveRecoveryResult,
   form: UseFormReturn<Record<string, unknown>>,
-  fieldPath: string | undefined,
+  fieldPath: FieldPathIn | undefined,
   registry: DocumentRestoreRegistry
 ): () => boolean {
-  const { offer, restore } = recovery;
+  const { offer, take } = recovery;
   return useCallback(() => {
     const handler = registry.current;
     if (handler === null || offer === null || fieldPath === undefined) {
       return false;
     }
     const snapshot = offer.snapshot as Record<string, unknown>;
-    const held = form.getValues(fieldPath);
-    if (!handler(valueAtPath(snapshot, fieldPath))) return false;
-    // The recovery's own restore, so a view and the form accept an offer the
+    const inSnapshot = fieldPath(snapshot);
+    const inForm = fieldPath();
+    if (inSnapshot === undefined || inForm === undefined) return false;
+    const held = form.getValues(inForm);
+    if (!handler(valueAtPath(snapshot, inSnapshot))) return false;
+    // The recovery's own take, so a view and the form accept an offer the
     // same way; then the view's field takes back what the view holds, since
-    // the view writes the restored value through its own edit.
-    restore();
-    form.setValue(fieldPath, held, { shouldDirty: true });
+    // the view writes the restored value through its own edit. Its place is
+    // read again after the take, which replaced the values: a row stands
+    // where the recovery point holds it now.
+    take();
+    const after = fieldPath();
+    if (after !== undefined) {
+      form.setValue(after, held, { shouldDirty: true });
+    }
     return true;
-  }, [registry, offer, fieldPath, form, restore]);
+  }, [registry, offer, fieldPath, form, take]);
 }
 
 /** The value at a dotted form path (`hero.body`, `sections.0.body`), if any. */
@@ -260,7 +283,14 @@ function useChipRecoveryOffer(
   const { restore, dismiss } = recovery;
   return useMemo(
     () =>
-      offer === null ? null : { savedAt: offer.savedAt, restore, dismiss },
+      offer === null
+        ? null
+        : {
+            savedAt: offer.savedAt,
+            olderVersion: offer.olderVersion,
+            restore,
+            dismiss,
+          },
     [offer, restore, dismiss]
   );
 }
@@ -280,22 +310,69 @@ function useViewField(
   form: UseFormReturn<Record<string, unknown>>
 ) {
   const requested = useSearchParams().field;
+  const values = useRowValues(fieldType, fields, form);
   // Every field the view could edit has its condition watched, not only the
   // one open: which fields the question offers depends on them all.
   const valueAt = useConditionValues(
-    fieldType === undefined ? [] : viewFieldCandidates(fieldType, fields),
+    fieldType === undefined
+      ? []
+      : viewFieldCandidates(fieldType, fields, values),
     form.control
   );
   const editing = resolveViewField(
     fieldType,
     fields,
     typeof requested === "string" ? requested : undefined,
-    candidate => viewFieldRefusal(candidate, valueAt) === null
+    candidate => viewFieldRefusal(candidate, valueAt) === null,
+    values
   );
   useFieldInAddress(editing, requested);
   const refusal =
     editing.kind === "field" ? viewFieldRefusal(editing, valueAt) : null;
-  return { editing, refusal };
+  // For a field in a row, where it sits in any copy of the values, found by
+  // its row's id each time it is asked; the one resolution its address was
+  // read by.
+  const address = editing.kind === "field" ? editing.name : undefined;
+  const inRow = editing.kind === "field" && editing.formPath !== undefined;
+  const pathIn = useMemo<FieldPathIn | undefined>(() => {
+    if (address === undefined || fieldType === undefined) return undefined;
+    if (!inRow) return () => address;
+    return snapshot =>
+      viewFieldPathIn(fieldType, fields, address, snapshot ?? form.getValues());
+  }, [address, inRow, fieldType, fields, form]);
+  return { editing, refusal, pathIn };
+}
+
+/**
+ * The values a row's address is read in: the top-level fields holding a row
+ * of the view's field type, watched so a row is found again wherever it
+ * moves, and the values as last loaded or stored, where a row's id is saved.
+ * The rest of the document is not watched: nothing else moves a row.
+ */
+function useRowValues(
+  fieldType: string | undefined,
+  fields: readonly FieldConfig[] | undefined,
+  form: UseFormReturn<Record<string, unknown>>
+): ViewFieldValues {
+  const roots = useMemo(
+    () => rowContainerRoots(fieldType, fields),
+    [fieldType, fields]
+  );
+  const watched: unknown[] = useWatch({
+    control: form.control,
+    name: roots,
+    disabled: roots.length === 0,
+  });
+  const saved = form.formState.defaultValues;
+  return useMemo(
+    () => ({
+      current: Object.fromEntries(
+        roots.map((root, index) => [root, watched?.[index]])
+      ),
+      saved,
+    }),
+    [roots, watched, saved]
+  );
 }
 
 /**
@@ -324,6 +401,16 @@ function ViewArea({
   if (editing.kind === "choose") {
     return <DocumentViewFieldChooser candidates={editing.candidates} />;
   }
+  // An address through a repeater's row that opens no row: said, with the
+  // way back, rather than opening whichever row now stands where it stood.
+  if (editing.kind === "refused") {
+    return (
+      <DocumentViewFieldRefused
+        reason={editing.reason}
+        onExit={viewProps.exit}
+      />
+    );
+  }
   if (refusal !== null) {
     return (
       <DocumentViewFieldRefused reason={refusal} onExit={viewProps.exit} />
@@ -338,6 +425,28 @@ function ViewArea({
       fallback={<MissingDocumentViewComponent path={component} />}
     />
   );
+}
+
+/**
+ * What a view is told about the field it edits: its declaration, where it sits
+ * in the form now, its address, where it sits in words, and for a field in a
+ * repeater's row, how to find that row again in any copy of the values.
+ */
+function fieldViewProps(
+  editing: Extract<ViewFieldResolution<FieldConfig>, { kind: "field" }>,
+  pathIn: FieldPathIn | undefined
+): Partial<DocumentViewProps> {
+  return {
+    field: editing.declaration,
+    fieldPath: editing.formPath ?? editing.name,
+    fieldAddress: editing.name,
+    ...(editing.location === undefined
+      ? {}
+      : { fieldLocation: editing.location }),
+    ...(editing.formPath === undefined || pathIn === undefined
+      ? {}
+      : { fieldPathIn: pathIn }),
+  };
 }
 
 export function DocumentViewBody({
@@ -371,11 +480,15 @@ export function DocumentViewBody({
    * through whatever navigation came next, with the work still unsaved.
    */
   const exit = view.onExit;
-  const { editing, refusal } = useViewField(view.fieldType, fields, form);
+  const { editing, refusal, pathIn } = useViewField(
+    view.fieldType,
+    fields,
+    form
+  );
   const { restoreRegistry, ...offered } = useViewRestore(
     recovery,
     form,
-    editing.kind === "field" ? editing.name : undefined
+    pathIn
   );
   // Handed to the save chip the view draws, which makes the offer there; the
   // banner below is for a view that draws no chip.
@@ -389,9 +502,7 @@ export function DocumentViewBody({
     control: form.control,
     readOnly: lock.readOnly,
     exit,
-    ...(editing.kind === "field"
-      ? { field: editing.declaration, fieldPath: editing.name }
-      : {}),
+    ...(editing.kind === "field" ? fieldViewProps(editing, pathIn) : {}),
   };
 
   return (
@@ -416,6 +527,7 @@ export function DocumentViewBody({
             onTakeOver={lock.takeOver}
             onRequestAccess={lock.requestAccess}
             onRetry={lock.retryLoad}
+            onChoose={lock.answerChange}
           />
           {recoveryOffer.claimed ? null : (
             <LiveDocumentRecoveryOffer

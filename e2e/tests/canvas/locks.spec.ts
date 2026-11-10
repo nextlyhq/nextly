@@ -184,7 +184,7 @@ test.describe("the editor inside locked areas", () => {
     await open(page);
     await clickBlock(page, "lk-row-heading");
     // The rail's button for the panel holding the inserter.
-    await page.getByRole("button", { name: "Add" }).click();
+    await page.locator('button[data-panel="add"]').click();
     const heading = page.getByRole("option", { name: "Heading", exact: true });
     // The row refuses every block, so a tile climbs past it and says so.
     await expect(heading).toHaveAccessibleDescription(
@@ -230,12 +230,17 @@ test.describe("the editor inside locked areas", () => {
     await expect.poll(() => undoDepth(page)).toBe(1);
 
     // The Style tab is shown, every control that edits held. A section's
-    // toggle and the state switcher only choose what is shown.
+    // toggle, the state switcher and the edit-target chips only choose what
+    // is shown; a shared style's chip is held with the design, which the
+    // builder's own tests cover, as this harness has no shared styles.
     await page.getByRole("tab", { name: "Style" }).click();
+    await expect(
+      page.getByRole("button", { name: "This block", exact: true })
+    ).toHaveAttribute("aria-pressed", "true");
     const controls = page
       .getByRole("tabpanel")
       .locator(
-        'input, button:not([aria-expanded]):not([role="radio"]), select, textarea'
+        'input, button:not([aria-expanded]):not([role="radio"]):not([data-target-chip]), select, textarea'
       );
     expect(await controls.count()).toBeGreaterThan(0);
     for (const control of await controls.all()) {

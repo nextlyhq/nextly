@@ -6,7 +6,7 @@
  * those to avoid duplication.
  */
 
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MockRecord = Record<string, any>;
@@ -163,8 +163,16 @@ export function createMockAdapter(db: MockRecord): MockRecord {
           execute: vi.fn().mockResolvedValue([]),
           selectOne: vi.fn().mockResolvedValue(null),
           // No pending versions row: a delete reads them on the transaction
-          // for the languages it removes.
-          select: vi.fn().mockResolvedValue([]),
+          // for the languages it removes. A write reads back the entry's
+          // version counter, at 1 for the row these tests write.
+          select: vi
+            .fn()
+            .mockImplementation(
+              async (_table: string, options?: { columns?: string[] }) =>
+                options?.columns?.includes("_revision")
+                  ? [{ _revision: 1 }]
+                  : []
+            ),
           // A created row, not `{}`. The write path derives this entry's cache
           // tags from the id it just wrote, and `requireSegment` REFUSES a
           // blank segment on purpose -- a bare `nextly:` tag would
@@ -192,6 +200,20 @@ export function createMockAdapter(db: MockRecord): MockRecord {
         })
       ),
   };
+}
+
+/**
+ * A transaction's `select`, for a mock transaction of a test's own: a write
+ * reads back the entry's version counter on its transaction, at 1 for the
+ * row these tests write. Every other read is empty.
+ */
+export function revisionReadingSelect(): Mock {
+  return vi
+    .fn()
+    .mockImplementation(
+      async (_table: string, options?: { columns?: string[] }) =>
+        options?.columns?.includes("_revision") ? [{ _revision: 1 }] : []
+    );
 }
 
 // ── Silent Logger ────────────────────────────────────────────────────────
@@ -338,6 +360,9 @@ export function createMockHookRegistry(): MockRecord {
     executeBeforeOperation: vi.fn().mockResolvedValue(undefined),
     execute: vi.fn().mockResolvedValue(undefined),
     executeAfterOperation: vi.fn().mockResolvedValue(undefined),
+    // No in-transaction handler, so a write never loads that phase.
+    hasInTransaction: vi.fn().mockReturnValue(false),
+    inTransactionRunners: vi.fn().mockReturnValue([]),
   };
 }
 

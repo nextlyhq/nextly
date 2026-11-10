@@ -89,7 +89,17 @@ export const Posts = defineCollection({
 });
 ```
 
-Fields inherit the collection's setting, so the common case is one flag.
+A field's type decides whether it is translated when it sets no `localized` of its own:
+
+| Field types                                        | Unset `localized`                      |
+| -------------------------------------------------- | -------------------------------------- |
+| `text`, `textarea`, `richText`, `email`, `code`    | Translated                             |
+| Every other type                                   | Shared by every language               |
+| `password`, and any virtual field                  | Shared, whatever `localized` says      |
+| A many-to-many `relationship`                      | Shared, whatever `localized` says: its links are kept in one table for every language |
+| A `component` reference                            | Decided by the component's own fields, whatever `localized` says on the reference |
+
+Set `localized: true` to translate a field of another type, or `localized: false` to share a text field, as `externalId` does above. On a collection or Single that is not localized, the flag does nothing.
 
 ### When a field stops being translated
 
@@ -102,7 +112,7 @@ In code, set `localized: false` on the field and run `nextly migrate:create`. It
 
 If the archive cannot be written, the change is refused and nothing is changed.
 
-A field marked Required or Unique can stop being translated in the same change, as long as the default language's values can take the setting. The shared column is created without the setting, filled with the default language's values, and only then made required or unique. In the Schema Builder, the change is refused before anything runs when they can't, and the dialog says so before Apply: Required needs every entry to have a default-language value, and Unique needs no two entries to end up with the same value (an entry with no default-language value takes another language's, which counts). The refusal names the field and how many entries are in the way, never a value. In code, `migrate:create` writes the setting into the third file, after the copy and before the translated column is removed. If the values can't take it, `nextly migrate` stops at that file with every value still in place.
+A field marked Required or Unique can stop being translated in the same change, as long as the default language's values can take the setting. The shared column is created without the setting, filled with the default language's values, and only then made required or unique. In the Schema Builder, the change is refused before anything runs when they can't, and the dialog says so before Apply: Required needs every entry to have a default-language value, and Unique needs no two entries to end up with the same value (an entry with no default-language value takes another language's, which counts). The refusal names the field and how many entries are in the way, never a value. In code, `migrate:create` writes the setting into the third file, after the copy and before the translated column is removed. `nextly migrate` checks the values before the first of the three files runs, and again before the third: when they can't take the setting, it refuses with the field and how many entries are in the way, and changes nothing. Give those entries their values, then run `nextly migrate` again. The values are checked once, before the move starts, so stop the app's writes while `nextly migrate` runs. Files that record the setting need this version of Nextly or a newer one to run.
 
 To bring those values back, make the field translated again, then restore that field:
 

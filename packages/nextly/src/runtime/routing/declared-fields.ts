@@ -33,17 +33,39 @@ export interface SourceEntity {
   slug: string;
 }
 
-/** The fields the registry holds for the source, or `undefined` when it has no such source. */
-async function declaredFields(
+/** What the registry holds for a source that a read of it is shaped by. */
+interface Declaration {
+  readonly fields: readonly FieldConfig[];
+  /**
+   * The timestamps a read of it returns: a collection's entries carry
+   * `createdAt` and `updatedAt` unless it turns timestamps off, as its type
+   * and schema are generated; a Single's document carries `updatedAt` alone.
+   */
+  readonly timestamps: readonly ("createdAt" | "updatedAt")[];
+}
+
+/** What the registry holds for the source, or `undefined` when it has no such source. */
+async function declarationOf(
   source: SourceEntity
-): Promise<readonly FieldConfig[] | undefined> {
-  const record =
-    source.kind === "collection"
-      ? await getService("collectionRegistryService").getCollectionBySlug(
-          source.slug
-        )
-      : await getService("singleRegistryService").getSingleBySlug(source.slug);
-  return record?.fields;
+): Promise<Declaration | undefined> {
+  if (source.kind === "collection") {
+    const record = await getService(
+      "collectionRegistryService"
+    ).getCollectionBySlug(source.slug);
+    return record === null
+      ? undefined
+      : {
+          fields: record.fields,
+          timestamps:
+            record.timestamps === false ? [] : ["createdAt", "updatedAt"],
+        };
+  }
+  const record = await getService("singleRegistryService").getSingleBySlug(
+    source.slug
+  );
+  return record === null
+    ? undefined
+    : { fields: record.fields, timestamps: ["updatedAt"] };
 }
 
 /**
@@ -55,15 +77,45 @@ async function declaredFields(
 export async function expandedFields(
   source: SourceEntity
 ): Promise<readonly SensitiveFieldSource[] | undefined> {
-  const fields = await declaredFields(source);
-  if (fields === undefined) return undefined;
+  return (await expandedDeclaration(source))?.fields;
+}
+
+/**
+ * The source's expanded fields ({@link expandedFields}), and whether its
+ * entries carry timestamps, from one registry read.
+ */
+export async function expandedDeclaration(source: SourceEntity): Promise<
+  | {
+      readonly fields: readonly SensitiveFieldSource[];
+      readonly timestamps: readonly ("createdAt" | "updatedAt")[];
+    }
+  | undefined
+> {
+  const declaration = await declarationOf(source);
+  if (declaration === undefined) return undefined;
   const fieldGroups = getService("fieldGroupDataService");
-  return expandComponentFields(fields, slug =>
-    fieldGroups.getComponentFields(slug)
-  );
+  return {
+    fields: await expandComponentFields(declaration.fields, slug =>
+      fieldGroups.getComponentFields(slug)
+    ),
+    timestamps: declaration.timestamps,
+  };
 }
 
 const NONE: ReadonlySet<string> = new Set();
+
+/**
+ * The dotted paths of the hidden and password fields among a source's
+ * expanded fields (`expandedFields`), by core's sensitive-field rule; none for
+ * a source the registry does not hold. The one derivation of hidden paths from
+ * declarations, so a reader that already holds the expanded fields derives
+ * them without a second registry read.
+ */
+export function hiddenPathsOf(
+  fields: readonly SensitiveFieldSource[] | undefined
+): ReadonlySet<string> {
+  return fields === undefined ? NONE : new Set(sensitiveFieldPaths(fields));
+}
 
 /**
  * The dotted paths of the source's hidden and password fields, inside its
@@ -85,8 +137,7 @@ export async function hiddenFieldPaths(
       logContext: { reason: "public-read-schema-unavailable" },
     });
   }
-  const fields = await expandedFields(source);
-  return fields === undefined ? NONE : new Set(sensitiveFieldPaths(fields));
+  return hiddenPathsOf(await expandedFields(source));
 }
 
 /**
