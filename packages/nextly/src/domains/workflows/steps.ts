@@ -36,7 +36,11 @@
  * - a step no named part can take from its stage, or, for `"all"`, that no part can take:
  *   `CONFLICT`, `{ reason: "not-from-stage", left }`;
  * - a part whose review state moved since the caller saw it: `CONFLICT`, `{ reason: "stale",
- *   parts }`, and nothing of the call is kept.
+ *   parts }`, and nothing of the call is kept;
+ * - an approval covering a field that changed since the part was last approved (else since it
+ *   was last published) and that a field-level read rule hides from the reviewer: `FORBIDDEN`,
+ *   `{ reason: "field-hidden", fields, approvers }`, the approvers being the people who hold the
+ *   step and could read every such field.
  *
  * @module domains/workflows/steps
  * @experimental
@@ -60,6 +64,11 @@ import { isUniqueViolation } from "../../database/errors";
 import { NextlyError } from "../../errors";
 import type { WorkflowRefusalPublicData } from "../../errors/public-data";
 import { permissionSlug } from "../../schemas/_zod/rbac";
+import {
+  resolvedCallerGrants,
+  type CallerGrants,
+} from "../../shared/lib/field-level-registry";
+import type { UserContext } from "../collections/services/collection-types";
 import type { ContentEventActor } from "../content-events/actor";
 import {
   contentEventKind,
@@ -67,18 +76,33 @@ import {
   type ContentEventKind,
 } from "../content-events/kinds";
 import { recordContentEvent } from "../content-events/record";
+import type { LiveFieldGroupReadPass } from "../field-groups/live-read-access";
 import { configuredLocales } from "../i18n/configured-locales";
 import { readDocumentRevision } from "../versions/stale-version";
-import type { VersionRow } from "../versions/versions-repository";
+import {
+  VersionsRepository,
+  type VersionRow,
+} from "../versions/versions-repository";
 
 import { approvalDigest } from "./approval-digest";
-import { allowsSelfApproval, primaryStep } from "./define-workflow";
+import {
+  allowsSelfApproval,
+  entersReview,
+  primaryStep,
+} from "./define-workflow";
 import { entryWriteAllowed, isEntryWrite } from "./entry-gate";
+import {
+  changedFields,
+  hiddenFrom,
+  possibleApprovers,
+  readerOf,
+} from "./hidden-changes";
 import { holderAnswer, readPerson, type HolderAnswer } from "./holders";
 import {
   documentTableOf,
+  fieldGroupReadPassOf,
   partVersionOn,
-  shownVersionOn,
+  shownContentOn,
   type DocumentTable,
 } from "./part-versions";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
@@ -93,6 +117,12 @@ import {
   type ReviewStateChange,
 } from "./review-state-repository";
 import type { ResolvedWorkflowStep, Workflow, WorkflowStepKind } from "./types";
+import {
+  approvedSlot,
+  enteredReviewSlot,
+  pinPart,
+  workflowPins,
+} from "./workflow-pins";
 import { readWorkflowSettings } from "./workflow-settings-repository";
 
 /**
@@ -641,6 +671,37 @@ interface StepContext {
   allowedOn: (part: string | null) => boolean;
   /** Whether the step enters a stage that allows publishing, which approves what it moves. */
   approves: boolean;
+  /**
+   * The person approving, with their grants resolved before the transaction opens, so judging
+   * which fields they can read reads nothing beside it. Null for any step that approves nothing,
+   * and for a caller that is no person (refused as such inside).
+   */
+  approver: StepApprover | null;
+  /**
+   * The field-group read pass a read of the collection makes, built before the transaction, for
+   * judging what an approval covers; undefined for a step that approves nothing, or where no field
+   * group declares a read rule.
+   */
+  fieldGroupPass: LiveFieldGroupReadPass | undefined;
+}
+
+/** A person approving, as the hidden-field check reads them. */
+interface StepApprover {
+  id: string;
+  name: string | null;
+  /** The person as a document read hands them to access rules (`readerOf`). */
+  user: UserContext;
+  grants: () => Promise<CallerGrants>;
+}
+
+/** What a step's transaction answers: the step taken, or an approval refused for hidden fields. */
+type StepOutcome = { taken: TakeStepResult } | { hidden: HiddenRefusal };
+
+/** The changed fields an approval would cover that the reviewer cannot read, and what decides who could. */
+interface HiddenRefusal {
+  fields: string[];
+  parts: Array<{ shown: unknown; changed: string[] }>;
+  excluded: string[];
 }
 
 /** A part as a step reads it on its transaction: its review state, and the stage that gives. */
@@ -723,6 +784,39 @@ async function prepareStep(
     action,
     allowedOn: await partsAllowed(input, parts, action, caller, slug),
     approves: allowsPublish(workflow, step.to),
+    approver: await approverOf(
+      adapter,
+      input,
+      caller,
+      allowsPublish(workflow, step.to)
+    ),
+    fieldGroupPass: allowsPublish(workflow, step.to)
+      ? await fieldGroupReadPassOf(table)
+      : undefined,
+  };
+}
+
+/** The person approving, with their grants resolved, or null where the step approves nothing. */
+async function approverOf(
+  adapter: DrizzleAdapter,
+  input: TakeStepInput,
+  caller: ResolvedCaller,
+  approves: boolean
+): Promise<StepApprover | null> {
+  if (!approves || input.caller.kind !== "user") return null;
+  const user = await readerOf(adapter, input.caller.userId);
+  // A person the canonical resolver cannot act as (gone, or deactivated) approves nothing:
+  // judging them by a thinner copy of who they are could read fields a real read withholds.
+  if (user === null) {
+    throw NextlyError.forbidden({
+      logContext: { refusal: "workflow-approver-unresolvable" },
+    });
+  }
+  return {
+    id: input.caller.userId,
+    name: caller.event.kind === "person" ? caller.event.name : null,
+    user,
+    grants: await resolvedCallerGrants(user),
   };
 }
 
@@ -858,9 +952,12 @@ async function readRecorded(
 ): Promise<Map<string | null, VersionRow | undefined>> {
   const recorded = new Map<string | null, VersionRow | undefined>();
   for (const entry of movable) {
+    // What the part shows now, shared values written since through another language included:
+    // the content the hidden-field check judges and the approval's digest covers, so both match
+    // what a later save is compared with.
     recorded.set(
       entry.part,
-      await shownVersionOn(tx, c.input.document, entry.part)
+      await shownContentOn(tx, c.input.document, c.table, entry.part)
     );
   }
   const unrecorded = movable.filter(entry => !recorded.get(entry.part));
@@ -887,7 +984,13 @@ function approvalChange(
   return {
     approval: {
       versionNo: shown.versionNo,
-      digest: approvalDigest(shown.snapshot, "collection"),
+      // Without the fields an edit may change while an approval stands, so a save compared with
+      // it leaves out the same ones.
+      digest: approvalDigest(
+        shown.snapshot,
+        "collection",
+        c.workflow.onEdit.exemptFields
+      ),
       by,
       at: now,
     },
@@ -979,10 +1082,145 @@ async function moveParts(
         to: c.step.to,
         revision,
       });
+      await pinMoved(tx, c, entry, recorded.get(entry.part));
     }
   }
   if (stale.length > 0) throw staleRefusal(stale);
   return moved;
+}
+
+/**
+ * The versions a move asks retention to keep: the one approved, which stays pinned after a
+ * withdrawal until a new approval or a publish moves it, and the one the part entered review at,
+ * until it enters again or a publish closes the cycle.
+ */
+async function pinMoved(
+  tx: TransactionContext,
+  c: StepContext,
+  entry: ReadPart,
+  shown: VersionRow | undefined
+): Promise<void> {
+  const versionNo = shown?.versionNo;
+  if (typeof versionNo !== "number") return;
+  const ref = c.input.document;
+  if (c.approves && c.caller.accountable !== null) {
+    await pinPart(tx, ref, approvedSlot(entry.part), versionNo);
+  }
+  if (entersReview(c.workflow, entry.stage, c.step.to)) {
+    await pinPart(tx, ref, enteredReviewSlot(entry.part), versionNo);
+  }
+}
+
+/**
+ * The version a part's last approval named: kept by the workflows pin after a withdrawal, else the
+ * one its current approval names. Undefined for a part never approved.
+ */
+async function lastApprovedNo(
+  tx: TransactionContext,
+  document: ReviewDocument,
+  entry: ReadPart
+): Promise<number | undefined> {
+  const pins = await workflowPins.list(tx, document);
+  const pinned = pins.find(pin => pin.slot === approvedSlot(entry.part));
+  return pinned?.versionNo ?? entry.state?.approval?.versionNo;
+}
+
+/**
+ * The version a review of one part compares with: the one its last approval named, else the
+ * newest it published (of any language for the shared part, as its shown version is of any).
+ * Undefined when it was never approved or published.
+ */
+async function reviewBaselineOn(
+  tx: TransactionContext,
+  document: ReviewDocument,
+  entry: ReadPart
+): Promise<VersionRow | undefined> {
+  const repo = new VersionsRepository(tx);
+  const approvedNo = await lastApprovedNo(tx, document, entry);
+  const approved =
+    approvedNo === undefined
+      ? undefined
+      : await repo.findByVersionNo(document, approvedNo);
+  return (
+    approved ?? repo.findNewestPublished(document, entry.part ?? undefined)
+  );
+}
+
+/** The changed fields of one part the approver cannot read, with what changed in it. */
+async function hiddenInPart(
+  tx: TransactionContext,
+  c: StepContext,
+  approver: StepApprover,
+  entry: ReadPart,
+  shown: VersionRow
+): Promise<{ changed: string[]; hidden: string[] }> {
+  const baseline = await reviewBaselineOn(tx, c.input.document, entry);
+  const changed = changedFields(
+    c.input.document,
+    shown.snapshot,
+    baseline?.snapshot,
+    c.workflow.onEdit.exemptFields
+  );
+  const hidden = await hiddenFrom(
+    c.input.document,
+    shown.snapshot,
+    changed,
+    approver.user,
+    approver.grants,
+    c.fieldGroupPass
+  );
+  return { changed, hidden };
+}
+
+/** Who may not approve in the refused reviewer's place: them, and whom the step refuses. */
+function excludedApprovers(
+  c: StepContext,
+  approver: StepApprover,
+  movable: readonly ReadPart[]
+): string[] {
+  if (allowsSelfApproval(c.step)) return [approver.id];
+  return [
+    approver.id,
+    ...movable.flatMap(entry =>
+      entry.state?.enteredBy ? [entry.state.enteredBy] : []
+    ),
+  ];
+}
+
+/**
+ * An approval covers what changed since the part was last approved, or else published: a changed
+ * field the approver cannot read is one they cannot approve. Null when nothing is hidden, or when
+ * the step approves nothing. Asked before anything is written, so a refusal keeps nothing.
+ */
+async function hiddenFieldRefusal(
+  tx: TransactionContext,
+  c: StepContext,
+  movable: readonly ReadPart[],
+  recorded: ReadonlyMap<string | null, VersionRow | undefined>
+): Promise<HiddenRefusal | null> {
+  const approver = c.approver;
+  if (approver === null) return null;
+  const fields = new Set<string>();
+  const parts: HiddenRefusal["parts"] = [];
+  for (const entry of movable) {
+    const shown = recorded.get(entry.part);
+    if (!shown) continue;
+    const { changed, hidden } = await hiddenInPart(
+      tx,
+      c,
+      approver,
+      entry,
+      shown
+    );
+    parts.push({ shown: shown.snapshot, changed });
+    for (const name of hidden) fields.add(name);
+  }
+  if (fields.size === 0) return null;
+  return {
+    fields: [...fields].sort(),
+    parts,
+    excluded: excludedApprovers(c, approver, movable),
+  };
 }
 
 /** The newest recorded version among `group`'s parts, the version an event names. */
@@ -1063,7 +1301,7 @@ async function recordStepEvents(
 async function runStep(
   tx: TransactionContext,
   c: StepContext
-): Promise<TakeStepResult> {
+): Promise<StepOutcome> {
   await lockDocument(tx, c);
   const { movable, left } = splitParts(c, await readParts(tx, c));
   checkPermission(c, movable);
@@ -1071,9 +1309,38 @@ async function runStep(
   checkSelfApproval(c, movable);
   checkComment(c.step, c.comment);
   const recorded = await readRecorded(tx, c, movable);
+  // Nothing is written before this, so answering the refusal out of the transaction keeps nothing.
+  const hidden = await hiddenFieldRefusal(tx, c, movable, recorded);
+  if (hidden !== null) return { hidden };
   const moved = await moveParts(tx, c, movable, recorded);
   await recordStepEvents(tx, c, moved, recorded);
-  return { step: c.step.name, moved, left, ...c.reviewer };
+  return { taken: { step: c.step.name, moved, left, ...c.reviewer } };
+}
+
+/**
+ * The refusal of an approval covering fields the reviewer cannot read, naming who could approve
+ * instead: read on the pool, once the step's transaction has ended.
+ */
+async function hiddenFieldsForbidden(
+  adapter: DrizzleAdapter,
+  c: StepContext,
+  hidden: HiddenRefusal
+): Promise<NextlyError> {
+  const data: WorkflowRefusalPublicData = {
+    reason: "field-hidden",
+    fields: hidden.fields,
+    approvers: await possibleApprovers(adapter, {
+      document: c.input.document,
+      action: c.action,
+      parts: hidden.parts,
+      excluded: new Set(hidden.excluded),
+      fieldGroupPass: c.fieldGroupPass,
+    }),
+  };
+  return NextlyError.forbidden({
+    publicData: data,
+    logContext: { refusal: "workflow-field-hidden", step: c.step.name },
+  });
 }
 
 /**
@@ -1086,7 +1353,9 @@ async function runStep(
  * The event's payload carries `step` (the step's name); for a key, `ownerId` (the key's maker);
  * and, where the stage's default reviewer was skipped, `skippedReviewer: { kind, id, reason }`.
  * A part moved records the caller as `enteredBy`, a key's owner for a key. A part leaving a
- * stage that allows publishing loses its approval.
+ * stage that allows publishing loses its approval. An approval pins the version it names
+ * (`approved:<part>`), and a step that enters review pins the version the part entered it at
+ * (`entered-review:<part>`), so retention keeps both for the comparisons a review shows.
  *
  * @experimental
  */
@@ -1098,7 +1367,9 @@ export async function takeWorkflowStep(
   const step = findStep(registered.workflow, input.step);
   const context = await prepareStep(adapter, input, registered, step);
   ensureWorkflowContentEventKinds();
-  return adapter.transaction(tx => runStep(tx, context));
+  const outcome = await adapter.transaction(tx => runStep(tx, context));
+  if ("taken" in outcome) return outcome.taken;
+  throw await hiddenFieldsForbidden(adapter, context, outcome.hidden);
 }
 
 /** One assignment, with the workflow of its document. */

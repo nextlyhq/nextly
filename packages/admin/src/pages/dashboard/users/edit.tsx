@@ -23,6 +23,7 @@ import { UserCustomFields } from "@admin/components/features/users/UserCustomFie
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
+import { PlaceTabs, TargetSlot } from "@admin/components/shared/target-slot";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { FORM_MIN_HEIGHT } from "@admin/constants/forms";
@@ -36,6 +37,7 @@ import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useLogout } from "@admin/hooks/useLogout";
 import { useRouter } from "@admin/hooks/useRouter";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
+import { useT } from "@admin/lib/i18n/I18nProvider";
 import { navigateTo } from "@admin/lib/navigation";
 import { validateUUID } from "@admin/lib/validation";
 import {
@@ -122,6 +124,7 @@ export default function EditUserPage(): ReactElement {
 
   // The signed-in user, to tell an edit of your own account from another's.
   const { user: signedInUser } = useDashboardUser();
+  const t = useT();
   const logout = useLogout();
 
   // React Hook Form
@@ -354,6 +357,13 @@ export default function EditUserPage(): ReactElement {
     );
   }
 
+  // What a plugin's block or tab on this page is told: who is looking, and
+  // at whom. Held while the viewer is not known yet, so no contribution is
+  // handed an id that is not theirs.
+  const placeContext = signedInUser
+    ? { userId: signedInUser.id, shownUserId: user.id }
+    : null;
+
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer width="form">
@@ -396,69 +406,86 @@ export default function EditUserPage(): ReactElement {
           </div>
         </div>
 
-        {/* Form Card */}
-        <div className="bg-card  border border-border rounded-lg p-6  ">
-          {/* Avatar Section */}
-          <div className="flex items-center gap-4 mb-8 pb-8  border-b border-border">
-            <AvatarUploader
-              value={watchedAvatar ?? ""}
-              onChange={url =>
-                setValue("avatarUrl", url, {
-                  shouldDirty: true,
-                  shouldValidate: true,
-                })
-              }
-              fullName={watchedFullName || user?.name || ""}
-              disabled={isUpdating}
-              className="border border-border"
-              // Keep text-primary in both modes: on the dark bg-primary/20 tint it
-              // reads ~11:1, whereas the old dark:text-primary-foreground/80 (a
-              // color meant for solid primary fills) fell to ~1.45:1 on the tint.
-              fallbackClassName="bg-primary/5 text-primary dark:bg-primary/20"
-            />
-            <div className="flex-1">
-              <h2 className="text-xl font-semibold text-foreground">
-                {watchedFullName || user.name}
-              </h2>
-              <p className="text-sm text-muted-foreground">{user.email}</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                User ID: {user.id}
-              </p>
-            </div>
-          </div>
+        {/* The page's own card is the `content` built-in: plugins' blocks
+            draw around it and their tabs beside it, in the order sent. */}
+        <PlaceTabs
+          place="user.detail"
+          context={placeContext}
+          contentLabel={t("nextly.places.userDetail.content")}
+        >
+          <TargetSlot
+            place="user.detail"
+            context={placeContext}
+            builtIns={{
+              content: (
+                <div className="bg-card  border border-border rounded-lg p-6  ">
+                  {/* Avatar Section */}
+                  <div className="flex items-center gap-4 mb-8 pb-8  border-b border-border">
+                    <AvatarUploader
+                      value={watchedAvatar ?? ""}
+                      onChange={url =>
+                        setValue("avatarUrl", url, {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        })
+                      }
+                      fullName={watchedFullName || user?.name || ""}
+                      disabled={isUpdating}
+                      className="border border-border"
+                      // Keep text-primary in both modes: on the dark bg-primary/20 tint it
+                      // reads ~11:1, whereas the old dark:text-primary-foreground/80 (a
+                      // color meant for solid primary fills) fell to ~1.45:1 on the tint.
+                      fallbackClassName="bg-primary/5 text-primary dark:bg-primary/20"
+                    />
+                    <div className="flex-1">
+                      <h2 className="text-xl font-semibold text-foreground">
+                        {watchedFullName || user.name}
+                      </h2>
+                      <p className="text-sm text-muted-foreground">
+                        {user.email}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        User ID: {user.id}
+                      </p>
+                    </div>
+                  </div>
 
-          {/* Form */}
-          <FormProvider {...form}>
-            <form
-              id="edit-user-form"
-              onSubmit={e => {
-                void handleSubmit(onSubmit)(e);
-              }}
-              className="space-y-8"
-            >
-              {/* Form Fields */}
-              <UserFormFields
-                mode="edit"
-                register={register}
-                control={control}
-                errors={errors}
-                roles={roles}
-                isLoadingRoles={isLoadingRoles}
-                rolesError={rolesError}
-                onRetryRoles={() => {
-                  void refetchRoles();
-                }}
-                showActiveAccount={true}
-              />
+                  {/* Form */}
+                  <FormProvider {...form}>
+                    <form
+                      id="edit-user-form"
+                      onSubmit={e => {
+                        void handleSubmit(onSubmit)(e);
+                      }}
+                      className="space-y-8"
+                    >
+                      {/* Form Fields */}
+                      <UserFormFields
+                        mode="edit"
+                        register={register}
+                        control={control}
+                        errors={errors}
+                        roles={roles}
+                        isLoadingRoles={isLoadingRoles}
+                        rolesError={rolesError}
+                        onRetryRoles={() => {
+                          void refetchRoles();
+                        }}
+                        showActiveAccount={true}
+                      />
 
-              <UserCustomFields
-                control={control as unknown as Control<FieldValues>}
-                errors={errors}
-                disabled={isUpdating}
-              />
-            </form>
-          </FormProvider>
-        </div>
+                      <UserCustomFields
+                        control={control as unknown as Control<FieldValues>}
+                        errors={errors}
+                        disabled={isUpdating}
+                      />
+                    </form>
+                  </FormProvider>
+                </div>
+              ),
+            }}
+          />
+        </PlaceTabs>
       </PageContainer>
     </QueryErrorBoundary>
   );

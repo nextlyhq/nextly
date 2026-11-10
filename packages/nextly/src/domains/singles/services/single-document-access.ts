@@ -325,6 +325,11 @@ async function storedSingleDocumentAllows(
             : registeredWriteAsNamedLanguagesFor(locale),
           ask
         );
+  // A rule that could not run never answered: the request ends with that,
+  // not with the Single read as one the caller may not touch.
+  if (denied?.code === "RULE_COULD_NOT_RUN") {
+    throw errorFromServiceEnvelope(denied);
+  }
   return denied === null;
 }
 

@@ -59,6 +59,7 @@ import {
   EntryFormContextProvider,
   hasPendingWorkingDraft,
 } from "@admin/components/features/entries/EntryForm/EntryFormContext";
+import { EntryFormPlace } from "@admin/components/features/entries/EntryForm/EntryFormPlace";
 import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
 import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
@@ -485,19 +486,24 @@ function SingleFormLanguagePanel({
  * what the single renders on the live side of it.
  */
 function SingleFormFieldsPanel({
+  document,
   historicalFields,
   historicalValues,
   isSubmitting,
   mainFields,
   readOnly,
+  singleSlug,
   versionActionsHeld,
   versionBannerSlot,
 }: {
+  /** The document as loaded, which the form's place hands its blocks. */
+  document: SingleDocumentData;
   historicalFields: FieldConfig[] | null;
   historicalValues: Record<string, unknown> | null;
   isSubmitting: boolean;
   mainFields: FieldConfig[];
   readOnly: boolean;
+  singleSlug: string;
   /** Why a past version's restore is withheld (see `useVersionActions`). */
   versionActionsHeld: boolean;
   /** Where the version's comparison bar is drawn, among the banners. */
@@ -510,16 +516,23 @@ function SingleFormFieldsPanel({
       actionsDisabled={versionActionsHeld}
       bannerSlot={versionBannerSlot}
     >
-      {mainFields.length > 0 && (
-        <div className="@4xl/content:p-8 pt-6">
-          <EntryFormContent
-            fields={mainFields}
-            disabled={isSubmitting}
-            readOnly={readOnly}
-            withCard
-          />
-        </div>
-      )}
+      <EntryFormPlace
+        kind="single"
+        slug={singleSlug}
+        entryId={document.id}
+        entry={document}
+      >
+        {mainFields.length > 0 && (
+          <div className="@4xl/content:p-8 pt-6">
+            <EntryFormContent
+              fields={mainFields}
+              disabled={isSubmitting}
+              readOnly={readOnly}
+              withCard
+            />
+          </div>
+        )}
+      </EntryFormPlace>
     </ViewedVersionBody>
   );
 }
@@ -1881,6 +1894,8 @@ export function SingleForm({
                                 {/* Reading a past version replaces the document rather
                               than opening beside it — see the fields panel. */}
                                 <SingleFormFieldsPanel
+                                  document={document}
+                                  singleSlug={schema.slug}
                                   historicalFields={historicalFields}
                                   historicalValues={historicalValues}
                                   isSubmitting={isSubmitting}
