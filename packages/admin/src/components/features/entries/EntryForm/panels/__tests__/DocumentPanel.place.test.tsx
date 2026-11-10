@@ -82,6 +82,11 @@ registerComponent(OWN_FORM, (() => (
   </form>
 )) as never);
 const ownSubmit = vi.fn();
+const PLAIN_BUTTON = "@acme/a/admin#PlainButton";
+registerComponent(PLAIN_BUTTON, (() => (
+  <button onClick={() => pluginClick()}>Escalate</button>
+)) as never);
+const pluginClick = vi.fn();
 const THROWS = "@acme/a/admin#Throws";
 registerComponent(THROWS, (() => {
   throw new Error("the section failed");
@@ -293,6 +298,23 @@ describe("plugins' sections in the document panel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(ownSubmit).toHaveBeenCalledTimes(1);
+    expect(documentSubmit).not.toHaveBeenCalled();
+  });
+
+  it("keeps a plain button of a section's from saving the document", async () => {
+    const documentSubmit = vi.fn();
+    pluginClick.mockClear();
+    sections(
+      { builtIn: "status" },
+      section("acme-a.button", "Button", { component: PLAIN_BUTTON }),
+      { builtIn: "publishing" },
+      { builtIn: "language" },
+      { builtIn: "details" }
+    );
+    panel(SHOWN, documentSubmit);
+
+    await userEvent.click(screen.getByRole("button", { name: "Escalate" }));
+    expect(pluginClick).toHaveBeenCalledTimes(1);
     expect(documentSubmit).not.toHaveBeenCalled();
   });
 

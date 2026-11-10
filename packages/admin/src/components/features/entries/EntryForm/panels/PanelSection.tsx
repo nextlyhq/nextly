@@ -12,7 +12,7 @@
  * @module components/features/entries/EntryForm/panels/PanelSection
  */
 
-import type { JSX, ReactNode, SyntheticEvent } from "react";
+import type { DOMAttributes, JSX, ReactNode } from "react";
 import { useId } from "react";
 
 import { cn } from "@admin/lib/utils";
@@ -23,8 +23,7 @@ export function PanelSection({
   collapsesWhenEmpty = false,
   focusTarget,
   flush = false,
-  onSubmit,
-  onReset,
+  containedEvents,
   children,
 }: {
   title: string;
@@ -49,12 +48,14 @@ export function PanelSection({
    */
   flush?: boolean;
   /**
-   * Handed to the section element: for a plugin's section, whose own form's
-   * submit and reset are kept from reaching the document's form.
+   * Handlers spread onto the section element, for a plugin's section: what
+   * it does in a form of its own stays there, and its controls do not submit
+   * or reset the document's form. Absent, the section is drawn as ever.
    */
-  onSubmit?: (event: SyntheticEvent) => void;
-  /** Handed to the section element, as `onSubmit` is. */
-  onReset?: (event: SyntheticEvent) => void;
+  containedEvents?: Pick<
+    DOMAttributes<HTMLElement>,
+    "onSubmit" | "onReset" | "onClickCapture" | "onKeyDownCapture"
+  >;
   children: ReactNode;
 }): JSX.Element {
   const headingId = useId();
@@ -75,8 +76,7 @@ export function PanelSection({
         collapsesWhenEmpty && "has-[>[data-panel-section-body]:empty]:hidden"
       )}
       {...focusable}
-      {...(onSubmit === undefined ? {} : { onSubmit })}
-      {...(onReset === undefined ? {} : { onReset })}
+      {...containedEvents}
     >
       <h3
         id={headingId}
