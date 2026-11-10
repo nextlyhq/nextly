@@ -85,10 +85,7 @@ export interface PlaceTabProps<P extends AdminPlaceId = AdminPlaceId>
   setBadge: (badge: PlaceTabBadge | null) => void;
 }
 
-export interface PlaceTabsProps<
-  P extends AdminPlaceId,
-  X extends object = Record<never, never>,
-> extends PlaceProps<P> {
+export interface PlaceTabsProps<P extends AdminPlaceId> extends PlaceProps<P> {
   /** The page's own content's tab label, in the interface language. */
   contentLabel: string;
   /**
@@ -99,9 +96,12 @@ export interface PlaceTabsProps<
   className?: string;
   /**
    * What each contributed tab's component is handed besides `PlaceTabProps`,
-   * such as the form an edit page's tab writes through.
+   * such as the form an edit page's tab writes through. A record rather than
+   * a type parameter: a tab is loaded by its path, so nothing here can check
+   * the component against it, and the page that passes it names the exact
+   * shape its tabs are promised (`DocumentTabProps` for the edit pages).
    */
-  tabProps?: X;
+  tabProps?: Readonly<Record<string, unknown>>;
   /**
    * The open tab, where the page keeps it: a contributed tab's id, or `null`
    * for the page's own content. One naming a tab not delivered shows the
@@ -167,10 +167,35 @@ function useTabBadges(): {
   return { badges, setterFor };
 }
 
-export function PlaceTabs<
-  P extends AdminPlaceId,
-  X extends object = Record<never, never>,
->({
+/**
+ * Which tab is shown, and the handler the strip calls when one is chosen.
+ *
+ * The strip keeps the choice unless the page passes `openTab`. A tab chosen
+ * here and no longer delivered is let go of, rather than only not shown:
+ * kept, it would take the page away again the moment it came back. That is
+ * set while rendering, as React's derived-state pattern allows. A page that
+ * keeps the open tab decides that itself: an address naming a tab before the
+ * tabs have arrived must still open it once they do.
+ */
+function useShownTab(
+  ids: readonly string[],
+  openTab: string | null | undefined,
+  onOpenTabChange: ((tab: string | null) => void) | undefined
+): { shown: string; choose: (value: string) => void } {
+  const [chosen, setChosen] = useState(CONTENT_TAB);
+  const controlled = openTab !== undefined;
+  if (!controlled && chosen !== CONTENT_TAB && !ids.includes(chosen)) {
+    setChosen(CONTENT_TAB);
+  }
+  const wanted = controlled ? (openTab ?? CONTENT_TAB) : chosen;
+  const choose = (value: string) => {
+    if (!controlled) setChosen(value);
+    onOpenTabChange?.(value === CONTENT_TAB ? null : value);
+  };
+  return { shown: ids.includes(wanted) ? wanted : CONTENT_TAB, choose };
+}
+
+export function PlaceTabs<P extends AdminPlaceId>({
   place,
   context,
   entry,
@@ -180,9 +205,8 @@ export function PlaceTabs<
   openTab,
   onOpenTabChange,
   children,
-}: PlaceTabsProps<P, X>): ReactNode {
+}: PlaceTabsProps<P>): ReactNode {
   const delivered = usePlaceContributions(place, "tab", { context, entry });
-  const [chosen, setChosen] = useState(CONTENT_TAB);
   const { badges, setterFor } = useTabBadges();
   const tabs =
     context === null
@@ -190,25 +214,11 @@ export function PlaceTabs<
       : delivered.flatMap(item =>
           "builtIn" in item || item.kind !== "tab" ? [] : [item]
         );
-  const controlled = openTab !== undefined;
-  // A chosen tab no longer delivered is let go of, rather than only not
-  // shown: kept, it would take the page away again the moment it came back.
-  // Set while rendering, as React's derived-state pattern allows. A page that
-  // keeps the open tab decides that itself: an address naming a tab before
-  // the tabs have arrived must still open it once they do.
-  if (
-    !controlled &&
-    chosen !== CONTENT_TAB &&
-    !tabs.some(tab => tab.id === chosen)
-  ) {
-    setChosen(CONTENT_TAB);
-  }
-  const wanted = controlled ? (openTab ?? CONTENT_TAB) : chosen;
-  const shown = tabs.some(tab => tab.id === wanted) ? wanted : CONTENT_TAB;
-  const choose = (value: string) => {
-    if (!controlled) setChosen(value);
-    onOpenTabChange?.(value === CONTENT_TAB ? null : value);
-  };
+  const { shown, choose } = useShownTab(
+    tabs.map(tab => tab.id),
+    openTab,
+    onOpenTabChange
+  );
   return (
     <>
       {context === null || tabs.length === 0 ? null : (
@@ -234,29 +244,18 @@ export function PlaceTabs<
             ))}
           </TabsList>
           {tabs.map(tab => (
-            // Mounted while closed, and hidden by its `hidden` attribute,
-            // which a mounted panel otherwise never carries.
-            <TabsContent
+            <PlaceTabPanel<P>
               key={tab.id}
-              value={tab.id}
-              forceMount
-              hidden={shown !== tab.id}
-            >
-              <PlaceTabBody setBadge={setterFor(tab.id)}>
-                <IsolatedContribution>
-                  <PluginSlot<PlaceTabProps<P> & X>
-                    path={tab.component}
-                    fallback={<PlaceContributionFallback />}
-                    props={{
-                      ...tabProps,
-                      context,
-                      ...(entry === undefined ? {} : { entry }),
-                      setBadge: setterFor(tab.id),
-                    }}
-                  />
-                </IsolatedContribution>
-              </PlaceTabBody>
-            </TabsContent>
+              id={tab.id}
+              component={tab.component}
+              open={shown === tab.id}
+              props={{
+                ...tabProps,
+                context,
+                ...(entry === undefined ? {} : { entry }),
+                setBadge: setterFor(tab.id),
+              }}
+            />
           ))}
         </Tabs>
       )}
@@ -264,6 +263,37 @@ export function PlaceTabs<
         {children}
       </Activity>
     </>
+  );
+}
+
+/**
+ * One contributed tab's panel: mounted while closed, and hidden by its
+ * `hidden` attribute, which a mounted panel otherwise never carries, with
+ * its component behind its own boundary.
+ */
+function PlaceTabPanel<P extends AdminPlaceId>({
+  id,
+  component,
+  open,
+  props,
+}: {
+  id: string;
+  component: string;
+  open: boolean;
+  props: PlaceTabProps<P> & Readonly<Record<string, unknown>>;
+}): ReactNode {
+  return (
+    <TabsContent value={id} forceMount hidden={!open}>
+      <PlaceTabBody setBadge={props.setBadge}>
+        <IsolatedContribution>
+          <PluginSlot<PlaceTabProps<P> & Readonly<Record<string, unknown>>>
+            path={component}
+            fallback={<PlaceContributionFallback />}
+            props={props}
+          />
+        </IsolatedContribution>
+      </PlaceTabBody>
+    </TabsContent>
   );
 }
 

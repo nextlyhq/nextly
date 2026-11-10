@@ -1585,7 +1585,7 @@ export function EntryForm({
                                   // A plugin's tab writes through the same
                                   // form, so the bar's Save stores it, and is
                                   // held as a panel section is.
-                                  control={form.control}
+                                  form={form}
                                   documentLock={pluginLock}
                                 >
                                   {/* The title first and largest, then the slug

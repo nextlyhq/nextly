@@ -1513,14 +1513,6 @@ export function SingleForm({
   // collection entry's page.
   const { panelOrder, sectionsAboveForm, placedSectionProps } =
     useDocumentPanelParts(documentPlace, panel.mode === "sheet");
-  // What holds the Single for a plugin's tab, as the entry editor tells a
-  // plugin's tab and panel section (`pluginDocumentLock`).
-  const pluginLock = pluginDocumentLock({
-    contentHeld,
-    writesHeld,
-    recovering,
-    removedFromCode,
-  });
 
   const localeCtx = useEntryLocaleContext({
     locale,
@@ -1892,9 +1884,16 @@ export function SingleForm({
                                 <DocumentPlaceTabs
                                   place={documentPlace}
                                   // A plugin's tab writes through the same
-                                  // form, so the bar's Save stores it.
-                                  control={form.control}
-                                  documentLock={pluginLock}
+                                  // form, so the bar's Save stores it, and
+                                  // is told what holds the Single as the
+                                  // entry editor tells its tabs.
+                                  form={form}
+                                  documentLock={pluginDocumentLock({
+                                    contentHeld,
+                                    writesHeld,
+                                    recovering,
+                                    removedFromCode,
+                                  })}
                                 >
                                   {/* The title, fixed by the Single's config and
                                   so read-only. No slug line: a Single's slug
