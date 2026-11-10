@@ -130,6 +130,8 @@ jobs:
             Integration (mysql) shard (1)
             Integration (mysql) shard (2)
             Integration (mysql) shard (3)
+            Integration (mysql) shard (4)
+            Integration (mysql) shard (5)
             Integration (sqlite) shard (1)
             Integration (sqlite) shard (2)
           token: ${{ github.token }}
@@ -327,7 +329,7 @@ jobs:
     # Not a required check: `Integration (mysql)` below is, and it passes
     # only when every shard did. GitHub appends the matrix value to a name
     # with no expression in it, so the shards report as `... shard (1)` to
-    # `... shard (3)`, and a skipped run as one `... shard`.
+    # `... shard (5)`, and a skipped run as one `... shard`.
     name: Integration (mysql) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
@@ -349,12 +351,14 @@ jobs:
     strategy:
       # Each shard's verdict is its own, as on the postgres leg.
       fail-fast: false
-      # Three, because two are not enough here: on a database per worker, the
-      # slowest shard of three still took 27 to 34 minutes, so two would project
-      # to about 45, past the quarter of INTEGRATION_SUITE_BUDGET every leg
+      # Five, because three are no longer enough: the leg runs the nextly suite
+      # beside the plugin suites on one runner and one MySQL server, and each
+      # shard of three grew to about 55 minutes, the whole of
+      # INTEGRATION_SUITE_BUDGET, so a slow runner stopped every shard short of
+      # its last files. Five project to about 33, inside the quarter every leg
       # keeps spare (the rule is beside the sqlite leg's matrix, below).
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
     # The same backstop as the postgres leg, for the same reasons.
     timeout-minutes: 75
 

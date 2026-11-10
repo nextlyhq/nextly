@@ -67,6 +67,8 @@ export const WORKFLOWS = {
     "Integration (mysql) shard (1)",
     "Integration (mysql) shard (2)",
     "Integration (mysql) shard (3)",
+    "Integration (mysql) shard (4)",
+    "Integration (mysql) shard (5)",
     "Integration (sqlite) shard (1)",
     "Integration (sqlite) shard (2)",
   ],
