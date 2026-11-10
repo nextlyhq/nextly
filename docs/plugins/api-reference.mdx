@@ -12,7 +12,7 @@ description: The public plugin surface re-exported by @nextlyhq/plugin-sdk.
 | `@nextlyhq/plugin-sdk`         | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`                                                            | no                  |
 | `@nextlyhq/plugin-sdk/testing` | `createTestNextly`                                                                                                                                               | no                  |
 | `@nextlyhq/plugin-sdk/client`  | `useCan`, `<Can>`                                                                                                                                                | yes (optional peer) |
-| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin`, `ChallengeViewProps`, `ChallengeResolveResult`                                                 | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin` (deprecated), `ChallengeViewProps`, `ChallengeResolveResult`                                    | yes (optional peer) |
 | `@nextlyhq/plugin-sdk/routing` | `slugToStaticParam`                                                                                                                                              | no                  |
 | `@nextlyhq/plugin-sdk/db`      | Drizzle query operators (`eq`, `and`, `inArray`, …); `sql` is not among them — a declaration a reviewer reads, not a boundary, since a plugin can bundle its own | no                  |
 | `@nextlyhq/plugin-sdk/widgets` | `WidgetProps`, `WidgetData`, `WidgetRenderSize`, `WidgetResult`, `WidgetResultField` — types only, no runtime                                                    | no                  |
@@ -292,12 +292,11 @@ const Can: React.FC<{ permission: string; fallback?: ReactNode; children: ReactN
 ```ts
 registerComponent(path, Component);
 registerComponents({ [path]: Component });
-registerKnownPlugin(packagePrefix, async () => {
-  /* register */
-});
 ```
 
-When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that calls `registerComponents` for you, with a `plugin-admin-components.generated.ts` listing its paths. The app's admin page imports the first, and its server layout hands the second to `checkAdminComponents` from `nextly/runtime`, which writes the pair again in development when it falls behind, so your `contributes.admin` and `contributes.dashboard` components load with no manual wiring. `nextly generate:types --check` holds the committed pair to the config in CI. See [Admin UI](/docs/plugins/admin-ui) for how the map stays current.
+`registerKnownPlugin(packagePrefix, register)` is deprecated, and removed at the next major release after two minor releases. It still runs `register` straight away and says once that it is deprecated. Call `registerComponents` in your admin module instead: the generated component map imports that module, so every component it registers is there before a page asks for it.
+
+When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that registers your components for you, with a `plugin-admin-components.generated.ts` listing its paths. It calls `registerComponentMap` (experimental), which registers them as `registerComponents` does and then tells the admin the map is complete, so a component missing from it draws its fallback rather than loading. The app's admin page imports the first, and its server layout hands the second to `checkAdminComponents` from `nextly/runtime`, which writes the pair again in development when it falls behind, so your `contributes.admin` and `contributes.dashboard` components load with no manual wiring. `nextly generate:types --check` holds the committed pair to the config in CI. See [Admin UI](/docs/plugins/admin-ui) for how the map stays current.
 
 ## Testing (`/testing`)
 

@@ -44,16 +44,17 @@ import { useCan } from "@admin/hooks/useCan";
 import { useDefaultLanguageAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
-import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { revsFor } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
-import type { InjectionPointProps } from "@admin/lib/plugins/component-registry";
+import {
+  hasComponent,
+  type InjectionPointProps,
+} from "@admin/lib/plugins/component-registry";
 import { getSearchParam } from "@admin/lib/search-params";
 import type { Entry } from "@admin/types/collection";
-import type { ApiCollection } from "@admin/types/entities";
 
 import { BulkDeleteDialog } from "../BulkActions/BulkDeleteDialog";
 import {
@@ -265,14 +266,6 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // Fetch collection metadata
   const { data: collection, isLoading: collectionLoading } =
     useCollection(collectionSlug);
-
-  // Auto-register plugin components when collection is loaded
-  // This ensures components like BeforeListTable are registered before rendering
-  const collectionsForRegistration = useMemo<ApiCollection[]>(
-    () => (collection ? [collection as unknown as ApiCollection] : []),
-    [collection]
-  );
-  usePluginAutoRegistration(collectionsForRegistration);
 
   // Request the per-locale translation-status overview only for localized collections
   // on a localization-enabled app — drives the list's translation-completeness column.
@@ -733,7 +726,16 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // isolated via PluginSlot.
   const beforeListTablePath = collection?.admin?.components?.BeforeListTable;
   const afterListTablePath = collection?.admin?.components?.AfterListTable;
-  const listViewPath = collection?.admin?.components?.views?.List?.Component;
+  // A collection's own List view, where the generated map registered it. One
+  // it did not register draws the default list instead of a blank page: the
+  // map registers every component before the admin draws, so nothing would
+  // bring it later. A collection removed from code is the usual case: its
+  // stored metadata still names the view, and the map no longer lists it.
+  const declaredListViewPath =
+    collection?.admin?.components?.views?.List?.Component;
+  const listViewPath = hasComponent(declaredListViewPath)
+    ? declaredListViewPath
+    : undefined;
 
   // Props for injection point components
   const injectionPointProps: InjectionPointProps = {

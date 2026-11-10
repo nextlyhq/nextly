@@ -41,7 +41,11 @@ An app loads these through its **component map**, two generated files beside its
 types (D60):
 
 - `plugin-admin-imports.generated.ts` imports and registers every plugin admin component, and
-  the app's admin page imports it.
+  the app's admin page imports it. That includes the views a collection names for its own
+  screens under `admin.components` (its `Edit` and `List` views, and what is drawn before and
+  after its list table and edit form), whether the collection is a plugin's or the site's own.
+  The admin imports no module by name at run time, so a component the map doesn't list draws
+  its fallback, and `next dev` names it.
 - `plugin-admin-components.generated.ts` lists the same paths as plain strings, and the admin's
   server layout passes them to `checkAdminComponents` from `nextly/runtime`.
 

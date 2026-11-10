@@ -43,9 +43,6 @@ vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ enabled: false }),
 }));
-vi.mock("@admin/hooks/usePluginAutoRegistration", () => ({
-  usePluginAutoRegistration: () => undefined,
-}));
 vi.mock("@admin/hooks/useSearchParams", () => ({
   useSearchParams: () => ({}),
 }));
@@ -129,6 +126,22 @@ describe("EntryList for a collection removed from code", () => {
     expect(screen.queryByRole("button", { name: /new page/i })).toBeNull();
     expect(screen.queryAllByRole("checkbox")).toEqual([]);
     expect(screen.queryByRole("menuitem", { name: /delete/i })).toBeNull();
+  });
+
+  it("lists its entries where its stored List view is no longer in the component map", () => {
+    // Its stored metadata still names the view it had while declared; the
+    // regenerated map, which no longer declares it, does not register it.
+    collection = {
+      ...pages({ state: "not-dropped" }),
+      admin: {
+        components: {
+          views: { List: { Component: "@acme/gone/admin#PagesList" } },
+        },
+      },
+    };
+    renderWithProviders(<EntryList collectionSlug="pages" />);
+
+    expect(screen.getAllByText("About us").length).toBeGreaterThan(0);
   });
 
   it("keeps the notice where a plugin replaces the list itself", () => {
