@@ -284,7 +284,9 @@ for (const dialect of getConfiguredTestDialects()) {
       const registry = (instance as TestNextly).getService(
         "fieldGroupRegistryService"
       );
-      await registry.updateComponent("ping", { fields: builderFields("pong") });
+      await registry.updateComponent("ping", {
+        fields: codeFieldGroup("ping", "pong").fields,
+      });
 
       const warn = vi.fn();
       const logger: Logger = {

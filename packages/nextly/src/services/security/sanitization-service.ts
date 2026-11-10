@@ -345,45 +345,57 @@ export async function attachFieldGroupChildren(
     return copy;
   };
 
-  const copyField = async (
+  /** A field-group field's copy, with the children of what it references attached. */
+  const copyFieldGroupField = async (
     field: FieldDefinition
   ): Promise<FieldDefinition> => {
-    if (isFieldGroupFieldType(field.type)) {
-      const copy: FieldDefinition = { ...field };
-      const { single, many } = extractFieldGroupReferences(field);
-      if (single !== undefined) {
-        const children = await childrenOf(single);
-        if (children !== undefined) {
-          (copy as { componentFields?: FieldDefinition[] }).componentFields =
-            children;
-        }
-        return copy;
-      }
-      if (many === undefined) return copy;
-      const schemas: FieldGroupSchemaMap = {};
-      for (const slug of many) {
-        const children = await childrenOf(slug);
-        if (children !== undefined) schemas[slug] = { fields: children };
-      }
-      if (Object.keys(schemas).length > 0) {
-        (copy as { componentSchemas?: FieldGroupSchemaMap }).componentSchemas =
-          schemas;
+    const copy: FieldDefinition = { ...field };
+    const { single, many } = extractFieldGroupReferences(field);
+    if (single !== undefined) {
+      const children = await childrenOf(single);
+      if (children !== undefined) {
+        (copy as { componentFields?: FieldDefinition[] }).componentFields =
+          children;
       }
       return copy;
     }
+    const schemas: FieldGroupSchemaMap = {};
+    for (const slug of many ?? []) {
+      const children = await childrenOf(slug);
+      if (children !== undefined) schemas[slug] = { fields: children };
+    }
+    if (Object.keys(schemas).length > 0) {
+      (copy as { componentSchemas?: FieldGroupSchemaMap }).componentSchemas =
+        schemas;
+    }
+    return copy;
+  };
+
+  /** A group's or repeater's copy, made once however often it is reached. */
+  const copyContainer = async (
+    field: FieldDefinition,
+    children: FieldDefinition[]
+  ): Promise<FieldDefinition> => {
+    const seen = containers.get(field);
+    if (seen !== undefined) return seen;
+    const copy: FieldDefinition = { ...field, fields: [] };
+    containers.set(field, copy);
+    for (const child of await copyList(children)) {
+      (copy.fields as FieldDefinition[]).push(child);
+    }
+    return copy;
+  };
+
+  const copyField = async (
+    field: FieldDefinition
+  ): Promise<FieldDefinition> => {
+    if (isFieldGroupFieldType(field.type)) return copyFieldGroupField(field);
     if (
       typeHasNestedFields(field.type) &&
       Array.isArray(field.fields) &&
       field.fields.length > 0
     ) {
-      const seen = containers.get(field);
-      if (seen !== undefined) return seen;
-      const copy: FieldDefinition = { ...field, fields: [] };
-      containers.set(field, copy);
-      for (const child of await copyList(field.fields)) {
-        (copy.fields as FieldDefinition[]).push(child);
-      }
-      return copy;
+      return copyContainer(field, field.fields);
     }
     return field;
   };
