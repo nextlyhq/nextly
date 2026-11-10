@@ -23,6 +23,7 @@
  */
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { MIGRATION_TARGET } from "../migration/target";
 
 /**
@@ -168,4 +169,66 @@ export function fieldGroupSlugList(field: unknown): string[] {
   if (single !== undefined) slugs.push(single);
   if (many !== undefined) slugs.push(...many);
   return slugs;
+}
+
+/** One place a field list puts a field group. */
+export interface FieldGroupPlacement {
+  /** The field's path from the list's top level, dotted through named groups and repeaters. */
+  readonly path: string;
+  /** The field groups placed there: the one a single slot names, or each a zone allows. */
+  readonly slugs: readonly string[];
+  /**
+   * Whether the field sits at the list's own level, outside any named group or repeater. A
+   * presentational group (one with no name) keeps its children at the level it sits in, so a
+   * field inside one is still direct.
+   */
+  readonly direct: boolean;
+}
+
+/**
+ * Every place a field list puts a field group, at any depth inside named groups and repeaters,
+ * looking through presentational groups. The one walk every question about which field groups a
+ * field list places derives from: who uses a field group, and whether field groups place each
+ * other in a cycle.
+ *
+ * Each field is read through {@link fieldGroupSlugList}, so a definition using any spelling of the
+ * reference keys, and a zone, is found. A field-group field is a leaf here: what the field group
+ * itself holds is that field group's own list, which a caller walks in turn if it needs to.
+ *
+ * A named field carrying `fields` stores its children under itself and is descended. The levels
+ * come from `addressableFields`, which looks through presentational groups and ends a cycle among
+ * them; a named container that holds itself is ended by the path-scoped open set below.
+ *
+ * @param fields a field list as written in config or parsed from a registry row
+ */
+export function fieldGroupPlacements(fields: unknown): FieldGroupPlacement[] {
+  const found: FieldGroupPlacement[] = [];
+  collectPlacements(fields, "", true, new WeakSet<object>(), found);
+  return found;
+}
+
+function collectPlacements(
+  fields: unknown,
+  parentPath: string,
+  direct: boolean,
+  openContainers: WeakSet<object>,
+  found: FieldGroupPlacement[]
+): void {
+  for (const field of addressableFields(fields)) {
+    // `addressableFields` emits only named fields; its type keeps `name` optional because a valid
+    // config field may lack one, so the name is narrowed here rather than asserted.
+    const { name } = field;
+    if (typeof name !== "string") continue;
+    const path = parentPath === "" ? name : `${parentPath}.${name}`;
+    if (isFieldGroupFieldType(field.type)) {
+      const slugs = fieldGroupSlugList(field);
+      if (slugs.length > 0) found.push({ path, slugs, direct });
+      continue;
+    }
+    const children = (field as { fields?: unknown }).fields;
+    if (!Array.isArray(children) || openContainers.has(field)) continue;
+    openContainers.add(field);
+    collectPlacements(children, path, false, openContainers, found);
+    openContainers.delete(field);
+  }
 }
