@@ -140,6 +140,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "SelectSeparator (value)",
   "SelectTrigger (value)",
   "SelectValue (value)",
+  "SidebarSectionProps (type)",
   "SingleDocument (type)",
   "SkeletonShape (type)",
   "Stack (value)",
