@@ -327,6 +327,8 @@ export {
   type DocumentActionReplacementProps,
   type DocumentChangeResult,
   type DocumentPanelSectionProps,
+  type DocumentTabProps,
+  type SidebarSectionProps,
   type DocumentViewProps,
 } from "./lib/plugins/component-registry";
 export type { DocumentLockGates } from "./components/features/entries/EntryForm/document-lock-affordances";
@@ -545,6 +547,8 @@ export { PlaceTabs, TargetSlot } from "./components/shared/target-slot";
 export type {
   PlaceContributionProps,
   PlaceProps,
+  PlaceTabBadge,
+  PlaceTabProps,
   PlaceTabsProps,
   TargetSlotProps,
 } from "./components/shared/target-slot";

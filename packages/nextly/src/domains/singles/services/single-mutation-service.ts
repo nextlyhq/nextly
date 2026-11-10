@@ -3211,7 +3211,10 @@ export class SingleMutationService extends BaseService {
           // publish state, so a per-locale write for a NON-default locale must not
           // clobber it — that language's draft/publish lives on the companion
           // `_status` (stamped by the upsert after commit).
+          // Only where each language publishes on its own: an untranslated Single kept per
+          // language under the setting has no `_status` there, and publishes as a document.
           if (
+            companion?.hasStatus === true &&
             writeLocale !== undefined &&
             this.localization &&
             writeLocale !== this.localization.defaultLocale &&
@@ -3691,8 +3694,11 @@ export class SingleMutationService extends BaseService {
                 attemptComponentFields[name] = value;
               }
               // A non-default language's lifecycle lives on its companion
-              // `_status`; the main row must not be clobbered by it.
+              // `_status`; the main row must not be clobbered by it. Only where
+              // each language publishes on its own: an untranslated Single kept
+              // per language under the setting publishes as a document.
               if (
+                companion?.hasStatus === true &&
                 writeLocale !== undefined &&
                 this.localization &&
                 writeLocale !== this.localization.defaultLocale &&
