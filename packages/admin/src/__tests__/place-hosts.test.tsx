@@ -251,13 +251,26 @@ import {
 /** A contribution kind, as the catalogue lists what each place accepts. */
 type Kind = (typeof CORE_ADMIN_PLACES)[CoreAdminPlaceId]["accepts"][number];
 
-/** The fixture component each contribution draws, one per kind. */
-const FIXTURE = "@acme/hosts/admin#Fixture";
-registerComponent(FIXTURE, ((props: { rows?: unknown }) => (
-  <aside data-testid="fixture">
-    {props.rows ? "fixture dialog" : "fixture part"}
-  </aside>
-)) as never);
+/**
+ * The fixture component each kind's contribution draws, one per kind, each
+ * marked as its own: one kind drawn cannot stand in for another, as a list's
+ * column cell would for a list's missing block.
+ */
+const fixtureOf = (kind: Kind) => `@acme/hosts/admin#Fixture_${kind}`;
+const KINDS = [
+  ...new Set(
+    Object.values(CORE_ADMIN_PLACES).flatMap(
+      (place): readonly Kind[] => place.accepts
+    )
+  ),
+];
+for (const kind of KINDS) {
+  registerComponent(fixtureOf(kind), ((props: { rows?: unknown }) => (
+    <aside data-testid={`fixture-${kind}`}>
+      {props.rows ? "fixture dialog" : "fixture part"}
+    </aside>
+  )) as never);
+}
 
 /** One contribution of `kind` at `place`, as the server delivers it. */
 function contribution(kind: Kind): Record<string, unknown> {
@@ -268,9 +281,9 @@ function contribution(kind: Kind): Record<string, unknown> {
     label: `Fixture ${kind}`,
   };
   if (kind === "rowAction" || kind === "bulkAction") {
-    return { ...base, action: { open: FIXTURE } };
+    return { ...base, action: { open: fixtureOf(kind) } };
   }
-  return { ...base, component: FIXTURE };
+  return { ...base, component: fixtureOf(kind) };
 }
 
 /**
@@ -311,7 +324,9 @@ function Providers({ children }: { children: ReactNode }): ReactElement {
 /** How each kind shows itself once its host has drawn it. */
 const SHOWN: Record<Kind, () => Promise<void>> = {
   block: async () => {
-    expect((await screen.findAllByTestId("fixture")).length).toBeGreaterThan(0);
+    expect(
+      (await screen.findAllByTestId("fixture-block")).length
+    ).toBeGreaterThan(0);
   },
   tab: async () => {
     expect(
@@ -470,7 +485,7 @@ describe("every core place's host", () => {
       host.render();
 
       expect(await host.own()).toBeTruthy();
-      expect(screen.queryByTestId("fixture")).toBeNull();
+      expect(screen.queryByTestId(/^fixture-/)).toBeNull();
       expect(screen.queryByRole("tab", { name: "Fixture tab" })).toBeNull();
     });
   }
