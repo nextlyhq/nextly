@@ -18,6 +18,36 @@
  * @module editor-markers
  */
 
+/**
+ * The attribute naming the action a collection list's note to its author
+ * offers on the editor's canvas: `choose-sort-field` on a note saying its
+ * sort fell back. The renderer writes it and the editor's canvas acts on it,
+ * so one string decides it.
+ */
+export const LIST_ACTION_ATTRIBUTE = "data-nx-list-action";
+
+/**
+ * The attribute holding the log reference a list note's `copy-ref` action
+ * copies: the reference a failed named query's run is logged under. The
+ * renderer writes it and the editor's canvas reads it, so one string decides
+ * it.
+ */
+export const LIST_REF_ATTRIBUTE = "data-nx-list-copy-ref";
+
+/**
+ * The attribute an Entry content block carries on the editor's canvas while
+ * it draws the entry's content: the renderer writes it and the canvas's sheet
+ * keeps the pointer off what is inside, so one string decides it.
+ */
+export const ENTRY_CONTENT_DRAWN_ATTRIBUTE = "data-nx-entry-content-drawn";
+
+/**
+ * The attribute on an Entry content block's note to its author on the
+ * editor's canvas, by its tone (`muted`, `failed`): the renderer writes it
+ * and the canvas's sheet draws the note by it.
+ */
+export const ENTRY_CONTENT_NOTE_ATTRIBUTE = "data-nx-entry-content-note";
+
 /** The attribute an editor addresses a node by. Named, so one string decides it. */
 export const NODE_ID_ATTRIBUTE = "data-nx-node";
 

@@ -88,7 +88,7 @@ async function heldDraft(t: TestNextly, collection: string): Promise<string> {
   await as(EDITOR).update({
     collection,
     id,
-    data: { body: "finished draft" },
+    data: { body: "finished draft", _overwrite: true },
   } as never);
   return id;
 }

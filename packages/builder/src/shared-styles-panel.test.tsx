@@ -21,11 +21,12 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type {
-  SharedStyleReach,
-  SharedStylesCount,
-  SharedStylesUsage,
-  SharedStyleUsesPage,
+import {
+  SHARED_STYLE_UNCOUNTED_USES,
+  type SharedStyleReach,
+  type SharedStylesCount,
+  type SharedStylesUsage,
+  type SharedStyleUsesPage,
 } from "./shared-style-library";
 import {
   SharedStylesPanel,
@@ -172,7 +173,7 @@ describe("the list", () => {
     expect(row(/^hero, \.nx-c-hero/)).toBeTruthy();
   });
 
-  it("lists no look among the shared styles", async () => {
+  it("lists no look among the shared styles, only among the block looks", async () => {
     const outline: NamedClass = {
       id: "look:core/button:outline",
       slug: "button-outline",
@@ -183,7 +184,190 @@ describe("the list", () => {
     };
     await panel({ library: [CARD, outline] });
     expect(row(/^Card, \.nx-c-card/)).toBeTruthy();
-    expect(screen.queryByText("Outline")).toBeNull();
+    const shared = screen.getByRole("region", { name: "Shared styles" });
+    expect(within(shared).queryByText("Outline")).toBeNull();
+    // It is listed with its block type's looks instead.
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    expect(within(looks).getByText("Outline")).toBeTruthy();
+  });
+
+  it("lists each block type's own look first, with a Default chip and no count, and edits a look on a click", async () => {
+    const primary: NamedClass = {
+      id: "look:core/button:primary",
+      slug: "button-primary",
+      label: "Primary",
+      orderIndex: 0,
+      blockType: "core/button",
+      isDefault: true,
+      styles: {},
+    };
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 1,
+      blockType: "core/button",
+      styles: {},
+    };
+    const onEditLook = vi.fn();
+    await panel({
+      library: [CARD, primary, outline],
+      looks: {
+        onEdit: onEditLook,
+        editing: { id: outline.id, blockType: "core/button" },
+      },
+    });
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    const rows = within(looks).getAllByRole("button");
+    expect(rows.map(each => each.textContent)).toEqual([
+      expect.stringMatching(/^ButtonPrimaryown lookDefault$/),
+      expect.stringMatching(/^ButtonOutline\.nx-l-button-outline/),
+    ]);
+    // The own look says what it covers, on hover and to a screen reader.
+    expect(rows[0]?.getAttribute("aria-description")).toBe(
+      "Default · every Button starts from this look; other looks are laid on top"
+    );
+    expect(rows.map(each => each.getAttribute("aria-pressed"))).toEqual([
+      "false",
+      "true",
+    ]);
+    fireEvent.click(rows[0] as HTMLElement);
+    expect(onEditLook).toHaveBeenCalledWith({
+      id: primary.id,
+      blockType: "core/button",
+    });
+  });
+
+  it("reads a worn look's count with the styles' and says it in the row's name", async () => {
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "core/button",
+      styles: {},
+    };
+    const { access, usageReads } = accessOf({
+      styles: { [outline.id]: reach({ pages: 3 }) },
+    });
+    await panel({
+      library: [CARD, outline],
+      access,
+      looks: { onEdit: () => {}, editing: null },
+    });
+    // One read for the tab: the styles and the worn look together.
+    expect(usageReads).toHaveLength(1);
+    expect(usageReads[0]).toEqual([CARD.id, outline.id]);
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    expect(
+      within(looks)
+        .getByRole("button", { name: /^Outline, \.nx-l-button-outline, / })
+        .getAttribute("aria-label")
+    ).toMatch(/3 pages/);
+  });
+
+  it("counts a worn look's blocks on the open page with its documents, as a shared style's", async () => {
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "core/button",
+      styles: {},
+    };
+    const { access } = accessOf({
+      styles: {
+        [CARD.id]: reach({ pages: 4 }),
+        [outline.id]: reach({ pages: 3 }),
+      },
+    });
+    await panel({
+      library: [CARD, outline],
+      access,
+      // The open page's unsaved blocks: two wear the look, one the style.
+      pageBlocks: {
+        counts: new Map([
+          [outline.id, 2],
+          [CARD.id, 1],
+        ]),
+        complete: true,
+      },
+      looks: { onEdit: () => {}, editing: null },
+    });
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    const look = within(looks).getByRole("button", { name: /^Outline, / });
+    expect(look.getAttribute("aria-label")).toBe(
+      "Outline, .nx-l-button-outline, 2 blocks on this page · on 3 pages"
+    );
+    expect(look.getAttribute("title")).toBe(
+      "2 blocks on this page · on 3 pages"
+    );
+    // The control: the shared style beside it says its page blocks the same way.
+    expect(row(/^Card, \.nx-c-card/).getAttribute("aria-label")).toBe(
+      "Card, .nx-c-card, 1 block on this page · on 4 pages"
+    );
+  });
+
+  it("finds each of two block types' own looks that share an id by its own text", async () => {
+    const primary: NamedClass = {
+      id: "look:shared",
+      slug: "button-primary",
+      label: "Primary",
+      orderIndex: 0,
+      blockType: "core/button",
+      isDefault: true,
+      styles: {},
+    };
+    const square: NamedClass = {
+      id: "look:shared",
+      slug: "image-square",
+      label: "Square",
+      orderIndex: 1,
+      blockType: "core/image",
+      isDefault: true,
+      styles: {},
+    };
+    await panel({
+      library: [CARD, primary, square],
+      looks: { onEdit: () => {}, editing: null },
+    });
+    const search = screen.getByRole("searchbox", { name: /Search/ });
+    const lookNames = () =>
+      within(screen.getByRole("region", { name: "Block looks" }))
+        .getAllByRole("button")
+        .map(each => each.getAttribute("aria-label"));
+    // The control: with no search, both are listed.
+    expect(lookNames()).toEqual(["Primary, own look", "Square, own look"]);
+    fireEvent.change(search, { target: { value: "Square" } });
+    expect(lookNames()).toEqual(["Square, own look"]);
+    fireEvent.change(search, { target: { value: "Primary" } });
+    expect(lookNames()).toEqual(["Primary, own look"]);
+  });
+
+  it("finds a look by a value it sets, as it finds a shared style", async () => {
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "core/button",
+      styles: { base: { base: { opacity: 0.25 } } },
+    };
+    const text: NamedClass = {
+      ...outline,
+      id: "look:core/button:text",
+      slug: "button-text",
+      label: "Text",
+      orderIndex: 1,
+      styles: {},
+    };
+    await panel({ library: [CARD, outline, text] });
+    fireEvent.change(screen.getByRole("searchbox", { name: /Search/ }), {
+      target: { value: "0.25" },
+    });
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    expect(within(looks).getByText("Outline")).toBeTruthy();
+    expect(within(looks).queryByText("Text")).toBeNull();
   });
 
   it("says how to make one when there are none, with no + to create an empty one", async () => {
@@ -1477,6 +1661,12 @@ describe("removing one style", () => {
     await panel({ access });
     const details = await open(/^Old note/, "Old note");
     fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
+    // At a count of zero it still asks, saying what the count cannot see.
+    const confirm = within(details).getByRole("group", {
+      name: "Remove Old note",
+    });
+    expect(confirm.textContent).toContain("No page uses it in the editor.");
+    expect(confirm.textContent).toContain(SHARED_STYLE_UNCOUNTED_USES);
     await act(async () => {
       fireEvent.click(
         within(details).getByRole("button", { name: "Remove Old note" })
@@ -1506,7 +1696,7 @@ describe("removing one style", () => {
     });
     expect(within(details).getByRole("alert").textContent).toBe(refusal);
     // No confirmation left saying nothing uses it, and nothing to press.
-    expect(within(details).queryByText(/Nothing uses it/)).toBeNull();
+    expect(within(details).queryByText(/No page uses it/)).toBeNull();
     expect(
       within(details).queryByRole("button", { name: /^Remove/ })
     ).toBeNull();
@@ -1615,8 +1805,10 @@ describe("Remove unused…", () => {
       name: "Remove 2 unused shared styles",
     });
     expect(confirm.textContent).toContain(
-      "Remove 2 unused shared styles? No page uses them."
+      "Remove 2 unused shared styles? No page uses them in the editor."
     );
+    // At a count of zero it still says what the count cannot see.
+    expect(confirm.textContent).toContain(SHARED_STYLE_UNCOUNTED_USES);
     expect(confirm.textContent).toContain("hero");
     expect(confirm.textContent).toContain("Old note");
     expect(confirm.textContent).not.toContain("Card");

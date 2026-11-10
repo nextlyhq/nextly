@@ -79,7 +79,11 @@ describe("the revalidator outside Next.js", () => {
     const flushing = new HandOffRevalidator().flush(write("posts"));
     await vi.advanceTimersByTimeAsync(HANDOFF_TIMEOUT_MS);
 
-    await expect(flushing).resolves.toBeUndefined();
+    // Kept in this process only, and said to be.
+    await expect(flushing).resolves.toEqual({
+      deferredTags: ["posts"],
+      keptInProcess: ["posts"],
+    });
     expect(takePendingExpiries()).toEqual(["posts"]);
   });
 
@@ -119,6 +123,26 @@ describe("the revalidator outside Next.js", () => {
     installTagExpiryLedger(adapter);
 
     await vi.waitFor(() => expect(takePendingExpiries()).toEqual(["posts"]));
+  });
+
+  it("reports nothing when the ledger records the write", async () => {
+    ledgerThat(async tags => new Map(tags.map(tag => [tag, 1] as const)));
+    setExpiryHandoff(new LedgerExpiryHandoff());
+
+    await expect(
+      new HandOffRevalidator().flush(write("posts"))
+    ).resolves.toBeUndefined();
+  });
+
+  it("reports the write's tags as kept in this process when the ledger refuses them", async () => {
+    ledgerThat(async () => {
+      throw new Error("connection reset");
+    });
+    setExpiryHandoff(new LedgerExpiryHandoff());
+
+    await expect(
+      new HandOffRevalidator().flush(write("posts"))
+    ).resolves.toEqual({ deferredTags: ["posts"], keptInProcess: ["posts"] });
   });
 
   it("hands nothing off with only the in-process hand-off installed", async () => {

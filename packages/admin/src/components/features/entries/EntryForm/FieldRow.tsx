@@ -42,6 +42,12 @@ export interface FieldRowProps {
  * growing the track past the form panel and painting the code outside the
  * field's border. With the minimum zeroed, the track keeps its proportional
  * width and the long line scrolls inside CodeMirror's own scroller.
+ *
+ * A row whose fields all draw nothing, hidden (`admin.hidden`) or with a
+ * condition that does not hold, is left empty, and `empty:hidden` takes it
+ * out of the layout: the form's `space-y-6` would otherwise give it a gap of
+ * its own, so a run of such rows at the top of a form opened a blank band
+ * above its first field.
  */
 export function FieldRow({
   fields,
@@ -54,7 +60,7 @@ export function FieldRow({
 
   return (
     <div
-      className="grid gap-6 items-start [&>*]:!w-full [&>*]:min-w-0"
+      className="grid gap-6 items-start [&>*]:!w-full [&>*]:min-w-0 empty:hidden"
       style={{ gridTemplateColumns: cols }}
     >
       {fields.map((field, i) => (

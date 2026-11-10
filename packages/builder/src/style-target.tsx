@@ -181,6 +181,34 @@ export function useStyleTarget(
 }
 
 /**
+ * The target for a look edited on its own, with no block selected: the look,
+ * read and written as a shared style is, its edits queued the same way.
+ * `undefined` while there is no look, or no host to store it.
+ *
+ * @experimental Settles with the Design panel's Block looks group.
+ */
+export function useLookTarget(
+  look: SharedStyleRow | undefined,
+  host: SharedStylesHost | undefined
+): StyleTarget | undefined {
+  const queued = useQueuedStyles(look, host);
+  if (look === undefined || host === undefined || queued === undefined) {
+    return undefined;
+  }
+  return {
+    kind: "shared",
+    worn: NONE,
+    style: queued.style,
+    readOnly: !host.mayChange
+      ? NO_DESIGN_RIGHT
+      : look.locked
+        ? lockedStyleReason(look.name)
+        : undefined,
+    write: queued.write,
+  };
+}
+
+/**
  * The target's styles as the edits queued since the last read leave them,
  * and the write that queues one.
  *

@@ -206,7 +206,7 @@ describe.each(getConfiguredTestDialects())(
       );
       await t.nextly.updateSingle({
         slug: HOMEPAGE,
-        data: { content: placing("page", componentId, {}) },
+        data: { content: placing("page", componentId, {}), _overwrite: true },
         overrideAccess: true,
       });
     }, 180_000);
@@ -319,10 +319,10 @@ describe.each(getConfiguredTestDialects())(
 
     describe.each(HOSTS)("on $name", (host: Host) => {
       const save = (overrides: Row) =>
-        patch(
-          host.path(),
-          host.body(placing(host.kind, componentId, overrides))
-        );
+        patch(host.path(), {
+          ...host.body(placing(host.kind, componentId, overrides)),
+          _overwrite: true,
+        });
 
       it("saves a value for a field the component exposes", async () => {
         const answer = await save({ headline: "Acme launch" });

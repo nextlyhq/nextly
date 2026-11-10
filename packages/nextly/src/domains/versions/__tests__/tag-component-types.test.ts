@@ -13,6 +13,7 @@ import {
 } from "../../schema/field-types/field-type-registry";
 import { NextlyError } from "../../../errors";
 import {
+  holdsFieldOfType,
   rehydrateSnapshotDates,
   resolveComponentFieldMap,
   tagComponentTypes,
@@ -620,5 +621,81 @@ describe("the migrated fieldGroup spellings reach the capture walks", () => {
     );
     const seo = value.seo as Record<string, unknown>;
     expect(seo.when instanceof Date).toBe(true);
+  });
+});
+
+describe("holdsFieldOfType", () => {
+  // A contributed type is not in the built-in field union.
+  const doc = (name: string) =>
+    ({ name, type: "doc" }) as unknown as FieldConfig;
+  const lookups: string[] = [];
+  const components: Record<string, FieldConfig[]> = {
+    wrapper: [
+      { name: "inner", type: "component", component: "leaf" },
+    ] as FieldConfig[],
+    leaf: [doc("deep")],
+    plain: [{ name: "label", type: "text" }] as FieldConfig[],
+  };
+  const lookup = async (slug: string) => {
+    lookups.push(slug);
+    return components[slug] ?? null;
+  };
+  afterEach(() => {
+    lookups.length = 0;
+  });
+
+  it("finds the type at the top level without looking up a component", async () => {
+    const fields = [
+      { name: "hero", type: "component", component: "wrapper" },
+      doc("body"),
+    ];
+
+    expect(await holdsFieldOfType(fields, ["doc"], lookup)).toBe(true);
+    expect(lookups).toEqual([]);
+  });
+
+  it("finds it inside groups and repeaters at any depth", async () => {
+    const fields = [
+      {
+        name: "rows",
+        type: "repeater",
+        fields: [
+          {
+            name: "panel",
+            type: "group",
+            fields: [{ type: "group", fields: [doc("body")] }],
+          },
+        ],
+      },
+    ];
+
+    expect(await holdsFieldOfType(fields, ["doc"], lookup)).toBe(true);
+  });
+
+  it("finds it inside a component named by a component", async () => {
+    const fields = [{ name: "hero", type: "component", component: "wrapper" }];
+
+    expect(await holdsFieldOfType(fields, ["doc"], lookup)).toBe(true);
+    expect([...lookups].sort()).toEqual(["leaf", "wrapper"]);
+  });
+
+  it("answers false where neither the fields nor their components hold it", async () => {
+    const fields = [
+      { name: "title", type: "text" },
+      { name: "hero", type: "component", component: "plain" },
+      { name: "gone", type: "component", component: "missing" },
+    ];
+
+    expect(await holdsFieldOfType(fields, ["doc"], lookup)).toBe(false);
+    // The control: the same fields hold `text`.
+    expect(await holdsFieldOfType(fields, ["text"], lookup)).toBe(true);
+    expect(await holdsFieldOfType(fields, [], lookup)).toBe(false);
+  });
+
+  it("terminates on a group that contains itself", async () => {
+    const group: Record<string, unknown> = { fields: [] };
+    (group.fields as unknown[]).push(group);
+
+    expect(await holdsFieldOfType([group], ["doc"], lookup)).toBe(false);
   });
 });

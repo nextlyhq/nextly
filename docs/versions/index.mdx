@@ -62,6 +62,24 @@ or not at all — there is no window where a document is saved and its history i
 The stored snapshot has the same shape the read path returns, which is what makes a
 restored version equal to a normal read rather than an approximation of one.
 
+History also shows events that are not versions. Taking over a document someone else is
+editing in the admin is one: it appears between the versions as "Took over from Ana", or "Took
+over (previous editor unavailable)" when that editor has no name or no account any more. Opening, leaving and
+asking for edit access are not recorded. See
+[Editing with others](/docs/admin/editing-together#taking-over).
+
+A save that chose to [overwrite](/docs/api-reference/rest-api#choosing-to-overwrite) is
+another, recorded whether or not the document keeps versions. When the version it was made from
+was out of date, it names whose changes it replaced: "Overwrote changes by Ben", or "by a
+member", "by an API key", "by a scheduled release", "by an agent", "by the system", or "Overwrote
+changes (previous editor unavailable)" for someone who can no longer be named. Otherwise it reads
+"Saved as an overwrite", or "Saved as an overwrite (no version given)" when the save sent no
+version.
+
+These version numbers are the history's own. A document's `_rev`, which a save sends back to
+show which version it was made from, is a different value (see
+[Versions and conflicts](/docs/api-reference/rest-api#versions-and-conflicts)).
+
 ## Comparing two versions
 
 The diff compares two snapshots **against the current field definitions**, not against the
@@ -172,6 +190,10 @@ Two consequences worth knowing:
 
 System columns — creation timestamps, the creating user — are never carried back by a
 restore, so history cannot be used to forge them.
+
+A restore through the API is judged like any other save. Send the `_rev` you read, and the
+restore is refused with `409 STALE_VERSION` if the document changed since; its answer carries the
+new `_rev` (see [Which writes are judged](/docs/api-reference/rest-api#which-writes-are-judged)).
 
 ## Working drafts
 

@@ -72,7 +72,12 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SLUG,
-        { headline: "live", goesLiveAt: PUBLISHED_AT, status: "published" },
+        {
+          headline: "live",
+          goesLiveAt: PUBLISHED_AT,
+          status: "published",
+          _overwrite: true,
+        },
         { overrideAccess: true }
       );
 
@@ -88,7 +93,7 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SLUG,
-        { headline: "edited", goesLiveAt: EDITED_AT },
+        { headline: "edited", goesLiveAt: EDITED_AT, _overwrite: true },
         { overrideAccess: true }
       );
 
@@ -112,7 +117,12 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SLUG,
-        { headline: "live", goesLiveAt: PUBLISHED_AT, status: "published" },
+        {
+          headline: "live",
+          goesLiveAt: PUBLISHED_AT,
+          status: "published",
+          _overwrite: true,
+        },
         { overrideAccess: true }
       );
       const published = await singles.get(SLUG, { overrideAccess: true });
@@ -125,7 +135,7 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SLUG,
-        { headline: "edited" },
+        { headline: "edited", _overwrite: true },
         { overrideAccess: true }
       );
       const drafted = await singles.get(SLUG, {

@@ -30,6 +30,7 @@
  */
 
 import {
+  DEFAULT_TOKEN_PREFIX,
   findNode,
   isRawColour,
   isStyleLeaf,
@@ -282,6 +283,18 @@ const BLOCK_TARGET: StyleTarget = { kind: "block", worn: [] };
  * between the panel and the field: none of them reads it.
  */
 const StyleTargetContext = React.createContext<StyleTarget>(BLOCK_TARGET);
+
+/**
+ * The prefix the cascade's token references were written under, for a reader
+ * matching a value reaching from elsewhere to one token exactly; the default
+ * prefix while no cascade answers.
+ */
+const TokenPrefixContext = React.createContext<string>(DEFAULT_TOKEN_PREFIX);
+
+/** The cascade's token prefix, or the default while no cascade answers. */
+function tokenPrefixOf(cascade: PageStyleCascade | undefined): string {
+  return cascade?.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
+}
 
 export interface StyleInspectorPanelProps {
   /**
@@ -753,33 +766,35 @@ function StyleInspectorBody({
 
   return (
     <StyleTargetContext.Provider value={target}>
-      <AppliedAtTier.Provider
-        value={appliedAtReader({
-          cascade,
-          subject,
-          state: inspected.state,
-          breakpoints,
-          nodeId: inspected.nodeId,
-        })}
-      >
-        <CanvasTokenModeProvider value={tokenMode}>
-          <div className="nx-style-inspector" data-style-target={target.kind}>
-            {showReadOnlyReason ? (
-              <ReadOnlyNote target={target} reason={readOnlyReason} />
-            ) : null}
-            <NoStyleProperties count={inspected.sections.length} />
-            <StyleSections
-              sections={inspected.sections}
-              nodeId={inspected.nodeId}
-              open={open}
-              onOpen={setOpenGroup}
-              readOnlyReason={readOnlyReason}
-              surroundings={surroundings}
-              fit={inspected.objectFit}
-            />
-          </div>
-        </CanvasTokenModeProvider>
-      </AppliedAtTier.Provider>
+      <TokenPrefixContext.Provider value={tokenPrefixOf(cascade)}>
+        <AppliedAtTier.Provider
+          value={appliedAtReader({
+            cascade,
+            subject,
+            state: inspected.state,
+            breakpoints,
+            nodeId: inspected.nodeId,
+          })}
+        >
+          <CanvasTokenModeProvider value={tokenMode}>
+            <div className="nx-style-inspector" data-style-target={target.kind}>
+              {showReadOnlyReason ? (
+                <ReadOnlyNote target={target} reason={readOnlyReason} />
+              ) : null}
+              <NoStyleProperties count={inspected.sections.length} />
+              <StyleSections
+                sections={inspected.sections}
+                nodeId={inspected.nodeId}
+                open={open}
+                onOpen={setOpenGroup}
+                readOnlyReason={readOnlyReason}
+                surroundings={surroundings}
+                fit={inspected.objectFit}
+              />
+            </div>
+          </CanvasTokenModeProvider>
+        </AppliedAtTier.Provider>
+      </TokenPrefixContext.Provider>
     </StyleTargetContext.Provider>
   );
 }
@@ -1332,8 +1347,9 @@ function BlockShortcutsFields({
   minHeightDrawn: boolean;
 }): React.JSX.Element | null {
   const target = React.useContext(StyleTargetContext);
+  const tokenPrefix = React.useContext(TokenPrefixContext);
   if (target.kind !== "block") return null;
-  const where = shortcutWhere(surroundings);
+  const where = shortcutWhere(surroundings, tokenPrefix);
   return (
     <>
       <BlockShortcutsControl {...where} />
@@ -1349,20 +1365,27 @@ function BlockPresetsOver({
   surroundings: StyleFieldSurroundings;
 }): React.JSX.Element | null {
   const target = React.useContext(StyleTargetContext);
+  const tokenPrefix = React.useContext(TokenPrefixContext);
   if (target.kind !== "block") return null;
-  return <MinHeightPresets {...shortcutWhere(surroundings)} over />;
+  return (
+    <MinHeightPresets {...shortcutWhere(surroundings, tokenPrefix)} over />
+  );
 }
 
 /**
  * Where a shortcut writes, and what reaches it from elsewhere: the value the
  * panel's own provenance reports as inherited, the one ranking of the trace.
  */
-function shortcutWhere(surroundings: StyleFieldSurroundings) {
+function shortcutWhere(
+  surroundings: StyleFieldSurroundings,
+  tokenPrefix: string
+) {
   return {
     editor: surroundings.editor,
     nodeId: surroundings.nodeId,
     state: surroundings.state,
     breakpoint: surroundings.breakpoint,
+    tokenPrefix,
     reaching: reachingBeneath(cssProperty =>
       surroundings.provenanceOf({
         kind: "cssValue",
@@ -1408,9 +1431,11 @@ function withOverlayOffered(
 }
 
 /**
- * Whether an image or a gradient, or an overlay itself, reaches what is
- * edited: read from the styles the fields show, the shared style's while it
- * is the target, whose cascade the panel does not trace.
+ * Whether the overlay has something to cover where it is edited, or an overlay
+ * of its own to clear. Where the cascade answers, the image that wins here
+ * decides, judged as the compiler paints it, so `none` covers nothing whatever
+ * another device or state stores; where it cannot answer (a shared style being
+ * edited, which the panel does not trace), what the target stores anywhere.
  */
 function overlayCovers(
   surroundings: StyleFieldSurroundings,
@@ -1421,41 +1446,65 @@ function overlayCovers(
     surroundings.editor,
     surroundings.nodeId
   );
-  if (storesBackgroundImage(styles)) return true;
+  if (anyAddress(styles, storesOverlay)) return true;
   const answer = surroundings.provenanceOf(BACKGROUND_IMAGE_LEAF);
-  return answer !== undefined && answer.provenance.kind !== "unset";
+  if (answer !== undefined) return winningImagePaints(answer.provenance);
+  return anyAddress(styles, paintsImage);
 }
 
 /**
- * Whether styles store, at any state or device, an image, a gradient or an
- * overlay: what keeps the overlay offered where no cascade answers.
+ * Whether the image a provenance names paints one: a value rather than a
+ * keyword that clears it, by the compiler's own judgement. The image and the
+ * gradient both write `background-image`, so the trace often cannot say which
+ * control wrote the winner; it is still the winner, and its value decides.
  */
-function storesBackgroundImage(styles: NodeStyles | undefined): boolean {
+function winningImagePaints(provenance: StyleProvenance): boolean {
+  return (
+    provenance.kind !== "unset" &&
+    paintsBackgroundImage("gradient", provenance.entry.value)
+  );
+}
+
+/** Whether any state and device of these styles holds what `test` asks. */
+function anyAddress(
+  styles: NodeStyles | undefined,
+  test: (values: StyleValues | undefined) => boolean
+): boolean {
   return Object.values(styles ?? {}).some(byBreakpoint =>
-    Object.values(byBreakpoint ?? {}).some(paintsOrOverlays)
+    Object.values(byBreakpoint ?? {}).some(test)
+  );
+}
+
+/** One address's background, when it is an object. */
+function backgroundAt(
+  values: StyleValues | undefined
+): Record<string, unknown> | undefined {
+  const background = values?.background;
+  return typeof background === "object" &&
+    background !== null &&
+    !Array.isArray(background)
+    ? (background as Record<string, unknown>)
+    : undefined;
+}
+
+/** Whether one address stores an overlay of its own. */
+function storesOverlay(values: StyleValues | undefined): boolean {
+  const background = backgroundAt(values);
+  return (
+    background !== undefined &&
+    [...OVERLAY_FIELDS].some(field => Object.hasOwn(background, field))
   );
 }
 
 /**
  * Whether one address's values paint an image or a gradient, judged as the
- * compiler judges it (`none` clears an image, and an overlay over it would
- * cover nothing), or store an overlay of their own.
+ * compiler judges it: `none` clears an image, and an overlay over it would
+ * cover nothing.
  */
-function paintsOrOverlays(values: StyleValues | undefined): boolean {
-  if (paintsBackgroundImage("gradient", values?.backgroundGradient)) {
-    return true;
-  }
-  const background = values?.background;
-  if (
-    typeof background !== "object" ||
-    background === null ||
-    Array.isArray(background)
-  ) {
-    return false;
-  }
+function paintsImage(values: StyleValues | undefined): boolean {
   return (
-    paintsBackgroundImage("url", (background as { url?: unknown }).url) ||
-    [...OVERLAY_FIELDS].some(field => Object.hasOwn(background, field))
+    paintsBackgroundImage("gradient", values?.backgroundGradient) ||
+    paintsBackgroundImage("url", backgroundAt(values)?.url)
   );
 }
 

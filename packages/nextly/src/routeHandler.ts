@@ -174,7 +174,17 @@ import {
 } from "./middleware/rest-limit-gate";
 import { createRestLimits, restLimitCounts } from "./middleware/rest-limits";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
+import {
+  contributionsForReader,
+  listFiltersForReader,
+  type ContributionAudience,
+} from "./plugins/admin-contributions-offer";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
+import {
+  contributionAudienceFor,
+  NOBODY,
+} from "./plugins/contribution-audience";
+import { assertDocumentSurfaces } from "./plugins/document-surfaces";
 import { assertNoRemovedWidgetKeys } from "./plugins/removed-widget-keys";
 import {
   pluginRouteAuthRequired,
@@ -2040,7 +2050,14 @@ async function buildAdminMeta(
    * {@link NO_WIDGETS} and discards `workspace` anyway. Required rather than
    * defaulted, so a new caller has to say who is asking.
    */
-  audience: WidgetAudience
+  audience: WidgetAudience,
+  /**
+   * The reader plugins' contributions and entry-list filters are offered to.
+   * Required for the same reason as `audience`: the public route passes
+   * {@link NOBODY}, and only the login page's contributions, which can carry
+   * neither a permission nor a rule, reach it.
+   */
+  offerTo: ContributionAudience
 ): Promise<{
   branding: Record<string, unknown>;
   workspace: Record<string, unknown>;
@@ -2120,6 +2137,32 @@ async function buildAdminMeta(
   // them (`collectionDefaultForReader`).
   const readable = audience.readableCollections;
   const plugins = buildPluginAdminMeta(config?.plugins ?? [], pluginOverrides);
+  // Each plugin's entry-list filters as THIS reader may use them: on each
+  // collection, only the options the list read would let them filter by.
+  for (const meta of plugins) {
+    if (meta.listFilters === undefined) continue;
+    const offered = await listFiltersForReader(meta.listFilters, offerTo);
+    if (offered.length > 0) meta.listFilters = offered;
+    else delete meta.listFilters;
+  }
+  // Every place's contributions, in order, less what this reader may not
+  // see; the login page's go to the public half alone.
+  const contributions = await contributionsForReader(
+    config?.plugins ?? [],
+    offerTo,
+    "workspace"
+  );
+  if (Object.keys(contributions).length > 0) {
+    workspace.contributions = contributions;
+  }
+  const loginContributions = await contributionsForReader(
+    config?.plugins ?? [],
+    NOBODY,
+    "login"
+  );
+  if (Object.keys(loginContributions).length > 0) {
+    branding.contributions = loginContributions;
+  }
   if (plugins.length > 0) {
     workspace.plugins = plugins;
 
@@ -2303,7 +2346,7 @@ export { withSessionCacheHeaders };
  * choose those fields rather than this package.
  */
 async function handleAdminMetaRequest(): Promise<Response> {
-  const { branding } = await buildAdminMeta(NO_WIDGETS);
+  const { branding } = await buildAdminMeta(NO_WIDGETS, NOBODY);
   return respondAdminMeta(branding);
 }
 
@@ -2355,14 +2398,22 @@ async function handleAdminMetaWorkspaceRequest(
   // handler deliberately does not initialise services, and refreshing there
   // asked an empty container for the collection registry on every anonymous
   // login-page request, for a payload that discards the cards anyway.
-  const caller = readAccessCaller(await readCaller(auth));
+  const read = await readCaller(auth);
+  const caller = readAccessCaller(read);
   const audience = await widgetAudience(caller);
+  // The reader the contributions and filters are offered to: the same caller,
+  // as the list read would judge it.
+  const offerTo = await contributionAudienceFor(
+    getHandlerConfig()?.plugins ?? [],
+    read,
+    caller
+  );
 
   // Dispatched outside the content requests that bring the language list up to date, so it does
   // so itself: a language added on another server reaches the admin within the registry's
   // interval rather than whenever unrelated content traffic next arrives here.
   const { workspace } = await withCurrentLanguages(() =>
-    buildAdminMeta(audience)
+    buildAdminMeta(audience, offerTo)
   );
   return withSessionCacheHeaders(respondAdminMeta(workspace));
 }
@@ -2371,11 +2422,18 @@ async function handleAdminMetaWorkspaceRequest(
  * The catch-all Email routes whose grant is not their verb's action, each the
  * system policy's entry for what it does, as the standalone routes ask it:
  * choosing a provider type is a read or a create, making a provider the
- * default updates it, and a test send through a provider or a template
- * preview creates nothing stored and asks create.
+ * default updates it, a test send through a provider or a template preview
+ * creates nothing stored and asks create, and checking a saved provider takes
+ * the edit grant, because it is an edit's first step and tries the provider's
+ * stored secrets.
  */
 const EMAIL_METHOD_GRANTS: Readonly<Record<string, RouteGrant>> = {
   listProviderTypes: SYSTEM_READ_POLICY.emailProviders.readTypes,
+  // A saved provider's check travels over POST, but it is an edit's first
+  // step and tries the provider's stored secrets, so it takes the grant an
+  // edit takes: read from the verb, a person who may only add providers
+  // could point another provider's stored sign-in at a server of their own.
+  checkSavedProvider: SYSTEM_WRITE_POLICY.emailProviders.update,
   setDefault: SYSTEM_WRITE_POLICY.emailProviders.makeDefault,
   testProvider: SYSTEM_WRITE_POLICY.emailProviders.sendTest,
   previewTemplate: SYSTEM_WRITE_POLICY.emailTemplates.preview,
@@ -2628,6 +2686,9 @@ export function createDynamicHandlers(options?: {
     // And the document views: two screens claiming one address on one
     // document would leave the admin drawing whichever it reached first.
     assertDocumentViews(options.config.plugins ?? []);
+    // And the document actions and panel sections, refused here for the
+    // same reason.
+    assertDocumentSurfaces(options.config.plugins ?? []);
     setHandlerConfig(options.config);
   }
 

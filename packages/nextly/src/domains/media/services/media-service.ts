@@ -628,6 +628,34 @@ export class MediaService {
   }
 
   /**
+   * Several media files by id, in one read: each file found, once, in the
+   * order its id was first asked for; an id with no file has none. Judged
+   * by the caller as `findById` is: this answers what it is asked.
+   *
+   * @param mediaIds - The ids, at most a page of them
+   * @param context - Request context
+   * @returns The files found
+   */
+  async findByIds(
+    mediaIds: readonly string[],
+    _context: RequestContext
+  ): Promise<MediaFile[]> {
+    const asked = [...new Set(mediaIds)];
+    this.logger.debug("Finding media by ids", { count: asked.length });
+    const result = await this.legacyMediaService.getMediaByIds(asked);
+    if (!result.success || result.data === null) {
+      throw this.mapLegacyErrorToNextlyError(
+        { ...result, statusCode: result.statusCode, data: null },
+        { entity: "media" }
+      );
+    }
+    const found = new Map(
+      result.data.map(row => [row.id, this.mapToMediaFile(row)] as const)
+    );
+    return asked.flatMap(id => found.get(id) ?? []);
+  }
+
+  /**
    * List media files with pagination and filtering
    *
    * @param options - Query options (pagination, search, filters)

@@ -564,9 +564,16 @@ export function rowPairing(
   };
 }
 
-/** A row's own identity, where it carries one. */
-function rowId(row: unknown): string | undefined {
-  return isRecord(row) && typeof row.id === "string" ? row.id : undefined;
+/**
+ * A row's own identity, where it carries one: a non-empty string. An empty
+ * `id` names no row, so it counts as none, and a row sending one pairs as a
+ * row sent without an id does. Every pairing of rows (denied changes, kept
+ * passwords, saved row ids) reads a row's id here.
+ */
+export function rowId(row: unknown): string | undefined {
+  return isRecord(row) && typeof row.id === "string" && row.id !== ""
+    ? row.id
+    : undefined;
 }
 
 /**

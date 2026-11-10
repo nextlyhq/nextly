@@ -54,7 +54,8 @@ interface PluginVersions {
   deleteWorkingDraft(
     ref: VersionRef,
     locale: string | null,
-    opts?: ServiceOpts
+    opts?: ServiceOpts,
+    version?: Readonly<Record<string, unknown>>
   ): Promise<number>;
   autosave(
     input: {
@@ -136,7 +137,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           user: { id: ownerId },
         },
-        { title: "edited" }
+        { title: "edited", _overwrite: true }
       );
       expect(
         (await draftParts(ref)).length,
@@ -197,14 +198,18 @@ describe.each(getConfiguredTestDialects())(
     describe("discarding a working draft", () => {
       it("is judged in the language it names: allowed in English where the rule closes French", async () => {
         const ref = await withEnglishDraft(FRENCH_CLOSED);
-        await versions.deleteWorkingDraft(ref, "en", asEditor());
+        await versions.deleteWorkingDraft(ref, "en", asEditor(), {
+          _overwrite: true,
+        });
         expect(await draftParts(ref)).toEqual([]);
       });
 
       it("is refused in French where the rule closes French, and the draft stays", async () => {
         const ref = await withEnglishDraft(FRENCH_CLOSED);
         await expect(
-          versions.deleteWorkingDraft(ref, "fr", asEditor())
+          versions.deleteWorkingDraft(ref, "fr", asEditor(), {
+            _overwrite: true,
+          })
         ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
         expect((await draftParts(ref)).length).toBeGreaterThan(0);
       });
@@ -212,7 +217,9 @@ describe.each(getConfiguredTestDialects())(
       it("is refused in English where the rule opens only where French is involved, and the draft stays", async () => {
         const ref = await withEnglishDraft(FRENCH_INVOLVED);
         await expect(
-          versions.deleteWorkingDraft(ref, "en", asEditor())
+          versions.deleteWorkingDraft(ref, "en", asEditor(), {
+            _overwrite: true,
+          })
         ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
         expect((await draftParts(ref)).length).toBeGreaterThan(0);
       });

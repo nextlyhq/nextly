@@ -3,11 +3,11 @@
  * handler, with a real API key per role, against a real database on each
  * dialect.
  *
- * The unit suite pins how the route narrows the fields it offers from core's
- * refusals. This pins that core's answer is the caller's own on every
- * dialect: a field with a read rule the caller fails is not offered, the
- * fields the caller may read are, and the probe that asks (a read that no row
- * can match, so nothing is sorted) is accepted rather than refused.
+ * The unit suite pins how the route chooses the fields it offers from the
+ * public's. This pins, on every dialect, that the fields are the PUBLIC's as
+ * core judges them, whoever asks: a field visitors may not read is not
+ * offered even to a caller who may read it, a collection visitors may read
+ * none of offers no field, and the collections listed are the caller's.
  *
  * @module __tests__/loop-collections-route.integration.test
  */
@@ -43,21 +43,21 @@ const NOTES = "notes";
 
 const articles = defineCollection({
   slug: ARTICLES,
+  // Visitors may read articles, as a published page's list does.
+  access: { read: () => true },
   fields: [
     text({
       name: "headline",
-      // A field-level read rule, in the spelling core hands a rule: the
-      // stored permission slug. A caller without `read-notes` reads the row
-      // and not its headline, so it may not order rows by it either.
-      access: {
-        read: ({ permissions }: { permissions: string[] }) =>
-          permissions.includes(`read-${NOTES}`),
-      },
+      // A field-level read rule a visitor fails and a signed-in caller
+      // passes: a list may not name it, since the entries shown would reveal
+      // its values to visitors.
+      access: { read: ({ user }: { user: unknown }) => user != null },
     } as never),
     text({ name: "body" }),
   ],
 });
 
+/** A collection visitors may not read, which the caller may. */
 const notes = defineCollection({
   slug: NOTES,
   fields: [text({ name: "title" })],
@@ -120,27 +120,30 @@ async function listed(key: string): Promise<LoopCollectionsResponse> {
 }
 
 /** The names of the fields offered for `slug`, or `undefined` if it is not listed. */
-function sortNames(
+function fieldNames(
   answer: LoopCollectionsResponse,
   slug: string
 ): string[] | undefined {
   return answer.items
     .find(item => item.slug === slug)
-    ?.sortFields.map(field => field.name);
+    ?.fields.map(field => field.name);
 }
 
 describe.each(getConfiguredTestDialects())(
   "the loop collections route (%s)",
   (dialect: TestDialect) => {
     let t: TestNextly;
-    /** Reads articles and their headlines. */
+    /** Reads articles, their headlines and notes. */
     let reader = "";
-    /** Reads articles, and not the headline field. */
-    let headlineBlind = "";
+    /** Reads articles only. */
+    let articlesOnly = "";
 
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
+        // The Public role, granted each collection's read where its rule
+        // answers true, as boot grants it: the fields offered are its.
+        seedPublic: true,
         collections: [articles, notes],
         plugins: [pageBuilder()],
       });
@@ -185,7 +188,7 @@ describe.each(getConfiguredTestDialects())(
       }
 
       reader = await keyHolding([`read-${ARTICLES}`, `read-${NOTES}`]);
-      headlineBlind = await keyHolding([`read-${ARTICLES}`]);
+      articlesOnly = await keyHolding([`read-${ARTICLES}`]);
 
       // Rows to order: a probe that read them would have something to sort.
       for (const headline of ["Beta", "Alpha", "Gamma"]) {
@@ -201,24 +204,22 @@ describe.each(getConfiguredTestDialects())(
       clearBlocks();
     });
 
-    it("offers every field a caller who may read them all can sort by", async () => {
-      const names = sortNames(await listed(reader), ARTICLES);
-
-      expect(names).toEqual(expect.arrayContaining(["headline", "body"]));
-    });
-
-    it("leaves out a field whose read rule the caller fails, keeping the rest", async () => {
-      const names = sortNames(await listed(headlineBlind), ARTICLES);
+    it("offers the fields visitors may read, even to a caller who may read more", async () => {
+      const names = fieldNames(await listed(reader), ARTICLES);
 
       expect(names).toContain("body");
       expect(names).not.toContain("headline");
     });
 
-    it("lists only the collections the caller may read", async () => {
-      const answer = await listed(headlineBlind);
+    it("offers no field of a collection visitors may read none of", async () => {
+      expect(fieldNames(await listed(reader), NOTES)).toEqual([]);
+    });
 
-      expect(sortNames(answer, ARTICLES)).toBeDefined();
-      expect(sortNames(answer, NOTES)).toBeUndefined();
+    it("lists only the collections the caller may read", async () => {
+      const answer = await listed(articlesOnly);
+
+      expect(fieldNames(answer, ARTICLES)).toContain("body");
+      expect(fieldNames(answer, NOTES)).toBeUndefined();
     });
   }
 );

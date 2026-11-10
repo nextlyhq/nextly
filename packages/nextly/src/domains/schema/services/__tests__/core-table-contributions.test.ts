@@ -186,6 +186,7 @@ describe("the static core tables built from the factories", () => {
       emailVerifiedVia: string | null;
       passwordUpdatedAt: Date | null;
       image: string | null;
+      interfaceLanguage: string | null;
       passwordHash: string | null;
       isActive: boolean;
       deactivatedAt: Date | null;

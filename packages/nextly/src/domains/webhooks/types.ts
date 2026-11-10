@@ -66,6 +66,18 @@ export const WEBHOOK_EVENT_WILDCARD = "*";
 export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
 
 /**
+ * A webhook event type a plugin declares, once checked as the recording
+ * plugin's own. Branded so that only the declared-type check
+ * (`isOwnEventType`) produces one: core's write paths keep the closed
+ * {@link WebhookEventType}, and a string a plugin passes cannot reach the
+ * outbox unchecked.
+ */
+export type PluginEventType = string & { readonly __pluginEventType: true };
+
+/** The type a recorded event carries: one of core's, or a plugin's checked one. */
+export type RecordedEventType = WebhookEventType | PluginEventType;
+
+/**
  * What an endpoint can subscribe to: one of core's event types, a type a
  * plugin declares (`contributes.webhookEvents`, a string in the plugin's
  * namespace), or the wildcard (all-and-future). Distinct from
@@ -120,6 +132,22 @@ export type WebhookResource =
       slug?: string;
       id?: string;
       locale?: string;
+    }
+  | {
+      /**
+       * An event a plugin recorded, of a type it declares. `plugin` is its
+       * admin slug. Never a `collection`, so a collection-scoped endpoint
+       * never receives one, even from a plugin slugged as a collection is.
+       * `locale` is optional as on every other kind, so code that adds a
+       * language to any resource still types; `ctx.webhooks.record` sets
+       * none.
+       */
+      kind: "plugin";
+      plugin: string;
+      collection?: never;
+      slug?: never;
+      id?: string;
+      locale?: string;
     };
 
 /** Who triggered the event. */
@@ -136,7 +164,7 @@ export interface WebhookActor {
 export interface WebhookEvent {
   /** ULID; stable across retries; doubles as the idempotency / webhook-id key. */
   id: string;
-  type: WebhookEventType;
+  type: RecordedEventType;
   /** Envelope schema version; bumped only on a breaking envelope change. */
   specversion: "1";
   /** Event time (not delivery time), ISO-8601. */

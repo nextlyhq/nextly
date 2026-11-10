@@ -24,6 +24,7 @@
  */
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import type { RequestActor } from "../../../auth/request-actor";
 import type { HookExemptRead } from "../../../services/collections/trust-grant";
 import type { RequestContext } from "../../../shared/types";
 
@@ -69,6 +70,13 @@ export interface ForwardedContext {
    * write receives and ignores it, so a write keeps every hook.
    */
   hookExemptRead: HookExemptRead | undefined;
+  /**
+   * Who a write is recorded under, when the context names one: the actor of
+   * the plugin route request a facade write was made for. Present only when
+   * set, so an actor passed beside the context is never cleared by an
+   * absent one.
+   */
+  actor?: RequestActor;
 }
 
 /** Read what the entry service needs off a {@link RequestContext}, whole. */
@@ -84,5 +92,6 @@ export function forwardedFromContext(
     locale: context.locale,
     fallbackLocale: context.fallbackLocale,
     hookExemptRead: context.hookExemptRead,
+    ...(context.actor === undefined ? {} : { actor: context.actor }),
   };
 }

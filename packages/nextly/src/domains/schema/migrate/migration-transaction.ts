@@ -8,6 +8,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
 import { isPluginLedgerRow } from "../events/ledger-scope";
 
 import { requiredColumnCheckpoint } from "./required-column-guard";
@@ -105,6 +106,11 @@ export async function executeTransaction<T>(
   adapter: DrizzleAdapter,
   work: (tx: MigrationTransaction) => Promise<T>
 ): Promise<T> {
+  // A precondition, on every dialect: a transaction opened inside another
+  // joins it, and a migration must not. On MySQL its DDL would commit the
+  // outer transaction implicitly; on SQLite the foreign-key switch it needs
+  // does nothing inside one.
+  assertNoOpenTransaction(adapter, "A migration");
   const dialect = adapter.getCapabilities().dialect;
   if (dialect !== "sqlite") {
     return adapter.transaction(

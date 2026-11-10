@@ -1,4 +1,10 @@
-import type { PublishedContentSource } from "nextly/config";
+import type {
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
+  AdminContributionsMeta,
+  PluginListFilterDeclaration,
+  PublishedContentSource,
+} from "nextly/config";
 import type {
   FieldStoragePrimitive,
   FieldSurface,
@@ -219,6 +225,29 @@ export interface PluginMetadata {
     )
   >;
   /**
+   * @experimental Overrides of a collection's built-in document actions,
+   * contributed via `contributes.admin.views[<slug>].documentActions`: on the
+   * slug the admin routes (rename map applied), `"hidden"` or the component
+   * the action opens instead. Present only for enabled plugins.
+   */
+  documentActions?: Array<{
+    slug: string;
+    action: OverridableDocumentAction;
+    override: PluginDocumentActionOverride;
+  }>;
+  /**
+   * @experimental Sections added to a collection's document panel, after
+   * Details, contributed via `contributes.admin.views[<slug>].panelSections`.
+   * Present only for enabled plugins.
+   */
+  panelSections?: Array<{ slug: string; title: string; component: string }>;
+  /**
+   * @experimental The filters this plugin offers in the entry list's toolbar,
+   * via `contributes.admin.filters`, as they passed the boot check. Present
+   * only for enabled plugins.
+   */
+  listFilters?: PluginListFilterDeclaration[];
+  /**
    * Custom field types — `type` → admin editor component path. `layout:
    * "takeover"` marks a type whose visible field collapses the entry-form body
    * to just that field + its condition controller (see takeoverLayout). The
@@ -286,6 +315,13 @@ export interface AdminBranding {
    * `useBrandingStatus()` before concluding anything from a plugin missing here.
    */
   plugins?: PluginMetadata[];
+
+  /**
+   * Each admin place's contributions, by kind, in order, as this reader may
+   * see them: the signed-in half's every place but the login page's, the
+   * public half's the login page's alone.
+   */
+  contributions?: AdminContributionsMeta;
 
   /**
    * Public client configuration, readable before a session exists.

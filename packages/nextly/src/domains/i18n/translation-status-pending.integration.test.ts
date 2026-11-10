@@ -68,13 +68,13 @@ describe("translation overview reports pending changes (integration)", () => {
     const id = (created.data as { id: string }).id;
     await entries.updateEntry(
       { collectionName: SLUG, entryId: id, overrideAccess: true, locale: "de" },
-      { title: "DE", body: "DE body", status: "published" }
+      { title: "DE", body: "DE body", status: "published", _overwrite: true }
     );
 
     // Hold an edit in German only.
     const held = await entries.updateEntry(
       { collectionName: SLUG, entryId: id, overrideAccess: true, locale: "de" },
-      { body: "DE edited" }
+      { body: "DE edited", _overwrite: true }
     );
     expect(held.success).toBe(true);
 

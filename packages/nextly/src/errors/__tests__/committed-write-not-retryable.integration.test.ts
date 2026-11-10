@@ -76,7 +76,7 @@ describe.each(getConfiguredTestDialects())(
     function update(nextly: TestNextly["nextly"], headline: string) {
       return nextly.updateSingle({
         slug: "banner",
-        data: { headline },
+        data: { headline, _overwrite: true },
         overrideAccess: true,
       });
     }
@@ -182,6 +182,7 @@ describe.each(getConfiguredTestDialects())(
           collectionName: "pages",
           entryId: created.item.id,
           overrideAccess: true,
+          data: { _overwrite: true },
         });
       const status = async () =>
         (

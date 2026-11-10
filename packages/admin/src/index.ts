@@ -106,6 +106,8 @@ export {
   useMedia,
   useMediaItem,
   useMediaResolver,
+  // The library's images searched by name, for a picker outside a dialog.
+  useMediaSearcher,
   useUploadMedia,
   useUpdateMedia,
   useDeleteMedia,
@@ -154,6 +156,16 @@ export {
   useDocumentLocale,
   type DocumentLocale,
 } from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * A field's address in its document, with a repeater's row named by its saved
+ * id rather than its position. Exported for the plugin surface: a field that
+ * links to a view of itself names itself by this, so the link opens the same
+ * row however the rows are reordered.
+ */
+export {
+  useFieldAddress,
+  type FieldAddress,
+} from "./components/features/entries/EntryForm/useFieldAddress";
 /**
  * How the surrounding document stands, for a field that covers the editor's own
  * chrome. Separate from the identity deliberately: which document this is does
@@ -312,6 +324,9 @@ export {
   registerKnownPlugin,
   type ComponentPath,
   type CustomEditViewProps,
+  type DocumentActionReplacementProps,
+  type DocumentChangeResult,
+  type DocumentPanelSectionProps,
   type DocumentViewProps,
 } from "./lib/plugins/component-registry";
 export type { DocumentLockGates } from "./components/features/entries/EntryForm/document-lock-affordances";
@@ -816,6 +831,10 @@ export type { WidgetRenderSize } from "nextly/widget-result";
 // so a widget's own list words and moves its times as theirs do.
 export { formatRelativeTime as formatWidgetTime } from "./lib/dashboard";
 export { useNowTick as useWidgetClock } from "./hooks/useNowTick";
+// A field's key as the admin's screens word it ("membersOnly" is "Members
+// Only"), for a plugin naming a field it holds only by its key, so the plugin
+// and the admin name it alike.
+export { humanizeFieldName } from "./lib/field-label";
 // Asks the dashboard's cards and header summary again, for a widget whose own
 // write changes what they answer.
 export { useRefreshDashboard } from "./hooks/queries/useRefreshDashboard";

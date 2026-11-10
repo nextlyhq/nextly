@@ -21,11 +21,7 @@ import type { IconSource } from "@nextlyhq/ui";
  * same loader and the set is loaded once.
  */
 export async function loadLucideIcons(): Promise<IconSource> {
-  const lucide = await import("@nextlyhq/blocks-react/icons/lucide");
-  return {
-    prefix: lucide.LUCIDE_PREFIX,
-    label: "Lucide",
-    search: query => lucide.searchLucideIcons(query),
-    resolve: id => lucide.resolveLucideIcon(id),
-  };
+  // The set's own source object, so the admin and the page builder read the
+  // set the same way; only the dynamic import is this bundle's to make.
+  return (await import("@nextlyhq/blocks-react/icons/lucide")).lucideIconSource;
 }

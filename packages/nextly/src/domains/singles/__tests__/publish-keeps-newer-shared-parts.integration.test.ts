@@ -68,7 +68,11 @@ function save(
   locale: string,
   data: Record<string, unknown>
 ) {
-  return singles.update(SLUG, data, { locale, overrideAccess: true });
+  return singles.update(
+    SLUG,
+    { ...data, _overwrite: true },
+    { locale, overrideAccess: true }
+  );
 }
 
 async function heading(singles: SingleEntryService): Promise<unknown> {
@@ -138,6 +142,7 @@ describe.each(getConfiguredTestDialects())(
 
       const published = await singles.publishAllLocales(SLUG, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
 
       expect(published.success).toBe(true);
@@ -178,6 +183,7 @@ describe.each(getConfiguredTestDialects())(
         slug: SLUG,
         locale: "en",
         overrideAccess: true,
+        version: { _overwrite: true },
       });
       expect(taken.data).toEqual({
         taken: [],

@@ -87,7 +87,14 @@ import {
   useShortcuts,
   type TreeNode,
 } from "@nextlyhq/ui";
-import { Eye, EyeOff, Lock, LockOpen, SlidersHorizontal } from "lucide-react";
+import {
+  Eye,
+  EyeOff,
+  Lock,
+  LockOpen,
+  SlidersHorizontal,
+  SquareDashed,
+} from "lucide-react";
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
@@ -96,6 +103,11 @@ import { DRAG_SOURCE_ATTRIBUTE } from "./canvas";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import {
+  EntryContentRowFact,
+  useEntryContentRows,
+  type EntryContentRowFacts,
+} from "./entry-content-layers";
 import { useHoveredBlockSetter } from "./hovered-block";
 import {
   layersLockChangeable,
@@ -117,6 +129,9 @@ import { LayerRowMenu, type RowMenuItem } from "./layer-row-menu";
 import {
   ancestorIds,
   filterLayers,
+  regionsTo,
+  slotRowsIn,
+  type SlotRow,
   layerLabel,
   layersOf,
   UNNAMED_COMPONENT,
@@ -309,6 +324,8 @@ interface RowView {
   readonly deviceName: string | undefined;
   readonly onRenamed: (id: string, name: string | null) => void;
   readonly onAct: (id: string, action: RowKeyAction) => void;
+  /** Each Entry content block's field, and whether it is gone, by id. */
+  readonly entryContent: ReadonlyMap<string, EntryContentRowFacts>;
 }
 
 /**
@@ -423,8 +440,49 @@ function RowAction({
   );
 }
 
+/**
+ * A list's region as a row: "Each entry" or "When empty", with how many
+ * blocks it holds. It names no block, so it is never dragged or renamed;
+ * choosing it selects the list and shows that region on the canvas.
+ */
+function slotRow(node: LayerNode, row: SlotRow, view: RowView): TreeNode {
+  const held = node.children.filter(child => child.slot === row.slot);
+  return {
+    id: row.rowId,
+    textValue: row.label,
+    label: (
+      <span className="nx-layer-row" data-nx-layer-slot={row.slot}>
+        <SquareDashed
+          aria-hidden="true"
+          size={14}
+          className="nx-layer-row__slot-mark"
+        />
+        <span className="nx-layer-row__label">{row.label}</span>
+        <span className="nx-layer-row__count">
+          {held.length === 0
+            ? "empty"
+            : held.length === 1
+              ? "1 block"
+              : `${String(held.length)} blocks`}
+        </span>
+      </span>
+    ),
+    ...(held.length === 0
+      ? {}
+      : { children: held.map(child => rowOf(child, view)) }),
+  };
+}
+
 /** A layer as a row: its mark, its name, and what is true about it. */
 function rowOf(node: LayerNode, view: RowView): TreeNode {
+  if (node.slotRows !== undefined) {
+    return {
+      id: node.id,
+      textValue: node.label,
+      label: <LayerRow node={node} view={view} />,
+      children: node.slotRows.map(row => slotRow(node, row, view)),
+    };
+  }
   return {
     id: node.id,
     // `textValue` carries the NAME alone even though the label renders badges
@@ -482,6 +540,7 @@ function LayerRow({
         </span>
       )}
       <ComponentTag node={node} />
+      <EntryContentRowFact facts={view.entryContent.get(node.id)} />
       <RowFacts node={node} />
       <RowActions node={node} view={view} />
     </span>
@@ -1058,6 +1117,9 @@ export function LayersPanel({
   // memo would need the document as its key and would therefore never hit.
   const tree = layersOf(editor.document, componentTitle, device);
   const search = filterLayers(tree, query);
+  // The region rows by their own ids, so choosing one is told from choosing
+  // a block by what the row is, never by how an id is spelled.
+  const regionRows = slotRowsIn(tree);
 
   /*
    * The document, read at effect time rather than depended on.
@@ -1079,7 +1141,13 @@ export function LayersPanel({
    * impossible to close.
    */
   React.useEffect(() => {
-    const needed = ancestorIds(documentRef.current, editor.selectedId);
+    const needed = [
+      ...ancestorIds(documentRef.current, editor.selectedId),
+      // And each list's region the selection sits in, drawn between them.
+      ...regionsTo(documentRef.current, editor.selectedId).map(
+        region => region.rowId
+      ),
+    ];
     if (needed.length === 0) return;
     setOpened(previous => {
       const missing = needed.filter(id => !previous.includes(id));
@@ -1100,6 +1168,7 @@ export function LayersPanel({
   );
 
   const icons = React.useMemo(iconsByType, []);
+  const entryContent = useEntryContentRows(editor.document);
   const deviceName = deviceNameOf(device);
   const { renamingId, onRenamed, act } = rows;
   const nodes = React.useMemo(
@@ -1112,11 +1181,13 @@ export function LayersPanel({
           deviceName,
           onRenamed,
           onAct: act,
+          entryContent,
         })
       ),
     [
       search.roots,
       icons,
+      entryContent,
       drag.draggingId,
       renamingId,
       deviceName,
@@ -1216,6 +1287,27 @@ export function LayersPanel({
               // decide what that does. A panel translating them itself would be a
               // second grammar to keep in step.
               onSelectedChange={(id, mode) => {
+                // A list's region names no block: choosing it selects the
+                // list, and shows that region on the canvas.
+                const region = regionRows.get(id);
+                if (region !== undefined) {
+                  editor.select(region.parentId, "replace");
+                  editor.showListEmpty?.(
+                    region.parentId,
+                    region.slot === "empty"
+                  );
+                  revealChosen(region.parentId);
+                  return;
+                }
+                // A block inside a list's region is drawn only while the
+                // list shows that region: each list above it is switched to
+                // the region it sits in first, so revealing finds it.
+                for (const around of regionsTo(editor.document, id)) {
+                  editor.showListEmpty?.(
+                    around.parentId,
+                    around.slot === "empty"
+                  );
+                }
                 editor.select(id, mode);
                 revealChosen(id);
               }}

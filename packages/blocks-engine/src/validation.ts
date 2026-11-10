@@ -11,11 +11,11 @@
  */
 import { BINDING_ISSUE_CODES, type BindingIssueCode } from "./binding-issues";
 import {
-  checkBinding,
   isBindPath,
   type BindingSchemaRef,
   type BindingSchemaSource,
 } from "./binding-rules";
+import { bindingSchemaIssues } from "./binding-schema-issues";
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import {
   BINDING_SOURCES,
@@ -23,6 +23,8 @@ import {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   EXPOSED_PROPERTY_TYPES,
+  MAX_SEO_SEGMENTS,
+  MAX_SEO_TEXT_LENGTH,
   MAX_CLASSES_PER_NODE,
   STYLE_STATES,
   isBindingSource,
@@ -30,6 +32,11 @@ import {
   isBlockType,
   renderedDomId,
 } from "./document";
+import {
+  ENTRY_CONTENT_ISSUE_CODES,
+  entryContentIssues,
+  type EntryContentIssueCode,
+} from "./entry-content";
 import { describeValue, pointer } from "./issue-text";
 import {
   DEFAULT_LIMITS,
@@ -38,8 +45,14 @@ import {
   MAX_NODES,
 } from "./limits";
 import type { DocumentLimits } from "./limits";
+import {
+  LIST_ISSUE_CODES,
+  listQueryIssues,
+  type ListFieldSource,
+} from "./list-query";
 import { boundedLimit, surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
+import type { NamedQuerySource } from "./named-query";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import {
@@ -77,6 +90,10 @@ import { walkNodes } from "./tree";
 import type { SlotDefaultSource } from "./tree";
 import { variantLabelIssues } from "./variant-labels";
 import { isConditionGated } from "./visibility";
+import {
+  CONDITION_ISSUE_CODES,
+  conditionIssues,
+} from "./visibility-conditions";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
 export type IssueSeverity = "error" | "warning";
@@ -240,6 +257,21 @@ export interface ValidationContext {
   bindingSchema?: BindingSchemaSource;
   /** Which source an `entry` binding reads, for {@link bindingSchema}. */
   bindingEntry?: BindingSchemaRef;
+  /**
+   * The fields each collection declares and the public may read, for judging
+   * what a collection list filters and sorts by (`list-query`).
+   *
+   * Absent means a list is judged by its shape and nesting only, on the same
+   * terms as {@link bindingSchema}. A list related to the page's entry looks
+   * its relation up in the collection {@link bindingEntry} names.
+   */
+  listFields?: ListFieldSource;
+  /**
+   * The named queries the site registers, for judging a list whose source
+   * is a custom one (`list-query`). Absent, such a list is judged by its
+   * shape alone.
+   */
+  namedQueries?: NamedQuerySource;
 }
 
 /** The validator's own codes, before the binding codes are added. */
@@ -306,6 +338,7 @@ const DOCUMENT_ISSUE_CODES = {
     "A breakpoint id is defined on more than one axis.",
   "invalid-visibility": "A node visibility structure is malformed.",
   "invalid-binding": "A binding is malformed.",
+  "invalid-seo": "A document's own metadata is malformed.",
   "missing-source-key":
     "A single-sourced binding does not name which single it reads.",
   "invalid-component-instance":
@@ -369,7 +402,12 @@ const DOCUMENT_ISSUE_CODES = {
 } as const;
 
 /** A stable validation issue code. */
-export type IssueCode = keyof typeof DOCUMENT_ISSUE_CODES | BindingIssueCode;
+export type IssueCode =
+  | keyof typeof DOCUMENT_ISSUE_CODES
+  | BindingIssueCode
+  | keyof typeof LIST_ISSUE_CODES
+  | keyof typeof CONDITION_ISSUE_CODES
+  | EntryContentIssueCode;
 
 /**
  * The stable issue-code vocabulary, each with a one-line description. Tests
@@ -383,6 +421,15 @@ export type IssueCode = keyof typeof DOCUMENT_ISSUE_CODES | BindingIssueCode;
 export const ISSUE_CODES: { readonly [Code in IssueCode]: string } = {
   ...DOCUMENT_ISSUE_CODES,
   ...BINDING_ISSUE_CODES,
+  // A collection list's query codes, from the module that reads the query, so
+  // the editor, the API and the renderer name a list's problem alike.
+  ...LIST_ISSUE_CODES,
+  // A block's visibility condition codes, the ones the renderer reports for
+  // the same conditions, so an author sees one name for one problem.
+  ...CONDITION_ISSUE_CODES,
+  // The Entry content block's own rules, from the module that reads the
+  // block, so the save, the editor and the API refuse one alike.
+  ...ENTRY_CONTENT_ISSUE_CODES,
 };
 
 /**
@@ -618,8 +665,76 @@ export function validateDocument(
   if (isPlainRecord(settings) && settings.styles !== undefined) {
     validateStyleEnvelope(settings.styles, "/settings/styles", state);
   }
+  // Skipped past the document's limits, as the other per-value checks are:
+  // the survey stopped reading, and a value of any width would otherwise be
+  // walked whole.
+  if (!overLimits && isPlainRecord(settings) && settings.seo !== undefined) {
+    validateDocumentSeo(settings.seo, "/settings/seo", issues);
+  }
 
   validateNodeForest(envelope.nodes, state, survey.limits.maxNodes);
+
+  // Each collection list's query: its bounds, filter rows, sort and related
+  // source, and the fields it names when the caller can answer for them.
+  // Under the survey's node cap, and skipped past the limits as the per-value
+  // work above is. A problem a stored form already held stays a warning, so a
+  // list a schema change broke does not make its page unsavable.
+  if (!overLimits) {
+    const judgement = {
+      ...schemaJudgement(ctx, survey.limits.maxNodes),
+      // A list whose source is a named query, and a condition on its rows,
+      // are judged against the query's declaration.
+      ...(ctx.namedQueries === undefined
+        ? {}
+        : { namedQueries: ctx.namedQueries }),
+    };
+    issues.push(
+      // As validation issues: the path names the block, so the block's id
+      // each judgement also carries is left to the editor that asks for it.
+      ...listQueryIssues(envelope.nodes, {
+        ...judgement,
+        ...(ctx.namedQueries === undefined
+          ? {}
+          : { namedQueries: ctx.namedQueries }),
+        // So a list in a component or a Layout region, which shows on many
+        // pages, is refused a split into pages of its own.
+        ...(typeof envelope.kind === "string"
+          ? { documentKind: envelope.kind }
+          : {}),
+      }).map(withoutNodeId),
+      // Each block's visibility conditions, judged as its lists are: the
+      // operator always, the field against the entry's or the list item's
+      // schema when given, a problem a stored form held kept a warning.
+      ...conditionIssues(envelope.nodes, judgement).map(withoutNodeId),
+      // Each binding, on a block or in the document's own metadata, against
+      // the schema of what it reads, when the caller can answer for it: the
+      // same rule the renderer falls back by, a problem a stored form held
+      // kept a warning.
+      ...(ctx.bindingSchema === undefined
+        ? []
+        : bindingSchemaIssues(
+            { nodes: envelope.nodes, settings },
+            {
+              schema: ctx.bindingSchema,
+              ...(ctx.bindingEntry === undefined
+                ? {}
+                : { entry: ctx.bindingEntry }),
+              ...(ctx.definitions === undefined
+                ? {}
+                : { definitions: ctx.definitions }),
+              ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
+              maxNodes: survey.limits.maxNodes,
+            }
+          ).map(withoutNodeId)),
+      // The Entry content block: in a template only, one per template, and
+      // its field named as text. Whether that field is a blocks field of the
+      // template's collection is the server's to judge, with the schema.
+      ...entryContentIssues(envelope.nodes, {
+        documentKind: envelope.kind,
+        maxNodes: survey.limits.maxNodes,
+      }).map(withoutNodeId)
+    );
+  }
 
   return { issues, survey };
 }
@@ -1770,7 +1885,7 @@ function validateNode(
   validateAttributes(node, path, issues);
   validateStyles(node, path, state);
   validateVisibility(node, path, state);
-  validateBindings(node, path, issues, state.ctx);
+  validateBindings(node, path, issues);
   validateComponentInstance(node, path, issues);
   validateDomIds(node, path, state, hidden);
 }
@@ -2266,6 +2381,17 @@ function validateVisibility(
       message: "A node visibility field must be an object.",
     });
     return;
+  }
+  // Placement gates exist only while a page is drawn; a document saved with
+  // one would ask the renderer for a gate no author set.
+  if (Object.hasOwn(vis, "within")) {
+    state.issues.push({
+      path: pointer(visPath, "within"),
+      code: "invalid-visibility",
+      severity: "error",
+      message:
+        "visibility.within is set only while a page is drawn and can't be stored.",
+    });
   }
   if (vis.conditions !== undefined) {
     // Each condition needs a string `field` AND a string `op`; the optional
@@ -3130,14 +3256,14 @@ function checkVariantTargets(
  * A binding's shape: an object keyed by prop, each a dot-joined path of field
  * identifiers (`isBindPath`, so nothing evaluable is stored) with a known
  * source and the key a Single needs. The rules that need the schema, the one
- * relation a path may follow among them, are checked here only when the
- * context carries one, and always where bindings are resolved.
+ * relation a path may follow among them, are checked over the whole document
+ * when the context carries one (`bindingSchemaIssues`), and always where
+ * bindings are resolved.
  */
 function validateBindings(
   node: BlockNode,
   path: string,
-  issues: ValidationIssue[],
-  ctx: ValidationContext
+  issues: ValidationIssue[]
 ): void {
   if (node.bindings === undefined) return;
   if (!isPlainRecord(node.bindings)) {
@@ -3152,111 +3278,188 @@ function validateBindings(
   const bindingsPath = pointer(path, "bindings");
   for (const [prop, binding] of Object.entries(node.bindings)) {
     const bPath = pointer(bindingsPath, prop);
-    // Check the shape BEFORE reading any field: a null/primitive binding value
-    // must produce an issue, not a thrown property access.
-    if (!isPlainRecord(binding)) {
-      issues.push({
-        path: bPath,
-        code: "invalid-binding",
-        severity: "error",
-        message: "A binding must be an object with a string $bind path.",
-      });
-      continue;
-    }
-    const bindPath = binding.$bind;
-    if (typeof bindPath !== "string") {
-      issues.push({
-        path: bPath,
-        code: "invalid-binding",
-        severity: "error",
-        message: "A binding must be an object with a string $bind path.",
-      });
-      continue;
-    }
-    if (!isBindPath(bindPath)) {
-      issues.push({
-        path: pointer(bPath, "$bind"),
-        code: "invalid-binding",
-        severity: "error",
-        message: `Binding path "${describeValue(bindPath)}" must be a dot-joined field path (never an expression).`,
-      });
-    }
-    const source: unknown = binding.source;
-    if (
-      source !== undefined &&
-      (typeof source !== "string" || !isBindingSource(source))
-    ) {
-      issues.push({
-        path: pointer(bPath, "source"),
-        code: "invalid-binding",
-        severity: "error",
-        message: `Binding source "${describeValue(source)}" is not one of: ${BINDING_SOURCES.join(", ")}.`,
-      });
-    }
-    const sourceKey = binding.sourceKey;
-    if (source === "single") {
-      if (typeof sourceKey !== "string" || sourceKey.length === 0) {
-        issues.push({
-          path: pointer(bPath, "sourceKey"),
-          code: "missing-source-key",
-          severity: "error",
-          message:
-            'A binding with source "single" must name the single via sourceKey.',
-          suggestion: "Set sourceKey to the single's slug.",
-        });
-      }
-    } else if (sourceKey !== undefined) {
-      // sourceKey is reserved for single-sourced bindings; on any other source
-      // it is an ambiguous, unresolvable field.
-      issues.push({
-        path: pointer(bPath, "sourceKey"),
-        code: "invalid-binding",
-        severity: "error",
-        message: 'sourceKey is only allowed when source is "single".',
-      });
-    }
-    validateBindingAgainstSchema(node, prop, binding, bPath, issues, ctx);
+    // The schema-aware checks run over the whole document once the walk is
+    // done (`bindingSchemaIssues`), so a problem a stored form already held
+    // stays a warning.
+    validBindingShape(binding, bPath, issues);
   }
 }
 
 /**
- * The schema-aware checks for one binding, when the context carries a schema.
- *
- * The same `checkBinding` the renderer runs, so what a save refuses and what a
- * page falls back on are one rule. A binding whose shape is malformed was
- * reported above, and is not reported twice.
+ * One binding's shape, wherever it is stored: an object with a `$bind` path
+ * of field identifiers (`isBindPath`, so nothing evaluable is stored), a
+ * known source, and the key a Single needs. Answers whether it was readable
+ * enough for the checks that follow it.
  */
-function validateBindingAgainstSchema(
-  node: BlockNode,
-  prop: string,
+function validBindingShape(
   binding: unknown,
   bPath: string,
-  issues: ValidationIssue[],
-  ctx: ValidationContext
-): void {
-  const schema = ctx.bindingSchema;
-  if (schema === undefined) return;
-  // A definition found with no `props` declares none, so every binding on it
-  // names a prop it lacks; only a definition not found leaves props unjudged.
-  const definition = ctx.definitions?.get(node.type);
-  const props = definition === undefined ? undefined : (definition.props ?? {});
-  const check = checkBinding({
-    nodeId: node.id,
-    prop,
-    binding,
-    ...(props === undefined ? {} : { props }),
-    schema,
-    ...(ctx.bindingEntry === undefined
-      ? {}
-      : { refs: { entry: ctx.bindingEntry } }),
-  });
-  for (const issue of check.issues) {
-    if (issue.code === "binding-malformed") continue;
+  issues: ValidationIssue[]
+): binding is Record<string, unknown> {
+  // Check the shape BEFORE reading any field: a null/primitive binding value
+  // must produce an issue, not a thrown property access.
+  if (!isPlainRecord(binding)) {
     issues.push({
       path: bPath,
-      code: issue.code,
+      code: "invalid-binding",
       severity: "error",
-      message: issue.message,
+      message: "A binding must be an object with a string $bind path.",
+    });
+    return false;
+  }
+  const bindPath = binding.$bind;
+  if (typeof bindPath !== "string") {
+    issues.push({
+      path: bPath,
+      code: "invalid-binding",
+      severity: "error",
+      message: "A binding must be an object with a string $bind path.",
+    });
+    return false;
+  }
+  if (!isBindPath(bindPath)) {
+    issues.push({
+      path: pointer(bPath, "$bind"),
+      code: "invalid-binding",
+      severity: "error",
+      message: `Binding path "${describeValue(bindPath)}" must be a dot-joined field path (never an expression).`,
+    });
+  }
+  const source: unknown = binding.source;
+  if (
+    source !== undefined &&
+    (typeof source !== "string" || !isBindingSource(source))
+  ) {
+    issues.push({
+      path: pointer(bPath, "source"),
+      code: "invalid-binding",
+      severity: "error",
+      message: `Binding source "${describeValue(source)}" is not one of: ${BINDING_SOURCES.join(", ")}.`,
+    });
+  }
+  const sourceKey = binding.sourceKey;
+  if (source === "single") {
+    if (typeof sourceKey !== "string" || sourceKey.length === 0) {
+      issues.push({
+        path: pointer(bPath, "sourceKey"),
+        code: "missing-source-key",
+        severity: "error",
+        message:
+          'A binding with source "single" must name the single via sourceKey.',
+        suggestion: "Set sourceKey to the single's slug.",
+      });
+    }
+  } else if (sourceKey !== undefined) {
+    // sourceKey is reserved for single-sourced bindings; on any other source
+    // it is an ambiguous, unresolvable field.
+    issues.push({
+      path: pointer(bPath, "sourceKey"),
+      code: "invalid-binding",
+      severity: "error",
+      message: 'sourceKey is only allowed when source is "single".',
+    });
+  }
+  return true;
+}
+
+/**
+ * A document's own metadata: `title` and `description`, each a list of
+ * literal text and bindings, and `image`, one binding. Each binding is held
+ * to the shape a prop's is. A list item is no source here: the metadata is
+ * read once for the page, outside any list.
+ */
+function validateDocumentSeo(
+  seo: unknown,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  if (!isPlainRecord(seo)) {
+    issues.push({
+      path,
+      code: "invalid-seo",
+      severity: "error",
+      message: "A document's seo setting must be an object.",
+    });
+    return;
+  }
+  for (const [field, value] of Object.entries(seo)) {
+    const at = pointer(path, field);
+    if (field === "title" || field === "description") {
+      validateSeoText(value, at, issues);
+    } else if (field === "image") {
+      validateSeoBinding(value, at, issues);
+    } else {
+      issues.push({
+        path: at,
+        code: "invalid-seo",
+        severity: "error",
+        message: `"${describeValue(field)}" is not a metadata field: a document's seo holds title, description and image.`,
+      });
+    }
+  }
+}
+
+/** One metadata text value: a bounded list of literal text and bindings. */
+function validateSeoText(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  if (!Array.isArray(value)) {
+    issues.push({
+      path,
+      code: "invalid-seo",
+      severity: "error",
+      message:
+        "A metadata text value must be a list of text and bindings, joined in order.",
+    });
+    return;
+  }
+  if (value.length > MAX_SEO_SEGMENTS) {
+    issues.push({
+      path,
+      code: "invalid-seo",
+      severity: "error",
+      message: `A metadata text value holds at most ${String(MAX_SEO_SEGMENTS)} pieces.`,
+    });
+    return;
+  }
+  value.forEach((segment: unknown, index) => {
+    const at = pointer(path, String(index));
+    if (typeof segment === "string") {
+      if (segment.length > MAX_SEO_TEXT_LENGTH) {
+        issues.push({
+          path: at,
+          code: "invalid-seo",
+          severity: "error",
+          message: `A piece of metadata text is at most ${String(MAX_SEO_TEXT_LENGTH)} characters.`,
+        });
+      }
+      return;
+    }
+    validateSeoBinding(segment, at, issues);
+  });
+}
+
+/**
+ * One metadata binding's shape, read for the page. The check the routed page
+ * applies before using it (`seo-binding-check`) runs over the whole document
+ * once the walk is done (`bindingSchemaIssues`), when the context carries the
+ * sources' schema, so a problem a stored form already held stays a warning.
+ */
+function validateSeoBinding(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  if (!validBindingShape(value, path, issues)) return;
+  if (value.source === "item") {
+    issues.push({
+      path: pointer(path, "source"),
+      code: "invalid-binding",
+      severity: "error",
+      message:
+        "A document's metadata is read once for the page, outside any list, so it cannot bind a list item.",
     });
   }
 }
@@ -3299,4 +3502,41 @@ function validateComponentInstance(
       message: `A component instance's props.overrides must be an object keyed by exposed id, not ${describeValue(overrides)}.`,
     });
   }
+}
+
+/**
+ * What a list's query and a block's conditions are judged with: the fields
+ * the public may read of each collection, the collection of the page's
+ * entry, and the stored forms whose problems stay warnings. One judgement
+ * for both, so a field a list may filter by is the field a condition may
+ * check.
+ */
+function schemaJudgement(
+  ctx: ValidationContext,
+  maxNodes: number
+): {
+  readonly fields?: ListFieldSource;
+  readonly entryCollection?: string | null;
+  readonly stored?: readonly BlockDocument[];
+  readonly maxNodes: number;
+} {
+  const entry = ctx.bindingEntry;
+  return {
+    ...(ctx.listFields === undefined ? {} : { fields: ctx.listFields }),
+    // A Single's page is no collection's entry: its renderer has no entry
+    // to read a relation of, or to check a condition against.
+    ...(entry === undefined
+      ? {}
+      : { entryCollection: "collection" in entry ? entry.collection : null }),
+    ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
+    maxNodes,
+  };
+}
+
+/** A judgement's finding as a validation issue, without its block's id. */
+function withoutNodeId<Issue extends { readonly nodeId: string }>({
+  nodeId: _nodeId,
+  ...issue
+}: Issue): Omit<Issue, "nodeId"> {
+  return issue;
 }

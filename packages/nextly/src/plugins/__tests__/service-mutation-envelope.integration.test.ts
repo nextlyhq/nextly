@@ -114,7 +114,7 @@ describe("ctx.services.collections write envelope", () => {
     const result = await services.collections.updateEntry(
       "widgets",
       created.item.id,
-      { title: "y" },
+      { title: "y", _overwrite: true },
       { as: "system" }
     );
 

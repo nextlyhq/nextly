@@ -11,6 +11,8 @@
 import type { RepeaterFieldConfig, RepeaterRowLabelProps } from "nextly/config";
 import type { JSX } from "react";
 
+import { repeaterRowTitle } from "./repeater-row-title";
+
 // ============================================================
 // Types
 // ============================================================
@@ -31,22 +33,6 @@ export interface RepeaterRowLabelComponentProps {
    */
   data: Record<string, unknown>;
 }
-
-// ============================================================
-// Constants
-// ============================================================
-
-/**
- * Field names to check for extracting a display title from row data.
- * Checked in order of priority.
- */
-const TITLE_FIELD_NAMES = [
-  "title",
-  "name",
-  "label",
-  "heading",
-  "subject",
-] as const;
 
 // ============================================================
 // Component
@@ -106,62 +92,19 @@ export function RepeaterRowLabel({
     return <CustomRowLabel {...labelProps} />;
   }
 
-  // 2. Explicit rowLabelField from the Builder's "Collapsed row title"
-  //    dropdown. Read the named sub-field's value from the row; if it's a
-  //    non-empty string-able value, use it.
-  const explicitField = (field as { rowLabelField?: string }).rowLabelField;
-  if (explicitField) {
-    const value = data[explicitField];
-    if (
-      value !== undefined &&
-      value !== null &&
-      value !== "" &&
-      (typeof value === "string" || typeof value === "number")
-    ) {
-      return (
-        <span className="font-medium text-foreground truncate">
-          {String(value)}
-        </span>
-      );
-    }
-  }
-
-  // 3. Auto-detect from common field names.
-  for (const fieldName of TITLE_FIELD_NAMES) {
-    const value = data[fieldName];
-    if (value !== undefined && value !== null && value !== "") {
-      return (
-        <span className="font-medium text-foreground truncate">
-          {/* eslint-disable-next-line @typescript-eslint/no-base-to-string */}
-          {String(value)}
-        </span>
-      );
-    }
-  }
-
-  // 4. Sub-field marked admin.useAsTitle: true.
-  const titleField = field.fields?.find(
-    f =>
-      "name" in f &&
-      (f.admin as { useAsTitle?: boolean } | undefined)?.useAsTitle
-  );
-  if (titleField && "name" in titleField && titleField.name) {
-    const value = data[titleField.name];
-    if (value !== undefined && value !== null && value !== "") {
-      return (
-        <span className="font-medium text-foreground truncate">
-          {/* eslint-disable-next-line @typescript-eslint/no-base-to-string */}
-          {String(value)}
-        </span>
-      );
-    }
-  }
-
-  // 5. Generic fallback.
-  const singularLabel = field.labels?.singular || "Item";
+  // 2-5. The row's title in words, read where every surface that names a row
+  //      reads it, so the header and the Page Builder's name for this row
+  //      cannot disagree.
+  const { title, fromContent } = repeaterRowTitle(field, data, index);
   return (
-    <span className="font-medium text-muted-foreground">
-      {singularLabel} {index + 1}
+    <span
+      className={
+        fromContent
+          ? "font-medium text-foreground truncate"
+          : "font-medium text-muted-foreground"
+      }
+    >
+      {title}
     </span>
   );
 }

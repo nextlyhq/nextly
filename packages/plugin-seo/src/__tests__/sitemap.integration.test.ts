@@ -159,7 +159,7 @@ describe("seo sitemap route (integration)", () => {
     await current.nextly.update({
       collection: "pages",
       id,
-      data: { status: "published" },
+      data: { status: "published", _overwrite: true },
     });
 
     // Published now: the published filter responds to the transition.

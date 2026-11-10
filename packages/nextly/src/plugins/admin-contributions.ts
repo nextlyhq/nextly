@@ -1,4 +1,10 @@
+import type { WhereFilter } from "../domains/collections/query/query-operators";
+
+import type { AdminContributionKind, AdminPlaceId } from "./admin-places";
 import type { PermissionSlug } from "./contributions";
+import type { PluginRoutePermissionResolver } from "./routes/route-permission";
+import type { PluginRouteMount, RouteMethod } from "./routes/route-types";
+import type { RowPredicate } from "./row-predicate";
 
 /**
  * @public A value that survives being sent to the browser as JSON.
@@ -186,6 +192,68 @@ export interface PluginCollectionView {
    * `/admin/singles/<slug>/<path>` for a Single.
    */
   documentViews?: PluginDocumentView[];
+  /**
+   * @experimental Hide or replace a built-in action in this collection's
+   * document screen ("…" menu), for this collection only: see
+   * `PluginDocumentActionOverride`. Two plugins overriding one action on one
+   * collection are refused at boot.
+   */
+  documentActions?: PluginDocumentActionOverrides;
+  /**
+   * @experimental Sections added to this collection's document panel, after
+   * Details, in the order given: see `PluginPanelSection`.
+   */
+  panelSections?: PluginPanelSection[];
+}
+
+/**
+ * The built-in document actions a plugin may hide or replace, as the one list
+ * the boot check, the admin and the type below all read. More may join here,
+ * and only here: the union is derived from this list, so a plugin cannot
+ * compile against an action the boot check would refuse.
+ */
+export const OVERRIDABLE_DOCUMENT_ACTIONS = ["delete", "unpublish"] as const;
+
+/**
+ * @experimental The built-in document actions a plugin may hide or replace.
+ * More may join; a plugin naming one this version does not know is refused
+ * at boot rather than silently ignored.
+ */
+export type OverridableDocumentAction =
+  (typeof OVERRIDABLE_DOCUMENT_ACTIONS)[number];
+
+/**
+ * @experimental What a plugin does with one built-in document action.
+ *
+ * - `"hidden"`: the action is not offered on this collection's documents,
+ *   from the menu or from `useDocumentActions().run`.
+ * - `{ component }`: the action keeps its row — its place, the permission it
+ *   needs, and every reason it can't run (a colleague's lock, a past version
+ *   on screen) — and choosing it opens the plugin's component instead of the
+ *   built-in write. The component receives `DocumentActionReplacementProps`.
+ *   `label` renames the row ("Remove layout…").
+ */
+export type PluginDocumentActionOverride =
+  | "hidden"
+  | { component: ComponentPath; label?: string };
+
+/** @experimental A plugin's overrides for one collection, by action. */
+export type PluginDocumentActionOverrides = Partial<
+  Record<OverridableDocumentAction, PluginDocumentActionOverride>
+>;
+
+/**
+ * @experimental A section a plugin adds to a collection's document panel,
+ * drawn after Details. The admin draws the heading and the section's frame,
+ * as it does the built-in sections, so it reads as part of the panel in
+ * light and dark; the component draws the body and receives
+ * `DocumentPanelSectionProps`. Not drawn while a document is being created.
+ */
+export interface PluginPanelSection {
+  /** The section's heading. */
+  title: string;
+  /** What the section shows under it. */
+  component: ComponentPath;
 }
 
 /**
@@ -234,6 +302,35 @@ export interface PluginFieldTypeDocumentView extends PluginDocumentView {
 }
 
 /**
+ * @experimental One choice of a plugin's entry-list filter: what the admin
+ * shows, the value the page's URL keeps, and the `where` it narrows the list
+ * by when chosen.
+ */
+export interface PluginListFilterOption {
+  /** Kept in the URL: lower-case letters, digits and single dashes. */
+  value: string;
+  label: string;
+  /**
+   * Added to the list's own `where`, so it can only narrow the rows the
+   * caller may already list.
+   */
+  where: WhereFilter;
+}
+
+/**
+ * @experimental A filter a plugin adds to the entry list's toolbar: see
+ * `PluginAdminContributions.filters`.
+ */
+export interface PluginListFilterDeclaration {
+  /** `<plugin-slug>.<name>`, e.g. `"acme-support.state"`. */
+  name: string;
+  label: string;
+  /** The collections whose lists offer it, by slug; every collection's when absent. */
+  collections?: string[];
+  options: PluginListFilterOption[];
+}
+
+/**
  * @experimental One place a plugin declares on its own admin pages, under its
  * namespace: see `PluginAdminContributions.places`.
  */
@@ -242,7 +339,153 @@ export interface PluginAdminPlaceDeclaration {
   name: string;
   /** What the place is for, for the authors of plugins that add to it. */
   description?: string;
+  /** The kinds of contribution the place takes; blocks alone when absent. */
+  accepts?: AdminContributionKind[];
 }
+
+/**
+ * @experimental What every contribution to an admin place says: its id, its
+ * place, where it goes there, and who sees it.
+ */
+interface AdminContributionBase {
+  /** `<plugin-slug>.<name>`, e.g. `"acme-support.sla"`; unique. */
+  id: string;
+  /** The place it is added to, which must take its kind. */
+  place: AdminPlaceId;
+  /** Lower first; 100 when absent, as the menu orders. */
+  order?: number;
+  /**
+   * Before this contribution's id, or a built-in part's name: as close to it
+   * as the other contributions' order allows, straight before it when nothing
+   * competes.
+   */
+  before?: string;
+  /**
+   * After this contribution's id, or a built-in part's name: as close to it
+   * as the other contributions' order allows, straight after it when nothing
+   * competes.
+   */
+  after?: string;
+  /** A built-in part of the same kind at this place, whose place it takes. */
+  replaces?: string;
+  /**
+   * Who sees it. A reader without this permission is not sent it at all, so
+   * its label and action never reach them. Not allowed on the login page,
+   * where nobody has signed in.
+   *
+   * A fixed slug for a name that cannot move, or, for one of the plugin's own
+   * collections or singles, a function of its names after the host's renames,
+   * as a route's `requiredPermission` is:
+   * `({ collection }) => collection("tickets", "update")`.
+   */
+  requiredPermission?: PermissionSlug | PluginRoutePermissionResolver;
+  /**
+   * On a collection entry's edit page, or an action on rows of a collection's
+   * list, the entries it shows for; a Single's edit page and the entry form
+   * take none yet.
+   * Judged on each entry as the reader's read returned it: a field the reader
+   * may not read is missing, and a rule that needs it does not match. A
+   * contribution whose rule names a field the reader may not read is not sent
+   * to them.
+   */
+  visibleWhen?: RowPredicate;
+  /**
+   * On a collection's list or edit page, the collections it is added to, by
+   * slug; every collection's when absent.
+   */
+  collections?: string[];
+}
+
+/**
+ * @experimental What an action does: open one of the plugin's components with
+ * the rows, or call one of the plugin's own routes with them.
+ */
+export type AdminContributionAction =
+  | { open: ComponentPath }
+  | {
+      run: {
+        /** A write's method: an action acts on rows. */
+        method: Exclude<RouteMethod, "GET">;
+        /** The route's `path`, as the plugin declares it. */
+        path: string;
+        /** The route's `mount`; the plugin's own, `"plugin"`, when absent. */
+        mount?: PluginRouteMount;
+      };
+    };
+
+/** @experimental A block the plugin draws, at any place that takes blocks. */
+export interface AdminBlockContribution extends AdminContributionBase {
+  kind: "block";
+  component: ComponentPath;
+}
+
+/** @experimental A tab of the plugin's own on an edit or detail page. */
+export interface AdminTabContribution extends AdminContributionBase {
+  kind: "tab";
+  label: string;
+  component: ComponentPath;
+}
+
+/**
+ * @experimental A section of the edit page's side panel.
+ *
+ * On a collection entry's edit page (`collection.edit`) the admin draws it
+ * where it is placed among the panel's own sections (`status`, `publishing`,
+ * `language`, `details`), under `label` as its heading, framed as they are;
+ * the component draws the body and receives `DocumentPanelSectionProps`. A
+ * component that draws nothing for an entry leaves no section, heading
+ * included, so a section may apply to some entries and not others. Not drawn
+ * while an entry is being created, nor yet on a Single's edit page.
+ */
+export interface AdminSidebarSectionContribution extends AdminContributionBase {
+  kind: "sidebarSection";
+  label: string;
+  component: ComponentPath;
+  /**
+   * @experimental Where the section is drawn when the editor is too narrow
+   * to keep the panel beside the fields (a phone), and the panel opens only
+   * when asked for. `"above-form"` draws it in the field column, under the
+   * title and above the fields, and leaves it out of the panel there, so a
+   * section an author should meet first stays on screen. Absent, it stays in
+   * the panel at every width.
+   */
+  narrow?: "above-form";
+}
+
+/**
+ * @experimental A column of a collection's entry list: a field's value, or a
+ * cell the plugin draws.
+ */
+export type AdminColumnContribution = AdminContributionBase & {
+  kind: "column";
+  label: string;
+} & (
+    | { field: string; component?: never }
+    | { component: ComponentPath; field?: never }
+  );
+
+/** @experimental An action on one row of a collection's entry list. */
+export interface AdminRowActionContribution extends AdminContributionBase {
+  kind: "rowAction";
+  label: string;
+  action: AdminContributionAction;
+}
+
+/** @experimental An action on the selected rows of a collection's entry list. */
+export interface AdminBulkActionContribution extends AdminContributionBase {
+  kind: "bulkAction";
+  label: string;
+  action: AdminContributionAction;
+}
+
+/** @experimental One declared contribution to an admin place. */
+export type AdminContribution =
+  | AdminBlockContribution
+  | AdminTabContribution
+  | AdminSidebarSectionContribution
+  | AdminColumnContribution
+  | AdminRowActionContribution
+  | AdminBulkActionContribution;
 
 /**
  * @public Declarative admin-UI contributions. Introspectable
@@ -265,6 +508,21 @@ export interface PluginAdminContributions {
    * plugins. Type each by augmenting `AdminPlaces`.
    */
   places?: PluginAdminPlaceDeclaration[];
+  /**
+   * @experimental Filters for the entry list's toolbar. Choosing an option
+   * adds its `where` to the list's request, so a filter narrows the list and
+   * never widens it; the choice is kept in the page's URL. The app refuses to
+   * start on one outside this plugin's namespace, declared twice, or with an
+   * malformed option.
+   */
+  filters?: PluginListFilterDeclaration[];
+  /**
+   * @experimental Blocks, tabs, columns, row and bulk actions and side panel
+   * sections, each added to an admin place and ordered there. Declared as
+   * data, checked when the app starts, and sent to a signed-in admin only,
+   * leaving out what the reader may not see.
+   */
+  contributions?: AdminContribution[];
   /** Custom admin pages, namespaced + RBAC-gated. */
   pages?: PluginAdminPage[];
   /** Plugin settings UI rendered at `/admin/plugins/<slug>`. */
