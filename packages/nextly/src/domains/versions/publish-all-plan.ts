@@ -86,6 +86,26 @@ function withSharedPart(drafts: PendingChange[]): PendingChange[] {
   return [shared, ...languages];
 }
 
+/**
+ * The pending changes as each language's validation judges them. Under
+ * per-language storage the shared draft holds no language's values, so judged
+ * alone, as no language, every required translated field would look missing.
+ * Every language's change already carries the shared values
+ * (`withSharedPart`), so the shared draft is judged through them, and as the
+ * default language's change where no language holds one of its own. Without
+ * per-language storage the changes are returned as they are.
+ */
+export function pendingChangesByLanguage<
+  T extends { readonly locale: string | null },
+>(pending: readonly T[], defaultLocale: string | null): T[] {
+  if (!draftsKeptByPart()) return [...pending];
+  const languages = pending.filter(
+    change => change.locale !== SHARED_DRAFT_SLOT
+  );
+  if (languages.length > 0) return languages;
+  return pending.map(change => ({ ...change, locale: defaultLocale }));
+}
+
 /** How a document carries its languages' statuses. */
 export interface PublishableShape {
   /** Whether the MAIN row carries the draft/published lifecycle. */

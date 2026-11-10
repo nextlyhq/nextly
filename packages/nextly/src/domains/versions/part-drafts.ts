@@ -25,6 +25,7 @@
  * @module domains/versions/part-drafts
  */
 
+import { addressableFields } from "../../shared/addressable-fields";
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { perLanguageFieldNames } from "../i18n/per-language-fields";
 import { perLanguageStorageEnabled } from "../i18n/per-language-storage";
@@ -63,20 +64,31 @@ interface PartField {
   readonly options?: unknown;
 }
 
+/** Whether a field `addressableFields` reached is one stored under a name. */
+function isNamedPartField(
+  field: unknown
+): field is PartField & { name: string } {
+  if (typeof field !== "object" || field === null) return false;
+  const { name } = field as { name?: unknown };
+  return typeof name === "string" && name.length > 0;
+}
+
 /**
  * Which keys of a document with `fields` belong to a language and which are
  * shared. Under per-language storage every entity keeps its translatable
  * values per language, so they are classified as an entity that stores per
  * language; every component is kept per language too, so a component field
  * belongs to the language whatever its own fields are.
+ *
+ * The keys are the fields addressable at the document's top level: an unnamed
+ * group stores its children there, so each child is classified as a top-level
+ * field is, and none is left out of both drafts.
  */
 export async function partKeysOf(
   fields: readonly PartField[]
 ): Promise<PartKeys> {
-  const named = fields.filter(
-    (field): field is PartField & { name: string } =>
-      typeof field.name === "string" && field.name.length > 0
-  );
+  const reached: readonly unknown[] = addressableFields(fields);
+  const named = reached.filter(isNamedPartField);
   const language = await perLanguageFieldNames(
     named,
     new Set(resolveLocalizedFieldNames(named, true)),

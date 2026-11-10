@@ -12,7 +12,18 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineSingle, number, text } from "../../../config";
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+
+import {
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  number,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -22,6 +33,14 @@ import {
 import type { SingleEntryService } from "../services/single-entry-service";
 
 const SLUG = "partsite";
+/** Translated, with its translatable `title` required. */
+const REQUIRED = "partreqsite";
+/** Translated, with a publish rule that refuses Spanish. */
+const GUARDED = "partguardsite";
+const PUBLISHER = "part-site-publisher";
+/** Untranslated, with no translatable field of its own: only a component. */
+const COMPONENTED = "partcompsite";
+const HERO = "partsitehero";
 const TRANSLATABLE = ["title", "tagline"];
 const SHARED = ["views"];
 
@@ -48,6 +67,43 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
           number({ name: "views" }),
         ],
       }),
+      defineSingle({
+        slug: REQUIRED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true },
+        fields: [
+          text({ name: "title", required: true }),
+          number({ name: "views" }),
+        ],
+      }),
+      defineSingle({
+        slug: GUARDED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          // Asked once for each language a publish puts live.
+          publish: ({ locale }) => locale !== "es",
+        },
+        fields: [text({ name: "title" }), number({ name: "views" })],
+      }),
+      defineSingle({
+        slug: COMPONENTED,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true },
+        fields: [
+          number({ name: "views" }),
+          fieldGroup({ name: "hero", component: HERO }),
+        ],
+      }),
+    ],
+    fieldGroups: [
+      defineFieldGroup({ slug: HERO, fields: [text({ name: "heading" })] }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
   });
@@ -212,6 +268,130 @@ describe.each(getConfiguredTestDialects())(
         expect((await read(singles, locale)).views).toBe(60);
       }
       expect(await drafts()).toEqual({});
+    }, 90_000);
+
+    it("asks every language's publish rule about a shared-only draft a publish of every language puts live", async () => {
+      const singles = await boot(dialect);
+      await userWhoMay(current!, PUBLISHER, "update", [GUARDED]);
+      for (const action of ["read", "publish"]) {
+        await grantTo(current!, PUBLISHER, action, [GUARDED]);
+      }
+      // Live in both languages, so the Spanish edit below is held: a save in
+      // a language that is not live yet is written live, and holds nothing.
+      for (const [locale, title] of [
+        ["en", "en title"],
+        ["es", "es title"],
+      ]) {
+        const saved = await singles.update(
+          GUARDED,
+          {
+            title,
+            ...(locale === "en" ? { views: 10 } : {}),
+            status: "published",
+          },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+      const held = await singles.update(
+        GUARDED,
+        { views: 70 },
+        { locale: "es", overrideAccess: true }
+      );
+      expect(held.success, JSON.stringify(held)).toBe(true);
+
+      const published = await singles
+        .update(
+          GUARDED,
+          { status: "published" },
+          {
+            locale: "*",
+            user: { id: PUBLISHER, email: `${PUBLISHER}@example.test` },
+            overrideAccess: false,
+          }
+        )
+        .catch((error: unknown) => error);
+
+      expect(published).toMatchObject({ statusCode: 403 });
+      const live = await singles.get(GUARDED, {
+        locale: "en",
+        overrideAccess: true,
+      });
+      expect((live.data as { views?: unknown }).views).toBe(10);
+    }, 90_000);
+
+    it("publishes every language with a shared edit where a translated field is required", async () => {
+      const singles = await boot(dialect);
+      for (const [locale, title] of [
+        ["en", "en title"],
+        ["es", "es title"],
+      ]) {
+        const saved = await singles.update(
+          REQUIRED,
+          {
+            title,
+            ...(locale === "en" ? { views: 10 } : {}),
+            status: "published",
+          },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+      const held = await singles.update(
+        REQUIRED,
+        { views: 80 },
+        { locale: "es", overrideAccess: true }
+      );
+      expect(held.success, JSON.stringify(held)).toBe(true);
+
+      const published = await singles.publishAllLocales(REQUIRED, {
+        overrideAccess: true,
+      });
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      for (const locale of ["en", "es"]) {
+        const live = await singles.get(REQUIRED, {
+          locale,
+          overrideAccess: true,
+        });
+        expect((live.data as { views?: unknown }).views).toBe(80);
+      }
+    }, 90_000);
+
+    // Components are kept per language under the setting, so a held edit of
+    // one is the language's, even on a Single with no translatable field of
+    // its own: made in Spanish, it is Spanish's draft.
+    it("keys an untranslated Single's held component edit by the language it was made in", async () => {
+      const singles = await boot(dialect);
+      const first = await singles.update(
+        COMPONENTED,
+        { views: 1, hero: { heading: "en heading" }, status: "published" },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(first.success, JSON.stringify(first)).toBe(true);
+
+      const held = await singles.update(
+        COMPONENTED,
+        { hero: { heading: "es heading" } },
+        { locale: "es", overrideAccess: true }
+      );
+      expect(held.success, JSON.stringify(held)).toBe(true);
+
+      const rows = await current!.adapter.select<{ locale: string | null }>(
+        "nextly_versions",
+        {
+          where: {
+            and: [
+              { column: "scopeKind", op: "=", value: "single" },
+              { column: "scopeSlug", op: "=", value: COMPONENTED },
+              { column: "isAutosave", op: "=", value: false },
+              { column: "versionNo", op: "IS NULL" },
+              { column: "status", op: "=", value: "draft" },
+            ],
+          },
+        }
+      );
+      expect(rows.map(row => row.locale ?? "shared")).toEqual(["es"]);
     }, 90_000);
   }
 );

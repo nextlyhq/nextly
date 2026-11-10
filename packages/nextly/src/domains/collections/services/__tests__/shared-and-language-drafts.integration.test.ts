@@ -19,6 +19,11 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../../__tests__/fixtures/permission-holders";
+
 import { defineCollection, number, text } from "../../../../config";
 import {
   createTestNextly,
@@ -31,6 +36,11 @@ import type { CollectionsHandler } from "../../../../services/collections-handle
 
 const TRANSLATED = "partposts";
 const UNTRANSLATED = "partnotes";
+/** Translated, with its translatable `title` required. */
+const REQUIRED = "partreqs";
+/** Translated, with a publish rule that refuses Spanish. */
+const GUARDED = "partguards";
+const PUBLISHER = "part-publisher";
 
 /** Translatable: `title` and `body`. Shared: `views` (a number). */
 const FIELDS = () => [
@@ -64,6 +74,30 @@ async function boot(dialect: TestDialect): Promise<CollectionEntryService> {
         slug: UNTRANSLATED,
         status: true,
         versions: { drafts: true },
+        fields: FIELDS(),
+      }),
+      defineCollection({
+        slug: REQUIRED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "title", required: true }),
+          text({ name: "body" }),
+          number({ name: "views" }),
+        ],
+      }),
+      defineCollection({
+        slug: GUARDED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          // Asked once for each language a publish puts live.
+          publish: ({ locale }) => locale !== "es",
+        },
         fields: FIELDS(),
       }),
     ],
@@ -361,6 +395,65 @@ describe.each(getConfiguredTestDialects())(
         expect((await read(entries, TRANSLATED, id, locale)).views).toBe(60);
       }
       expect(await drafts(id)).toEqual({});
+    }, 90_000);
+
+    // A shared-only draft goes live in every language, so a publish of every
+    // language asks each language's publish rule about it, Spanish included.
+    it("asks every language's publish rule about a shared-only draft a publish of every language puts live", async () => {
+      const entries = await boot(dialect);
+      await userWhoMay(handle!, PUBLISHER, "update", [GUARDED]);
+      for (const action of ["read", "publish"]) {
+        await grantTo(handle!, PUBLISHER, action, [GUARDED]);
+      }
+      const created = await entries.createEntry(
+        { collectionName: GUARDED, overrideAccess: true, locale: "en" },
+        { title: "en title", body: "en body", views: 10, status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      await save(entries, GUARDED, id, "es", { views: 70 });
+
+      const published = await entries.updateEntry(
+        {
+          collectionName: GUARDED,
+          entryId: id,
+          locale: "*",
+          user: { id: PUBLISHER, email: `${PUBLISHER}@example.test` },
+          overrideAccess: false,
+        },
+        { status: "published" }
+      );
+
+      expect(published.statusCode, JSON.stringify(published)).toBe(403);
+      expect((await read(entries, GUARDED, id, "en")).views).toBe(10);
+      expect(Object.keys(await drafts(id))).toEqual(["shared"]);
+    }, 90_000);
+
+    // Each language's change is validated as that language, its translated
+    // values read in: a shared-only change judged with no language would find
+    // every required translated field missing.
+    it("publishes every language with a shared edit where a translated field is required", async () => {
+      const entries = await boot(dialect);
+      const created = await entries.createEntry(
+        { collectionName: REQUIRED, overrideAccess: true, locale: "en" },
+        { title: "en title", views: 10, status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      await save(entries, REQUIRED, id, "es", {
+        title: "es title",
+        status: "published",
+      });
+      await save(entries, REQUIRED, id, "es", { views: 80 });
+
+      const published = await entries.publishAllLocales({
+        collectionName: REQUIRED,
+        entryId: id,
+        overrideAccess: true,
+      });
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      for (const locale of ["en", "es"]) {
+        expect((await read(entries, REQUIRED, id, locale)).views).toBe(80);
+      }
     }, 90_000);
   }
 );

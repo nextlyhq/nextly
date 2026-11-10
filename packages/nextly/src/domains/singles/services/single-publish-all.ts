@@ -112,6 +112,7 @@ import {
   type NamedVerdict,
   nameVerdict,
   type PendingChange,
+  pendingChangesByLanguage,
   pendingChangesInSaveOrder,
   type PublishableShape,
   promotionBlockers,
@@ -1485,7 +1486,13 @@ export class SinglePublishAllService extends BaseService {
     );
     // The gate takes the type tags off nested components as well.
     const componentFields = await this.componentFieldsOn(tx, fieldConfigs);
-    await assertDraftsMayBePromoted(pending, {
+    // Each change judged as the language it goes live in, the shared draft's
+    // values within them, never as a language of its own.
+    const judged = pendingChangesByLanguage(
+      pending,
+      this.localization?.defaultLocale ?? null
+    );
+    await assertDraftsMayBePromoted(judged, {
       ...promoteCallerFor({
         tx,
         slug,

@@ -5060,18 +5060,19 @@ export class CollectionMutationService extends BaseService {
     }
     const locale = this.wildcardDraftLocale(collection);
     if (locale === null) return [];
-    const draft = await new VersionsRepository(
-      args.tx ?? this.adapter
-    ).findWorkingDraft(
-      {
-        scopeKind: "collection",
-        scopeSlug: args.collectionName,
-        entryId: args.entryId,
-      },
-      locale
-    );
+    const repo = new VersionsRepository(args.tx ?? this.adapter);
+    const ref = {
+      scopeKind: "collection" as const,
+      scopeSlug: args.collectionName,
+      entryId: args.entryId,
+    };
+    // Under per-language storage the promote takes the shared draft with this
+    // slot's own, so a document whose only change is shared holds one too.
+    const holds = draftsKeptByPart()
+      ? holdsPendingChange(await findPartDrafts(repo, ref, locale))
+      : (await repo.findWorkingDraft(ref, locale)) !== undefined;
     return languagesPromotedChangeReaches(
-      draft === undefined ? undefined : locale,
+      holds ? locale : undefined,
       configured
     );
   }

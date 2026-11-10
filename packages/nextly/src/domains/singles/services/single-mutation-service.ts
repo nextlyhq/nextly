@@ -1274,12 +1274,15 @@ export class SingleMutationService extends BaseService {
       defaultLocale: this.localization?.defaultLocale ?? null,
     });
     if (locale === null) return [];
-    const draft = await new VersionsRepository(db).findWorkingDraft(
-      { scopeKind: "single", scopeSlug: slug, entryId },
-      locale
-    );
+    const repo = new VersionsRepository(db);
+    const ref = { scopeKind: "single" as const, scopeSlug: slug, entryId };
+    // Under per-language storage the promote takes the shared draft with this
+    // slot's own, so a Single whose only change is shared holds one too.
+    const holds = draftsKeptByPart()
+      ? holdsPendingChange(await findPartDrafts(repo, ref, locale))
+      : (await repo.findWorkingDraft(ref, locale)) !== undefined;
     return languagesPromotedChangeReaches(
-      draft === undefined ? undefined : locale,
+      holds ? locale : undefined,
       this.localization?.locales.map(language => language.code) ?? []
     );
   }
@@ -3378,7 +3381,14 @@ export class SingleMutationService extends BaseService {
             componentSchemas: singleComponentSchemas,
             namedStatus: (updatePayload as Record<string, unknown>).status,
             liveStatus: singleLiveStatus,
-            requestLocale: writeLocale ?? null,
+            // Under per-language storage a component is kept per language
+            // even on a Single with no translations of its own, so its held
+            // edit is the request's language's, as the editor reads it.
+            requestLocale:
+              writeLocale ??
+              (draftsKeptByPart() && this.localization
+                ? resolveRequestedLocale(this.localization, options.locale)
+                : null),
             defaultLocale: this.localization?.defaultLocale ?? null,
           });
 
