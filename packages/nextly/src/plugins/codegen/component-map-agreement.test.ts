@@ -47,7 +47,7 @@ const LIST = "plugin-admin-components.generated.ts";
 const STUBS = "stubs.d.ts";
 const STUB_SOURCE = `
 declare module "@nextlyhq/admin" {
-  export function registerComponents(map: Record<string, unknown>): void;
+  export function registerComponentMap(map: Record<string, unknown>): void;
 }
 declare module "@acme/shop/admin" {
   export const A: unknown;
@@ -99,10 +99,10 @@ function compileErrorsWith(map: string, list: string, stubs: string): string[] {
 function load(
   map: string,
   listed: readonly string[],
-  registerComponents = vi.fn()
+  registerComponentMap = vi.fn()
 ) {
   const modules: Record<string, unknown> = {
-    "@nextlyhq/admin": { registerComponents },
+    "@nextlyhq/admin": { registerComponentMap },
     "@acme/shop/admin": { A: "A", B: "B" },
     "./plugin-admin-components.generated": {
       registeredComponentPaths: listed,
@@ -118,7 +118,7 @@ function load(
   const run = new Function("require", "module", "exports", code);
   const module = { exports: {} };
   run((name: string) => modules[name], module, module.exports);
-  return registerComponents;
+  return registerComponentMap;
 }
 
 const map = buildComponentImportMap([shop]);
@@ -201,7 +201,7 @@ const pageBuilder = {
 
 const BLOCK_STUBS = `
 declare module "@nextlyhq/admin" {
-  export function registerComponents(map: Record<string, unknown>): void;
+  export function registerComponentMap(map: Record<string, unknown>): void;
 }
 declare module "@nextlyhq/plugin-page-builder/admin" {
   export function registerBlockEditorModules(modules: {
@@ -221,10 +221,10 @@ describe("a map handing block modules to the page builder", () => {
 
   /** Runs the map with both registrars stubbed. */
   function loadBlocks(map: string, listed: readonly string[]) {
-    const registerComponents = vi.fn();
+    const registerComponentMap = vi.fn();
     const registerBlockEditorModules = vi.fn();
     const modules: Record<string, unknown> = {
-      "@nextlyhq/admin": { registerComponents },
+      "@nextlyhq/admin": { registerComponentMap },
       "@nextlyhq/plugin-page-builder/admin": { registerBlockEditorModules },
       "@acme/blocks/editor": { Hero: "Hero", editorBlocks: "editorBlocks" },
       "./plugin-admin-components.generated": {
@@ -239,20 +239,20 @@ describe("a map handing block modules to the page builder", () => {
     const run = new Function("require", "module", "exports", code);
     const module = { exports: {} };
     run((name: string) => modules[name], module, module.exports);
-    return { registerComponents, registerBlockEditorModules };
+    return { registerComponentMap, registerBlockEditorModules };
   }
 
   it("lists the entry, compiles, and hands the entry and the inspector over", () => {
     expect(blockList).toContain('"@acme/blocks/editor#editorBlocks"');
     expect(compileErrorsWith(blockMap, blockList, BLOCK_STUBS)).toEqual([]);
 
-    const { registerComponents, registerBlockEditorModules } = loadBlocks(
+    const { registerComponentMap, registerBlockEditorModules } = loadBlocks(
       blockMap,
       ["@acme/blocks/editor#Hero", "@acme/blocks/editor#editorBlocks"]
     );
     // The entry exports definitions, not a component, so the component
     // registry never receives it.
-    expect(registerComponents).toHaveBeenCalledWith({
+    expect(registerComponentMap).toHaveBeenCalledWith({
       "@acme/blocks/editor#Hero": "Hero",
     });
     expect(registerBlockEditorModules).toHaveBeenCalledWith({

@@ -45,7 +45,6 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   registerComponents: (map: Record<string, unknown>) => {
     Object.assign(registered, map);
   },
-  registerKnownPlugin: () => undefined,
   // The list actions and the import bar the entry also registers; their own
   // behaviour is tested beside them.
   registerRowAction: () => undefined,
