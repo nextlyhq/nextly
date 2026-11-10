@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { phasesFor } from "./verify.mjs";
+import { describeBase, phasesFor } from "./verify.mjs";
 
 /** The tasks a `turbo run <task>… <flags>` argument list names: those before its first flag. */
 function turboTasksOf(argv) {
@@ -97,5 +97,31 @@ describe("the phases a verification scope runs", () => {
    */
   it("extends the pr scope rather than restating it", () => {
     expect(names("full").slice(0, names("pr").length)).toEqual(names("pr"));
+  });
+});
+
+describe("the quick scope", () => {
+  const limits = { concurrency: 2, maxWorkers: 8 };
+
+  it("compares the affected types and the changed tests with the base it is given", () => {
+    const phases = phasesFor("quick", limits, "upstream/dev");
+    const types = phases.find(phase => phase.argv.includes("check-types"));
+    expect(types.argv).toEqual(expect.arrayContaining(["--affected", "--only"]));
+    expect(types.env).toEqual({ TURBO_SCM_BASE: "upstream/dev" });
+    const tests = phases.find(phase => phase.argv.includes("scripts/test-changed.mjs"));
+    expect(tests.argv.slice(-2)).toEqual(["upstream/dev", "--max-workers=2"]);
+  });
+
+  it("names the base commit it compares with, and how to refresh it, without fetching", () => {
+    const calls = [];
+    const git = args => (calls.push(args), { status: 0, stdout: "abc1234, committed 3 hours ago\n" });
+    expect(describeBase("origin/dev", git)).toBe(
+      "verify (quick): comparing with origin/dev (abc1234, committed 3 hours ago); `git fetch origin dev` first if that is not the current target"
+    );
+    expect(calls.every(args => args[0] !== "fetch")).toBe(true);
+  });
+
+  it("says when the base cannot be read", () => {
+    expect(describeBase("upstream/dev", () => ({ status: 128, stdout: "" }))).toContain("upstream/dev cannot be read");
   });
 });
