@@ -104,7 +104,8 @@ beforeEach(() => {
 });
 
 async function rename(user: ReturnType<typeof userEvent.setup>, name: string) {
-  const field = screen.getByLabelText(/Provider Name/);
+  // The form's code arrives apart from the page's, so its fields are waited for.
+  const field = await screen.findByLabelText(/Provider Name/);
   await user.clear(field);
   await user.click(field);
   await user.paste(name);

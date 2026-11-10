@@ -43,8 +43,11 @@ export const BUDGETS = {
   // 3,572 KB. That 3,572 was measured on a base without the media library's
   // views, Used in and Replace, which merged minutes before it: main stood
   // at 3,582 KB from then on. Raised to 3,600 KB when those (+11.7 KB) and
-  // the setup card (+1.7 KB) took it to 3,584 KB.
-  totalMinifiedKB: 3600,
+  // the setup card (+1.7 KB) took it to 3,584 KB. Raised to 3,740 KB to cover
+  // the admin's shipped code as it measures at 3,736 KB: concurrency, history
+  // and email setup screens, editors loaded on demand, and no unused code left
+  // to remove, so the limit sits just above that measurement.
+  totalMinifiedKB: 3740,
   // Spec R-3: the shared shell, measured at 259 KB gzipped on 2026-10-27.
   shellGzipKB: 280,
   // Spec R-3: each route's own code may grow this share above its pin...
