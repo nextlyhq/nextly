@@ -31,6 +31,7 @@ import {
 } from "../../database/test-database-ddl";
 import { clearServices, type NextlyServiceConfig } from "../../di/register";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
+import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import { reloadNextlyConfig } from "../../init/reload-config";
 import { _resetEnvCache } from "../../shared/lib/env";
 import type { PluginDefinition } from "../plugin-context";
@@ -317,6 +318,26 @@ describe.each(getConfiguredTestDialects())(
       const hidden = await read();
       expect(hidden?.title).toBe("Saved");
       expect(hidden).not.toHaveProperty("seo_title");
+      // Nor is the kept column drift: the boot's check and the admin's
+      // preview of a change see nothing to do for the type.
+      const preview = await previewDesiredSchema({
+        desired: {
+          collections: {
+            es_pages: {
+              slug: "es_pages",
+              tableName: "dc_es_pages",
+              fields: pages.fields,
+            },
+          },
+          singles: {},
+          components: {},
+        },
+        db: adapter.getDrizzle(),
+        dialect: adapter.dialect as Parameters<
+          typeof previewDesiredSchema
+        >[0]["dialect"],
+      });
+      expect(preview.operations).toEqual([]);
       await current.nextly.create({
         collection: "es_pages" as never,
         data: { title: "Written while off" } as never,
@@ -325,6 +346,70 @@ describe.each(getConfiguredTestDialects())(
       // Switched on again, the value saved before is back.
       configWith({ collections: [posts, pages] }, [seoEverywhere]);
       await reloadNextlyConfig();
+      expect((await read())?.seo_title).toBe("Kept");
+    }, 240_000);
+
+    it("keeps a Builder type's column and values, hidden, while it is switched off in development", async () => {
+      database = await openDatabase(dialect);
+      const adapter = database.adapter;
+      await createTestNextly({
+        adapter: adapter as never,
+        collections: [posts],
+      });
+      await seedBuilderCollection(adapter as never, {
+        slug: "es_cases",
+        fields: [{ name: "summary", type: "text" }],
+      });
+      clearServices();
+      vi.stubEnv("NODE_ENV", "development");
+      current = await createTestNextly({
+        adapter: adapter as never,
+        collections: [posts],
+        plugins: [seoEverywhere],
+      });
+      configWith({ collections: [posts] }, [seoEverywhere]);
+      await reloadNextlyConfig();
+      expect(await columnsOf(current, "dc_es_cases")).toContain("seo_title");
+      const created = await current.nextly.create({
+        collection: "es_cases" as never,
+        data: { summary: "Saved", seo_title: "Kept" } as never,
+      });
+      const id = (created.item as { id: string }).id;
+      const read = async () =>
+        (await current?.nextly.findByID({
+          collection: "es_cases" as never,
+          id,
+        } as never)) as Record<string, unknown> | null;
+      expect((await read())?.seo_title).toBe("Kept");
+
+      const offForCases: PluginDefinition = {
+        ...seoPlugin,
+        contributes: {
+          extend: [
+            {
+              target: { every: ["collection", "single"], except: ["es_cases"] },
+              fields: [text({ name: "seo_title" })],
+            },
+          ],
+        },
+      };
+      // A Builder type takes a plugin's fields when the site starts, so the
+      // site restarts with the type switched off.
+      const restart = async (plugin: PluginDefinition) => {
+        clearServices();
+        configWith({ collections: [posts] }, [plugin]);
+        current = await createTestNextly({
+          adapter: adapter as never,
+          collections: [posts],
+          plugins: [plugin],
+        });
+        await reloadNextlyConfig();
+      };
+      await restart(offForCases);
+      expect(await columnsOf(current, "dc_es_cases")).toContain("seo_title");
+      expect(await read()).not.toHaveProperty("seo_title");
+
+      await restart(seoEverywhere);
       expect((await read())?.seo_title).toBe("Kept");
     }, 240_000);
 

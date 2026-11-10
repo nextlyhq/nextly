@@ -558,44 +558,43 @@ function applyScopeClause<
 }
 
 /**
- * The fields each scope holds back from a configured type the site switched
- * off: one its kinds reach that its `except` names. A field of a name the type
- * already has is its own, not held back. Judged by the same rule the fold adds
- * by, over the folded types, and published for the schema changes that keep
- * the column of a type switched off after it was made
- * (`kept-scope-fields.ts`).
+ * The fields each scope holds back from a type the site switched off: one its
+ * `except` names that its kinds would otherwise reach. Published for the
+ * schema changes that keep the column of a type switched off after it was
+ * made (`kept-scope-fields.ts`), which leave alone a type declaring a field of
+ * that name itself.
  */
 function publishWithheld(
   folded: Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups">,
   plugins: PluginDefinition[],
   owners: ReadonlyMap<string, string>
 ): void {
-  const types = [...(folded.collections ?? []), ...(folded.singles ?? [])];
-  const candidates = scopeCandidates(
-    folded.collections ?? [],
-    folded.singles ?? [],
-    folded.fieldGroups ?? [],
-    configuredScope(owners),
-    new Set()
+  const configured = new Map(
+    scopeCandidates(
+      folded.collections ?? [],
+      folded.singles ?? [],
+      folded.fieldGroups ?? [],
+      configuredScope(owners),
+      new Set()
+    ).map(type => [type.slug, type])
   );
   const withheld = new Map<string, FieldConfig[]>();
   for (const { target, fields } of flattenExtends(plugins)) {
-    if (typeof target === "string" || target.except === undefined) continue;
-    const off = typesReachedBy({ every: target.every }, candidates).filter(
-      type => target.except?.includes(type.slug) === true
-    );
-    for (const type of off) {
-      if (type.kind === "fieldGroup") continue;
-      const own = new Set(
-        (types.find(t => t.slug === type.slug)?.fields ?? []).map(field =>
-          (field as { name?: string }).name?.toLowerCase()
-        )
-      );
-      const key = scopedTypeKey(type.kind, type.slug);
-      const held = fields.filter(
-        field => !own.has((field as { name?: string }).name?.toLowerCase())
-      );
-      withheld.set(key, [...(withheld.get(key) ?? []), ...held]);
+    if (typeof target === "string") continue;
+    for (const slug of target.except ?? []) {
+      // A type made in the Schema Builder is not in the configuration, and
+      // its kind is known only once its row is read: held back under each
+      // kind the scope reaches, of which it has one.
+      const type = configured.get(slug);
+      const judged: ContentTypeCandidate[] =
+        type === undefined
+          ? target.every.map(kind => ({ slug, kind }))
+          : [type];
+      for (const reached of typesReachedBy({ every: target.every }, judged)) {
+        if (reached.kind === "fieldGroup") continue;
+        const key = scopedTypeKey(reached.kind, slug);
+        withheld.set(key, [...(withheld.get(key) ?? []), ...fields]);
+      }
     }
   }
   publishWithheldScopeFields(withheld);

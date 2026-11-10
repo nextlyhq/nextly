@@ -38,6 +38,7 @@ import {
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
+import { withKeptScopeFieldsIn } from "./kept-scope-fields";
 import { operationsToJudge, planCompanionMoves } from "./moved-to-companion";
 import {
   excludeLockedTableOps,
@@ -118,7 +119,7 @@ export async function previewDesiredSchema(
   // Resolved once, here, so the snapshot this function builds and the DDL the apply path builds
   // from the same declaration describe the same column. Two different builders read a desired
   // schema, and normalising what they share is what keeps them from disagreeing forever.
-  const desired = args.desired;
+  let desired = args.desired;
   const renameDetector = deps.renameDetector ?? new RegexRenameDetector();
   const classifier = deps.classifier ?? new RealClassifier();
   const introspect = deps.introspect ?? introspectLiveSnapshot;
@@ -136,6 +137,9 @@ export async function previewDesiredSchema(
     dialect,
     desiredSchemaTableNames(desired, extensions)
   );
+  // The fields a plugin holds back from a type switched off, kept while
+  // their columns are live, as the apply keeps them (`kept-scope-fields.ts`).
+  desired = withKeptScopeFieldsIn(desired, liveSnapshot);
   const { snapshot: desiredSnapshot } = buildDesiredSnapshot({
     desired,
     dialect,

@@ -10,7 +10,13 @@
  * with the configuration folded as `loadConfig` folds it, on each dialect's
  * statements. Neither command connects to a database here.
  */
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,13 +33,14 @@ import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { publishWithheldScopeFields } from "../../../domains/schema/pipeline/kept-scope-fields";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { applyPluginSchemaContributionsDeferred } from "../../../plugins/schema/apply-contributions";
+import { uiSchemaManifest } from "../../../schemas/_zod/ui-schema";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { runMigrateCheck } from "../migrate-check";
 import { runMigrateCreate } from "../migrate-create";
 
-const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
+const loaded = vi.hoisted(() => ({ result: undefined as unknown }));
 // `../program` imports every command, `migrate` with its whole graph among
 // them; the commands under test need only its context factory.
 vi.mock("../../program", () => ({
@@ -50,7 +57,7 @@ vi.mock("../../program", () => ({
 
 vi.mock("../../utils/config-loader", async importOriginal => ({
   ...(await importOriginal<typeof import("../../utils/config-loader")>()),
-  loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
+  loadConfig: async () => loaded.result,
 }));
 
 const posts = defineCollection({
@@ -100,9 +107,13 @@ function project(except?: string[], required = false): unknown {
     plugins
   );
   return {
-    ...base,
-    collections: folded.config.collections,
-    singles: folded.config.singles,
+    config: {
+      ...base,
+      collections: folded.config.collections,
+      singles: folded.config.singles,
+    },
+    deferredExtends: folded.deferredExtends,
+    dependencies: [],
   };
 }
 
@@ -124,7 +135,7 @@ async function run(
   config: unknown,
   command: (context: CommandContext) => Promise<void>
 ): Promise<{ code: number | undefined; said: string }> {
-  loaded.config = config;
+  loaded.result = config;
   const said: string[] = [];
   const capture = (message: string) => {
     said.push(message);
@@ -179,9 +190,13 @@ function written(): string {
     .join("\n");
 }
 
-/** The statements in `sql`, without its comment lines. */
+/**
+ * The statements a migration's UP section runs, without its comment lines:
+ * DOWN puts back what the migration changes, the field's record included.
+ */
 function statements(sql: string): string {
   return sql
+    .split("-- DOWN")[0]
     .split("\n")
     .filter(line => !line.trimStart().startsWith("--"))
     .join("\n");
@@ -224,6 +239,28 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       expect((await create(project())).code).toBeUndefined();
       expect(statements(written().slice(off.length))).not.toMatch(/seo_title/);
       expect((await check(project())).code).toBeUndefined();
+    });
+
+    it("keeps a Builder type's column once it is made, with nothing pending", async () => {
+      writeFileSync(
+        join(dir, "ui-schema.json"),
+        JSON.stringify(
+          uiSchemaManifest.parse({
+            collections: [
+              { slug: "cases", fields: [{ name: "summary", type: "text" }] },
+            ],
+          })
+        )
+      );
+      expect((await create(project())).code).toBeUndefined();
+      expect(written()).toMatch(/dc_cases[\s\S]*seo_title/);
+      const before = written();
+
+      expect((await create(project(["cases"]))).code).toBeUndefined();
+      expect(statements(written().slice(before.length))).not.toMatch(
+        /seo_title/
+      );
+      expect((await check(project(["cases"]))).code).toBeUndefined();
     });
 
     it("lets a kept column of a required field take no value while its type is off, and drops nothing", async () => {

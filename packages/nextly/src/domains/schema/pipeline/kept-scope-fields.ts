@@ -94,10 +94,18 @@ export function keptScopeFields(
     ...(existing.get(type.tableName) ?? []),
     ...(existing.get(companionTableOf(type.tableName)) ?? []),
   ]);
+  // A type that declares a field of the name itself keeps its own.
+  const declared = new Set(
+    type.fields.flatMap(field => {
+      const name = (field as { name?: unknown }).name;
+      return typeof name === "string" ? [name.toLowerCase()] : [];
+    })
+  );
   return withheld
     .filter(
       (field): field is NamedField =>
         typeof field.name === "string" &&
+        !declared.has(field.name.toLowerCase()) &&
         [...columnsDeclaredBy([field])].some(column => held.has(column))
     )
     .map(asOptional);
