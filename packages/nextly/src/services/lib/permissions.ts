@@ -1066,14 +1066,20 @@ export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
   // Open for the batch's whole length, not from its first write. A batch exists
   // to write permission rows, and the alternative is a window between the run
   // starting and its first write in which answers derived from rows the batch
-  // is about to change are still being filed as current.
-  return duringRetirement(async () => {
-    try {
-      return await permissionSweep.run(batch, run);
-    } finally {
-      if (batch.dirty) await flushPermissionCaches();
-    }
-  });
+  // is about to change are still being filed as current. The content expiry
+  // the batch owes is queued ahead of its first write and taken by the flush
+  // at its end; a batch that writes nothing queues nothing.
+  return aheadOfGrantsChange(
+    () =>
+      duringRetirement(async () => {
+        try {
+          return await permissionSweep.run(batch, run);
+        } finally {
+          if (batch.dirty) await flushPermissionCaches();
+        }
+      }),
+    { queue: false }
+  );
 }
 
 /**
@@ -1146,11 +1152,31 @@ export async function writingPermissions<TTable, T>(
   permissions: TTable,
   run: (permissions: TTable) => Promise<T>
 ): Promise<T> {
-  try {
-    return await run(permissions);
-  } finally {
-    await invalidateAllPermissionCaches();
-  }
+  // The content expiry the write owes is queued before the write starts, so it
+  // is owed in the database before the write commits; the expiry the
+  // retirement below reaches (or a sweep's, at its end) takes it.
+  return aheadOfGrantsChange(async () => {
+    try {
+      return await run(permissions);
+    } finally {
+      await invalidateAllPermissionCaches();
+    }
+  });
+}
+
+/**
+ * {@link aheadOfGrantsChange}, loaded when a gate is entered rather than with
+ * this module, which most of the package imports, for the reason
+ * `expireContentReads` gives.
+ */
+async function aheadOfGrantsChange<T>(
+  write: () => Promise<T>,
+  options?: { queue?: boolean }
+): Promise<T> {
+  const { aheadOfGrantsChange: ahead } = await import(
+    "../../domains/flush-content-change"
+  );
+  return ahead(write, options);
 }
 
 /**
@@ -1213,9 +1239,26 @@ function storedAnswersReadElsewhere(): boolean {
   return setting !== "false" && setting !== "0";
 }
 
+/**
+ * Retire everything derived from permission rows, after one was written: the caches here, and
+ * the cached content reads (`expireContentAfterGrantsChange`), since a permission's rows decide
+ * what every role holding it, the Public role among them, may read.
+ */
 async function flushPermissionCaches(): Promise<void> {
   clearInMemoryTiers();
   await publishRetirement();
+  await expireContentReads();
+}
+
+/**
+ * The cached content reads expired after a change to grants. Loaded when it runs, so this module,
+ * which most of the package imports, does not import the content cache's.
+ */
+async function expireContentReads(): Promise<void> {
+  const { expireContentAfterGrantsChange } = await import(
+    "../../domains/flush-content-change"
+  );
+  await expireContentAfterGrantsChange();
 }
 
 export async function invalidatePermissionCache(
@@ -1238,6 +1281,9 @@ export async function invalidatePermissionCache(
   }
 
   await publishRetirement();
+  // What a role grants changed, so the cached content reads go too. A user's roles changing
+  // expires none: a read cached for a user is keyed by the roles it was read under.
+  if (roleId) await expireContentReads();
 }
 
 /**

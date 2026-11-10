@@ -1,0 +1,119 @@
+---
+title: Editing with others
+description: What the admin tells you when someone else has the same entry or Single open, and what you can do about it.
+---
+
+When you open an existing entry or a Single in the admin, it is claimed for you while the editor is open. Anyone else who opens it is told that you are editing it, and sees it read-only until they decide what to do. Plugin views that open inside the editor, such as the Visual Page Builder, share the same claim.
+
+The claim is a courtesy between people using the admin. It tells your colleagues you are working on the document, and lets them take over when they need to. It does not stop a program, an integration or a plugin from saving the document. Saves are checked separately: a save made from a copy someone else has changed since is refused, whoever makes it, so nobody's work is replaced without them knowing (see [When your save is refused](#when-your-save-is-refused)).
+
+## What each message means
+
+These messages appear in a strip at the top of the editor. The names below are examples. The admin shows the person's name, or their email when they have no name. When a program holds the document through an API key, it says so: "Ana's API key is editing this document", or "An API key is editing this document" when the key's maker has no name. When there is nothing to name the holder by, it says "Someone". That happens only for a claim made before Nextly began naming every holder, and stops once that claim ends.
+
+### When someone else is editing
+
+| Message | What it means | What you can do |
+| --- | --- | --- |
+| "Ana is editing this document. You can read it, or take over." | Ana has the document open. You see it read-only. | Read it, choose **Take over** to edit it yourself, or choose **Request edit access** to let Ana know you are waiting. |
+| "We have let Ana know you are waiting." | Your request reached Ana. Nothing else changed: the document is still Ana's. | Wait. You can edit as soon as Ana leaves the document or Ana's claim lapses. You can still take over. |
+| "Ana was editing this document, and we could not re-check. You can read it, or take over." | The admin lost touch with the server, and the last thing it knew was that Ana was editing. | Read it, or take over. When the connection comes back, the message updates. |
+| "Ana is editing this document right now." | Your role lets you read this document but not change it, and Ana is editing it. Publishing or unpublishing waits until Ana is done. | Read it. |
+| "Your access lets you view this, but not change it. If you need to change it, ask an admin." | Your role lets you read this document but not change it. Nobody else is involved. | Ask an admin if you need to change it. |
+
+While someone else holds the document, Save, Publish and the other actions that would change it are turned off. The actions menu and the side panel say why under each one, "This document is being edited elsewhere", and a button says it when you point at it. Actions that change nothing, such as previewing, opening the history and pinning to the dashboard, still work.
+
+### When you are editing
+
+| Message | What it means | What you can do |
+| --- | --- | --- |
+| "Someone is waiting to edit this document." | A colleague asked for edit access. The admin does not say who. | Keep working: nothing is taken away from you. Finish and leave the document when you can. |
+| "Ana took over this document. Your unsaved changes are still here, but cannot be saved until you take it back." | Ana took the document from you. What you typed stays on screen, read-only. | Copy what you need, or choose **Take it back**. See [Your unsaved work](#your-unsaved-work). |
+| "You opened this document in another tab. Your unsaved changes are still here, but cannot be saved until you continue editing here." | You opened the same document in another tab, and that tab is now the one editing it. What you typed in this tab stays on screen, read-only. | Choose **Continue editing here** to edit in this tab again, with what you typed. See [Two tabs](#two-tabs). |
+| "Your claim on this document ended. Your unsaved changes are still here, but cannot be saved until you take it back." | Your claim lapsed, for example while your computer was asleep. Nobody has taken the document. | Choose **Take it back** to carry on. |
+| "This document could not be confirmed as yours for long enough that a colleague may now be editing it. Your unsaved changes are still here." | The admin could not reach the server for long enough that your claim may have lapsed. | Choose **Take it back** once you are online again. |
+| "We could not check whether anyone else is editing this document. You can keep working, but a colleague may be in it too." | The admin could not ask the server who is editing. | Keep working, but be aware that a colleague may have it open. |
+
+### When someone changes the document you are editing
+
+Someone can still change a document you are editing, for example a program or a scheduled release, since your claim doesn't stop them. The editor checks each time it renews your claim, about every 15 seconds, and tells you before you save. It names who changed it and when, as in "Ana changed this document at Nov 5, 2026 10:42 AM", or says "This document changed" when there is nobody to name.
+
+| Message | What it means | What you can do |
+| --- | --- | --- |
+| "Ana changed this document at …, so it now shows the latest version." | You had nothing unsaved, so the editor loaded Ana's change at once. | Choose **Dismiss**, and carry on from the latest version. |
+| "Ana changed this document at …. Your unsaved edits are still here." | Your edits stay on screen, and nothing replaces them until you choose. When the document keeps no recovery points, it adds "Loading the current version discards them." | Choose **Load current version** to see Ana's change, with your edits kept as a recovery point you can restore where the document keeps them. Or choose **Keep editing**: your next save is refused, and the [conflict dialog](#when-your-save-is-refused) asks again. |
+| "Ana changed this document at …. Your unsaved edits are still here: they could not be kept as a recovery point, so the latest version was not loaded." | Loading the latest version would have lost your edits, so it did not happen. | Choose **Load current version** to try again, or **Keep editing**. Keeping editing also stops a load still on its way from replacing your edits when it arrives. |
+| "Ana changed this document at …. This copy could not be updated to the latest version." | You had nothing unsaved, but the latest version could not be loaded. You can keep typing, but a save from this copy is refused, so it can't replace Ana's change. | Choose **Try again**. If you have typed since, it asks first, as above: **Load current version**, with your edits kept as a recovery point, or **Keep editing**. |
+
+### When you start editing a document someone else had
+
+| Message | What it means | What you can do |
+| --- | --- | --- |
+| "Loading the latest version of this document before you edit it." | You can edit now, and the admin is loading what was saved while you were waiting, so you don't edit an old copy. | Wait a moment. The form unlocks when the latest version is on screen. |
+| "We couldn't load the latest version of this document, so you can't edit it yet." | The latest version could not be loaded. The form stays read-only so you can't save over newer work. | Choose **Try again**. |
+
+## Taking over
+
+Choose **Take over** when you need to edit a document now, for example because a colleague left it open and went home. It works at once: you do not need their permission.
+
+- The latest version of the document loads before you can type.
+- Your colleague's editor turns read-only and tells them you took over. What they typed and had not saved stays on their screen, and where the document keeps recovery points, their autosave keeps a copy (see [Your unsaved work](#your-unsaved-work)).
+- It is recorded in the document's history. Where [version history](/docs/versions) is on, the History panel shows it as "Took over from Ana".
+- Your colleague can take it back the same way. If you saved while they were away, their editor tells them when they take it back (see [Your unsaved work](#your-unsaved-work)).
+
+## Asking for edit access
+
+Choose **Request edit access** to let the person editing know you are waiting, without taking anything from them. They see "Someone is waiting to edit this document." They are not told who asked, and they can keep working. The request is a courtesy: it does not move the document.
+
+You can edit the document once they leave it: the editor unlocks for you on its own, within about 20 seconds. Requests don't queue, though: when more than one colleague is waiting, whichever editor checks in first gets the document, and the others then see that person named as the one editing. If they could not let go of it, for example because their computer went to sleep or lost its connection, their claim lapses about two and a half minutes after it was last renewed.
+
+## Leaving a document
+
+The document is yours until you leave it. You leave it when you close the editor, go to another page of the admin, reload the tab, close it, or follow a link out of the admin. A colleague waiting on it can edit within about 20 seconds.
+
+A reload normally gives the document back to you, not to someone waiting: your editor claims it again as the page loads. Only if a waiting colleague's editor happens to check in that moment does the document pass to them. When the editor cannot say it is leaving, because the browser crashed, the computer went to sleep or the connection dropped, the claim lapses after about two and a half minutes instead.
+
+## Your unsaved work
+
+If someone takes over while you are typing, nothing you typed is thrown away. It stays on screen, read-only, so you can copy what you need. Where the document keeps recovery points, your autosave also keeps it as one, and when you next open the document the editor offers to restore it. Where it keeps none, what you typed is only on that screen, so copy it before you close the tab.
+
+If you take the document back after someone changed it, the editor loads the latest version before you can type, and keeps your edits as a recovery point: "Ana changed this document at … while you were away. It now shows the latest version, and your unsaved edits are kept as a recovery point." Restore them from the recovery offer if you still want them. Where the document keeps no recovery points, the editor doesn't load the latest version until you choose: loading it discards your edits.
+
+## When your save is refused
+
+Every save remembers the version of the document you started editing. If someone else saved it after you started, your save is refused and nothing is written, so neither of you loses work without knowing. A dialog opens, titled "This document changed since you started editing". It says who changed it and when, "Ana changed it at Nov 5, 2026 10:42 AM.", or "Someone else saved it after you started." when there is nobody to name, then "Your edits are still here, not saved."
+
+| Choice | What happens |
+| --- | --- |
+| **Keep editing** | The dialog closes and your edits stay. Your next save is refused again until you load the current version or save anyway. |
+| **Load current version** | The editor shows the document as it is now. Your edits are kept as a recovery point you can restore. When the document keeps no recovery points, the dialog says your edits are discarded instead. |
+| **Save anyway** | Asks first: "Replace Ana's changes?" Saving anyway replaces the changes Ana made with yours, and the document's history records that you replaced them. Choose **Replace their changes**, or **Back** to return. |
+
+Where the document keeps versions, the dialog links to "See what Ana changed", which opens the comparison in a new tab so your edits stay where they are.
+
+If your editor has seen that someone else is editing the document when you choose **Save anyway**, nothing is saved: "Someone else is editing this document now, so nothing was saved." Your editor checks about every 15 seconds, so a colleague who took the document in the last few seconds isn't seen yet, and the save goes ahead.
+
+The same dialog appears for Singles and in the Visual Page Builder.
+
+A recovery point remembers which version its edits began from. When you restore one after someone else changed the document, the offer says so: "These edits began from an older version. Ana changed the document at Nov 5, 2026 10:42 AM. Restoring them replaces those changes." For a recovery point saved before Nextly kept versions, it says "The version these edits began from is unknown." Restored edits are saved as edits of the version they began from, so saving them after someone else's change opens the same dialog.
+
+A few actions are refused the same way and tell you in a short message instead of a dialog:
+
+- **Publish every language:** "This document changed since you opened it. It now shows the current version; publish again if you still want to."
+- **Discarding a draft:** the same, ending "discard again if you still want to."
+- **Restore a version from the history:** "Someone changed this document since you opened it. Load its current version, then restore again."
+
+## Two tabs
+
+You count as one person, however many tabs you have open, so opening a document you are editing in a second tab is never a takeover. The tab you opened last is the one that edits. The earlier tab says "You opened this document in another tab", keeps what you typed there on screen, and offers **Continue editing here**, which makes it the editing tab again with your typing intact. The other tab is then told the same. Nothing is recorded in the history.
+
+A list open in another tab does not update when you save in this one. Reloading that tab shows the change. Opening the list again shows it only once that tab's copy is more than 30 seconds old, and switching back to the tab doesn't read it again.
+
+## Limits
+
+- **No editing together.** Only one person edits a document at a time. There are no live cursors, and edits are never merged.
+- **One person is named.** The strip names whoever holds the document, not everyone who has it open.
+- **Existing documents only.** A new entry is not claimed while it is being created.
+- **The site style isn't checked yet.** Changes to the shared styles' variables, classes and fonts in the [page editor](/docs/page-builder/editor) are saved over whatever is stored, so when two people change them at the same time, the later save wins. Each of these saves shows in the site style's history as "Saved as an overwrite (no version given)". A breakpoint change is refused instead when someone else's is stored while it is being saved.
+- **Claims don't stop programs.** A claim doesn't stop the REST API, the Direct API or a plugin from writing. A program can still take part through the REST API's [document locks](/docs/api-reference/rest-api#document-locks): see who holds a document, claim it, ask for it, take it over and release it. A program that sends the version it read has its save refused when the document changed since, so it can't replace someone's work unseen (see [Versions and conflicts](/docs/api-reference/rest-api#versions-and-conflicts)).
+- **Your own API key counts as you.** If a program using an API key you made claims a document you have open, your editor says you opened it in another tab, not that the key took it. And if your key holds a document when you open it, you get the document straight away, without being told the key had it.

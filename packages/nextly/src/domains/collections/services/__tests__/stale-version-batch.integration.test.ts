@@ -5,8 +5,8 @@
  * out-of-date one as a conflict, saying its current version, and applies the
  * rest. A bulk update gives every document the same values, so it carries no
  * one document's version: it is judged per document only when it names a
- * version for each id (`revs`), and applies over whatever is stored when it
- * says to overwrite.
+ * version for each id (`revs`), applies over whatever is stored when it says
+ * to overwrite, and is refused when it says neither.
  *
  * @module domains/collections/services/__tests__/stale-version-batch.integration.test
  */
@@ -96,8 +96,17 @@ async function three(t: TestNextly) {
   return notes;
 }
 
-/** Ana saves a note, so the version read before is out of date. */
+/**
+ * Ana saves a note, so the version read before is out of date. She saves from
+ * the version she just read: the overwrite choice would record an
+ * `overwritten` event, which the tests count.
+ */
 async function anaSaves(t: TestNextly, id: string, title: string) {
+  const read = (await t.nextly.findByID({
+    collection: NOTES as never,
+    id,
+    overrideAccess: true,
+  } as never)) as Record<string, unknown>;
   const saved = await handlerOf(t).updateEntry(
     {
       collectionName: NOTES,
@@ -105,7 +114,7 @@ async function anaSaves(t: TestNextly, id: string, title: string) {
       overrideAccess: true,
       user: ANA,
     },
-    { title }
+    { title, _rev: read._rev }
   );
   return field(saved, "_rev");
 }
@@ -342,26 +351,37 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
-    it("applies an update by ids or by query that gives neither, until a version is required", async () => {
+    it("refuses an update by ids or by query that gives neither, writing nothing", async () => {
       const t = await boot(dialect);
       const [a, b] = await three(t);
-      const byIds = await handlerOf(t).bulkUpdateEntries({
-        collectionName: NOTES,
-        ids: [a.id],
-        data: { title: "unjudged" },
-        overrideAccess: true,
-      });
-      expect(byIds.failures).toEqual([]);
-      expect(await titleOf(t, a.id)).toBe("unjudged");
-
-      const byQuery = await handlerOf(t).bulkUpdateByQuery({
-        collectionName: NOTES,
-        where: { id: { in: [b.id] } },
-        data: { title: "unjudged by query" },
-        overrideAccess: true,
-      });
-      expect(byQuery.failures, JSON.stringify(byQuery)).toEqual([]);
-      expect(await titleOf(t, b.id)).toBe("unjudged by query");
+      const before = [await counterOf(t, a.id), await counterOf(t, b.id)];
+      expect(
+        await codeOf(() =>
+          handlerOf(t).bulkUpdateEntries({
+            collectionName: NOTES,
+            ids: [a.id],
+            data: { title: "unjudged" },
+            overrideAccess: true,
+          })
+        )
+      ).toBe("VERSION_REQUIRED");
+      expect(
+        await codeOf(() =>
+          handlerOf(t).bulkUpdateByQuery({
+            collectionName: NOTES,
+            where: { id: { in: [b.id] } },
+            data: { title: "unjudged by query" },
+            overrideAccess: true,
+          })
+        )
+      ).toBe("VERSION_REQUIRED");
+      expect([await titleOf(t, a.id), await titleOf(t, b.id)]).toEqual([
+        "a",
+        "b",
+      ]);
+      expect([await counterOf(t, a.id), await counterOf(t, b.id)]).toEqual(
+        before
+      );
     });
   }
 );

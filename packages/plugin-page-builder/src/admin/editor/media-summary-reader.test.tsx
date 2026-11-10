@@ -11,12 +11,17 @@ import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const readMedia = vi.fn<(id: string) => Promise<unknown>>();
+const searchMedia =
+  vi.fn<(search: string, signal?: AbortSignal) => Promise<unknown[]>>();
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useMediaResolver: () => readMedia,
+  useMediaSearcher: () => searchMedia,
 }));
 
-const { useMediaSummaryReader } = await import("./media-summary-reader");
+const { useMediaSearchReader, useMediaSummaryReader } = await import(
+  "./media-summary-reader"
+);
 
 describe("the inspector's media read", () => {
   it("names the file as uploaded, pictures it by its thumbnail, and gives its alt text", async () => {
@@ -72,5 +77,49 @@ describe("the inspector's media read", () => {
     readMedia.mockResolvedValue(null);
     const { result } = renderHook(() => useMediaSummaryReader());
     await expect(result.current("gone")).resolves.toBeNull();
+  });
+});
+
+describe("the Fallback picker's library search", () => {
+  it("sums up each image found as a stored one is, keyed by its id", async () => {
+    searchMedia.mockResolvedValue([
+      {
+        id: "m1",
+        url: "/uploads/spring-1600.jpg",
+        thumbnailUrl: "/uploads/spring-thumb.jpg",
+        filename: "spring-1600.jpg",
+        originalFilename: "spring-banner.jpg",
+        altText: "Spring sale",
+        mimeType: "image/jpeg",
+      },
+      {
+        id: "m2",
+        url: "/uploads/team.jpg",
+        thumbnailUrl: null,
+        filename: "team.jpg",
+        mimeType: "image/jpeg",
+        altText: "",
+      },
+    ]);
+    const { result } = renderHook(() => useMediaSearchReader());
+    const signal = new AbortController().signal;
+    await expect(result.current("spring", signal)).resolves.toEqual([
+      {
+        id: "m1",
+        name: "spring-banner.jpg",
+        thumbnail: "/uploads/spring-thumb.jpg",
+        alt: "Spring sale",
+      },
+      { id: "m2", name: "team.jpg", thumbnail: "/uploads/team.jpg" },
+    ]);
+    // The search and its signal handed on as given, so a newer search can
+    // abort this one.
+    expect(searchMedia).toHaveBeenCalledWith("spring", signal);
+  });
+
+  it("rejects where the library cannot be read, rather than finding none", async () => {
+    searchMedia.mockRejectedValue(new Error("Forbidden"));
+    const { result } = renderHook(() => useMediaSearchReader());
+    await expect(result.current("")).rejects.toThrow("Forbidden");
   });
 });

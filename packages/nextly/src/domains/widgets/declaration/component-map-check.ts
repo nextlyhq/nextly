@@ -53,6 +53,10 @@ import {
   configImportSpecifier,
   describeComponentUse,
 } from "../../../plugins/codegen/component-import-map";
+import {
+  unbackedContributions,
+  unbackedPaths,
+} from "../../../plugins/codegen/unbacked-contributions";
 import { writeComponentMapFiles } from "../../../plugins/codegen/write-component-map";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { findConfigFile } from "../../../shared/lib/config-file";
@@ -91,9 +95,23 @@ export async function checkAdminComponents(
   // boot registered them: after every plugin's setup(), which may add one the
   // config as written does not hold.
   const siteDashboard = adminSiteDashboard();
+  const place = mapFolder(input.config);
   // Every use, not one per path: two widgets drawn with one missing component
-  // are both named.
-  const uses = componentUses(plugins, siteDashboard);
+  // are both named. A contribution whose module is not there is left out, as
+  // the generator leaves it out of the map, or every request would read the
+  // map as missing it and write it again unchanged.
+  const uses = componentUses(
+    plugins,
+    siteDashboard,
+    unbackedPaths(
+      unbackedContributions(
+        plugins,
+        place.typesOutputPath,
+        process.cwd(),
+        siteDashboard
+      )
+    )
+  );
   const missing = uses.filter(each => !registered.has(each.path));
   /*
    * 🔴 Compared in both directions. A plugin removed from the config leaves
@@ -103,7 +121,6 @@ export async function checkAdminComponents(
    */
   const declared = new Set(uses.map(each => each.path));
   const obsolete = [...registered].filter(path => !declared.has(path));
-  const place = mapFolder(input.config);
   const otherConfig =
     missing.length === 0 && obsolete.length === 0
       ? await configDisagreement(plugins, siteDashboard, uses, place)

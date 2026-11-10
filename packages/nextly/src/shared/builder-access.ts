@@ -74,6 +74,8 @@ const BUILDER_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "createCollection",
       "updateCollection",
       "deleteCollection",
+      // The delete dialog's dry run, for the reason the previews are here.
+      "previewCollectionDelete",
       "previewSchemaChanges",
       "applySchemaChanges",
     ]),

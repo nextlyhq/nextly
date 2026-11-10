@@ -342,7 +342,7 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             locale: "en",
           },
-          { title }
+          { title, _overwrite: true }
         );
       }
       expect(await refusal(doc.mark(ANA, 3))).toMatchObject({

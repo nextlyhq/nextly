@@ -9,6 +9,7 @@ import {
   ChevronsRight,
 } from "@admin/components/icons";
 import { PAGINATION } from "@admin/constants/pagination";
+import { useT } from "@admin/lib/i18n/I18nProvider";
 import { cn } from "@admin/lib/utils";
 
 import type { PaginationProps } from "./types";
@@ -82,6 +83,17 @@ function PaginationSummary({
       )}
     </div>
   );
+}
+
+/**
+ * The landmark's accessible name: the caller's own as given, or the admin's
+ * in the interface language.
+ */
+function landmarkName(
+  ariaLabel: string | undefined,
+  t: (key: "nextly.pagination.label") => string
+): string {
+  return ariaLabel ?? t("nextly.pagination.label");
 }
 
 /**
@@ -212,11 +224,14 @@ export const Pagination: React.ForwardRefExoticComponent<
       isLoading = false,
       totalItems,
       itemLabel = "items",
-      ariaLabel = "Pagination",
+      ariaLabel,
       className,
     },
     ref
   ) => {
+    // The controls' names read in the interface language; a caller's own
+    // landmark name is shown as given.
+    const t = useT();
     const canGoPrevious = currentPage > 0;
     const canGoNext = currentPage < totalPages - 1;
 
@@ -308,7 +323,7 @@ export const Pagination: React.ForwardRefExoticComponent<
             onClick={() => onPageChange(i)}
             disabled={isLoading}
             className={getButtonClass(currentPage === i)}
-            aria-label={`Go to page ${i + 1}`}
+            aria-label={t("nextly.pagination.page", { page: i + 1 })}
             aria-current={currentPage === i ? "page" : undefined}
           >
             {i + 1}
@@ -337,7 +352,7 @@ export const Pagination: React.ForwardRefExoticComponent<
             onClick={() => onPageChange(0)}
             disabled={isLoading}
             className={getButtonClass(currentPage === 0)}
-            aria-label="Go to first page"
+            aria-label={t("nextly.pagination.first")}
           >
             1
           </button>
@@ -355,7 +370,7 @@ export const Pagination: React.ForwardRefExoticComponent<
             onClick={() => onPageChange(i)}
             disabled={isLoading}
             className={getButtonClass(currentPage === i)}
-            aria-label={`Go to page ${i + 1}`}
+            aria-label={t("nextly.pagination.page", { page: i + 1 })}
             aria-current={currentPage === i ? "page" : undefined}
           >
             {i + 1}
@@ -374,7 +389,7 @@ export const Pagination: React.ForwardRefExoticComponent<
             onClick={() => onPageChange(totalPages - 1)}
             disabled={isLoading}
             className={getButtonClass(currentPage === totalPages - 1)}
-            aria-label="Go to last page"
+            aria-label={t("nextly.pagination.last")}
           >
             {totalPages}
           </button>
@@ -387,7 +402,7 @@ export const Pagination: React.ForwardRefExoticComponent<
     return (
       <nav
         ref={ref}
-        aria-label={ariaLabel}
+        aria-label={landmarkName(ariaLabel, t)}
         onKeyDown={handleKeyDown}
         className={cn(
           "flex flex-col @2xl/content:flex-row w-full items-center justify-between gap-4 text-xs @md/content:text-sm text-muted-foreground p-4 border-t border-border bg-[var(--nx-table-header-bg)]",
@@ -454,7 +469,7 @@ export const Pagination: React.ForwardRefExoticComponent<
               onClick={() => onPageChange(0)}
               disabled={currentPage === 0 || isLoading}
               className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
-              aria-label="Go to first page"
+              aria-label={t("nextly.pagination.first")}
             >
               <ChevronsLeft className="h-4 w-4" />
             </button>
@@ -464,7 +479,7 @@ export const Pagination: React.ForwardRefExoticComponent<
               onClick={() => onPageChange(currentPage - 1)}
               disabled={currentPage === 0 || isLoading}
               className="flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
-              aria-label="Go to previous page"
+              aria-label={t("nextly.pagination.previous")}
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
@@ -477,7 +492,7 @@ export const Pagination: React.ForwardRefExoticComponent<
               onClick={() => onPageChange(currentPage + 1)}
               disabled={currentPage >= totalPages - 1 || isLoading}
               className="flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
-              aria-label="Go to next page"
+              aria-label={t("nextly.pagination.next")}
             >
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -487,7 +502,7 @@ export const Pagination: React.ForwardRefExoticComponent<
               onClick={() => onPageChange(totalPages - 1)}
               disabled={currentPage >= totalPages - 1 || isLoading}
               className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
-              aria-label="Go to last page"
+              aria-label={t("nextly.pagination.last")}
             >
               <ChevronsRight className="h-4 w-4" />
             </button>

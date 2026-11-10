@@ -2018,6 +2018,15 @@ export class DynamicCollectionService extends BaseService {
     return this.registryService.unregisterCollection(name);
   }
 
+  /** Lock the registry rows of `slugs` inside `tx`; see the registry's `holdCollectionsIn`. */
+  async holdCollectionsIn(
+    tx: TransactionContext,
+    slugs: readonly string[],
+    strength: "share" | "update"
+  ): ReturnType<DynamicCollectionRegistryService["holdCollectionsIn"]> {
+    return this.registryService.holdCollectionsIn(tx, slugs, strength);
+  }
+
   /** Remove a collection's registry row inside `tx`; forget it once `tx` commits. */
   async unregisterCollectionIn(
     tx: TransactionContext,

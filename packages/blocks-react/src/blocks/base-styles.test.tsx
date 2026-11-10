@@ -29,6 +29,7 @@ import {
   defaultSiteTokens,
   type TokenLookup,
   getStyleProperty,
+  isStyleLeaf,
   validateStyleValues,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -231,6 +232,12 @@ function declarationsFor(
 }
 
 function cssNameOf(property: string): string {
+  // A single-leaf property is written under the name its catalog leaf gives,
+  // which need not be its key spelled in kebab case: `disclosureIcon` writes
+  // `--nx-pb-disclosure-icon`. An object or sided property's leaves are
+  // counted under the kebab prefix every one of them shares.
+  const shape = getStyleProperty(property)?.shape;
+  if (shape !== undefined && isStyleLeaf(shape)) return shape.cssProperty;
   return property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`);
 }
 
@@ -318,6 +325,7 @@ describe("every default the core library declares", () => {
       "core/embed",
       "core/form",
       "core/gallery",
+      "core/icon",
       "core/image",
       "core/list",
       "core/quote",
@@ -356,6 +364,11 @@ describe("every default the core library declares", () => {
     expect(
       DECLARING_PARTS.map(([block, part]) => `${block}#${part}`).sort()
     ).toEqual([
+      "core/accordion-item#title",
+      "core/collection-loop#current-page",
+      "core/collection-loop#page-gap",
+      "core/collection-loop#page-link",
+      "core/collection-loop#pages",
       "core/form#control",
       "core/form#submit",
       "core/image#caption",
@@ -365,6 +378,12 @@ describe("every default the core library declares", () => {
       "core/image#picture",
       "core/quote#attribution",
       "core/quote#quotation",
+      "core/table-of-contents#item",
+      "core/table-of-contents#link",
+      "core/table-of-contents#list",
+      "core/table-of-contents#note",
+      "core/table-of-contents#sublist",
+      "core/table-of-contents#title",
     ]);
   });
 

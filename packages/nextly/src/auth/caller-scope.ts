@@ -28,6 +28,9 @@ import { currentPrincipal } from "./principal-scope";
 import type { RequestActor } from "./request-actor";
 
 const callerScope = new AsyncLocalStorage<AuthenticatedScope>();
+// See `RouteActor` below: attribution for a plugin route's request, and
+// nothing a gate reads.
+const routeActor = new AsyncLocalStorage<RouteActor>();
 
 /**
  * Who an authenticated REST request is, as the route handler resolved it.
@@ -101,7 +104,49 @@ export function runWithCallerScope<T>(
  * own authority, in it.
  */
 export function runDetachedFromRequest<T>(operation: () => T): T {
-  return callerScope.exit(() => requestCaller.exit(operation));
+  return callerScope.exit(() =>
+    requestCaller.exit(() => routeActor.exit(operation))
+  );
+}
+
+/**
+ * Who an authenticated plugin route's request is, for attribution only: the
+ * account it authenticated as, and the actor its writes are recorded under
+ * (the API key itself when one was used).
+ *
+ * Separate from {@link RequestCaller} on purpose. That record also VOUCHES:
+ * a service that finds one pinned skips its own access re-check, because the
+ * REST route already ran the gate for the operation. A plugin route's
+ * dispatcher ran no gate for the writes its handler goes on to make, so it
+ * pins this instead, which says who is acting and decides nothing.
+ */
+export interface RouteActor {
+  /** The account the request authenticated as: for an API key, its owner. */
+  readonly userId: string;
+  /** Who a write made as that account is recorded under. */
+  readonly actor: RequestActor;
+}
+
+/**
+ * Run `operation` with `actor` as the plugin route request's actor, or with
+ * none. Always a new context, so a request reached while another is being
+ * served never inherits the outer one's actor.
+ */
+export function runWithRouteActor<T>(
+  actor: RouteActor | undefined,
+  operation: () => T
+): T {
+  if (actor === undefined) return routeActor.exit(operation);
+  return routeActor.run(actor, operation);
+}
+
+/**
+ * The actor of the plugin route request being served, if any. Nothing but the
+ * plugin route dispatcher sets it, so a job, a script and the Direct API
+ * answer `undefined`.
+ */
+export function currentRouteActor(): RouteActor | undefined {
+  return routeActor.getStore();
 }
 
 /**

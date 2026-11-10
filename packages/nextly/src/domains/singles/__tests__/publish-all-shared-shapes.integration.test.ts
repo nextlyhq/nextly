@@ -85,7 +85,11 @@ function save(
   locale: string,
   data: Record<string, unknown>
 ) {
-  return singles.update(SLUG, data, { locale, overrideAccess: true });
+  return singles.update(
+    SLUG,
+    { ...data, _overwrite: true },
+    { locale, overrideAccess: true }
+  );
 }
 
 async function liveIn(
@@ -211,7 +215,10 @@ describe.each(getConfiguredTestDialects())(
         expect((await save(singles, "en", english)).success).toBe(true);
 
         const published = await singles
-          .publishAllLocales(SLUG, { overrideAccess: true })
+          .publishAllLocales(SLUG, {
+            overrideAccess: true,
+            data: { _overwrite: true },
+          })
           .then(
             () => ({ ok: true as const }),
             (error: { statusCode?: number; publicData?: unknown }) => ({
@@ -243,7 +250,10 @@ describe.each(getConfiguredTestDialects())(
       );
 
       await expect(
-        singles.publishAllLocales(SLUG, { overrideAccess: true })
+        singles.publishAllLocales(SLUG, {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        })
       ).rejects.toMatchObject({
         statusCode: 409,
         publicData: {
@@ -322,7 +332,10 @@ describe.each(getConfiguredTestDialects())(
       expect(await pendingLocales()).toEqual(["de", "en"]);
 
       await expect(
-        singles.publishAllLocales(SLUG, { overrideAccess: true })
+        singles.publishAllLocales(SLUG, {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        })
       ).rejects.toMatchObject({
         statusCode: 409,
         publicData: { reason: "shared-edits-unmergeable", fields: ["panel"] },
@@ -356,6 +369,7 @@ describe.each(getConfiguredTestDialects())(
 
       const published = await singles.publishAllLocales(SLUG, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
 
       expect(published.success, JSON.stringify(published)).toBe(true);
@@ -384,6 +398,7 @@ describe.each(getConfiguredTestDialects())(
 
       const published = await singles.publishAllLocales(SLUG, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
 
       expect(published.success).toBe(true);

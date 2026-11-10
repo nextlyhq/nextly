@@ -207,7 +207,7 @@ describeEachDialect("the preview of a removed field's values", dialect => {
         overrideAccess: true,
         locale: "es",
       },
-      { heading: "Uno" }
+      { heading: "Uno", _overwrite: true }
     );
     expect(translated.success, JSON.stringify(translated)).toBe(true);
     await createEntry("posts", { views: 2 });
@@ -274,7 +274,7 @@ describeEachDialect("the preview of a removed field's values", dialect => {
       current.getService("singleEntryService");
     const written = await singles.update(
       "hero",
-      { metaTitle: "Welcome" },
+      { metaTitle: "Welcome", _overwrite: true },
       { overrideAccess: true }
     );
     expect(written.success, JSON.stringify(written)).toBe(true);
@@ -449,7 +449,7 @@ describeEachDialect("the preview of a removed field's values", dialect => {
     ]) {
       const written = await singles.update(
         "hero",
-        { heading: value },
+        { heading: value, _overwrite: true },
         { locale, overrideAccess: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);

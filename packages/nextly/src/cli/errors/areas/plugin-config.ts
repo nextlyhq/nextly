@@ -461,6 +461,61 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
             ? `Name one of Nextly's admin places instead of "${field(error, "place")}".`
             : `Enable the plugin whose admin slug is "${field(error, "owningPrefix")}" and declare it in the \`dependsOn\` of "${field(error, "plugin")}", or correct the place's name.`,
       })),
+      ...resolved("list-filter-invalid", error => ({
+        what: detail(error),
+        why: "A filter is offered in the entry list's toolbar, so each option needs a value the page's URL can keep, a label, and a well-formed `where`.",
+        next: `Correct the filter in \`contributes.admin.filters\` of "${field(error, "plugin")}" as the line above says.`,
+      })),
+      ...resolved("list-filter-outside-namespace", error => ({
+        what: detail(error),
+        why: "A plugin's filters are named under its admin slug, so no two plugins declare the same one.",
+        next: `Rename the filter "${field(error, "filter")}" so that it starts with "${field(error, "expectedPrefix")}".`,
+      })),
+      ...resolved("list-filter-duplicate", error => ({
+        what: detail(error),
+        why: "A filter is kept in the page's URL by its name, so each name is declared once.",
+        next: `Declare the filter "${field(error, "filter")}" once.`,
+      })),
+      ...resolved("admin-contribution-invalid", error => ({
+        what: detail(error),
+        why: "A contribution is drawn where its place puts it, so it needs a kind that place takes, the fields that kind draws with, and rules the admin can evaluate.",
+        next: `Correct the contribution in \`contributes.admin.contributions\` of "${field(error, "plugin")}" as the line above says.`,
+      })),
+      ...resolved("admin-contribution-outside-namespace", error => ({
+        what: detail(error),
+        why: "A plugin's contributions are named under its admin slug, so no two plugins declare the same one and each can be ordered against by name.",
+        next: `Rename the contribution "${field(error, "contribution")}" so that it starts with "${field(error, "expectedPrefix")}".`,
+      })),
+      ...resolved("admin-contribution-duplicate", error => ({
+        what: detail(error),
+        why: "Other contributions are ordered against a contribution by its id, so each id is declared once.",
+        next: `Declare the contribution "${field(error, "contribution")}" once.`,
+      })),
+      ...resolved("admin-contribution-kind-not-accepted", error => ({
+        what: detail(error),
+        why: "Each admin place draws only the kinds of contribution its page has room for.",
+        next: `Move "${field(error, "contribution")}" to a place that takes a ${field(error, "kind")}, or contribute a kind "${field(error, "place")}" takes.`,
+      })),
+      ...resolved("contribution-order-unknown", error => ({
+        what: detail(error),
+        why: "A contribution is placed `before` or `after` another one of its kind at the same place, contributed or built in.",
+        next: `Name a ${field(error, "kind")} at "${field(error, "place")}" that exists, or drop the reference.`,
+      })),
+      ...resolved("contribution-order-cycle", error => ({
+        what: detail(error),
+        why: "Contributions ordered before and after each other leave no order that keeps every request.",
+        next: "Drop one of the `before` or `after` references between the contributions named above.",
+      })),
+      ...resolved("contribution-replace-unknown", error => ({
+        what: detail(error),
+        why: "A contribution may replace only a part the page draws itself, of its own kind, at its place.",
+        next: `Replace one of the built-in parts named at "${field(error, "place")}", or drop \`replaces\`.`,
+      })),
+      ...resolved("contribution-replace-twice", error => ({
+        what: detail(error),
+        why: "A built-in part can be replaced by one contribution only, or which one is drawn would depend on load order.",
+        next: `Keep \`replaces: "${field(error, "replaces")}"\` on one of the contributions named above.`,
+      })),
       ...resolved("principal-kind-invalid", error => {
         const parts = cut(detail(error), " cannot be used: ");
         return {
@@ -891,6 +946,40 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
           what: asSentence(detail(error)),
           why: "A document view needs a component to draw, a label of text if it has one, and a path of one address segment, of lowercase letters, digits and single dashes, that the document does not already use.",
           next: "Correct the view the message names in the plugin's `contributes.admin`.",
+        }),
+      },
+    ],
+  },
+  PLUGIN_DOCUMENT_SURFACE_COLLISION: {
+    cause: "Two plugins override the same document action on one collection.",
+    from: [
+      {
+        code: "NEXTLY_PLUGIN_DOCUMENT_SURFACE_INVALID",
+        when: error => typeof error.logContext?.other === "string",
+        describe: error => {
+          const parts = cut(
+            detail(error),
+            ". One action can be drawn one way: "
+          );
+          return {
+            what: asSentence(parts?.[0] ?? detail(error)),
+            why: "One action can be drawn one way.",
+            next: asSentence(parts?.[1] ?? "Drop one of the two overrides"),
+          };
+        },
+      },
+    ],
+  },
+  PLUGIN_DOCUMENT_SURFACE_INVALID: {
+    cause:
+      "A plugin overrides a document action it may not override, or declares a document action override or panel section with nothing to draw.",
+    from: [
+      {
+        code: "NEXTLY_PLUGIN_DOCUMENT_SURFACE_INVALID",
+        describe: error => ({
+          what: asSentence(detail(error)),
+          why: "A plugin may hide or replace only the delete and unpublish actions; a replacement needs a component to open and a label of text if it has one, and a panel section needs a title and a component.",
+          next: "Correct the override or section the message names in the plugin's `contributes.admin.views`.",
         }),
       },
     ],

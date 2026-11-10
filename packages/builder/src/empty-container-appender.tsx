@@ -805,11 +805,17 @@ export function EmptyContainerAppenders({
             title={`Add a block to ${container.label}`}
             onClick={() => onAppend(container.id)}
           >
-            <Plus size={16} aria-hidden="true" />
-            {/* The words the editor's design gives an empty box, so the "+"
-                says what a drop or a press here does. */}
-            <span className="nx-empty-container-appenders__words">
-              {APPENDER_WORDS}
+            {/* On a plate of the editor's own surface: the box is drawn over
+                the SITE's ground, which can be any colour, and the editor's
+                text colour holds its contrast only against the editor's own
+                surface. */}
+            <span className="nx-empty-container-appenders__plate">
+              <Plus size={16} aria-hidden="true" />
+              {/* The words the editor's design gives an empty box, so the "+"
+                  says what a drop or a press here does. */}
+              <span className="nx-empty-container-appenders__words">
+                {APPENDER_WORDS}
+              </span>
             </span>
           </button>
         );

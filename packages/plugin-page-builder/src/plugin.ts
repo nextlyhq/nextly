@@ -1,20 +1,32 @@
 import {
   allBlocks,
-  breakpointContexts,
+  createNamedQueryRegistry,
   DEFAULT_LIMITS,
+  namedQueryDeclaration,
   type DocumentLimits,
   type NamedClass,
+  type NamedQueryDefinition,
+  type NamedQueryRegistry,
+  type NamedQuerySource,
   type RemotePattern,
   type RetiredExposures,
 } from "@nextlyhq/blocks-engine";
-import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
+import {
+  COMPONENT_DOCUMENT_FIELD,
+  type NamedQueryLookup,
+} from "@nextlyhq/blocks-react";
 import {
   definePlugin,
   NextlyError,
+  type HookContext,
+  readableTitleText,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
+  type PluginCollectionTransaction,
+  type PluginCollectionView,
   type PluginDefinition,
   type PluginRouteContext,
+  type PluginRouteIdentity,
   type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
@@ -27,6 +39,54 @@ import type { PreviewViewportsDeclaration } from "nextly/config";
 // isomorphic and reachable from a browser bundle.
 import { version as PLUGIN_VERSION } from "../package.json";
 
+import {
+  backfillPageClaims,
+  publishedPagesInTransaction,
+  type PagesInTransactionRead,
+  type PagesReader,
+} from "./address-claims/backfill";
+import { committedClaims, type Tx } from "./address-claims/claim-store";
+import {
+  CONTENT_ADDRESS_SERVICE,
+  contentAddressService,
+  type ContentAddressService,
+} from "./address-claims/content-addresses";
+import { entryDesignReads } from "./address-claims/design-reads";
+import { ENTRY_SLUG_FIELD } from "./address-claims/entry-claims";
+import {
+  registerEntryAddressClaims,
+  releaseUndeclared,
+  settleEntryClaimsAtStart,
+  type EntryClaimsDeps,
+} from "./address-claims/entry-claims-hook";
+import { claimLocales, pageClaims } from "./address-claims/page-claims";
+import {
+  describeFor,
+  registerPageAddressClaims,
+} from "./address-claims/page-claims-hook";
+import { addressWaitingRoute } from "./address-claims/waiting-report-route";
+import { bindingFieldsRoute } from "./binding-fields-route";
+import { BINDINGS_TO_FIX_PAGE_HREF } from "./bindings-report/contract";
+import { schemaFingerprint } from "./bindings-report/fingerprint";
+import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
+import { layoutRegionsOf } from "./bindings-report/layout-regions";
+import {
+  readableAsCaller,
+  readableSingles,
+  visibleBindings,
+} from "./bindings-report/readable";
+import { bindingsToFixRoute } from "./bindings-report/route";
+import {
+  registerBindingReportOnWrite,
+  runFullCheck,
+  type BindingReportDeps,
+} from "./bindings-report/scan";
+import { bindingReportStore } from "./bindings-report/store";
+import {
+  bindingsToFixAttention,
+  bindingsToFixWidget,
+  EDIT_PAGES_PERMISSION,
+} from "./bindings-report/widget";
 import {
   BLOCK_SERVICE,
   createBlockRegistrationService,
@@ -42,41 +102,42 @@ import {
   type BreakpointRemovalService,
   type RemovalInstall,
 } from "./breakpoint-removal/service";
-import { countRemovalOnSite } from "./breakpoint-removal/site-counter";
 import {
+  countRemovalOnSite,
+  nameDocumentsOnSite,
+} from "./breakpoint-removal/site-counter";
+import {
+  BINDINGS_TO_FIX_PAGE_COMPONENT,
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
+  COMPONENT_STORE_DELETE_HOST_COMPONENT,
+  DELETE_COMPONENT_REPLACEMENT_COMPONENT,
+  ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
+  TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_DESIGN_DETAILS_COMPONENT,
+  TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "./builder-view";
+import { canvasBindingsRoute } from "./canvas-bindings-route";
 import { canvasPathOption } from "./canvas-path";
 import { patternCapabilityRoute } from "./capability-route";
-import {
-  blocksFieldReach,
-  blocksFieldSurvey,
-} from "./class-usage-blocks-fields";
+import { blocksFieldReach } from "./class-usage-blocks-fields";
 import {
   registerClassUsageMaintenance,
   type CommittedWriteReconciler,
 } from "./class-usage-hook";
 import { classUsageIndex } from "./class-usage-reconcile";
+import { hostFieldReader } from "./class-usage-runtime";
 import {
-  classUsageDocumentRowReader,
-  ownIndexReader,
-  usageCountReader,
-  usageRowReader,
-} from "./class-usage-runtime";
-import {
-  CLASS_USAGE_INDEX_SLUG,
-  classUsageIndexCollection,
-} from "./collections/class-usage-index";
+  ADDRESS_CLAIMS_SLUG,
+  addressClaimsCollection,
+} from "./collections/address-claims";
+import { classUsageIndexCollection } from "./collections/class-usage-index";
 import {
   COMPONENT_RETIRED_SLUG,
   componentRetiredCollection,
 } from "./collections/component-retired-exposures";
-import {
-  COMPONENT_USAGE_INDEX_SLUG,
-  componentUsageIndexCollection,
-} from "./collections/component-usage-index";
+import { componentUsageIndexCollection } from "./collections/component-usage-index";
 import {
   COMPONENTS_SLUG,
   componentsCollection,
@@ -85,8 +146,16 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
+import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
+import {
+  registerComponentGuards,
+  storedUseCheck,
+  storeLifecycle,
+} from "./component-delete/guards";
+import { componentDeleteRoutes } from "./component-delete/route";
+import { componentDeleteJob } from "./component-delete/sweep";
 import {
   componentFactsRoute,
   componentStoreShape,
@@ -100,8 +169,11 @@ import {
 } from "./component-page-reach";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
+import { seedCompositionGraphLock } from "./composition-graph-lock";
 import { manifestRoute } from "./composition-manifest";
+import { registerCompositionRejudge } from "./composition-rejudge";
 import { COMPOSITION_SERVICE, compositionService } from "./composition-service";
+import { conditionsPreviewEntryRoute } from "./conditions-preview-route";
 import { withBlockLooks, withCoreLooks } from "./core-looks";
 import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
 import {
@@ -118,23 +190,30 @@ import {
   PAGE_BUILDER_SETTINGS_SLUG,
   pageBuilderSettingsSingle,
 } from "./default-layout/settings-single";
+import { readLayoutSettings } from "./default-layout/store";
 import { definitionActionsRoute } from "./definition-actions-route";
-import { entriesRoute } from "./entries-route";
+import { entriesRoute, titleFieldIn } from "./entries-route";
+import type { BindingJudging } from "./fields/binding-judgement";
 import type {
   CompositionSetup,
   LayersLockUnjudged,
 } from "./fields/blocks-composition";
-import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
+import { blocksFieldType, BLOCKS_TYPE, onceAsked } from "./fields/blocksField";
+import { listFieldsFrom } from "./fields/list-query-judgement";
 import { hostFetchPolicy } from "./host-policy";
-import { registerFencedWriteReport } from "./host-rewrite/after-commit";
+import type { HostAddress } from "./host-rewrite/contract";
 import { fencedComponentsReader, fenceStore } from "./host-rewrite/fence";
-import { progressStore } from "./host-rewrite/progress";
+import { readSiteFieldGroups } from "./host-rewrite/field-groups";
+import { registerInTransactionFence } from "./host-rewrite/in-transaction";
 import {
   COMPONENT_DELETE_REWRITE_SERVICE,
   componentDeleteRewriteService,
   type RewriteInstall,
 } from "./host-rewrite/service";
 import {
+  documentHosts,
+  siteHostReader,
+  siteWalkSource,
   singleToWalk,
   type RewriteDirectApi,
   type SingleToWalk,
@@ -157,7 +236,9 @@ import {
   patternLibraryRoute,
   type ComponentStore,
 } from "./library-route";
+import { listEntriesRoute } from "./list-entries-route";
 import { loopCollectionsRoute } from "./loop-collections-route";
+import { namedQueriesRoute, registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
 import { pageActionsRoute } from "./page-actions-route";
@@ -170,13 +251,25 @@ import {
   type PublishReadinessSetup,
 } from "./publish-readiness";
 import {
+  installRemovalHolds,
+  NO_HOLDS,
+  removalHoldStore,
+  type HoldDirectApi,
+  type PlacementCount,
+  type RemovalHoldStore,
+} from "./removal-hold";
+import { removalHoldRoutes } from "./removal-hold-route";
+import {
   registerRetiredCleanupCheck,
   RETIRED_CLEANUP_SERVICE,
   retiredCleanupService,
   type RetiredCleanupService,
 } from "./retired-cleanup";
 import { retiredCleanupJob } from "./retired-cleanup-job";
-import { registerRetiredExposures } from "./retired-exposure-hooks";
+import {
+  blocksFieldPaths,
+  registerRetiredExposures,
+} from "./retired-exposure-hooks";
 import { reconcileRetired, retiredHistoryMemo } from "./retired-history";
 import { retiredPins, type RetiredPins } from "./retired-pins";
 import { allRetired, retiredStore } from "./retired-store";
@@ -187,8 +280,28 @@ import {
 } from "./schema/definition";
 import {
   LOCK_SHARED_STYLES_DECLARATION,
+  firstReadableTitle,
   sharedStyleRoutes,
+  storedDocumentsOf,
+  storedSharedStyleUses,
+  type SharedStyleUsageSource,
 } from "./shared-styles-routes";
+import {
+  BREAKPOINT_REMOVAL_UNDONE_AUDIT,
+  BREAKPOINT_REMOVAL_UNDONE_METADATA,
+  siteBreakpointUndoRoute,
+} from "./site-breakpoint-undo";
+import {
+  SITE_CODE_SAVED_AUDIT,
+  SITE_CODE_SAVED_METADATA,
+  siteCodeRoutes,
+  type PageBuilderSiteCodeOptions,
+} from "./site-code/route";
+import { siteCodeSingle } from "./site-code/storage";
+import {
+  siteDefinitionsOfDocument,
+  siteStyleDocumentOn,
+} from "./site-definitions";
 import {
   resolveFontOptions,
   type PageBuilderFontOptions,
@@ -197,7 +310,9 @@ import { siteFontRoutes } from "./site-fonts/routes";
 import {
   BREAKPOINT_REMOVED_AUDIT,
   BREAKPOINT_REMOVED_METADATA,
+  MANAGE_SITE_PERMISSION,
   siteBreakpointRemovalRoute,
+  siteBreakpointRemovalStatusRoute,
   siteBreakpointsRoute,
   siteSettingsRoute,
   type BreakpointsRouteContext,
@@ -206,13 +321,24 @@ import {
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleExpiry } from "./site-style-expiry";
-import { referableClassIds } from "./site-style-record";
-import { blocksSurvey, siteStyleRoute } from "./site-style-route";
 import {
-  loadSiteStyle,
+  registerSiteStyleRemovalLock,
+  type SiteStyleRemovalLockSetup,
+} from "./site-style-removal-lock";
+import {
+  blocksSurvey,
+  builderCollectionsIn,
+  builderSinglesIn,
+  siteLocales as siteLocalesOf,
+  siteStyleRoute,
+} from "./site-style-route";
+import {
   readStoredSiteStyleVersioned,
   SITE_STYLE_SLUG,
+  siteStyleOfDocument,
   siteStyleSingle,
+  suppliedVariableIds,
+  type VariablesInUseCheck,
 } from "./site-style-storage";
 import {
   configuredSpacingMode,
@@ -229,11 +355,57 @@ import {
 } from "./spacing-mode-reader";
 import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
+import { storedDocumentsOnTransaction } from "./stored-documents-on-transaction";
+import {
+  holdTemplateCollection,
+  templateCollectionDelete,
+} from "./templates/collection-delete";
+import { readEntryBlocksFields } from "./templates/entry-content-fields";
+import {
+  designUnderWhere,
+  registerEntryDesignCascade,
+} from "./templates/entry-design-cascade";
+import { judgeTemplateInTransaction } from "./templates/entry-design-write";
+import { entryDesignsRoute } from "./templates/entry-designs-route";
+import {
+  templateActionsRoute,
+  templateCollectionRetargetRoute,
+  templateRoutingRoute,
+} from "./templates/template-actions-route";
+import {
+  addressSegments,
+  checkedTemplateAddresses,
+  type PageBuilderTemplateOptions,
+} from "./templates/template-addresses";
+import { templateCollectionChoicesRoute } from "./templates/template-collection-choices-route";
+import {
+  addressHolderReader,
+  registerTemplateGuard,
+  storedAddressesReader,
+  templateCollectionProblem,
+  templateHolderReader,
+  templateTargets,
+  type TemplateGuardSetup,
+} from "./templates/template-guard";
+import {
+  templatePreviewEntriesRoute,
+  templatePreviewEntryRoute,
+} from "./templates/template-preview-route";
+import {
+  MANAGE_TEMPLATE_ROUTING_DECLARATION,
+  storedAddressOf,
+  storedAddressProblem,
+  TEMPLATE_ADDRESS_FIELD,
+} from "./templates/template-routing";
+import { unlinkCopies } from "./templates/unlink-copies";
+import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
+import { unbindPlanRoute } from "./unbind-plan-route";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
+  forgetGoneScopes,
   usageBackfillDeps,
   type BackfillHost,
 } from "./usage-backfill-wiring";
@@ -243,7 +415,19 @@ import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
 } from "./usage-health-service";
+import type { UsageIndex, UsageSubject } from "./usage-index";
+import {
+  usageIndexStores,
+  usageTableOf,
+  usageTableRows,
+} from "./usage-index-tables";
+import {
+  variableRemovalChecks,
+  variableRoutes,
+  variablesInUseCheck,
+} from "./variables-routes";
 import { variantUseRoute } from "./variant-use-route";
+import { SINGLE_HOOK_NAMESPACE } from "./write-target";
 
 /**
  * What the plugin-owned `pages` collection is built with, resolved from the
@@ -335,6 +519,79 @@ function componentStoreOf(opts: PageBuilderOptions): ComponentStore {
       : { collection: readiness.collection }),
     field: readiness.field ?? COMPONENT_DOCUMENT_FIELD,
   };
+}
+
+/**
+ * Whether the plugin's own Components collection is the component store: no
+ * host store is named, or the one named is it.
+ */
+function storeIsOwn(store: ComponentStore): boolean {
+  return store.collection === undefined || store.collection === COMPONENTS_SLUG;
+}
+
+/**
+ * The admin views that route a component's delete through Delete component,
+ * on the store's collection and no other: the plugin's own when no host store
+ * is named, else the host's.
+ */
+function deleteComponentViews(
+  store: ComponentStore
+): Record<string, PluginCollectionView> {
+  const replaced = {
+    documentActions: {
+      delete: {
+        component: DELETE_COMPONENT_REPLACEMENT_COMPONENT,
+        label: "Delete component…",
+      },
+    },
+  };
+  return store.collection === undefined || storeIsOwn(store)
+    ? { [COMPONENTS_SLUG]: replaced }
+    : { [store.collection]: replaced };
+}
+
+/**
+ * Refuse a component store that shares a slug with a collection this plugin
+ * declares, other than naming its own Components collection.
+ *
+ * The delete's surfaces are keyed by the store's slug, and a key that is one
+ * of the plugin's own slugs is read as that plugin collection, through any
+ * rename: a host store named `patterns` would get Delete component on the
+ * plugin's Patterns, and one named `components` while the plugin's own is
+ * renamed would get it on the renamed collection, while the delete itself
+ * acts on the host's. Ambiguous either way, so refused, naming both, rather
+ * than guessed. `resolved` is the plugin's collections as the site renamed
+ * them, known from `init`; without it, only the declared names are judged.
+ */
+function refuseStoreSharingAPluginSlug(
+  store: ComponentStore,
+  declared: readonly string[],
+  resolved?: Readonly<Record<string, string | undefined>>
+): void {
+  const slug = store.collection;
+  if (slug === undefined) return;
+  if (slug === COMPONENTS_SLUG) {
+    const renamed = resolved?.[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
+    if (renamed === COMPONENTS_SLUG) return;
+    throw new Error(
+      `[page-builder] componentReadiness.collection names "${slug}", but the Page Builder's own Components collection is renamed to "${renamed}". Leave componentReadiness.collection unset to keep components in the plugin's collection, or give the host's store a slug the Page Builder does not declare.`
+    );
+  }
+  if (declared.includes(slug)) {
+    throw new Error(
+      `[page-builder] componentReadiness.collection names "${slug}", which is also a collection the Page Builder declares. A component store of the host's own needs a slug of its own: rename the host's collection, or leave componentReadiness.collection unset to use the plugin's Components collection.`
+    );
+  }
+}
+
+/**
+ * A host's own component store's slug, or `undefined` when the store is the
+ * plugin's own collection.
+ */
+function hostStoreOf(store: ComponentStore): string | undefined {
+  return store.collection === undefined || storeIsOwn(store)
+    ? undefined
+    : store.collection;
 }
 
 /**
@@ -437,6 +694,14 @@ export interface PageBuilderOptions {
    * Left unset, both use the engine defaults and agree by construction.
    */
   limits?: DocumentLimits;
+  /**
+   * The site's named queries: a collection list's custom sources, made with
+   * `defineNamedQuery` from `@nextlyhq/plugin-sdk/blocks`. Registered on each
+   * boot beside the ones plugins declare, all or nothing.
+   *
+   * @experimental
+   */
+  namedQueries?: readonly NamedQueryDefinition[];
   /**
    * Where component definitions live: what publishing a page checks when it
    * warns that some are not live, and what the EDITOR reads to draw them.
@@ -634,6 +899,36 @@ export interface PageBuilderOptions {
    * false }` turns the catalogue off; uploading a font file still works.
    */
   fonts?: PageBuilderFontOptions;
+
+  /**
+   * Site code: the code people who may change the site's settings add to
+   * every published page, in Settings, under Site. Declare the site's
+   * Content Security Policy here (`csp`, a header value or a function read on
+   * each check) so code is checked against it before it is saved.
+   *
+   * @experimental
+   */
+  siteCode?: PageBuilderSiteCodeOptions;
+
+  /**
+   * Collection templates: where each collection defined in code serves its
+   * entries, drawn with the collection's published template.
+   *
+   * ```ts
+   * pageBuilder({ templates: { addresses: { posts: "/blog" } } });
+   * ```
+   *
+   * serves each published post at `/blog/<its slug>` from the site's content
+   * route (`createContentPage` with `pageBuilderContent()`), once the
+   * collection's template is published. An address not in its one spelling,
+   * or under a path the runtime keeps, refuses to start; so do two
+   * collections given one address, and a collection that cannot have a
+   * template.
+   *
+   * @experimental New public surface: its name and shape may change before
+   * it is marked stable.
+   */
+  templates?: PageBuilderTemplateOptions;
 }
 
 /**
@@ -691,6 +986,11 @@ function adminClientConfig(
       ? {}
       : { remotePatterns: opts.remotePatterns }),
     ...(opts.checklist === undefined ? {} : { checklist: opts.checklist }),
+    // A host's own component store, by slug, for the delete tools the header
+    // draws for its list. A slug, nothing secret.
+    ...(hostStoreOf(componentStoreOf(opts)) === undefined
+      ? {}
+      : { componentStore: hostStoreOf(componentStoreOf(opts)) }),
     // The canvas route's path, which the editor loads its frame from. A path,
     // never a secret: the route serves an empty page.
     ...(canvasPath === undefined ? {} : { canvasPath }),
@@ -741,51 +1041,6 @@ function jsonSafeLimits(limits: DocumentLimits): Record<string, number | null> {
   );
 }
 
-/**
- * Turn the installed plugin context into what a backfill pass needs.
- *
- * Every member is a FUNCTION rather than a resolved value, and that is the
- * whole shape of it. A site can gain a collection, a locale or a draft variant
- * after boot, and the Direct API is not resolvable until services are
- * registered — so anything captured here would be a fact about the moment the
- * plugin was installed, used to decide whether an index covering the site as it
- * is now is complete.
- */
-/**
- * Whether any declared Single carries a blocks field.
- *
- * The index cannot cover a Single at all: a plugin has no supported way to READ
- * one — the available path CREATES the row when it is absent, so indexing would
- * materialise every Single in the app as a side effect — and `writeTargetOf`
- * declines every `single:` hook for that reason. So no scope is enumerated for
- * them, and a backfill that finishes every collection scope has still not made
- * the index cover a site whose homepage is a blocks-backed Single.
- *
- * The declaration is what is read, not the content: a Single that nobody has
- * filled in yet still means the index will not cover it once somebody does, and
- * this answer must not flip the day an author first saves.
- *
- * PAGED and exhausted, for the reason the collection listing is: a short read
- * here answers "no Singles hold blocks" for a site where a later page does, and
- * that is the direction that lets completeness be claimed wrongly. A listing it
- * cannot parse answers TRUE — the conservative reading, since "I could not
- * check" must not become "there is nothing to worry about".
- */
-export async function singlesHoldBlocks(
-  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
-): Promise<boolean> {
-  // The slugs configuration still declares, read once. A row whose source is
-  // `code` and whose slug is not in here is a leftover, not a Single.
-  const declared = declaredSingleSlugs(ctx);
-  for await (const rows of singlesRegistryPages(ctx)) {
-    // `true` is the refusal on every unreadable shape: it means content may be
-    // out of reach, which is what withholds completeness.
-    if (rows === UNREADABLE_PAGE) return true;
-    if (rowsHoldBlocks(rows, declared)) return true;
-  }
-  return false;
-}
-
 /** What {@link singlesRegistryPages} yields for a registry it cannot read whole. */
 const UNREADABLE_PAGE = Symbol("unreadable registry page");
 
@@ -828,38 +1083,80 @@ async function* singlesRegistryPages(
   }
 }
 
-/** Whether any row on one page is a live Single declaring blocks content. */
-function rowsHoldBlocks(
-  rows: readonly unknown[],
-  declared: ReadonlySet<string> | undefined
-): boolean {
-  for (const row of rows) {
-    // An ORPHAN says nothing about content that exists. Removing a code-first
-    // Single from config leaves its registry row readable until someone runs
-    // the destructive cleanup — `PluginSinglesService.list` documents that,
-    // says such a row carries `source: "code"`, and says a caller who must
-    // exclude them can, because `source` is on every record and a plugin holds
-    // `ctx.config.singles`. It is not filtered at that layer because doing so
-    // after pagination would return short pages and a total describing one of
-    // them.
-    //
-    // Counted here, a removed Single kept `unreachable` true for ever and no
-    // count could become exact for content the app no longer has.
-    if (isOrphanedSingle(row, declared)) continue;
-    // The FULL survey, not the addressable half. A Single declaring its blocks
-    // field under a named group — or behind a field-group reference — returns
-    // an empty addressable list, and reading only that reported "this Single
-    // holds no blocks" for content no scope will ever index. The collection side
-    // already asks it this way; asking differently here is how the two come to
-    // disagree about the same declaration.
-    const survey = blocksFieldSurvey(row as { fields?: unknown });
-    if (survey.addressable.length > 0 || survey.unaddressable) return true;
-  }
-  return false;
-}
-
 /** How many registry rows one page of the collection listing asks for. */
 const REGISTRY_PAGE_SIZE = 100;
+
+/**
+ * Every collection's registry record, page by page, for the schema
+ * fingerprint the bindings report checks against. Refused when a page cannot
+ * be read, so a fingerprint is never taken over part of the registry.
+ */
+async function collectionRegistryRows(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for (let page = 1; ; page += 1) {
+    const listed: unknown = await ctx.services.collections.listCollections(
+      { page, limit: REGISTRY_PAGE_SIZE, sortBy: "slug", sortOrder: "asc" },
+      undefined as never
+    );
+    const data = (listed as { data?: unknown }).data;
+    const hasMore = (listed as { pagination?: { hasMore?: unknown } })
+      .pagination?.hasMore;
+    if (!Array.isArray(data) || typeof hasMore !== "boolean") {
+      throw new Error(
+        "[page-builder] the collection registry could not be read for the bindings report"
+      );
+    }
+    rows.push(...data);
+    if (!hasMore || data.length === 0) return rows;
+  }
+}
+
+/** Every Single's registry record, for the same fingerprint. */
+async function singleRegistryRows(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for await (const page of singlesRegistryPages(ctx)) {
+    if (page === UNREADABLE_PAGE) {
+      throw new Error(
+        "[page-builder] the Singles registry could not be read for the bindings report"
+      );
+    }
+    rows.push(...page);
+  }
+  return rows;
+}
+
+/** How many field groups one read of the registry asks for. */
+const FIELD_GROUP_PAGE_SIZE = 100;
+
+/**
+ * Every field group's registry record, for the same fingerprint: a binding
+ * reaches a field group's fields where a collection or a Single places it, so
+ * a change to one changes what those bindings are judged against.
+ */
+async function fieldGroupRows(): Promise<unknown[]> {
+  const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+  const nextly = await getCachedNextly();
+  const rows: unknown[] = [];
+  for (let offset = 0; ; offset += FIELD_GROUP_PAGE_SIZE) {
+    const page = await nextly.fieldGroups.find({
+      limit: FIELD_GROUP_PAGE_SIZE,
+      offset,
+    });
+    rows.push(...page.items);
+    // Bounded by a short page, so an empty one ends the read.
+    if (page.items.length < FIELD_GROUP_PAGE_SIZE) return rows;
+  }
+}
+
+/** How often a read of the bindings report may start a check, at most. */
+const BINDINGS_REFRESH_MS = 60_000;
+
+/** How long a check a read starts may run. */
+const BINDINGS_REFRESH_RUN_MS = 20_000;
 
 /**
  * How long a save removing breakpoints walks the site before it answers with
@@ -972,10 +1269,21 @@ export async function registeredCollectionSlugs(
   }
 }
 
-function installContext(
+/**
+ * Turn the installed plugin context into what a backfill pass needs.
+ *
+ * Every member is a FUNCTION rather than a resolved value, and that is the
+ * whole shape of it. A site can gain a collection, a locale or a draft variant
+ * after boot, and the Direct API is not resolvable until services are
+ * registered — so anything captured here would be a fact about the moment the
+ * plugin was installed, used to decide whether an index covering the site as it
+ * is now is complete.
+ */
+export function installContext(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
   opts: PageBuilderOptions
 ): BackfillHost {
+  const nextly = async () => (await import("nextly/runtime")).requireNextly();
   return {
     /*
      * Imported at CALL time, not at module scope, for the reason the preview
@@ -991,7 +1299,7 @@ function installContext(
      * job wants: a pass that ran too early fails and is re-queued rather than
      * reading a database whose schema is unverified.
      */
-    nextly: async () => (await import("nextly/runtime")).requireNextly(),
+    nextly,
     // The LIVE registry, not the configured list. `class-usage-hook` opens by
     // saying the set of collections is not known when a plugin is wired — which
     // is why the write path registers on the wildcard — because the Schema
@@ -1014,27 +1322,147 @@ function installContext(
     hasDrafts: async collection =>
       (await resolvedCollectionDraftSplit(resolvedCollectionView(collection)))
         .eligible,
-    singlesHoldBlocks: () => singlesHoldBlocks(ctx),
+    singles: () => singlesDeclaringBlocks(ctx),
+    // Through the rewrite's own reader, so the index and the rewrite answer
+    // "what does this field group hold" the same way, from the registry a
+    // reload and the admin both write to.
+    fieldGroups: siteFieldGroups(ctx, nextly),
     locales: () =>
       ctx.config.localization?.locales.map(locale => locale.code) ?? [],
     // The SAME bounds the renderer draws under, for the reason the write path
     // reads them per call: an index derived under different ones records a
     // different document than the page serves.
     limits: () => opts.limits ?? DEFAULT_LIMITS,
-    // RESOLVED slugs, not the declared ones. An integrator may rename either,
-    // and a pass holding a literal would write to a table that does not exist
-    // while reporting the scope backfilled.
-    slugs: () => ({
-      classIndex:
-        ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ?? CLASS_USAGE_INDEX_SLUG,
-      componentIndex:
-        ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-        COMPONENT_USAGE_INDEX_SLUG,
-    }),
+    // The index rows, in the plugin's own tables.
+    db: ctx.db,
     // The run, its progress and the dirty mark, in the plugin's own tables.
     bookkeeping: () => usageBookkeeping(ctx.db, ctx.dialect),
-    ownIndexReader: indexCollection =>
-      ownIndexReader(ctx.services.ownCollections, indexCollection),
+  };
+}
+
+/**
+ * The hold a component's removal takes while it is published, wired over the
+ * plugin's bookkeeping table: the fence on every write, the count again as
+ * the publish is written, and the release once it lands (`removal-hold`).
+ */
+function installHoldsFor(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
+  opts: PageBuilderOptions,
+  composition: CompositionSetup,
+  parts: {
+    readonly nextly: () => Promise<HoldDirectApi>;
+    readonly count: (componentId: string) => Promise<PlacementCount>;
+  }
+): RemovalHoldStore {
+  const { collection, field } = composition.store;
+  return installRemovalHolds({
+    ctx,
+    store: removalHoldStore({
+      nextly: parts.nextly,
+      // RESOLVED, for the reason every own table is: a host may rename it.
+      collection:
+        ctx.self.collections[COMPONENT_RETIRED_SLUG] ?? COMPONENT_RETIRED_SLUG,
+    }),
+    componentCollection: collection,
+    componentField: field,
+    storedDraft: storedDraftOf,
+    // The declared blocks fields, surveyed as the strip on every write
+    // surveys them.
+    paths: (slug, context) =>
+      blocksFieldPaths(ctx, slug, context as HookContext<unknown>),
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+    count: parts.count,
+    lifecycle: async () => {
+      const store = (await ctx.services.collections.getCollection(
+        collection,
+        undefined as never
+      )) as { status?: unknown } | null;
+      return store?.status === true;
+    },
+  });
+}
+
+/** The context the plugin's `init` is handed. */
+type InitContext = Parameters<
+  NonNullable<Parameters<typeof definePlugin>[0]["init"]>
+>[0];
+
+/**
+ * The Site Style Single's reads a write is judged by: its record as stored,
+ * through the Direct API or on a write's own transaction, and what it
+ * defines, by the one reading of a record (`site-definitions`).
+ */
+function siteStyleReads(
+  ctx: InitContext,
+  defaults: SiteStyleData
+): {
+  documentOn: (transaction: PluginCollectionTransaction) => Promise<unknown>;
+  styleNow: () => Promise<SiteStyleData>;
+  definitions: NonNullable<CompositionSetup["siteDefinitions"]>;
+} {
+  // The Single as the host renamed it.
+  const slug = ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG;
+  // The record as stored now, read through the Direct API when asked.
+  const documentNow = async (): Promise<unknown> => {
+    // Imported at call time, for the reason `defaultLayoutDeps` gives: this
+    // entry reaches a browser bundle, where the Direct API has no place.
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    const nextly = await getCachedNextly();
+    return nextly.findSingle({ slug });
+  };
+  // On the transaction's own connection, so the read takes no second one
+  // from the pool while the write holds one, and with no row lock.
+  const documentOn = siteStyleDocumentOn(ctx.services.ownCollections, slug);
+  return {
+    documentOn,
+    styleNow: async () => siteStyleOfDocument(await documentNow(), defaults),
+    definitions: async transaction =>
+      siteDefinitionsOfDocument(
+        transaction === undefined
+          ? await documentNow()
+          : await documentOn(transaction),
+        defaults
+      ),
+  };
+}
+
+/**
+ * The stored documents a removal walks under the composition graph lock,
+ * read on its write's transaction: the plugin's own reads for the
+ * collections and Singles it declared, the host reads for the others, and
+ * the stored read of the blocks type for each working draft. Which hold a
+ * blocks field is read from the registry on the same transaction
+ * (`listHostTypesInTransaction`, which takes no row locks), once per walk:
+ * read from the pool, it would wait for a connection the write's own
+ * transaction holds, for good on a pool of one.
+ */
+function removalDocumentsOn(
+  ctx: InitContext
+): SiteStyleRemovalLockSetup["documentsOn"] {
+  const declared = (slugs: Readonly<Record<string, string | undefined>>) =>
+    new Set(
+      Object.values(slugs).filter((slug): slug is string => slug !== undefined)
+    );
+  const ownCollections = declared(ctx.self.collections);
+  const ownSingles = declared(ctx.self.singles);
+  return write => {
+    // One listing per walk, read on the write's transaction: the collections
+    // and the Singles both come from it, so they describe one registry.
+    const listing = onceAsked(() =>
+      ctx.services.ownCollections.listHostTypesInTransaction(write.transaction)
+    );
+    return storedDocumentsOnTransaction({
+      reads: ctx.services.ownCollections,
+      transaction: write.transaction,
+      readStored: target => write.readStored(BLOCKS_TYPE, target),
+      ownCollections,
+      ownSingles,
+      locales: () => siteLocalesOf(ctx.config),
+      collections: async () =>
+        builderCollectionsIn((await listing()).collections),
+      singles: async () =>
+        builderSinglesIn((await listing()).singles, declaredSingleSlugs(ctx)),
+    });
   };
 }
 
@@ -1067,12 +1495,18 @@ function rewriteInstallFor(
         ctx.config.localization?.locales.map(locale => locale.code) ?? [],
       defaultLocale: () => ctx.config.localization?.defaultLocale,
       layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+      // A document whose field groups hold no blocks field is no host: its
+      // field groups' values are stored apart, where no copy can be.
+      fieldGroups: siteFieldGroups(ctx, nextly),
     },
     hints: async componentId => {
       const found = await composition.hostsOf?.placing([componentId]);
       const seen = new Set<string>();
       const hints: { slug: string; id: string }[] = [];
       for (const host of found?.hosts ?? []) {
+        // Collection entries only: the walk after the hints reads every
+        // Single anyway, and a hint names an entry by its id.
+        if (host.single === true) continue;
         const key = `${host.slug}\u001F${host.id}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -1086,12 +1520,60 @@ function rewriteInstallFor(
 }
 
 /**
+ * A written document's pending working draft, read as the system, or `null`
+ * where there is none: what a write's hold judgement compares with beside
+ * the live row its hook is handed. A Single's hooks name it `single:<slug>`.
+ */
+async function storedDraftOf(at: {
+  readonly collection: string;
+  readonly id: string | undefined;
+}): Promise<unknown> {
+  const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+  const nextly: RewriteDirectApi = await getCachedNextly();
+  const single = at.collection.startsWith(SINGLE_HOOK_NAMESPACE)
+    ? at.collection.slice(SINGLE_HOOK_NAMESPACE.length)
+    : undefined;
+  try {
+    const row =
+      single !== undefined
+        ? await nextly.findSingle({
+            slug: single,
+            createIfMissing: false,
+            draft: true,
+            status: "all",
+            depth: 0,
+            overrideAccess: true,
+          })
+        : at.id === undefined
+          ? null
+          : await nextly.findByID({
+              collection: at.collection,
+              id: at.id,
+              draft: true,
+              status: "all",
+              depth: 0,
+              overrideAccess: true,
+            });
+    const pending = row as { _isWorkingDraft?: unknown } | null;
+    return pending?._isWorkingDraft === true ? pending : null;
+  } catch (error) {
+    if (NextlyError.isNotFound(error)) return null;
+    throw error;
+  }
+}
+
+/**
  * Every live Single whose declaration holds a blocks field, with its fields
  * and its localization master switch, or `undefined` when the registry cannot
- * be read whole. Orphaned code-first rows are left out, as `singlesHoldBlocks`
- * leaves them out.
+ * be read whole. Orphaned code-first rows are left out: removing a code-first
+ * Single from config leaves its registry row readable until someone runs the
+ * destructive cleanup, and that row says nothing about content that exists.
+ *
+ * PAGED and exhausted, for the reason the collection listing is: a short read
+ * leaves out a Single a later page holds, and the usage index would call
+ * itself whole without having walked it.
  */
-async function singlesDeclaringBlocks(
+export async function singlesDeclaringBlocks(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
 ): Promise<SingleToWalk[] | undefined> {
   const declared = declaredSingleSlugs(ctx);
@@ -1111,6 +1593,36 @@ async function singlesDeclaringBlocks(
   return found;
 }
 
+/**
+ * One live Single holding blocks, read as {@link singlesDeclaringBlocks} reads
+ * each, from the Singles registry, which creates nothing; `undefined` when no
+ * live Single of that slug holds a blocks field. Refused when the registry's
+ * answer cannot be read, so a save it cannot place is a maintenance failure
+ * rather than a Single silently left out.
+ */
+async function liveSingle(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
+  slug: string
+): Promise<SingleToWalk | undefined> {
+  const listed: unknown = await ctx.services.singles.list({
+    slugAllowlist: [slug],
+    limit: 1,
+  });
+  const rows = (listed as { data?: unknown }).data;
+  const page = Array.isArray(rows)
+    ? singlesDeclaringBlocksIn(rows, declaredSingleSlugs(ctx))
+    : undefined;
+  if (page === undefined) {
+    throw new Error(
+      `[page-builder] the Singles registry could not be read for "${slug}", so its usage could not be recorded`
+    );
+  }
+  const single = page.find(entry => entry.slug === slug);
+  if (single === undefined) return undefined;
+  const localizedSite = (ctx.config.localization?.locales.length ?? 0) > 0;
+  return singleToWalk(single, configuredSingles(ctx).get(slug), localizedSite);
+}
+
 /** The Singles declared in code, by slug, as the site's config states them. */
 function configuredSingles(ctx: {
   config?: { singles?: unknown };
@@ -1125,6 +1637,46 @@ function configuredSingles(ctx: {
     }
   }
   return bySlug;
+}
+
+/**
+ * The site's field groups, read once per walk from the registry through the
+ * Direct API, with the code's declarations for a slug the registry does not
+ * hold; nothing at all where the registry cannot be read to the end
+ * (`host-rewrite/field-groups`).
+ */
+function siteFieldGroups(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
+  nextly: () => Promise<Pick<RewriteDirectApi, "fieldGroups">>
+): () => Promise<(slug: string) => { readonly fields?: unknown } | undefined> {
+  const inCode = declaredFieldGroups(ctx);
+  return () =>
+    readSiteFieldGroups({
+      page: async (offset, limit) =>
+        (await nextly()).fieldGroups.find({ limit, offset }),
+      inCode,
+      warn: (message, meta) => ctx.logger.warn(message, meta),
+    });
+}
+
+/**
+ * The field groups the site declares in code, by slug, as its config states
+ * them.
+ */
+function declaredFieldGroups(ctx: {
+  config?: { fieldGroups?: unknown };
+}): (slug: string) => { readonly fields?: unknown } | undefined {
+  const groups = ctx.config?.fieldGroups;
+  const bySlug = new Map<string, { readonly fields?: unknown }>();
+  if (Array.isArray(groups)) {
+    for (const group of groups) {
+      const slug = (group as { slug?: unknown } | null)?.slug;
+      if (typeof slug === "string") {
+        bySlug.set(slug, group as { readonly fields?: unknown });
+      }
+    }
+  }
+  return slug => bySlug.get(slug);
 }
 
 /**
@@ -1150,6 +1702,28 @@ function singlesDeclaringBlocksIn(
   return found;
 }
 
+/** The named queries each page builder this process made registers. */
+const sitesQueries = new WeakMap<PluginDefinition, NamedQueryLookup>();
+
+/**
+ * The named queries the page builder `plugin` registers for its site, run
+ * functions included: what a route rendering that site's pages takes as its
+ * `namedQueries`. Bound to that one page builder, so two sites served from
+ * one process never resolve each other's queries. Nothing for a plugin that
+ * is not a page builder.
+ *
+ * ```ts
+ * export const builder = pageBuilder({ namedQueries: [upcomingEvents] });
+ * // app/[...slug]/page.tsx
+ * createBlocksPage({ ..., namedQueries: namedQueriesOf(builder) });
+ * ```
+ *
+ * @experimental
+ */
+export function namedQueriesOf(plugin: PluginDefinition): NamedQueryLookup {
+  return sitesQueries.get(plugin) ?? { definitionOf: () => undefined };
+}
+
 export const pageBuilder = (
   opts: PageBuilderOptions = {}
 ): PluginDefinition => {
@@ -1168,6 +1742,19 @@ export const pageBuilder = (
    * and every pass resolves the API itself.
    */
   let installed: BackfillHost | null = null;
+  // This page builder's named queries: the site's own from the start, so a
+  // route built before boot already knows them, and rebuilt with the ones
+  // plugins declare on each boot. Its own, so two sites in one process never
+  // resolve each other's.
+  let namedQueries: NamedQueryRegistry = createNamedQueryRegistry();
+  namedQueries.register(opts.namedQueries ?? [], {
+    source: "pageBuilder({ namedQueries })",
+  });
+  const namedQuerySource: NamedQuerySource = {
+    declarationOf: name => namedQueries.declarationOf(name),
+  };
+  const namedQueryDeclarations = () =>
+    namedQueries.all().map(namedQueryDeclaration);
 
   /**
    * What the default-Layout repair needs from the installed plugin: the
@@ -1176,6 +1763,80 @@ export const pageBuilder = (
    * handled long after it.
    */
   let defaultLayoutSetup: DefaultLayoutSetup | null = null;
+  // The claiming of existing pages' addresses, set by `init` and run once the
+  // boot has finished.
+  // It answers whether every page was settled.
+  let pageClaimsBackfill: (() => Promise<boolean>) | null = null;
+  // Set once that pass has finished, after which a page save need not claim
+  // the existing pages its list's later pages would fall on.
+  let pageClaimsBackfilled = false;
+  // Which initialization the flag belongs to. A reload under HMR runs
+  // `init` again on this same definition, so the flag is reset there, and a
+  // pass started by an earlier initialization, still running, never sets it
+  // for the new one (whose languages may differ).
+  let pageClaimsInit = 0;
+  // Each collection's code-declared template address, checked when the
+  // plugin is defined, so a malformed or shared one refuses to start.
+  const templateAddresses = checkedTemplateAddresses(opts.templates);
+  // The same addresses as written, each in its one spelling once checked:
+  // what a stored address is compared with.
+  const declaredPaths: ReadonlyMap<string, string> = new Map(
+    Object.entries(opts.templates?.addresses ?? {}).filter(([collection]) =>
+      templateAddresses.has(collection)
+    )
+  );
+  // Who holds a path, for the site's content route, set by `init`.
+  let contentAddresses: ContentAddressService | null = null;
+  const requireContentAddresses = (): ContentAddressService => {
+    if (contentAddresses === null) {
+      throw new Error(
+        "[page-builder] the content route asked for an address before the plugin was installed"
+      );
+    }
+    return contentAddresses;
+  };
+  // Refuses to start when a collection given a template address cannot have
+  // a template: run once every plugin's collections are registered.
+  let checkTemplateAddresses: (() => Promise<void>) | null = null;
+  // Brings the entries' claims to the declared addresses, after the pages'.
+  let entryClaimsPass: (() => Promise<void>) | null = null;
+  // Releases the claims of collections no longer given an address.
+  let undeclaredSweep: (() => Promise<void>) | null = null;
+  // The start-up passes over the address store while they run: pages, the
+  // sweep, then entries. The addresses listed for pre-rendering wait for it,
+  // so a build never lists a store the passes are still filling or moving.
+  let addressStartup: Promise<void> | null = null;
+  // How many of a collection's entries wait for an address, set by `init`.
+  let waitingEntriesOf: ((collection: string) => Promise<number>) | null = null;
+  // What the template actions run with, for the route and the service.
+  const templateActions = {
+    guard: (): TemplateGuardSetup => requireTemplateGuard(),
+    waitingEntries: (collection: string): Promise<number> => {
+      if (waitingEntriesOf === null) {
+        throw new Error(
+          "[page-builder] a template action ran before the plugin was installed"
+        );
+      }
+      return waitingEntriesOf(collection);
+    },
+  };
+
+  /**
+   * The templates guard's lookups over the installed plugin: the RESOLVED
+   * templates slug, the plugin's own collections, the registry and the
+   * hook-free own read. Published by `init`, and read by the template route
+   * and service per call, so a request reaching them before `init` refuses
+   * rather than judging against slugs nothing resolved.
+   */
+  let templateGuard: TemplateGuardSetup | null = null;
+  const requireTemplateGuard = (): TemplateGuardSetup => {
+    if (templateGuard === null) {
+      throw new Error(
+        "[page-builder] a template action ran before the plugin was installed"
+      );
+    }
+    return templateGuard;
+  };
 
   /**
    * The repair's deps for one run, the Direct API resolved at call time. A run
@@ -1207,6 +1868,12 @@ export const pageBuilder = (
     siteStyle: string;
     warn: (message: string, meta?: Record<string, unknown>) => void;
   } | null = null;
+
+  /**
+   * Put the composition graph lock's row in place, once the plugin's tables
+   * exist. Published by `init` for the reason `defaultLayoutSetup` is.
+   */
+  let seedGraphLock: (() => Promise<void>) | null = null;
 
   /** The installed spacing-model store, or a refusal naming why it is missing. */
   const requireSpacingSetup = (): NonNullable<typeof spacingSetup> => {
@@ -1247,11 +1914,203 @@ export const pageBuilder = (
   let composition: CompositionSetup | undefined;
 
   /**
+   * What a page action's bindings are judged with, as a save judges them;
+   * nothing until the plugin is installed.
+   */
+  const pageActionBindings = (): BindingJudging | undefined => {
+    if (composition?.bindingShapes === undefined) return undefined;
+    const { bindingShapes, templates, namedQueries, limits } = composition;
+    return {
+      shapesOf: bindingShapes,
+      maxNodes: limits.maxNodes,
+      ...(templates === undefined ? {} : { templates }),
+      ...(namedQueries === undefined ? {} : { namedQueries }),
+    };
+  };
+
+  /**
    * What the component-delete rewrite needs from the installed plugin,
    * published by `init` for the reason `installed` is: the service is
    * contributed before `init` runs and called long after it.
    */
   let rewriteInstall: RewriteInstall | null = null;
+  /**
+   * The installed plugin as the "Bindings to fix" report reads it, published
+   * by `init`: its job and its route are contributed before `init` runs.
+   */
+  let bindingReportCtx:
+    | Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+    | null = null;
+  const bindingReportDeps: BindingReportDeps = {
+    store: () =>
+      bindingReportCtx === null
+        ? null
+        : bindingReportStore(bindingReportCtx.db, bindingReportCtx.dialect),
+    // Each source's declared fields, as a save judges bindings by them.
+    shapesOf: async ref => {
+      const { declaredFieldShapes } = await import("nextly/runtime");
+      return declaredFieldShapes(ref);
+    },
+    // And a list's item bindings, against the rows its named query declares.
+    namedQueries: namedQuerySource,
+    // Documents read as the walk reads them, and the components they place as
+    // visitors are served them.
+    reading: () => {
+      const install = rewriteInstall;
+      if (install === null) return null;
+      const site = install.site;
+      const read = siteHostReader(site);
+      return {
+        hostsOf: at => documentHosts(site, at),
+        read,
+        // A page's Layout, as visitors are served it: its regions' components
+        // placed, so their bindings are judged against the page's entry.
+        layoutOf: at => {
+          const ctx = bindingReportCtx;
+          const setup = defaultLayoutSetup;
+          return ctx === null || setup === null
+            ? Promise.resolve(undefined)
+            : layoutRegionsOf(at, {
+                pages: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+                slugs: setup.slugs,
+              });
+        },
+        components: async (id, draft) => {
+          try {
+            const found = await read({
+              kind: "collection",
+              slug: install.store.collection,
+              id,
+              path: [install.store.field],
+            });
+            const value =
+              draft && found.draft !== null && found.draft.kind === "value"
+                ? found.draft
+                : found.published;
+            return value.kind === "value"
+              ? { kind: "document", document: value.value }
+              : { kind: "absent" };
+          } catch {
+            return { kind: "unreadable" };
+          }
+        },
+      };
+    },
+    // The sweep, started as soon as a write marks a document, at most once a
+    // second; the jobs pass runs it where nothing starts it.
+    kick: () => {
+      const ctx = bindingReportCtx;
+      const now = Date.now();
+      if (ctx === null || now - bindingsKickedAt < 1000) return;
+      bindingsKickedAt = now;
+      ctx.services.jobs
+        .runSweepNow(BINDINGS_REPORT_JOB, {
+          maxDurationMs: BINDINGS_REFRESH_RUN_MS,
+        })
+        .catch((error: unknown) =>
+          ctx.logger.warn(
+            "[page-builder] the bindings report's judgement could not start; the next jobs pass runs it.",
+            { error }
+          )
+        );
+    },
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+    placeOf: at => {
+      if (at.kind === "single") return "singles";
+      const own = bindingReportCtx?.self.collections ?? {};
+      const named = (slug: string) => own[slug] ?? slug;
+      if (at.slug === named(PAGES_SLUG)) return "pages";
+      // The component store the composition reads, a configured one included.
+      if (
+        at.slug === (rewriteInstall?.store.collection ?? named(COMPONENTS_SLUG))
+      )
+        return "components";
+      if (at.slug === named(PATTERNS_SLUG)) return "patterns";
+      if (at.slug === named(LAYOUTS_SLUG)) return "layouts";
+      return "entries";
+    },
+  };
+  let bindingsKickedAt = 0;
+  /**
+   * How many broken bindings a person may see, read as them by the report
+   * route's own read, for the dashboard's card and attention line.
+   */
+  const bindingsVisibleTo = async (
+    user: PluginRouteIdentity["user"]
+  ): Promise<number> => {
+    const ctx = bindingReportCtx;
+    const store = bindingReportDeps.store();
+    if (ctx === null || store === null) return 0;
+    return visibleBindings(
+      {
+        caller: { identity: () => Promise.resolve({ user }) },
+        services: ctx.services,
+      },
+      await store.list()
+    );
+  };
+  /** The latest save among the documents named, for the fingerprint. */
+  const latestSave = async (collections: readonly string[]) => {
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    const nextly = await getCachedNextly();
+    const parts: string[] = [];
+    for (const collection of collections) {
+      const found = await nextly.find({
+        collection,
+        sort: "-updatedAt",
+        limit: 1,
+        depth: 0,
+        status: "all",
+        overrideAccess: true,
+      });
+      const latest = (found.items[0] as { updatedAt?: unknown } | undefined)
+        ?.updatedAt;
+      parts.push(
+        `${collection}:${String(found.meta.total)}:${JSON.stringify(latest ?? null)}`
+      );
+    }
+    return parts.join("|");
+  };
+  /** One pass of the report's check of every document, until `deadline`. */
+  const bindingReportPass = async (deadline: Date) => {
+    const ctx = bindingReportCtx;
+    const site = rewriteInstall?.site;
+    if (ctx === null || site === undefined) return "paused" as const;
+    const walk = siteWalkSource(site);
+    return runFullCheck(
+      {
+        documents: cursor => walk.documents(cursor),
+        cursorOf: document => walk.cursorOf(document),
+        fingerprint: () =>
+          schemaFingerprint({
+            collections: () => collectionRegistryRows(ctx),
+            singles: () => singleRegistryRows(ctx),
+            fieldGroups: () => fieldGroupRows(),
+            namedQueries: () => namedQueryDeclarations(),
+            blocks: () => allBlocks(),
+            designs: async () => {
+              const saves = await latestSave([
+                rewriteInstall?.store.collection ?? COMPONENTS_SLUG,
+                defaultLayoutSetup?.slugs.layouts ?? LAYOUTS_SLUG,
+              ]);
+              // And the site's default Layout, which every page naming none
+              // is drawn in.
+              const setup = defaultLayoutSetup;
+              if (setup === null) return saves;
+              const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+              const settings = await readLayoutSettings(
+                await getCachedNextly(),
+                setup.slugs
+              );
+              return `${saves}|default:${settings.defaultLayout ?? ""}`;
+            },
+          }),
+      },
+      bindingReportDeps,
+      deadline
+    );
+  };
+  let bindingsRefreshedAt = 0;
   const requireRewriteInstall = (): RewriteInstall => {
     if (rewriteInstall === null) {
       throw new Error(
@@ -1259,6 +2118,28 @@ export const pageBuilder = (
       );
     }
     return rewriteInstall;
+  };
+  // What Delete component's sweep reads and moves, resolved per pass.
+  const componentDeleteSweepDeps = () => {
+    const installed = requireRewriteInstall();
+    const runs = fenceStore(installed.db, installed.dialect);
+    return {
+      deleting: () => runs.runsAt("deleting"),
+      store: () => runs,
+      exists: async (componentId: string) => {
+        const nextly = await installed.site.nextly();
+        const found = await nextly.find({
+          collection: installed.store.collection,
+          where: { id: { equals: componentId } },
+          status: "all",
+          limit: 1,
+          depth: 0,
+          overrideAccess: true,
+        });
+        return found.items.length > 0;
+      },
+      now: () => new Date(),
+    };
   };
 
   /**
@@ -1308,6 +2189,75 @@ export const pageBuilder = (
   // it. Set by `init`, which holds the context pins are made through; read by
   // the facts route's repair, which releases them.
   let heldRemovals: RetiredPins | undefined;
+  // The holds a component's removal takes while it is published. Set by
+  // `init`, which holds the bookkeeping table's slug; read by the hold route.
+  let removalHolds: RemovalHoldStore | null = null;
+  const requireRemovalHolds = (): RemovalHoldStore => {
+    // Nothing is retired without the readiness hooks, so a removal loses no
+    // value and nothing need be held: a hold asked for holds nothing.
+    if (opts.componentReadiness === false) return NO_HOLDS;
+    if (removalHolds === null) {
+      throw new Error(
+        "[page-builder] a component removal was held before the plugin was installed"
+      );
+    }
+    return removalHolds;
+  };
+  /**
+   * One usage index as the shared-style and variable routes read it: its
+   * health, the documents using each reference in one bounded read, and which
+   * kind of document a collection holds. The composition stores are
+   * components, patterns and Layouts; every other collection with a page
+   * builder field holds pages, as the editor's page search reads them.
+   */
+  const usageSourceOf = <TRow extends UsageSubject>(
+    collections: Readonly<Record<string, string | undefined>>,
+    index: UsageIndex<TRow>
+  ): SharedStyleUsageSource => {
+    const kinds = new Map<string, SharedStyleUsageKind>([
+      [
+        componentStoreOf(opts).collection ??
+          collections[COMPONENTS_SLUG] ??
+          COMPONENTS_SLUG,
+        "components",
+      ],
+      [collections[PATTERNS_SLUG] ?? PATTERNS_SLUG, "patterns"],
+      [collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG, "layouts"],
+    ]);
+    return {
+      health: () => usageHealthService(requireInstalled).read(index),
+      // One bounded read for a whole page of references.
+      documentsUsingEach: async (ids, health) =>
+        listDocumentsUsingEach({
+          index,
+          rows: usageTableRows(requireInstalled().db, usageTableOf(index)),
+          referenceIds: ids,
+          health,
+        }),
+      kindOf: collection => kinds.get(collection) ?? "pages",
+    };
+  };
+  // The in-use check a write of the site style that drops a variable is
+  // judged by. Set by `init`, which holds the context the stored documents
+  // are listed through; read by the Single's guard on such a write.
+  let variablesInUse: VariablesInUseCheck | undefined;
+  // The booted Direct API through the SDK, imported at call time for the
+  // reason `defaultLayoutDeps` gives.
+  const bootedNextly = async () =>
+    (await import("@nextlyhq/plugin-sdk")).getCachedNextly();
+  /**
+   * How many documents place a component directly, from the usage index: the
+   * number the removal dialog says, and the one a hold counts again. The
+   * index rows live in the plugin's own tables, so no route context is read.
+   */
+  const countPlacements = () => async (id: string) => {
+    const health = usageHealthService(requireInstalled);
+    return componentUsageCount({
+      read: health.counts(componentUsageIndex),
+      componentId: id,
+      health: await health.read(componentUsageIndex),
+    });
+  };
   // The cleanup of retired values still stored, published by `init` for the
   // reason `rewriteInstall` is: its service and sweep are contributed before
   // `init` runs and called long after it.
@@ -1382,6 +2332,16 @@ export const pageBuilder = (
   // The open removal as the write path's locks read it: before `init`, the
   // read throws, and a lock then accepts nothing extra.
   const openBreakpointRemoval = () => removalService().openRemoval();
+  // The site as a removal's count and an undo's report read it.
+  const removalSite = () => ({
+    site: () => rewriteInstall?.site ?? null,
+    naming: async () => {
+      const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+      return getCachedNextly();
+    },
+    componentCollection: rewriteInstall?.store.collection,
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+  });
   // How the breakpoints routes count a removal and carry it out.
   const breakpointRemoval = {
     defaults: configStyle,
@@ -1408,20 +2368,15 @@ export const pageBuilder = (
       deadline?: Date
     ) =>
       countRemovalOnSite(
-        {
-          site: () => rewriteInstall?.site ?? null,
-          naming: async () => {
-            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-            return getCachedNextly();
-          },
-          componentCollection: rewriteInstall?.store.collection,
-          limits: () => opts.limits ?? DEFAULT_LIMITS,
-        },
+        removalSite(),
         routeCtx,
         removed,
         classes,
         ...(deadline === undefined ? [] : [deadline])
       ),
+    // The documents an undo could not put back, named as the person asking.
+    names: (hosts: readonly HostAddress[], routeCtx: BreakpointsRouteContext) =>
+      nameDocumentsOnSite(removalSite(), routeCtx, hosts),
     // A save counts for the audit, then walks, this long at most before it
     // answers with the run to carry on.
     cascade: {
@@ -1432,7 +2387,7 @@ export const pageBuilder = (
         removalLogger?.error(message, meta),
     },
   };
-  return definePlugin({
+  const plugin = definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
     // The floor states the version carrying the APIs this plugin needs, not the
@@ -1483,9 +2438,19 @@ export const pageBuilder = (
     // because the factory is memoized for the boot and clears only on its
     // first resolution.
     init: ctx => {
+      // The store judged again against the site's renames, before anything
+      // is wired to it.
+      refuseStoreSharingAPluginSlug(
+        componentStoreOf(opts),
+        [],
+        ctx.self.collections
+      );
       installed = installContext(ctx, opts);
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
+      // The site's named queries and the ones plugins declare, into a
+      // registry emptied for this boot.
+      namedQueries = registerNamedQueriesAtBoot(ctx, opts.namedQueries);
       // Every registered block is known now, other plugins' among them, so
       // the code tier takes all their looks.
       refreshCodeTier(configStyle, configClassIds, opts.siteStyle);
@@ -1507,6 +2472,209 @@ export const pageBuilder = (
           ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG,
         layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
       });
+
+      // One template per collection: the guard that sets each template's
+      // place and names the template already holding it. RESOLVED slugs, for
+      // the reason the guard above takes them.
+      const templates = ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG;
+      // The address store's collection, as the address claims reach it.
+      const addressClaims = {
+        services: ctx.services,
+        slug: ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
+        dialect: ctx.dialect,
+      };
+      templateGuard = {
+        templatesCollection: templates,
+        ownCollections: () => new Set(Object.values(ctx.self.collections)),
+        readCollection: async slug => {
+          try {
+            return (await ctx.services.collections.getCollection(
+              slug,
+              undefined as never
+            )) as unknown as Record<string, unknown>;
+          } catch (error) {
+            if (NextlyError.isNotFound(error)) return null;
+            throw error;
+          }
+        },
+        holderOf: templateHolderReader(ctx.services.ownCollections, templates),
+        holdEntry: (tx, collection, id) =>
+          ctx.services.collections.holdEntryInTransaction(tx, collection, id),
+        // Read as the system and in any state: whether the entry exists is
+        // the question, and who may see it is the action's to ask.
+        entryExists: async (collection, id) => {
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          const nextly = (await getCachedNextly()) as unknown as {
+            findByID(args: Record<string, unknown>): Promise<unknown>;
+          };
+          try {
+            const row = await nextly.findByID({
+              collection,
+              id,
+              overrideAccess: true,
+              status: "all",
+              depth: 0,
+              select: { id: true },
+            });
+            return typeof row === "object" && row !== null;
+          } catch (error) {
+            if (NextlyError.isNotFound(error)) return false;
+            throw error;
+          }
+        },
+        declaredAddresses: declaredPaths,
+        addressHolderOf: addressHolderReader(
+          ctx.services.ownCollections,
+          templates
+        ),
+      };
+      registerTemplateGuard(ctx, templateGuard);
+      // An entry's own design is deleted with its entry, in the delete's
+      // transaction, and a deleted template's copies lose their link to it.
+      registerEntryDesignCascade(ctx.hooks, {
+        templates,
+        ownCollections: () => new Set(Object.values(ctx.self.collections)),
+        // On the delete's own transaction, for update: the design is deleted
+        // next, and no second pooled connection is taken while the delete
+        // holds one.
+        designUnder: async (tx, key) => {
+          const found =
+            await ctx.services.ownCollections.listEntriesInTransaction(
+              tx,
+              templates,
+              {
+                where: designUnderWhere(key),
+                pagination: { limit: 1 },
+                depth: 0,
+              },
+              { lock: "update" }
+            );
+          const id = (found.data[0] as { id?: unknown } | undefined)?.id;
+          return typeof id === "string" || typeof id === "number"
+            ? String(id)
+            : null;
+        },
+        unlinkCopiesOf: (tx, id) =>
+          unlinkCopies<PluginCollectionTransaction>(
+            {
+              listForUpdate: (transaction, options) =>
+                ctx.services.ownCollections.listEntriesInTransaction(
+                  transaction,
+                  templates,
+                  options,
+                  { lock: "update" }
+                ),
+              list: (transaction, options) =>
+                ctx.services.ownCollections.listEntriesInTransaction(
+                  transaction,
+                  templates,
+                  options
+                ),
+              update: (transaction, copy, data) =>
+                ctx.services.collections.updateEntryInTransaction(
+                  transaction,
+                  templates,
+                  copy,
+                  data
+                ),
+            },
+            tx,
+            id
+          ),
+        deleteInTransaction: (tx, slug, id) =>
+          ctx.services.collections.deleteEntryInTransaction(tx, slug, id),
+      });
+      // A template written while its collection is deleted holds the
+      // collection in its own transaction, so the two take turns: see
+      // `holdTemplateCollection`.
+      ctx.hooks.onInTransaction(
+        templates,
+        holdTemplateCollection<PluginCollectionTransaction>(
+          (transaction, collection) =>
+            ctx.services.collections.holdCollectionInTransaction(
+              transaction,
+              collection
+            )
+        )
+      );
+      // After the collection is held: the row a template write commits is
+      // judged again on its transaction, a new own design holds its entry,
+      // and a write linking a row to the template it was copied from holds
+      // that template, so one written while either is deleted is refused or
+      // seen by the delete, whichever path wrote it: see `entry-design-write`.
+      ctx.hooks.onInTransaction(
+        templates,
+        judgeTemplateInTransaction<PluginCollectionTransaction>(
+          (transaction, collection, id) =>
+            ctx.services.collections.holdEntryInTransaction(
+              transaction,
+              collection,
+              id
+            ),
+          templates
+        )
+      );
+      // A collection's template and its entries' own designs go with the
+      // collection: listed in its delete dialog, and removed in the delete's
+      // transaction, so none is left drawing a collection that is gone.
+      ctx.hooks.onCollectionDelete(
+        templateCollectionDelete<PluginCollectionTransaction>({
+          own: () => new Set(Object.values(ctx.self.collections)),
+          services: {
+            listTemplates: options =>
+              ctx.services.ownCollections.listEntries(templates, options),
+            listTemplatesInTransaction: (transaction, options) =>
+              ctx.services.ownCollections.listEntriesInTransaction(
+                transaction,
+                templates,
+                options,
+                { lock: "update" }
+              ),
+            deleteTemplateInTransaction: (transaction, id) =>
+              ctx.services.collections.deleteEntryInTransaction(
+                transaction,
+                templates,
+                id,
+                {}
+              ),
+            // Named by the field the collection names its entries by, and
+            // its value read as core reads a title, so the dialog shows the
+            // names people recognise.
+            entryTitles: async (collection, ids) => {
+              const config = await ctx.services.collections
+                .getCollection(collection, undefined as never)
+                .catch(() => null);
+              const field =
+                (typeof config === "object" && config !== null
+                  ? titleFieldIn(config)?.name
+                  : undefined) ?? "title";
+              const found = await ctx.services.collections.listEntries(
+                collection,
+                {
+                  where: { id: { in: [...ids] } },
+                  pagination: { limit: ids.length },
+                  select: { id: true, [field]: true },
+                  depth: 0,
+                },
+                { as: "system" }
+              );
+              const titles = new Map<string, string>();
+              for (const entry of found.data as Record<string, unknown>[]) {
+                const title = readableTitleText(entry[field]);
+                // An id is a string or a number, keyed as its text.
+                const id = entry.id;
+                if (
+                  (typeof id === "string" || typeof id === "number") &&
+                  title !== undefined
+                ) {
+                  titles.set(String(id), title);
+                }
+              }
+              return titles;
+            },
+          },
+        })
+      );
 
       // The site's one default Layout: refuse deleting or unpublishing it, and
       // queue the repair when a write gets past that.
@@ -1536,9 +2704,6 @@ export const pageBuilder = (
       // so when some of those could not be judged. Set here because the
       // resolved slugs exist only once the plugin is installed; the field type
       // was declared before that and reads this through a getter.
-      const componentIndex =
-        ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-        COMPONENT_USAGE_INDEX_SLUG;
       // What the server log says when the field's validation could not judge
       // a write's Layers locks.
       const warnLayersLockUnjudged = (found: LayersLockUnjudged) =>
@@ -1553,18 +2718,10 @@ export const pageBuilder = (
           }
         );
       // The site's style as a write is judged against: the code's defaults
-      // and the stored record of the Single as renamed, read when asked.
-      const siteStyleNow = async () => {
-        // Imported at call time, for the reason the readers above give: this
-        // entry reaches a browser bundle, where the Direct API has no place.
-        const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-        const nextly = await getCachedNextly();
-        return loadSiteStyle({
-          nextly: { findSingle: args => nextly.findSingle(args) },
-          defaults: configStyle,
-          slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-        });
-      };
+      // and the Single's stored record, by the one reading every judgement
+      // uses.
+      const siteStyle = siteStyleReads(ctx, configStyle);
+      const siteStyleNow = siteStyle.styleNow;
       composition = {
         store: {
           // The collection components actually live in, resolved the way the
@@ -1591,28 +2748,53 @@ export const pageBuilder = (
         // code's defaults and the stored record of the Single as renamed,
         // read per write so a style or a breakpoint removed a moment ago is
         // gone for the next save.
-        siteDefinitions: async () => {
-          const style = await siteStyleNow();
-          return {
-            // Capped and resolved as the compiler reads the library, so a
-            // page may reference exactly the classes it applies.
-            classIds: referableClassIds(style.classes ?? []),
-            // The ones its stylesheet is emitted under.
-            breakpointIds: new Set(
-              breakpointContexts(siteBreakpoints(style)).map(
-                context => context.id
-              )
-            ),
-          };
+        // What a page's collection lists may filter and sort by: each
+        // collection's declared fields from its record, and the ones the
+        // public may read as a published page's bindings are judged. Read per
+        // write, so a field hidden a moment ago is refused at the next save.
+        // This site's named queries, for a list whose source is one.
+        namedQueries: namedQuerySource,
+        // Where templates live, under the host's name for them, so a
+        // template's lists and conditions are judged against the collection
+        // it draws, read from the template itself.
+        templates: templateTargets(ctx.services.ownCollections, templates),
+        // A collection's top-level blocks fields, for the field a template's
+        // Entry content block draws: read per write, so a field removed a
+        // moment ago is refused at the next save that newly chooses it.
+        // A failed read is thrown, so the save refuses rather than storing
+        // a field nobody checked.
+        entryBlocksFields: collection =>
+          readEntryBlocksFields(ctx.services.collections, collection),
+        listFields: listFieldsFrom({
+          record: collection =>
+            ctx.services.collections.getCollection(collection, {}),
+          // In the write's language: a field's public read rule may depend
+          // on it, and the published list is read in the page's.
+          readable: async (collection, locale) => {
+            // Imported at call time, for the reason the readers above give.
+            const { bindingFieldShapes } = await import("nextly/runtime");
+            return bindingFieldShapes(
+              { collection },
+              locale === undefined ? {} : { locale }
+            );
+          },
+        }),
+        // What a page's bindings may read: each source's declared fields,
+        // whoever may read them, since binding a field the public may not read
+        // is allowed. Read per write, so a field renamed a moment ago is judged
+        // at the next save.
+        bindingShapes: async ref => {
+          // Imported at call time, for the reason the readers above give.
+          const { declaredFieldShapes } = await import("nextly/runtime");
+          return declaredFieldShapes(ref);
         },
+        // Through the Direct API for the validation, and on the write's own
+        // transaction for the judgement under the graph lock.
+        siteDefinitions: siteStyle.definitions,
         hostsOf: indexHostFinder({
-          nextly: () => requireInstalled().nextly(),
-          indexCollection: componentIndex,
+          rows: () => usageTableRows(ctx.db, usageTableOf(componentUsageIndex)),
           health: () =>
-            usageHealthService(requireInstalled).read(
-              componentUsageIndex,
-              componentIndex
-            ),
+            usageHealthService(requireInstalled).read(componentUsageIndex),
         }),
         onUnjudged: unjudged =>
           ctx.logger.warn(
@@ -1645,6 +2827,16 @@ export const pageBuilder = (
             }
           ),
         onLayersLockUnjudged: warnLayersLockUnjudged,
+        onBindingsUnjudged: found =>
+          ctx.logger.warn(
+            `[page-builder] a save kept ${String(found.bindings)} binding problem(s) the schema refuses, because the stored value they may already be part of could not be read; repair them in the editor`,
+            {
+              field: found.field,
+              kind: found.kind,
+              slug: found.slug,
+              id: found.id,
+            }
+          ),
         // The components being deleted, read from the plugin's own table on
         // each write that places a component. A table that cannot be read
         // refuses only writes adding a component, and says so here.
@@ -1673,23 +2865,62 @@ export const pageBuilder = (
           ),
       };
 
+      // Every write changing a blocks value is judged again in its own
+      // transaction under the graph lock, so two saves made at once cannot
+      // each pass against the graph as it stood before the other.
+      // The site's languages, read per write: a held working draft keeps a
+      // reference its live form holds in any of them.
+      registerCompositionRejudge(
+        ctx,
+        () => composition,
+        () => siteLocalesOf(ctx.config)
+      );
+      // What a variable's in-use check reads: the variable index, the block
+      // types the pages are rendered with (read per check), and the stored
+      // documents. It names no document, since the write's author is not a
+      // caller this can ask.
+      const variableCheckSetup = {
+        usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
+        blocks: allBlocks,
+        documents: async () => storedDocumentsOf(ctx, await bootedNextly()),
+        limits: opts.limits ?? DEFAULT_LIMITS,
+        pathOf: () => "tokens",
+      };
+      // And every write of the site style dropping a variable or a shared
+      // style takes the same lock and reads the stored documents again under
+      // it, so a page cannot commit a first use of what it removes. Read on
+      // the write's own transaction, by the walks the remove routes' rescans
+      // make.
+      registerSiteStyleRemovalLock(ctx, {
+        suppliedVariables: () => suppliedVariableIds(configStyle),
+        // The set the code tier refresh keeps current.
+        suppliedClasses: () => configClassIds,
+        defaults: () => configStyle,
+        siteStyleOn: siteStyle.documentOn,
+        documentsOn: removalDocumentsOn(ctx),
+        variableUses: (ids, documents) =>
+          variableRemovalChecks({
+            ...variableCheckSetup,
+            documents: () => Promise.resolve(documents),
+          }).stillUsed.uses(ids),
+        sharedStyleUses: (ids, documents) =>
+          storedSharedStyleUses(documents, opts.limits ?? DEFAULT_LIMITS)(ids),
+      });
+      seedGraphLock = () =>
+        seedCompositionGraphLock(ctx.db, ctx.dialect).catch((error: unknown) =>
+          ctx.logger.warn(
+            "[page-builder] the composition graph lock's row could not be put in place; the first write locking it inserts it",
+            { error }
+          )
+        );
+
       usage.reconcile = registerClassUsageMaintenance({
         ctx,
-        // The RESOLVED slug, not the declared one. An integrator may
-        // `.rename({ nx_pb_class_usage: "..." })`, and the schema then creates
-        // only the renamed collection — so a hook holding the literal would
-        // write every row to a table that does not exist, and would also fail
-        // to recognise its own writes and recurse.
-        indexCollection:
-          ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
-          CLASS_USAGE_INDEX_SLUG,
-        // Resolved the same way and for the same reason: an integrator may
-        // rename it, and a hook holding the declared name would write every row
-        // to a collection that does not exist and fail to recognise its own
-        // writes, so the wildcard would re-enter itself.
-        componentIndexCollection:
-          ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-          COMPONENT_USAGE_INDEX_SLUG,
+        // Both indexes' rows, in the plugin's own tables.
+        stores: () => usageIndexStores(ctx.db),
+        // A saved Single's declaration, from the Singles registry, which
+        // reads it without creating the Single's document.
+        single: slug => liveSingle(ctx, slug),
         // The registry record, projected. `getCollection` is declared to
         // return a shape that promises none of the properties this question
         // reads, while returning an object that carries all of them.
@@ -1709,7 +2940,412 @@ export const pageBuilder = (
         // whole until a full rebuild has walked the site again.
         markDirty: () => usageBookkeeping(ctx.db, ctx.dialect).markDirty(),
       });
+      // A write of the site style dropping a variable still in use is
+      // refused before its transaction, by the check the remove route makes.
+      variablesInUse = variablesInUseCheck(variableCheckSetup);
       registerReadinessNotice(ctx, opts);
+      // A page's address, and its paginated list's later pages, held in the
+      // address store in the save's own transaction, so two documents never
+      // hold one address whichever path saved them.
+      const claimsStore = addressClaims;
+      const pagesSlug = ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG;
+      const siteLocales = (): readonly string[] =>
+        claimLocales(
+          ctx.config.localization?.locales.map(locale => locale.code) ?? [],
+          ctx.config.localization?.defaultLocale
+        );
+      pageClaimsInit += 1;
+      pageClaimsBackfilled = false;
+      const claimsInit = pageClaimsInit;
+      // On the save's own connection, so naming a refusal takes no second
+      // connection from the pool while the save holds one.
+      const readPage = async (
+        tx: Tx,
+        id: string
+      ): Promise<Readonly<Record<string, unknown>> | null> => {
+        try {
+          const found =
+            await ctx.services.ownCollections.findEntryByIdInTransaction(
+              tx,
+              pagesSlug,
+              id
+            );
+          return found;
+        } catch (error) {
+          if (NextlyError.isNotFound(error)) return null;
+          throw error;
+        }
+      };
+      // The Pages collection read on a write's transaction, for the walk a
+      // save makes over every published page while the start-up pass runs,
+      // whether a page's save or an entry's.
+      const readPagesOn: PagesInTransactionRead = (on, options, opts) =>
+        ctx.services.ownCollections.listEntriesInTransaction(
+          on,
+          pagesSlug,
+          options,
+          opts
+        );
+      registerPageAddressClaims(ctx.hooks, {
+        pages: pagesSlug,
+        claims: claimsStore,
+        locales: siteLocales,
+        readPage,
+        ...(opts.pagePreviewPath === undefined
+          ? {}
+          : { pathTemplate: opts.pagePreviewPath }),
+        backfillDone: () => pageClaimsBackfilled,
+        // Hook-free and as the system, as the pages' start-up pass reads
+        // them, on the save's own transaction: a save holding the pool's
+        // last connection never waits for a second one.
+        publishedPages: tx => publishedPagesInTransaction(readPagesOn, tx),
+      });
+      pageClaimsBackfill = async () => {
+        const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+        const complete = await backfillPageClaims({
+          pages: pagesSlug,
+          claims: claimsStore,
+          locales: siteLocales(),
+          ...(opts.pagePreviewPath === undefined
+            ? {}
+            : { pathTemplate: opts.pagePreviewPath }),
+          nextly: (await getCachedNextly()) as unknown as PagesReader,
+          // With no row lock: the pass holds the page's claims lock, which a
+          // save of the page takes before it commits, while a share lock
+          // here would wait for a save holding the row that is itself
+          // waiting for that claims lock.
+          readPage: async (tx, id) => {
+            try {
+              return await ctx.services.ownCollections.findEntryByIdInTransaction(
+                tx,
+                pagesSlug,
+                id,
+                { lock: "none" }
+              );
+            } catch (error) {
+              if (NextlyError.isNotFound(error)) return null;
+              throw error;
+            }
+          },
+          withTransaction: work =>
+            ctx.services.collections.withTransaction(work),
+          warn: (message, meta) => ctx.logger.warn(message, meta),
+          current: () => claimsInit === pageClaimsInit,
+        });
+        // Only a pass that settled every page ends the saves' part in it: a
+        // page it failed to read or claim is still unclaimed, so saves keep
+        // claiming the pages in a list's way until a later boot's pass
+        // finishes.
+        if (complete && claimsInit === pageClaimsInit) {
+          pageClaimsBackfilled = true;
+        }
+        return complete;
+      };
+      // Each collection's entries hold `<its address>/<slug>` while it and
+      // the collection's template are published, in the save's transaction,
+      // beside the pages, so an entry and a page never share an address.
+      const templatesSlug =
+        ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG;
+      // Named as a page's save names the document in its way.
+      const describeHolder = (tx: Tx) =>
+        describeFor({ pages: pagesSlug, readPage }, tx);
+      // A collection's record as the registry answers it, or null. Given a
+      // write's transaction, read on that transaction's own connection, so
+      // a save holding the pool's last connection never waits for another.
+      const collectionRecord = async (
+        slug: string,
+        tx?: Tx
+      ): Promise<Record<string, unknown> | null> => {
+        try {
+          return (await (tx === undefined
+            ? ctx.services.collections.getCollection(slug, undefined as never)
+            : ctx.services.collections.getCollectionInTransaction(
+                tx,
+                slug
+              ))) as unknown as Record<string, unknown>;
+        } catch (error) {
+          if (NextlyError.isNotFound(error)) return null;
+          throw error;
+        }
+      };
+      const readStoredAddresses = storedAddressesReader(
+        ctx.services.ownCollections,
+        templatesSlug
+      );
+      // The entries of `collection` waiting for an address another document
+      // holds, as last committed, for the template action's answer.
+      waitingEntriesOf = async collection => {
+        const waiting = new Set<string>();
+        for (let page = 1; ; page += 1) {
+          const { rows, total } = await committedClaims(
+            claimsStore,
+            {
+              kind: { equals: "waiting" },
+              holderCollection: { equals: collection },
+            },
+            { limit: 500, page }
+          );
+          for (const row of rows) {
+            if (
+              row.kind === "waiting" &&
+              row.holder?.collection === collection
+            ) {
+              waiting.add(row.holder.id);
+            }
+          }
+          if (rows.length === 0 || page * 500 >= total) return waiting.size;
+        }
+      };
+      // Each published page among `rows`, with the claims it holds.
+      const pageHoldings = (rows: readonly unknown[]) =>
+        (rows as Readonly<Record<string, unknown>>[]).flatMap(row =>
+          typeof row.id === "string" || typeof row.id === "number"
+            ? [
+                {
+                  id: String(row.id),
+                  ...pageClaims(row, siteLocales(), opts.pagePreviewPath),
+                },
+              ]
+            : []
+        );
+      const claimsDeps: EntryClaimsDeps = {
+        claims: claimsStore,
+        addresses: templateAddresses,
+        templates: templatesSlug,
+        locales: siteLocales,
+        describe: describeHolder,
+        pages: pagesSlug,
+        pagesBackfilled: () => pageClaimsBackfilled,
+        // The registry's record says whether the collection's entries carry
+        // a Draft/Published status, which a field named `status` does not.
+        // Asked inside a write's transaction, so read on it.
+        lifecycle: async (collection, tx) =>
+          (await collectionRecord(collection, tx))?.status === true,
+        // Hook-free and as the system, as the pages' start-up pass reads
+        // them, on the write's own transaction: a write holding the pool's
+        // last connection never waits for a second one. A page's slug is
+        // unique, so one read of as many rows as slugs asked finds them all.
+        pagesWithSlugs: async (slugs, tx) => {
+          const found =
+            await ctx.services.ownCollections.listEntriesInTransaction(
+              tx,
+              pagesSlug,
+              {
+                where: {
+                  status: { equals: "published" },
+                  slug: { in: [...slugs] },
+                },
+                pagination: { limit: slugs.length },
+                depth: 0,
+              }
+            );
+          return pageHoldings(found.data);
+        },
+        // The walk a page's save makes while the start-up pass runs (see
+        // `publishedPagesInTransaction`), on the write's own transaction.
+        publishedPagesOn: async function* (tx) {
+          for await (const batch of publishedPagesInTransaction(
+            readPagesOn,
+            tx
+          )) {
+            yield pageHoldings(batch);
+          }
+        },
+        // Hook-free and as the system, as the template guard reads it, so a
+        // read hook cannot hide a template that serves entries.
+        templateOf: async (collection, tx) => {
+          const read = {
+            where: { collection: { equals: collection } },
+            pagination: { limit: 1 },
+            // Asked on every save of a collection with a slug: the routing
+            // columns alone, never the template's design.
+            select: {
+              id: true,
+              collection: true,
+              status: true,
+              [TEMPLATE_ADDRESS_FIELD]: true,
+            },
+            depth: 0,
+          };
+          // On a save's transaction, its own connection: a save holding the
+          // pool's last connection never waits for a second one.
+          const found =
+            tx === undefined
+              ? await ctx.services.ownCollections.listEntries(
+                  templatesSlug,
+                  read
+                )
+              : await ctx.services.ownCollections.listEntriesInTransaction(
+                  tx,
+                  templatesSlug,
+                  read
+                );
+          const row = found.data[0] as Record<string, unknown> | undefined;
+          if (row === undefined || row.collection !== collection) return null;
+          const address = storedAddressOf(row[TEMPLATE_ADDRESS_FIELD]);
+          return {
+            published: row.status === "published",
+            address: address === null ? null : addressSegments(address),
+          };
+        },
+        // The entry's own design and the collection's template, judged for a
+        // list split into pages, on the write's own transaction.
+        ...entryDesignReads(ctx.services.ownCollections, templatesSlug),
+        // The host's collection, read as the system, as a template's walk
+        // reads it, but on the write's own transaction: a write holding the
+        // pool's last connection never waits for a second one. One read
+        // for every id asked, the columns an entry's address is judged by
+        // alone; whether each is published is the hook's to judge.
+        entriesWithIds: async (collection, ids, tx) => {
+          const found = await ctx.services.collections.listEntriesInTransaction(
+            tx,
+            collection,
+            {
+              where: { id: { in: [...ids] } },
+              pagination: { limit: ids.length },
+              select: { id: true, [ENTRY_SLUG_FIELD]: true, status: true },
+              depth: 0,
+            }
+          );
+          return found.data;
+        },
+        storedAddresses: async () =>
+          new Map(
+            [...(await readStoredAddresses()).entries()].map(
+              ([collection, address]) => [collection, addressSegments(address)]
+            )
+          ),
+        // The page builder's own documents are pages, stores and
+        // bookkeeping, never entries served under a template address.
+        neverServed: collection =>
+          Object.values(ctx.self.collections).includes(collection),
+        // The template guard's own judgement of which collections may have
+        // one; a localized collection is refused an address.
+        // Given a write's transaction, the registry is read on it.
+        mayHaveTemplate: async (collection, tx) => {
+          const problem = await templateCollectionProblem(
+            collection,
+            slug => collectionRecord(slug, tx),
+            new Set(Object.values(ctx.self.collections))
+          );
+          return (
+            problem === null &&
+            (await collectionRecord(collection, tx))?.localized !== true
+          );
+        },
+        storedAddressProblem: (address, collection) =>
+          storedAddressProblem(address, collection, {
+            declared: declaredPaths,
+          }),
+        // The host's collection, read as the system, as `entriesWithIds`
+        // reads it, on the write's own transaction: a write holding the
+        // pool's last connection never waits for a second one.
+        publishedEntries: async (collection, page, size, tx, lifecycle) => {
+          const found = await ctx.services.collections.listEntriesInTransaction(
+            tx,
+            collection,
+            {
+              // Published only where the collection has a Draft/Published
+              // lifecycle; without one every entry is live, whatever an
+              // ordinary field named `status` holds. The hook judges each
+              // row by the same test (`isPublished`).
+              ...(lifecycle
+                ? { where: { status: { equals: "published" } } }
+                : {}),
+              // `id` is unique and on every collection; `createdAt` is absent
+              // where timestamps are off, and ties would let a paged walk skip
+              // an entry at a batch's edge.
+              sort: { field: "id", direction: "asc" },
+              pagination: { limit: size, page },
+              depth: 0,
+            }
+          );
+          return found.data;
+        },
+      };
+      // Whatever is declared in code: a collection created at runtime is
+      // given its address on its template, at any time after start.
+      registerEntryAddressClaims(ctx.hooks, claimsDeps);
+      const passDeps = {
+        ...claimsDeps,
+        withTransaction: <T>(work: (tx: Tx) => Promise<T>) =>
+          ctx.services.collections.withTransaction(work),
+        warn: (message: string, meta: Record<string, unknown>) =>
+          ctx.logger.warn(message, meta),
+      };
+      entryClaimsPass = () => settleEntryClaimsAtStart(passDeps);
+      undeclaredSweep = () => releaseUndeclared(passDeps);
+      checkTemplateAddresses = async () => {
+        const own = new Set(Object.values(ctx.self.collections));
+        const problems: string[] = [];
+        // An address declared in code is compared with every other
+        // collection's stored one: two collections may not share one. A
+        // collection promoted into code taking over its own stored address
+        // is no clash.
+        const stored = await readStoredAddresses();
+        for (const [collection, address] of declaredPaths) {
+          for (const [other, held] of stored) {
+            if (held === address && other !== collection) {
+              problems.push(
+                `"${collection}" is given the address "${address}" in code, which the collection "${other}" is already served at, set on its template in the admin. Each collection needs an address of its own: change one of them.`
+              );
+            }
+          }
+        }
+        for (const collection of templateAddresses.keys()) {
+          const problem = await templateCollectionProblem(
+            collection,
+            collectionRecord,
+            own
+          );
+          if (problem !== null) {
+            problems.push(problem);
+            continue;
+          }
+          // One slug serves an entry in every language, as a page's does: a
+          // localized collection's entries have a slug and a state in each,
+          // which an address per language would have to follow.
+          if ((await collectionRecord(collection))?.localized === true) {
+            problems.push(
+              `The collection "${collection}" is localized, and a localized collection's entries cannot be served under a template address yet.`
+            );
+          }
+        }
+        if (problems.length > 0) {
+          throw new Error(
+            `[page-builder] templates.addresses cannot be used: ${problems.join(" ")}`
+          );
+        }
+      };
+      contentAddresses = contentAddressService({
+        claims: claimsStore,
+        // The site's default language, where a localized site names one.
+        defaultLocale: () =>
+          ctx.config.localization?.defaultLocale || siteLocales()[0] || "en",
+        // The claims collection too: the start-up passes write it alone.
+        collections: [
+          pagesSlug,
+          templatesSlug,
+          claimsStore.slug,
+          ...templateAddresses.keys(),
+        ],
+        holders: [pagesSlug, ...templateAddresses.keys()],
+        // Served while its template stores an address and it may still have
+        // a template: one that lost its `slug` field or became localized
+        // is served nowhere, whatever claims its entries still hold.
+        storesAddress: async collection =>
+          ((await claimsDeps.templateOf(collection))?.address ?? null) !==
+            null && (await claimsDeps.mayHaveTemplate(collection)),
+        // Listed for pre-rendering: those given an address in code, and
+        // those whose template stores one.
+        entryHolders: async () => [
+          ...new Set([
+            ...templateAddresses.keys(),
+            ...(await readStoredAddresses()).keys(),
+          ]),
+        ],
+        startup: () => addressStartup,
+      });
       // A page published naming a Layout that is not: it is served inside the
       // site's default until its own is published, and the author is told.
       registerLayoutReadinessNotice({
@@ -1767,6 +3403,12 @@ export const pageBuilder = (
           memo: retiredHistory,
           pins: heldRemovals,
         });
+        // While a removal is published, no write may newly set one of its
+        // fields: the count the designer confirmed is final until it lands.
+        removalHolds = installHoldsFor(ctx, opts, composition, {
+          nextly: () => requireInstalled().nextly(),
+          count: countPlacements(),
+        });
         // The values already stored when a field was retired: walked out of
         // every document by the sweep below, and walked again when a write
         // committed after the walk passed its document puts one back.
@@ -1790,16 +3432,48 @@ export const pageBuilder = (
           walkAgain: () => Promise.resolve(),
         };
       }
-      // A write that keeps a reference to a component being deleted, committed
-      // after the deletion converted that document, sends the document back to
-      // be converted again from what was saved.
-      registerFencedWriteReport({
+      // Every write holding a component being deleted is judged again last
+      // inside its own transaction: before the delete, it sends its document
+      // back to be converted again from what was saved; once the delete is
+      // under way, it is refused as made from a stale copy.
+      registerInTransactionFence({
         ctx,
-        fence: () => fenceStore(ctx.db, ctx.dialect),
-        progress: () => progressStore(ctx.db, ctx.dialect),
         limits: () => opts.limits ?? DEFAULT_LIMITS,
+        // A component being deleted may not itself change meanwhile.
+        components: composition.store.collection,
       });
+      // A component's own delete only through Delete component, and no
+      // unpublish of one documents place. Registered after the Layout guard,
+      // so a component a Layout uses is refused naming the Layout first.
+      {
+        const placing = composition.hostsOf;
+        const store = composition.store.collection;
+        // The registry's record of the collection, which a store made in the
+        // admin changes there; never read inside a caller's transaction.
+        const lifecycle = storeLifecycle(
+          async () =>
+            (
+              (await ctx.services.collections.getCollection(store, {})) as {
+                status?: unknown;
+              } | null
+            )?.status === true
+        );
+        registerComponentGuards({
+          ctx,
+          components: store,
+          runs: () => fenceStore(ctx.db, ctx.dialect),
+          hostsOf: () => placing,
+          confirmUnused: storedUseCheck(() =>
+            componentDeleteRewriteService(requireRewriteInstall)
+          ),
+          lifecycle,
+        });
+      }
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
+      // The "Bindings to fix" report: each committed write's document judged
+      // again, and every document by the sweep once the schema changes.
+      bindingReportCtx = ctx;
+      registerBindingReportOnWrite(ctx, bindingReportDeps);
       // The breakpoints the write path judges a save against: one read of
       // the site's style, the same answer the blocks field gets. A removal's
       // walk, its locks and the write report all ask it, so they agree on
@@ -1819,6 +3493,8 @@ export const pageBuilder = (
         site: rewriteInstall.site,
         defaults: configStyle,
         definedBreakpoints,
+        breakpointsNow: async () =>
+          siteBreakpoints(await siteStyleNow()) ?? null,
       };
       removalLogger = ctx.logger;
       // A write holding a removed breakpoint's values, committed after the
@@ -1840,7 +3516,36 @@ export const pageBuilder = (
     //
     // Then record the site's spacing model, once: AFTER the seed, so the seed
     // is recorded and not taken for content. Neither step throws.
-    onReady: () => {
+    onReady: async () => {
+      // A collection given a template address that cannot have a template
+      // refuses to start, naming it: checked once every plugin's
+      // collections are registered.
+      await checkTemplateAddresses?.();
+      // Existing pages' addresses, claimed in the background, then the
+      // entries' under their collections' addresses, pages first: the
+      // passes never throw, and a boot is not held for them.
+      const backfill = pageClaimsBackfill;
+      const entryPass = entryClaimsPass;
+      const sweep = undeclaredSweep;
+      if (backfill !== null) {
+        // The entries' pass only after every page holds its address: until
+        // then an entry could take a path a page is still owed. Releasing a
+        // removed collection's claims takes nothing a page is owed, so it
+        // runs whether or not the pages' pass completed.
+        // Not awaited, so the boot is not held; the address listing joins it
+        // instead (see the content address service).
+        const startup = backfill()
+          .then(async complete => {
+            await sweep?.();
+            if (complete) await entryPass?.();
+          })
+          .catch(() => undefined);
+        addressStartup = startup;
+        void startup.finally(() => {
+          if (addressStartup === startup) addressStartup = null;
+        });
+      }
+      void seedGraphLock?.();
       const setup = defaultLayoutSetup;
       const spacing = spacingSetup;
       const seeded =
@@ -1865,12 +3570,21 @@ export const pageBuilder = (
       // screen, REST route or Direct API call reaches them.
       schema: pageBuilderSchema,
       // The audit rows this plugin writes: one per breakpoint removed, with
-      // what removing it dropped.
+      // what removing it dropped, and one per removal undone.
       audit: {
         kinds: [
           {
             kind: BREAKPOINT_REMOVED_AUDIT,
             metadataKeys: [...BREAKPOINT_REMOVED_METADATA],
+          },
+          {
+            kind: BREAKPOINT_REMOVAL_UNDONE_AUDIT,
+            metadataKeys: [...BREAKPOINT_REMOVAL_UNDONE_METADATA],
+          },
+          // One per site code save: hashes, sizes and counts, never the code.
+          {
+            kind: SITE_CODE_SAVED_AUDIT,
+            metadataKeys: [...SITE_CODE_SAVED_METADATA],
           },
         ],
       },
@@ -1916,7 +3630,14 @@ export const pageBuilder = (
             store: componentStoreOf(opts),
             limits: () => opts.limits ?? DEFAULT_LIMITS,
             readRetired: readRetiredFor,
+            templates: templateActions,
+            namedQueries: namedQueryDeclarations,
+            bindings: pageActionBindings,
           }),
+        // Who holds a path, for the site's one content route: a page, or a
+        // collection's entry under its template address. Read as committed,
+        // through the store every save's collision check writes.
+        [CONTENT_ADDRESS_SERVICE]: () => requireContentAddresses(),
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
           read: () =>
             readJoiningDecision(
@@ -1938,6 +3659,8 @@ export const pageBuilder = (
           state: () => usageBackfillDeps(requireInstalled()).state(),
           rebuild: (scope, walk) =>
             usageBackfillDeps(requireInstalled()).rebuild(scope, walk),
+          forgetGone: (scopes, fenced, run) =>
+            forgetGoneScopes(requireInstalled(), scopes, fenced, run),
         }),
         // The default-Layout repair. A sweep, so the runner keeps one queued
         // and every jobs pass confirms the site still has a published default,
@@ -1953,6 +3676,12 @@ export const pageBuilder = (
         // The breakpoint removal a write opened again, which nobody is
         // waiting on: carried on each pass until it is done.
         breakpointRemovalJob(removalService),
+        // The check of every document for the bindings report, when the
+        // schema changed since the last complete one.
+        bindingsReportJob(bindingReportPass),
+        // Delete component's sweep: a delete that stopped after its write
+        // becomes its tombstone. Never a host write or a delete.
+        componentDeleteJob(componentDeleteSweepDeps),
       ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
@@ -1977,14 +3706,22 @@ export const pageBuilder = (
           )
         ),
         patternsCollection(),
-        componentsCollection(),
+        // The plugin's own collection is the store unless the host names one.
+        componentsCollection({
+          isStore: storeIsOwn(componentStoreOf(opts)),
+        }),
         layoutsCollection(),
         classUsageIndexCollection(),
         componentUsageIndexCollection(),
+        // Who holds each served address, so no two documents share one.
+        addressClaimsCollection(),
         // Each component's retired field and slot ids, recorded when a
         // definition that drops one is published. Contributed unconditionally,
         // because every write to a page that places a component reads it.
         componentRetiredCollection(),
+        // The designs a collection's entries are drawn with, one per
+        // collection.
+        templatesCollection(),
         // The backfill's former progress collection. Nothing reads or writes
         // it any more: progress lives in the plugin's own tables. Still
         // declared so an existing site keeps its table and registry row as
@@ -2018,12 +3755,17 @@ export const pageBuilder = (
           // A locked shared style may be stripped by an open removal, in the
           // settings write that stores its set: judged by every id it
           // removed, which the site still defines while that write is judged.
-          () => removalService().openRemovalAsSaved()
+          () => removalService().openRemovalAsSaved(),
+          // A write dropping a variable is judged by the remove route's check.
+          () => variablesInUse
         ),
         // Where the site's default Layout is recorded. Contributed whether or
         // not any Layout exists yet, because the repair writes it on a site
         // that has none, and the make-default route writes it on every other.
         pageBuilderSettingsSingle(),
+        // The code every published page carries, written only by the site
+        // code route, which judges it first.
+        siteCodeSingle(),
       ],
       // One field type, where there were two. The other named the previous
       // editor's document — a shape this package defined itself, stored under a
@@ -2074,32 +3816,19 @@ export const pageBuilder = (
         // maintains.
         componentFactsRoute({
           store: componentStoreOf(opts),
-          countPlacements: ctx => async id => {
-            const index =
-              ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-              COMPONENT_USAGE_INDEX_SLUG;
-            return componentUsageCount({
-              read: usageCountReader(await requireInstalled().nextly(), index),
-              componentId: id,
-              health: await usageHealthService(requireInstalled).read(
-                componentUsageIndex,
-                index
-              ),
-            });
-          },
+          countPlacements,
           // How many pages a change reaches, for the banner over the view:
           // through other components by the same index, and through the
           // Layouts wrapping pages, read live, the site's default included.
           countPages: ctx => async id => {
-            const index =
-              ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-              COMPONENT_USAGE_INDEX_SLUG;
-            const host = requireInstalled();
-            const rows = usageRowReader(await host.nextly(), index);
-            const health = await usageHealthService(requireInstalled).read(
-              componentUsageIndex,
-              index
+            const rows = usageTableRows(
+              requireInstalled().db,
+              usageTableOf(componentUsageIndex)
             );
+            const health =
+              await usageHealthService(requireInstalled).read(
+                componentUsageIndex
+              );
             // Imported at call time, as the Layout choices route does, so the
             // entry stays free of the runtime graph.
             const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
@@ -2135,25 +3864,22 @@ export const pageBuilder = (
           // The ids a published removal retired; `null` adds no field.
           readRetired: readRetiredFor,
         }),
+        // A removal's hold at publish: the count taken again, and while held
+        // no write sets a removed field (`removal-hold`).
+        ...removalHoldRoutes({
+          store: componentStoreOf(opts),
+          holds: requireRemovalHolds,
+          countPlacements,
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+        }),
         // How many placements chose one of a component's variants, for the
         // dialog that confirms deleting it: the usage index lists the hosts,
         // and each host's stored forms are walked as the system.
         variantUseRoute({
           store: componentStoreOf(opts),
           hosts: () => composition?.hostsOf,
-          readForm: async (host, form) => {
-            const row = await classUsageDocumentRowReader(
-              await requireInstalled().nextly()
-            )({
-              entity: host.slug,
-              entityKey: host.id,
-              locale: "",
-              variant: form,
-            });
-            return row !== null && typeof row === "object"
-              ? (row as Record<string, unknown>)[host.field]
-              : undefined;
-          },
+          readForm: async (host, form) =>
+            hostFieldReader(await requireInstalled().nextly())(host, form),
           limits: opts.limits ?? DEFAULT_LIMITS,
         }),
         // Save a selection as a component, or convert it into one. Here
@@ -2172,18 +3898,49 @@ export const pageBuilder = (
         pageActionsRoute({
           store: componentStoreOf(opts),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
+          bindings: pageActionBindings,
         }),
         definitionActionsRoute({
           store: componentStoreOf(opts),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
           readRetired: readRetiredFor,
         }),
+        // Give a collection its template, publish or delete it, set its address,
+        // and give an entry its own design or take it away, each with a dry run.
+        templateActionsRoute(templateActions),
+        // A template's preview in the editor: the entries of its collection
+        // the author may preview, and the one being previewed, read as the
+        // author asking. Reads only: which entry is previewed is not stored.
+        templatePreviewEntriesRoute({ guard: requireTemplateGuard }),
+        templatePreviewEntryRoute({ guard: requireTemplateGuard }),
+        // What a visitor reads of the page being edited, for applying its
+        // visibility conditions: published values and public fields only,
+        // for a page the caller may open in the editor.
+        conditionsPreviewEntryRoute({ guard: requireTemplateGuard }),
+        // Whether this caller may set or change a template address: what the
+        // template form asks before it offers the address for editing. Not a
+        // security boundary: the field's rules and the action decide.
+        templateRoutingRoute(),
+        // Whether a saved template may be pointed at another collection, by
+        // the guard's own rule, for a caller who may change that template:
+        // what the template form asks before it offers the change, since the
+        // collection list leaves out what the author may not read.
+        templateCollectionRetargetRoute({ guard: requireTemplateGuard }),
+        // The collections the template form offers: those the caller may
+        // read that the guard lets a template draw, judged by the guard's
+        // own rule, for a caller who may create or change templates.
+        templateCollectionChoicesRoute({ guard: requireTemplateGuard }),
+        // A collection's own designs, its template and its names, read as
+        // the caller: what the admin's Design section, Design column and the
+        // template's own designs list draw from.
+        entryDesignsRoute({ guard: requireTemplateGuard }),
         // What an API client or an agent reads before composing: the
         // patterns, components (fields, slots, variants) and Layouts it may
         // read, and the actions above with their request schemas.
         manifestRoute({
           store: componentStoreOf(opts),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
+          namedQueries: namedQueryDeclarations,
         }),
         // Detach, duplicate and update a pattern, each with a dry run.
         ...componentActionRoutes({
@@ -2203,9 +3960,63 @@ export const pageBuilder = (
         // A collection loop's menus: the collections the author may read,
         // the plugin's own stores left out, with each one's sortable fields.
         loopCollectionsRoute(componentStoreOf(opts)),
+        // The site's named queries, without their run functions: what the
+        // editor offers as a list's custom sources.
+        namedQueriesRoute(namedQueryDeclarations),
+        // A collection list's entries on the canvas, read as the author asking
+        // reads them, drafts included, for a collection they may read. A
+        // list whose source is a named query runs it here, on the server,
+        // where its run function lives.
+        listEntriesRoute(
+          name => namedQueries.definitionOf(name),
+          requireTemplateGuard
+        ),
+        // The canvas's bound props: the entry being edited, the Singles its
+        // bindings read and the site settings, read as the author asking.
+        canvasBindingsRoute(),
+        // The fields the inspector's picker offers a binding, as the author
+        // asking may read them, each marked by whether visitors may.
+        bindingFieldsRoute(),
+        // An unbind's plan for the inspector, against the document it holds:
+        // the same decision as the page actions API's, applied by the editor.
+        unbindPlanRoute({ limits: () => opts.limits ?? DEFAULT_LIMITS }),
+        // The documents whose bindings no longer fit, for those who edit
+        // pages, each listed only when the caller may read it.
+        bindingsToFixRoute({
+          store: bindingReportDeps.store,
+          readable: (routeCtx, entries) => readableAsCaller(routeCtx, entries),
+          // A read starts a check when the schema may have changed, at most
+          // once a minute, and never waits for it.
+          refresh: routeCtx => {
+            const now = Date.now();
+            if (now - bindingsRefreshedAt < BINDINGS_REFRESH_MS) return;
+            bindingsRefreshedAt = now;
+            routeCtx.services.jobs
+              .runSweepNow(BINDINGS_REPORT_JOB, {
+                maxDurationMs: BINDINGS_REFRESH_RUN_MS,
+              })
+              .catch((error: unknown) =>
+                bindingReportCtx?.logger.warn(
+                  "[page-builder] the bindings report's check could not start; the next jobs pass runs it.",
+                  { error }
+                )
+              );
+          },
+          // Where a Layout region's binding is edited, and the language the
+          // builder edits, for each row's way into the editor.
+          componentStore: () =>
+            rewriteInstall?.store.collection ??
+            bindingReportCtx?.self.collections[COMPONENTS_SLUG] ??
+            COMPONENTS_SLUG,
+          defaultLocale: () =>
+            bindingReportCtx?.config.localization?.defaultLocale,
+          readableSingles: (routeCtx, slugs) =>
+            readableSingles(routeCtx, slugs),
+        }),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
         pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),
+        addressWaitingRoute(),
         // The Pages panel's writes: create, duplicate, rename and delete a
         // page, each as the author asking, in exactly the collections the
         // search lists.
@@ -2220,6 +4031,19 @@ export const pageBuilder = (
         // under it. The Layout's own delete and unpublish refuse every write
         // that does not come through here.
         removeLayoutRoute(),
+        // Delete component: the dry run, each step of the delete as the
+        // person who started it, and its progress. A component's own delete
+        // refuses every write that does not come through here.
+        ...componentDeleteRoutes({
+          store: componentStoreOf(opts),
+          install: () => {
+            const installed = requireRewriteInstall();
+            return {
+              rewrite: componentDeleteRewriteService(requireRewriteInstall),
+              runs: fenceStore(installed.db, installed.dialect),
+            };
+          },
+        }),
         // The Layouts an author may choose for a page, with the published
         // regions the editor draws around it, read as the author from the
         // component store the editor's library reads, under the bounds the
@@ -2233,11 +4057,41 @@ export const pageBuilder = (
         pageCollectionRoute(),
         // Settings' Site tab: what the caller may change there, and the one
         // way the site's breakpoints change.
-        siteSettingsRoute(configStyle),
+        // With the removals still holding what they removed, so the tab can
+        // follow one that is still going.
+        siteSettingsRoute(configStyle, breakpointRemoval),
         // A set that removes breakpoints strips what they held from the site;
         // one that does not finish in its save is carried on by the second.
         siteBreakpointsRoute(breakpointRemoval),
         siteBreakpointRemovalRoute(breakpointRemoval),
+        // The newest removal undone, within its 30 days; its walk is carried
+        // on through the removal route.
+        siteBreakpointUndoRoute(breakpointRemoval),
+        // Where one removal stands, read by its id.
+        siteBreakpointRemovalStatusRoute(breakpointRemoval),
+        // The site's code, read, checked and saved under the site settings
+        // permission; saved by a signed-in person only.
+        ...siteCodeRoutes({
+          nextly: async () => {
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            const nextly = await getCachedNextly();
+            return {
+              findSingle: args => nextly.findSingle(args),
+              updateSingle: args => nextly.updateSingle(args),
+            };
+          },
+          options: opts.siteCode,
+          permission: MANAGE_SITE_PERMISSION,
+          // Read as the server, for "Last changed by": the name only.
+          personName: async id => {
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            const nextly = await getCachedNextly();
+            const person = await nextly.users.findByID({ id });
+            return typeof person?.name === "string" && person.name !== ""
+              ? person.name
+              : null;
+          },
+        }),
         // A pattern, a component or a Layout as one file, with the components,
         // shared styles, variables, breakpoints and media it depends on,
         // read as the caller.
@@ -2269,45 +4123,35 @@ export const pageBuilder = (
         // the class usage index the installed host maintains.
         ...sharedStyleRoutes({
           configClassIds,
-          usage: ctx => {
-            const index =
-              ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
-              CLASS_USAGE_INDEX_SLUG;
-            const kinds = new Map<string, SharedStyleUsageKind>([
-              [
-                componentStoreOf(opts).collection ??
-                  ctx.self.collections[COMPONENTS_SLUG] ??
-                  COMPONENTS_SLUG,
-                "components",
-              ],
-              [
-                ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
-                "patterns",
-              ],
-              [ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG, "layouts"],
-            ]);
-            return {
-              health: () =>
-                usageHealthService(requireInstalled).read(
-                  classUsageIndex,
-                  index
+          usage: ctx => usageSourceOf(ctx.self.collections, classUsageIndex),
+          // The bounds the class index and the renderer read a page under.
+          limits: opts.limits ?? DEFAULT_LIMITS,
+        }),
+        // The Variables panel: how widely each variable is used and where,
+        // from the variable usage index and the site's shared styles, and
+        // removing the ones the site added that nothing uses. A count now is
+        // the shared styles' count route: one sweep fills every index.
+        ...variableRoutes({
+          defaults: configStyle,
+          usage: ctx => usageSourceOf(ctx.self.collections, tokenUsageIndex),
+          // A block type's own default styles are a use, read per request.
+          blocks: allBlocks,
+          inUse: (ctx, readNamed) =>
+            variableRemovalChecks({
+              usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
+              blocks: allBlocks,
+              documents: async () =>
+                storedDocumentsOf(ctx, await bootedNextly()),
+              limits: opts.limits ?? DEFAULT_LIMITS,
+              // The first use named only if this caller may open it.
+              firstReadable: uses =>
+                firstReadableTitle(
+                  uses,
+                  readNamed,
+                  async slug => (await ctx.caller?.can("read", slug)) ?? false
                 ),
-              // One bounded read for a whole page of styles.
-              documentsUsingEach: async (classIds, health) =>
-                listDocumentsUsingEach({
-                  index: classUsageIndex,
-                  rows: usageRowReader(
-                    await requireInstalled().nextly(),
-                    index
-                  ),
-                  referenceIds: classIds,
-                  health,
-                }),
-              // Every other collection with a page builder field holds pages,
-              // as the editor's page search reads them.
-              kindOf: collection => kinds.get(collection) ?? "pages",
-            };
-          },
+              pathOf: id => id,
+            }),
         }),
       ],
       // The grant that lets a role change the site's settings in the editor's
@@ -2328,6 +4172,11 @@ export const pageBuilder = (
         // Design (`update-site-style`), so a lock protects a style from every
         // Design manager who does not hold it. Asked by the lock route alone.
         LOCK_SHARED_STYLES_DECLARATION,
+        // Setting or changing where a collection's entries are served moves
+        // live addresses, so it is a grant of its own, apart from updating
+        // templates. Asked by the address field's rules and the template
+        // action.
+        MANAGE_TEMPLATE_ROUTING_DECLARATION,
       ],
 
       // No `publish` permission. One was declared here and nothing ever read
@@ -2335,6 +4184,13 @@ export const pageBuilder = (
       // `update-pages` already covers, and no code path asked whether the user
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
+      // The "Bindings to fix" card, for those who edit pages, hidden while
+      // they may see no broken binding.
+      dashboard: {
+        widgets: [bindingsToFixWidget(bindingsVisibleTo)],
+        // And a line on the Needs your attention card every dashboard shows.
+        attention: [bindingsToFixAttention(bindingsVisibleTo)],
+      },
       admin: {
         // What the editor in the browser needs of the options: see
         // `adminClientConfig`.
@@ -2343,6 +4199,16 @@ export const pageBuilder = (
           canvasPath,
           fontsOff: fonts.off,
         }),
+        // The "Bindings to fix" page, at
+        // `/admin/plugins/nextlyhq-plugin-page-builder/bindings-to-fix`,
+        // reached from its dashboard card and the editor's notice.
+        pages: [
+          {
+            path: "/bindings-to-fix",
+            component: BINDINGS_TO_FIX_PAGE_COMPONENT,
+            requiredPermission: EDIT_PAGES_PERMISSION,
+          },
+        ],
         // The three LIBRARIES, and no link to Pages.
         //
         // Pages is an ordinary collection that happens to declare a `blocks`
@@ -2392,6 +4258,67 @@ export const pageBuilder = (
         // delete and unpublish are refused. The slot is offered to every entry
         // form; the component draws only on a saved Layout's own.
         entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
+        // An entry's own design, where an author meets it.
+        //
+        // The Design section of an entry's side panel, first, before Status:
+        // which design the entry is shown with, and its own design. Declared
+        // at the `collection.edit` place with no collections named, so it is
+        // offered on every collection's entries, a collection the Schema
+        // Builder adds later included; it draws nothing for an entry whose
+        // collection cannot have a template, which leaves no section.
+        contributions: [
+          {
+            id: "nextlyhq-plugin-page-builder.entry-design",
+            kind: "sidebarSection",
+            place: "collection.edit",
+            label: "Design",
+            component: ENTRY_DESIGN_SECTION_COMPONENT,
+            before: "status",
+            // On a phone the panel opens only from the document's menu, so
+            // the section sits above the form there, where an author meets
+            // which design the entry is shown with before its fields.
+            narrow: "above-form",
+          },
+        ],
+        // Delete component on the component store, wherever it is: the
+        // plugin's own collection (followed through a rename, as every view
+        // key is), or the host's store named by `componentReadiness`. The
+        // document's own Delete opens the Delete component dialog in its
+        // place, keeping its row, its permission and every reason it can't
+        // run (a past version on screen, a colleague's claim). A host's store
+        // also gets the delete tools above its list, for the row action; the
+        // plugin's own collection declares them itself.
+        //
+        // On a template's own document screen: the entries with their own
+        // design, in its panel, and a Delete that says what deleting the
+        // template, or an own design, does to the site before it happens.
+        views: {
+          ...deleteComponentViews(componentStoreOf(opts)),
+          [TEMPLATES_SLUG]: {
+            documentActions: {
+              delete: { component: TEMPLATE_DELETE_COMPONENT },
+            },
+            panelSections: [
+              {
+                title: "Own designs",
+                component: TEMPLATE_OWN_DESIGNS_COMPONENT,
+              },
+              // On an own design instead: the entry it serves and the
+              // template it was copied from, which the form does not draw.
+              {
+                title: "Own design",
+                component: TEMPLATE_DESIGN_DETAILS_COMPONENT,
+              },
+            ],
+          },
+        },
+        // A host's own store's list gets Delete component on each row through
+        // tools drawn in the header, which is on every page: the slot above a
+        // list is the host's own to fill, and a second one there would be
+        // dropped. Its slug reaches them through `clientConfig`.
+        ...(hostStoreOf(componentStoreOf(opts)) === undefined
+          ? {}
+          : { header: { slot: COMPONENT_STORE_DELETE_HOST_COMPONENT } }),
         menu: [
           {
             label: "Patterns",
@@ -2411,6 +4338,25 @@ export const pageBuilder = (
             to: `/admin/collections/${LAYOUTS_SLUG}`,
             icon: "PanelsTopLeft",
           },
+          // The designs collections' entries are drawn with, and where each
+          // collection's entries are served.
+          {
+            label: "Templates",
+            collection: TEMPLATES_SLUG,
+            to: `/admin/collections/${TEMPLATES_SLUG}`,
+            icon: "LayoutDashboard",
+          },
+          // The site-wide report of bindings that no longer fit, for those
+          // who edit pages, as its page asks.
+          {
+            label: "Bindings to fix",
+            to: BINDINGS_TO_FIX_PAGE_HREF,
+            // Neutral: the entry is there whether or not anything needs
+            // fixing; the warning sign is for the dashboard line and the
+            // editor's chip, which show only when something does.
+            icon: "Unlink",
+            requiredPermission: EDIT_PAGES_PERMISSION,
+          },
         ],
         // No `schemaBuilderSlot`. It named a component this package no longer
         // ships: a schema-builder toggle for turning a collection into a
@@ -2422,4 +4368,18 @@ export const pageBuilder = (
       },
     },
   });
+  // The route a site renders its pages with reads this page builder's own
+  // queries through `namedQueriesOf`: bound to this definition, never to a
+  // registry another site's boot can replace.
+  sitesQueries.set(plugin, {
+    definitionOf: name => namedQueries.definitionOf(name),
+  });
+  // A host's component store must not share a slug with the plugin's own
+  // collections: refused while the config is read, before anything is keyed
+  // by it. A rename is judged again in `init`, once it is known.
+  refuseStoreSharingAPluginSlug(
+    componentStoreOf(opts),
+    (plugin.contributes?.collections ?? []).map(collection => collection.slug)
+  );
+  return plugin;
 };

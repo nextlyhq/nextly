@@ -93,6 +93,7 @@ describe.each(getConfiguredTestDialects())(
       const german = await entries.updateEntry(at(id, "de"), {
         headline: "Hallo",
         status: "published",
+        _overwrite: true,
       });
       expect(german.success, JSON.stringify(german)).toBe(true);
 
@@ -109,6 +110,7 @@ describe.each(getConfiguredTestDialects())(
       // English holds a pending change: the read shows the change...
       const held = await entries.updateEntry(at(id, "en"), {
         headline: "Hello again",
+        _overwrite: true,
       });
       expect(held.success, JSON.stringify(held)).toBe(true);
       const read = await entries.getEntry({
@@ -132,14 +134,14 @@ describe.each(getConfiguredTestDialects())(
       ] as const) {
         const live = await singles.update(
           PREFS,
-          { siteName, status: "published" },
+          { siteName, status: "published", _overwrite: true },
           { locale, overrideAccess: true }
         );
         expect(live.success, JSON.stringify(live)).toBe(true);
       }
       const held = await singles.update(
         PREFS,
-        { siteName: "Hello again" },
+        { siteName: "Hello again", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);

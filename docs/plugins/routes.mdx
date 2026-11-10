@@ -152,6 +152,16 @@ outside React, with the same session handling and token. Where
 `writePluginRoute` rejects with the parsed error. Use it when you need the reason
 at the moment you await, such as to show it beside the field that was refused.
 
+A write through `usePluginRouteMutation` refreshes the reads it names in
+`invalidates`, in the same tab: a list your page reads with `usePluginRoute` shows
+the change as soon as the write succeeds. `writePluginRoute` refreshes nothing.
+Neither reaches another browser tab. Each tab keeps its own copy of what it read,
+so a list open in another tab of the admin still shows what it read before the
+write. Reloading that tab reads it again. Opening the page again reads it again
+only once its copy is older than the read's `staleTime`, five minutes by default,
+since the admin doesn't re-read on switching tabs. Pass `staleTime: 0` to
+`usePluginRoute` for a read that is fetched afresh each time its page opens.
+
 On a public route, `csrf: true` also checks the origin of a write no session
 authenticates, without asking it for a token; only such a write that sends an
 `Authorization: Bearer` token is exempt. A write a session authenticates is
@@ -295,6 +305,119 @@ endpoint serves is a request failure, not an empty answer — the admin's
 catch-all falls through to the built-in parser and refuses it. Writes have
 their own pair, `usePluginRouteMutation` and `writePluginRoute`, described with
 the `csrf` options above.
+
+## Receiving webhooks
+
+> **Experimental.** `ctx.security.webhooks` is new and ships `@experimental`.
+
+A route that receives webhooks is `public`, since the sender has no session, and
+reads the body as the exact bytes sent (`rawBody: true`). Verify the delivery's
+signature before reading anything in it:
+
+```ts
+import { definePlugin, standardWebhooks } from "@nextlyhq/plugin-sdk";
+
+// Your own record of the delivery ids already handled.
+declare function seen(deliveryId: string): Promise<boolean>;
+
+definePlugin({
+  name: "@acme/nextly-plugin-orders",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.0",
+  // ...
+  contributes: {
+    routes: [
+      {
+        method: "POST",
+        path: "/webhooks/orders",
+        public: true,
+        rawBody: true,
+        handler: async (req, ctx) => {
+          const result = await ctx.security.webhooks.verify(req, {
+            scheme: standardWebhooks,
+            // Every secret currently valid: during a rotation, the new and the old.
+            secrets: [process.env.ACME_ORDERS_SECRET ?? ""],
+          });
+          if (!result.verified) {
+            ctx.logger.warn("Refused an orders webhook", { reason: result.reason });
+            return new Response(null, { status: 401 });
+          }
+          // The same delivery can arrive twice: a sender's retry, or a
+          // replay within the tolerance. Act on each delivery id once.
+          if (result.deliveryId && (await seen(result.deliveryId))) {
+            return new Response(null, { status: 204 });
+          }
+          const event = JSON.parse(result.body);
+          // ...
+          return new Response(null, { status: 204 });
+        },
+      },
+    ],
+  },
+});
+```
+
+Use `result.body`, the bytes that were verified, rather than reading the request
+again. `seen` stands for your own record of the delivery ids you have handled:
+a verified delivery can still be a repeat, so handle each id once. `verify` reads a copy, so the request stays readable, but only the
+verified body is known to be what the sender signed.
+
+What core checks, whatever the scheme:
+
+- **Age.** A delivery signed more than 5 minutes away from now, either way, is
+  refused as `expired`. Set `toleranceSeconds` to change that; it must be a
+  finite number.
+- **Signatures.** Every signature the delivery presents is compared with every
+  secret you pass, as bytes, in constant time. A delivery signed with the old
+  secret or the new one verifies while you pass both.
+- **Size.** A body over 1 MiB is refused as `too-large` before anything is
+  signed. Set `maxBytes` to change that.
+- **Nothing is verified by default.** No signature headers is `missing`, an
+  unreadable header is `malformed`, no usable secret is `no-secret`, and a
+  signature that matches no secret is `mismatch`. The reason is for your log;
+  answer the sender with a plain 400 or 401.
+
+### A provider's own scheme
+
+`standardWebhooks` is the scheme Nextly signs its own [webhooks](/docs/webhooks)
+with. For another provider, describe its scheme: where its signatures and
+timestamp are, which bytes it signs, and how one secret signs them. Core still
+does the age check and the comparison.
+
+```ts
+import { createHmac } from "node:crypto";
+import type { InboundWebhookScheme } from "@nextlyhq/plugin-sdk";
+
+/** `Provider-Signature: t=<seconds>,v1=<hex>`, signing "<t>.<body>". */
+const providerScheme: InboundWebhookScheme = {
+  read({ headers, bytes }) {
+    const header = headers.get("provider-signature");
+    if (header === null) return null; // not this scheme's delivery
+    const parts = header.split(",").map(part => part.split("="));
+    const t = parts.find(([key]) => key === "t")?.[1];
+    if (t === undefined || !/^\d+$/.test(t)) throw new Error("no timestamp"); // malformed
+    return {
+      timestamp: Number(t),
+      // The exact bytes sent, not text decoded and encoded again.
+      signed: Buffer.concat([Buffer.from(`${t}.`), bytes]),
+      signatures: parts
+        .filter(([key]) => key === "v1")
+        .map(([, value]) => Buffer.from(value, "hex")),
+    };
+  },
+  sign: (secret, signed) => createHmac("sha256", secret).update(signed).digest(),
+};
+```
+
+A provider that signs no time, such as one sending `sha256=<hex>` over the body
+alone, returns `timestamp: "none"`. It has to say so: a scheme that leaves the
+timestamp out is refused as `malformed`. Its verified result says
+`freshness: "unchecked"`, against `"checked"` for every other delivery.
+**Such a delivery has no replay protection here**: someone who captured one can
+send it again at any time, and it still verifies. A `"checked"` delivery can be
+replayed too, but only within the tolerance. Either way, handle each delivery id
+once, and require `result.freshness === "checked"` wherever a replay outside
+that window would do harm.
 
 ## Middleware (D27)
 

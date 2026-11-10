@@ -52,7 +52,8 @@ const padding = {
 function mount(
   type: string,
   styles?: BlockNode["styles"],
-  target?: React.ComponentProps<typeof StyleInspectorPanel>["target"]
+  target?: React.ComponentProps<typeof StyleInspectorPanel>["target"],
+  entries?: readonly unknown[]
 ) {
   const block = (name: string, extra: Record<string, unknown>) => ({
     name,
@@ -108,6 +109,9 @@ function mount(
     <StyleInspectorPanel
       editor={editor}
       {...(target === undefined ? {} : { target })}
+      {...(entries === undefined
+        ? {}
+        : { cascade: { entries, nodes: document.nodes } as never })}
     />
   );
   return editor;
@@ -320,6 +324,56 @@ describe("a shared style's overlay", () => {
     );
     open("Background");
     expect(overlayLabels()).toEqual([]);
+  });
+});
+
+describe("the overlay, judged by the image that wins here", () => {
+  const overlayLabels = () =>
+    screen.queryAllByText(/^Overlay/).map(each => each.textContent);
+  /** The background image the cascade records for the Section. */
+  const image = (value: string) => ({
+    origin: { kind: "node", id: "n" },
+    property: "background-image",
+    value,
+    state: "base",
+    breakpoint: BASE_BREAKPOINT,
+  });
+
+  it("is not offered where the winning image is none, whatever another state stores", () => {
+    mount(
+      "core/section",
+      {
+        base: { [BASE_BREAKPOINT]: { background: { url: "none" } } },
+        hover: { [BASE_BREAKPOINT]: { background: { url: "/hills.jpg" } } },
+      },
+      undefined,
+      [image("none")]
+    );
+    open("Background");
+    expect(overlayLabels()).toEqual([]);
+  });
+
+  it("is offered where the winning image paints", () => {
+    mount("core/section", undefined, undefined, [
+      image('var(--nx-pb-overlay-layer,) url("/hills.jpg")'),
+    ]);
+    open("Background");
+    expect(overlayLabels()).toEqual(["Overlay", "Overlay strength"]);
+  });
+
+  it("stays offered while an overlay of its own is stored, so it can be cleared", () => {
+    mount(
+      "core/section",
+      {
+        base: {
+          [BASE_BREAKPOINT]: { background: { url: "none", overlay: "#000" } },
+        },
+      },
+      undefined,
+      [image("none")]
+    );
+    open("Background");
+    expect(overlayLabels()).toEqual(["Overlay", "Overlay strength"]);
   });
 });
 

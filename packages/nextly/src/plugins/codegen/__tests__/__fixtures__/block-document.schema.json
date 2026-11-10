@@ -34,6 +34,648 @@
         },
         "customCss": {
           "type": "string"
+        },
+        "seo": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "$bind": {
+                            "type": "string"
+                          },
+                          "fallback": {},
+                          "format": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "date"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "number"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "currency"
+                                  },
+                                  "currency": {
+                                    "type": "string"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type", "currency"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "relativeTime"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "list"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              }
+                            ]
+                          },
+                          "source": {
+                            "type": "string",
+                            "enum": ["entry", "site"]
+                          },
+                          "sourceKey": {
+                            "not": {}
+                          }
+                        },
+                        "required": ["$bind"],
+                        "additionalProperties": {}
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "$bind": {
+                            "type": "string"
+                          },
+                          "fallback": {},
+                          "format": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "date"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "number"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "currency"
+                                  },
+                                  "currency": {
+                                    "type": "string"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type", "currency"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "relativeTime"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "list"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              }
+                            ]
+                          },
+                          "source": {
+                            "type": "string",
+                            "const": "single"
+                          },
+                          "sourceKey": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["$bind", "source", "sourceKey"],
+                        "additionalProperties": {}
+                      }
+                    ]
+                  }
+                ]
+              },
+              "maxItems": 32
+            },
+            "description": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "$bind": {
+                            "type": "string"
+                          },
+                          "fallback": {},
+                          "format": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "date"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "number"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "currency"
+                                  },
+                                  "currency": {
+                                    "type": "string"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type", "currency"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "relativeTime"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "list"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              }
+                            ]
+                          },
+                          "source": {
+                            "type": "string",
+                            "enum": ["entry", "site"]
+                          },
+                          "sourceKey": {
+                            "not": {}
+                          }
+                        },
+                        "required": ["$bind"],
+                        "additionalProperties": {}
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "$bind": {
+                            "type": "string"
+                          },
+                          "fallback": {},
+                          "format": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "date"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "number"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "currency"
+                                  },
+                                  "currency": {
+                                    "type": "string"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type", "currency"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "relativeTime"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "list"
+                                  },
+                                  "options": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": {}
+                              }
+                            ]
+                          },
+                          "source": {
+                            "type": "string",
+                            "const": "single"
+                          },
+                          "sourceKey": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["$bind", "source", "sourceKey"],
+                        "additionalProperties": {}
+                      }
+                    ]
+                  }
+                ]
+              },
+              "maxItems": 32
+            },
+            "image": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "$bind": {
+                      "type": "string"
+                    },
+                    "fallback": {},
+                    "format": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "date"
+                            },
+                            "options": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": ["type"],
+                          "additionalProperties": {}
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "number"
+                            },
+                            "options": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": ["type"],
+                          "additionalProperties": {}
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "currency"
+                            },
+                            "currency": {
+                              "type": "string"
+                            },
+                            "options": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": ["type", "currency"],
+                          "additionalProperties": {}
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "relativeTime"
+                            },
+                            "options": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": ["type"],
+                          "additionalProperties": {}
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "list"
+                            },
+                            "options": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": ["type"],
+                          "additionalProperties": {}
+                        }
+                      ]
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": ["entry", "site"]
+                    },
+                    "sourceKey": {
+                      "not": {}
+                    }
+                  },
+                  "required": ["$bind"],
+                  "additionalProperties": {}
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "$bind": {
+                      "type": "string"
+                    },
+                    "fallback": {},
+                    "format": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "date"
+                            },
+                            "options": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": ["type"],
+                          "additionalProperties": {}
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "number"
+                            },
+                            "options": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": ["type"],
+                          "additionalProperties": {}
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "currency"
+                            },
+                            "currency": {
+                              "type": "string"
+                            },
+                            "options": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": ["type", "currency"],
+                          "additionalProperties": {}
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "relativeTime"
+                            },
+                            "options": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": ["type"],
+                          "additionalProperties": {}
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "list"
+                            },
+                            "options": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": ["type"],
+                          "additionalProperties": {}
+                        }
+                      ]
+                    },
+                    "source": {
+                      "type": "string",
+                      "const": "single"
+                    },
+                    "sourceKey": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["$bind", "source", "sourceKey"],
+                  "additionalProperties": {}
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": {}

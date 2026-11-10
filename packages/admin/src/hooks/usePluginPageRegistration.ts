@@ -45,6 +45,12 @@ function pluginComponentPaths(plugin: PluginMetadata): string[] {
     // A document view is a whole screen resolved by string, and its plugin
     // may contribute nothing else that would trigger the module's import.
     ...(plugin.documentViews ?? []).map(view => view.component),
+    // What a replaced document action opens, and a document panel section:
+    // both drawn by string on a collection's document screen.
+    ...(plugin.documentActions ?? []).map(each =>
+      typeof each.override === "object" ? each.override.component : undefined
+    ),
+    ...(plugin.panelSections ?? []).map(section => section.component),
     ...(plugin.fieldTypes ?? []).map(fieldType => fieldType.component),
     // Falsy rather than only `undefined`, matching the codegen collector
     // exactly: an empty component path names no module, and the two halves

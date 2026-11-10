@@ -30,10 +30,13 @@
  */
 import { useCallback, useEffect, useRef } from "react";
 
-import { BUILDER_VIEW_PATH } from "../../builder-view";
 import { useComponentEditing } from "../pattern-capability-client";
 
-import { addressWithoutSection, sectionAddress } from "./builder-address";
+import {
+  addressWithoutSection,
+  documentBuilderPath,
+  sectionAddress,
+} from "./builder-address";
 
 /** The query parameter naming where the component view goes back to. */
 const RETURN_PARAM = "return";
@@ -63,7 +66,7 @@ export function componentEditorAddress(
   /** The name of the document left, which Back says it returns to. */
   from?: string
 ): string {
-  const base = `/admin/collections/${encodeURIComponent(collection)}/${encodeURIComponent(componentId)}/${BUILDER_VIEW_PATH}`;
+  const base = documentBuilderPath(collection, componentId);
   const query = new URLSearchParams();
   if (field !== undefined) query.set(FIELD_PARAM, field);
   if (returnTo !== undefined) query.set(RETURN_PARAM, returnTo);

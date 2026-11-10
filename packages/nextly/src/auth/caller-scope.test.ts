@@ -7,10 +7,13 @@ import { describe, expect, it } from "vitest";
 import {
   currentCallerScope,
   currentRequestCaller,
+  currentRouteActor,
   runDetachedFromRequest,
   runWithCallerScope,
   runWithRequestCaller,
+  runWithRouteActor,
   type RequestCaller,
+  type RouteActor,
 } from "./caller-scope";
 
 const ada: RequestCaller = {
@@ -70,5 +73,40 @@ describe("the request caller", () => {
         })
       )
     );
+  });
+});
+
+describe("a plugin route request's actor", () => {
+  const key: RouteActor = {
+    userId: "u1",
+    actor: { type: "apiKey", id: "key-1" },
+  };
+
+  it("is set inside the request that set it, and pins no REST caller", async () => {
+    expect(currentRouteActor()).toBeUndefined();
+    await runWithRouteActor(key, async () => {
+      await Promise.resolve();
+      expect(currentRouteActor()).toBe(key);
+      // Attribution only: nothing a service reads as a gate having run.
+      expect(currentRequestCaller()).toBeUndefined();
+    });
+    expect(currentRouteActor()).toBeUndefined();
+  });
+
+  it("gives a request served inside another its own actor, or none", () => {
+    runWithRouteActor(key, () => {
+      runWithRouteActor(undefined, () => {
+        expect(currentRouteActor()).toBeUndefined();
+      });
+      expect(currentRouteActor()).toBe(key);
+    });
+  });
+
+  it("is dropped by work detached from the request", () => {
+    runWithRouteActor(key, () => {
+      runDetachedFromRequest(() => {
+        expect(currentRouteActor()).toBeUndefined();
+      });
+    });
   });
 });

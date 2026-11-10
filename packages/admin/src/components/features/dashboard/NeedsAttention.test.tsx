@@ -10,8 +10,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
+import {
+  CardFitContext,
+  oneItemBodyPx,
+} from "@admin/components/features/widgets/frame/fit";
 import { cardBodyHeightPx } from "@admin/components/features/widgets/frame/measures";
+import { CardHeightContext } from "@admin/components/features/widgets/frame/tier";
 import { HiddenWhileEmptyContext } from "@admin/components/features/widgets/hidden-while-empty";
+import { WidgetCard } from "@admin/components/features/widgets/WidgetCard";
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 
 import type { ReleaseListResponse } from "@admin/types/releases";
@@ -106,9 +112,15 @@ function draw(
 
 /**
  * Lays the card out as the frame draws it at `h` grid rows: a body of `cardBodyHeightPx(h)`, rows
- * of the list's own height from its top, and the fold's control wherever it is drawn.
+ * `rowPx` high from its top (the list's own height unless a case wraps them taller), and the
+ * fold's control wherever it is drawn. `drawnBodyPx` draws the body shorter than its rows give
+ * it, as a card sized to its content stands while it loads.
  */
-function layOut(h: number): void {
+function layOut(
+  h: number,
+  rowPx = LIST_ROW_HEIGHT_PX.default,
+  drawnBodyPx = cardBodyHeightPx(h)
+): void {
   const rect = (top: number, bottom: number) =>
     ({
       top,
@@ -118,12 +130,15 @@ function layOut(h: number): void {
       width: 600,
       height: bottom - top,
     }) as DOMRect;
-  const row = LIST_ROW_HEIGHT_PX.default;
-  const body = cardBodyHeightPx(h);
+  const row = rowPx;
+  const body = drawnBodyPx;
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
     function (this: Element) {
       if (this.getAttribute("data-testid") === "widget-card-body")
         return rect(0, body);
+      // What the card's body draws: its rows, one under another from the body's top.
+      if (this.getAttribute("data-testid") === "needs-attention")
+        return rect(0, row * this.querySelectorAll("[data-fold-row]").length);
       if (this.hasAttribute("data-fold-row")) {
         const index = [
           ...(this.parentElement?.querySelectorAll("[data-fold-row]") ?? []),
@@ -198,7 +213,52 @@ describe("NeedsAttention's release rows", () => {
   });
 });
 
+/**
+ * What the card drawn four rows high (its stored body holds four default rows) last asked of its
+ * cell, with `drawn` rows on show when the case says how many it expects.
+ */
+function askedOfCell(items: readonly object[], drawn?: number): unknown {
+  const report = vi.fn();
+  const { unmount } = render(
+    <CardFitContext.Provider value={report}>
+      <CardHeightContext.Provider value={4}>
+        {inFrame(
+          <NeedsAttention
+            widgetId="core/needs-attention"
+            placementId="attention"
+            settings={{}}
+            size={{ w: 8, h: 4, tier: "medium" }}
+            data={{ items }}
+            refreshing={false}
+            retry={() => undefined}
+          />,
+          "Needs your attention"
+        )}
+      </CardHeightContext.Provider>
+    </CardFitContext.Provider>
+  );
+  if (drawn !== undefined) {
+    expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(drawn);
+  }
+  const last = report.mock.calls.at(-1)?.[0];
+  unmount();
+  // Withdrawn as the body leaves, so a card whose state replaces it takes its rows again.
+  expect(report.mock.calls.at(-1)?.[0]).toBeUndefined();
+  return last;
+}
+
 describe("NeedsAttention", () => {
+  it("keeps every row that fits its stored rows while it is drawn at the loading height", () => {
+    // Drawn one row high, as the loading card stood, with two items its four stored rows hold:
+    // judged against its drawn body the second row would fold and the card would ask for its
+    // full rows for a frame, then unfold once drawn there. Judged against its stored rows, both
+    // show and it asks for their height at once. Fails on a fold measured against the drawn body.
+    layOut(4, LIST_ROW_HEIGHT_PX.default, oneItemBodyPx("default"));
+    expect(askedOfCell([STOPPED, OVERDUE], 2)).toBe(
+      LIST_ROW_HEIGHT_PX.default * 2
+    );
+  });
+
   it("draws each item with its severity, label and count, reason and one Review, in the answer's order", () => {
     draw([OVERDUE, SEO]);
     const [overdue, seo] = screen.getAllByTestId("needs-attention-item");
@@ -361,5 +421,97 @@ describe("NeedsAttention", () => {
   it("says nothing of arriving when it was drawn from the start", () => {
     draw([STOPPED, OVERDUE]);
     expect(screen.queryByText(/need your attention/)).toBeNull();
+  });
+
+  it("asks its cell to fit it to its items while they leave a row of its height empty, and not once they fill it", () => {
+    // One item: a height to fit to (jsdom measures it as 0), not "its own rows".
+    expect(askedOfCell([OVERDUE])).toEqual(expect.any(Number));
+    expect(askedOfCell([1, 2, 3].map(plugin))).toEqual(expect.any(Number));
+    // Four fill the body: the card keeps its stored height.
+    expect(askedOfCell([1, 2, 3, 4].map(plugin))).toBeUndefined();
+  });
+
+  it("asks its cell for nothing while it folds rows its count says would fit", () => {
+    // 🔴 Fails where the count alone decides: three items leave a row of four empty, but rows
+    // wrapped to 80 px fold the third, and a card drawn at the two rows' height would be measured
+    // again with all three drawn, grow back, and fold them again.
+    layOut(4, 80);
+    expect(askedOfCell([1, 2, 3].map(plugin), 2)).toBeUndefined();
+    vi.restoreAllMocks();
+    // The must-differ half: rows of their own height all fit, and the card asks for their height.
+    layOut(4);
+    expect(askedOfCell([1, 2, 3].map(plugin), 3)).toEqual(expect.any(Number));
+  });
+
+  it("asks, while loading, for exactly the height its one-item answer then asks for", () => {
+    // 🔴 Fails where the loading card asks for nothing: its cell then stands at its stored
+    // height until the answer arrives and shrinks it, moving every card below.
+    const loadingAsks = (h: number) => {
+      const report = vi.fn();
+      const { unmount } = render(
+        <CardFitContext.Provider value={report}>
+          <WidgetCard
+            title="Needs your attention"
+            widgetId="core/needs-attention"
+            h={h}
+            state={{ kind: "loading" }}
+            skeleton="rows"
+          >
+            {null}
+          </WidgetCard>
+        </CardFitContext.Provider>
+      );
+      const last = report.mock.calls.at(-1)?.[0];
+      unmount();
+      // Withdrawn as the loading state leaves, so the answer's own report is the one that holds.
+      expect(report.mock.calls.at(-1)?.[0]).toBeUndefined();
+      return last;
+    };
+    const loading = loadingAsks(4);
+    expect(loading).toBe(oneItemBodyPx("default"));
+    // The answer with one item, its row laid out at the height it is drawn at.
+    layOut(4);
+    expect(askedOfCell([OVERDUE], 1)).toBe(loading);
+    // Two rows high, one item fills the body, so neither the loading card nor its answer asks.
+    expect(loadingAsks(2)).toBeUndefined();
+  });
+
+  it("keeps its full skeleton where no cell takes its one-item height, as in a preview", () => {
+    // 🔴 Fails where the loading card draws one skeleton row whether or not a cell took the
+    // request: a preview drawn at its stored height with no cell to tell stood tall and mostly
+    // blank under one row until its answer arrived.
+    const skeletonRows = (inCell: boolean) => {
+      const card = (
+        <CardHeightContext.Provider value={4}>
+          <WidgetCard
+            title="Needs your attention"
+            widgetId="core/needs-attention"
+            h={4}
+            state={{ kind: "loading" }}
+            skeleton="rows"
+          >
+            {null}
+          </WidgetCard>
+        </CardHeightContext.Provider>
+      );
+      const { unmount } = render(
+        inCell ? (
+          <CardFitContext.Provider value={vi.fn()}>
+            {card}
+          </CardFitContext.Provider>
+        ) : (
+          card
+        )
+      );
+      // Every child of the skeleton but its "Loading" words is a row.
+      const rows = screen
+        .getByTestId("card-skeleton")
+        .querySelectorAll(":scope > :not(.sr-only)").length;
+      unmount();
+      return rows;
+    };
+    // The must-differ half: in a cell that takes the request, one row.
+    expect(skeletonRows(true)).toBe(1);
+    expect(skeletonRows(false)).toBeGreaterThan(1);
   });
 });

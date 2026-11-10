@@ -100,7 +100,7 @@ async function staleSave(
   const mine = `My excerpt ${uniqueTag()}`;
   await excerpt(page).fill(mine);
   const written = await writer.patch(`${POSTS}/${id}`, {
-    data: { excerpt: theirs },
+    data: { excerpt: theirs, _overwrite: true },
   });
   expect(written.ok(), await written.text()).toBe(true);
   await page
@@ -277,6 +277,7 @@ test.describe(
         data: {
           tagline: `Stored ${uniqueTag()}`,
           siteName: siteName || "Nextly",
+          _overwrite: true,
         },
       });
       expect(seeded.ok(), await seeded.text()).toBe(true);
@@ -288,7 +289,7 @@ test.describe(
         const mine = `My tagline ${uniqueTag()}`;
         await tagline.fill(mine);
         const written = await other.api.patch(SITE_SETTINGS, {
-          data: { tagline: "Theirs" },
+          data: { tagline: "Theirs", _overwrite: true },
         });
         expect(written.ok(), await written.text()).toBe(true);
         await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -321,7 +322,7 @@ test.describe(
         })),
       });
       const seeded = await page.request.patch(HOMEPAGE, {
-        data: { layout: layout(["First", "Second"]) },
+        data: { layout: layout(["First", "Second"]), _overwrite: true },
       });
       expect(seeded.ok(), await seeded.text()).toBe(true);
       await gotoAdmin(page, "/singles/homepage/builder?field=layout");
@@ -335,7 +336,10 @@ test.describe(
         await second.click();
         await page.keyboard.press("Delete");
         const written = await other.api.patch(HOMEPAGE, {
-          data: { layout: layout(["First", "Second", "Third by them"]) },
+          data: {
+            layout: layout(["First", "Second", "Third by them"]),
+            _overwrite: true,
+          },
         });
         expect(written.ok(), await written.text()).toBe(true);
         await pressSave(page);
@@ -387,7 +391,11 @@ test.describe(
             siteName?: string | null;
           };
           const seeded = await page.request.patch(SITE_SETTINGS, {
-            data: { tagline: "Stored", siteName: siteName || "Nextly" },
+            data: {
+              tagline: "Stored",
+              siteName: siteName || "Nextly",
+              _overwrite: true,
+            },
           });
           expect(seeded.ok(), await seeded.text()).toBe(true);
           address = "/singles/site-settings";

@@ -227,6 +227,9 @@ test.describe("a Section's overlay and Height, a Button's Size", () => {
             parent.clientWidth -
             Number.parseFloat(getComputedStyle(parent).paddingLeft) -
             Number.parseFloat(getComputedStyle(parent).paddingRight);
+          // Narrowed by what it has, not by `instanceof`: the element is the
+          // canvas frame's, whose HTMLElement is not this window's.
+          if (!("offsetWidth" in element)) return "not laid out";
           // Both in layout pixels, which the canvas's zoom scales alike.
           const wide = Math.abs(element.offsetWidth - inner) <= 2;
           return `${String(wide)} ${getComputedStyle(element).textAlign}`;

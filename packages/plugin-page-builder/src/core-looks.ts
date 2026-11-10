@@ -14,7 +14,7 @@
  * @module core-looks
  */
 
-import { blockLooks } from "@nextlyhq/blocks-engine";
+import { blockLooks, blockOwnLooks } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 
 import type { SiteStyleData } from "./site-style";
@@ -34,7 +34,13 @@ export function withBlockLooks(
 ): SiteStyleData {
   const own = siteStyle?.classes ?? [];
   const stated = new Set(own.map(entry => entry.id));
-  const looks = blockLooks(definitions).filter(look => !stated.has(look.id));
+  // Each block's own look too, with no edits: where the site's edits to the
+  // block's base are stored once it makes one.
+  const definitionList = [...definitions];
+  const looks = [
+    ...blockOwnLooks(definitionList),
+    ...blockLooks(definitionList),
+  ].filter(look => !stated.has(look.id));
   return { ...siteStyle, classes: [...own, ...looks] };
 }
 

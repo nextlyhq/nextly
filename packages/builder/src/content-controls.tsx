@@ -27,10 +27,13 @@ import {
   ITEM_SCHEMA_MAX_DEPTH,
   optionLabel,
   richTextToPlainText,
+  type Binding,
   type BlockDocument,
+  type FieldStoragePrimitive,
 } from "@nextlyhq/blocks-engine";
 import {
   Button,
+  IconField,
   Input,
   Label,
   Select,
@@ -44,16 +47,27 @@ import {
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import type {
+  BindingFieldSource,
+  UnbindAsk,
+  UnbindPlanAnswer,
+} from "./binding-services";
 import { CollectionControl, SortControl } from "./collection-loop-controls";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
   type ContentControlType,
 } from "./content-control-types";
+import { EntryFieldControl } from "./entry-field-control";
 import { propLabel, type EditableProp } from "./inspector";
+import type { QueryField } from "./list-query-model";
+import { loadLucideIcons } from "./lucide-icon-source";
+import type { CustomSource } from "./named-query-model";
 import type { OpenPassages } from "./open-passages";
+import { useRecentIcons } from "./recent-icons";
 import { RelationControl } from "./relation-control";
 import { radioGroupStep } from "./roving-radios";
+import type { PreferenceStore } from "./shell-state";
 import { useStoredDraft } from "./stored-draft";
 import { fitsSideBySide, type SideBySideRoom } from "./style-numeric";
 import type { InlineRichTextEditorLoader } from "./use-inline-rich-text";
@@ -75,6 +89,15 @@ export interface MediaSummary {
   readonly thumbnail?: string;
   /** Its alt text in the library, when it has one. */
   readonly alt?: string;
+}
+
+/**
+ * One image a library search found: its summary, and the id a pick stores.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface FoundMedia extends MediaSummary {
+  readonly id: string;
 }
 
 /** What the content controls hand the host's media picker. */
@@ -130,14 +153,23 @@ export interface LinkTarget {
   readonly path?: string;
 }
 
-/** One field a collection's entries can be ordered by. */
-export interface LoopSortField {
-  /** The key a sort stores: the field's name. */
-  readonly name: string;
-  /** What the author calls it: "Published date". */
+/**
+ * One field a collection list may filter by, and sort by unless it is a
+ * relation: a field visitors can see, holding one value.
+ */
+export interface LoopListField extends QueryField {
+  /** A date picked as a day, which a filter compares as that day. */
+  readonly dateOnly?: boolean;
+}
+
+/** A to-many relation a related list can show the entries of. */
+export interface LoopRelation {
+  /** The relation field a list's `relation.field` stores. */
+  readonly field: string;
+  /** What the author calls it: "Categories". */
   readonly label: string;
-  /** Whether it holds a date, which the sort menu lists first. */
-  readonly date: boolean;
+  /** The collection its entries are in. */
+  readonly collection: string;
 }
 
 /** One collection a loop can repeat over, as its controls offer it. */
@@ -146,8 +178,43 @@ export interface LoopCollection {
   readonly slug: string;
   /** Its name, as the admin shows it: "Blog posts". */
   readonly label: string;
-  /** The fields its entries can be ordered by, in the collection's order. */
-  readonly sortFields: readonly LoopSortField[];
+  /** Its name for one entry: "Post". Its label where it has none. */
+  readonly singular?: string;
+  /**
+   * The fields a list may filter and sort by, in the collection's order:
+   * only those visitors can see, since the entries shown would otherwise
+   * reveal a field no visitor may read.
+   */
+  readonly fields: readonly LoopListField[];
+  /** Its to-many relations visitors can see, to a listed collection. */
+  readonly relations?: readonly LoopRelation[];
+  /**
+   * Every field name it declares, so a stored filter on a field visitors
+   * can't see is told apart from one on a field it no longer has.
+   */
+  readonly declared?: readonly string[];
+  /**
+   * Every field the public may read, as a save judges a list against them;
+   * {@link fields} is the narrower view of these an author is offered.
+   */
+  readonly readable?: readonly {
+    readonly name: string;
+    /** What the admin calls it: "Cover image". */
+    readonly label?: string;
+    readonly type: string;
+    readonly hasMany?: boolean;
+    readonly relationTo?: string | readonly string[];
+    /** A time of day, which no list filters or sorts by. */
+    readonly timeOnly?: boolean;
+    /** The primitive a plugin's field type is stored as, which gives its kind. */
+    readonly storage?: FieldStoragePrimitive;
+  }[];
+}
+
+/** A list's matching entries, and how many of them it shows. */
+export interface ListEntriesCount {
+  readonly matching: number;
+  readonly shown: number;
 }
 
 /**
@@ -176,21 +243,98 @@ export interface ContentServices {
     query: LinkTargetQuery
   ) => Promise<readonly LinkTarget[]>;
   /**
-   * The collections a collection loop can repeat over, each with the fields
-   * it can be sorted by, read with the signed-in author's own access. Absent,
-   * a loop's collection and sort are typed as text.
+   * The collections a collection loop can repeat over, read with the
+   * signed-in author's own access, each with the fields visitors can see
+   * and its to-many relations. Absent, a loop's collection and sort are
+   * typed as text.
    */
   readonly listLoopCollections?: () => Promise<readonly LoopCollection[]>;
+  /**
+   * The custom sources a collection list may show: the named queries the
+   * site registers, each without its run function, with the collections it
+   * reads that visitors can read nothing of. Absent, the Source menu offers
+   * collections and related entries only.
+   */
+  readonly listCustomSources?: () => Promise<readonly CustomSource[]>;
+  /**
+   * The fields a binding can read, for the inspector's picker: the entry's,
+   * each Single's and the site settings', only those the signed-in author may
+   * read, each marked by whether visitors may and previewed as the author
+   * reads it. Absent, a prop offers no binding.
+   */
+  readonly listBindingFields?: () => Promise<readonly BindingFieldSource[]>;
+  /**
+   * The page's language, as the canvas's render formats bound values in it,
+   * so the picker previews a date or a number as the page shows it. Resolved
+   * as a render resolves it (`bindingFormatEnv`): absent, English.
+   */
+  readonly bindingLocale?: string;
+  /**
+   * The site's time zone, as a published page shows its date-times in it,
+   * read when a binding picker opens: `undefined` for a site with none set.
+   * Until it is in, or where it is absent or fails, previews are in UTC, as
+   * a page rendered with no zone.
+   */
+  readonly readSiteTimeZone?: () => Promise<string | undefined>;
+  /**
+   * An unbind's plan, made against the document the editor holds by the same
+   * decision the page actions API takes: what to write in the binding's place
+   * and why, or why it can't be kept. Absent, a bound prop offers no unbind.
+   */
+  readonly planUnbind?: (ask: UnbindAsk) => Promise<UnbindPlanAnswer>;
+  /**
+   * Where a binding's source is edited in the admin: the entry's edit
+   * screen, the Single's, or the site settings. `undefined` for a source the
+   * host has no screen for, such as a list's item, which leaves a bound
+   * prop's menu without "Open source".
+   */
+  readonly sourceHref?: (binding: Binding) => string | undefined;
+  /**
+   * How many entries a list's stored query matches as the canvas reads them,
+   * and how many of those its window shows, from one count read. Asked only
+   * for the list selected in the editor. Undefined where one read cannot
+   * count it, such as a list of an entry's related entries.
+   */
+  readonly countListEntries?: (
+    props: Readonly<Record<string, unknown>>
+  ) => Promise<ListEntriesCount | undefined>;
+  /**
+   * The collection the document being edited is an entry of, so a list on
+   * it can show the entry's related entries. `null` where the document is
+   * known to be no collection's entry, such as a Single, so a list there
+   * showing the entry's related entries is refused as the save refuses it;
+   * absent where that is not known.
+   */
+  readonly entryCollection?: string | null;
   /**
    * A media item by its id, read with the signed-in author's own access, so a
    * stored file is shown by its picture and name rather than as "a file".
    */
   readonly readMedia?: (mediaId: string) => Promise<MediaSummary | null>;
   /**
+   * The media library's images found by name, read with the signed-in
+   * author's own access: the newest first, a handful at a time, and the
+   * newest of all for an empty search. Rejects where the library cannot be
+   * read, and once `signal` aborts. Absent, an image binding's Fallback
+   * offers the host's `MediaPicker` dialog alone.
+   *
+   * @experimental Settles with the editor's binding controls.
+   */
+  readonly searchMedia?: (
+    search: string,
+    signal?: AbortSignal
+  ) => Promise<readonly FoundMedia[]>;
+  /**
    * Where a rich-text field holds the passage it has open, so the host
    * finishes it before the document is stored.
    */
   readonly openPassages?: OpenPassages;
+  /**
+   * Where the icons this author chose last are kept, for the Icon control's
+   * Recent row: the host's, so it is one per signed-in author. Absent, the
+   * picker offers no Recent row.
+   */
+  readonly recentIcons?: PreferenceStore;
 }
 
 /**
@@ -241,6 +385,16 @@ export interface ContentControlProps {
 /** A content control: a label and the field it names. */
 export type ContentControl = (props: ContentControlProps) => React.JSX.Element;
 
+/**
+ * The words a block gives a prop to explain it (`hint`), shown under its
+ * control and read as its description, or `undefined` for none.
+ */
+function propHint(prop: EditableProp): string | undefined {
+  return typeof prop.schema.hint === "string" && prop.schema.hint !== ""
+    ? prop.schema.hint
+    : undefined;
+}
+
 /** A prop's value as editable text, or empty when it is not representable. */
 function storedText(value: unknown): string {
   if (value === undefined || value === null) return "";
@@ -290,10 +444,12 @@ function TextishControl({
     onCommit(prop.name, draft);
   };
 
+  const hint = propHint(prop);
   const shared = {
     id,
     disabled,
     value: draft,
+    ...(hint === undefined ? {} : { "aria-describedby": `${id}-hint` }),
     onBlur: send,
     onChange: (
       event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
@@ -323,6 +479,11 @@ function TextishControl({
             }
           }}
         />
+      )}
+      {hint === undefined ? null : (
+        <p className="nx-inspector__note" id={`${id}-hint`}>
+          {hint}
+        </p>
       )}
     </div>
   );
@@ -415,10 +576,7 @@ function PairSwitch({
   pair: readonly [on: string, off: string];
   on: boolean;
 }): React.JSX.Element {
-  const hint =
-    typeof prop.schema.hint === "string" && prop.schema.hint !== ""
-      ? prop.schema.hint
-      : undefined;
+  const hint = propHint(prop);
   return (
     <div
       className="nx-inspector__field"
@@ -1363,6 +1521,50 @@ export function UnsupportedField({
   );
 }
 
+/**
+ * An `icon` prop: the chosen icon, drawn with its name and set, as one button
+ * that opens a search-first picker, and a clear button. The picker offers the
+ * author's recent icons first, from the host's store. The set loads when
+ * the control first draws an icon or opens its picker. A chosen icon commits
+ * at once, as one undo step; clearing removes the prop. An id the set no
+ * longer draws is shown with a warning and kept until another is chosen.
+ */
+function IconControl({
+  id,
+  prop,
+  disabled,
+  onCommit,
+  label,
+  services,
+}: ContentControlProps): React.JSX.Element {
+  const name = label ?? propLabel(prop.name, prop.schema);
+  const store = services?.recentIcons;
+  // One list per store, which every Icon control on screen draws: a choice
+  // made in another is here too, at once.
+  const [recent, remember] = useRecentIcons(store);
+  return (
+    <div className="nx-inspector__field" data-content-control="icon">
+      <Label htmlFor={id}>{name}</Label>
+      <IconField
+        id={id}
+        label={name}
+        value={
+          typeof prop.value === "string" && prop.value !== ""
+            ? prop.value
+            : null
+        }
+        disabled={disabled}
+        loadIcons={loadLucideIcons}
+        {...(store === undefined ? {} : { recentIcons: recent })}
+        onChange={next => {
+          if (next !== null) remember(next);
+          onCommit(prop.name, next ?? undefined);
+        }}
+      />
+    </div>
+  );
+}
+
 /** Each type's control. Total over the list, so neither can gain a member alone. */
 const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   text: TextControl,
@@ -1372,9 +1574,11 @@ const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   checkbox: CheckboxControl,
   select: SelectControl,
   media: MediaControl,
+  icon: IconControl,
   richText: RichTextControl,
   array: ArrayControl,
   relation: RelationControl,
+  entryField: EntryFieldControl,
 };
 
 /**

@@ -106,7 +106,7 @@ async function seedThree(entries: CollectionEntryService): Promise<{
         overrideAccess: true,
         locale: "es",
       },
-      { happensAt: dates.es }
+      { happensAt: dates.es, _overwrite: true }
     );
     created.push(id);
   }

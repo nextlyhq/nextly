@@ -17,9 +17,10 @@ import {
   type ComponentLookup,
   type DefinitionsById,
   type DocumentLimits,
+  type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import type { QueryBudget } from "./context";
+import type { ComponentPlacements, QueryBudget } from "./context";
 import { repairingLookup } from "./prepare-document";
 import { sanitizeDocument } from "./sanitize";
 
@@ -38,7 +39,12 @@ import { sanitizeDocument } from "./sanitize";
  * for — hand the value over and let the pipeline say which.
  */
 export type ComponentSource = (
-  ids: readonly string[]
+  ids: readonly string[],
+  /**
+   * The placements asking for each id, so a read refused for want of reads
+   * names them. A source may ignore it.
+   */
+  placements?: ComponentPlacements
 ) => Promise<DefinitionsById>;
 
 /** Shared, so a route whose budget is spent allocates no map at all. */
@@ -133,10 +139,13 @@ async function discover(
   // every instance it can reach reports `missing` and names itself. Seeding
   // this from a walk of the stored nodes left one parallel traversal in place
   // — the one this function exists to delete — and it disagreed in the usual
-  // direction: a condition-gated instance, or one in slot content the chosen
-  // definition discards, is an id the walk reports and the resolver never
-  // asks for.
-  let wanted = stillMissing(sanitized, lookup, limits);
+  // direction: an instance in slot content the chosen definition discards is
+  // an id the walk reports and the resolver never asks for.
+  let wanted: readonly MissingPlacement[] = stillMissing(
+    sanitized,
+    lookup,
+    limits
+  );
   // Until a FIXED POINT, not for a fixed number of rounds. Nesting depth is
   // not the bound: fetching a definition changes the resolver's node-budget
   // decisions, so a definition that composes to less than the instance it
@@ -156,13 +165,16 @@ async function discover(
     // A round can expose more ids than the cap in one go — a page naming a
     // thousand components does — and a check before an unbounded batch caps
     // nothing.
-    const unread = [...new Set(wanted)]
+    const unread = [...new Set(wanted.map(entry => entry.componentId))]
       .filter(id => !attempted.has(id))
       .slice(0, MAX_DISCOVERED_COMPONENTS - attempted.size);
     if (unread.length === 0) break;
     const asked = new Set(unread);
     for (const id of unread) attempted.add(id);
-    for (const [id, definition] of await source(unread)) {
+    for (const [id, definition] of await source(
+      unread,
+      placementsAsking(wanted, asked)
+    )) {
       // Only what was ASKED for. A source answers with the id it read off the
       // row, and an `afterRead` hook may rewrite that — so an answer filed
       // under a key nobody requested would let one component's document stand
@@ -211,7 +223,9 @@ export async function unsuppliedComponentIds(
   // offers a remedy that cannot work, since publishing a component again does
   // not make discovery reach it. Exhausting the cap is a different problem with
   // a different fix.
-  return outstanding.filter(id => attempted.has(id));
+  return outstanding
+    .map(entry => entry.componentId)
+    .filter(id => attempted.has(id));
 }
 
 /**
@@ -227,11 +241,63 @@ function stillMissing(
   document: BlockDocument,
   lookup: ComponentLookup,
   limits: DocumentLimits
-): string[] {
-  const composed = resolveComponentInstances(document, lookup, { limits });
-  return composed.unresolved
-    .filter(entry => entry.reason === "missing")
-    .map(entry => entry.componentId);
+): MissingPlacement[] {
+  // Composed as a route that decides conditions composes, expanding a
+  // conditioned instance too: it shows wherever its conditions hold, so its
+  // definition is read as any other placed one is.
+  const composed = resolveComponentInstances(document, lookup, {
+    limits,
+    conditioned: "carry",
+  });
+  const missing = composed.unresolved.filter(
+    entry => entry.reason === "missing"
+  );
+  if (missing.length === 0) return [];
+  const placed = placementsById(composed.document.nodes);
+  return missing.map(entry => ({
+    componentId: entry.componentId,
+    placement: placed.get(entry.instanceId) ?? entry.instanceId,
+  }));
+}
+
+/** A component a composition asked for, and the placement it was asked by. */
+interface MissingPlacement {
+  readonly componentId: string;
+  /** The block an author placed: the host's instance at every depth. */
+  readonly placement: string;
+}
+
+/**
+ * Each node of a composed tree by its id, as the block an author placed:
+ * its host instance where it came from a definition, itself otherwise.
+ */
+function placementsById(
+  nodes: readonly ResolvedBlockNode[]
+): Map<string, string> {
+  const placed = new Map<string, string>();
+  const stack = [...nodes];
+  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
+    placed.set(node.id, node.instanceOf ?? node.id);
+    for (const children of Object.values(node.slots ?? {})) {
+      stack.push(...children);
+    }
+  }
+  return placed;
+}
+
+/** The placements asking for each id of `asked`, from a round's misses. */
+function placementsAsking(
+  wanted: readonly MissingPlacement[],
+  asked: ReadonlySet<string>
+): ComponentPlacements {
+  const placements = new Map<string, string[]>();
+  for (const { componentId, placement } of wanted) {
+    if (!asked.has(componentId)) continue;
+    const known = placements.get(componentId) ?? [];
+    if (!known.includes(placement)) known.push(placement);
+    placements.set(componentId, known);
+  }
+  return placements;
 }
 
 /**
