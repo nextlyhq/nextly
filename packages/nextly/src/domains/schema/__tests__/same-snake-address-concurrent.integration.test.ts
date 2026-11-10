@@ -386,23 +386,43 @@ describe.each(getConfiguredTestDialects())(
           const revalidator =
             container.get<CacheRevalidator>("cacheRevalidator");
           const real = revalidator.flush.bind(revalidator);
-          let during: Answer | undefined;
+          // The rename's flush is held open until the save below has been made. The save is made
+          // from the test, outside the rename's own calls: the lock is re-entrant within the
+          // request that holds it, so a save made from inside the flush would count as the
+          // rename's own and pass whether the lock were still held or not.
+          let flushStarted!: () => void;
+          const started = new Promise<void>(resolve => {
+            flushStarted = resolve;
+          });
+          let releaseFlush!: () => void;
+          const released = new Promise<void>(resolve => {
+            releaseFlush = resolve;
+          });
+          let held = false;
           const spy = vi
             .spyOn(revalidator, "flush")
             .mockImplementation(async (...args) => {
               // The first flush is the rename's own, after its commit.
-              if (during === undefined) {
-                during = await answerOf(() =>
-                  create("collection", "made-during-flush")
-                );
+              if (!held) {
+                held = true;
+                flushStarted();
+                await released;
               }
               return real(...args);
             });
+          let during: Answer | undefined;
           try {
-            expect(
-              await answerOf(() => rename(renamed, "flush-start", "flush-end"))
-            ).toEqual({ accepted: true });
+            const renaming = answerOf(() =>
+              rename(renamed, "flush-start", "flush-end")
+            );
+            await started;
+            during = await answerOf(() =>
+              create("collection", "made-during-flush")
+            );
+            releaseFlush();
+            expect(await renaming).toEqual({ accepted: true });
           } finally {
+            releaseFlush();
             spy.mockRestore();
           }
           expect(during, "a save made during the rename's flush").toEqual({
