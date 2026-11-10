@@ -215,8 +215,9 @@ interface RouteConfigBase {
   requiredPermission?: string | string[];
   /**
    * Route belongs to the schema builder, so it is only reachable where the
-   * builder is enabled (`admin.branding.showBuilder`; off in production by
-   * default). Its links are already hidden there — this covers arriving by URL.
+   * server says the builder is on (never in production; elsewhere unless
+   * `admin.branding.showBuilder` is false). Its links are already hidden
+   * there — this covers arriving by URL.
    */
   requiresBuilder?: boolean;
 }

@@ -1063,8 +1063,6 @@ export interface Nextly {
    * const { items } = await nextly.notices.find({ userId, unread: true });
    * await nextly.notices.markRead({ userId, all: true });
    * ```
-   *
-   * @experimental
    */
   notices: NoticesNamespace;
 

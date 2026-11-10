@@ -536,7 +536,7 @@ Admin panel branding and per-plugin sidebar overrides.
 | `favicon` | `string` | None | Custom favicon URL. |
 | `colors.primary` | `string` (6-digit hex) | None | Primary brand color (e.g. `"#6366f1"`). Foreground colors auto-calculated for WCAG AA contrast. |
 | `colors.accent` | `string` (6-digit hex) | None | Accent brand color (e.g. `"#f59e0b"`). |
-| `showBuilder` | `boolean` | `process.env.NODE_ENV !== "production"` | Show or hide the Visual Schema Builder navigation in the admin. Defaults to visible in dev/test, hidden in production. |
+| `showBuilder` | `boolean` | on outside production | `false` turns the Visual Schema Builder off in development and test: its navigation is hidden and its schema writes are refused. The builder is always off in production, whatever this says; a production start that finds `true` logs that it has no effect there. |
 
 #### `admin.pluginOverrides`
 

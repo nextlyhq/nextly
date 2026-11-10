@@ -383,6 +383,9 @@ export {
 // Whether a link a plugin wrote stays inside the admin: asked at startup and
 // again by the admin before it draws the link, so both read this one rule.
 export { isAdminRelativePath } from "./domains/widgets/admin-path";
+// The admin's robots directives, for its layout's metadata and the admin's own
+// fallback tag.
+export { ADMIN_ROBOTS, adminMetadata } from "./domains/admin-metadata";
 // The settings the sheet draws beyond field configs (a collection, and a
 // filter, sort or grouping over it), and the union every rule reads, so the
 // admin's controls and reset are typed by core's vocabulary, not a copy of it.

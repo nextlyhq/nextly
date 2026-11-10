@@ -22,15 +22,16 @@ const LANES = [
   { job: "unit-tests-admin", lane: "lane:test:admin" },
 ];
 
-// This workflow's `push` trigger is `main` alone, which the first test below holds.
-const MAIN_PUSH_ONLY = "success() && github.event_name == 'push'";
+// This workflow's `push` trigger is `main` and `dev` alone, the two branches
+// that hold merged code only, which the first test below holds.
+const MERGED_PUSH_ONLY = "success() && github.event_name == 'push'";
 
 /** The job's steps whose `run` is exactly `command`; the caller asserts how many. */
 const stepsRunning = (steps, command) => steps.filter(step => String(step.run ?? "").trim() === command);
 const stepNamed = (steps, name) => steps.find(step => step.name === name);
 
-it("is pushed to on main alone, so a push-only step is a main-only step", () => {
-  expect(workflow.on.push).toEqual({ branches: ["main"] });
+it("is pushed to on main and dev alone, so a push-only step runs on merged code only", () => {
+  expect(workflow.on.push).toEqual({ branches: ["main", "dev"] });
 });
 
 describe.each(LANES)("the $job job", ({ job, lane }) => {
@@ -55,12 +56,12 @@ describe.each(LANES)("the $job job", ({ job, lane }) => {
     expect(narrowed?.if).toContain("env.NEXTLY_UNIT_TESTS == 'select'");
   });
 
-  it("publishes records only after a passing push to main", () => {
+  it("publishes records only after a passing push to main or dev", () => {
     const save = stepNamed(steps, "Save unit test records");
     const stamp = stepNamed(steps, "Stamp unit test records");
     expect(save?.uses).toMatch(/^actions\/cache\/save@/);
-    expect(save?.if).toBe(MAIN_PUSH_ONLY);
-    expect(stamp?.if).toBe(MAIN_PUSH_ONLY);
+    expect(save?.if).toBe(MERGED_PUSH_ONLY);
+    expect(stamp?.if).toBe(MERGED_PUSH_ONLY);
     expect(stamp?.run).toContain(`ci-unit-lane.mjs stamp ${lane}`);
   });
 

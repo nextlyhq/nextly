@@ -25,7 +25,11 @@ file by hand under `.changeset/` following an existing one.
 
 ## How releasing actually works (CI-only)
 
-1. PRs with changesets merge to `main`.
+1. PRs with changesets merge into `dev`, and reach `main` with the daily
+   promotion (a pull request from `dev` that lands only when `dev` is green).
+   Releases are cut from `main` alone; `.changeset/config.json`'s
+   `baseBranch` is `dev` because only `changeset status` and `changeset add`
+   read it, to compare a branch with where it merges.
 2. When a release is wanted, a maintainer runs the Release workflow from the
    Actions tab ("Run workflow" on `main`; the job runs from no other branch or
    tag). With changesets pending it opens or refreshes the Version PR
@@ -47,6 +51,9 @@ file by hand under `.changeset/` following an existing one.
    "Bootstrapping a brand-new package" below.
 4. Tags (`vX.Y.Z-alpha.N`) and a consolidated GitHub Release are created by
    the workflow.
+5. After the release, merge `main` back into `dev`, so `dev` carries the
+   version bump, the changelogs and `.changeset/pre.json`, and the next
+   promotion brings only new commits.
 
 ## Known gotchas (learned the hard way)
 
