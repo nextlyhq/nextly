@@ -162,34 +162,13 @@ describe.each(getConfiguredTestDialects())(
       // the case the gate before the hooks cannot see. It fires only for the
       // titles the hook tests below use, so no other case meets it; a title
       // on the allow-list gets a whole value instead, the pass-through leg.
-      // The nested mutation runs where the hook runner recurses: a field
-      // hook on a group's child mutates that child's row in place, which the
-      // parent's reference does not show.
+      // Each transform is its own function below, so the hook itself stays a
+      // straight dispatch and each risk it poses stands small on its own.
       getHookRegistry().register("beforeChange", SLUG, context => {
         const data = context.data as Record<string, unknown>;
-        if (
-          typeof data.title === "string" &&
-          data.title.startsWith("hookfrac")
-        ) {
-          if (data.title === "hookfrac-whole") {
-            data.quantity = 3;
-          } else if (data.quantity === 2) {
-            data.quantity = 2.5;
-          }
-          const meta = data.meta as Record<string, unknown> | undefined;
-          if (meta && meta.rating === 2) {
-            meta.rating = 2.5;
-          }
-        } else if (data.title === "hookrestored-1") {
-          // The restore has already put the row's own 2.5 back under
-          // `locked` when the hooks run; the hook overwrites it. What the
-          // hook leaves there is this write's production, judged like any
-          // caller's value.
-          const locked = data.locked as Record<string, unknown> | undefined;
-          if (locked && locked.rating === 2.5) {
-            locked.rating = 3.5;
-          }
-        }
+        fractionTheTopLevelValue(data);
+        fractionTheNestedGroupValue(data);
+        fractionTheRestoredDeniedValue(data);
         return data;
       });
 
@@ -216,6 +195,63 @@ describe.each(getConfiguredTestDialects())(
     afterAll(async () => {
       await handle?.destroy();
     });
+
+    /**
+     * The hook's top-level transform: a `hookfrac` title turns a whole 2
+     * into a fraction, while the allow-listed `hookfrac-whole` title gets a
+     * whole 3 instead — the pass-through leg.
+     */
+    function fractionTheTopLevelValue(data: Record<string, unknown>): void {
+      if (
+        typeof data.title !== "string" ||
+        !data.title.startsWith("hookfrac")
+      ) {
+        return;
+      }
+      if (data.title === "hookfrac-whole") {
+        data.quantity = 3;
+        return;
+      }
+      if (data.quantity === 2) {
+        data.quantity = 2.5;
+      }
+    }
+
+    /**
+     * The hook's nested transform, where the hook runner recurses: a field
+     * hook on a group's child mutates that child's row in place, which the
+     * parent's reference does not show.
+     */
+    function fractionTheNestedGroupValue(data: Record<string, unknown>): void {
+      if (
+        typeof data.title !== "string" ||
+        !data.title.startsWith("hookfrac")
+      ) {
+        return;
+      }
+      const meta = data.meta as Record<string, unknown> | undefined;
+      if (meta && meta.rating === 2) {
+        meta.rating = 2.5;
+      }
+    }
+
+    /**
+     * The hook's transform of a restored denied value: the restore has
+     * already put the row's own 2.5 back under `locked` when the hooks run;
+     * the hook overwrites it. What the hook leaves there is this write's
+     * production, judged like any caller's value.
+     */
+    function fractionTheRestoredDeniedValue(
+      data: Record<string, unknown>
+    ): void {
+      if (data.title !== "hookrestored-1") {
+        return;
+      }
+      const locked = data.locked as Record<string, unknown> | undefined;
+      if (locked && locked.rating === 2.5) {
+        locked.rating = 3.5;
+      }
+    }
 
     /** The error a refused write produced, or a failure naming the verb. */
     async function refusalOf(promise: Promise<unknown>): Promise<NextlyError> {
