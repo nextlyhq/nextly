@@ -134,6 +134,8 @@ describe.each(getConfiguredTestDialects())(
         collection: "articles",
         id: articleId,
       })) as { _rev?: string };
+      // A version is there to compare: two reads answering none would agree as well.
+      expect(detail._rev).toMatch(/\S/);
       expect(listed.items.find(item => item.id === articleId)?._rev).toBe(
         detail._rev
       );
