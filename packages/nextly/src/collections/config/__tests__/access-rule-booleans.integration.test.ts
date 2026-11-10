@@ -126,7 +126,7 @@ describe.each(getConfiguredTestDialects())(
       await asPerson.update({
         collection: NOTES,
         id,
-        data: { title: "t2", locked: "changed" },
+        data: { title: "t2", locked: "changed", _overwrite: true },
       } as never);
       const stored = (await new Nextly().findByID({
         collection: NOTES,

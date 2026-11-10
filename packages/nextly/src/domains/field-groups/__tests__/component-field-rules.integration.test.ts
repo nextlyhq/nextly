@@ -549,7 +549,11 @@ describe.each(getConfiguredTestDialects())(
       it("withholds a field-group field its reader may not read", async () => {
         await trusted.updateSingle({
           slug: "site",
-          data: { title: "s", one: { heading: "h", ...guardedValues("site") } },
+          data: {
+            title: "s",
+            one: { heading: "h", ...guardedValues("site") },
+            _overwrite: true,
+          },
         } as never);
 
         const read = (await checkedAs("editor").findSingle({
@@ -568,7 +572,11 @@ describe.each(getConfiguredTestDialects())(
       it("answers an update with the stored row, which holds no field-group instance", async () => {
         const result = (await checkedAs("editor").updateSingle({
           slug: "site",
-          data: { title: "s2", one: { heading: "h2", ...guardedValues("w") } },
+          data: {
+            title: "s2",
+            one: { heading: "h2", ...guardedValues("w") },
+            _overwrite: true,
+          },
         } as never)) as unknown as { item: Doc };
         // The response is the stored Single row: its field groups live in
         // their own tables, and the update hooks cannot reshape it (their
@@ -699,7 +707,11 @@ describe.each(getConfiguredTestDialects())(
             tx,
             "drafted",
             id,
-            { title: "d2", one: { heading: "h2", ...guardedValues("held") } },
+            {
+              title: "d2",
+              one: { heading: "h2", ...guardedValues("held") },
+              _overwrite: true,
+            },
             { user: { id: editorId }, overrideAccess: false }
           )
         );

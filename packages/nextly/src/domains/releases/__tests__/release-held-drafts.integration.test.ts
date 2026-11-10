@@ -103,7 +103,7 @@ async function pageHeldInGerman(t: TestNextly): Promise<string> {
       overrideAccess: true,
       locale: "de",
     },
-    { title: "DE pending" }
+    { title: "DE pending", _overwrite: true }
   );
   return id;
 }
@@ -237,7 +237,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "draft" }
+        { status: "draft", _overwrite: true }
       );
       expect(written).toMatchObject({ success: false, statusCode: 409 });
 
@@ -292,7 +292,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
       expect(
         (await t.nextly.releases.readiness({ releaseId: comingDown.releaseId }))
@@ -306,18 +306,26 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.updateSingle({
         slug: "notice" as never,
         locale: "en",
-        data: { headline: "EN live", status: "published" } as never,
+        data: {
+          headline: "EN live",
+          status: "published",
+          _overwrite: true,
+        } as never,
       });
       await t.nextly.updateSingle({
         slug: "notice" as never,
         locale: "de",
-        data: { headline: "DE live", status: "published" } as never,
+        data: {
+          headline: "DE live",
+          status: "published",
+          _overwrite: true,
+        } as never,
       });
       // German is live, so this edit is held as its pending work.
       await t.nextly.updateSingle({
         slug: "notice" as never,
         locale: "de",
-        data: { headline: "DE pending" } as never,
+        data: { headline: "DE pending", _overwrite: true } as never,
       });
       const row = await t.adapter.selectOne<{ id: string }>(
         "single_notice",
@@ -329,7 +337,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.updateSingle({
           slug: "notice" as never,
           locale: "*",
-          data: { status: "draft" } as never,
+          data: { status: "draft", _overwrite: true } as never,
         })
       ).rejects.toMatchObject({ code: "CONFLICT" });
 

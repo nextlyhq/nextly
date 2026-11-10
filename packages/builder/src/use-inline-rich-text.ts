@@ -45,13 +45,15 @@ import {
   INLINE_EDIT_UNCHANGED,
   type InlineEditOutcome,
 } from "./inline-edit-outcome";
-import {
-  richInlineTargets,
-  richInlineTextOp,
-  richTextChanged,
-  richTextMovedOn,
-} from "./inline-rich-text";
+import { richInlineTargets, richTextChanged } from "./inline-rich-text";
 import { namedTarget } from "./inline-target";
+import {
+  passageKeptBy,
+  passageMovedOn,
+  passageNow,
+  passageOp,
+  type RichPassageAddress,
+} from "./rich-passage";
 import { editableElement, EDITING_ATTRIBUTE } from "./use-inline-text";
 
 /** What a pointer handed over with a `begin`: the element, and where it fell. */
@@ -70,7 +72,9 @@ function passageIn(
   doc: Document | null,
   editing: InlineRichTextEditing
 ): HTMLElement | null {
-  return doc === null ? null : editableElement(doc, editing);
+  return doc === null
+    ? null
+    : editableElement(doc, { nodeId: editing.nodeId, prop: editing.prop });
 }
 
 /** Where a point falls in a document's text, however this engine spells it. */
@@ -174,6 +178,11 @@ function selectionOffsetIn(element: HTMLElement): number | undefined {
 export interface InlineRichTextEditing {
   readonly nodeId: string;
   readonly prop: string;
+  /**
+   * The placement and exposure a component's exposed passage is stored
+   * under; absent for a node's own passage.
+   */
+  readonly exposure?: RichPassageAddress["exposure"];
 }
 
 export interface UseInlineRichTextResult {
@@ -195,7 +204,8 @@ export interface UseInlineRichTextResult {
     nodeId: string,
     prop?: string,
     element?: HTMLElement,
-    point?: CaretPoint
+    point?: CaretPoint,
+    exposure?: RichPassageAddress["exposure"]
   ) => boolean;
   /**
    * Finish, writing whatever the author left behind.
@@ -272,14 +282,12 @@ function settleCarried(
   if (!richTextChanged(carry.baseline, carry.words)) {
     return INLINE_EDIT_UNCHANGED;
   }
-  const { nodeId, prop } = carry.editing;
-  if (richTextMovedOn(editor.document, nodeId, prop, carry.opened)) {
+  if (passageMovedOn(editor, carry.editing, carry.opened)) {
     return INLINE_EDIT_DISCARDED;
   }
-  const op = richInlineTextOp(
-    editor.document,
-    nodeId,
-    prop,
+  const op = passageOp(
+    editor,
+    carry.editing,
     carry.words,
     carry.baseline,
     carry.opened
@@ -478,14 +486,7 @@ export function useInlineRichText(
     // so whether there is anything to destroy is the first question.
     const next = live.session.read();
     const typed = richTextChanged(live.baseline, next);
-    if (
-      richTextMovedOn(
-        editorRef.current.document,
-        live.editing.nodeId,
-        live.editing.prop,
-        live.opened
-      )
-    ) {
+    if (passageMovedOn(editorRef.current, live.editing, live.opened)) {
       /*
        * The document moved on. Holding the passage open protects an author's
        * words from being replaced by the older copy — but only if they wrote
@@ -509,10 +510,9 @@ export function useInlineRichText(
       return report({ status: "refused", reason: "moved-on" });
     }
     // The passage this session was opened for, not whichever is current now.
-    const op = richInlineTextOp(
-      editorRef.current.document,
-      live.editing.nodeId,
-      live.editing.prop,
+    const op = passageOp(
+      editorRef.current,
+      live.editing,
       next,
       live.baseline,
       live.opened
@@ -565,13 +565,22 @@ export function useInlineRichText(
       nodeId: string,
       prop?: string,
       element?: HTMLElement,
-      point?: CaretPoint
+      point?: CaretPoint,
+      exposure?: RichPassageAddress["exposure"]
     ) => {
       if (load === undefined) return false;
-      const target = namedTarget(
-        richInlineTargets(editorRef.current.document, nodeId),
-        prop
-      );
+      // A component's exposed passage is named outright, through its
+      // placement; a node's own is found among the passages it declares.
+      const target =
+        exposure === undefined
+          ? namedTarget(
+              richInlineTargets(editorRef.current.document, nodeId),
+              prop
+            )
+          : prop === undefined
+            ? undefined
+            : (passageNow(editorRef.current, { nodeId, prop, exposure }) ??
+              undefined);
       if (target === undefined) return false;
       /*
        * Finish the open passage FIRST, synchronously.
@@ -590,7 +599,11 @@ export function useInlineRichText(
       if (mounted.current !== null && commit().status === "refused")
         return false;
       handed.current = { element: element ?? null, point: point ?? null };
-      setEditing({ nodeId: target.nodeId, prop: target.prop });
+      setEditing({
+        nodeId: target.nodeId,
+        prop: target.prop,
+        ...(exposure === undefined ? {} : { exposure }),
+      });
       return true;
     },
     [commit, load]
@@ -612,7 +625,7 @@ export function useInlineRichText(
    */
   useEffect(() => {
     if (editing === null || mounted.current !== null) return;
-    if (editor.selectedId === editing.nodeId) return;
+    if (editor.selectedId === passageKeptBy(editing)) return;
     cancel();
   }, [editor.selectedId, editing, cancel]);
 
@@ -693,7 +706,7 @@ export function useInlineRichText(
          */
         if (cancelled) return;
         if (editingRef.current !== editing) return;
-        if (editorRef.current.selectedId !== editing.nodeId) return;
+        if (editorRef.current.selectedId !== passageKeptBy(editing)) return;
         /*
          * The ELEMENT can go while the chunk is in flight, without the edit
          * being cancelled: React re-renders the canvas and replaces this
@@ -720,11 +733,8 @@ export function useInlineRichText(
          * thing the author types is refused as `moved-on` — a write lost to a
          * conflict that had already resolved before the editor existed.
          */
-        const target = richInlineTargets(
-          editorRef.current.document,
-          editing.nodeId
-        ).find(t => t.prop === editing.prop);
-        if (target === undefined) {
+        const target = passageNow(editorRef.current, editing);
+        if (target === null) {
           // The passage stopped being editable while the chunk was loading.
           // A carry is settled by the cleanup this sets off.
           setEditing(null);

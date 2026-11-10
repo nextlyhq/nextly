@@ -16,6 +16,7 @@ export {
 } from "./nextly-tags";
 export { cachedFind } from "./cached-find";
 export {
+  cachedReadRegistered,
   registerCachedRead,
   runRegisteredRead,
   type CachedRead,

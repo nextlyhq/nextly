@@ -142,7 +142,7 @@ async function post(t: TestNextly): Promise<string> {
   const id = String((created.data as Doc).id);
   await handlerOf(t).updateEntry(
     { collectionName: POSTS, entryId: id, overrideAccess: true, locale: "es" },
-    { title: "hola" }
+    { title: "hola", _overwrite: true }
   );
   return id;
 }
@@ -229,7 +229,7 @@ describe.each(getConfiguredTestDialects())(
               locale: "en",
               user: ANA as never,
             },
-            { note: "Ana's change" }
+            { note: "Ana's change", _overwrite: true }
           )
       );
 
@@ -265,7 +265,7 @@ describe.each(getConfiguredTestDialects())(
               locale: "es",
               user: ANA as never,
             },
-            { title: "otra" }
+            { title: "otra", _overwrite: true }
           )
       );
       expect(point).not.toHaveProperty("changedSince");
@@ -287,7 +287,7 @@ describe.each(getConfiguredTestDialects())(
       const singles = t.getService("singleEntryService") as SingleEntryService;
       const first = (await singles.update(
         BANNER,
-        { notice: "first" },
+        { notice: "first", _overwrite: true },
         { overrideAccess: true }
       )) as { data?: Doc };
       const startedFrom = String(first.data?._rev);
@@ -300,7 +300,7 @@ describe.each(getConfiguredTestDialects())(
       expect(saved.status, JSON.stringify(saved.json)).toBeLessThan(300);
       await singles.update(
         BANNER,
-        { notice: "Ana's notice" },
+        { notice: "Ana's notice", _overwrite: true },
         { overrideAccess: true, user: ANA as never }
       );
       const read = await call("GET", path, key, "");
@@ -323,7 +323,7 @@ describe.each(getConfiguredTestDialects())(
           locale: "en",
           user: ANA as never,
         },
-        { note: "Ana's change" }
+        { note: "Ana's change", _overwrite: true }
       );
       const point = (user: { id: string; roles: string[] } | undefined) =>
         changesSinceRecoveryPoint(t.adapter, {
@@ -369,7 +369,7 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             user: ANA as never,
           },
-          { note: "Ana's change" }
+          { note: "Ana's change", _overwrite: true }
         );
         return { id, startedFrom: String(read._rev) };
       };

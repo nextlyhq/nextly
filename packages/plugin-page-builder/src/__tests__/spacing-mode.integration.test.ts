@@ -274,6 +274,7 @@ describe.each(getConfiguredTestDialects())(
           slug: "frontpage",
           data: {
             hero: { body: { formatVersion: 1, kind: "page", nodes } },
+            _overwrite: true,
           },
           overrideAccess: true,
         } as never);
@@ -348,6 +349,7 @@ describe.each(getConfiguredTestDialects())(
               },
             ],
           },
+          _overwrite: true,
         },
         overrideAccess: true,
       } as never);

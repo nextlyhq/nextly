@@ -27,6 +27,13 @@ const COLUMNS = 8;
 const ROW_HEIGHT = 40;
 /** Rows a Page Up or Page Down moves the highlight by. */
 const PAGE_ROWS = 5;
+/** How the picker's headings are set: small capitals in the muted ink. */
+const HEADING_TEXT =
+  "px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground";
+/** A heading inside the grid, "Recent" or "All icons": its line and the space above. */
+const HEADING_HEIGHT = 28;
+/** How many recently used icons the picker offers: one row of the grid. */
+const RECENT_SHOWN = COLUMNS;
 
 /*
  * One load per loader, shared by every field and picker handed the same
@@ -168,30 +175,113 @@ function partsOf(id: string): { set: string; name: string } {
     : { set: id.slice(0, colon), name: id.slice(colon + 1) };
 }
 
-/** The arrow and page keys the grid answers, and how far each moves. */
-const STEPS: Readonly<Record<string, number>> = {
-  ArrowLeft: -1,
-  ArrowRight: 1,
-  ArrowUp: -COLUMNS,
-  ArrowDown: COLUMNS,
-  PageUp: -COLUMNS * PAGE_ROWS,
-  PageDown: COLUMNS * PAGE_ROWS,
+/**
+ * One row of the grid as it is drawn: a heading, or a run of icons by their
+ * places in the list of options (`start` up to, not including, `end`).
+ */
+type GridRow =
+  | { readonly kind: "heading"; readonly label: string }
+  | { readonly kind: "icons"; readonly start: number; readonly end: number };
+
+/** The rows of icons from `start` up to `end`, eight to a row. */
+function iconRows(start: number, end: number): GridRow[] {
+  const rows: GridRow[] = [];
+  for (let at = start; at < end; at += COLUMNS) {
+    rows.push({ kind: "icons", start: at, end: Math.min(end, at + COLUMNS) });
+  }
+  return rows;
+}
+
+/**
+ * The grid's rows: the recently used icons under "Recent" and the rest under
+ * `label` ("All icons", or the search's matches) when there are any recent
+ * ones to show, otherwise the icons alone, under the heading above the grid.
+ */
+function gridRows(
+  recentCount: number,
+  count: number,
+  label: string
+): GridRow[] {
+  if (recentCount === 0) return iconRows(0, count);
+  return [
+    { kind: "heading", label: "Recent" },
+    ...iconRows(0, recentCount),
+    { kind: "heading", label },
+    ...iconRows(recentCount, count),
+  ];
+}
+
+/** What the icons below the Recent row are: the whole set, or a search's matches. */
+function resultsLabel(query: string): string {
+  return query === "" ? "All icons" : `Matches for “${query}”`;
+}
+
+/** The rows the arrow and page keys move the highlight up or down by. */
+const ROW_STEPS: Readonly<Record<string, number>> = {
+  ArrowUp: -1,
+  ArrowDown: 1,
+  PageUp: -PAGE_ROWS,
+  PageDown: PAGE_ROWS,
 };
 
 /**
- * Where a key moves the highlight from `active` among `count` icons, or
- * `undefined` for a key the grid does not answer. Up from the top row stays
- * put rather than jumping to the first icon.
+ * Where a key moves the highlight from `active` in the grid's rows, or
+ * `undefined` for a key the grid does not answer. Left and right move by one
+ * icon, across rows; up and down move by rows of icons, past a heading,
+ * keeping the column, or the last icon of a shorter row. Up from the top row
+ * stays put rather than jumping to the first icon.
  */
 function stepFrom(
   key: string,
   active: number,
-  count: number
+  rows: readonly GridRow[]
 ): number | undefined {
-  const step = STEPS[key];
-  if (step === undefined || count === 0) return undefined;
-  if (step === -COLUMNS && active < COLUMNS) return active;
-  return Math.min(count - 1, Math.max(0, active + step));
+  const icons = rows.filter(
+    (row): row is Extract<GridRow, { kind: "icons" }> => row.kind === "icons"
+  );
+  const last = icons.at(-1);
+  if (last === undefined) return undefined;
+  if (key === "ArrowLeft") return Math.max(0, active - 1);
+  if (key === "ArrowRight") return Math.min(last.end - 1, active + 1);
+  const step = ROW_STEPS[key];
+  if (step === undefined) return undefined;
+  const at = icons.findIndex(row => active >= row.start && active < row.end);
+  const from = icons[at];
+  const to = icons[Math.min(icons.length - 1, Math.max(0, at + step))];
+  if (from === undefined || to === undefined) return undefined;
+  return Math.min(to.end - 1, to.start + (active - from.start));
+}
+
+/** The row an option is drawn in, for scrolling it into view. */
+function rowOf(rows: readonly GridRow[], index: number): number {
+  return Math.max(
+    0,
+    rows.findIndex(
+      row => row.kind === "icons" && index >= row.start && index < row.end
+    )
+  );
+}
+
+/**
+ * The recently used icons to offer, newest first: the ids the host remembers
+ * that the set still draws, found among the whole set's icons, which the
+ * picker has from the browse it opens on. Offered above a search's matches
+ * too, so an icon used a moment ago is one press away whatever is typed.
+ */
+function recentAmong(
+  wholeSet: readonly IconSourceIcon[] | null,
+  recentIds: readonly string[] | undefined
+): IconSourceIcon[] {
+  if (wholeSet === null || recentIds === undefined) return [];
+  const results = wholeSet;
+  const byId = new Map(results.map(icon => [icon.id, icon]));
+  const recent: IconSourceIcon[] = [];
+  for (const id of new Set(recentIds)) {
+    const icon = byId.get(id);
+    if (icon !== undefined) recent.push(icon);
+    if (recent.length === RECENT_SHOWN) break;
+  }
+  return recent;
 }
 
 /** What the picker's status line says, for the results in hand. */
@@ -246,6 +336,8 @@ interface IconSearch {
   readonly start: SearchStart | null;
   /** Runs the search again, after it failed. */
   readonly retry: () => void;
+  /** The whole set, once the browse the picker opens on has answered. */
+  readonly wholeSet: readonly IconSourceIcon[] | null;
 }
 
 /**
@@ -255,20 +347,33 @@ interface IconSearch {
  * "tr" must not replace the answer to "truck" that came back first, and
  * until the query typed is answered the search is `pending`. Browsing (an
  * empty query) highlights the chosen icon, once `currentSettled` says which
- * icon `currentId` is; a search highlights its best match.
+ * icon `currentId` is; a search highlights its best match. The highlight is a
+ * place among the options as drawn, which while browsing start with the
+ * Recent row the host's `recentIds` give.
  */
 function useIconSearch(
   source: IconSource | null,
   query: string,
   currentId: string | null | undefined,
-  currentSettled: boolean
+  currentSettled: boolean,
+  recentIds: readonly string[] | undefined
 ): IconSearch {
   const [answer, setAnswer] = React.useState<SearchAnswer | null>(null);
+  /* The whole set, from the browse the picker opens on, for the Recent row. */
+  const [wholeSet, setWholeSet] = React.useState<
+    readonly IconSourceIcon[] | null
+  >(null);
   const [attempt, setAttempt] = React.useState(0);
   const [active, setActive] = React.useState(0);
   const [start, setStart] = React.useState<SearchStart | null>(null);
-  /* The answer the highlight was last placed for, so each is placed once. */
-  const placed = React.useRef<SearchAnswer | null>(null);
+  /*
+   * The answer the highlight was last placed for, and the whole set it was
+   * placed among, so each is placed once for the options as drawn.
+   */
+  const placed = React.useRef<{
+    readonly answer: SearchAnswer;
+    readonly wholeSet: readonly IconSourceIcon[] | null;
+  } | null>(null);
   /*
    * Read when an answer lands rather than watched: the chosen icon positions
    * the highlight for the search in hand, and choosing one is no reason to
@@ -276,12 +381,23 @@ function useIconSearch(
    */
   const place = React.useEffectEvent((found: SearchAnswer): void => {
     if (found.status !== "found" || !currentSettled) return;
-    placed.current = found;
+    placed.current = { answer: found, wholeSet };
+    // Placed in the options as drawn, the Recent row first. Browsing starts
+    // on the chosen icon, or the first; a search, on its best match.
+    const browsing = found.query.trim() === "";
+    const recent = recentAmong(browsing ? found.results : wholeSet, recentIds);
+    const options = [...recent, ...found.results];
     const chosen =
-      found.query.trim() === "" && currentId
-        ? found.results.findIndex(icon => icon.id === currentId)
+      browsing && currentId
+        ? options.findIndex(icon => icon.id === currentId)
         : -1;
-    const index = Math.max(0, chosen);
+    // A search with no matches starts on the first recent icon, the only
+    // options it draws, so Enter and the arrow keys still have one to act on.
+    const index = browsing
+      ? Math.max(0, chosen)
+      : found.results.length > 0
+        ? recent.length
+        : 0;
     setActive(index);
     setStart({ index, centred: chosen > 0 });
   });
@@ -290,12 +406,46 @@ function useIconSearch(
     place(found);
   });
   /*
+   * The whole set, browsed once the source is ready, on its own and not as
+   * one of the searches typed: a query typed before the first browse lands
+   * discards that browse's answer, and the Recent row must not go with it.
+   * Only when there are recent icons to find in it: a picker without them
+   * browses no more than it searches.
+   */
+  const wantsRecent = recentIds !== undefined && recentIds.length > 0;
+  React.useEffect(() => {
+    if (source === null || !wantsRecent) return;
+    let current = true;
+    source.search("").then(
+      results => {
+        if (!current) return;
+        // The Recent row it brings moves every option after it, so the
+        // answer in hand is placed again among the options now drawn (below).
+        setWholeSet(results);
+      },
+      () => {
+        // Without the whole set there is no Recent row; the search itself
+        // still answers, and says when it cannot.
+      }
+    );
+    return () => {
+      current = false;
+    };
+  }, [source, wantsRecent]);
+  /*
    * An answer that landed before the chosen icon resolved is placed once it
-   * has: a renamed icon is found in the grid by the id it resolves to.
+   * has: a renamed icon is found in the grid by the id it resolves to. So is
+   * one that landed before the whole set did.
    */
   React.useEffect(() => {
-    if (answer !== null && placed.current !== answer) place(answer);
-  }, [answer, currentSettled]);
+    if (
+      answer !== null &&
+      (placed.current?.answer !== answer ||
+        placed.current.wholeSet !== wholeSet)
+    ) {
+      place(answer);
+    }
+  }, [answer, currentSettled, wholeSet]);
   const latest = React.useRef(0);
   React.useEffect(() => {
     if (source === null) return;
@@ -325,6 +475,7 @@ function useIconSearch(
     setActive,
     start,
     retry: () => setAttempt(n => n + 1),
+    wholeSet,
   };
 }
 
@@ -380,6 +531,7 @@ function IconOption({
   count,
   isActive,
   isCurrent,
+  isRecent,
   onHighlight,
   onChoose,
 }: {
@@ -389,6 +541,8 @@ function IconOption({
   count: number;
   isActive: boolean;
   isCurrent: boolean;
+  /** Drawn in the Recent row, which its name says, as the heading is not read. */
+  isRecent: boolean;
   onHighlight: (index: number) => void;
   onChoose: (icon: IconSourceIcon) => void;
 }): React.JSX.Element {
@@ -399,7 +553,7 @@ function IconOption({
       aria-selected={isActive}
       aria-setsize={count}
       aria-posinset={index + 1}
-      aria-label={`${iconDisplayName(icon.name)}${isCurrent ? ", current" : ""}`}
+      aria-label={`${iconDisplayName(icon.name)}${isRecent ? ", recent" : ""}${isCurrent ? ", current" : ""}`}
       data-current={isCurrent || undefined}
       // Keeps focus in the search box, so typing carries on.
       onMouseDown={event => event.preventDefault()}
@@ -474,6 +628,13 @@ export interface IconPickerProps {
   value?: string | null;
   /** An icon was chosen, by click or by Enter. */
   onChoose: (icon: IconSourceIcon) => void;
+  /**
+   * The ids of the icons this person used last, newest first, offered as a
+   * "Recent" row above the whole set while the search is empty. Kept by the
+   * host, never by the picker, which writes no storage: the host knows who is
+   * signed in, and remembers per person.
+   */
+  recentIcons?: readonly string[];
   className?: string;
 }
 
@@ -495,6 +656,7 @@ export function IconPicker({
   loadIcons,
   value,
   onChoose,
+  recentIcons,
   className,
 }: IconPickerProps): React.JSX.Element {
   const base = React.useId();
@@ -521,15 +683,38 @@ export function IconPicker({
     setActive,
     start,
     retry: retrySearch,
-  } = useIconSearch(source, query, currentId, current.status !== "loading");
-  const count = results?.length ?? 0;
+    wholeSet,
+  } = useIconSearch(
+    source,
+    query,
+    currentId,
+    current.status !== "loading",
+    recentIcons
+  );
+  /*
+   * The options as drawn: the Recent row, while browsing, then the results.
+   * Taken from the answer in hand, so a Recent row and the grid beneath it
+   * never belong to two different searches.
+   */
+  const { options, recentCount } = React.useMemo(() => {
+    const recent = recentAmong(wholeSet, recentIcons);
+    return {
+      options: [...recent, ...(results ?? [])],
+      recentCount: recent.length,
+    };
+  }, [results, wholeSet, recentIcons]);
+  const count = options.length;
+  const rows = React.useMemo(
+    () => gridRows(recentCount, count, resultsLabel(answered)),
+    [recentCount, count, answered]
+  );
   /*
    * No option is active while the query typed is unanswered: the results in
    * hand are an earlier query's, and Enter chooses the best match for what
    * was typed, never one from the set before it. Their highlight stays
    * drawn, dimmed with them, so the grid does not flicker while typing.
    */
-  const highlighted = pending ? undefined : results?.[active];
+  const highlighted = pending ? undefined : options[active];
   const trimmed = query.trim();
   const failed = sourceState.status === "failed" || (searchFailed && !pending);
   const retry = (): void => {
@@ -540,21 +725,28 @@ export function IconPicker({
   };
 
   const virtualizer = useVirtualizer({
-    count: Math.ceil(count / COLUMNS),
+    count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: index =>
+      rows[index]?.kind === "heading" ? HEADING_HEIGHT : ROW_HEIGHT,
     overscan: 4,
   });
   /*
    * Scrolls once an answer's results are drawn, from an effect: scrolling as
    * they arrive would measure the grid of the previous results.
    */
-  React.useEffect(() => {
-    if (start === null) return;
-    virtualizer.scrollToIndex(Math.floor(start.index / COLUMNS), {
-      align: start.centred ? "center" : "start",
+  // Reads the rows drawn for this answer when it is placed, rather than
+  // watching them: a new Recent row is no reason to scroll again.
+  const scrollToStart = React.useEffectEvent((at: SearchStart): void => {
+    // The top of the grid when the highlight starts in its first row, so a
+    // heading above that row stays in view.
+    virtualizer.scrollToIndex(at.centred ? rowOf(rows, at.index) : 0, {
+      align: at.centred ? "center" : "start",
     });
-  }, [start, virtualizer]);
+  });
+  React.useEffect(() => {
+    if (start !== null) scrollToStart(start);
+  }, [start]);
 
   /*
    * A click chooses only from answered results, as Enter does: while the query
@@ -564,17 +756,26 @@ export function IconPicker({
     if (!pending) onChoose(icon);
   };
 
+  const message = (
+    <PickerMessage
+      results={results}
+      failed={failed}
+      query={answered}
+      onRetry={retry}
+    />
+  );
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
     if (pending) {
       // Enter must not submit a surrounding form while the answer is due.
       if (event.key === "Enter") event.preventDefault();
       return;
     }
-    const next = stepFrom(event.key, active, count);
+    const next = stepFrom(event.key, active, rows);
     if (next !== undefined) {
       event.preventDefault();
       setActive(next);
-      virtualizer.scrollToIndex(Math.floor(next / COLUMNS), { align: "auto" });
+      virtualizer.scrollToIndex(rowOf(rows, next), { align: "auto" });
       return;
     }
     if (event.key === "Enter" && highlighted !== undefined) {
@@ -619,17 +820,14 @@ export function IconPicker({
         />
       </div>
 
-      <p className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {trimmed === "" ? "All icons" : `Matches for “${trimmed}”`}
-      </p>
+      {/* With a Recent row, the grid carries its own headings. */}
+      {recentCount > 0 ? null : (
+        <p className={HEADING_TEXT}>{resultsLabel(trimmed)}</p>
+      )}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2.5">
-        <PickerMessage
-          results={results}
-          failed={failed}
-          query={answered}
-          onRetry={retry}
-        />
+        {/* Above the grid, or below a Recent row the grid still shows. */}
+        {recentCount > 0 ? null : message}
         <div
           id={listId}
           role="listbox"
@@ -638,17 +836,37 @@ export function IconPicker({
           className={cn("relative w-full", pendingFade(pending))}
           style={{ height: virtualizer.getTotalSize() }}
         >
-          {virtualizer.getVirtualItems().map(row => (
-            <div
-              key={row.key}
-              role="presentation"
-              className="absolute inset-x-0 top-0 grid grid-cols-8 gap-0.5"
-              style={{ transform: `translateY(${row.start}px)` }}
-            >
-              {(results ?? [])
-                .slice(row.index * COLUMNS, row.index * COLUMNS + COLUMNS)
-                .map((icon, column) => {
-                  const index = row.index * COLUMNS + column;
+          {virtualizer.getVirtualItems().map(item => {
+            const row = rows[item.index];
+            if (row === undefined) return null;
+            if (row.kind === "heading") {
+              // Read by sight; each recent option says "recent" in its name.
+              return (
+                <p
+                  key={item.key}
+                  aria-hidden="true"
+                  className={cn(
+                    HEADING_TEXT,
+                    "absolute inset-x-0 top-0 flex items-end px-0.5"
+                  )}
+                  style={{
+                    height: HEADING_HEIGHT,
+                    transform: `translateY(${item.start}px)`,
+                  }}
+                >
+                  {row.label}
+                </p>
+              );
+            }
+            return (
+              <div
+                key={item.key}
+                role="presentation"
+                className="absolute inset-x-0 top-0 grid grid-cols-8 gap-0.5"
+                style={{ transform: `translateY(${item.start}px)` }}
+              >
+                {options.slice(row.start, row.end).map((icon, column) => {
+                  const index = row.start + column;
                   return (
                     <IconOption
                       key={icon.id}
@@ -658,19 +876,22 @@ export function IconPicker({
                       count={count}
                       isActive={index === active}
                       isCurrent={icon.id === currentId}
+                      isRecent={index < recentCount}
                       onHighlight={setActive}
                       onChoose={chooseAnswered}
                     />
                   );
                 })}
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
+        {recentCount > 0 ? message : null}
       </div>
 
       {/* Still the earlier answer's highlight while pending, dimmed with it. */}
       <HighlightedIcon
-        icon={results?.[active]}
+        icon={options[active]}
         className={pendingFade(pending)}
       />
 
@@ -792,7 +1013,14 @@ function IconFieldFace({
 }
 
 /** The warning under a field whose icon the set no longer draws. */
-function MissingIconWarning({ id }: { id: string }): React.JSX.Element {
+function MissingIconWarning({
+  shown,
+  id,
+}: {
+  shown: boolean;
+  id: string;
+}): React.JSX.Element | null {
+  if (!shown) return null;
   return (
     <p
       id={id}
@@ -866,12 +1094,15 @@ function IconFieldFrame({
   );
 }
 
-/** A button that clears the field. */
+/** A button that clears the field, drawn while there is a value to clear. */
 function ClearIconButton({
+  shown,
   onClear,
 }: {
+  shown: boolean;
   onClear: () => void;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  if (!shown) return null;
   return (
     <button
       type="button"
@@ -937,12 +1168,90 @@ function useSharedButtonRef(
   return [own, share];
 }
 
+/** The warning's id while the warning is drawn, for the button it describes. */
+function warningIdIf(missing: boolean, id: string): string | undefined {
+  return missing ? id : undefined;
+}
+
 /** Joins the ids describing an element, or `undefined` when there are none. */
 function describedByIds(
   ...ids: readonly (string | undefined)[]
 ): string | undefined {
   const joined = ids.filter(id => id !== undefined && id !== "").join(" ");
   return joined === "" ? undefined : joined;
+}
+
+/** The popover the field's picker opens in, beside the field. */
+function IconFieldPopover({
+  ref,
+  loadIcons,
+  value,
+  recentIcons,
+  onChoose,
+}: {
+  ref: React.Ref<HTMLDivElement>;
+  loadIcons: () => Promise<IconSource>;
+  value: string | null | undefined;
+  recentIcons: readonly string[] | undefined;
+  onChoose: (id: string) => void;
+}): React.JSX.Element {
+  return (
+    <PopoverContent
+      ref={ref}
+      align="start"
+      collisionPadding={8}
+      aria-label="Choose an icon"
+      className="w-[min(360px,calc(100vw-32px))] rounded-[10px] p-0 shadow-lg motion-reduce:animate-none"
+    >
+      <IconPicker
+        loadIcons={loadIcons}
+        value={value}
+        recentIcons={recentIcons}
+        onChoose={icon => onChoose(icon.id)}
+      />
+    </PopoverContent>
+  );
+}
+
+/**
+ * Whether the field's picker is open, and a setter that opens it only for a
+ * field that can be changed and reports the field left when it closes.
+ */
+function useReportedOpen(
+  interactive: boolean,
+  onBlur: (() => void) | undefined
+): [boolean, (next: boolean) => void] {
+  const [open, setOpen] = React.useState(false);
+  const setOpenAndReport = (next: boolean): void => {
+    if (next && !interactive) return;
+    setOpen(next);
+    if (!next) onBlur?.();
+  };
+  return [open, setOpenAndReport];
+}
+
+/**
+ * A blur handler for the field's wrapper that reports the field left when
+ * focus moves from its buttons to somewhere outside the field. The picker sits
+ * in a portal, elsewhere in the document, so it is checked by its own node;
+ * its focus events still bubble to the wrapper through React. Focus never
+ * leaves the open picker without closing it, and the close reports, so
+ * nothing is reported while it is open or for focus leaving it.
+ */
+function focusLeftReporter(
+  open: boolean,
+  pickerRef: React.RefObject<HTMLDivElement | null>,
+  onBlur: (() => void) | undefined
+): (event: React.FocusEvent<HTMLDivElement>) => void {
+  return event => {
+    const picker = pickerRef.current;
+    if (open || picker?.contains(event.target)) return;
+    const next = event.relatedTarget;
+    const stays =
+      next instanceof Node &&
+      (event.currentTarget.contains(next) || picker?.contains(next) === true);
+    if (!stays) onBlur?.();
+  };
 }
 
 /**
@@ -958,6 +1267,12 @@ export interface IconFieldProps {
   /** Loads the icon source; see {@link IconPickerProps.loadIcons}. */
   loadIcons: () => Promise<IconSource>;
   /**
+   * The icons this person used last, newest first, for the picker's Recent
+   * row; see {@link IconPickerProps.recentIcons}. The host records a choice
+   * from `onChange`.
+   */
+  recentIcons?: readonly string[];
+  /**
    * The field's label as a person reads it. It opens the button's accessible
    * name, which goes on to say the chosen icon: `Icon: Truck`.
    */
@@ -971,7 +1286,10 @@ export interface IconFieldProps {
   invalid?: boolean;
   /** Describes the button, for a hint or an error beside the field. */
   "aria-describedby"?: string;
-  /** The picker closed, or the value was cleared: the field was left. */
+  /**
+   * The field was left: focus moved from its buttons to somewhere outside
+   * them, the picker closed, or the value was cleared.
+   */
   onBlur?: () => void;
   /**
    * The button that opens the picker, for a form that focuses a field it
@@ -1002,24 +1320,23 @@ export function IconField({
   invalid = false,
   "aria-describedby": describedBy,
   onBlur,
+  recentIcons,
   ref,
   className,
 }: IconFieldProps): React.JSX.Element {
-  const [open, setOpen] = React.useState(false);
+  const interactive = !disabled && !readOnly;
+  const [open, setOpenAndReport] = useReportedOpen(interactive, onBlur);
   const [triggerRef, setTrigger] = useSharedButtonRef(ref);
   const warningId = React.useId();
   const { resolved, text } = useIconFieldValue(loadIcons, value, label, open);
   const missing = resolved.status === "missing";
-  const interactive = !disabled && !readOnly;
 
-  const setOpenAndReport = (next: boolean): void => {
-    if (next && !interactive) return;
-    setOpen(next);
-    if (!next) onBlur?.();
-  };
+  const pickerRef = React.useRef<HTMLDivElement | null>(null);
+
+  const reportFocusLeft = focusLeftReporter(open, pickerRef, onBlur);
 
   return (
-    <div className={cn("w-full", className)}>
+    <div className={cn("w-full", className)} onBlur={reportFocusLeft}>
       <IconFieldFrame invalid={invalid} disabled={disabled}>
         <Popover open={open} onOpenChange={setOpenAndReport}>
           <PopoverTrigger asChild>
@@ -1028,7 +1345,7 @@ export function IconField({
               id={id}
               aria-describedby={describedByIds(
                 describedBy,
-                missing ? warningId : undefined
+                warningIdIf(missing, warningId)
               )}
               disabled={disabled}
               resolved={resolved}
@@ -1039,33 +1356,27 @@ export function IconField({
               readOnly={readOnly}
             />
           </PopoverTrigger>
-          <PopoverContent
-            align="start"
-            collisionPadding={8}
-            aria-label="Choose an icon"
-            className="w-[min(360px,calc(100vw-32px))] rounded-[10px] p-0 shadow-lg motion-reduce:animate-none"
-          >
-            <IconPicker
-              loadIcons={loadIcons}
-              value={value}
-              onChoose={icon => {
-                onChange(icon.id);
-                setOpenAndReport(false);
-              }}
-            />
-          </PopoverContent>
-        </Popover>
-        {value && interactive ? (
-          <ClearIconButton
-            onClear={() => {
-              onChange(null);
-              onBlur?.();
-              triggerRef.current?.focus();
+          <IconFieldPopover
+            ref={pickerRef}
+            loadIcons={loadIcons}
+            value={value}
+            recentIcons={recentIcons}
+            onChoose={id => {
+              onChange(id);
+              setOpenAndReport(false);
             }}
           />
-        ) : null}
+        </Popover>
+        <ClearIconButton
+          shown={Boolean(value) && interactive}
+          onClear={() => {
+            onChange(null);
+            onBlur?.();
+            triggerRef.current?.focus();
+          }}
+        />
       </IconFieldFrame>
-      {missing ? <MissingIconWarning id={warningId} /> : null}
+      <MissingIconWarning shown={missing} id={warningId} />
     </div>
   );
 }

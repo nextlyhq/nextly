@@ -118,7 +118,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const saved = await t.singles.update(
         "site-settings",
-        { siteName: "Acme" },
+        { siteName: "Acme", _overwrite: true },
         AS_ANA
       );
       expect(saved.success, JSON.stringify(saved)).toBe(true);
@@ -140,14 +140,18 @@ describe.each(getConfiguredTestDialects())(
 
     it("records a Single that opted out of webhooks", async () => {
       const t = await boot(dialect);
-      await t.singles.update("quiet", { note: "x" }, AS_ANA);
+      await t.singles.update("quiet", { note: "x", _overwrite: true }, AS_ANA);
       expect(await t.rowsOf("quiet")).toHaveLength(1);
     }, 120_000);
 
     it("records one row per save, without folding consecutive saves together", async () => {
       const t = await boot(dialect);
       for (const siteName of ["a", "b", "c"]) {
-        await t.singles.update("site-settings", { siteName }, AS_ANA);
+        await t.singles.update(
+          "site-settings",
+          { siteName, _overwrite: true },
+          AS_ANA
+        );
       }
       expect(await t.rowsOf("site-settings")).toHaveLength(3);
     }, 120_000);
@@ -157,12 +161,12 @@ describe.each(getConfiguredTestDialects())(
       // Published by no one the trail records, so only the edit below counts.
       await t.singles.update(
         "masthead",
-        { heading: "Live", status: "published" },
+        { heading: "Live", status: "published", _overwrite: true },
         { overrideAccess: true }
       );
       const held = await t.singles.update(
         "masthead",
-        { heading: "Next" },
+        { heading: "Next", _overwrite: true },
         { routeAuthorized: true, user: ANA }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
@@ -180,7 +184,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await t.singles.update(
         "banner",
-        { headline: "hello" },
+        { headline: "hello", _overwrite: true },
         {
           ...AS_ANA,
           locale: "en",
@@ -188,7 +192,7 @@ describe.each(getConfiguredTestDialects())(
       );
       await t.singles.update(
         "banner",
-        { headline: "hola" },
+        { headline: "hola", _overwrite: true },
         {
           ...AS_ANA,
           locale: "es",
@@ -198,7 +202,7 @@ describe.each(getConfiguredTestDialects())(
 
       await t.singles.update(
         "banner",
-        { status: "published" },
+        { status: "published", _overwrite: true },
         {
           ...AS_ANA,
           locale: "*",
@@ -208,14 +212,17 @@ describe.each(getConfiguredTestDialects())(
 
       await t.singles.update(
         "banner",
-        { status: "draft" },
+        { status: "draft", _overwrite: true },
         {
           ...AS_ANA,
           locale: "*",
         }
       );
       expect(await t.rowsOf("banner")).toHaveLength(4);
-      await t.singles.publishAllLocales("banner", AS_ANA);
+      await t.singles.publishAllLocales("banner", {
+        ...AS_ANA,
+        data: { _overwrite: true },
+      });
       // One row for every language at once, not one per language.
       expect(await t.rowsOf("banner")).toHaveLength(5);
     }, 120_000);
@@ -224,7 +231,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const saved = await t.singles.update(
         "site-settings",
-        { siteName: "Acme" },
+        { siteName: "Acme", _overwrite: true },
         AS_ANA
       );
       const versions = current!.getService("versionsService");
@@ -246,15 +253,18 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await t.singles.update(
         "site-settings",
-        { siteName: "by the system" },
+        { siteName: "by the system", _overwrite: true },
         { overrideAccess: true }
       );
       expect(await t.rowsOf("site-settings")).toEqual([]);
 
       await t.singles.update(
         "site-settings",
-        { siteName: "by a key" },
-        { overrideAccess: true, actor: { type: "apiKey", id: "key-1" } }
+        { siteName: "by a key", _overwrite: true },
+        {
+          overrideAccess: true,
+          actor: { type: "apiKey", id: "key-1" },
+        }
       );
       expect(await t.rowsOf("site-settings")).toEqual([
         expect.objectContaining({ actorType: "apiKey", subjectKind: "single" }),
@@ -265,7 +275,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await t.singles.update(
         "site-settings",
-        { siteName: "Before" },
+        { siteName: "Before", _overwrite: true },
         {
           overrideAccess: true,
         }
@@ -276,7 +286,7 @@ describe.each(getConfiguredTestDialects())(
 
       const result = await t.singles.update(
         "site-settings",
-        { siteName: "After" },
+        { siteName: "After", _overwrite: true },
         AS_ANA
       );
       expect(result.success).toBe(false);

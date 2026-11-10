@@ -86,6 +86,21 @@ export function setSearchParam(
   setSearchParams({ [key]: value }, options);
 }
 
+/** Whether the URL already holds exactly `value` under `key`. */
+function holds(
+  params: URLSearchParams,
+  key: string,
+  value: string | readonly string[] | null
+): boolean {
+  const present = params.getAll(key);
+  if (value === null) return present.length === 0;
+  const wanted = typeof value === "string" ? [value] : value;
+  return (
+    present.length === wanted.length &&
+    present.every((each, index) => each === wanted[index])
+  );
+}
+
 /**
  * Set several query parameters as ONE history entry, a `null` value removing
  * its key: closing a panel that keeps two keys clears both in one step back,
@@ -94,18 +109,22 @@ export function setSearchParam(
  * No-ops when every value is already set.
  */
 export function setSearchParams(
-  values: Readonly<Record<string, string | null>>,
+  values: Readonly<Record<string, string | readonly string[] | null>>,
   options?: { replace?: boolean }
 ): void {
   try {
     const url = new URL(window.location.href);
     const entries = Object.entries(values);
-    if (entries.every(([key, value]) => url.searchParams.get(key) === value)) {
+    if (entries.every(([key, value]) => holds(url.searchParams, key, value))) {
       return;
     }
     for (const [key, value] of entries) {
-      if (value === null) url.searchParams.delete(key);
-      else url.searchParams.set(key, value);
+      url.searchParams.delete(key);
+      // A list is the key repeated, once per value, in order.
+      if (value === null) continue;
+      for (const each of typeof value === "string" ? [value] : value) {
+        url.searchParams.append(key, each);
+      }
     }
 
     const next = `${url.pathname}${url.search}${url.hash}`;

@@ -9,7 +9,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { generateAdminPage } from "../generators/admin";
 import { generateConfig } from "../generators/config";
-import { ADMIN_LAYOUT } from "../generators/media-routes";
+import {
+  ADMIN_COMPONENT_MAP_FILES,
+  ADMIN_LAYOUT,
+} from "../generators/media-routes";
 import { patchNextConfig } from "../generators/next-config";
 import { generateRoutes } from "../generators/routes";
 import { generateTypesDirectory } from "../generators/types";
@@ -48,7 +51,20 @@ const ADMIN_LAYOUT_TEXT = readFileSync(
   ),
   "utf8"
 );
-const templates = new Map([[ADMIN_LAYOUT.path, ADMIN_LAYOUT_TEXT]]);
+// And the component map's pair, as the base template commits them.
+const templates = new Map([
+  [ADMIN_LAYOUT.path, ADMIN_LAYOUT_TEXT],
+  ...ADMIN_COMPONENT_MAP_FILES.map(
+    file =>
+      [
+        file,
+        readFileSync(
+          new URL(`../../../../templates/base/src/${file}`, import.meta.url),
+          "utf8"
+        ),
+      ] as const
+  ),
+]);
 
 const srcLayout: ProjectInfo = {
   isNextJs: true,
@@ -130,7 +146,7 @@ describe("generateConfig", () => {
       vi.clearAllMocks();
       mockPathExists.mockResolvedValue(false as never);
       await generateConfig("/test/project", "blank", layout);
-      await generateTypesDirectory("/test/project", layout);
+      await generateTypesDirectory("/test/project", layout, templates);
 
       const configured = String(mockWriteFile.mock.calls[0][1]).match(
         /outputFile: "\.\/([^"]+)"/
@@ -343,14 +359,14 @@ describe("generateTypesDirectory", () => {
       appDir: "src/app",
     };
 
-    await generateTypesDirectory("/test/project", projectInfo);
+    await generateTypesDirectory("/test/project", projectInfo, templates);
 
     expect(mockEnsureDir).toHaveBeenCalled();
     const ensureDirPath = mockEnsureDir.mock.calls[0][0];
     expect(posix(ensureDirPath)).toContain("src/types/generated");
 
-    // Should create .gitkeep and placeholder
-    expect(mockWriteFile).toHaveBeenCalledTimes(2);
+    // Should create .gitkeep, the placeholder and the component map's pair
+    expect(mockWriteFile).toHaveBeenCalledTimes(4);
 
     const [gitkeepPath] = mockWriteFile.mock.calls[0];
     expect(gitkeepPath).toContain(".gitkeep");
@@ -372,7 +388,7 @@ describe("generateTypesDirectory", () => {
       appDir: "app",
     };
 
-    await generateTypesDirectory("/test/project", projectInfo);
+    await generateTypesDirectory("/test/project", projectInfo, templates);
 
     const ensureDirPath = mockEnsureDir.mock.calls[0][0];
     expect(posix(ensureDirPath)).toContain("types/generated");

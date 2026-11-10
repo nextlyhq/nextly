@@ -10,6 +10,11 @@ import migration1 from "./20261103_024902_454_create_layout_removals";
 import migration2 from "./20261104_063215_663_create_component_rewrite_runs";
 import migration3 from "./20261104_115414_028_create_site_options";
 import migration4 from "./20261105_064012_324_create_breakpoint_removals";
+import migration5 from "./20261106_064828_573_create_breakpoint_removal_fragments";
+import migration6 from "./20261106_084948_318_create_usage_index_tables";
+import migration7 from "./20261106_095219_741_add_breakpoint_removal_undoes";
+import migration8 from "./20261106_104001_085_create_token_usage_table";
+import migration9 from "./20261107_174750_902_create_binding_report_tables";
 
 export const migrations: PluginMigration[] = [
   migration0,
@@ -17,4 +22,9 @@ export const migrations: PluginMigration[] = [
   migration2,
   migration3,
   migration4,
+  migration5,
+  migration6,
+  migration7,
+  migration8,
+  migration9,
 ];

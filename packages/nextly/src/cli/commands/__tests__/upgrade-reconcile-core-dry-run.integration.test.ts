@@ -68,6 +68,8 @@ describe.each(getConfiguredTestDialects())(
       const clean = await previewReconcileCore({
         adapter: adapter(),
         interactive: false,
+        // A database whose history the build holds: nothing to refuse.
+        checkAppHistory: () => Promise.resolve(),
       });
       expect(clean.changes, JSON.stringify(clean)).toEqual([]);
 
@@ -86,6 +88,8 @@ describe.each(getConfiguredTestDialects())(
       const plan = await previewReconcileCore({
         adapter: adapter(),
         interactive: false,
+        // A database whose history the build holds: nothing to refuse.
+        checkAppHistory: () => Promise.resolve(),
       });
       const statements = plan.changes.map(c => c.target);
       expect(statements.join("\n")).toContain(INDEX);
@@ -106,6 +110,8 @@ describe.each(getConfiguredTestDialects())(
       await runReconcileCore(
         {
           adapter: adapter(),
+          // A database whose history the build holds: nothing to refuse.
+          checkAppHistory: () => Promise.resolve(),
           confirmDestructive: async reasons => {
             questions.push(reasons);
             return true;

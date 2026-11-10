@@ -21,6 +21,12 @@ describe("the Add panel's order of the core blocks", () => {
     const runs = CORE_PALETTE_ORDER.map(name => categoryOf.get(name)).filter(
       (category, index, all) => index === 0 || all[index - 1] !== category
     );
-    expect(runs).toEqual(["layout", "content", "media", "interactive"]);
+    expect(runs).toEqual([
+      "layout",
+      "content",
+      "entry",
+      "media",
+      "interactive",
+    ]);
   });
 });

@@ -52,7 +52,8 @@ export type StyleGroup =
   | "effects"
   | "position"
   | "container"
-  | "list";
+  | "list"
+  | "disclosure";
 
 /** A group and the label an editor shows for it. */
 export interface StyleGroupDef {
@@ -78,6 +79,7 @@ export const STYLE_GROUP_DEFS: readonly StyleGroupDef[] = [
   { key: "position", label: "Position" },
   { key: "container", label: "Container queries" },
   { key: "list", label: "List" },
+  { key: "disclosure", label: "Disclosure icon" },
 ];
 
 export const STYLE_GROUPS: readonly StyleGroup[] = STYLE_GROUP_DEFS.map(
@@ -103,6 +105,14 @@ interface StyleLeafBase {
   descendant?: string;
 }
 
+/** One declaration a keyword writes beside its own, under a fixed descendant. */
+export interface KeywordExpansion {
+  /** The descendant selector it attaches to, as {@link StyleLeafBase.descendant}. */
+  readonly descendant: string;
+  readonly property: string;
+  readonly value: string;
+}
+
 /** A closed set of legal keywords — the catalog's own vocabulary, not CSS's. */
 export interface KeywordLeaf extends StyleLeafBase {
   kind: "keyword";
@@ -120,6 +130,15 @@ export interface KeywordLeaf extends StyleLeafBase {
    * anything emits a declaration the browser discards.
    */
   soloValues?: readonly string[];
+  /**
+   * Declarations each keyword writes beside the leaf's own, for a choice no
+   * one CSS property expresses: an Accordion's icon is a row, a glyph and an
+   * open look on its sections. The leaf's own declaration carries the keyword
+   * (on a custom property), which is what the trace and an editor read; the
+   * expansion is fixed per keyword, so it is enumerated here and testable. A
+   * CSS-wide keyword writes the leaf's own declaration alone.
+   */
+  expands?: Readonly<Record<string, readonly KeywordExpansion[]>>;
 }
 
 /** A length, percentage, or other CSS dimension, stored as a string (or `0`). */

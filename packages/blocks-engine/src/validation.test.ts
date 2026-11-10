@@ -1477,6 +1477,33 @@ describe("validation never throws on adversarial input", () => {
     ).toBe(true);
   });
 
+  it("refuses placement gates, which exist only while a page is drawn", () => {
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          visibility: { within: [{ conditions: [] }] },
+        },
+      ],
+    });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    expect(
+      issues.some(
+        i =>
+          i.code === "invalid-visibility" &&
+          i.path === "/nodes/0/visibility/within"
+      )
+    ).toBe(true);
+  });
+
   it("counts malformed array elements toward the node cap", () => {
     const doc = invalidDoc({
       formatVersion: 1,

@@ -321,6 +321,124 @@ describe("IconField", () => {
     expect(onChange).toHaveBeenCalledWith("fake:star");
   });
 
+  it("offers the icons used last in a Recent row above the whole set, while browsing", async () => {
+    renderField({ recentIcons: ["fake:heart", "fake:gone", "fake:star"] });
+    const box = await openPicker(/^Badge/);
+    const names = screen
+      .getAllByRole("option")
+      .map(option => option.getAttribute("aria-label"));
+    // Newest first; an id the set no longer draws is left out.
+    expect(names.slice(0, 3)).toEqual([
+      "Heart, recent",
+      "Star, recent",
+      "Truck",
+    ]);
+    expect(screen.getByText("Recent")).not.toBeNull();
+    expect(screen.getByText("All icons")).not.toBeNull();
+    // Browsing with nothing chosen starts on the newest recent icon.
+    expect(highlightedIn(box)).toBe("Heart, recent");
+    // The whole set is still all there beneath it.
+    expect(names).toHaveLength(NAMES.length + 2);
+  });
+
+  it("moves from the Recent row into the set beneath by column, and back", async () => {
+    renderField({ recentIcons: ["fake:heart", "fake:star"] });
+    const box = await openPicker(/^Badge/);
+    fireEvent.keyDown(box, { key: "ArrowRight" });
+    expect(highlightedIn(box)).toBe("Star, recent");
+    // Down keeps the column: the second icon of the set's first row.
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    expect(highlightedIn(box)).toBe("Star");
+    fireEvent.keyDown(box, { key: "ArrowLeft" });
+    expect(highlightedIn(box)).toBe("Truck");
+    fireEvent.keyDown(box, { key: "ArrowUp" });
+    expect(highlightedIn(box)).toBe("Heart, recent");
+    // Up from the top row stays put.
+    fireEvent.keyDown(box, { key: "ArrowUp" });
+    expect(highlightedIn(box)).toBe("Heart, recent");
+  });
+
+  it("moves up into a shorter Recent row onto its last icon", async () => {
+    // One recent icon: up from the third column of the set's first row lands
+    // on the only icon the row above has.
+    renderField({ recentIcons: ["fake:heart"] });
+    const box = await openPicker(/^Badge/);
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    fireEvent.keyDown(box, { key: "ArrowRight" });
+    fireEvent.keyDown(box, { key: "ArrowRight" });
+    expect(highlightedIn(box)).toBe("Star half");
+    // Up into a Recent row of one icon: its last icon.
+    fireEvent.keyDown(box, { key: "ArrowUp" });
+    expect(highlightedIn(box)).toBe("Heart, recent");
+  });
+
+  it("chooses a recent icon by its id", async () => {
+    const { onChange } = renderField({ recentIcons: ["fake:heart"] });
+    const box = await openPicker(/^Badge/);
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("fake:heart");
+  });
+
+  it("keeps the Recent row above a search's matches, and starts on the best match", async () => {
+    renderField({ recentIcons: ["fake:heart"] });
+    const box = await openPicker(/^Badge/);
+    fireEvent.change(box, { target: { value: "star" } });
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("option")
+          .map(option => option.getAttribute("aria-label"))
+      ).toEqual(["Heart, recent", "Star", "Star half"])
+    );
+    expect(screen.getByText("Recent")).not.toBeNull();
+    expect(screen.getByText("Matches for “star”")).not.toBeNull();
+    // Enter after typing chooses the best match, not the recent icon above it.
+    expect(highlightedIn(box)).toBe("Star");
+  });
+
+  it("keeps the Recent row for a search typed before the set has loaded", async () => {
+    let arrive: (() => void) | undefined;
+    renderField(
+      { recentIcons: ["fake:heart"] },
+      fakeSource({
+        load: source =>
+          new Promise<IconSource>(resolve => {
+            arrive = () => resolve(source);
+          }),
+      })
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Badge/ }));
+    const box = await screen.findByRole("combobox", { name: "Search icons" });
+    // Typed while the set is still on its way, so no browse is ever the
+    // answer in hand.
+    fireEvent.change(box, { target: { value: "star" } });
+    await act(async () => arrive?.());
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("option")
+          .map(option => option.getAttribute("aria-label"))
+      ).toEqual(["Heart, recent", "Star", "Star half"])
+    );
+    expect(highlightedIn(box)).toBe("Star");
+  });
+
+  it("keeps a search with no matches on a recent icon the keys can reach", async () => {
+    const { onChange } = renderField({ recentIcons: ["fake:heart"] });
+    const box = await openPicker(/^Badge/);
+    fireEvent.change(box, { target: { value: "zzz" } });
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe(
+        "No icons match “zzz”."
+      )
+    );
+    expect(highlightedIn(box)).toBe("Heart, recent");
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    expect(highlightedIn(box)).toBe("Heart, recent");
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("fake:heart");
+  });
+
   it("chooses an icon by click", async () => {
     const { onChange } = renderField();
     await openPicker(/^Badge/);
@@ -524,6 +642,71 @@ describe("IconField", () => {
     expect(ref.current).toBe(button);
     fireEvent.click(screen.getByRole("button", { name: "Clear icon" }));
     expect(document.activeElement).toBe(button);
+  });
+
+  describe("reports the field left", () => {
+    /** The field between two other buttons, so focus has somewhere to go. */
+    function renderBetween(
+      props: Partial<React.ComponentProps<typeof IconField>> = {}
+    ): ReturnType<typeof vi.fn> {
+      const onBlur = vi.fn();
+      const { load } = fakeSource();
+      render(
+        <>
+          <button type="button">Before</button>
+          <IconField
+            value={null}
+            onChange={() => {}}
+            onBlur={onBlur}
+            loadIcons={load}
+            label="Badge"
+            {...props}
+          />
+          <button type="button">After</button>
+        </>
+      );
+      return onBlur;
+    }
+
+    it("when focus leaves its closed button for outside the field", () => {
+      const onBlur = renderBetween();
+      screen.getByRole("button", { name: "Badge: none chosen" }).focus();
+      expect(onBlur).not.toHaveBeenCalled();
+      screen.getByRole("button", { name: "After" }).focus();
+      expect(onBlur).toHaveBeenCalledTimes(1);
+    });
+
+    it("not when focus moves from its button to its clear", async () => {
+      const onBlur = renderBetween({ value: "fake:star" });
+      (await screen.findByRole("button", { name: "Badge: Star" })).focus();
+      screen.getByRole("button", { name: "Clear icon" }).focus();
+      expect(onBlur).not.toHaveBeenCalled();
+      // The control: leaving from the clear is reported.
+      screen.getByRole("button", { name: "After" }).focus();
+      expect(onBlur).toHaveBeenCalledTimes(1);
+    });
+
+    it("once when the picker closes on Escape, not for focus going into it or back", async () => {
+      const onBlur = renderBetween();
+      const button = screen.getByRole("button", { name: "Badge: none chosen" });
+      button.focus();
+      const box = await openPicker(/^Badge/);
+      await waitFor(() => expect(document.activeElement).toBe(box));
+      expect(onBlur).not.toHaveBeenCalled();
+      fireEvent.keyDown(box, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(document.activeElement).toBe(button);
+      expect(onBlur).toHaveBeenCalledTimes(1);
+    });
+
+    it("once when focus leaves the open picker for outside the field", async () => {
+      const onBlur = renderBetween();
+      const box = await openPicker(/^Badge/);
+      await waitFor(() => expect(document.activeElement).toBe(box));
+      act(() => screen.getByRole("button", { name: "After" }).focus());
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(onBlur).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("opens no picker and offers no clear when read-only", async () => {

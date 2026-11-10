@@ -22,8 +22,10 @@ const placed = INSPECTOR_SECTIONS.flatMap(section =>
 );
 
 describe("the placement table", () => {
-  it("orders the sections Layout, Spacing, Size, Position, Typography, Background, Border, Effects", () => {
+  it("orders the sections Icon, Layout, Spacing, Size, Position, Typography, Background, Border, Effects", () => {
+    // Icon first, shown only by a block offering it: an Accordion.
     expect(INSPECTOR_SECTIONS.map(section => section.label)).toEqual([
+      "Icon",
       "Layout",
       "Spacing",
       "Size",

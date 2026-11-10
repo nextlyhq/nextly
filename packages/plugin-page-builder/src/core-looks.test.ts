@@ -1,7 +1,8 @@
+import { blockDefaultsOf } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { withBlockLooks, withCoreLooks } from "./core-looks";
-import { checkStoredClasses } from "./site-style-record";
+import { checkStoredClasses, referableClassIds } from "./site-style-record";
 import { classOverrideOf, resolveSiteStyle } from "./site-style";
 
 describe("the core blocks' looks in the site's code tier", () => {
@@ -95,5 +96,90 @@ describe("a site's own style holding a look's name", () => {
     expect(checkStoredClasses([rival], policy).issues).toEqual([
       expect.stringContaining('"look:core/image:circle"'),
     ]);
+  });
+});
+
+describe("a block's own look, which a site edits as its type's base", () => {
+  const configured = withCoreLooks(undefined).classes ?? [];
+  const primary = configured.find(
+    each => each.id === "look:core/button:primary"
+  );
+  if (primary === undefined) throw new Error("no primary look");
+  const edited = {
+    ...primary,
+    styles: { base: { base: { color: "purple" } } },
+  };
+  const policy = { defaults: resolveSiteStyle(withCoreLooks(undefined)) };
+
+  it("is in the code tier with no edits, marked as the type's own", () => {
+    expect(primary).toMatchObject({
+      blockType: "core/button",
+      isDefault: true,
+      styles: {},
+    });
+    // Nothing edited: the code tier changes no base.
+    expect(blockDefaultsOf(configured)).toEqual({
+      "core/button": {},
+      "core/image": {},
+      "core/section": {},
+    });
+  });
+
+  it("is stored only once edited, and the edit reaches its type's base", () => {
+    expect(classOverrideOf(configured, [primary])).toEqual([]);
+    const stored = classOverrideOf(configured, [edited]);
+    expect(stored).toEqual([edited]);
+    expect(checkStoredClasses(stored, policy).issues).toEqual([]);
+    const merged = resolveSiteStyle(withCoreLooks(undefined), {
+      classes: stored,
+    });
+    expect(blockDefaultsOf(merged.classes)["core/button"]).toEqual(
+      edited.styles
+    );
+  });
+
+  it("refuses a second own look of a type, which would never be read", () => {
+    const second = {
+      ...edited,
+      id: "look:core/button:main",
+      slug: "button-main",
+      orderIndex: 900,
+    };
+    expect(checkStoredClasses([second], policy).issues).toEqual([
+      expect.stringContaining('"look:core/button:main" would not render'),
+    ]);
+  });
+
+  it("may be stored beside a shared style holding its name", () => {
+    const named = {
+      id: "c-named",
+      slug: "button-primary",
+      orderIndex: 0,
+      styles: { base: { base: { color: "black" } } },
+    };
+    expect(checkStoredClasses([edited, named], policy).issues).toEqual([]);
+    expect(checkStoredClasses([named, edited], policy).issues).toEqual([]);
+  });
+
+  it("keeps an override that only takes its mark away", () => {
+    const { isDefault: _mark, ...unmarked } = primary;
+    expect(classOverrideOf(configured, [unmarked])).toEqual([unmarked]);
+  });
+
+  it("is never a class a page may refer to", () => {
+    const ids = referableClassIds(configured);
+    expect(ids.has("look:core/button:outline")).toBe(true);
+    expect(ids.has(primary.id)).toBe(false);
+  });
+
+  it("refuses the mark on a stored class bound to no block type", () => {
+    const unbound = {
+      id: "c-own",
+      slug: "own",
+      orderIndex: 0,
+      isDefault: true,
+      styles: {},
+    };
+    expect(checkStoredClasses([unbound], policy).issues).not.toEqual([]);
   });
 });

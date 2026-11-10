@@ -174,7 +174,13 @@ const update = (
   collection: string,
   id: string,
   data: Record<string, unknown>
-) => t.nextly.update({ collection, id, data, ...asAuthor } as never);
+) =>
+  t.nextly.update({
+    collection,
+    id,
+    data: { ...data, _overwrite: true },
+    ...asAuthor,
+  } as never);
 
 /** The entry as the author reads it with its held edit, where it has one. */
 const readWithDraft = (t: TestNextly, collection: string, id: string) =>
@@ -209,7 +215,7 @@ const updateInTransaction = (
       entries.updateEntryInTransaction(
         tx,
         { collectionName, entryId, user: { id: AUTHOR } },
-        data
+        { ...data, _overwrite: true }
       )
     )
     .then(
@@ -488,7 +494,7 @@ describe("an update rule's filter on a collection with languages", () => {
         collection: LOCALIZED,
         id: others,
         locale: "de",
-        data: { title: "shown" },
+        data: { title: "shown", _overwrite: true },
       } as never);
 
       const refused = await errorOf(() =>
@@ -496,7 +502,7 @@ describe("an update rule's filter on a collection with languages", () => {
           collection: LOCALIZED,
           id: others,
           locale: "de",
-          data: { title: "renamed" },
+          data: { title: "renamed", _overwrite: true },
           ...asAuthor,
         } as never)
       );
@@ -544,7 +550,7 @@ describe("an update rule's filter on a collection with languages", () => {
         collection: FALLBACK,
         id,
         locale: "fr",
-        data: { note: "changed in French" },
+        data: { note: "changed in French", _overwrite: true },
         ...asAuthor,
       } as never)
     );
@@ -556,7 +562,7 @@ describe("an update rule's filter on a collection with languages", () => {
       collection: FALLBACK,
       id,
       locale: "en",
-      data: { note: "changed in English" },
+      data: { note: "changed in English", _overwrite: true },
       ...asAuthor,
     } as never);
     expect((await stored(t, FALLBACK, id))?.note).toBe("changed in English");
@@ -643,7 +649,7 @@ describe("a publish or unpublish rule that answers a filter", () => {
     await t.nextly.update({
       collection: DRAFTED,
       id: others,
-      data: { title: "their edit" },
+      data: { title: "their edit", _overwrite: true },
     } as never);
     // POPULATION CONTROL: both edits were held, not written to the live rows.
     expect((await stored(t, DRAFTED, own))?.title).toBe("mine");
@@ -725,7 +731,7 @@ describe("a publish or unpublish rule that answers a filter", () => {
     await t.nextly.update({
       collection: DRAFTED,
       id: own,
-      data: { title: "given away", owner: OTHER },
+      data: { title: "given away", owner: OTHER, _overwrite: true },
     } as never);
     const live = await stored(t, DRAFTED, own);
     // POPULATION CONTROL: the edit was held, not written to the live row, so

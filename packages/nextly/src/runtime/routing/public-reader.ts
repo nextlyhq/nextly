@@ -216,7 +216,11 @@ const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 100;
 
-function refuse(reason: string, message: string, detail: object = {}): never {
+export function refuse(
+  reason: string,
+  message: string,
+  detail: object = {}
+): never {
   throw NextlyError.invalidInput({
     message,
     logContext: { reason: `public-read-${reason}`, ...detail },
@@ -285,7 +289,9 @@ function assertShape(
  * commas, as core splits one, so `""`, `" "` and `","` come to no keys and
  * the read keeps its id order instead of reaching core with no order at all.
  */
-function sortKeys(sort: string | readonly string[] | undefined): string[] {
+export function sortKeys(
+  sort: string | readonly string[] | undefined
+): string[] {
   // Every element split on commas, as core splits each one, so the keys
   // judged here are the keys core would order by.
   const parts = (typeof sort === "string" ? [sort] : [...(sort ?? [])]).flatMap(
@@ -331,7 +337,7 @@ function assertKnownKeys(
   }
 }
 
-function assertCountKeys(query: object): void {
+export function assertCountKeys(query: object): void {
   if (query === null || typeof query !== "object") {
     refuse("query-invalid", "A count query must be an object.");
   }
@@ -476,14 +482,20 @@ const PUBLIC_BOUNDARY = {
   showHiddenFields: false,
 } as const;
 
-/** The fields each row carries, with its id; none named means every public one. */
-function selectOf(query: PublicReadQuery): FindArgs["select"] | undefined {
+/**
+ * The fields each row or document carries, with its id; none named means
+ * every public one. One spelling for the list's read and the Single's, so a
+ * selection asks core for the same fields on both.
+ */
+function selectOf(query: {
+  select?: readonly string[];
+}): Record<string, boolean> | undefined {
   const fields = query.select ?? [];
   if (fields.length === 0) return undefined;
   return Object.fromEntries([
     ["id", true],
     ...fields.map(field => [field, true]),
-  ]) as FindArgs["select"];
+  ]);
 }
 
 /**
@@ -564,20 +576,28 @@ export function toPublicFindSingle(
 ): FindSingleArgs & { createIfMissing: false } {
   assertPublicSingleQuery(query, binding);
   const locale = binding.locale ?? query.locale;
+  // Sent to the read, as a list's is, so a read that honours a selection
+  // fetches only these fields rather than the whole document.
+  const select = selectOf(query);
   return {
     slug: query.slug,
     ...(locale === undefined ? {} : { locale }),
+    ...(select === undefined ? {} : { select }),
     createIfMissing: false,
     ...PUBLIC_BOUNDARY,
   };
 }
 
 /**
- * The document narrowed to its id and the fields named. A Single's read
- * returns the whole document, so the selection is kept here; a field the
- * read left out stays out.
+ * The document narrowed to its id and the fields named; a field the read
+ * left out stays out.
+ *
+ * Kept though the read is asked for the same fields: the Direct API's
+ * `findSingle` does not yet hand `select` to the Singles service, which reads
+ * whole documents, and a source a route hands over may ignore it too. Without
+ * this a page would be answered fields it never asked for.
  */
-function selectedFrom(
+export function selectedFrom(
   document: Record<string, unknown>,
   select: readonly string[] | undefined
 ): Record<string, unknown> {
@@ -596,7 +616,7 @@ function selectedFrom(
  * instance on its first read, and asked earlier the registry would not be
  * there to answer for that read.
  */
-async function hiddenOf(
+export async function hiddenOf(
   binding: PublicReaderBinding,
   source: PublicSource
 ): Promise<ReadonlySet<string>> {
@@ -622,7 +642,7 @@ async function hiddenOf(
  * returned: the rows a filter keeps, and the order a sort puts them in, would
  * reveal the value every row is stripped of.
  */
-function assertNotHidden(
+export function assertNotHidden(
   query: Pick<PublicReadQuery, "filters" | "sort">,
   hidden: ReadonlySet<string>
 ): void {

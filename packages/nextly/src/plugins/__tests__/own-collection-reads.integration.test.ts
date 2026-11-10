@@ -490,11 +490,20 @@ describe.each(getConfiguredTestDialects())(
 
     it("offers reads only", async () => {
       const { ctx } = await boot(dialect);
+      // Every member reads: the transaction-held ones read on a transaction
+      // the plugin already holds, and none of them writes.
       expect(Object.keys(ctx.services.ownCollections).sort()).toEqual([
         "count",
         "findEntryById",
+        "findEntryByIdInTransaction",
+        "findHostEntryByIdInTransaction",
+        "getHostSingleInTransaction",
+        "getSingleInTransaction",
         "group",
         "listEntries",
+        "listEntriesInTransaction",
+        "listHostEntriesInTransaction",
+        "listHostTypesInTransaction",
       ]);
     });
   }

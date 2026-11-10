@@ -7,10 +7,14 @@
       // playground's own rule (`tests/support/cache-components.ts` imports
       // `apps/playground/cache-components.ts`), so that file is in this
       // package's program. Inputs are package-scoped, so it is named here:
-      // without it, editing the rule would leave this hash unchanged.
+      // without it, editing the rule would leave this hash unchanged. The
+      // blog template's two library files the post-page specs import are
+      // named for the same reason.
       "inputs": [
         "$TURBO_EXTENDS$",
-        "$TURBO_ROOT$/apps/playground/cache-components.ts"
+        "$TURBO_ROOT$/apps/playground/cache-components.ts",
+        "$TURBO_ROOT$/templates/blog/src/lib/extract-toc.ts",
+        "$TURBO_ROOT$/templates/blog/src/lib/format-date.ts"
       ]
     }
   }

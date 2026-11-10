@@ -98,6 +98,51 @@ function card(): ComponentDocument {
   };
 }
 
+describe("the bind and unbind actions' shapes", () => {
+  const bind = (binding: unknown) =>
+    pageActionSchema.safeParse({
+      kind: "bind-prop",
+      nodeId: "n",
+      prop: "text",
+      binding,
+    }).success;
+  const unbind = (keep: unknown) =>
+    pageActionSchema.safeParse({
+      kind: "unbind-prop",
+      nodeId: "n",
+      prop: "text",
+      keep,
+    }).success;
+
+  it("takes a binding as a block stores it, a Single's with its key", () => {
+    expect(bind({ $bind: "title", source: "entry" })).toBe(true);
+    expect(bind({ $bind: "motto", source: "single", sourceKey: "brand" })).toBe(
+      true
+    );
+    // A Single named without its key, a source the engine has not, and a
+    // field the binding has not, are refused by shape.
+    expect(bind({ $bind: "motto", source: "single" })).toBe(false);
+    expect(bind({ $bind: "title", source: "elsewhere" })).toBe(false);
+    expect(bind({ $bind: "title", expression: "1+1" })).toBe(false);
+    expect(bind({ $bind: "" })).toBe(false);
+  });
+
+  it("keeps the visitor's value, a named entry's or item's, or a value given", () => {
+    for (const keep of [
+      "visitor",
+      { entry: "e1" },
+      { item: "i1" },
+      { value: "Spring sale" },
+      { value: null },
+    ]) {
+      expect(unbind(keep)).toBe(true);
+    }
+    // An empty object is no value: refused rather than read as "keep nothing".
+    expect(unbind({})).toBe(false);
+    expect(unbind({ entry: "e1", item: "i1" })).toBe(false);
+  });
+});
+
 describe("the page action schema", () => {
   it("takes each kind it lists, and nothing else", () => {
     const accepted = [
@@ -105,7 +150,22 @@ describe("the page action schema", () => {
       { kind: "place-component", componentId: "c", variant: "dark" },
       { kind: "set-placement-values", instanceId: "i", reset: ["title"] },
       { kind: "choose-variant", instanceId: "i", variant: null },
+      { kind: "set-list-query", listId: "l", query: { limit: null } },
+      {
+        kind: "set-conditions",
+        nodeId: "n",
+        conditions: [[{ field: "title", op: "exists" }]],
+      },
+      {
+        kind: "bind-prop",
+        nodeId: "n",
+        prop: "text",
+        binding: { $bind: "title", fallback: "Untitled" },
+      },
+      { kind: "unbind-prop", nodeId: "n", prop: "text" },
       { kind: "set-layout", layout: null },
+      { kind: "place-entry-content", field: "body", at: { index: 2 } },
+      { kind: "set-entry-content-field", nodeId: "n", field: "sidebar" },
     ];
     expect(accepted.map(action => action.kind)).toEqual(PAGE_ACTION_KINDS);
     for (const action of accepted) {
@@ -239,6 +299,71 @@ describe("the definition action schema", () => {
   });
 });
 
+describe("the page actions' JSON Schema", () => {
+  /** Every schema the form names under `key`, wherever it sits. */
+  function propertiesNamed(schema: unknown, key: string): unknown[] {
+    const found: unknown[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach(walk);
+        return;
+      }
+      if (typeof node !== "object" || node === null) return;
+      const properties = (node as { properties?: Record<string, unknown> })
+        .properties;
+      if (properties !== undefined && key in properties) {
+        found.push(properties[key]);
+      }
+      Object.values(node).forEach(walk);
+    };
+    walk(schema);
+    return found;
+  }
+
+  it("states a binding's format as an object, and leaves a kept value open", () => {
+    const schema = pageActionJsonSchema();
+    const formats = propertiesNamed(schema, "format");
+    expect(formats.length).toBeGreaterThan(0);
+    // The route refuses a format that is not a plain object, so the form a
+    // client validates against says so too.
+    for (const format of formats) {
+      expect(format).toMatchObject({ type: "object" });
+    }
+    // An unbind may keep any JSON value: its `{ value }` keep states no
+    // constraint at all, and still requires the value.
+    const unbind = (
+      schema.oneOf as { properties: { kind: { const: string } } }[]
+    ).find(option => option.properties.kind.const === "unbind-prop");
+    expect(unbind).toBeDefined();
+    const keepsValue: {
+      properties: Record<string, unknown>;
+      required?: string[];
+    }[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (typeof node !== "object" || node === null) return;
+      const shaped = node as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+      if (
+        shaped.properties !== undefined &&
+        Object.keys(shaped.properties).join() === "value"
+      ) {
+        keepsValue.push({
+          properties: shaped.properties,
+          required: shaped.required,
+        });
+      }
+      Object.values(node).forEach(walk);
+    };
+    walk(unbind);
+    expect(keepsValue).toHaveLength(1);
+    expect(keepsValue[0]?.properties.value).toEqual({});
+    expect(keepsValue[0]?.required).toContain("value");
+  });
+});
+
 describe("planDefinitionAction", () => {
   const sources = () => ({ definitions: registryBlockSource() });
 
@@ -347,5 +472,40 @@ describe("planDefinitionAction", () => {
         sources()
       )
     ).toMatchObject({ problem: "unknown-variant" });
+  });
+});
+
+describe("a list's custom source in set-list-query", () => {
+  const action = (namedQuery: unknown) => ({
+    kind: "set-list-query",
+    listId: "l",
+    query: { namedQuery },
+  });
+
+  it("takes a query's name and its inputs as literals, or null to remove it", () => {
+    for (const namedQuery of [
+      {
+        name: "events.upcoming",
+        params: { city: "lahore", within: 3, free: true },
+      },
+      { name: "events.all" },
+      null,
+    ]) {
+      expect(pageActionSchema.safeParse(action(namedQuery)).success).toBe(true);
+    }
+  });
+
+  it("refuses anything but a name and literal inputs, leaving their meaning to the save", () => {
+    for (const namedQuery of [
+      { name: "events.upcoming", run: "x" },
+      { name: "events.upcoming", params: { city: ["lahore"] } },
+      { name: "events.upcoming", params: { city: "x".repeat(201) } },
+      { name: "x".repeat(65) },
+      { params: {} },
+    ]) {
+      expect(pageActionSchema.safeParse(action(namedQuery)).success).toBe(
+        false
+      );
+    }
   });
 });

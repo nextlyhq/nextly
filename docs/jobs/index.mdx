@@ -284,7 +284,7 @@ Each call to the jobs route enqueues a schedule's job for the latest window that
 
 A schedule that can't run (an invalid `cron` or `tz`, a `job` the plugin doesn't declare, or a slug it uses twice) stops the installation from starting, naming the plugin. Each window's record is kept for 30 days, and a schedule's latest window is always kept.
 
-This surface is experimental. The earlier `{ name, schedule }` shape is still accepted but not run.
+This surface is experimental. The earlier `{ name, schedule, handler }` shape is deprecated, and runs as the current shape with a warning at start-up: `name` is the slug, `schedule` is the cron, or an interval in milliseconds of whole minutes dividing an hour or whole hours dividing a day (`900000` runs every 15 minutes, `7200000` every 2 hours), and `handler` runs as a job of its own, given the plugin's context. One that cannot be mapped, such as a 7-minute interval, a cron that doesn't parse, or one with no handler, is not run, and the warning says why. Neither stops the app starting.
 
 ## Retention
 

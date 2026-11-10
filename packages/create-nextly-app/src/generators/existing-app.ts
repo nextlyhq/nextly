@@ -43,7 +43,7 @@ export async function generateIntoExistingApp(
     await generateMediaRoutes(cwd, projectInfo, templates),
     await generateUploadsRoute(cwd, projectInfo, templates),
     await generateInstrumentation(cwd, projectInfo),
-    await generateTypesDirectory(cwd, projectInfo),
+    await generateTypesDirectory(cwd, projectInfo, templates),
     nextConfigFiles(await patchNextConfig(cwd, database)),
     // After the packages, so it reads the config that step left.
     cacheComponentsFiles(await turnOnCacheComponents(cwd)),

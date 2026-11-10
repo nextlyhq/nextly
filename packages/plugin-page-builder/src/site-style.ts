@@ -161,6 +161,9 @@ function sameNamedClass(a: NamedClass, b: NamedClass): boolean {
     // The block type a look is bound to: the same styles on another type is
     // another look.
     a.blockType === b.blockType &&
+    // A block's own look edits its type's base; the same entry without the
+    // mark is a look blocks wear instead.
+    a.isDefault === b.isDefault &&
     sameJsonValue(a.styles, b.styles)
   );
 }
@@ -311,7 +314,9 @@ function hasBreakpoints(set: BreakpointSet | undefined): boolean {
  * characters it covers. One cut in two scripts is two files, each with its
  * own `unicode-range`, and both must load.
  */
-function faceIdentity(face: FontFaceDef): string {
+export function faceIdentity(
+  face: Pick<FontFaceDef, "family" | "weight" | "style" | "unicodeRange">
+): string {
   // Weight and style default at emission (`normal` both), so an absent value
   // and the default spelled out are the same face and must collide here.
   return `${face.family} ${face.weight ?? "normal"} ${face.style ?? "normal"} ${face.unicodeRange ?? ""}`;

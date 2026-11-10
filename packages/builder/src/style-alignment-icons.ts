@@ -21,6 +21,7 @@
 
 import {
   BASE_BREAKPOINT,
+  DISCLOSURE_ICON_PROPERTY,
   type NodeStyles,
   type StyleLeaf,
   type StyleState,
@@ -282,6 +283,23 @@ const FIXED_GROUPS: Readonly<
       { value: "capitalize", icon: "CaseSensitive" },
     ],
     more: ["math-auto", "full-width", "full-size-kana"],
+  },
+  // An Accordion's icon, each drawn as itself; Browser default as the
+  // triangle a browser draws.
+  [DISCLOSURE_ICON_PROPERTY]: {
+    entries: [
+      { value: "chevron", icon: "ChevronDown" },
+      { value: "plus", icon: "Plus" },
+      { value: "none", icon: "Ban" },
+      { value: "browser", icon: "Play" },
+    ],
+    more: [],
+    help: {
+      chevron: "Turns when a section opens.",
+      plus: "Becomes a minus when a section opens.",
+      none: "No icon; the whole title still opens it.",
+      browser: "The browser's own triangle.",
+    },
   },
   // Cover first: the fit most images want. Original size and Shrink to fit
   // are rarer, and wait under More.

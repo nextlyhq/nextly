@@ -5,6 +5,9 @@
  * with rows 72 px high. A card spans its `w` columns and `h` rows, placed in
  * the list's order and never moved out of it to fill a gap, so the order a
  * reader sees, the order the page is read in and the order Tab visits agree.
+ * At rest the rows are as tall as the cards drawn in them, never taller than
+ * 72 px rows would draw them (`dashboardGridClass`, `frame/fit`); a card still
+ * spans its `h` rows, so it is placed where customise mode places it.
  *
  * How many columns a card is DRAWN across depends on how wide the DASHBOARD
  * is, not the window: the grid sits in an `@container/dashboard` wrapper and
@@ -62,7 +65,7 @@ export {
 } from "nextly/card-geometry";
 
 /**
- * The grid's own classes: twelve columns, rows of {@link ROW_HEIGHT_PX}, and the gaps.
+ * The grid's classes but its rows: twelve columns, in order, and the gaps.
  *
  * 🔴 The gap rule lives here and nowhere else: 16 px down at every width, and across 16 px, or
  * 24 px once the DASHBOARD is {@link WIDE_GAP_FROM_PX} wide. In pixels, because a card's drawn
@@ -70,8 +73,31 @@ export {
  * off by enough to move a card across a tier's edge. `grid-flow-row` and never `dense`: a dense
  * grid backfills a gap with a later card, which draws it out of its order.
  */
-export const GRID_CLASS =
-  "grid grid-flow-row grid-cols-12 auto-rows-[72px] gap-x-[16px] gap-y-[16px] @min-[1280px]/dashboard:gap-x-[24px]";
+const GRID_TRACKS_CLASS =
+  "grid grid-flow-row grid-cols-12 gap-x-[16px] gap-y-[16px] @min-[1280px]/dashboard:gap-x-[24px]";
+
+/**
+ * The grid's own classes with rows of {@link ROW_HEIGHT_PX}: where every card is drawn at its
+ * stored size, as in customise mode, and wherever the grid holds places with nothing drawn in
+ * them yet (the placeholders drawn while the dashboard is read).
+ */
+export const GRID_CLASS = `${GRID_TRACKS_CLASS} auto-rows-[72px]`;
+
+/**
+ * The grid's own classes with rows as tall as what is drawn in them: the dashboard at rest, where
+ * each cell asks its rows for the height its card takes, at most its stored size (`frame/fit`).
+ * The columns, the order and the gaps are {@link GRID_CLASS}'s, so every card is placed in the
+ * same row and columns in both; only how tall the rows are differs.
+ */
+export const CONTENT_ROWS_GRID_CLASS = `${GRID_TRACKS_CLASS} auto-rows-auto`;
+
+/**
+ * The dashboard grid's classes: fixed rows while customising, where the stored sizes are what is
+ * edited and a card is resized by the rows it spans, and rows as tall as their cards at rest.
+ */
+export function dashboardGridClass(isEditing: boolean): string {
+  return isEditing ? GRID_CLASS : CONTENT_ROWS_GRID_CLASS;
+}
 
 /**
  * The grid's columns and the gap across them, without its rows: for a grid that draws cards at

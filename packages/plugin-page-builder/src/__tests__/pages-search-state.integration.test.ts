@@ -215,7 +215,7 @@ describe.each(getConfiguredTestDialects())(
       await direct.update({
         collection: PAGES,
         id: changed,
-        data: { title: "St changed, edited" },
+        data: { title: "St changed, edited", _overwrite: true },
       });
       await page("St plain", "published");
       const scheduled = await page("St scheduled", "draft");

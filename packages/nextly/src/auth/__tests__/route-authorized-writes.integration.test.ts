@@ -307,7 +307,7 @@ for (const dialect of getConfiguredTestDialects()) {
           "PATCH",
           `collections/${REFUSES_UPDATE}/entries/${entryId}`,
           callers.editorKey,
-          { title: "changed" }
+          { title: "changed", _overwrite: true }
         );
         expect(update.status).toBe(403);
 
@@ -324,7 +324,7 @@ for (const dialect of getConfiguredTestDialects()) {
           "PATCH",
           `singles/${S_REFUSES_UPDATE}`,
           callers.editorKey,
-          { headline: "changed" }
+          { headline: "changed", _overwrite: true }
         );
         expect(update.status).toBe(403);
 
@@ -338,7 +338,7 @@ for (const dialect of getConfiguredTestDialects()) {
           "PATCH",
           `collections/${REFUSES_UPDATE}/entries/${entryId}`,
           callers.editor,
-          { title: "changed" }
+          { title: "changed", _overwrite: true }
         );
         expect(update.status).toBe(403);
 
@@ -358,8 +358,8 @@ for (const dialect of getConfiguredTestDialects()) {
       const writes = (slug: string, entryId: string) =>
         [
           ["PATCH", `versions/1`, { label: "named" }],
-          ["POST", `versions/1/restore`, undefined],
-          ["DELETE", `versions/working-draft`, undefined],
+          ["POST", `versions/1/restore`, { _overwrite: true }],
+          ["DELETE", `versions/working-draft?_overwrite=true`, undefined],
           ["PUT", `versions/autosave`, { snapshot: { title: "x" } }],
         ].map(([method, tail, body]) => ({
           method: method as Method,
@@ -373,7 +373,7 @@ for (const dialect of getConfiguredTestDialects()) {
         await t.nextly.update({
           collection: slug,
           id: entryId,
-          data: { title: "second" },
+          data: { title: "second", _overwrite: true },
         });
         return entryId;
       }
@@ -398,13 +398,16 @@ for (const dialect of getConfiguredTestDialects()) {
         await t.nextly.update({
           collection: HIDDEN_READ,
           id: entryId,
-          data: { title: "second" },
+          data: { title: "second", _overwrite: true },
         });
         for (const who of [callers.editor, callers.editorKey]) {
           const entry = `collections/${HIDDEN_READ}/entries/${entryId}`;
           // The caller may update the entry through REST, so the route's
           // update gate passes and only the read it asks next can refuse.
-          const update = await rest("PATCH", entry, who, { title: "edited" });
+          const update = await rest("PATCH", entry, who, {
+            title: "edited",
+            _overwrite: true,
+          });
           expect(update.ok, `PATCH ${entry}: ${update.status}`).toBe(true);
           const read = await rest("GET", entry, who);
           expect(REFUSED).toContain(read.status);
@@ -423,12 +426,13 @@ for (const dialect of getConfiguredTestDialects()) {
         await t.nextly.update({
           collection: PLAIN,
           id: entryId,
-          data: { title: "second" },
+          data: { title: "second", _overwrite: true },
         });
         const entry = `collections/${PLAIN}/entries/${entryId}`;
         // As above: the update passes, the read does not.
         const update = await rest("PATCH", entry, callers.updater, {
           title: "edited",
+          _overwrite: true,
         });
         expect(update.ok, `PATCH ${entry}: ${update.status}`).toBe(true);
         const read = await rest("GET", entry, callers.updater);
@@ -642,7 +646,7 @@ for (const dialect of getConfiguredTestDialects()) {
         await t.nextly.update({
           collection: PLAIN,
           id: liveId,
-          data: { title: "pending" },
+          data: { title: "pending", _overwrite: true },
         });
         // A working draft is pending, so copying the live row is a choice.
         const withDraft = (await t.nextly.findByID({
@@ -686,7 +690,9 @@ for (const dialect of getConfiguredTestDialects()) {
           })) as { status?: unknown } | null
         )?.status;
       const publishAll = (id: string, who: Headers) =>
-        rest("POST", `collections/${PLAIN}/entries/${id}/publish-all`, who);
+        rest("POST", `collections/${PLAIN}/entries/${id}/publish-all`, who, {
+          _overwrite: true,
+        });
 
       // A caller who may publish publishes it.
       const allowed = await makeEntry(t, PLAIN, { status: "draft" });
@@ -700,7 +706,7 @@ for (const dialect of getConfiguredTestDialects()) {
         "PATCH",
         `collections/${PLAIN}/entries/${entryId}`,
         callers.noPublisher,
-        { title: "edited" }
+        { title: "edited", _overwrite: true }
       );
       expect(update.ok, `update: ${update.status}`).toBe(true);
       expect(REFUSED).toContain(
@@ -719,7 +725,7 @@ for (const dialect of getConfiguredTestDialects()) {
               "content-type": "application/json",
               ...who,
             },
-            body: JSON.stringify({ headline: "out", status }),
+            body: JSON.stringify({ headline: "out", status, _overwrite: true }),
           }),
           { params: Promise.resolve({ slug: S_STATUS }) }
         );

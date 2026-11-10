@@ -28,6 +28,7 @@ import {
   type WidgetSizeBounds,
 } from "nextly/config";
 
+import { freshId } from "@admin/lib/fresh-id";
 import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
 /** The four ways a card moves from its menu. */
@@ -319,24 +320,11 @@ export function setPlacementConfig(
 }
 
 /**
- * A fresh placement id.
- *
- * `crypto.randomUUID` where it exists, and a counter-plus-random fallback where
- * it does not — jsdom without a secure context, and older browsers, both leave
- * it undefined. The fallback does not need to be unguessable: this id is opaque
- * within one arrangement and is never a secret, so uniqueness is the whole
- * requirement.
+ * A fresh placement id: opaque within one arrangement and never a secret, so
+ * the admin's one fresh-id maker (`freshId`) serves it.
  */
-let fallbackCounter = 0;
 export function newPlacementId(): string {
-  const generator = globalThis.crypto;
-  if (typeof generator?.randomUUID === "function") {
-    return generator.randomUUID();
-  }
-  fallbackCounter += 1;
-  return `placement-${Date.now()}-${fallbackCounter}-${Math.random()
-    .toString(36)
-    .slice(2, 10)}`;
+  return freshId("placement");
 }
 
 /**

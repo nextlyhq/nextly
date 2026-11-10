@@ -50,6 +50,28 @@ function messages(raw: unknown): string[] {
 }
 
 describe("readTransferFile", () => {
+  it("leaves out a block's own look, so an import never changes the site's", () => {
+    const primary = {
+      id: "look:core/button:primary",
+      slug: "button-primary",
+      orderIndex: 0,
+      blockType: "core/button",
+      isDefault: true,
+      styles: { base: { base: { color: "purple" } } },
+    };
+    const outline = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      orderIndex: 1,
+      blockType: "core/button",
+      styles: { base: { base: { color: "red" } } },
+    };
+    const read = readTransferFile(file({ classes: [primary, outline] }));
+    if (!("file" in read)) throw new Error("refused");
+    // The population: a look blocks wear is carried.
+    expect(read.file.classes.map(entry => entry.id)).toEqual([outline.id]);
+  });
+
   it("accepts a whole file", () => {
     expect(messages(file())).toEqual([]);
   });

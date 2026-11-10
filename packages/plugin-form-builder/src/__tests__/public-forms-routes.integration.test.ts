@@ -185,7 +185,11 @@ describe("GET /api/forms/:slug", () => {
     await current!.nextly.update({
       collection: "forms",
       id: (existing.items[0] as { id: string }).id,
-      data: { status: "closed", closedMessage: "Applications closed." },
+      data: {
+        status: "closed",
+        closedMessage: "Applications closed.",
+        _overwrite: true,
+      },
     });
 
     const res = await handlers.GET(
@@ -308,7 +312,7 @@ describe("POST /api/forms/:slug/submit?locale=", () => {
     await current.nextly.update({
       collection: "pages",
       id: pageId,
-      data: { slug: "merci" },
+      data: { slug: "merci", _overwrite: true },
       locale: "fr",
     });
     await current.nextly.create({

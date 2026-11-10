@@ -192,6 +192,51 @@ describe("buildPluginAdminMeta", () => {
     expect(disabled.documentViews).toBeUndefined();
   });
 
+  it("publishes document action overrides and panel sections on their routed slug, for an enabled plugin only", () => {
+    const declaration = {
+      ...base,
+      renameMap: { layouts: "site-layouts" },
+      contributes: {
+        admin: {
+          views: {
+            layouts: {
+              documentActions: {
+                unpublish: "hidden",
+                delete: { component: "@acme/p/admin#Remove" },
+              },
+              panelSections: [
+                { title: "Used by", component: "@acme/p/admin#Usage" },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const [enabled] = buildPluginAdminMeta(asPlugins([declaration]), undefined);
+    expect(enabled.documentActions).toEqual([
+      { slug: "site-layouts", action: "unpublish", override: "hidden" },
+      {
+        slug: "site-layouts",
+        action: "delete",
+        override: { component: "@acme/p/admin#Remove" },
+      },
+    ]);
+    expect(enabled.panelSections).toEqual([
+      {
+        slug: "site-layouts",
+        title: "Used by",
+        component: "@acme/p/admin#Usage",
+      },
+    ]);
+
+    const [disabled] = buildPluginAdminMeta(
+      asPlugins([{ ...declaration, enabled: false }]),
+      undefined
+    );
+    expect(disabled.documentActions).toBeUndefined();
+    expect(disabled.panelSections).toBeUndefined();
+  });
+
   it("folds contributes.admin menu/pages/settings for enabled plugins", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
@@ -1248,5 +1293,41 @@ describe("buildPluginAdminMeta menu slugs", () => {
       to: "/admin/collections/saved-patterns",
       requiredPermission: "read-saved-patterns",
     });
+  });
+});
+
+describe("buildPluginAdminMeta, a plugin's translations", () => {
+  const catalog = { en: { "acme-p.cart.title": "Cart" } };
+
+  it("serves a plugin's translations whether or not it is enabled, as its field editors still mount", () => {
+    const [enabled] = buildPluginAdminMeta(
+      asPlugins([{ ...base, contributes: { translations: catalog } }]),
+      undefined
+    );
+    const [disabled] = buildPluginAdminMeta(
+      asPlugins([
+        { ...base, enabled: false, contributes: { translations: catalog } },
+      ]),
+      undefined
+    );
+
+    expect(enabled?.translations).toEqual(catalog);
+    expect(disabled?.translations).toEqual(catalog);
+  });
+
+  it("refuses to serve a catalog startup would refuse", () => {
+    expect(() =>
+      buildPluginAdminMeta(
+        asPlugins([
+          {
+            ...base,
+            contributes: {
+              translations: { en: { "other.cart.title": "Cart" } },
+            },
+          },
+        ]),
+        undefined
+      )
+    ).toThrow(NextlyError);
   });
 });

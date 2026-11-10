@@ -56,6 +56,7 @@ import { MANAGE_SITE_PERMISSION } from "../site-settings";
 
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./settings-single";
 import {
+  changedByOf,
   layoutExists,
   publishedLayoutIds,
   readLayoutSettings,
@@ -144,7 +145,7 @@ async function makeDefault(
   // it, so of two calls at once the later write wins, as said above.
   await writeLayoutSettings(nextly, slugs, "overwrite", {
     defaultLayout: id,
-    defaultLayoutChangedBy: by.userId,
+    defaultLayoutChangedBy: changedByOf(by),
   });
   await restoreIfUnusable(nextly, slugs, ctx, removals, {
     id,

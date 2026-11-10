@@ -14,6 +14,7 @@
 import { isDrawnAttentionItem } from "nextly/attention-keys";
 
 import { adminHref } from "@admin/constants/routes";
+import type { ReleaseAttentionReason } from "@admin/types/releases";
 
 import { countSpoken, countText } from "../widgets/frame/list-card";
 
@@ -37,12 +38,32 @@ export interface AttentionRow {
   href?: string;
   /** The count could not be read: the row says so and offers Retry. */
   failed: boolean;
+  /**
+   * For core's stopped and overdue release items, which part of the Releases
+   * list's Needs attention tab the row counts, so the card can name those
+   * releases under it. Absent on every other row, and on a failed one.
+   */
+  releases?: ReleaseAttentionReason;
 }
+
+/**
+ * Core's release items of the digest, by id, and the part of Needs attention
+ * each counts: the ids the server's release kinds are sent under.
+ */
+const RELEASE_ITEM_REASON: Readonly<Record<string, ReleaseAttentionReason>> = {
+  "core/stopped-releases": "stopped",
+  "core/overdue-releases": "overdue",
+};
 
 /** One item of the answer, or `null` for anything the card cannot draw. */
 function attentionRow(item: unknown): AttentionRow | null {
   if (!isDrawnAttentionItem(item)) return null;
   const failed = item.failed === true;
+  // Own-property lookup, so an id such as "toString" names no reason.
+  const releases =
+    !failed && Object.hasOwn(RELEASE_ITEM_REASON, item.id)
+      ? RELEASE_ITEM_REASON[item.id]
+      : undefined;
   return {
     id: item.id,
     label: item.label,
@@ -50,6 +71,7 @@ function attentionRow(item: unknown): AttentionRow | null {
     ...rowWords(item.label, item, failed),
     ...rowExtras(item),
     failed,
+    ...(releases === undefined ? {} : { releases }),
   };
 }
 

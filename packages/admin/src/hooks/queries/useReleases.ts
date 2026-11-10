@@ -47,6 +47,7 @@ import { toast } from "@admin/components/ui";
 import { collectionApi } from "@admin/services/collectionApi";
 import { entryApi } from "@admin/services/entryApi";
 import {
+  addReleaseMembers,
   cancelRelease,
   changeReleaseMemberAction,
   createRelease,
@@ -69,6 +70,7 @@ import {
   type ReleaseMutationResponse,
   type ReleaseListResponse,
   type MemberMutationResponse,
+  type MembersMutationResponse,
   type MemberListResponse,
   type BlockerListResponse,
   type ReleaseHistoryResponse,
@@ -77,7 +79,9 @@ import {
 import { singleApi } from "@admin/services/singleApi";
 import {
   RELEASE_LIST_TABS,
+  type AddReleaseMembersPayload,
   type CreateReleasePayload,
+  type ReleaseAttentionReason,
   type ReleaseCalendarParams,
   type ReleaseCalendarRead,
   type ReleaseDocumentInfo,
@@ -159,6 +163,34 @@ export function useReleaseListPage(
       hasPendingRelease(data.state.data)
         ? PENDING_RELEASE_POLL_MS
         : NO_RELEASE_POLL_MS,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * The first few releases that need attention, and how many there are in all:
+ * what the strip at the top of the Releases page draws, and, narrowed to one
+ * reason, what the dashboard's Needs attention card names under that row.
+ *
+ * The server's own Needs attention tab, never a rule of the caller's, so the
+ * strip, the card and the tab always agree on what is stopped or overdue.
+ * Polled on the pending speed whatever is on it, as the tab counts are: a
+ * release turns overdue on its own, while nothing on screen is about to run.
+ */
+export function useReleasesNeedingAttention(
+  limit: number,
+  reason?: ReleaseAttentionReason
+): UseQueryResult<ReleaseListResponse, Error> {
+  const params: ReleaseListParams = {
+    tab: "attention",
+    page: 1,
+    limit,
+    ...(reason ? { reason } : {}),
+  };
+  return useQuery({
+    queryKey: releaseKeys.list(params),
+    queryFn: () => fetchReleases(params),
+    refetchInterval: PENDING_RELEASE_POLL_MS,
     refetchOnWindowFocus: true,
   });
 }
@@ -566,6 +598,27 @@ export function useCancelRelease(id: string): UseMutationResult<
 }
 
 /**
+ * Several documents added in one step, all or none. No toast here: what the
+ * editor is told depends on what the answer offers next, so the caller says it.
+ */
+export function useAddReleaseMembers(
+  releaseId: string
+): UseMutationResult<
+  MembersMutationResponse,
+  Error,
+  AddReleaseMembersPayload,
+  unknown
+> {
+  const refresh = useRefreshRelease();
+  return useMutation({
+    ...NO_RETRY,
+    mutationFn: (payload: AddReleaseMembersPayload) =>
+      addReleaseMembers(releaseId, payload),
+    onSuccess: () => refresh(releaseId),
+  });
+}
+
+/**
  * What a removal tells the editor, from what the server says it did: taking
  * the only document out of a single-document release cancels the release, so
  * the toast says that rather than that the document was removed.
@@ -805,7 +858,11 @@ export interface ReleaseDocumentNames {
  */
 export function useReleaseDocumentNames(
   releaseId: string | undefined,
-  members: readonly ReleaseMember[]
+  // Only where each document is, so a linked document an add offers is named
+  // the same way as a member.
+  members: ReadonlyArray<
+    Pick<ReleaseMember, "scopeKind" | "scopeSlug" | "entryId">
+  >
 ): ReleaseDocumentNames {
   const scopes = new Map<
     string,

@@ -117,39 +117,56 @@ function normalize(text: string): string {
 const startsAWord = (text: string, query: string): boolean =>
   text.startsWith(query) || text.includes(`-${query}`);
 
+/** What a search compares a query with: an icon's name, former names and tags. */
+interface SearchedIcon {
+  readonly name: string;
+  readonly formerNames: readonly string[];
+  readonly tags: readonly string[];
+}
+
+/** One way a query can match an icon. */
+type MatchKind = (query: string, icon: SearchedIcon) => boolean;
+
 /**
- * How well an icon matches, lower being better, or `undefined` for no match.
- *
- * In order: the name itself; a name Lucide renamed from, typed in full; the
- * start of the name; the start of a word in the name; the start of a word in
- * a former name; a tag in full; the start of a word in a tag; anywhere in the
- * name. A query of several words that matches none of these still matches
- * when every word starts a word of the name, a former name or a tag.
+ * A query of several words, each starting a word of the name, a former name
+ * or a tag: `circle out` finds `circle-arrow-out-up-right`.
  */
-function rankOf(
-  query: string,
-  name: string,
-  formerNames: readonly string[],
-  tags: readonly string[]
-): number | undefined {
-  if (name === query) return 0;
-  if (formerNames.includes(query)) return 1;
-  if (name.startsWith(query)) return 2;
-  if (startsAWord(name, query)) return 3;
-  if (formerNames.some(former => startsAWord(former, query))) return 4;
-  if (tags.includes(query)) return 5;
-  if (tags.some(tag => startsAWord(tag, query))) return 6;
-  if (name.includes(query)) return 7;
+const everyWordStartsAWord: MatchKind = (query, icon) => {
   const words = query.split("-");
-  if (
+  const texts = [icon.name, ...icon.formerNames, ...icon.tags];
+  return (
     words.length > 1 &&
-    words.every(word =>
-      [name, ...formerNames, ...tags].some(text => startsAWord(text, word))
-    )
-  ) {
-    return 8;
-  }
-  return undefined;
+    words.every(word => texts.some(text => startsAWord(text, word)))
+  );
+};
+
+/**
+ * The ways a query can match an icon, best first; a match ranks by the first
+ * kind it meets. In order: the name itself; a name Lucide renamed from, typed
+ * in full; the start of the name; the start of a word in the name; the start
+ * of a word in a former name; a tag in full; the start of a word in a tag;
+ * anywhere in the name; every word of the query starting a word of the icon.
+ */
+const MATCH_KINDS: readonly MatchKind[] = [
+  (query, { name }) => name === query,
+  (query, { formerNames }) => formerNames.includes(query),
+  (query, { name }) => name.startsWith(query),
+  (query, { name }) => startsAWord(name, query),
+  (query, { formerNames }) =>
+    formerNames.some(former => startsAWord(former, query)),
+  (query, { tags }) => tags.includes(query),
+  (query, { tags }) => tags.some(tag => startsAWord(tag, query)),
+  (query, { name }) => name.includes(query),
+  everyWordStartsAWord,
+];
+
+/**
+ * How well an icon matches, lower being better, or `undefined` for no match:
+ * the place in {@link MATCH_KINDS} of the first kind of match it meets.
+ */
+function rankOf(query: string, icon: SearchedIcon): number | undefined {
+  const rank = MATCH_KINDS.findIndex(matches => matches(query, icon));
+  return rank === -1 ? undefined : rank;
 }
 
 /**
@@ -176,12 +193,11 @@ export async function searchLucideIcons(
     const rank =
       wanted === ""
         ? 0
-        : rankOf(
-            wanted,
+        : rankOf(wanted, {
             name,
-            formerNamesOf.get(name) ?? [],
-            (LUCIDE_TAGS[name] ?? []).map(normalize)
-          );
+            formerNames: formerNamesOf.get(name) ?? [],
+            tags: (LUCIDE_TAGS[name] ?? []).map(normalize),
+          });
     if (rank !== undefined) ranked.push({ name, rank });
   }
   const byName = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -202,4 +218,26 @@ export async function searchLucideIcons(
     stroked: true,
     tags: LUCIDE_TAGS[name] ?? [],
   }));
+}
+
+/**
+ * The set as an icon picker's source: its prefix, its name as a person reads
+ * it, and its search and resolve. Shaped as `@nextlyhq/ui`'s `IconSource`,
+ * which this package cannot import, so every picker (the admin's icon field,
+ * the page builder's Icon control) reads the set through this one object
+ * rather than each assembling its own.
+ */
+export const lucideIconSource: LucideIconSource = {
+  prefix: LUCIDE_PREFIX,
+  label: "Lucide",
+  search: query => searchLucideIcons(query),
+  resolve: id => resolveLucideIcon(id),
+};
+
+/** The shape of {@link lucideIconSource}. */
+export interface LucideIconSource {
+  readonly prefix: string;
+  readonly label: string;
+  search(query: string): Promise<readonly LucideSearchResult[]>;
+  resolve(id: string): Promise<ResolvedIcon | null>;
 }

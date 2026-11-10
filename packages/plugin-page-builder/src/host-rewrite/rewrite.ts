@@ -13,15 +13,15 @@
  * Every write is made by the writer the run is walked with (as the person the
  * run belongs to, or as the system for a run no one person owns), writes only
  * the blocks field, and carries the hash of the value it was computed from, so
- * a write
- * that would overwrite somebody's edit is refused and the host is read again
- * (see `expectations`). Doubt never reads as "nothing to do": a host that
- * cannot be read, read to the end, or addressed is reported as left.
+ * a write that would overwrite somebody's edit is refused and the host is read
+ * again (core's conditional write, judged under the write's own row lock).
+ * Doubt never reads as "nothing to do": a host that cannot be read, read to
+ * the end, or addressed is reported as left.
  *
  * @module host-rewrite/rewrite
  * @experimental
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import { NextlyError, storedValueHash } from "@nextlyhq/plugin-sdk";
 
 import {
   documentKeyOf,
@@ -30,13 +30,13 @@ import {
   type HostStep,
   type LeftHost,
   type LeftReason,
+  type PlannedHostWrite,
   type RewriteReport,
   type StepOutcome,
 } from "./contract";
 import type { RunPhase } from "./fence";
-import type { HostState, ProgressStore } from "./progress";
+import type { ProgressStore } from "./progress";
 import { scannedOutcomes } from "./scan";
-import { storedHash } from "./stored-hash";
 
 /** How a host's value can be reached. */
 export type HostAccess =
@@ -164,7 +164,10 @@ export interface RunStore {
 /** Everything a run is walked with. */
 export interface RewriteDeps {
   readonly fence: RunStore;
-  readonly progress: Pick<ProgressStore, "record" | "all" | "reopenLeft">;
+  readonly progress: Pick<
+    ProgressStore,
+    "record" | "settledAmong" | "reopenLeft"
+  >;
   readonly source: HostSource;
   readonly read: HostReader;
   /**
@@ -196,6 +199,12 @@ export interface RewriteArgs {
    * rewrite and leave. Progress and phase are untouched.
    */
   readonly dryRun?: boolean;
+  /**
+   * With `dryRun`, report each write with the body it sends
+   * (`RewriteReport.writes`). Off by default: every body is held until the
+   * call ends, so only a caller walking a few documents a call asks.
+   */
+  readonly plannedWrites?: boolean;
 }
 
 /** How many times a host changing under the rewrite is read again by default. */
@@ -213,6 +222,7 @@ type HostResult =
 /** The report being built over one call. */
 interface Tally {
   rewritten: HostAddress[];
+  writes: PlannedHostWrite[];
   unchanged: HostAddress[];
   left: LeftHost[];
   caught: HostAddress[];
@@ -245,6 +255,7 @@ export async function rewriteHosts(
   }
   const tally: Tally = {
     rewritten: [],
+    writes: [],
     unchanged: [],
     left: [],
     caught: [],
@@ -263,18 +274,6 @@ export async function rewriteHosts(
   return report(walk, await finalWalk(walk));
 }
 
-/**
- * Whether a recorded state means the converting walk need not visit the
- * document again: `rewritten`, `unchanged` or `left`. A left document is
- * settled for that walk because visiting it again changes nothing until its
- * author acts, and a budgeted run that kept revisiting one would never get past
- * it. Only `pending`, a document a write re-queued, is visited again. The final
- * walk reads every document regardless, left ones included.
- */
-function settlesConverting(state: HostState): boolean {
-  return state !== "pending";
-}
-
 /** The report a call answers with. */
 function report(walk: Walk, finished: boolean): RewriteReport {
   return {
@@ -282,6 +281,9 @@ function report(walk: Walk, finished: boolean): RewriteReport {
     unchanged: walk.tally.unchanged,
     left: walk.tally.left,
     caughtByFinalWalk: walk.tally.caught,
+    ...(walk.args.dryRun === true && walk.args.plannedWrites === true
+      ? { writes: walk.tally.writes }
+      : {}),
     finished,
   };
 }
@@ -303,30 +305,46 @@ async function dryWalk(walk: Walk): Promise<boolean> {
   return true;
 }
 
+/** How many documents the converting walk asks the progress about at once. */
+const PROGRESS_PAGE = 100;
+
 /**
  * The converting walk: the hinted documents, then every document, each once,
  * skipping those recorded as finished. Answers whether it reached the end.
+ *
+ * Which ones are finished is asked of the progress table a page of documents
+ * at a time, by their keys, so a step reads the rows of the documents it
+ * passes rather than every row the run has recorded.
  */
 async function convertingWalk(walk: Walk): Promise<boolean> {
   const { deps, run } = walk;
-  const skip = new Set(
-    (await deps.progress.all(run.id))
-      .filter(row => settlesConverting(row.state))
-      .map(row => row.documentKey)
-  );
-  const visitOnce = async (document: HostDocument): Promise<boolean> => {
-    if (skip.has(document.key)) return true;
-    if (spent(walk)) return false;
-    skip.add(document.key);
-    await visit(walk, document, true);
+  const seen = new Set<string>();
+  const visitPage = async (page: readonly HostDocument[]): Promise<boolean> => {
+    if (page.length === 0) return true;
+    const settled = await deps.progress.settledAmong(
+      run.id,
+      page.map(document => document.key)
+    );
+    for (const document of page) {
+      if (seen.has(document.key) || settled.has(document.key)) continue;
+      if (spent(walk)) return false;
+      seen.add(document.key);
+      await visit(walk, document, true);
+    }
     return true;
   };
-  for (const document of await deps.source.hinted()) {
-    if (!(await visitOnce(document))) return false;
+  const hinted = await deps.source.hinted();
+  for (let at = 0; at < hinted.length; at += PROGRESS_PAGE) {
+    if (!(await visitPage(hinted.slice(at, at + PROGRESS_PAGE)))) return false;
   }
+  let page: HostDocument[] = [];
   for await (const document of deps.source.documents(null)) {
-    if (!(await visitOnce(document))) return false;
+    page.push(document);
+    if (page.length < PROGRESS_PAGE) continue;
+    if (!(await visitPage(page))) return false;
+    page = [];
   }
+  if (!(await visitPage(page))) return false;
   // From the converting walk only: a write re-queueing a document meanwhile
   // leaves the phase as it is, which is what it would set.
   await deps.fence.advance(run.id, "converting", "final", null);
@@ -459,8 +477,29 @@ async function attemptHost(
   if (candidate.access !== "write") {
     return { kind: "left", reason: "unaddressable" };
   }
-  if (!writes) return written(decision);
+  if (!writes) {
+    // Kept only in a dry run that asks for them: a real run's values are
+    // not held past their write, and a long dry walk holds none.
+    if (walk.args.plannedWrites === true)
+      recordWrite(walk, candidate, decision);
+    return written(decision);
+  }
   return writtenBy(await walk.deps.write(decision.write), decision);
+}
+
+/** Hold one write a dry run would make, with the body it sends. */
+function recordWrite(
+  walk: Walk,
+  candidate: HostCandidate,
+  decision: Extract<Decision, { kind: "write" }>
+): void {
+  walk.tally.writes.push({
+    host: candidate.host,
+    value: decision.write.value,
+    ...(decision.write.publishAs === undefined
+      ? {}
+      : { status: decision.write.publishAs }),
+  });
 }
 
 /** What a write's result comes to for its host. */
@@ -526,7 +565,9 @@ async function decideLive(
       ...(read.liveState === null
         ? { mode: "save" as const }
         : { mode: "publish" as const, publishAs: read.liveState }),
-      expected: { form, hash: await storedHash(read.published.value) },
+      // The stored value exactly as read, which the conditional write hashes
+      // again under its row lock.
+      expected: { form, hash: await storedValueHash(read.published) },
       ...(read.rev === undefined ? {} : { rev: read.rev }),
     },
   };
@@ -582,7 +623,7 @@ async function decideWithDraft(
       host: candidate.host,
       value: outcome.value,
       mode: "save",
-      expected: { form: "draft", hash: await storedHash(draft.value) },
+      expected: { form: "draft", hash: await storedValueHash(draft) },
       ...(read.rev === undefined ? {} : { rev: read.rev }),
     },
   };

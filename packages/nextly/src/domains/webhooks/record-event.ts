@@ -24,7 +24,26 @@ import {
   DEFAULT_EVENT_RETENTION_CLASS,
   type EventRetentionClass,
 } from "./retention-config";
-import { DEFAULT_EVENT_OUTCOME, type WebhookEvent } from "./types";
+import {
+  DEFAULT_EVENT_OUTCOME,
+  type WebhookEvent,
+  type WebhookResource,
+} from "./types";
+
+/**
+ * The denormalized scope column: an entry's collection slug; a single (or
+ * other slugged resource) its own slug, so the delivery log identifies which
+ * resource changed; a plugin's event its admin slug. Informational only — the
+ * endpoint `collections` filter matches on the PAYLOAD's `resource.collection`,
+ * which only an entry carries, so neither a single's slug nor a plugin's here
+ * ever widens a collection-scoped subscription. One function for both writers
+ * below, so the two cannot store a different scope for one event.
+ */
+function resourceScope(resource: WebhookResource): string | null {
+  if (resource.kind === "entry") return resource.collection;
+  if (resource.kind === "plugin") return resource.plugin;
+  return resource.slug ?? null;
+}
 
 /**
  * Row shape written to `nextly_events` (snake_case column names). `created_at`
@@ -41,18 +60,7 @@ function eventRow(
     id: envelope.id,
     type: envelope.type,
     resource_kind: envelope.resource.kind,
-    // The denormalized scope column: an entry carries its collection slug; a
-    // single (or other slugged resource) carries its own slug so the delivery
-    // log identifies which resource changed. This is informational only — the
-    // endpoint `collections` filter matches on the PAYLOAD's `resource.collection`
-    // (undefined for a single), so a single slug here never widens a
-    // collection-scoped subscription.
-    resource_collection:
-      "collection" in envelope.resource
-        ? envelope.resource.collection
-        : "slug" in envelope.resource
-          ? (envelope.resource.slug ?? null)
-          : null,
+    resource_collection: resourceScope(envelope.resource),
     resource_id: envelope.resource.id ?? null,
     // Serialize the payload here rather than passing the object through: the
     // transactional insert is a raw INSERT, and only some dialect drivers
@@ -116,12 +124,7 @@ function eventRowForDrizzle(
     id: envelope.id,
     type: envelope.type,
     resourceKind: envelope.resource.kind,
-    resourceCollection:
-      "collection" in envelope.resource
-        ? envelope.resource.collection
-        : "slug" in envelope.resource
-          ? (envelope.resource.slug ?? null)
-          : null,
+    resourceCollection: resourceScope(envelope.resource),
     resourceId: envelope.resource.id ?? null,
     payload: envelope,
     actorType: envelope.actor?.type ?? null,

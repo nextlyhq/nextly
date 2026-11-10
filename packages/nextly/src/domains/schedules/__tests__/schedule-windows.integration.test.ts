@@ -16,6 +16,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { container } from "../../../di/container";
+import { getInitializedPluginContext } from "../../../di/register";
 import { defineJob, type JobRegistry } from "../../jobs/job-registry";
 import { runJobsPass } from "../../jobs/jobs-runner";
 import { definePlugin } from "../../../plugins/plugin-context";
@@ -152,6 +153,39 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     it("refuses to start with a schedule that cannot run, naming the plugin", async () => {
       await expect(boot(dialect, "every hour")).rejects.toThrow(PLUGIN);
+    });
+
+    it("runs a schedule in the earlier shape once per window, its handler given the plugin's started context", async () => {
+      const seen: unknown[] = [];
+      const plugin = definePlugin({
+        name: "@test/earlier",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          schedules: [
+            {
+              name: "tick",
+              schedule: 3_600_000,
+              handler: ctx => {
+                seen.push(ctx);
+              },
+            },
+          ],
+        },
+      });
+      current = await createTestNextly(
+        dialect === "sqlite"
+          ? { plugins: [plugin] }
+          : { dialect, plugins: [plugin] }
+      );
+      expect(current.adapter.dialect).toBe(dialect);
+      await pass(current, "2026-11-05T10:30:00.000Z");
+      await pass(current, "2026-11-05T11:05:00.000Z");
+      await pass(current, "2026-11-05T11:35:00.000Z");
+      expect(seen).toHaveLength(1);
+      const started = getInitializedPluginContext("@test/earlier");
+      expect(started).toBeDefined();
+      expect(seen[0]).toBe(started);
     });
 
     it("enqueues a due window's job once, and not again in the same window after the job has finished", async () => {

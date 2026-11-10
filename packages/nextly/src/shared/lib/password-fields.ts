@@ -23,10 +23,14 @@ import { systemColumnNames } from "../../lib/system-columns";
 import { addressableFields } from "../addressable-fields";
 
 import { toCamelCase, toSnakeCase } from "./case-conversion";
-import { rowPairing } from "./denied-change";
+import { rowId, rowPairing } from "./denied-change";
+import { sameApartFromIds, type InstanceFieldsOf } from "./same-apart-from-ids";
 
-/** The minimal field shape both FieldConfig and FieldDefinition satisfy. */
-interface NamedField {
+/**
+ * The minimal field shape both FieldConfig and FieldDefinition satisfy.
+ * Exported for the other walks over the same values (`repeater-row-ids`).
+ */
+export interface NamedField {
   name?: string;
   // `string`, not the strict field-type union: these helpers accept both
   // code-first FieldConfig[] and runtime FieldDefinition[], whose `type`
@@ -287,9 +291,10 @@ const WITHHELD = Symbol("withheld");
 /**
  * Rewrite one value of `holder` through `rewrite`, parsing it first where it
  * is held as JSON text and writing it back in that shape; a value that is not
- * valid JSON is left alone.
+ * valid JSON is left alone. Exported so every walk over a container's value
+ * opens and writes it back one way.
  */
-function rewriteValue(
+export function rewriteValue(
   holder: Record<string, unknown>,
   name: string,
   rewrite: (value: unknown) => unknown
@@ -336,9 +341,9 @@ function keepsInstance(
 /**
  * The fields one instance is judged by: its field group's, or for a dynamic
  * zone's row the field group its type names. `undefined` when they are not
- * known.
+ * known. Exported so every walk reads an inline instance by the same fields.
  */
-function instanceFields(
+export function instanceFields(
   instance: Record<string, unknown>,
   { single, many }: { single?: string; many?: string[] },
   { reach, untypedZoneRows }: Pick<PasswordWalk, "reach" | "untypedZoneRows">
@@ -564,10 +569,13 @@ function carryLevel(
   fields: readonly NamedField[],
   reach: FieldGroupReach,
   atEntry: boolean,
-  kept: Set<string>
+  kept: Set<string>,
+  // Where `level` sits in the document, as a path prefix ("lines.1."), so a
+  // refusal names the row it means.
+  at = ""
 ): void {
   for (const field of fields) {
-    carryField(level, stored, field, reach, atEntry, kept);
+    carryField(level, stored, field, reach, atEntry, kept, at);
   }
 }
 
@@ -578,12 +586,13 @@ function carryField(
   field: NamedField,
   reach: FieldGroupReach,
   atEntry: boolean,
-  kept: Set<string>
+  kept: Set<string>,
+  at: string
 ): void {
   if (!field.name) {
     // A layout container keeps its fields on this level.
     if (field.fields) {
-      carryLevel(level, stored, field.fields, reach, atEntry, kept);
+      carryLevel(level, stored, field.fields, reach, atEntry, kept, at);
     }
     return;
   }
@@ -595,7 +604,7 @@ function carryField(
   }
   // Own keys only: a field may be named like a member every object inherits.
   if (Object.hasOwn(level, field.name)) {
-    carryHeld(level, stored, field.name, field, reach, atEntry, kept);
+    carryHeld(level, stored, field.name, field, reach, atEntry, kept, at);
   }
 }
 
@@ -607,13 +616,15 @@ function carryHeld(
   field: NamedField,
   reach: FieldGroupReach,
   atEntry: boolean,
-  kept: Set<string>
+  kept: Set<string>,
+  at: string
 ): void {
   const previous = parsedValue(stored[name]);
   const held = field.fields;
+  const path = `${at}${name}`;
   if (held && (field.type === "group" || field.type === "repeater")) {
     rewriteValue(level, name, value => {
-      carryContainer(value, previous, field.type, held, reach, kept);
+      carryContainer(value, previous, field, held, reach, kept, path);
       return value;
     });
     return;
@@ -625,7 +636,7 @@ function carryHeld(
   // One placed directly on the entry is stored, and kept, in its own table.
   if (atEntry && reach.direct !== true) return;
   rewriteValue(level, name, value => {
-    carryInstances(value, previous, references, reach, kept);
+    carryInstances(value, previous, references, reach, kept, path);
     return value;
   });
 }
@@ -652,20 +663,67 @@ function carryPassword(
 function carryContainer(
   value: unknown,
   previous: unknown,
-  type: string,
+  container: NamedField,
   fields: readonly NamedField[],
   reach: FieldGroupReach,
-  kept: Set<string>
+  kept: Set<string>,
+  path: string
 ): void {
-  if (type === "group") {
+  if (container.type === "group") {
     if (isPlainRecord(value) && isPlainRecord(previous)) {
-      carryLevel(value, previous, fields, reach, false, kept);
+      carryLevel(value, previous, fields, reach, false, kept, `${path}.`);
     }
     return;
   }
-  forEachPairedRow(value, previous, (row, storedRow) =>
-    carryLevel(row, storedRow, fields, reach, false, kept)
-  );
+  const rows = Array.isArray(value) ? value : [];
+  forEachPairedRow(value, previous, "sent", (row, storedRow) => {
+    const index = rows.indexOf(row);
+    const carried = kept.size;
+    carryLevel(row, storedRow, fields, reach, false, kept, `${path}.${index}.`);
+    refuseAmbiguousCarry(row, storedRow, kept.size > carried, {
+      fields,
+      instanceFields: instanceFieldsFor(reach),
+      path,
+      index,
+    });
+  });
+}
+
+/**
+ * Refuse a row sent without its id that kept a stored password but no longer
+ * holds what that stored row does. Such a row is matched to the stored row at
+ * its place only by position, and a reorder or an insertion by a writer that
+ * sends no ids would hand that row's password to another. A row the system
+ * has given an id can be sent with it, so the write is refused with how to
+ * fix it, rather than the password moved or silently dropped. Rows stored
+ * before rows had ids carry none to send, and pair by position as before.
+ */
+function refuseAmbiguousCarry(
+  row: Record<string, unknown>,
+  storedRow: Record<string, unknown>,
+  carriedAPassword: boolean,
+  where: {
+    fields: readonly NamedField[];
+    instanceFields: InstanceFieldsOf;
+    path: string;
+    index: number;
+  }
+): void {
+  if (!carriedAPassword || hasRowId(row) || !hasRowId(storedRow)) return;
+  // Compared with the carried passwords in place, so only the row's other
+  // values can tell it apart from the stored row.
+  if (sameApartFromIds(row, storedRow, where.fields, where.instanceFields)) {
+    return;
+  }
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `${where.path}.${where.index}`,
+        code: "ROW_ID_REQUIRED",
+        message: `Row ${where.index + 1} of '${where.path}' changed without its id, so its saved password can't be kept safely. Send each row's id (from the last read), or send the password again.`,
+      },
+    ],
+  });
 }
 
 /** {@link carryLevel} through the instances a field-group field holds. */
@@ -674,8 +732,10 @@ function carryInstances(
   previous: unknown,
   references: { single?: string; many?: string[] },
   reach: FieldGroupReach,
-  kept: Set<string>
+  kept: Set<string>,
+  path: string
 ): void {
+  const list = Array.isArray(value) ? value : undefined;
   const carryInstance = (
     instance: Record<string, unknown>,
     storedInstance: Record<string, unknown>
@@ -685,10 +745,12 @@ function carryInstances(
     const fields = instanceFields(instance, references, lookup);
     if (fields === undefined) return;
     if (instanceFields(storedInstance, references, lookup) !== fields) return;
-    carryLevel(instance, storedInstance, fields, reach, false, kept);
+    const at =
+      list === undefined ? `${path}.` : `${path}.${list.indexOf(instance)}.`;
+    carryLevel(instance, storedInstance, fields, reach, false, kept, at);
   };
-  if (Array.isArray(value)) {
-    forEachPairedRow(value, previous, carryInstance);
+  if (list !== undefined) {
+    forEachPairedRow(list, previous, "both", carryInstance);
   } else if (
     isPlainRecord(value) &&
     isPlainRecord(previous) &&
@@ -698,25 +760,38 @@ function carryInstances(
   }
 }
 
-/** Each row of `value` with the stored row `rowPairing` pairs it with. */
+/**
+ * Each row of `value` with the stored row `rowPairing` pairs it with.
+ * `identifiedBy` says whose ids make the list one paired by id: "both"
+ * sides', or, for a repeater's rows, the "sent" rows' alone.
+ */
 function forEachPairedRow(
   value: unknown,
   previous: unknown,
+  identifiedBy: "both" | "sent",
   visit: (row: Record<string, unknown>, stored: Record<string, unknown>) => void
 ): void {
   if (!Array.isArray(value) || !Array.isArray(previous)) return;
   const pairOf = rowPairing(value, previous);
-  // Where rows carry ids, a row without one is new and takes no stored
-  // password: pairing it by position could hand it another record's. Only a
-  // list whose rows carry none at all pairs by position.
-  const identified = [...value, ...previous].some(hasRowId);
+  // Whether the list is paired by id. A repeater's is asked of the sent
+  // rows alone: every write stores its rows with ids (`assignRepeaterRowIds`),
+  // so asking the stored side too would leave a writer that never sends ids
+  // unable to keep any password it leaves out.
+  const identified = (
+    identifiedBy === "sent" ? value : [...value, ...previous]
+  ).some(hasRowId);
   value.forEach((row, index) => {
-    if (identified && !hasRowId(row)) return;
+    const sentId = hasRowId(row);
+    // A field-group instance without an id, among ones with, is new. A
+    // repeater row without one takes the stored row at its place that no
+    // sent row names (`rowPairing`), so an unchanged row keeps its password
+    // and a changed one is refused (`refuseAmbiguousCarry`), never dropped.
+    if (identified && !sentId && identifiedBy === "both") return;
     const at = pairOf(index);
     const storedRow = at === undefined ? undefined : previous[at];
     // Paired by id only, on both sides: an id the stored rows never carried
     // pairs by position, which names no record.
-    if (identified && !hasRowId(storedRow)) return;
+    if (identified && sentId && !hasRowId(storedRow)) return;
     if (isPlainRecord(row) && isPlainRecord(storedRow)) visit(row, storedRow);
   });
 }
@@ -753,8 +828,9 @@ function visitStoredPlainPasswords(
 /**
  * Whether a single instance is the stored one: the same id, or none on
  * either side. One with another id replaces it and takes none of its values.
+ * Exported so the row-id walk pairs a single instance the way this one does.
  */
-function sameInstance(
+export function sameInstance(
   instance: Record<string, unknown>,
   stored: Record<string, unknown>
 ): boolean {
@@ -764,11 +840,11 @@ function sameInstance(
 
 /** Whether a row carries an id of its own. */
 function hasRowId(row: unknown): boolean {
-  return isPlainRecord(row) && typeof row.id === "string";
+  return rowId(row) !== undefined;
 }
 
 /** A stored value, parsed where the dialect holds it as JSON text. */
-function parsedValue(value: unknown): unknown {
+export function parsedValue(value: unknown): unknown {
   if (typeof value !== "string") return value;
   try {
     return JSON.parse(value) as unknown;
@@ -777,7 +853,10 @@ function parsedValue(value: unknown): unknown {
   }
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
+/** A non-null, non-array object: one level of a value, or one row. */
+export function isPlainRecord(
+  value: unknown
+): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -843,11 +922,25 @@ export function reachesPasswordField(
   fields: readonly NamedField[],
   reach: FieldGroupReach
 ): boolean {
-  return reachesFrom(fields, reach, new Set(), true);
+  return reachesFieldWhere(fields, reach, field => field.type === "password");
 }
 
 /**
- * {@link reachesPasswordField} at one level, following field groups where the
+ * Whether `fields` declare a field `test` accepts at any depth, through the
+ * field groups `reach` follows, as {@link reachesPasswordField} asks it for a
+ * password: one question, so a walk asking it for another field type follows
+ * field groups exactly as the password walk does.
+ */
+export function reachesFieldWhere(
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  test: (field: NamedField) => boolean
+): boolean {
+  return reachesFrom(fields, reach, test, new Set(), true);
+}
+
+/**
+ * {@link reachesFieldWhere} at one level, following field groups where the
  * walk does: one placed directly on the entry is left to its own read, as the
  * walk leaves it, and one held inline that `reach` has no fields for counts,
  * since the strip withholds it and so has to run.
@@ -855,16 +948,17 @@ export function reachesPasswordField(
 function reachesFrom(
   fields: readonly NamedField[],
   reach: FieldGroupReach,
+  test: (field: NamedField) => boolean,
   seen: ReadonlySet<string>,
   atEntry: boolean
 ): boolean {
   return fields.some(field => {
-    if (field.type === "password") return true;
+    if (test(field)) return true;
     // A layout container keeps its fields on this level; a group or
     // repeater holds a level of its own.
     if (
       field.fields &&
-      reachesFrom(field.fields, reach, seen, atEntry && !field.name)
+      reachesFrom(field.fields, reach, test, seen, atEntry && !field.name)
     ) {
       return true;
     }
@@ -876,7 +970,7 @@ function reachesFrom(
       const inner = reach.fieldsOf(slug);
       return (
         inner === undefined ||
-        reachesFrom(inner, reach, new Set([...seen, slug]), false)
+        reachesFrom(inner, reach, test, new Set([...seen, slug]), false)
       );
     });
   });
@@ -1016,4 +1110,20 @@ export function hiddenColumnMatcher(
   const hidden = new Set(hiddenColumnNames(tableName));
   if (hidden.size === 0) return () => false;
   return key => hidden.has(key) || hidden.has(toSnakeCase(key));
+}
+
+/**
+ * How the row comparison opens an inline field-group instance in one write:
+ * by the field groups `reach` follows, as the walks here read instances. An
+ * untyped zone row's schema is a guess, so it is not opened.
+ */
+export function instanceFieldsFor(reach: FieldGroupReach): InstanceFieldsOf {
+  const lookup = { reach, untypedZoneRows: "unknown" as const };
+  return (field, instance) => {
+    const references = extractFieldGroupReferences(field);
+    if (references.single === undefined && references.many === undefined) {
+      return undefined;
+    }
+    return instanceFields(instance, references, lookup);
+  };
 }

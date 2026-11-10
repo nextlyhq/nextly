@@ -201,6 +201,7 @@ describe.each(getConfiguredTestDialects())(
       await update(id, {
         acct: { email: "b@example.com" },
         held: { nested: { heading: "h2" } },
+        _overwrite: true,
       });
       const row = await rawRow("dc_kentries", { id });
 
@@ -217,7 +218,10 @@ describe.each(getConfiguredTestDialects())(
         acct: { email: "a@example.com", pw: "acct-1" },
       });
 
-      await update(id, { acct: { email: "a@example.com", pw: "" } });
+      await update(id, {
+        acct: { email: "a@example.com", pw: "" },
+        _overwrite: true,
+      });
 
       const row = await rawRow("dc_kentries", { id });
       expect(await hashes(open(row.acct).pw, "acct-1")).toBe(true);
@@ -228,7 +232,10 @@ describe.each(getConfiguredTestDialects())(
         acct: { email: "a@example.com", pw: "acct-1" },
       });
 
-      await update(id, { acct: { email: "a@example.com", pw: "acct-2" } });
+      await update(id, {
+        acct: { email: "a@example.com", pw: "acct-2" },
+        _overwrite: true,
+      });
       expect(
         await hashes(
           open((await rawRow("dc_kentries", { id })).acct).pw,
@@ -236,7 +243,10 @@ describe.each(getConfiguredTestDialects())(
         )
       ).toBe(true);
 
-      await update(id, { acct: { email: "a@example.com", pw: null } });
+      await update(id, {
+        acct: { email: "a@example.com", pw: null },
+        _overwrite: true,
+      });
       expect(open((await rawRow("dc_kentries", { id })).acct).pw ?? null).toBe(
         null
       );
@@ -265,6 +275,7 @@ describe.each(getConfiguredTestDialects())(
           { label: "new" },
           { id: idA, label: "a again" },
         ],
+        _overwrite: true,
       });
       const rows = rowsOf((await rawRow("dc_kentries", { id })).lines);
 
@@ -299,6 +310,7 @@ describe.each(getConfiguredTestDialects())(
           heading: "f2",
           box: { a: "2", held: { heading: "i2" } },
         },
+        _overwrite: true,
       });
       const row = await rawRow("comp_kbox", { id: instanceId });
 
@@ -333,6 +345,7 @@ describe.each(getConfiguredTestDialects())(
         zone: [
           { id: zoneId, [typeKey]: "kbox", heading: "z2", box: { a: "2" } },
         ],
+        _overwrite: true,
       });
       const rep = await rawRow("comp_kbox", { id: fgsId });
       const block = await rawRow("comp_kbox", { id: zoneId });
@@ -346,12 +359,12 @@ describe.each(getConfiguredTestDialects())(
     it("keeps a Single's group password", async () => {
       await trusted.updateSingle({
         slug: "ksite",
-        data: { title: "s", own: { a: "1", pw: "site-1" } },
+        data: { title: "s", own: { a: "1", pw: "site-1" }, _overwrite: true },
       } as never);
 
       await trusted.updateSingle({
         slug: "ksite",
-        data: { own: { a: "2" } },
+        data: { own: { a: "2" }, _overwrite: true },
       } as never);
       const [row] = await t.adapter.select<Doc>("single_ksite", {});
 
@@ -362,12 +375,16 @@ describe.each(getConfiguredTestDialects())(
     it("keeps a translated Single's group password, named in camel case", async () => {
       await trusted.updateSingle({
         slug: "ksitel",
-        data: { title: "s", accountSettings: { a: "1", pw: "camel-1" } },
+        data: {
+          title: "s",
+          accountSettings: { a: "1", pw: "camel-1" },
+          _overwrite: true,
+        },
       } as never);
 
       await trusted.updateSingle({
         slug: "ksitel",
-        data: { accountSettings: { a: "2" } },
+        data: { accountSettings: { a: "2" }, _overwrite: true },
       } as never);
       const [row] = await t.adapter.select<Doc>("single_ksitel_locales", {});
       const stored = open(row?.accountSettings ?? row?.account_settings);
@@ -386,14 +403,14 @@ describe.each(getConfiguredTestDialects())(
         collection: "klocal",
         id,
         locale: "es",
-        data: { wrap: { a: "1", pw: "es-1" } },
+        data: { wrap: { a: "1", pw: "es-1" }, _overwrite: true },
       } as never);
 
       await trusted.update({
         collection: "klocal",
         id,
         locale: "es",
-        data: { wrap: { a: "2" } },
+        data: { wrap: { a: "2" }, _overwrite: true },
       } as never);
       const es = open(
         (await rawRow("dc_klocal_locales", { _parent: id, _locale: "es" })).wrap
@@ -414,7 +431,11 @@ describe.each(getConfiguredTestDialects())(
         top: "top-1",
         direct: { heading: "d", pin: "direct-1" },
       });
-      await update(id, { title: "e2", direct: { heading: "d2" } });
+      await update(id, {
+        title: "e2",
+        direct: { heading: "d2" },
+        _overwrite: true,
+      });
 
       const row = await rawRow("dc_kentries", { id });
       expect(await hashes(row.top, "top-1")).toBe(true);

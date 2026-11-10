@@ -71,6 +71,11 @@ export function productionServerEnv(port) {
     // Production never rewrites generated files; stated so the build under
     // test is held to the committed component map, as a deployment is.
     NEXTLY_GENERATED_FILES_WRITE: "0",
+    // The browser suite's fixture collections (the Entry content articles,
+    // the blog fixture and the rest), which the production specs of a
+    // template's content write and read. It adds no public route: besides
+    // collections, only a styling plugin's admin page, behind sign-in.
+    NEXTLY_E2E_STYLE_FIXTURE: "1",
     // NO harness routes. The dev suite enables them; this one must not, because
     // the demo's claim is about what a VISITOR is served, and a dev-only route
     // reachable in the build under test would falsify exactly that.

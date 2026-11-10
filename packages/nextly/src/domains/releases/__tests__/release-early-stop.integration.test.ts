@@ -441,7 +441,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "DE pending" }
+        { title: "DE pending", _overwrite: true }
       );
 
       expect(await visibleIds(t, "pages")).toContain(page);
@@ -458,7 +458,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.updateSingle({
           slug: "notice" as never,
           locale,
-          data: { headline, status: "published" } as never,
+          data: { headline, status: "published", _overwrite: true } as never,
         });
       }
       const row = await t.adapter.selectOne<{ id: string }>(
@@ -479,7 +479,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.updateSingle({
         slug: "notice" as never,
         locale: "de",
-        data: { headline: "DE pending" } as never,
+        data: { headline: "DE pending", _overwrite: true } as never,
       });
 
       expect(await singleVisible(t)).toBe(true);
@@ -751,7 +751,7 @@ describe.each(getConfiguredTestDialects())(
       const written = await handlerOf(t)
         .getEntryService()
         .updateEntries({ collectionName: "dossiers", overrideAccess: true }, [
-          { id: dossier, data: { guarded: "secret" } },
+          { id: dossier, data: { guarded: "secret", _overwrite: true } },
         ]);
       expect(written.successful).toBe(1);
 
@@ -905,7 +905,7 @@ describe.each(getConfiguredTestDialects())(
 
       await handlerOf(t).updateEntry(
         { collectionName: "articles", entryId: article, overrideAccess: true },
-        { title: "Edited" }
+        { title: "Edited", _overwrite: true }
       );
 
       expect(await visibleIds(t, "articles")).toContain(article);

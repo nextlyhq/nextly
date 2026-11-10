@@ -187,7 +187,7 @@ async function writeTwoIds(
   const singles = t.getService("singleEntryService") as SingleEntryService;
   const saved = await singles.update(
     `${slug}_page`,
-    { card: { heading: "Hello", related: ids } },
+    { card: { heading: "Hello", related: ids }, _overwrite: true },
     { overrideAccess: true }
   );
   // The message travels with the flag so a refused save names its reason.

@@ -186,6 +186,56 @@ describe("the canvas frame", () => {
     expect(root?.hasAttribute("data-nx-theme")).toBe(false);
   });
 
+  it("states a light or dark theme as the iframe element's own colour scheme, and nothing once it is unset", () => {
+    // On the ELEMENT, not the page inside: a frame's prefers-color-scheme
+    // follows the scheme of the element embedding it. No page is loaded, so
+    // this is the element alone and not the marker on the frame's document.
+    const { container, rerender } = render(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        theme="dark"
+        source={TEST_SOURCE}
+      />
+    );
+    const frame = frameIn(container);
+    expect(frame.style.colorScheme).toBe("dark");
+
+    rerender(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        theme="light"
+        source={TEST_SOURCE}
+      />
+    );
+    expect(frame.style.colorScheme).toBe("light");
+
+    // A theme that is no colour scheme states none.
+    rerender(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        theme="brand"
+        source={TEST_SOURCE}
+      />
+    );
+    expect(frame.style.colorScheme).toBe("");
+
+    rerender(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        theme="dark"
+        source={TEST_SOURCE}
+      />
+    );
+    rerender(<CanvasFrame width={1280} title="Home" source={TEST_SOURCE} />);
+    expect(frame.style.colorScheme).toBe("");
+    // The rest of the element's style is kept as it was.
+    expect(frame.style.width).toBe("1280px");
+  });
+
   it("hands the region chrome the admin's tokens, scoped to it, and again when the theme changes", async () => {
     /*
      * jsdom does not inherit custom properties into a computed style, so the
@@ -227,7 +277,7 @@ describe("the canvas frame", () => {
       }
       return undefined;
     };
-    const words = ".nx-canvas-region__badge, .nx-canvas-region__tag";
+    const words = ".nx-canvas-region__mark";
     expect(handed(words, "--nx-builder-border")).toBe("rgb(1, 2, 3)");
     expect(handed(words, "--font-sans")).toBe("Inter");
     expect(handed(".nx-canvas-region", "--nx-builder-border")).toBe(
@@ -244,6 +294,11 @@ describe("the canvas frame", () => {
     ).toBe("");
     // A token the editor does not declare is not invented.
     expect(handed(words, "--nx-builder-accent")).toBe(undefined);
+    // A list's note to its author holds the admin's words alone, so it takes
+    // the admin's face; a list showing its empty state holds the site's
+    // content, so it takes none of a name a site may share.
+    expect(handed("[data-nx-list-diagnostic]", "--font-sans")).toBe("Inter");
+    expect(handed("[data-nx-list-shows]", "--font-sans")).toBe(undefined);
 
     // The admin switches its theme on its own root; the chrome follows.
     border = "rgb(4, 5, 6)";
@@ -385,6 +440,33 @@ describe("the canvas frame", () => {
     loadPage(frameIn(container));
     const chrome = container.querySelector('[data-testid="chrome"]');
     expect(chrome?.closest("[data-nx-canvas-layer]")).not.toBeNull();
+  });
+
+  it("holds its pinned chrome at the viewport, outside the box the page's scroll moves", () => {
+    const { container } = render(
+      <CanvasFrame
+        width={1280}
+        title="Home"
+        source={TEST_SOURCE}
+        overlay={<div data-testid="marks" />}
+        pinned={<div data-testid="tags" />}
+      >
+        <Page />
+      </CanvasFrame>
+    );
+    loadPage(frameIn(container));
+    const tags = container.querySelector('[data-testid="tags"]');
+    const marks = container.querySelector('[data-testid="marks"]');
+    // In the same layer as the overlay, so it takes the layer's colours...
+    expect(tags?.closest("[data-nx-canvas-layer]")).not.toBeNull();
+    // ...but not in the content box, which is moved with the page's scroll.
+    // The control: the overlay is in that box.
+    expect(tags?.closest(".nx-canvas-layer__content")).toBeNull();
+    expect(marks?.closest(".nx-canvas-layer__content")).not.toBeNull();
+    // Inset by the layer's bleed past the viewport, so its edges are the
+    // viewport's.
+    const pinned = tags?.closest<HTMLElement>(".nx-canvas-layer__pinned");
+    expect(pinned?.style.inset).toBe("4px");
   });
 });
 

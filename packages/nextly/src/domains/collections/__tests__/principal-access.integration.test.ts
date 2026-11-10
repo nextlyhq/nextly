@@ -263,7 +263,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: "verified_only",
             id: entryId,
-            data: { title: "changed" },
+            data: { title: "changed", _overwrite: true },
             principal: unverified,
           })
         ).rejects.toMatchObject({ statusCode: 404, code: "NOT_FOUND" });
@@ -302,9 +302,9 @@ describe.each(getConfiguredTestDialects())(
       expect(all.totalDocs).toBe(1);
 
       // A page past the end, where no Single is read: its total must not
-      // count the protected Single. (No `search` here: the registry's search
-      // is ILIKE, which SQLite and MySQL do not have; and a limit beside the
-      // offset, which SQLite requires.)
+      // count the protected Single. (No `search` here: this probe pins the
+      // page-past-the-end total alone; the registry's search has its own
+      // suite.)
       const probe = await t.nextly.findSingles({
         principal: member,
         limit: 10,
@@ -448,7 +448,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "members_only",
         id: staffRow,
-        data: { title: "edited by a person" },
+        data: { title: "edited by a person", _overwrite: true },
         principal: member,
       });
 
