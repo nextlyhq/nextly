@@ -21,6 +21,7 @@ import { EnvelopeBar } from "./EnvelopeBar";
 import { InboxStrip } from "./InboxStrip";
 import { OwnershipNotices } from "./OwnershipNotices";
 import { regionsForRefusal } from "./refusal-routing";
+import { suppliedNamesFor } from "./sample-data";
 import {
   DEFAULT_VALUES,
   EMAIL_TEMPLATE_FORM_ID,
@@ -127,6 +128,7 @@ function ContentColumn({
           isPending={isPending}
           readOnly={!owns}
           liquid={!keptOnOldEngine}
+          suppliedNames={suppliedNamesFor(isLayoutRow)}
           {...editor}
         />
       </div>

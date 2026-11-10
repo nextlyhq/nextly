@@ -8,8 +8,10 @@ import type {
 // Variables & sample data
 // ============================================================
 
-// Variables the layout composition injects automatically. Everything else
-// comes from the send payload and the custom variables declared below.
+// Names the built-in flows pass themselves and the layout chrome carries
+// (`appName`, `year`). Offered to the author as completions and starting
+// values; an ordinary body is NOT handed them for free (see SUPPLIED below),
+// so each is still the template's to declare where a send must supply it.
 export const BUILT_IN_VARIABLES: {
   name: string;
   description: string;
@@ -19,14 +21,26 @@ export const BUILT_IN_VARIABLES: {
 ];
 
 /**
- * Names the send supplies itself, never the template's sender: the built-ins
- * above and the brand settings (`nextly_brand`). The workbench neither asks
- * for them to be declared nor marks them blank.
+ * The names a body never has to declare, because the renderer supplies them
+ * whatever the send holds: the brand settings, under both spellings (see
+ * `renderTemplate`, which hands every body `brand` and `nextly_brand`).
+ * `appName` and `year` are not among them — an ordinary body renders whatever
+ * its sender passed, and nothing when it passed nothing.
  */
 export const SUPPLIED_VARIABLE_NAMES: ReadonlySet<string> = new Set([
-  ...BUILT_IN_VARIABLES.map(variable => variable.name),
+  "brand",
   "nextly_brand",
 ]);
+
+/**
+ * The names a given row never has to declare. A layout row is the wrapper
+ * itself, so the composition hands it the chrome too: `content`, `appName`
+ * and `year`.
+ */
+export function suppliedNamesFor(isLayoutRow: boolean): ReadonlySet<string> {
+  if (!isLayoutRow) return SUPPLIED_VARIABLE_NAMES;
+  return new Set([...SUPPLIED_VARIABLE_NAMES, "content", "appName", "year"]);
+}
 
 const SAMPLE_VALUE_BY_NAME: Record<string, string> = {
   appName: "Northwind",

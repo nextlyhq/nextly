@@ -15,7 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { collectVariableNames } from "./interpolate";
 import type * as VariableAnalysisModule from "./liquid/liquid-variables";
-import { SUPPLIED_VARIABLE_NAMES } from "./sample-data";
+import { suppliedNamesFor } from "./sample-data";
 
 // Only its type: the module itself loads on demand, with the editor.
 type VariableAnalysis = typeof VariableAnalysisModule;
@@ -61,9 +61,7 @@ export function useTemplateVariables({
   const key = JSON.stringify(sources.map(source => source ?? ""));
   return useMemo(() => {
     const texts = JSON.parse(key) as string[];
-    const supplied = new Set(SUPPLIED_VARIABLE_NAMES);
-    // A layout's body arrives as `content`.
-    if (isLayoutRow) supplied.add("content");
+    const supplied = suppliedNamesFor(isLayoutRow);
     const declaredNames = new Set(declared.map(v => v.name).filter(Boolean));
 
     // The analysis reads the template as the Liquid engine does; a template

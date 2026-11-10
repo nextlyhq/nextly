@@ -24,24 +24,32 @@ describe("the workbench's variable check", () => {
           "Hi {{ customer.name }}, {{ nextly_brand.footer }} {{ year }}",
         ],
         declared: [{ name: "customer" }],
-        data: { order: { number: "A-1" } },
+        // The sample data the form always carries: appName and year have
+        // starting values, so the sender-dependent names are not blank.
+        data: { order: { number: "A-1" }, appName: "Northwind", year: "2026" },
         isLayoutRow: false,
         liquid: true,
       })
     );
 
+    // An ordinary body is handed only the brand settings for free (see
+    // renderTemplate): `appName` and `year` arrive just where the sender
+    // passes them, so both are the template's to declare — with a sample
+    // value, so not blank.
     await waitFor(() =>
       expect(result.current.undeclared).toEqual([
         {
           name: "order",
           paths: ["order.number", "order.total", "order.lines"],
         },
+        { name: "appName", paths: ["appName"] },
         { name: "shop", paths: ["shop.name", "shop.email"] },
+        { name: "year", paths: ["year"] },
       ])
     );
-    // Blank: written, no fallback, no value. `order.number` has one,
-    // `shop.email` has a fallback, and the send supplies `appName`, `year`
-    // and the brand.
+    // Blank: written, no fallback, no value. `order.number` and the two
+    // sender-dependent names have sample values, `shop.email` has a
+    // fallback, and the brand needs nothing.
     expect(result.current.missing).toEqual([
       "order.total",
       "shop.name",
@@ -61,6 +69,45 @@ describe("the workbench's variable check", () => {
     );
     await waitFor(() =>
       expect(result.current).toEqual({ undeclared: [], missing: [] })
+    );
+  });
+
+  it("asks a layout for the chrome its composition supplies", async () => {
+    // A layout row IS the wrapper, so the chrome the composition hands it —
+    // `appName`, `year` beside `content` — reads for free, as does the brand
+    // every body reads.
+    const { result } = renderHook(() =>
+      useTemplateVariables({
+        sources: [
+          "<header>{{ appName }} {{ year }}</header><main>{{ content }} {{ brand.accent }}</main>",
+        ],
+        declared: [],
+        data: {},
+        isLayoutRow: true,
+        liquid: true,
+      })
+    );
+    await waitFor(() =>
+      expect(result.current).toEqual({ undeclared: [], missing: [] })
+    );
+  });
+
+  it("asks an ordinary body to declare the brand's other spelling", async () => {
+    // Only `brand` and `nextly_brand` are free to a body; anything else,
+    // including a misspelled brand, is the sender's to pass.
+    const { result } = renderHook(() =>
+      useTemplateVariables({
+        sources: ["Footer {{ Brand.footer }}"],
+        declared: [],
+        data: {},
+        isLayoutRow: false,
+        liquid: true,
+      })
+    );
+    await waitFor(() =>
+      expect(result.current.undeclared).toEqual([
+        { name: "Brand", paths: ["Brand.footer"] },
+      ])
     );
   });
 

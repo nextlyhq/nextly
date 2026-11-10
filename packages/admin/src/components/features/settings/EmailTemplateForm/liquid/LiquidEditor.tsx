@@ -64,6 +64,12 @@ export interface LiquidEditorProps {
   disabled?: boolean;
   /** What completion offers: the template's variables and test data. */
   completion: CompletionData;
+  /**
+   * The names this row never has to declare, because the renderer supplies
+   * them: the brand to every body, the chrome to a layout row. Defaults to
+   * the body's set.
+   */
+  suppliedNames?: ReadonlySet<string>;
   placeholder?: string;
   /** Lines of height for a multi-line editor before it grows. */
   minHeight?: number;
@@ -150,7 +156,8 @@ const inputLike = EditorView.theme({
 function liquidTooling(
   completionRef: MutableRefObject<CompletionData>,
   problemsRef: MutableRefObject<LiquidEditorProps["onProblems"]>,
-  mode: LiquidEditorProps["mode"]
+  mode: LiquidEditorProps["mode"],
+  suppliedNames: ReadonlySet<string>
 ) {
   return [
     autocompletion({
@@ -177,7 +184,7 @@ function liquidTooling(
             : missingValues(
                 doc,
                 completionRef.current.sample,
-                SUPPLIED_VARIABLE_NAMES
+                suppliedNames
               ).map(
                 (use): Diagnostic => ({
                   from: use.from,
@@ -267,7 +274,7 @@ function useLiquidExtensions(
   disabled: boolean
 ) {
   const { resolvedTheme } = useTheme();
-  const { mode, label, id, completion, onProblems } = props;
+  const { mode, label, id, completion, onProblems, suppliedNames } = props;
   const describedBy = props["aria-describedby"];
   const invalid = props["aria-invalid"];
 
@@ -287,7 +294,14 @@ function useLiquidExtensions(
   return useMemo(
     () => [
       language(isLiquid, mode),
-      ...(isLiquid ? liquidTooling(completionRef, problemsRef, mode) : []),
+      ...(isLiquid
+        ? liquidTooling(
+            completionRef,
+            problemsRef,
+            mode,
+            suppliedNames ?? SUPPLIED_VARIABLE_NAMES
+          )
+        : []),
       EditorView.contentAttributes.of(
         contentAttributes({ label, id, describedBy, invalid, disabled })
       ),
@@ -308,6 +322,7 @@ function useLiquidExtensions(
       disabled,
       singleLine,
       resolvedTheme,
+      suppliedNames,
     ]
   );
 }
