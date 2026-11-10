@@ -36,7 +36,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   defineCollection,
+  defineFieldGroup,
   defineSingle,
+  fieldGroup,
   group,
   number,
   text,
@@ -52,7 +54,10 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { CollectionService } from "../collection-service";
 import type { SingleEntryService } from "../../../../domains/singles/services/single-entry-service";
-import { grantTo, userWhoMay } from "../../../../__tests__/fixtures/permission-holders";
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../../__tests__/fixtures/permission-holders";
 
 interface ValidationIssueShape {
   path: string;
@@ -87,6 +92,16 @@ describe.each(getConfiguredTestDialects())(
       // own proof the column took the declaration.
       handle = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
+        fieldGroups: [
+          // A top-level component whose own whole-number child is judged by
+          // the component write pass — the pass a publish once exempted
+          // whole, letting a caller-supplied fraction reach the integer
+          // column of the component's row.
+          defineFieldGroup({
+            slug: "wnf_dial",
+            fields: [number({ name: "tally" })],
+          }),
+        ],
         collections: [
           defineCollection({
             slug: SLUG,
@@ -114,6 +129,7 @@ describe.each(getConfiguredTestDialects())(
                 name: "meta",
                 fields: [number({ name: "rating" })],
               }),
+              fieldGroup({ name: "dial", component: "wnf_dial" }),
               group({
                 name: "locked",
                 fields: [
@@ -283,7 +299,9 @@ describe.each(getConfiguredTestDialects())(
         collections.updateEntry(
           SLUG,
           entry.id as string,
-          { quantity: 2.5 },
+          // Main now refuses an update that says neither its version nor to
+          // overwrite; these scenarios test the floor, not concurrency.
+          { quantity: 2.5, _overwrite: true },
           CONTEXT
         )
       );
@@ -319,7 +337,7 @@ describe.each(getConfiguredTestDialects())(
 
       const result = await collections.updateMany(
         SLUG,
-        [{ id: entry.id as string, data: { quantity: 2.5 } }],
+        [{ id: entry.id as string, data: { quantity: 2.5, _overwrite: true } }],
         CONTEXT
       );
       expect(result.failed).toBe(1);
@@ -404,7 +422,7 @@ describe.each(getConfiguredTestDialects())(
         collections.updateEntry(
           SLUG,
           entry.id as string,
-          { title: "hookfrac-update", quantity: 2 },
+          { title: "hookfrac-update", quantity: 2, _overwrite: true },
           CONTEXT
         )
       );
@@ -449,7 +467,7 @@ describe.each(getConfiguredTestDialects())(
       const published = (await collections.updateEntry(
         SLUG,
         "legacy-frac-1",
-        { status: "published" },
+        { status: "published", _overwrite: true },
         CONTEXT
       )) as unknown as Record<string, unknown>;
       expect(published.status).toBe("published");
@@ -459,6 +477,43 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("a bulk publish that supplies a top-level component judges its fraction", async () => {
+      // The component values a transactional publish carries — the bulk
+      // update's path — were once exempted whole, as the assembled
+      // document's own: a caller-supplied 2.5 in a component reached the
+      // integer column of the component's row, and the database decided.
+      // The exemption now bounds itself to what the caller did not name,
+      // so the caller's own value is judged like any write's — while the
+      // row's own, a publish that names no component, still rides.
+      const entry = (await collections.createEntry(
+        SLUG,
+        { title: "publish-component", dial: { tally: 2 } },
+        CONTEXT
+      )) as unknown as Record<string, unknown>;
+
+      const result = await collections.updateMany(
+        SLUG,
+        [
+          {
+            id: entry.id as string,
+            data: {
+              status: "published",
+              dial: { tally: 2.5 },
+              _overwrite: true,
+            },
+          },
+        ],
+        CONTEXT
+      );
+      expect(result.failed).toBe(1);
+      // Named as the component's own pass reports it, inside the instance.
+      expect(result.errors[0]?.error).toContain("tally must be a whole number");
+
+      // The stored instance keeps the value this write was refused over.
+      const stored = await readEntry(entry.id as string);
+      expect((stored.dial as Record<string, unknown>).tally).toBe(2);
+    });
+
     it("a Single's beforeChange hook that turns a whole value into a fraction is refused", async () => {
       // The single-mutation-service runs hookChangedWholeNumberIssues after
       // beforeChange hooks run, so a hook that turns a whole value into a
@@ -466,7 +521,7 @@ describe.each(getConfiguredTestDialects())(
       // any row is written.
       const result = await singles.update(
         SINGLE_SLUG,
-        { title: "hookfrac-single", quantity: 2 },
+        { title: "hookfrac-single", quantity: 2, _overwrite: true },
         CONTEXT
       );
       expect(result.success).toBe(false);
@@ -483,7 +538,12 @@ describe.each(getConfiguredTestDialects())(
       // Initialize the Single live.
       await singles.update(
         SINGLE_SLUG,
-        { title: "single-live", quantity: 2, status: "published" },
+        {
+          title: "single-live",
+          quantity: 2,
+          status: "published",
+          _overwrite: true,
+        },
         CONTEXT
       );
 
@@ -499,7 +559,7 @@ describe.each(getConfiguredTestDialects())(
       // An edit while published holds a working draft carrying the stored fraction.
       const held = await singles.update(
         SINGLE_SLUG,
-        { title: "single-draft" },
+        { title: "single-draft", _overwrite: true },
         CONTEXT
       );
       expect(held.success).toBe(true);
@@ -508,7 +568,7 @@ describe.each(getConfiguredTestDialects())(
       // assembledFromStorage is true, the stored fraction is not refused.
       const published = await singles.update(
         SINGLE_SLUG,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         CONTEXT
       );
       expect(published.success).toBe(true);
@@ -542,18 +602,18 @@ describe.each(getConfiguredTestDialects())(
       const edited = (await collections.updateEntry(
         SLUG,
         "denied-frac-1",
-        { locked: { label: "sibling edit" } },
+        { locked: { label: "sibling edit" }, _overwrite: true },
         {
-      overrideAccess: false,
-      // The rules this write meets read only who the caller is; the role
-      // rows userWhoMay inserted answer for the grants.
-      user: {
-        id: "sibling-editor",
-        email: "sibling-editor@example.test",
-        role: "",
-        permissions: [],
-      },
-    }
+          overrideAccess: false,
+          // The rules this write meets read only who the caller is; the role
+          // rows userWhoMay inserted answer for the grants.
+          user: {
+            id: "sibling-editor",
+            email: "sibling-editor@example.test",
+            role: "",
+            permissions: [],
+          },
+        }
       )) as unknown as Record<string, unknown>;
       expect(edited.title).toBe("denied legacy");
       expect((edited.locked as Record<string, unknown>).label).toBe(
@@ -570,18 +630,18 @@ describe.each(getConfiguredTestDialects())(
         collections.updateEntry(
           SLUG,
           "denied-frac-1",
-          { quantity: 2.5 },
+          { quantity: 2.5, _overwrite: true },
           {
-      overrideAccess: false,
-      // The rules this write meets read only who the caller is; the role
-      // rows userWhoMay inserted answer for the grants.
-      user: {
-        id: "sibling-editor",
-        email: "sibling-editor@example.test",
-        role: "",
-        permissions: [],
-      },
-    }
+            overrideAccess: false,
+            // The rules this write meets read only who the caller is; the role
+            // rows userWhoMay inserted answer for the grants.
+            user: {
+              id: "sibling-editor",
+              email: "sibling-editor@example.test",
+              role: "",
+              permissions: [],
+            },
+          }
         )
       );
       expectFractionRefusal(refusal, "quantity");
@@ -597,17 +657,22 @@ describe.each(getConfiguredTestDialects())(
         collections.updateEntry(
           SLUG,
           "denied-frac-1",
-          { title: "hookrestored-1", quantity: 4, locked: { label: "kept" } },
           {
-      overrideAccess: false,
-      user: {
-        id: "sibling-editor",
-        email: "sibling-editor@example.test",
-        role: "",
-        permissions: [],
-      },
-    }
-          )
+            title: "hookrestored-1",
+            quantity: 4,
+            locked: { label: "kept" },
+            _overwrite: true,
+          },
+          {
+            overrideAccess: false,
+            user: {
+              id: "sibling-editor",
+              email: "sibling-editor@example.test",
+              role: "",
+              permissions: [],
+            },
+          }
+        )
       );
       expect(NextlyError.is(refusal)).toBe(true);
       expect(refusal.code).toBe("VALIDATION_ERROR");
