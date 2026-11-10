@@ -43,7 +43,6 @@ import {
   TEMPLATE_ENTRY_ADDRESS_FIELD,
   TEMPLATE_TARGET_FIELDS,
 } from "./template-preview-contract";
-import { templateTargetOf } from "./template-target";
 import {
   addressRefusal,
   heldAddressMessage,
@@ -53,6 +52,7 @@ import {
   TEMPLATE_ADDRESS_FIELD,
   type AddressHolderRead,
 } from "./template-routing";
+import { templateTargetOf } from "./template-target";
 
 /** The template drawing a collection, as a refusal names it. */
 export interface TemplateHolder {
@@ -583,7 +583,7 @@ export async function addressCollectionProblem(
   const record = await setup.readCollection(collection);
   const problem = await templateCollectionProblem(
     collection,
-    async () => record,
+    () => Promise.resolve(record),
     setup.ownCollections()
   );
   if (problem !== null) return problem;

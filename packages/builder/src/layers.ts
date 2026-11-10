@@ -49,7 +49,6 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { gatedAsStored } from "./condition-gate";
-
 import { blockLabel, type SavedComponent } from "./inserter";
 import { storedComponentId } from "./placement-props";
 

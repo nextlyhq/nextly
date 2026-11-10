@@ -21,12 +21,12 @@ import type {
 
 import { SettingsSection } from "../SettingsSection";
 
+import { clearSelectionValue } from "./email-provider-catalog";
 import {
   hasStoredSecret,
   hasUnrepresentableStoredValue,
   type ProviderFormValues,
 } from "./schemas/emailProviderSchema";
-import { clearSelectionValue } from "./email-provider-catalog";
 import { SecretField } from "./SecretField";
 
 /**

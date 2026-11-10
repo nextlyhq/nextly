@@ -50,8 +50,8 @@ import { HistoryStoryList } from "./HistoryStoryList";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
 import { useMarkVersionSeen } from "./useMarkVersionSeen";
 import { newestInLocale, predecessorOf } from "./version-pairing";
-import { versionsHref } from "./versions-href";
 import { VersionLabelDialog } from "./VersionLabelDialog";
+import { versionsHref } from "./versions-href";
 
 // How many extra history pages the panel will auto-fetch while searching for a
 // previewed version's previous same-locale version before deferring to the
