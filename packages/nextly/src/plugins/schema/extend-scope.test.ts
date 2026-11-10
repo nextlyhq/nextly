@@ -363,3 +363,41 @@ describe("extend with a scope — Schema Builder types", () => {
     ).not.toThrow();
   });
 });
+
+describe("extend with a scope — what a switched-off type would have had", () => {
+  it("holds back the first of two scopes' fields of one name, as the fold adds only that one", async () => {
+    const { withheldScopeFieldsOf, publishWithheldScopeFields } = await import(
+      "../../domains/schema/pipeline/withheld-scope-fields"
+    );
+    const off: ContentTypeScope = { ...EVERY, except: ["pages"] };
+    const first = plugin("@t/first", {
+      extend: [{ target: off, fields: [field("seo")] }],
+    });
+    const second = plugin("@t/second", {
+      extend: [
+        {
+          target: off,
+          fields: [{ name: "SEO", type: "number" } as unknown as FieldConfig],
+        },
+      ],
+    });
+
+    // Switched on, the type has the first scope's field and not the second's.
+    const on = applyPluginSchemaContributionsDeferred(siteConfig(), [
+      plugin("@t/first", {
+        extend: [{ target: EVERY, fields: [field("seo")] }],
+      }),
+      second,
+    ]);
+    expect(fieldNames(find(on.config.collections, "pages"))).toEqual([
+      "title",
+      "seo",
+    ]);
+
+    applyPluginSchemaContributionsDeferred(siteConfig(), [first, second]);
+    expect(withheldScopeFieldsOf("collection", "pages")).toEqual([
+      field("seo"),
+    ]);
+    publishWithheldScopeFields(new Map());
+  });
+});

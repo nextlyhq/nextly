@@ -73,8 +73,18 @@ const settings = defineSingle({
   fields: [text({ name: "name" })],
 });
 
+/** How the plugin's field is declared, and whether the site translates. */
+interface Shape {
+  required?: boolean;
+  translated?: boolean;
+  unique?: boolean;
+}
+
 /** Adds `seo_title` to every collection and Single, except the slugs named. */
-function seoPlugin(except?: string[], required = false): PluginDefinition {
+function seoPlugin(
+  except: string[] | undefined,
+  shape: Shape
+): PluginDefinition {
   return {
     name: "@t/seo",
     version: "1.0.0",
@@ -86,7 +96,13 @@ function seoPlugin(except?: string[], required = false): PluginDefinition {
             every: ["collection", "single"],
             ...(except === undefined ? {} : { except }),
           },
-          fields: [text({ name: "seo_title", required })],
+          fields: [
+            {
+              ...text({ name: "seo_title", required: shape.required === true }),
+              ...(shape.translated === true ? { localized: true } : {}),
+              ...(shape.unique === true ? { unique: true } : {}),
+            },
+          ],
         },
       ],
     },
@@ -94,10 +110,16 @@ function seoPlugin(except?: string[], required = false): PluginDefinition {
 }
 
 /** The project with the plugin, folded as `loadConfig` folds it. */
-function project(except?: string[], required = false): unknown {
-  const plugins = [seoPlugin(except, required)];
+function project(except?: string[], shape: Shape = {}): unknown {
+  const plugins = [seoPlugin(except, shape)];
   const base = defineConfig({
-    collections: [posts, pages],
+    ...(shape.translated === true
+      ? { localization: { locales: ["en", "es"], defaultLocale: "en" } }
+      : {}),
+    collections: [
+      posts,
+      shape.translated === true ? { ...pages, localized: true } : pages,
+    ],
     singles: [settings],
     plugins,
     db: { migrationsDir: "./migrations" },
@@ -181,12 +203,30 @@ const create = (config: unknown) =>
 const check = (config: unknown) =>
   run(config, context => runMigrateCheck({ cwd: dir }, context));
 
-/** Every migration statement written so far, in one string. */
-function written(): string {
-  const migrations = join(dir, "migrations");
-  return readdirSync(migrations)
-    .filter(name => name.endsWith(".sql"))
-    .map(name => readFileSync(join(migrations, name), "utf-8"))
+/** The migration files written so far. */
+function sqlFiles(): string[] {
+  return readdirSync(join(dir, "migrations")).filter(name =>
+    name.endsWith(".sql")
+  );
+}
+
+/**
+ * What the migration files hold, in one string: every one, or those written
+ * since `before` was listed. By name, since two runs within one millisecond
+ * can write names that sort out of the order they were written in.
+ */
+function written(before: readonly string[] = []): string {
+  return sqlFiles()
+    .filter(name => !before.includes(name))
+    .map(name => readFileSync(join(dir, "migrations", name), "utf-8"))
+    .join("\n");
+}
+
+/** Every statement in `sql`, UP and DOWN, without its comment lines. */
+function withoutComments(sql: string): string {
+  return sql
+    .split("\n")
+    .filter(line => !line.trimStart().startsWith("--"))
     .join("\n");
 }
 
@@ -195,11 +235,7 @@ function written(): string {
  * DOWN puts back what the migration changes, the field's record included.
  */
 function statements(sql: string): string {
-  return sql
-    .split("-- DOWN")[0]
-    .split("\n")
-    .filter(line => !line.trimStart().startsWith("--"))
-    .join("\n");
+  return withoutComments(sql.split("-- DOWN")[0]);
 }
 
 describe.each(["sqlite", "postgresql", "mysql"] as const)(
@@ -219,7 +255,7 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
     it("keeps the column once it is made, with nothing pending, and when switched on again", async () => {
       expect((await create(project())).code).toBeUndefined();
       expect(written()).toMatch(/dc_pages[\s\S]*seo_title/);
-      const before = written();
+      const before = sqlFiles();
 
       // Switched off after the column was made: the migration records that
       // the types no longer declare the field, and touches no table.
@@ -227,17 +263,15 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         undefined
       );
       expect(written()).toContain("pages: fields.seo_title (removed)");
-      expect(statements(written().slice(before.length))).not.toMatch(
-        /seo_title/
-      );
+      expect(statements(written(before))).not.toMatch(/seo_title/);
       expect((await check(project(["pages", "site_info"]))).code).toBe(
         undefined
       );
 
       // Switched on again: the column is there, so again no table changes.
-      const off = written();
+      const off = sqlFiles();
       expect((await create(project())).code).toBeUndefined();
-      expect(statements(written().slice(off.length))).not.toMatch(/seo_title/);
+      expect(statements(written(off))).not.toMatch(/seo_title/);
       expect((await check(project())).code).toBeUndefined();
     });
 
@@ -254,25 +288,56 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       );
       expect((await create(project())).code).toBeUndefined();
       expect(written()).toMatch(/dc_cases[\s\S]*seo_title/);
-      const before = written();
+      const before = sqlFiles();
 
       expect((await create(project(["cases"]))).code).toBeUndefined();
-      expect(statements(written().slice(before.length))).not.toMatch(
-        /seo_title/
-      );
+      expect(statements(written(before))).not.toMatch(/seo_title/);
       expect((await check(project(["cases"]))).code).toBeUndefined();
     });
 
     it("lets a kept column of a required field take no value while its type is off, and drops nothing", async () => {
-      expect((await create(project(undefined, true))).code).toBeUndefined();
-      const before = written();
+      expect(
+        (await create(project(undefined, { required: true }))).code
+      ).toBeUndefined();
+      const before = sqlFiles();
 
-      expect((await create(project(["pages"], true))).code).toBeUndefined();
-      const relaxed = statements(written().slice(before.length));
+      expect(
+        (await create(project(["pages"], { required: true }))).code
+      ).toBeUndefined();
+      const relaxed = statements(written(before));
       expect(relaxed).toMatch(/dc_pages/);
       expect(relaxed).toMatch(/seo_title/);
       expect(relaxed).not.toMatch(/DROP COLUMN/i);
-      expect((await check(project(["pages"], true))).code).toBeUndefined();
+      expect(
+        (await check(project(["pages"], { required: true }))).code
+      ).toBeUndefined();
+    });
+
+    it("keeps a translated type's column, and switched on again plans nothing for it", async () => {
+      const translated = { translated: true, unique: true };
+      expect((await create(project(undefined, translated))).code).toBe(
+        undefined
+      );
+      expect(written()).toMatch(/dc_pages_locales[\s\S]*seo_title/);
+      const before = sqlFiles();
+
+      expect((await create(project(["pages"], translated))).code).toBe(
+        undefined
+      );
+      expect(statements(written(before))).not.toMatch(/seo_title/);
+      expect((await check(project(["pages"], translated))).code).toBe(
+        undefined
+      );
+
+      const off = sqlFiles();
+      expect((await create(project(undefined, translated))).code).toBe(
+        undefined
+      );
+      // Neither way: a DOWN that drops it would take the saved translations.
+      expect(withoutComments(written(off))).not.toMatch(/seo_title/);
+      expect((await check(project(undefined, translated))).code).toBe(
+        undefined
+      );
     });
 
     it("never makes the column for a type switched off before its first migration", async () => {

@@ -39,6 +39,14 @@ export function publishWithheldScopeFields(
   store.__nextly_withheldScopeFields = withheld;
 }
 
+/**
+ * Everything the latest fold held back, for a reload to put back when the
+ * configuration it read is refused and the previous one keeps running.
+ */
+export function currentWithheldScopeFields(): WithheldScopeFields {
+  return store.__nextly_withheldScopeFields ?? new Map();
+}
+
 /** The fields the latest fold held back from one type; none when it held none. */
 export function withheldScopeFieldsOf(
   kind: ScopedKind,

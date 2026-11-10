@@ -37,12 +37,21 @@ import {
 export function columnsByTable(
   snapshot: NextlySchemaSnapshot
 ): ReadonlyMap<string, ReadonlySet<string>> {
-  return new Map(
-    snapshot.tables.map(table => [
+  const columns = new Map<string, Set<string>>();
+  const add = (table: string, names: readonly string[]) =>
+    columns.set(table, new Set([...(columns.get(table) ?? []), ...names]));
+  for (const table of snapshot.tables) {
+    add(
       table.name,
-      new Set(table.columns.map(column => column.name)),
-    ])
-  );
+      table.columns.map(column => column.name)
+    );
+    // A migration snapshot records a translated table's companion columns on
+    // the main table, as `localizedColumns`, not as a table of its own.
+    if (table.localizedColumns !== undefined) {
+      add(companionTableOf(table.name), table.localizedColumns);
+    }
+  }
+  return columns;
 }
 
 interface TypeShape {

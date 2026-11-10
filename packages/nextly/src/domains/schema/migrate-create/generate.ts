@@ -331,15 +331,31 @@ function operationTableName(op: Operation): string {
  * remain (config matches latest snapshot; the CLI exits 0 for that).
  */
 export async function generateMigration(
-  args: GenerateArgs
+  declared: GenerateArgs
 ): Promise<GenerateResult | null> {
-  const metaDir = resolve(args.migrationsDir, "meta");
+  const metaDir = resolve(declared.migrationsDir, "meta");
   // Single clock for the whole run so the main file and its companions share a
   // deterministic base timestamp (companions get a strictly-later one below).
-  const now = args.now ?? new Date();
+  const now = declared.now ?? new Date();
 
   // 1. Load previous state.
   const previous = await loadLatestSnapshot(metaDir);
+
+  // The entities with the fields a plugin's scope holds back from a type
+  // switched off, kept while the previous snapshot has their columns. Taken
+  // once, here, so the table diff and every companion planner below see the
+  // same fields: planned from the declared ones alone, a translated kept
+  // field's companion column was added again when the type was switched on.
+  const kept = columnsByTable(previous?.data.snapshot ?? EMPTY_SNAPSHOT);
+  const args: GenerateArgs = {
+    ...declared,
+    collections: declared.collections.map(entity =>
+      withKeptScopeFields("collection", entity, kept)
+    ),
+    singles: declared.singles.map(entity =>
+      withKeptScopeFields("single", entity, kept)
+    ),
+  };
 
   // 2. Build desired snapshot from config. Localized collections omit their
   //    translatable columns here (they live in the companion `_locales` table).

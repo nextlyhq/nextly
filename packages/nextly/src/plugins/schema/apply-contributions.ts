@@ -593,11 +593,27 @@ function publishWithheld(
       for (const reached of typesReachedBy({ every: target.every }, judged)) {
         if (reached.kind === "fieldGroup") continue;
         const key = scopedTypeKey(reached.kind, slug);
-        withheld.set(key, [...(withheld.get(key) ?? []), ...fields]);
+        withheld.set(key, withFirstOfEachName(withheld.get(key), fields));
       }
     }
   }
   publishWithheldScopeFields(withheld);
+}
+
+/**
+ * `held` with each of `fields` whose name it does not have yet, compared as
+ * `tryExtend` compares them: switched on, a type takes the first clause's
+ * field of a name and leaves a later one unapplied, so only that one was ever
+ * its column.
+ */
+function withFirstOfEachName(
+  held: readonly FieldConfig[] = [],
+  fields: readonly FieldConfig[]
+): FieldConfig[] {
+  const nameOf = (field: FieldConfig) =>
+    (field as { name?: string }).name?.toLowerCase();
+  const seen = new Set(held.map(nameOf));
+  return [...held, ...fields.filter(field => !seen.has(nameOf(field)))];
 }
 
 /** Records `fields` as `owner`'s on the type `slug`, in `added`. */

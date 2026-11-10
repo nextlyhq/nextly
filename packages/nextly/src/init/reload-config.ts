@@ -110,7 +110,11 @@ import type {
   DesiredSchema,
   DesiredSingle,
 } from "../domains/schema/pipeline/types";
-import { scopedTypeKey } from "../domains/schema/pipeline/withheld-scope-fields";
+import {
+  currentWithheldScopeFields,
+  publishWithheldScopeFields,
+  scopedTypeKey,
+} from "../domains/schema/pipeline/withheld-scope-fields";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import {
@@ -1720,6 +1724,12 @@ async function applyReloadHolding(
         registerFieldType(fieldType);
       }
     });
+    // The fold `loadConfig` runs publishes what each scope holds back from a
+    // switched-off type, process-wide. A refused reload keeps the previous
+    // configuration, so its held-back fields are put back with it, or the
+    // next apply would plan dropping a column the running site still keeps.
+    const previousWithheld = currentWithheldScopeFields();
+    reloadUndo.push(() => publishWithheldScopeFields(previousWithheld));
     clearConfigCache();
     const result = await loadConfig();
     // Watch exactly what this read: the config and every file it imported. Set
