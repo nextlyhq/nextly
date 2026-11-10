@@ -38,11 +38,6 @@ import { installRegistryResolver } from "../utils/registry-resolver";
 /** The longest stored value a line of output shows. */
 const MAX_SHOWN = 200;
 
-/** Whether a code unit is a C0 or C1 control character, or DEL. */
-function isControlCharacter(code: number): boolean {
-  return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
-}
-
 /**
  * A stored value as one printable line: a failure is a plugin's own message,
  * and a newline or a terminal escape in it would split a row or act on the
@@ -50,12 +45,16 @@ function isControlCharacter(code: number): boolean {
  * value is cut short.
  */
 function printable(value: string): string {
-  // Compared by code unit rather than matched by a pattern, which would have to
-  // spell the control characters out; the runs of spaces they leave collapse below.
-  const spaced = Array.from(value, char =>
-    isControlCharacter(char.charCodeAt(0)) ? " " : char
-  ).join("");
-  const line = spaced.replace(/ {2,}/g, " ").trim();
+  // C0 controls (newline and ESC among them), DEL and the C1 controls, each
+  // compared by code point.
+  const isControl = (code: number): boolean =>
+    code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+  const line = Array.from(value, char =>
+    isControl(char.codePointAt(0) ?? 0) ? " " : char
+  )
+    .join("")
+    .replace(/ {2,}/g, " ")
+    .trim();
   return line.length > MAX_SHOWN ? `${line.slice(0, MAX_SHOWN - 1)}…` : line;
 }
 

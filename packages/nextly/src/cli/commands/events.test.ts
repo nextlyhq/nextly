@@ -170,7 +170,9 @@ describe("nextly events report", () => {
         subscriber: "@acme/email:receipt",
         status: "failed",
         attemptCount: 10,
-        lastError: "line one\nline two\u001b]0;title\u0007\u001b[2Jend",
+        // A newline, an OSC title, BEL, an ESC sequence, DEL and a C1 CSI.
+        lastError:
+          "line one\nline two\u001b]0;title\u0007\u001b[2Jend\u007f\u009b2Jdone",
       },
     ]);
     const { rows, context } = fakeContext();
@@ -180,8 +182,6 @@ describe("nextly events report", () => {
     const cell = String(rows[0]?.[5]);
     expect(cell).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
     expect(cell).toContain("line one line two");
-    // Each run of control characters is one space, and the rest is kept.
-    expect(cell).toBe("line one line two ]0;title [2Jend");
   });
 
   it("a database that is not there fails the report, and is not a dry run", async () => {

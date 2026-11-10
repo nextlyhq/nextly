@@ -111,6 +111,7 @@ import {
 import { createPluginLimits } from "./limits/plugin-limits";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
+import { createPluginCache, type PluginCacheApi } from "./plugin-cache";
 import type { PluginCategory } from "./plugin-categories";
 import { type PluginConfig, pluginConfigView } from "./plugin-config-view";
 import { NO_PLUGIN_GRANTS, type PluginGrants } from "./plugin-consent";
@@ -885,6 +886,15 @@ export interface PluginContext {
    * test double typed as `PluginContext`, adds a `webhooks` of its own.
    */
   webhooks: PluginWebhooksApi;
+
+  /**
+   * @experimental The cache tags of this plugin's own data, and their expiry.
+   * A read built from the plugin's data carries `cache.tag(part)`; when that
+   * data changes, `cache.expire(part)` clears every cached page carrying it,
+   * on every instance. Only this plugin's own tags: never content's or another
+   * plugin's.
+   */
+  cache: PluginCacheApi;
 
   /**
    * @experimental This plugin's stored configuration.
@@ -2865,6 +2875,8 @@ export function createPluginContext(
     // Kept within this plugin's name, which decides the types it may record.
     // The adapter is read per call and through this context's own resolver,
     // as the secrets helper's is.
+    // Under the same name as its webhooks: a plugin expires its own tags.
+    cache: createPluginCache(owner),
     webhooks: createPluginWebhooks(
       owner,
       () => asSecretsAdapter(getServiceFn("adapter")),

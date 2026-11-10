@@ -84,9 +84,16 @@ export async function documentTableOf(
     // The registry's fields: what a read of the collection is judged over.
     fields: record.fields ?? [],
     // Named as the collection's own writes name them, so a step reads a language's shared
-    // values exactly as a save in place wrote them.
+    // values exactly as a save in place wrote them. A presentational group has no name of its own,
+    // so nothing is translated under it and it is left out of the names.
     translated: localized
-      ? resolveLocalizedFieldNames([...(record.fields ?? [])], true)
+      ? resolveLocalizedFieldNames(
+          (record.fields ?? []).filter(
+            (field): field is FieldConfig & { name: string } =>
+              typeof field.name === "string"
+          ),
+          true
+        )
       : null,
   };
 }

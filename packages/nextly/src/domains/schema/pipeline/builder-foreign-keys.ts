@@ -36,6 +36,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import type { CollectionTables } from "../../dynamic-collections/services/collection-tables";
 import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 
 import type {
@@ -50,7 +51,9 @@ export function withBuilderForeignKeys(
   spec: TableSpec,
   collection: DesiredCollection,
   live: TableSpec | undefined,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  // The table each collection is stored in, so a key to a renamed target references the one it kept.
+  targetTables?: CollectionTables
 ): TableSpec {
   if (collection.builderOwned !== true) return spec;
 
@@ -79,7 +82,12 @@ export function withBuilderForeignKeys(
   const movedFrom = new Set(
     (recordedFields ?? []).flatMap(field => {
       if (desiredNames.has(field.name)) return [];
-      const described = builder.relationshipForeignKey(spec.name, field, false);
+      const described = builder.relationshipForeignKey(
+        spec.name,
+        field,
+        false,
+        targetTables
+      );
       return described === null || liveColumns.has(lower(described.columns[0]))
         ? []
         : [lower(described.referencesTable)];
@@ -100,7 +108,12 @@ export function withBuilderForeignKeys(
     // already exists keeps whatever it has, and a combination an older save
     // accepted (a required relationship that nulls on delete) must not block
     // every later save of the collection over a key nothing is creating.
-    const described = builder.relationshipForeignKey(spec.name, field, false);
+    const described = builder.relationshipForeignKey(
+      spec.name,
+      field,
+      false,
+      targetTables
+    );
     if (described === null) continue;
     const column = lower(described.columns[0]);
     const addedByThisChange =
@@ -113,7 +126,12 @@ export function withBuilderForeignKeys(
     }
     // A key this push creates is judged: what a save asks for has to be
     // possible, exactly as when the Builder creates the table.
-    const fk = builder.relationshipForeignKey(spec.name, field);
+    const fk = builder.relationshipForeignKey(
+      spec.name,
+      field,
+      true,
+      targetTables
+    );
     if (fk !== null) created.push(fk);
   }
 

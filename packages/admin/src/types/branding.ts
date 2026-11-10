@@ -284,7 +284,10 @@ export interface AdminBranding {
   logoText?: string;
   favicon?: string;
   colors?: ResolvedBrandingColors;
-  /** Runtime toggle for builder-related navigation visibility. */
+  /**
+   * Whether the server offers the schema builder: never in production, and
+   * elsewhere unless `admin.branding.showBuilder` is false.
+   */
   showBuilder?: boolean;
 
   /**

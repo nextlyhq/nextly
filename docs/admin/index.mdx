@@ -32,7 +32,7 @@ The top-level sections (in order) are:
 | Users | `/admin/users` | Users, Roles, Custom user fields |
 | Settings | `/admin/settings` | General, API keys, Email providers, Email templates, Email layout |
 
-Collection and Single icons are added to the primary sidebar dynamically as you register collections / singles in `nextly.config.ts` (or create them via the Visual Schema Builder). The Builder icon is always present but can be hidden in production; see [Schema Builder visibility](/docs/admin/branding#schema-builder-visibility) for the `admin.branding.showBuilder` toggle.
+Collection and Single icons are added to the primary sidebar dynamically as you register collections / singles in `nextly.config.ts` (or create them via the Visual Schema Builder). The Builder icon is present outside production unless `admin.branding.showBuilder` is `false`, and never in production, where schema arrives through migrations; see [Schema Builder visibility](/docs/admin/branding#schema-builder-visibility).
 
 ## What you can do in each section
 
@@ -88,7 +88,7 @@ The admin sidebar is permission-gated. The built-in mapping is:
 | API Keys | `update-api-keys` |
 | Email Providers / Templates / Layout | `read-email-providers` (Sending) or `read-email-templates` (Messages, Design) |
 | Plugins overview | `create-settings`, `update-settings` or `delete-settings` |
-| Builders (Collections / Singles / Field Groups Builder) | Gated by the `admin.branding.showBuilder` toggle |
+| Builders (Collections / Singles / Field Groups Builder) | Off in production; elsewhere off when `admin.branding.showBuilder` is `false` |
 
 Permissions for collections you define in `nextly.config.ts` follow the same slug pattern (`read-posts`, `update-posts`, etc.); they are wired up automatically when the collection is registered. Assign permissions to roles from `/admin/security/roles`.
 

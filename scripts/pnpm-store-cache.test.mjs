@@ -1,7 +1,7 @@
 /**
  * pnpm's package store is cached by one composite action
  * (`.github/actions/pnpm-store`), restored on every event and saved only by a
- * push to `main`, never by a pull request: a pull request's saved store sits
+ * push to `main` or `dev`, never by a pull request: a pull request's saved store sits
  * under its own ref, where no other run reads it.
  */
 import { readdirSync, readFileSync } from "node:fs";
@@ -65,7 +65,7 @@ describe("the pnpm store cache", () => {
     expect(unrestored).toEqual([]);
   });
 
-  it("is saved only on a push, after an install that ran, and only where a push means main", () => {
+  it("is saved only on a push, after an install that ran, and only where a push means main or dev", () => {
     const saves = allLists.flatMap(list =>
       list.steps
         .map((step, index) => ({ step, index }))
@@ -76,7 +76,12 @@ describe("the pnpm store cache", () => {
     for (const { list, step, install } of saves) {
       const expected = install?.if ? `${install.if} && github.event_name == 'push'` : "github.event_name == 'push'";
       expect(step.if, list.where).toBe(expected);
-      if (!list.composite) expect(list.push, list.where).toEqual({ branches: ["main"] });
+      // Pushed to on `main`, `dev` or both, which hold merged code alone.
+      if (!list.composite) {
+        expect(Object.keys(list.push ?? {}), list.where).toEqual(["branches"]);
+        expect(list.push.branches.length, list.where).toBeGreaterThan(0);
+        for (const branch of list.push.branches) expect(["main", "dev"], list.where).toContain(branch);
+      }
     }
   });
 
@@ -94,10 +99,10 @@ describe("the pnpm store cache", () => {
     expect(mismatched).toEqual([]);
   });
 
-  it("is saved by the integration setup only for workflows that push to main alone", () => {
+  it("is saved by the integration setup only for workflows that push to main and dev alone", () => {
     const callers = allLists.filter(list => list.steps.some(step => step.uses === INTEGRATION_SETUP));
     expect(callers.length).toBeGreaterThan(0);
-    for (const caller of callers) expect(caller.push ?? null, caller.where).toEqual({ branches: ["main"] });
+    for (const caller of callers) expect(caller.push ?? null, caller.where).toEqual({ branches: ["main", "dev"] });
   });
 });
 

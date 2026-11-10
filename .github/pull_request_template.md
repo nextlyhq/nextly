@@ -43,7 +43,7 @@ Then commit the generated `.changeset/*.md` file.
 
 - [ ] I read [CONTRIBUTING](../CONTRIBUTING.md)
 - [ ] My commits follow the [Conventional Commits](https://www.conventionalcommits.org/) spec (enforced by commitlint)
-- [ ] I targeted the `main` branch
+- [ ] I targeted the `dev` branch
 - [ ] I updated relevant documentation
 
 ## Screenshots / recordings

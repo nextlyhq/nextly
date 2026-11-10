@@ -529,6 +529,13 @@ Collections and Singles additionally carry the Versions, Revalidate and Webhooks
 Groups have none of those, and the Field Group registry has no columns for them under either name.
 The runtime reads its Drizzle table from that row, so the row matters as much as the columns do.
 
+The Builder itself never runs in production. A production server refuses every Builder save,
+preview, repair and delete with `BUILDER_DISABLED`, and so does a field-group save through the
+Direct API or a collection save through a plugin's `ctx.services.collections`, whatever
+`admin.branding.showBuilder` says; a production start that finds `showBuilder: true` logs that it
+has no effect there. Make schema changes in development, commit them with their migration, and let
+`nextly migrate` apply them. Entry writes are unaffected.
+
 ### Commit `ui-schema.json`
 
 The Builder dual-writes every entity it creates or saves into the UI-schema manifest — the file
