@@ -309,7 +309,8 @@ export type {
 /**
  * The runtime surfaces a plugin receives when it declares them, and the
  * declarations that ask for them.
- * @experimental `PluginSettingsApi` (`ctx.settings`), `PluginAuditApi`
+ * @experimental `PluginSettingsApi` (`ctx.settings`), `PluginCacheApi`
+ *   (`ctx.cache`), `PluginAuditApi`
  *   (`ctx.audit`), `PluginAuthApi` and `CompleteLoginOptions` (`ctx.auth`),
  *   `PluginCapabilities` (`capabilities`), `PluginAuditDeclaration`
  *   (`contributes.audit`) and `PluginHookPointDeclaration`
@@ -318,6 +319,7 @@ export type {
  */
 export type {
   PluginSettingsApi,
+  PluginCacheApi,
   PluginAuditApi,
   PluginAuthApi,
   CompleteLoginOptions,
@@ -639,6 +641,14 @@ export type {
  *   still be reaching past the boundary that makes one possible.
  */
 export { getCachedNextly } from "nextly";
+
+/**
+ * @experimental The cache tag `ctx.cache.tag(part)` gives, for code that
+ * renders a plugin's data outside its context (a route an app owns), so the
+ * read it caches carries the tag `ctx.cache.expire(part)` clears. Intended to
+ * be stable once a first-party plugin expires its pages through `ctx.cache`.
+ */
+export { pluginCacheTag } from "nextly";
 
 /**
  * @experimental The canonical response envelopes, and the trusted-client-IP
