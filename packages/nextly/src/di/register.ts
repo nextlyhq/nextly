@@ -2925,13 +2925,6 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
     config.plugins ?? [],
     { coreVersion: getCoreVersion(), consent: pluginConsent }
   );
-  for (const warning of unmatchedConsentWarnings(
-    resolvedPlugins,
-    pluginConsent
-  )) {
-    // Masked as every line the services write is (`resolvedLogger`).
-    maskingServiceLogger(config.logger ?? consoleLogger).warn(warning);
-  }
   const resolvedConfig = setupTransformerInput(config, resolvedPlugins);
 
   // ----------------------------------------
@@ -2968,11 +2961,25 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
   // The published hook-point map is rewritten by the same call, and the
   // boot's schema folding receives this list, so a transformer-added plugin's
   // collections and singles fold exactly like a declared plugin's.
-  return resolveTransformedPlugins(setupConfig, {
+  const transformed = resolveTransformedPlugins(setupConfig, {
     coreVersion: getCoreVersion(),
     consent: pluginConsent,
     declared: preSetup,
   });
+  // The unmatched-consent warnings are judged against the FINAL list — the
+  // configuration that actually runs and receives the grants. Judged on the
+  // pre-transform list, a `setup` transformer removing a listed plugin
+  // emitted no stale-grant warning (the name still matched there), and one
+  // adding an ordinary plugin under a listed name emitted a false one (the
+  // name matched nothing yet).
+  for (const warning of unmatchedConsentWarnings(
+    transformed.config.plugins,
+    pluginConsent
+  )) {
+    // Masked as every line the services write is (`resolvedLogger`).
+    maskingServiceLogger(config.logger ?? consoleLogger).warn(warning);
+  }
+  return transformed;
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await
