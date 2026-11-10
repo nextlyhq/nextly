@@ -184,11 +184,12 @@ describe.each(getConfiguredTestDialects())(
       // a column declared in another unit than the one written would misread
       // it by a factor of a thousand.
       const table = pluginEventsTables(adapter.dialect).nextlyPluginEvents;
-      const [viaSchema] = await adapter.transaction(tx =>
-        tx
-          .getDrizzle<SchemaReadDb>()
-          .select({ createdAt: table.createdAt })
-          .from(table)
+      const [viaSchema] = await adapter.transaction(
+        async tx =>
+          await tx
+            .getDrizzle<SchemaReadDb>()
+            .select({ createdAt: table.createdAt })
+            .from(table)
       );
       expect(viaSchema?.createdAt.getTime()).toBe(at.getTime());
     });
