@@ -98,21 +98,23 @@ export function phasesFor(scope, limits, base = INTEGRATION_BASE) {
 }
 
 /**
- * The quick check's phases. The typecheck runs without `--only`, so the
- * builds and typechecks the affected packages depend on run first (replayed
- * from turbo's cache when nothing changed them); a typecheck read against a
- * missing or stale `dist` answers about code that is not there. At most two
- * test workers, whatever the machine allows, so the check stays light enough
- * to run before every merge.
+ * The quick check's phases. The packages are built first, as `pnpm build`
+ * builds them (replayed from turbo's cache when nothing changed them), since a
+ * typecheck read against a missing or stale `dist` answers about code that is
+ * not there. `--affected` is not used for the build: it would also build the
+ * apps that depend on a changed package, and the playground's build is a whole
+ * `next build`. The typecheck then runs with `--only`, as the
+ * pre-push's does: its verdict covers the affected packages, and a red in an
+ * unchanged dependency is that package's owner's, not this branch's. At most
+ * two test workers, whatever the machine allows, so the check stays light
+ * enough to run before every merge.
  */
 function quickPhases(limits, base) {
   const workers = Math.min(2, limits.maxWorkers);
+  const scm = { TURBO_SCM_BASE: base };
   return [
-    {
-      name: "types (affected)",
-      argv: ["turbo", "run", "check-types", "--affected", "--continue"],
-      env: { TURBO_SCM_BASE: base },
-    },
+    { name: "build", argv: ["turbo", "run", "build", "--filter=./packages/*"] },
+    { name: "types (affected)", argv: ["turbo", "run", "check-types", "--affected", "--only", "--continue"], env: scm },
     { name: "unit tests (changed)", argv: ["exec", "node", "scripts/test-changed.mjs", base, `--max-workers=${workers}`] },
   ];
 }
