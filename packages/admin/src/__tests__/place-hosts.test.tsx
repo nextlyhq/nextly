@@ -237,6 +237,7 @@ vi.mock("@admin/components/features/auth-login", () => ({
 
 import LoginPage from "@admin/pages/(auth)/login";
 import DashboardPage from "@admin/pages/dashboard";
+import AccountPage from "@admin/pages/dashboard/account";
 import SettingsGeneralPage from "@admin/pages/dashboard/settings";
 import EditUserPage from "@admin/pages/dashboard/users/edit";
 import { EntryForm } from "@admin/components/features/entries/EntryForm/EntryForm";
@@ -399,17 +400,16 @@ const homepageDocument = {
   status: "draft",
 } as unknown as SingleDocumentData;
 
-/**
- * The host of every core place. The account page is not on this branch: it
- * joins this map, and the `Exclude` goes, when this branch takes the change
- * that adds it.
- */
-const PLACE_HOSTS: {
-  [P in Exclude<CoreAdminPlaceId, "account">]: PlaceHost;
-} = {
+/** The host of every core place: a place without one fails to compile here. */
+const PLACE_HOSTS: { [P in CoreAdminPlaceId]: PlaceHost } = {
   dashboard: {
     render: () => render(<DashboardPage />, { wrapper: Providers }),
     own: () => screen.findByRole("heading", { name: "Welcome, Ada" }),
+  },
+  account: {
+    render: () => render(<AccountPage />, { wrapper: Providers }),
+    // The page's own card: the person's profile form.
+    own: () => screen.findByLabelText("Name"),
   },
   "collection.list": {
     render: () =>
@@ -468,7 +468,7 @@ afterEach(() => {
 
 describe("every core place's host", () => {
   for (const [place, host] of Object.entries(PLACE_HOSTS) as [
-    Exclude<CoreAdminPlaceId, "account">,
+    CoreAdminPlaceId,
     PlaceHost,
   ][]) {
     const accepts: readonly Kind[] = CORE_ADMIN_PLACES[place].accepts;

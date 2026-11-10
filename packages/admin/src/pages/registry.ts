@@ -90,6 +90,7 @@ const FieldGroupsPage = lazyRoute(
   () => import("./dashboard/field-group/index")
 );
 const DashboardPage = lazyRoute(() => import("./dashboard/index"));
+const AccountPage = lazyRoute(() => import("./dashboard/account/index"));
 const MediaLibraryPage = lazyRoute(() => import("./dashboard/media/index"));
 const PluginDetailPage = lazyRoute(() => import("./dashboard/plugins/[slug]"));
 const PluginSettingsPage = lazyRoute(
@@ -309,6 +310,15 @@ export const routeConfig: Record<string, RouteConfig> = {
     screenName: railScreen("dashboard"),
     type: "private",
     section: "dashboard",
+  },
+  // The signed-in person's own account. No permission of its own: it reads
+  // and writes only their own row, through `/me`, which every signed-in
+  // person may. Shown under settings, where "My Account" used to land.
+  [ROUTES.ACCOUNT]: {
+    component: AccountPage,
+    screenName: "My Account",
+    type: "private",
+    section: "settings",
   },
 
   // Users routes

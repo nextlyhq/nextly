@@ -2902,6 +2902,44 @@ async function refuseUniqueFileThatCannotHold(
 }
 
 /**
+ * The UP an `adds` companion file should run here: the file's own, less the ADD of any column its
+ * translations table already has (`withoutColumnsAlreadyThere`). Any other file passes untouched.
+ *
+ * A companion file is snapshotless and runs verbatim, so one adding a translated field's column
+ * failed on a database where a dev push, the Schema Builder or a change that stopped part-way had
+ * already added it. Whether that column can hold the field is judged once the files have applied
+ * (`refuseCompanionColumnsThatCannotHold`), as for a column the run finds without a file.
+ */
+async function adoptColumnsAlreadyAdded(
+  adapter: DrizzleAdapter,
+  localization: LocalizationMigrationIntent | undefined,
+  upSql: string
+): Promise<string> {
+  if (localization?.kind !== "adds") return upSql;
+  const { companionTable } = localization.spec;
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [companionTable]
+  );
+  const live = new Set(
+    snapshot.tables
+      .find(table => table.name === companionTable)
+      ?.columns.map(column => column.name) ?? []
+  );
+  const { withoutColumnsAlreadyThere } = await import(
+    "../../domains/i18n/migration/field-added-to-translation"
+  );
+  const statements = splitSqlStatements(upSql, adapter.dialect);
+  const keep = withoutColumnsAlreadyThere(statements, companionTable, live);
+  return keep.length === statements.length
+    ? upSql
+    : keep
+        .map(statement => `${statement};`)
+        .join("\n--> statement-breakpoint\n");
+}
+
+/**
  * Refuses a companion file whose header records the settings a move out of translation applies
  * (an `archive` or `shared` file, or a `unique` file dropping a per-language index ahead of them),
  * where the fields' default-language values cannot take them
@@ -3080,6 +3118,8 @@ export async function runFileMigrations(args: {
       filename,
       m.upSql
     );
+    // A file adding translated fields' columns runs without the ADD of a column already there.
+    m.upSql = await adoptColumnsAlreadyAdded(dz, m.localization, m.upSql);
     // A file moving fields out of translation is refused here too, where their default language's
     // values cannot take the Required or Unique setting the move applies after its copy: at the
     // archive file, before the move's first statement, and again at the shared file.
