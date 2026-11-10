@@ -769,3 +769,28 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* --------------------------------------------------------- bindings to fix */
+/* The editor's notice of the page's bindings that no longer fit: a quiet chip
+   beside the page's status, in the builder's amber, which the canvas's
+   "Visitors won't see this" badge also wears. */
+.nx-pb-bindings-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin-inline-start: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--nx-builder-warning-text);
+  border-radius: 999px;
+  background: var(--nx-builder-warning-ground);
+  color: var(--nx-builder-warning-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.nx-pb-bindings-chip:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}

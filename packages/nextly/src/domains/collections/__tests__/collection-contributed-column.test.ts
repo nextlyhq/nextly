@@ -294,7 +294,12 @@ describe("a column contributed to a collection whose table is named by dbName", 
 
       const result = await service.updateEntry(
         { collectionName: SLUG, entryId: "entry-1", overrideAccess: true },
-        { title: "Updated", searchVector: "a", search_vector: "b" }
+        {
+          title: "Updated",
+          searchVector: "a",
+          search_vector: "b",
+          _overwrite: true,
+        }
       );
 
       expect(result.success).toBe(true);

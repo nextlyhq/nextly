@@ -65,7 +65,7 @@ async function boot(): Promise<TestNextly> {
   });
   await t.nextly.updateSingle({
     slug: SETTINGS,
-    data: { siteName: "Acme", tagline: "Hello" },
+    data: { siteName: "Acme", tagline: "Hello", _overwrite: true },
     overrideAccess: true,
   });
   // A code rule only narrows the permission, so the editor holds read on both

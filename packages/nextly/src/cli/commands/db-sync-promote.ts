@@ -27,6 +27,15 @@ import type { Logger } from "../utils/logger";
 import { answered } from "../utils/prompt-cancelled";
 
 import {
+  droppedHooksNote,
+  droppedPreviewNote,
+  promotedCollection,
+} from "./db-sync-promote-collection";
+import {
+  storedTemplateAddress,
+  templateAddressNote,
+} from "./db-sync-promote-template-address";
+import {
   collectionChangedAfterConsent,
   openCollectionRegistry,
   sameCollectionRecord,
@@ -57,6 +66,11 @@ export interface PromoteCollectionArgs {
   confirm: (code: string) => Promise<boolean>;
   /** How long a held schema lock is waited for, in milliseconds. */
   lockWaitMs?: number;
+  /**
+   * The template address the collection's entries are served at, stored on its page builder
+   * template, or null for none. Absent, none is read.
+   */
+  templateAddress?: (slug: string) => Promise<string | null>;
 }
 
 /**
@@ -69,6 +83,12 @@ interface PromotionPlan {
   record: DynamicCollectionRecord;
   /** The collection as `nextly.config.ts` source. */
   code: string;
+  /** The template address read before the prompt, or null for none; read again under the lock. */
+  address: string | null;
+  /** What the promote cannot carry into code (a template address, hooks, a preview), shown and appended beside it. */
+  note: string[];
+  /** The code with its note, as the confirmation shows it and a run without a config prints it. */
+  preview: string;
   /** The configuration file the snippet is appended to; null when none is found, and it is printed. */
   configPath: string | null;
 }
@@ -80,15 +100,27 @@ interface PromotionPlan {
 async function planPromotion(
   slug: string,
   registry: CollectionRegistryService,
-  cwd: string
+  cwd: string,
+  templateAddress?: (slug: string) => Promise<string | null>
 ): Promise<PromotionPlan> {
   const record = await registry.getCollectionBySlug(slug);
   if (!record) throw promoteCollectionNotFound(slug);
-  const fields = (record.fields ?? []) as unknown[];
+  const code = serializeCollection(promotedCollection(record));
+  // A collection whose template stores an address keeps its entries there only if the address is
+  // declared in code too, so the declaration is shown and appended beside its code.
+  const address = (await templateAddress?.(slug)) ?? null;
+  const note = [
+    ...(address === null ? [] : templateAddressNote(slug, address)),
+    ...droppedHooksNote(record.hooks),
+    ...droppedPreviewNote(record.admin),
+  ];
   return {
     slug,
     record,
-    code: serializeCollection({ slug, fields: fields as never[] }),
+    code,
+    address,
+    note,
+    preview: [code, ...note.map(line => `// ${line}`)].join("\n"),
     configPath: findConfigFile(cwd),
   };
 }
@@ -98,12 +130,13 @@ async function planPromotion(
  * array is not AST-edited: users may have custom imports, env-gated branches, or other machinery
  * the AST transformer cannot safely preserve.
  */
-function promotionSnippet(code: string, at: Date): string {
+function promotionSnippet(plan: PromotionPlan, at: Date): string {
   return [
     "",
     `// Promoted from UI source on ${at.toISOString()}.`,
     "// Move this entry into your collections array:",
-    ...code.split("\n").map(line => `// ${line}`),
+    ...plan.code.split("\n").map(line => `// ${line}`),
+    ...plan.note.map(line => `// ${line}`),
     "",
   ].join("\n");
 }
@@ -122,7 +155,8 @@ async function applyPromotion(
   plan: PromotionPlan,
   registry: CollectionRegistryService,
   logger: Logger,
-  cwd: string
+  cwd: string,
+  templateAddress?: (slug: string) => Promise<string | null>
 ): Promise<void> {
   await registry.assertDeletable(plan.slug);
 
@@ -136,13 +170,25 @@ async function applyPromotion(
     });
   }
 
+  // The address the printed declaration names, read again too: one changed in the admin since the
+  // preview would be declared stale, and the collection moved back to it at the next start.
+  const addressNow = (await templateAddress?.(plan.slug)) ?? null;
+  if (addressNow !== plan.address) {
+    throw planChangedAfterConsent({
+      command: "nextly db:sync --promote",
+      message: `${plan.slug}'s template address changed after you confirmed; nothing was changed; run the command again`,
+      agreed: plan.address === null ? [] : [plan.address],
+      current: addressNow === null ? [] : [addressNow],
+    });
+  }
+
   if (!plan.configPath) {
     logger.warn(
       "Could not locate nextly.config.ts. The snippet is printed below; paste it into the collections array manually."
     );
-    logger.info(plan.code);
+    logger.info(plan.preview);
   } else {
-    appendFileSync(plan.configPath, promotionSnippet(plan.code, new Date()));
+    appendFileSync(plan.configPath, promotionSnippet(plan, new Date()));
     logger.info(`Appended commented snippet to ${plan.configPath}.`);
   }
 
@@ -166,9 +212,14 @@ export async function promoteCollection(
 ): Promise<"promoted" | "cancelled"> {
   const { slug, logger, registry } = args;
 
-  const plan = await planPromotion(slug, registry, args.cwd);
+  const plan = await planPromotion(
+    slug,
+    registry,
+    args.cwd,
+    args.templateAddress
+  );
 
-  if (!(await args.confirm(plan.code))) {
+  if (!(await args.confirm(plan.preview))) {
     logger.info("Promote cancelled.");
     return "cancelled";
   }
@@ -192,13 +243,20 @@ export async function promoteCollection(
           current,
         });
       }
-      await applyPromotion(plan, registry, logger, args.cwd);
+      await applyPromotion(
+        plan,
+        registry,
+        logger,
+        args.cwd,
+        args.templateAddress
+      );
     }
   );
 
   logger.info(
     `Collection '${slug}' removed from UI source. Move the snippet into your collections array, then restart dev server.`
   );
+  if (plan.note.length > 0) logger.info(plan.note.join("\n"));
   return "promoted";
 }
 
@@ -213,9 +271,15 @@ async function previewPromotion(args: {
   registry: CollectionRegistryService;
   adapter: DrizzleAdapter;
   logger: Logger;
+  templateAddress?: (slug: string) => Promise<string | null>;
 }): Promise<DryRunPlan> {
   try {
-    const plan = await planPromotion(args.slug, args.registry, args.cwd);
+    const plan = await planPromotion(
+      args.slug,
+      args.registry,
+      args.cwd,
+      args.templateAddress
+    );
     await assertNoMigrationInFlight({
       adapter: args.adapter,
       logger: args.logger,
@@ -237,11 +301,11 @@ function promotionDryRun(plan: PromotionPlan, at: Date): DryRunPlan {
   if (plan.configPath) {
     changes.push({
       action: "edit",
-      target: `${plan.configPath}, appending this commented snippet:${promotionSnippet(plan.code, at).trimEnd()}`,
+      target: `${plan.configPath}, appending this commented snippet:${promotionSnippet(plan, at).trimEnd()}`,
     });
   } else {
     notes.push(
-      `No nextly.config.ts was found, so a real run prints this code to paste instead of appending it:\n${plan.code}`
+      `No nextly.config.ts was found, so a real run prints this code to paste instead of appending it:\n${plan.preview}`
     );
   }
   changes.push({
@@ -300,6 +364,14 @@ export async function runPromote(
       cwd: context.cwd,
       registry,
       adapter,
+      templateAddress: collection =>
+        storedTemplateAddress(
+          {
+            getAllCollections: () => registry.getAllCollections(),
+            queryStatement: statement => adapter.queryStatement(statement),
+          },
+          collection
+        ),
       // `--yes` answers the confirmation: append, without asking.
       confirm: code =>
         confirmationAnswered(context)
@@ -331,6 +403,16 @@ export async function runPromoteDryRun(
         registry: opened.registry,
         adapter: opened.adapter,
         logger: context.logger,
+        // The same address a real promote reads, over the read-only connection.
+        templateAddress: collection =>
+          storedTemplateAddress(
+            {
+              getAllCollections: () => opened.registry.getAllCollections(),
+              queryStatement: statement =>
+                opened.adapter.queryStatement(statement),
+            },
+            collection
+          ),
       })
     );
   } finally {

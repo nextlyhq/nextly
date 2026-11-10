@@ -67,7 +67,7 @@ describe("the transaction update path and updated_at", () => {
         .updateEntryInTransaction(
           tx as never,
           { collectionName: "bumpnotes", entryId: id, overrideAccess: true },
-          { title: "Second" }
+          { title: "Second", _overwrite: true }
         )
     );
     expect(result.success).toBe(true);

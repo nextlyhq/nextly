@@ -26,7 +26,6 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { COMPONENT_USAGE_INDEX_SLUG } from "../collections/component-usage-index";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { PAGES_SLUG } from "../collections/pages";
 import { PATTERNS_SLUG } from "../collections/patterns";
@@ -37,6 +36,9 @@ import {
   type CleanupPass,
   type RetiredCleanupService,
 } from "../retired-cleanup";
+
+/** Where the component usage index keeps its rows. */
+const COMPONENT_ROWS = "page_builder__component_usage";
 
 type Row = Record<string, unknown>;
 type Kind = "page" | "component" | "pattern";
@@ -95,6 +97,12 @@ function overridesOf(stored: unknown): unknown {
 interface Switches {
   /** Hold the next note write with this title once its strip has run. */
   hold?: { title: string; reached: () => void; release: Promise<void> };
+  /**
+   * Run once inside the walk's next note write, before that write takes its
+   * row lock: the walk writes the blocks field alone, so its data carries no
+   * title.
+   */
+  duringWalkWrite?: () => Promise<void>;
 }
 
 /**
@@ -109,6 +117,13 @@ function harness(switches: Switches): PluginDefinition {
     nextly: ">=0.0.0",
     init(ctx) {
       ctx.hooks.on("beforeChange", NOTES, async context => {
+        const data = (context as { data?: Record<string, unknown> }).data;
+        const during = switches.duringWalkWrite;
+        if (during !== undefined && data !== undefined && !("title" in data)) {
+          switches.duringWalkWrite = undefined;
+          await during();
+          return;
+        }
         const hold = switches.hold;
         const title = (context as { data?: { title?: unknown } }).data?.title;
         if (hold === undefined || title !== hold.title) return;
@@ -229,7 +244,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id,
-        data: { content: hero(kept), status: "published" },
+        data: { content: hero(kept), status: "published", _overwrite: true },
         overrideAccess: true,
       });
     }
@@ -268,25 +283,18 @@ describe.each(getConfiguredTestDialects())(
       );
       await t.nextly.updateSingle({
         slug: HOMEPAGE,
-        data: { content: placing("page", heroId, BOTH) },
+        data: { content: placing("page", heroId, BOTH), _overwrite: true },
         overrideAccess: true,
       });
       // The index forgets one note, as if it never saw it.
-      const rows = await t.nextly.find({
-        collection: COMPONENT_USAGE_INDEX_SLUG,
-        limit: 100,
-        depth: 0,
-        overrideAccess: true,
-      });
-      const forgotten = (rows.items as Row[]).filter(row =>
+      const rows = await t.adapter.select<Row>(COMPONENT_ROWS, {});
+      const forgotten = rows.filter(row =>
         String(row.entityKey).includes(unlisted)
       );
       expect(forgotten.length).toBeGreaterThan(0);
       for (const row of forgotten) {
-        await t.nextly.delete({
-          collection: COMPONENT_USAGE_INDEX_SLUG,
-          id: String(row.id),
-          overrideAccess: true,
+        await t.adapter.delete(COMPONENT_ROWS, {
+          and: [{ column: "id", op: "=", value: String(row.id) }],
         });
       }
 
@@ -329,6 +337,7 @@ describe.each(getConfiguredTestDialects())(
         id,
         data: {
           content: placing("page", heroId, { title: "Draft", body: "Kept" }),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -353,7 +362,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: PAGES_SLUG,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
         overrideAccess: true,
       });
       expect(await stored(t, PAGES_SLUG, id)).toEqual({ body: "Kept" });
@@ -366,7 +375,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id: heroId,
-        data: { content: hero(["body"]) },
+        data: { content: hero(["body"]), _overwrite: true },
         overrideAccess: true,
       });
 
@@ -393,7 +402,11 @@ describe.each(getConfiguredTestDialects())(
       const save = t.nextly.update({
         collection: NOTES,
         id,
-        data: { title: "Edited", content: placing("page", heroId, BOTH) },
+        data: {
+          title: "Edited",
+          content: placing("page", heroId, BOTH),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       await held;
@@ -416,6 +429,43 @@ describe.each(getConfiguredTestDialects())(
       expect(row.title).toBe("Edited");
     });
 
+    it("keeps an author's edit that commits between the walk's read and its write, and still takes the value out", async () => {
+      const switches: Switches = {};
+      const { t, cleanup } = await boot(switches);
+      const heroId = await publishedHero(t);
+      const id = await note(t, heroId);
+      await publishWithout(t, heroId, ["body"]);
+      // The walk, as the system, has read the note and computed its write;
+      // the author's save, still holding the retired value, commits first.
+      switches.duringWalkWrite = async () => {
+        await t.nextly.update({
+          collection: NOTES,
+          id,
+          data: {
+            title: "Author edit",
+            content: placing("page", heroId, { title: "Old", body: "Author" }),
+            _overwrite: true,
+          },
+          overrideAccess: true,
+        });
+      };
+
+      await cleanToTheEnd(cleanup);
+
+      expect(switches.duringWalkWrite).toBeUndefined();
+      // The walk's write, made from what it read before the save, was refused
+      // and the note read again: the author's body is kept, the retired value
+      // is not.
+      expect(await stored(t, NOTES, id)).toEqual({ body: "Author" });
+      const row = (await t.nextly.findByID({
+        collection: NOTES,
+        id,
+        depth: 0,
+        overrideAccess: true,
+      })) as Row;
+      expect(row.title).toBe("Author edit");
+    });
+
     it("keeps no value from a save that commits before the walk reads it", async () => {
       const switches: Switches = {};
       const { t, cleanup } = await boot(switches);
@@ -432,7 +482,11 @@ describe.each(getConfiguredTestDialects())(
       const save = t.nextly.update({
         collection: NOTES,
         id,
-        data: { title: "Edited", content: placing("page", heroId, BOTH) },
+        data: {
+          title: "Edited",
+          content: placing("page", heroId, BOTH),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       await held;

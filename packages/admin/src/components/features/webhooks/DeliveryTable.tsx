@@ -21,11 +21,15 @@ import { useMemo } from "react";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import {
+  webhookEventChoices,
+  type WebhookEventChoice,
+} from "@admin/lib/webhook-event-choices";
+import {
   WEBHOOK_DELIVERY_STATUSES,
-  WEBHOOK_EVENT_TYPES,
   type WebhookDeliveryStatus,
   type WebhookDeliverySummary,
   type WebhookEventType,
+  type WebhookEventTypeEntry,
 } from "@admin/types/webhooks";
 
 import {
@@ -35,6 +39,18 @@ import {
   formatLatency,
   formatStatusCode,
 } from "./deliveryStatus";
+
+/**
+ * What the event filter calls a choice: a plugin's label beside its id, so it
+ * reads as the webhook form names it, and a type the server no longer lists
+ * marked unavailable.
+ */
+function eventChoiceText(choice: WebhookEventChoice): string {
+  if (choice.unavailable) return `${choice.type} (unavailable)`;
+  return choice.label === choice.type
+    ? choice.type
+    : `${choice.label} (${choice.type})`;
+}
 
 /** Sentinel for the "no filter" option (Radix Select forbids an empty value). */
 const ALL = "all" as const;
@@ -51,6 +67,13 @@ export interface DeliveryTableProps {
   /** Active filters; undefined means unfiltered. */
   status?: WebhookDeliveryStatus;
   eventType?: WebhookEventType;
+  /**
+   * The event types the server lists, which the event filter offers;
+   * `undefined` while they load or when they could not be loaded.
+   */
+  eventTypes: readonly WebhookEventTypeEntry[] | undefined;
+  /** The list could not be loaded, which the filter says rather than look empty. */
+  eventTypesFailed?: boolean;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
   onStatusChange: (status?: WebhookDeliveryStatus) => void;
@@ -67,6 +90,8 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
   pageSize,
   status,
   eventType,
+  eventTypes,
+  eventTypesFailed = false,
   onPageChange,
   onPageSizeChange,
   onStatusChange,
@@ -164,29 +189,12 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
           </SelectContent>
         </Select>
 
-        <Select
-          value={eventType ?? ALL}
-          onValueChange={value =>
-            onEventTypeChange(
-              value === ALL ? undefined : (value as WebhookEventType)
-            )
-          }
-        >
-          <SelectTrigger
-            className="w-full sm:w-64"
-            aria-label="Filter by event"
-          >
-            <SelectValue placeholder="All events" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All events</SelectItem>
-            {WEBHOOK_EVENT_TYPES.map(value => (
-              <SelectItem key={value} value={value}>
-                {value}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <DeliveryEventFilter
+          eventType={eventType}
+          eventTypes={eventTypes}
+          eventTypesFailed={eventTypesFailed}
+          onEventTypeChange={onEventTypeChange}
+        />
       </div>
 
       <DataTableView<WebhookDeliverySummary>
@@ -219,3 +227,54 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
     </div>
   );
 };
+
+/**
+ * The delivery log's event filter: the types the server lists, by label, and
+ * the filter in force kept named when the server no longer lists it. Says so
+ * when the list could not be loaded, rather than offer an empty one.
+ */
+function DeliveryEventFilter({
+  eventType,
+  eventTypes,
+  eventTypesFailed,
+  onEventTypeChange,
+}: {
+  eventType: WebhookEventType | undefined;
+  eventTypes: readonly WebhookEventTypeEntry[] | undefined;
+  eventTypesFailed: boolean;
+  onEventTypeChange: (eventType?: WebhookEventType) => void;
+}): React.ReactElement {
+  return (
+    <>
+      <Select
+        value={eventType ?? ALL}
+        onValueChange={value =>
+          onEventTypeChange(value === ALL ? undefined : value)
+        }
+      >
+        <SelectTrigger className="w-full sm:w-64" aria-label="Filter by event">
+          <SelectValue placeholder="All events" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>All events</SelectItem>
+          {/* The filter in force stays offered, named, though the server
+          no longer lists it, as a disabled plugin's type is not. */}
+          {webhookEventChoices(
+            eventTypes ?? [],
+            eventType === undefined ? [] : [eventType]
+          ).map(choice => (
+            <SelectItem key={choice.type} value={choice.type}>
+              {eventChoiceText(choice)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {eventTypesFailed && (
+        <p className="text-sm text-destructive-500">
+          Could not load the event types to filter by. Reload the page to try
+          again.
+        </p>
+      )}
+    </>
+  );
+}

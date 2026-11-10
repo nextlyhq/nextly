@@ -181,7 +181,7 @@ describeEachDialect(
             current.getService("singleEntryService");
           const written = await singles.update(
             "hero",
-            { heading: "Hello", views: 7 },
+            { heading: "Hello", views: 7, _overwrite: true },
             { overrideAccess: true }
           );
           expect(written.success, JSON.stringify(written)).toBe(true);
@@ -309,7 +309,7 @@ describeEachDialect(
         }
       );
 
-      const registry = current.getService("schemaRegistry") as {
+      const registry = current.getService("schemaRegistry" as never) as {
         getTable(name: string): unknown;
       };
       for (const table of ["dc_posts_locales", "single_hero_locales"]) {

@@ -5,7 +5,8 @@
  * read: drawing a block needs the style, and the Single's read needs Design's
  * `read-site-style`, which an author who may edit a page need not hold. The
  * route answers to anyone who may edit something the builder opens, with the
- * four stored sections exactly as the Single holds them.
+ * four stored sections exactly as the Single holds them, and the Single's
+ * `_rev` as the same read gave it, which a save made from it sends back.
  *
  * ONE query, under one key, for every surface that draws or edits the style:
  * the canvas, the inspector, Design's studios, the undo history's read-back
@@ -61,6 +62,12 @@ export interface StoredSiteStyleRead {
    * read for one that caught up.
    */
   readonly refetch: () => Promise<{ readonly isError: boolean }>;
+  /**
+   * Read the route again now, never answering from the cache, and resolve
+   * with what it answered, its `_rev` with it; rejects when the read fails.
+   * What a save refused as made from a replaced version merges onto next.
+   */
+  readonly readFresh: () => Promise<StoredSiteStyle>;
 }
 
 /** Read the stored site style through the plugin's route. */
@@ -86,6 +93,17 @@ export function useStoredSiteStyle(): StoredSiteStyleRead {
     const answer = await ask();
     return { isError: answer.isError };
   }, [ask]);
+  const readFresh = useCallback(async () => {
+    // A read started now, cancelling one already in flight: that one may
+    // have been started before the save that was just refused.
+    const answer = await ask({ cancelRefetch: true });
+    // A failed read keeps the earlier answer as its data, which is exactly
+    // what must not be merged onto as the newest copy.
+    if (answer.isError || answer.data === undefined) {
+      throw answer.error ?? new Error("The site style could not be read.");
+    }
+    return answer.data;
+  }, [ask]);
   return {
     data: query.data,
     isPending: query.isPending,
@@ -93,5 +111,6 @@ export function useStoredSiteStyle(): StoredSiteStyleRead {
     // `isSuccess` is false once a later read fails, even with data kept.
     current: query.isSuccess && (query.isFetchedAfterMount || !query.isStale),
     refetch,
+    readFresh,
   };
 }

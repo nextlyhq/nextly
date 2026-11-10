@@ -34,6 +34,16 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   }),
 }));
 
+// The pages ask through the router-free hook, which reads the same answer.
+vi.mock("@admin/hooks/useHasPermission", async () => {
+  const { useCurrentUserPermissions } = await import(
+    "@admin/hooks/useCurrentUserPermissions"
+  );
+  return {
+    useHasPermission: () => useCurrentUserPermissions().hasPermission,
+  };
+});
+
 vi.mock("@admin/hooks/queries/useEmailProviders", () => ({
   useEmailProviders: (params: unknown) => useEmailProviders(params),
   useEmailProviderTypes: () => useEmailProviderTypes(),
@@ -116,7 +126,7 @@ describe("row actions when the provider catalog did not load", () => {
     // nothing here established otherwise. Withholding both actions on the
     // strength of a failed request removes them from every working provider.
     expect(actions).toContain("Set Default");
-    expect(actions).toContain("Send Test");
+    expect(actions).toContain("Send a test");
   });
 
   it("says the catalog is unavailable, with a way to retry", () => {
@@ -139,7 +149,7 @@ describe("row actions when the provider catalog did not load", () => {
     const actions = await openRowActions();
 
     expect(actions).not.toContain("Set Default");
-    expect(actions).not.toContain("Send Test");
+    expect(actions).not.toContain("Send a test");
     // Deleting an orphaned row is the whole reason it is still listed.
     expect(actions).toContain("Delete");
   });
@@ -151,7 +161,7 @@ describe("row actions when the provider catalog did not load", () => {
     const actions = await openRowActions();
 
     expect(actions).toContain("Set Default");
-    expect(actions).toContain("Send Test");
+    expect(actions).toContain("Send a test");
     expect(screen.queryByText(/catalog unavailable/i)).not.toBeInTheDocument();
   });
 });

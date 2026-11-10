@@ -41,6 +41,8 @@ const ELIGIBLE_SOURCE_TYPES = new Set([
   "email",
   "code",
   "password",
+  // An icon id compares as text: "is set", or "equals lucide:star".
+  "icon",
   "number",
   "date",
   "select",

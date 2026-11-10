@@ -203,7 +203,8 @@ export function asNavigableUrl(value: string): URL | null {
  */
 function interpolate(
   template: string,
-  entry: Record<string, unknown>
+  entry: Record<string, unknown>,
+  pathFields: ReadonlySet<string> = NO_PATH_FIELDS
 ): string | null {
   const placeholders = template.match(/\{(\w+)\}/g);
   if (!placeholders) return template;
@@ -213,9 +214,34 @@ function interpolate(
     const field = placeholder.slice(1, -1);
     const text = asUrlSegment(entry[field]);
     if (text === null) return null;
-    result = result.replace(placeholder, encodeURIComponent(text));
+    result = result.replace(
+      placeholder,
+      pathFields.has(field) ? encodedPath(text) : encodeURIComponent(text)
+    );
   }
   return result;
+}
+
+/** No field's value is a path unless a caller names it one. */
+const NO_PATH_FIELDS: ReadonlySet<string> = new Set();
+
+/**
+ * A path field's value as it goes into a URL: each segment encoded with its
+ * `/` kept, where the value is a path of real segments (a page stored at
+ * `docs/install`), so its link names the address it is served at. Anything
+ * else is encoded whole, so `../admin` can never step out of the template it
+ * is placed in.
+ */
+function encodedPath(text: string): string {
+  const segments = text.split("/");
+  const isPath =
+    segments.length > 1 &&
+    segments.every(
+      segment => segment !== "" && segment !== "." && segment !== ".."
+    );
+  return isPath
+    ? segments.map(encodeURIComponent).join("/")
+    : encodeURIComponent(text);
 }
 
 /**
@@ -234,9 +260,20 @@ function interpolate(
  * previewable, and will be once it has one.
  */
 export function previewUrlFromTemplate(
-  template: string
+  template: string,
+  options: {
+    /**
+     * The fields whose values are paths of several segments, such as the
+     * slug of a collection with `db.slugPaths`: their `/` is kept and each
+     * segment encoded. Every other value is encoded whole.
+     *
+     * @experimental Settles with multi-segment page addresses.
+     */
+    readonly pathFields?: readonly string[];
+  } = {}
 ): (entry: Record<string, unknown>) => string | null {
-  return entry => interpolate(template, entry);
+  const pathFields = new Set(options.pathFields ?? []);
+  return entry => interpolate(template, entry, pathFields);
 }
 
 /**

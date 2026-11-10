@@ -468,7 +468,7 @@ describe.each(dialects)(
         collection: FALLING_BACK,
         id: others,
         locale: "fr",
-        data: { title: "hidden" },
+        data: { title: "hidden", _overwrite: true },
       } as never);
 
       // The control: the author's plain read hides the entry.

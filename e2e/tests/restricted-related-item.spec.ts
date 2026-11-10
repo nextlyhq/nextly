@@ -115,7 +115,12 @@ async function freshPost(): Promise<string> {
 async function resetSingle(): Promise<void> {
   await expectOk(
     await admin.patch(`/admin/api/singles/${SINGLE}`, {
-      data: { headline: "Links", featuredTags: tagIds, logo: mediaId },
+      data: {
+        headline: "Links",
+        featuredTags: tagIds,
+        logo: mediaId,
+        _overwrite: true,
+      },
     }),
     "resetting the Single"
   );

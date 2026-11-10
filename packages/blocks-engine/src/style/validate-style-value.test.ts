@@ -3516,3 +3516,53 @@ describe("leafAcceptsValue", () => {
     expect(leafAcceptsValue(leafOf("opacity"), 1.5)).toBe(false);
   });
 });
+
+describe("a scaled token reference", () => {
+  const issuesOf = (values: StyleValues) =>
+    validateStyleValues(values, "/s", "strict").filter(
+      issue => issue.severity === "error"
+    );
+
+  it("takes a length or number token times a sane factor", () => {
+    expect(issuesOf({ rowGap: { $token: "space.4", times: 0.75 } })).toEqual(
+      []
+    );
+    expect(issuesOf({ rowGap: { $token: "space.4", times: 4 } })).toEqual([]);
+    expect(issuesOf({ rowGap: { $token: "space.4", times: 0.25 } })).toEqual(
+      []
+    );
+  });
+
+  it("refuses a factor that is not a positive finite number in range", () => {
+    for (const times of [0, -1, 0.1, 5, Number.NaN, "0.75", null]) {
+      expect(
+        issuesOf({ rowGap: { $token: "space.4", times } as never }),
+        String(times)
+      ).toHaveLength(1);
+    }
+  });
+
+  it("refuses scaling a token that is not a length or a number", () => {
+    expect(
+      issuesOf({ color: { $token: "color.primary", times: 0.5 } as never })
+    ).toHaveLength(1);
+  });
+
+  it("still refuses any other field beside the token", () => {
+    expect(
+      issuesOf({ rowGap: { $token: "space.4", scale: 2 } as never })
+    ).toHaveLength(1);
+  });
+});
+
+describe("a scale left undefined", () => {
+  it("is a token reference with no scale, as an omitted field is", () => {
+    expect(
+      validateStyleValues(
+        { rowGap: { $token: "space.4", times: undefined } as never },
+        "/s",
+        "strict"
+      ).filter(issue => issue.severity === "error")
+    ).toEqual([]);
+  });
+});

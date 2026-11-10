@@ -153,11 +153,11 @@ async function render(t: TestNextly, token: string): Promise<string> {
 async function seed(t: TestNextly): Promise<void> {
   await t.nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme", status: "published" },
+    data: { siteName: "Acme", status: "published", _overwrite: true },
   });
   await t.nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme (pending)" },
+    data: { siteName: "Acme (pending)", _overwrite: true },
   });
 }
 

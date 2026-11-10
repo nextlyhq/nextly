@@ -43,6 +43,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  * stay out of what the admin and the plugin SDK publish, so a plugin never depends on them.
  * `recharts-wrapper` is the class of the element every Recharts chart renders around itself.
  *
+ * The icon set is the Lucide data behind the admin's icon field, reached through a dynamic import
+ * of `@nextlyhq/blocks-react/icons/lucide`. It is loaded when an icon field is drawn, never by an
+ * admin entry before it renders, and no published type names it. `activity-square` is the first
+ * of the set's renamed icon names, a key its alias table always holds.
+ *
  * @type {readonly { name: string, packageDir: string, specifier: string, marker: string, declarationDirs: readonly string[] }[]}
  */
 export const BOUNDARIES = [
@@ -51,6 +56,13 @@ export const BOUNDARIES = [
     packageDir: "packages/admin",
     specifier: "recharts",
     marker: "recharts-wrapper",
+    declarationDirs: ["packages/admin/dist", "packages/plugin-sdk/dist"],
+  },
+  {
+    name: "icon set",
+    packageDir: "packages/admin",
+    specifier: "@nextlyhq/blocks-react",
+    marker: "activity-square",
     declarationDirs: ["packages/admin/dist", "packages/plugin-sdk/dist"],
   },
 ];

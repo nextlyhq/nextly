@@ -17,14 +17,12 @@
  * no per-caller filter), so a stable cache key shared by every visitor is
  * correct; the varying arguments (slug, page, limit, ...) go in `keyParts`.
  *
- * Depth>=1 reads embed related author / category / tag records, so an edit to
- * one of those must also refresh the post pages showing it. Those reads use
- * `POST_WITH_RELATIONS_TAGS`: category and tag writes bust their own collection
- * tags immediately, and because the `users` collection (authors) does not emit
- * cache tags yet, those reads also carry a time-based safety net
- * (`RELATION_REVALIDATE_SECONDS`) so an author profile edit becomes visible
- * within that window. Depth=0 reads select only post columns and stay tagged
- * with `nextly:posts` alone.
+ * Depth>=1 reads embed related byline (author profile) / category / tag
+ * records, so an edit to one of those must also refresh the post pages showing
+ * it. Those reads use `POST_WITH_RELATIONS_TAGS`: author, category and tag
+ * writes bust their own collection tags immediately, and the reads also carry a
+ * time-based safety net (`RELATION_REVALIDATE_SECONDS`). Depth=0 reads select
+ * only post columns and stay tagged with `nextly:posts` alone.
  */
 
 // Pass nextlyConfig (loaded via the @nextly-config path alias) so
@@ -38,6 +36,7 @@ import type { WhereFilter } from "nextly";
 import { cachedFind, nextlyTags } from "nextly/runtime";
 import nextlyConfig from "@nextly-config";
 
+import { toAuthor } from "./coerce";
 import type { Post } from "./types";
 import { getCategoryBySlug } from "./categories";
 import { getTagBySlug } from "./tags";
@@ -46,27 +45,26 @@ const PUBLISHED = { status: { equals: "published" } };
 
 /**
  * Tags for a read that populates related records (depth>=1). Carries the post,
- * category, tag, user, and media collection tags so an edit to any embedded
- * relation busts these pages. Categories, tags and media emit their tags on
- * write, so an edited image refreshes these pages immediately. The `users` tag
- * is still inert (that system collection emits no cache tags — see
- * `RELATION_REVALIDATE_SECONDS`) but future-proofs the read for when it does.
+ * category, tag, author and media collection tags so an edit to any embedded
+ * relation busts these pages: each of those collections emits its tags on
+ * write, so an edited byline or image refreshes these pages on the next visit.
+ * The `users` tag covers the owning account the read also embeds; that system
+ * collection emits none today, and the tag is ready for when it does.
  */
 const POST_WITH_RELATIONS_TAGS = [
   ...nextlyTags("posts"),
   ...nextlyTags("categories"),
   ...nextlyTags("tags"),
+  ...nextlyTags("authors"),
   ...nextlyTags("users"),
   ...nextlyTags("media"),
 ];
 
 /**
- * Time-based safety net (seconds) for reads that embed author (user) fields.
- * The `users` system collection emits no revalidation tags, so this window is
- * how an author's updated name / bio / avatar becomes visible inside posts.
- * Media no longer depends on it — a media write busts that file's tags on
- * commit, so an edited image's alt text or crop appears on the next visit.
- * Lower it for fresher author data at a higher DB cost.
+ * Time-based safety net (seconds) for reads that embed related records. Every
+ * embedded collection busts its own tags on write, so this only bounds how
+ * long a missed refresh could last. Lower it for fresher pages at a higher DB
+ * cost.
  */
 const RELATION_REVALIDATE_SECONDS = 3600;
 
@@ -78,10 +76,21 @@ const RELATION_REVALIDATE_SECONDS = 3600;
  * inside these helpers.
  */
 function coercePost(doc: unknown): Post {
-  return doc as Post;
+  const post = doc as Post & { byline?: unknown };
+  // The author a reader is shown is the post's byline, a public profile in
+  // `authors`, read as the same public projection the author pages use. The
+  // post's `author` field is the account that owns it, which no page shows.
+  const byline = post.byline;
+  return {
+    ...post,
+    author:
+      byline !== null && typeof byline === "object"
+        ? toAuthor(byline as Record<string, unknown>)
+        : null,
+  };
 }
 function coercePosts(docs: unknown[]): Post[] {
-  return docs as Post[];
+  return docs.map(coercePost);
 }
 
 /**
@@ -336,7 +345,7 @@ export async function getPostsByAuthor(
         const result = await nextly.find({
           collection: "posts",
           where: {
-            and: [PUBLISHED, { author: { equals: authorId } }],
+            and: [PUBLISHED, { byline: { equals: authorId } }],
           },
           sort: "-publishedAt",
           page,
@@ -625,7 +634,7 @@ export async function getRelatedPosts(
     }
     if (authorId) {
       const docs = await tryQuery(`author:${authorId}`, {
-        author: { equals: authorId },
+        byline: { equals: authorId },
       });
       if (docs.length > 0) return docs;
     }

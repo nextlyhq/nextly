@@ -155,6 +155,7 @@ describe.each(getConfiguredTestDialects())(
       const updated = docOf(
         await rest("PATCH", ["collections", NOTES, "entries", id], {
           title: "b",
+          _rev: created._rev,
         })
       );
       expect(updated._rev).toBe("2");
@@ -174,7 +175,10 @@ describe.each(getConfiguredTestDialects())(
       const read = docOf(await rest("GET", ["singles", SETTINGS]));
       expect(read._rev).toBe("1");
       const updated = docOf(
-        await rest("PATCH", ["singles", SETTINGS], { notice: "x" })
+        await rest("PATCH", ["singles", SETTINGS], {
+          notice: "x",
+          _rev: read._rev,
+        })
       );
       expect(updated._rev).toBe("2");
       expect(await counterOf(t, `single_${SETTINGS}`)).toBe(2);
@@ -292,7 +296,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: DRAFTED as never,
         id,
-        data: { title: "held" },
+        data: { title: "held", _overwrite: true },
         overrideAccess: true,
       } as never);
       const read = async () =>
@@ -307,7 +311,9 @@ describe.each(getConfiguredTestDialects())(
 
       const removed = await versions!.deleteWorkingDraft(
         { scopeKind: "collection", scopeSlug: DRAFTED, entryId: id },
-        null
+        null,
+        undefined,
+        { _rev: held }
       );
       expect(removed).toBe(1);
       expect(await read()).not.toBe(held);
@@ -326,7 +332,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: DRAFTED as never,
         id,
-        data: { title: "held" },
+        data: { title: "held", _overwrite: true },
         overrideAccess: true,
       } as never);
       const ref = { scopeKind: "collection", scopeSlug: DRAFTED, entryId: id };
@@ -335,12 +341,17 @@ describe.each(getConfiguredTestDialects())(
         services!.withTransaction(async tx => {
           await services!.updateEntryInTransaction(tx, DRAFTED, id, {
             title: "written in the plugin's transaction",
+            _overwrite: true,
           });
           return versions!.deleteWorkingDraft(ref as never, null);
         })
       ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
       // Nothing discarded: the draft is still there to discard afterwards.
-      expect(await versions!.deleteWorkingDraft(ref as never, null)).toBe(1);
+      expect(
+        await versions!.deleteWorkingDraft(ref as never, null, undefined, {
+          _overwrite: true,
+        })
+      ).toBe(1);
     }, 60_000);
   }
 );

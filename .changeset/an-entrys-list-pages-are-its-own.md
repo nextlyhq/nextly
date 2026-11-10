@@ -1,0 +1,43 @@
+---
+"nextly": patch
+"create-nextly-app": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/ui": patch
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-accounts": patch
+"@nextlyhq/plugin-commerce": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
+---
+
+An entry drawn with a design that splits a Collection list into pages now holds its
+list's later pages (`/blog/hello/page/2`, …) beside its address, as a page does, and
+the content route serves them. The design is the entry's published own design, else
+its collection's published template. Saving an entry where a document is published
+among those pages is refused, naming it; publishing a paged template or own design, or
+turning on Split into pages in a published one, leaves such an entry waiting for them,
+its list shown on one page with no links to later pages, until the document frees the
+address. An entry left waiting for its own address waits for its later pages too, and
+is given both together. A paged page that held its later pages while it waited for its
+address gives them up when the site next starts, so a document waiting among them is
+served there, and the page waits for both. Turning pagination off, or unpublishing or
+removing the paged design, frees them.

@@ -950,6 +950,20 @@ export const MIGRATION_CODES = defineCodes({
           };
         },
       },
+      // A migration whose file's removal was recorded: its down section is
+      // gone with the file.
+      {
+        code: "INVALID_INPUT",
+        reason: "down-file-removed",
+        describe: error => {
+          const [what, next] = splitFirst(error.publicMessage);
+          return {
+            what,
+            why: "`nextly migrate:resolve --removed` recorded its file removed from the folder, so there is no `-- DOWN` section to run.",
+            next,
+          };
+        },
+      },
     ],
   },
   PRODUCTION_ROLLBACK_UNCONFIRMED: {
@@ -1036,9 +1050,9 @@ export function resolveModeRequired(given: number): CliError {
     what: "`nextly migrate:resolve` needs exactly one thing to record.",
     why:
       given === 0
-        ? "It was given none of `--applied`, `--rolled-back` and `--failed-cleanup`."
-        : `It was given ${given} of \`--applied\`, \`--rolled-back\` and \`--failed-cleanup\`.`,
-    next: "Provide exactly one of --applied, --rolled-back, or --failed-cleanup.",
+        ? "It was given none of `--applied`, `--rolled-back`, `--failed-cleanup` and `--removed`."
+        : `It was given ${given} of \`--applied\`, \`--rolled-back\`, \`--failed-cleanup\` and \`--removed\`.`,
+    next: "Provide exactly one of --applied, --rolled-back, --failed-cleanup, or --removed.",
   });
 }
 

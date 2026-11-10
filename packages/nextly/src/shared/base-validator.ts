@@ -21,6 +21,7 @@
  */
 
 import type { FieldAccess } from "../collections/fields/types/base";
+import { isIconIdShape } from "../collections/fields/types/icon";
 import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
 import {
   configuredSiblingClashes,
@@ -92,6 +93,7 @@ export const VALID_FIELD_TYPES = [
   "email",
   "password",
   "code",
+  "icon",
   // Numeric types
   "number",
   // Selection types
@@ -427,6 +429,29 @@ export function validateNumberDecimalDimensionsShared(
       path: `${path}.scale`,
       message: "Decimal 'scale' cannot exceed 'precision'",
       code: "DECIMAL_SCALE_EXCEEDS_PRECISION",
+    });
+  }
+}
+
+/**
+ * Validate an icon field's `defaultValue`. The default is written into the
+ * column's DDL and onto every new entry, so a value that is not an icon id
+ * (`<set>:<name>`, see {@link isIconIdShape}) is refused at config time.
+ * Only the shape is checked: whether the set and the icon exist is answered
+ * at runtime, once icon sets are registered. Non-icon fields are ignored.
+ */
+export function validateIconDefaultShared(
+  field: Record<string, unknown>,
+  path: string,
+  errors: BaseValidationError[]
+): void {
+  if (field.type !== "icon" || field.defaultValue === undefined) return;
+  if (!isIconIdShape(field.defaultValue)) {
+    errors.push({
+      path: `${path}.defaultValue`,
+      message:
+        "Icon 'defaultValue' must be an icon id of the form '<set>:<name>', for example 'lucide:star'",
+      code: "ICON_DEFAULT_INVALID",
     });
   }
 }

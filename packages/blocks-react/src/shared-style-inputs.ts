@@ -546,6 +546,11 @@ function classParts(entry: unknown, reading: Reading): unknown {
     ...(entry.blockType === undefined
       ? []
       : [["look", boundedName(entry.blockType, reading)]]),
+    // A block's own look edits its type's base instead of being a class, so
+    // the mark moves the stamp. Spread, so every other class stamps as before.
+    ...(entry.isDefault === undefined
+      ? []
+      : [["own-look", structural(entry.isDefault, reading)]]),
   ] as unknown;
 }
 

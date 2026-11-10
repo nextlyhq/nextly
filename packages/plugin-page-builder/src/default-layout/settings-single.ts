@@ -114,10 +114,11 @@ export function pageBuilderSettingsSingle(): SingleConfig {
         relationTo: LAYOUTS_SLUG,
         admin: { readOnly: true, hidden: true },
       }),
-      // Who last chose the default, by user id, so a surprising change can be
-      // traced to a person. Empty when the system chose it: the repair clears
-      // it whenever it changes the default, so no person is credited with a
-      // choice they did not make.
+      // Who last chose the default, so a surprising change can be traced:
+      // `user:<id>` for a person, `api-key:<id>` for an API key (a bare id is
+      // a person's, from before the kind was written). Empty when the system
+      // chose it: the repair clears it whenever it changes the default, so no
+      // one is credited with a choice they did not make.
       text({
         name: "defaultLayoutChangedBy",
         label: "Default changed by",

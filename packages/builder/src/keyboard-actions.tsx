@@ -22,7 +22,6 @@
 
 import {
   registryNestingSource,
-  saveAsPatternRefusal,
   type ComponentLookup,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
@@ -31,7 +30,6 @@ import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
-import { compositionRefusalReason } from "./composition-refusal";
 import type { EditorState } from "./editor-state";
 import { lockViewOf } from "./inspector";
 import { placedComponentId } from "./instance-inspector";
@@ -58,6 +56,7 @@ import {
 import type { SharedStyleOffer } from "./shared-style-target";
 import {
   depthMoveActions,
+  patternSaveRefusal,
   SAVE_PATTERN_GRANT_REFUSAL,
   toolbarActions,
   turnIntoChoice,
@@ -460,6 +459,13 @@ export interface BlockKeyboardActionsOptions {
    * gesture that opens its form. Absent, the verb is not offered.
    */
   sharedStyles?: SharedStyleVerbHost;
+  /**
+   * Esc pressed with no block selected, which otherwise does nothing: a host
+   * editing a look on its own leaves it, back to editing blocks.
+   *
+   * @experimental Settles with the Design panel's Block looks group.
+   */
+  onEscapeWithoutSelection?: () => void;
 }
 
 /**
@@ -584,7 +590,11 @@ export function useBlockKeyboardActions({
   onEditComponent,
   components,
   sharedStyles,
+  onEscapeWithoutSelection,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
+  // Read when the key lands, so a host's newest callback is the one called.
+  const escapeWithoutSelection = React.useRef(onEscapeWithoutSelection);
+  escapeWithoutSelection.current = onEscapeWithoutSelection;
   /*
    * The same rule source the pointer route asks, defaulted the way the insert
    * panel defaults it. Taken as an option rather than resolved here only so a
@@ -1088,7 +1098,10 @@ export function useBlockKeyboardActions({
             typeof document === "undefined" ? undefined : document
           );
           if (outcome !== "navigate-selection") return;
-          if (editorNow.selectedId === null) return;
+          if (editorNow.selectedId === null) {
+            escapeWithoutSelection.current?.();
+            return;
+          }
           // Up a level: the block holding the selection, the same answer
           // "Select parent" gives, or nothing once the selection is at the top.
           editorNow.select(
@@ -1131,13 +1144,14 @@ export function useBlockKeyboardActions({
       announce(SAVE_PATTERN_GRANT_REFUSAL);
       return;
     }
-    const refusal = saveAsPatternRefusal(
+    // The words the menu dims the verb with, Entry content's among them.
+    const refusal = patternSaveRefusal(
       editor.document,
       editor.selection.ids,
       nestingSource
     );
     if (refusal !== undefined) {
-      announce(compositionRefusalReason(refusal));
+      announce(refusal);
       return;
     }
     onSaveAsPattern();

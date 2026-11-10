@@ -373,7 +373,7 @@ async function boot(
     .getService("singleEntryService")
     .update(
       "homepage",
-      { featured: pageId, logo: "media-1" },
+      { featured: pageId, logo: "media-1", _overwrite: true },
       { overrideAccess: true }
     );
 
@@ -691,7 +691,7 @@ describe.each(getConfiguredTestDialects())(
               routeAuthorized: true,
               ...caller,
             },
-            { name: "rewritten" }
+            { name: "rewritten", _overwrite: true }
           );
           expect(updated.success).toBe(true);
           return [

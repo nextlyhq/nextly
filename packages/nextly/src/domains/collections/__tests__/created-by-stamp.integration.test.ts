@@ -119,7 +119,12 @@ describe("created_by owner stamping (integration)", () => {
     // the immutable field is stripped before the SQL SET.
     const updated = await handler.updateEntry(
       { collectionName: "ownerdocs", entryId: id, overrideAccess: true },
-      { title: "edited", created_by: "attacker", createdBy: "attacker" }
+      {
+        title: "edited",
+        created_by: "attacker",
+        createdBy: "attacker",
+        _overwrite: true,
+      }
     );
     expect(updated.data).not.toHaveProperty("created_by");
 

@@ -642,7 +642,9 @@ export function classifyFieldKind(
     case "text":
       return textKindFor(field, builtBy);
 
+    // An icon id ("lucide:star") is a short string, stored like an email.
     case "email":
+    case "icon":
     case "password":
     case "select":
     case "radio":

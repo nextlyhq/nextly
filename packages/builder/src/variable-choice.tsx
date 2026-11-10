@@ -106,6 +106,8 @@ export interface VariableChipProps {
    * room for a ◇ beside the chip. Left out, the name is text alone.
    */
   readonly onPick?: (identity: string) => void;
+  /** A factor the variable is scaled by (a Small button's padding), shown after its name. */
+  times?: number | undefined;
 }
 
 /**
@@ -408,14 +410,17 @@ export function VariableChip({
   onClear,
   labelledBy,
   onPick,
+  times,
 }: VariableChipProps): React.JSX.Element {
   const mode = useCanvasTokenMode();
   const variable = variableFor(identity, tokens, mode);
   const offered = variablesFor(leaf, tokens, mode);
   // Named through the list's own rule, so two variables sharing a name read
   // here as they do there, and the chip says which one the document holds.
-  const name =
+  const named =
     variable === undefined ? identity : variableLabel(variable, offered);
+  // Scaled, the chip says by how much: "padding-y × 0.75".
+  const name = times === undefined ? named : `${named} × ${String(times)}`;
   return (
     // A group, so it can carry a name: a bare paragraph maps to a role that
     // prohibits one. Focusable by script only, as the field's label targets it.

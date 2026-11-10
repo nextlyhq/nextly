@@ -43,7 +43,7 @@ describe("single publish enforcement — authorize before create (integration)",
     // First-ever write, and it would publish. The publish rule denies it.
     const denied = await service.update(
       "branding",
-      { siteName: "S", status: "published" },
+      { siteName: "S", status: "published", _overwrite: true },
       { user: { id: "u1" }, routeAuthorized: true }
     );
 
@@ -77,7 +77,7 @@ describe("single publish enforcement — authorize before create (integration)",
     // legitimate first publish.
     const ok = await service.update(
       "branding",
-      { siteName: "S", status: "published" },
+      { siteName: "S", status: "published", _overwrite: true },
       { overrideAccess: true }
     );
 
@@ -110,7 +110,7 @@ describe("single publish enforcement — authorize before create (integration)",
     // denying publish rule is never consulted and the row is created.
     const ok = await service.update(
       "branding",
-      { siteName: "S", status: "draft" },
+      { siteName: "S", status: "draft", _overwrite: true },
       { user: { id: "u1" }, routeAuthorized: true }
     );
 
@@ -159,7 +159,7 @@ describe("single publish enforcement — authorize before create (integration)",
     // `en` `_status` published.
     await service.update(
       "branding",
-      { heading: "H", status: "published" },
+      { heading: "H", status: "published", _overwrite: true },
       { overrideAccess: true, locale: "en" }
     );
     const mainRow = await current.adapter.selectOne<{ id: string }>(
@@ -177,8 +177,12 @@ describe("single publish enforcement — authorize before create (integration)",
     // default locale. The companion draft -> published transition must be denied.
     const denied = await service.update(
       "branding",
-      { heading: "H2", status: "published" },
-      { user: { id: "u1" }, routeAuthorized: true, locale: "en" }
+      { heading: "H2", status: "published", _overwrite: true },
+      {
+        user: { id: "u1" },
+        routeAuthorized: true,
+        locale: "en",
+      }
     );
     expect(denied.success).toBe(false);
     // No read grant either: the refusal is answered as the Single missing.
@@ -211,13 +215,13 @@ describe("single publish enforcement — authorize before create (integration)",
     // Seed a draft via a trusted write so the update path is a pure transition.
     await service.update(
       "branding",
-      { siteName: "S", status: "draft" },
+      { siteName: "S", status: "draft", _overwrite: true },
       { overrideAccess: true }
     );
 
     const denied = await service.update(
       "branding",
-      { status: "published" },
+      { status: "published", _overwrite: true },
       {
         user: { id: "key-owner" },
         routeAuthorized: true,
@@ -234,7 +238,7 @@ describe("single publish enforcement — authorize before create (integration)",
 
     const allowed = await service.update(
       "branding",
-      { status: "published" },
+      { status: "published", _overwrite: true },
       {
         user: { id: "key-owner" },
         routeAuthorized: true,
@@ -265,14 +269,14 @@ describe("single publish enforcement — authorize before create (integration)",
 
     await service.update(
       "branding",
-      { siteName: "S", status: "published" },
+      { siteName: "S", status: "published", _overwrite: true },
       { overrideAccess: true }
     );
 
     // A plain field edit that also carries an explicit undefined status.
     const res = await service.update(
       "branding",
-      { siteName: "changed", status: undefined },
+      { siteName: "changed", status: undefined, _overwrite: true },
       { user: { id: "editor" }, routeAuthorized: true }
     );
     expect(res.success).toBe(true);

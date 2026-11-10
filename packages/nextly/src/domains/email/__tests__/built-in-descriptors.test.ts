@@ -133,11 +133,12 @@ describe("built-in provider descriptors", () => {
   });
 
   it("advertises a connection test only where a probe exists", () => {
-    // SMTP can open a session and authenticate; a REST provider cannot check
-    // anything short of sending, so offering the button would be a lie.
+    // SMTP can open a session and authenticate, and Resend can read the
+    // account's domains with the key; SendLayer cannot check anything short of
+    // sending, so offering the button there would be a lie.
     expect(toDescriptor(smtpDefinition).capabilities.connectionTest).toBe(true);
     expect(toDescriptor(resendDefinition).capabilities.connectionTest).toBe(
-      false
+      true
     );
     expect(toDescriptor(sendLayerDefinition).capabilities.connectionTest).toBe(
       false

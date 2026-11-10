@@ -545,13 +545,10 @@ describe("the store the notice judges a page against", () => {
 });
 
 describe("asking the resolver rather than walking stored nodes", () => {
-  it("does NOT report a condition-gated instance", async () => {
-    // The discriminating case for the whole approach. A gated instance is a
-    // node the walk reports and the resolver never asks for, so a check built
-    // on a walk warns about a component no visitor encounters — and this is
-    // the exact disagreement the renderer's own discovery was written to
-    // delete. Reported here, it would be a warning about a page that renders
-    // correctly.
+  it("reports a condition-gated instance, which shows wherever its conditions hold", async () => {
+    // A placement's conditions are decided once the page is read, so the
+    // renderer composes a gated instance like any other: a visitor its
+    // conditions admit meets the same hole, and the author is told.
     const h = harness({ published: [] });
     const ctx = writeContext({
       data: {
@@ -578,11 +575,13 @@ describe("asking the resolver rather than walking stored nodes", () => {
 
     await h.handlers[0]!(ctx);
 
-    expect(recorded).toEqual([]);
-    // The stronger half: the store was never even ASKED about it. A walk-based
-    // check would have queried for `hero` and then reported it, so an empty
-    // query log is what separates asking the resolver from asking a traversal.
-    expect(h.finds).toEqual([]);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      code: COMPONENTS_NOT_PUBLISHED_CODE,
+    });
+    // Asked of the store, as the render's own discovery asks.
+    expect(h.finds).toHaveLength(1);
+    expect(h.finds[0]).toMatchObject({ where: { id: { in: ["hero"] } } });
   });
 
   it("reads only the component field the renderer reads", async () => {

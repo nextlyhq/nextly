@@ -25,6 +25,7 @@
  * @module direct-api/namespaces/hidden-fields
  */
 
+import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
 import {
   sensitiveFieldPaths,
   type SensitiveFieldSource,
@@ -268,10 +269,11 @@ async function stripRelated(
   for (const field of fields) {
     const { name } = field;
     if (name?.startsWith("#") === true) {
-      // A dynamic zone's member type: its fields apply to an instance whose
-      // `_componentType` names it, at the instance's own level.
+      // A dynamic zone's member type: its fields apply to an instance that
+      // names it, at the instance's own level. Read through the accessor, so
+      // an instance stored under either spelling of the key is walked.
       if (
-        holder._componentType === name.slice(1) &&
+        readFieldGroupType(holder) === name.slice(1) &&
         field.fields !== undefined
       ) {
         await stripRelated(declarations, holder, field.fields, level);

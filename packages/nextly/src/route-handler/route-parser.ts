@@ -580,6 +580,23 @@ function parseCollectionRoutes(
     };
   }
 
+  // GET /api/collections/schema/{slug}/delete-impact → what deleting the
+  // collection takes with it, by plugin (a dry run the delete dialog asks)
+  if (
+    id === "schema" &&
+    subresource &&
+    subId === "delete-impact" &&
+    httpMethod === "GET"
+  ) {
+    routeParams.collectionName = subresource;
+    return {
+      service: "collections",
+      operation: "single",
+      method: "previewCollectionDelete",
+      routeParams,
+    };
+  }
+
   if (id === "schema" && subresource && httpMethod === "GET") {
     // GET /api/collections/schema/course → get collection schema with enriched component fields
     routeParams.collectionName = subresource;
@@ -1711,17 +1728,25 @@ function parseComponentRoutes(
  * - DELETE /api/email-providers/[id] → delete provider
  * - PATCH /api/email-providers/[id]/default → set as default
  * - GET /api/email-providers/types → registered provider catalog
+ * - GET /api/email-providers/settings → default sender, code provider
+ * - POST /api/email-providers/check → check unsaved settings, sending nothing
+ * - POST /api/email-providers/[id]/check → check a saved provider's changed settings
  * - POST /api/email-providers/[id]/test → send test email
  */
-function parseEmailProviderRoutes(
+/**
+ * The reserved words beside the provider collection: the registered catalog,
+ * how email goes out when no provider is chosen, and a configuration checked
+ * with its provider before it is saved, sending nothing. Each is matched
+ * BEFORE the by-id branch, which would otherwise read the word as a provider
+ * id and answer 404 for a route that has nothing to do with one.
+ */
+function parseEmailProviderCollectionKeywordRoutes(
   id: string | undefined,
   subresource: string | undefined,
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
   // GET /api/email-providers/types → the registered provider catalog.
-  // Matched BEFORE the by-id branch, which would otherwise read "types" as a
-  // provider id and answer 404 for a route that has nothing to do with one.
   if (id === "types" && !subresource && httpMethod === "GET") {
     return {
       service: "emailProviders",
@@ -1730,6 +1755,46 @@ function parseEmailProviderRoutes(
       routeParams,
     };
   }
+
+  // GET /api/email-providers/settings → the default sender and the provider
+  // set in code, without its configuration. A read, gated as one.
+  if (id === "settings" && !subresource && httpMethod === "GET") {
+    return {
+      service: "emailProviders",
+      operation: "list",
+      method: "getSendingSettings",
+      routeParams,
+    };
+  }
+
+  // POST /api/email-providers/check → check a configuration with its provider
+  // before it is saved. Gated as a create, since it is the first step of
+  // adding one and hands the provider credentials to try.
+  if (id === "check" && !subresource && httpMethod === "POST") {
+    return {
+      service: "emailProviders",
+      operation: "create",
+      method: "checkProvider",
+      routeParams,
+    };
+  }
+
+  return null;
+}
+
+function parseEmailProviderRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  const keywordRoute = parseEmailProviderCollectionKeywordRoutes(
+    id,
+    subresource,
+    httpMethod,
+    routeParams
+  );
+  if (keywordRoute) return keywordRoute;
 
   // GET /api/email-providers → list all providers
   if (!id && httpMethod === "GET") {
@@ -1758,6 +1823,21 @@ function parseEmailProviderRoutes(
       service: "emailProviders",
       operation: "update",
       method: "setDefault",
+      routeParams,
+    };
+  }
+
+  // POST /api/email-providers/[id]/check → check a saved provider's changed
+  // settings before they are saved, with its stored secrets standing in for
+  // the masked ones. An edit's first step, gated as one: the stored secrets it
+  // uses are the provider's, and only someone who may change the provider may
+  // try them against another server.
+  if (id && subresource === "check" && httpMethod === "POST") {
+    routeParams.providerId = id;
+    return {
+      service: "emailProviders",
+      operation: "update",
+      method: "checkSavedProvider",
       routeParams,
     };
   }

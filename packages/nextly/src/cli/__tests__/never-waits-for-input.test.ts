@@ -122,7 +122,11 @@ vi.mock("../utils/adapter", () => ({
 vi.mock("../utils/config-loader", () => ({
   loadConfig: () =>
     Promise.resolve({
-      config: { collections: [{ slug: "nw_posts", fields: [] }] },
+      // `db.migrationsDir` as the real loader fills it in.
+      config: {
+        collections: [{ slug: "nw_posts", fields: [] }],
+        db: { migrationsDir: "./migrations" },
+      },
     }),
 }));
 
@@ -135,8 +139,14 @@ vi.mock("../commands/db-sync-registry", async importOriginal => ({
     work(),
 }));
 
-vi.mock("../commands/migrate", () => ({
+// `upgrade --reconcile-core` asks the app's history before its reconcile;
+// here it holds, so the run reaches the question.
+vi.mock("../commands/migrate", async importOriginal => ({
   maybeForceUnlock: () => Promise.resolve(),
+  assertAppHistoryHolds: () => Promise.resolve(),
+  migrateExitCode: (
+    await importOriginal<typeof import("../commands/migrate")>()
+  ).migrateExitCode,
 }));
 
 vi.mock("../../domains/schema/pipeline/locks", async importOriginal => ({

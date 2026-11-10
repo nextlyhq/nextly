@@ -129,6 +129,7 @@ export { nextlyEmailBrandMysql as nextlyEmailBrand } from "../email-brand/mysql"
 export { nextlyVersionViewsMysql as nextlyVersionViews } from "../version-views/mysql";
 export { nextlyReviewStatesMysql as nextlyReviewStates } from "../review-states/mysql";
 export { nextlyWorkflowSettingsMysql as nextlyWorkflowSettings } from "../workflow-settings/mysql";
+export { nextlyScheduleWindowsMysql as nextlyScheduleWindows } from "../schedule-windows/mysql";
 // The record of content events; in the bundle so freshPushSchema creates the
 // tables on a fresh database, for the reason the release tables above give.
 export {

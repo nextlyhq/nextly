@@ -242,7 +242,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: LAYOUTS_SLUG,
         id,
-        data: { title, status: "published" },
+        data: { title, status: "published", _overwrite: true },
         overrideAccess: true,
       });
       // The write did expire something: a test of "no page was hit" against

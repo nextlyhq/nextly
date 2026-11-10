@@ -64,6 +64,7 @@ import {
 } from "nextly/reserved-filter-keys";
 import { z } from "nextly/zod";
 
+import { labelOf, pluralLabelOf } from "./collection-labels";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PAGES_SLUG } from "./collections/pages";
 import { PATTERNS_SLUG } from "./collections/patterns";
@@ -77,6 +78,7 @@ import {
 import {
   entryOf,
   findAsCaller,
+  idsKeptByWorkflowKey,
   readSavedAsCaller,
   type AsCallerFindArgs,
   type AsCallerPage,
@@ -555,28 +557,6 @@ export function slugOf(record: Record<string, unknown>): string | undefined {
   return typeof record.slug === "string" && record.slug !== ""
     ? record.slug
     : undefined;
-}
-
-/**
- * The label the registry listing already resolved (the singular name, or the
- * slug where there is none), rather than a second rule here.
- */
-export function labelOf(record: Record<string, unknown>, slug: string): string {
-  return typeof record.label === "string" && record.label !== ""
-    ? record.label
-    : slug;
-}
-
-/** The plural name a registry record holds (`labels.plural`), if any. */
-export function pluralLabelOf(record: Record<string, unknown>): {
-  pluralLabel?: string;
-} {
-  const labels = record.labels;
-  if (typeof labels !== "object" || labels === null) return {};
-  const plural = (labels as { plural?: unknown }).plural;
-  return typeof plural === "string" && plural !== ""
-    ? { pluralLabel: plural }
-    : {};
 }
 
 /** One as-caller list read, as the search asks the Direct API for it. */
@@ -1132,9 +1112,11 @@ export function pageItemOf(
 function pathOf(row: unknown, source: PageCollection): { path?: string } {
   if (source.pathTemplate === undefined) return {};
   if (typeof row !== "object" || row === null) return {};
-  const path = previewUrlFromTemplate(source.pathTemplate)(
-    row as Record<string, unknown>
-  );
+  // Only the plugin's own Pages have a template, and their slug is a path
+  // (`db.slugPaths`), so its `/` stays, as in their preview.
+  const path = previewUrlFromTemplate(source.pathTemplate, {
+    pathFields: source.slugField === undefined ? [] : [source.slugField.name],
+  })(row as Record<string, unknown>);
   return typeof path === "string" && path !== "" ? { path } : {};
 }
 
@@ -1251,17 +1233,12 @@ async function idsMatching(
   reads: PagesSearchReads
 ): Promise<ReadonlySet<string>> {
   try {
-    const page = await reads.find({
-      collection: source.slug,
-      where: workflowWhere(key, ids),
-      select: { id: true },
-      limit: ids.length,
-    });
-    return new Set(
-      page.items.flatMap(row => {
-        const entry = entryOf(row, undefined);
-        return entry === undefined ? [] : [entry.id];
-      })
+    // The shared read, which the template preview's list asks too.
+    return await idsKeptByWorkflowKey(
+      async args => await reads.find(args),
+      source.slug,
+      ids,
+      key
     );
   } catch (error) {
     const refused =
@@ -1277,19 +1254,6 @@ async function idsMatching(
     }
     return new Set();
   }
-}
-
-/**
- * The ids, with one of core's reserved workflow keys at the filter's top
- * level, where core reads them.
- *
- * Asserted rather than typed: the keys take `true` itself, a form the
- * `WhereFilter` type, spelled for field conditions, does not describe. The
- * spelling is core's (`nextly/reserved-filter-keys`), so it is not restated.
- */
-function workflowWhere(key: string, ids: readonly string[]): WhereFilter {
-  const where: Record<string, unknown> = { id: { in: [...ids] }, [key]: true };
-  return where as WhereFilter;
 }
 
 /**

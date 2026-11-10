@@ -30,7 +30,7 @@ import {
   storeSiteBreakpoints,
   type SiteBreakpoints,
 } from "../support/site-breakpoints";
-import { test } from "../support/test";
+import { ownSeat, test } from "../support/test";
 
 import { openEditorWith, selection, structure } from "./editor-driver";
 
@@ -414,7 +414,10 @@ test.describe("the canvas keeps the site's colours whatever the admin's theme", 
       try {
         const nodes = [text("lead", "The site's own colours")];
         const stored = await page.request.patch("/admin/api/singles/homepage", {
-          data: { layout: { formatVersion: 1, kind: "page", nodes } },
+          data: {
+            layout: { formatVersion: 1, kind: "page", nodes },
+            _overwrite: true,
+          },
         });
         expect(stored.ok()).toBe(true);
         await page.setViewportSize({ width: 1440, height: 900 });
@@ -723,6 +726,7 @@ test.describe("a locked block's ring", () => {
             kind: "page",
             nodes: [text("held", "A locked block")],
           },
+          _overwrite: true,
         },
       });
       expect(unlocked.ok(), `unlocking: ${unlocked.status()}`).toBe(true);
@@ -860,6 +864,9 @@ test.describe("chrome drawn over the frame stays on the block", () => {
 
 test.describe("a drag from the Add panel into the frame", () => {
   test.describe.configure({ timeout: 240_000 });
+  // An account of its own: the file's earlier tests open the editor again and
+  // again, and through one account these met the per-user REST limit.
+  ownSeat(1);
 
   // A gap of the first block's own, since blocks at the page's top level
   // carry no margin and nothing between them spaces them apart.

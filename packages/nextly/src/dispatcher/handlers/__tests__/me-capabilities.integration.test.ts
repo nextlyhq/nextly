@@ -275,7 +275,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: NOT_IN_GERMAN,
         id: entryIn[NOT_IN_GERMAN]!,
-        data: { title: "eins" },
+        data: { title: "eins", _overwrite: true },
         locale: "de",
       });
       readerId = (
@@ -608,7 +608,10 @@ describe.each(getConfiguredTestDialects())(
         [
           "an update sent with no language",
           await allowed(
-            send(reader, "PATCH", at(GERMAN), { title: "changed" })
+            send(reader, "PATCH", at(GERMAN), {
+              title: "changed",
+              _overwrite: true,
+            })
           ),
           german[GERMAN]!.updateInDefaultLanguage as boolean,
         ],
@@ -627,14 +630,21 @@ describe.each(getConfiguredTestDialects())(
         [
           "publishing every language",
           await allowed(
-            send(reader, "POST", `${at(NOT_IN_GERMAN)}/publish-all`)
+            send(reader, "POST", `${at(NOT_IN_GERMAN)}/publish-all`, {
+              _overwrite: true,
+            })
           ),
           english[NOT_IN_GERMAN]!.publishEveryLanguage as boolean,
         ],
         // The allow side, from a caller no rule refuses.
         [
           "an update sent with no language, by a super-admin",
-          await allowed(send(admin, "PATCH", at(GERMAN), { title: "changed" })),
+          await allowed(
+            send(admin, "PATCH", at(GERMAN), {
+              title: "changed",
+              _overwrite: true,
+            })
+          ),
           adminCells[GERMAN]!.updateInDefaultLanguage as boolean,
         ],
         [
@@ -650,7 +660,9 @@ describe.each(getConfiguredTestDialects())(
         [
           "publishing every language, by a super-admin",
           await allowed(
-            send(admin, "POST", `${at(NOT_IN_GERMAN)}/publish-all`)
+            send(admin, "POST", `${at(NOT_IN_GERMAN)}/publish-all`, {
+              _overwrite: true,
+            })
           ),
           adminCells[NOT_IN_GERMAN]!.publishEveryLanguage as boolean,
         ],

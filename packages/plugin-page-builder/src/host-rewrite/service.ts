@@ -18,7 +18,11 @@ import {
   type DefinitionsById,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
-import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type PluginRouteContext,
+  type PluginRouteIdentity,
+} from "@nextlyhq/plugin-sdk";
 import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 
 import {
@@ -26,7 +30,6 @@ import {
   AS_THE_SYSTEM,
   publishedStoreSource,
 } from "../component-store-source";
-import { readingAsUser } from "../library-route";
 
 import {
   componentDeleteStep,
@@ -34,9 +37,18 @@ import {
   type DefinitionsAnswer,
 } from "./component-delete-step";
 import type { RewriteReport, StoredForm } from "./contract";
-import { fenceStore, type DeletionRun, type RunPurpose } from "./fence";
-import { progressStore, type HostProgress } from "./progress";
-import { rewriteHosts } from "./rewrite";
+import {
+  fenceStore,
+  walkedRuns,
+  type DeletionRun,
+  type RunPurpose,
+} from "./fence";
+import {
+  progressStore,
+  type HostProgress,
+  type ProgressCounts,
+} from "./progress";
+import { rewriteHosts, type HostSource, type RunStore } from "./rewrite";
 import {
   siteHostReader,
   siteHostSource,
@@ -61,6 +73,12 @@ export interface ComponentDeleteRewriteArgs {
   readonly deadline?: Date;
   /** Judge every host and write nothing. */
   readonly dryRun?: boolean;
+  /**
+   * In a dry run, report each write with the body it sends
+   * (`RewriteReport.writes`). Asked only by a caller whose slices are small,
+   * since every body is held until the call ends.
+   */
+  readonly plannedWrites?: boolean;
 }
 
 /**
@@ -81,17 +99,62 @@ export interface ComponentDeleteRewriteService {
   open(
     componentId: string,
     caller: RewriteCaller,
-    purpose?: RunPurpose
+    purpose?: RunPurpose,
+    /** Where a new run starts: the component delete opens at `preflight`. */
+    startAt?: "converting" | "preflight"
   ): Promise<{ readonly opened: boolean; readonly run: DeletionRun }>;
   /** Rewrite the component's hosts for its `delete` run, resuming where it stopped. */
   rewrite(args: ComponentDeleteRewriteArgs): Promise<RewriteReport>;
+  /**
+   * Judge every host as a delete would, writing nothing and opening no run,
+   * so nothing is fenced: what the delete dialog shows before anyone
+   * confirms, and the check a delete makes before converting anything.
+   */
+  plan(args: PlanArgs): Promise<PlanSlice>;
   /** What a run recorded about each document, or nothing when none is open. */
   progress(
     componentId: string,
     purpose?: RunPurpose
   ): Promise<readonly HostProgress[]>;
+  /**
+   * How many documents of each state the component's `delete` run recorded,
+   * counted in the database; all zero when none is open.
+   */
+  counts(componentId: string): Promise<ProgressCounts>;
+  /** The first `limit` documents its `delete` run left; none when none is open. */
+  leftPage(
+    componentId: string,
+    limit: number
+  ): Promise<readonly HostProgress[]>;
   /** Close a run, which lifts a `delete` run's fence. */
   close(componentId: string, purpose?: RunPurpose): Promise<void>;
+}
+
+/**
+ * One slice of a plan: the hosts after `after`, until the budget is spent.
+ * A plan of a whole site may take several, each resuming where the last
+ * stopped, so no one request walks a large site.
+ */
+export interface PlanArgs
+  extends Pick<ComponentDeleteRewriteArgs, "componentId" | "caller"> {
+  /** Where the slice starts: the `next` of the one before, or `null`. */
+  readonly after: string | null;
+  /** How many documents the slice judges at most (at least one). */
+  readonly maxDocuments: number;
+  /** When the slice stops, after the document in hand. */
+  readonly deadline: Date;
+  /** Report each write with its body; see {@link ComponentDeleteRewriteArgs}. */
+  readonly plannedWrites?: boolean;
+}
+
+/** What one slice of a plan found. */
+export interface PlanSlice {
+  /** The slice's own findings: its hosts, and Layouts on its last slice. */
+  readonly report: RewriteReport;
+  /** Whether the slice reached the last document, so the plan is whole. */
+  readonly complete: boolean;
+  /** Where the next slice starts; `null` once complete. */
+  readonly next: string | null;
 }
 
 /** What the installed plugin hands the service. */
@@ -131,6 +194,16 @@ export function runStarterOf(
     : `user:${userIdOf(caller)}`;
 }
 
+/** The caller's identity as the stored read and the conditional write take it. */
+function identityOf(caller: RewriteCaller): Promise<PluginRouteIdentity> {
+  if (caller.caller === null) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "host-rewrite-no-caller" },
+    });
+  }
+  return caller.caller.identity();
+}
+
 /** The signed-in user's id, which a route's caller always carries. */
 function userIdOf(caller: {
   readonly user: { readonly id: string } | null;
@@ -149,13 +222,21 @@ export function componentDeleteRewriteService(
   const fence = () => fenceStore(install().db, install().dialect);
   const progress = () => progressStore(install().db, install().dialect);
   return {
-    open: (componentId, caller, purpose = "delete") =>
-      fence().open(componentId, purpose, runStarterOf(caller)),
+    open: (componentId, caller, purpose = "delete", startAt) =>
+      fence().open(componentId, purpose, runStarterOf(caller), startAt),
     close: (componentId, purpose = "delete") =>
       fence().close(componentId, purpose),
     progress: async (componentId, purpose = "delete") => {
       const run = await fence().runFor(componentId, purpose);
       return run === null ? [] : progress().all(run.id);
+    },
+    counts: async componentId => {
+      const run = await fence().runFor(componentId, "delete");
+      return run === null ? NO_PROGRESS : progress().counts(run.id);
+    },
+    leftPage: async (componentId, limit) => {
+      const run = await fence().runFor(componentId, "delete");
+      return run === null ? [] : progress().leftPage(run.id, limit);
     },
     rewrite: async args => {
       const run = await fence().runFor(args.componentId, "delete");
@@ -179,32 +260,115 @@ export function componentDeleteRewriteService(
           },
         });
       }
-      return rewriteAsCaller(install(), fence(), progress(), args, run.id);
+      return rewriteAsCaller(
+        install(),
+        walkedRuns(fence(), args.dryRun === true),
+        progress(),
+        args,
+        run.id
+      );
+    },
+    // A dry walk reads the run once, for its phase, and moves nothing: the
+    // stand-in answers that one read and refuses any move.
+    plan: async args => {
+      const slice: SliceState = { next: args.after, ended: false };
+      const report = await rewriteAsCaller(
+        install(),
+        {
+          runById: runId =>
+            Promise.resolve({ id: runId, phase: "converting", cursor: null }),
+          advance: () => Promise.resolve(false),
+        },
+        progress(),
+        {
+          componentId: args.componentId,
+          caller: args.caller,
+          dryRun: true,
+          ...(args.plannedWrites === true ? { plannedWrites: true } : {}),
+        },
+        PLAN_RUN_ID,
+        source => slicedSource(source, args, slice)
+      );
+      return {
+        report,
+        complete: slice.ended,
+        next: slice.ended ? null : slice.next,
+      };
     },
   };
 }
 
+/** Where a slice of a plan got to. */
+interface SliceState {
+  /** The cursor after the last document it judged. */
+  next: string | null;
+  /** Whether it judged the last document there is. */
+  ended: boolean;
+}
+
+/**
+ * A source answering one slice: the documents after `after`, stopping once the
+ * budget is spent, always after at least one so every slice moves on. The
+ * hosts outside every walk (Layouts) are judged on the slice that ends, once.
+ */
+function slicedSource(
+  source: HostSource,
+  budget: Pick<PlanArgs, "after" | "maxDocuments" | "deadline">,
+  slice: SliceState
+): HostSource {
+  return {
+    ...source,
+    documents: async function* () {
+      let judged = 0;
+      for await (const document of source.documents(budget.after)) {
+        const spent =
+          judged >= budget.maxDocuments ||
+          Date.now() >= budget.deadline.getTime();
+        if (judged > 0 && spent) return;
+        judged += 1;
+        slice.next = source.cursorOf(document);
+        yield document;
+      }
+      slice.ended = true;
+    },
+    outside: () => (slice.ended ? source.outside() : Promise.resolve([])),
+  };
+}
+
+/** The counts of a component with no run open. */
+const NO_PROGRESS: ProgressCounts = {
+  rewritten: 0,
+  unchanged: 0,
+  left: 0,
+  pending: 0,
+};
+
+/** The id a plan's stand-in run answers to; no stored run has it. */
+const PLAN_RUN_ID = "plan";
+
 /** One call of the rewrite, as the caller, with the component-delete step. */
 function rewriteAsCaller(
   installed: RewriteInstall,
-  fence: ReturnType<typeof fenceStore>,
+  runs: RunStore,
   progress: ReturnType<typeof progressStore>,
   args: ComponentDeleteRewriteArgs,
   /** The run whose starter was just checked against the caller. */
-  runId: string
+  runId: string,
+  /** How the site's source is narrowed, for a slice of a plan. */
+  narrow: (source: HostSource) => HostSource = source => source
 ): Promise<RewriteReport> {
   const site: RewriteSite = {
     ...installed.site,
     componentId: args.componentId,
     hints: () => installed.hints(args.componentId),
-    identity: () => readingAsUser(args.caller),
+    identity: () => identityOf(args.caller),
   };
   const limits = installed.limits();
   return rewriteHosts(
     {
-      fence,
+      fence: runs,
       progress,
-      source: siteHostSource(site),
+      source: narrow(siteHostSource(site)),
       read: siteHostReader(site),
       write: siteHostWriter(site),
     },
@@ -223,6 +387,7 @@ function rewriteAsCaller(
         : { maxDocuments: args.maxDocuments }),
       ...(args.deadline === undefined ? {} : { deadline: args.deadline }),
       ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
+      ...(args.plannedWrites === true ? { plannedWrites: true } : {}),
     }
   );
 }

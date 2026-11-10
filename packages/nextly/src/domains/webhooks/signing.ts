@@ -15,6 +15,11 @@
  * every active secret (one `v1` token per secret), and verification accepts a
  * match against any secret in the list.
  *
+ * Verifying a delivery is not here: core has one verifier, for the webhooks a
+ * plugin receives as for this scheme, in `plugins/security/inbound-webhooks`.
+ * It signs with `standardWebhooksSignature`, so signing and verifying share
+ * one HMAC.
+ *
  * These are pure functions over the plaintext secret. Secrets live encrypted at
  * rest (utils/encryption.ts + NEXTLY_SECRET); the CRUD and delivery slices own
  * the encrypt/decrypt boundary and pass the decrypted secret in here.
@@ -22,7 +27,7 @@
  * @module domains/webhooks/signing
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 
 import { NextlyError } from "../../errors";
 
@@ -58,6 +63,17 @@ function signedContent(id: string, timestamp: string, body: string): string {
   return `${id}.${timestamp}.${body}`;
 }
 
+/**
+ * The raw HMAC-SHA256 of `signed`, `<id>.<timestamp>.<body>`, under one
+ * secret. Throws for a secret with no key material.
+ */
+export function standardWebhooksSignature(
+  secret: string,
+  signed: string | Uint8Array
+): Buffer {
+  return createHmac("sha256", secretToKey(secret)).update(signed).digest();
+}
+
 /** Base64 HMAC-SHA256 of `<id>.<timestamp>.<body>` under one secret. */
 function computeSignature(
   secret: string,
@@ -65,9 +81,10 @@ function computeSignature(
   timestamp: string,
   body: string
 ): string {
-  return createHmac("sha256", secretToKey(secret))
-    .update(signedContent(id, timestamp, body))
-    .digest("base64");
+  return standardWebhooksSignature(
+    secret,
+    signedContent(id, timestamp, body)
+  ).toString("base64");
 }
 
 export interface SignInput {
@@ -129,81 +146,4 @@ export function buildSignatureHeaders(
     [WEBHOOK_TIMESTAMP_HEADER]: input.timestamp,
     [WEBHOOK_SIGNATURE_HEADER]: signatures.join(" "),
   };
-}
-
-/** Constant-time equality over the raw HMAC bytes of two base64 signatures. */
-function signaturesEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, "base64");
-  const bufB = Buffer.from(b, "base64");
-  if (bufA.length !== bufB.length) return false;
-  return timingSafeEqual(bufA, bufB);
-}
-
-/** Default replay window: reject timestamps more than 5 minutes from now. */
-const DEFAULT_TOLERANCE_SECONDS = 300;
-
-export interface VerifyInput {
-  id: string;
-  timestamp: string;
-  body: string;
-  /** The received `webhook-signature` header (may hold multiple space-separated tokens). */
-  signatureHeader: string;
-  /** Every currently-valid secret (plaintext); rotation keeps more than one. */
-  secrets: readonly string[];
-  /**
-   * Max allowed difference between the signed timestamp and `now`, in seconds.
-   * Defaults to 300 (the Standard Webhooks recommendation); pass `Infinity` to
-   * skip the freshness check.
-   */
-  toleranceSeconds?: number;
-  /** Current time; defaults to the wall clock. Injectable for tests. */
-  now?: Date;
-}
-
-/**
- * Whether `signatureHeader` contains a valid, fresh `v1` signature for `body`
- * under any of `secrets`. A verify helper for tests and for documenting the
- * scheme; receivers are pointed at the `standardwebhooks` libraries. The
- * timestamp is checked against a tolerance first so a captured delivery cannot
- * be replayed indefinitely.
- */
-export function verifySignature(input: VerifyInput): boolean {
-  // Fail closed: only an explicit `Infinity` disables freshness. A NaN,
-  // negative, or otherwise non-finite tolerance, or an invalid `now`, must
-  // reject rather than silently accept a possibly-replayed signature.
-  const tolerance = input.toleranceSeconds ?? DEFAULT_TOLERANCE_SECONDS;
-  if (tolerance !== Infinity) {
-    if (!Number.isFinite(tolerance) || tolerance < 0) return false;
-    const signedAt = Number(input.timestamp);
-    if (!Number.isFinite(signedAt)) return false;
-    const nowMs = (input.now ?? new Date()).getTime();
-    if (!Number.isFinite(nowMs)) return false;
-    const nowSeconds = Math.floor(nowMs / 1000);
-    if (Math.abs(nowSeconds - signedAt) > tolerance) return false;
-  }
-
-  const presented = input.signatureHeader
-    .split(" ")
-    .filter(token => token.startsWith("v1,"))
-    .map(token => token.slice("v1,".length));
-  if (presented.length === 0) return false;
-
-  for (const secret of input.secrets) {
-    // Verification must stay fail-closed: a malformed/empty secret entry (which
-    // `secretToKey` rejects by throwing) simply can't match, so skip it rather
-    // than let the exception escape. Signing still fails loud on a bad key.
-    let expected: string;
-    try {
-      expected = computeSignature(
-        secret,
-        input.id,
-        input.timestamp,
-        input.body
-      );
-    } catch {
-      continue;
-    }
-    if (presented.some(sig => signaturesEqual(sig, expected))) return true;
-  }
-  return false;
 }
