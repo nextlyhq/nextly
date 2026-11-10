@@ -373,10 +373,14 @@ export function createPluginReceivedWebhooks(
           ])
         )
         .digest("hex");
-      // Kept for diagnosis only, and only within the column's width: the key
-      // above holds the whole id however long the scheme's was.
+      // Kept for diagnosis only, and only when every dialect can store it:
+      // within the column's width and free of what PostgreSQL refuses. The
+      // scheme's id is the provider's, never checked as the caller's `id` is,
+      // so it is judged here; the key above holds the whole id either way.
       const storedId =
-        deliveryId !== undefined && deliveryId.length <= MAX_NAME_LENGTH
+        deliveryId !== undefined &&
+        deliveryId.length <= MAX_NAME_LENGTH &&
+        isStorableText(deliveryId)
           ? deliveryId
           : null;
       const dialect = options.adapter().dialect;

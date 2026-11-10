@@ -90,6 +90,22 @@ const untimed: InboundWebhookScheme = {
     createHmac("sha256", secret).update(signed).digest(),
 };
 
+/**
+ * The timestamp-less scheme, with the delivery's id read from its body, as a
+ * provider that puts it there is read. JSON can carry any character in it.
+ */
+const idInBody: InboundWebhookScheme = {
+  read(delivery) {
+    const reading = untimed.read(delivery);
+    if (reading === null) return null;
+    const id = (
+      JSON.parse(new TextDecoder().decode(delivery.bytes)) as { id?: string }
+    ).id;
+    return id === undefined ? reading : { ...reading, deliveryId: id };
+  },
+  sign: untimed.sign,
+};
+
 /** A delivery in the timestamp-less scheme, signed as its provider signs it. */
 function untimedRequest(body: string): Request {
   const hex = createHmac("sha256", UNTIMED_SECRET).update(body).digest("hex");
@@ -428,6 +444,32 @@ describe.each(getConfiguredTestDialects())(
         status: "duplicate",
       });
       expect(await rows()).toHaveLength(2);
+    });
+
+    it("a scheme's id that no dialect can store is kept out of the record, and still claims its delivery", async () => {
+      const { a, rows } = await boot();
+      const hooks = a.security.webhooks;
+      const options = { scheme: idInBody, secrets: [UNTIMED_SECRET] };
+      // NUL, which PostgreSQL's text cannot hold, and one past the width.
+      for (const id of ["evt\u0000nul", "e".repeat(192)]) {
+        const body = JSON.stringify({ id });
+        const claim = async () => {
+          const answer = await hooks.verify(untimedRequest(body), options);
+          if (!answer.verified) throw new Error(answer.reason);
+          expect(answer.deliveryId).toBe(id);
+          return hooks.claimDelivery(answer, { provider: "acme" });
+        };
+        const first = await claim();
+        expect(first.status).toBe("first");
+        if (first.status === "first") await first.claim.complete();
+        // Keyed by the id all the same: the replay is a duplicate.
+        expect(await claim()).toEqual({ status: "duplicate" });
+      }
+      // Recorded, with no id kept for either.
+      expect((await rows()).map(row => row.deliveryId ?? null)).toEqual([
+        null,
+        null,
+      ]);
     });
 
     it("an empty delivery id is no id: deliveries are told apart by their body", async () => {
