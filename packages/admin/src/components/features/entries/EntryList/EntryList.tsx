@@ -66,6 +66,7 @@ import {
   getCollectionLabels,
   toCollectionForColumns,
 } from "./collection-for-columns";
+import { declaredColumns } from "./declared-columns";
 import { EntryEmptyState } from "./EntryEmptyState";
 import {
   buildEntryWhereFilter,
@@ -92,7 +93,6 @@ import {
   pluginFilterWheres,
   writePluginFilterParams,
 } from "./plugin-filters";
-import { declaredColumns } from "./declared-columns";
 import { useDeclaredBulkActions } from "./useDeclaredBulkActions";
 import { useDeclaredRowActions } from "./useDeclaredRowActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";

@@ -328,7 +328,9 @@ const SHOWN: Record<Kind, () => Promise<void>> = {
   },
   rowAction: async () => {
     const user = userEvent.setup();
-    await user.click(screen.getAllByRole("button", { name: "Row actions" })[0]!);
+    await user.click(
+      screen.getAllByRole("button", { name: "Row actions" })[0]!
+    );
     const menu = await screen.findByRole("menu");
     expect(
       within(menu).getByRole("menuitem", { name: "Fixture rowAction" })
@@ -340,7 +342,9 @@ const SHOWN: Record<Kind, () => Promise<void>> = {
     const table = within(screen.getByRole("table", { name: "Entries table" }));
     await user.click(table.getAllByRole("checkbox").slice(1)[0]!);
     const bar = within(screen.getByRole("region", { name: "Bulk actions" }));
-    expect(bar.getByRole("button", { name: "Fixture bulkAction" })).toBeTruthy();
+    expect(
+      bar.getByRole("button", { name: "Fixture bulkAction" })
+    ).toBeTruthy();
   },
 };
 

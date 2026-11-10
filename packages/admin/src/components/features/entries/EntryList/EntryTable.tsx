@@ -43,8 +43,6 @@ import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
 import { BulkActionBar } from "./BulkActionBar";
-import type { DeclaredBulkAction } from "./useDeclaredBulkActions";
-
 import type { TranslationListFilter } from "./entryFilters";
 import {
   buildEntryColumns,
@@ -53,6 +51,7 @@ import {
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
 import type { OfferedListFilter } from "./plugin-filters";
+import type { DeclaredBulkAction } from "./useDeclaredBulkActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import {
   rowId,

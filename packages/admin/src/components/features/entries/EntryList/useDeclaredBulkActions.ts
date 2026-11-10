@@ -11,21 +11,19 @@
  *
  * @module components/features/entries/EntryList/useDeclaredBulkActions
  */
-import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo } from "react";
 
-import { toast } from "@admin/components/ui";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
-import { apiErrorMessage } from "@admin/lib/api/parseApiError";
-import { entryKeys } from "@admin/services/entryApi";
 
 import {
   actionOfferedOn,
   declaredBulkActionsFor,
-  runDeclaredAction,
   type DeclaredAction,
 } from "./declared-actions";
-import type { OpenedAction } from "./useDeclaredRowActions";
+import {
+  useDeclaredActionRunner,
+  type OpenedAction,
+} from "./useDeclaredActionRunner";
 
 /** A declared bulk action as the bulk bar offers it, on the selected ids. */
 export interface DeclaredBulkAction {
@@ -46,17 +44,14 @@ export function useDeclaredBulkActions<Row extends { id?: unknown }>(
   close: () => void;
 } {
   const { contributions } = useBranding();
-  const queryClient = useQueryClient();
-  const [opened, setOpened] = useState<OpenedAction | null>(null);
-  // The actions with a request in flight, so choosing one again before it
-  // answers sends nothing: a plugin's handler need not be safe to run twice.
-  const inFlight = useRef(new Set<string>());
-  const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
-  const settle = useCallback((id: string, running: boolean) => {
-    if (running) inFlight.current.add(id);
-    else inFlight.current.delete(id);
-    setPending(new Set(inFlight.current));
-  }, []);
+  // Each run is keyed by its action alone: the bar offers it once, on the
+  // whole selection.
+  const {
+    run: runOn,
+    pending,
+    opened,
+    close,
+  } = useDeclaredActionRunner(collection);
 
   const byId = useMemo(
     () => new Map(rows.map(row => [String(row.id), row])),
@@ -76,31 +71,13 @@ export function useDeclaredBulkActions<Row extends { id?: unknown }>(
   );
 
   const run = useCallback(
-    async (action: DeclaredAction, ids: readonly string[]) => {
-      if (inFlight.current.has(action.id)) return;
-      const actionRows = ids.map(id => ({ collection, id }));
-      settle(action.id, true);
-      try {
-        const outcome = await runDeclaredAction(action, actionRows);
-        if ("open" in outcome) {
-          setOpened({
-            label: action.label,
-            component: outcome.open,
-            rows: actionRows,
-          });
-          return;
-        }
-        toast.success(`${action.label}: done.`);
-        await queryClient.invalidateQueries({
-          queryKey: entryKeys.listsByCollection(collection),
-        });
-      } catch (error) {
-        toast.error(apiErrorMessage(error, `${action.label} couldn't run.`));
-      } finally {
-        settle(action.id, false);
-      }
-    },
-    [collection, queryClient, settle]
+    (action: DeclaredAction, ids: readonly string[]) =>
+      runOn(
+        action,
+        ids.map(id => ({ collection, id })),
+        action.id
+      ),
+    [collection, runOn]
   );
 
   const bulkActions = useMemo(
@@ -116,5 +93,5 @@ export function useDeclaredBulkActions<Row extends { id?: unknown }>(
     [contributions, collection, run, pending, offeredOn]
   );
 
-  return { bulkActions, opened, close: () => setOpened(null) };
+  return { bulkActions, opened, close };
 }
