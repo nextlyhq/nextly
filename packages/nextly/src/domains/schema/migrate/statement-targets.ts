@@ -17,6 +17,25 @@ import {
   type StatementToken,
 } from "./statement-cursor";
 
+/**
+ * Every cursor here reads a quoted name only as written in lower case
+ * (`exactQuotedNames`): which entity's tables a statement changes is judged
+ * from them, and a name in another case is another table on PostgreSQL.
+ */
+const EXACT = { exactQuotedNames: true } as const;
+
+/**
+ * The tables a DROP TABLE names, read in the shape the Builder wrote: after
+ * `DROP TABLE [IF EXISTS]`, its names and at most one CASCADE, which it added
+ * on PostgreSQL and MySQL, and nothing after. Undefined for any other shape.
+ */
+function droppedTables(cursor: StatementCursor): string[] | undefined {
+  cursor.acceptCondition();
+  const names = cursor.names();
+  cursor.accept("CASCADE");
+  return names !== undefined && cursor.done() ? names : undefined;
+}
+
 /** The one table a statement names next, as a list, or undefined. */
 function oneTable(cursor: StatementCursor): string[] | undefined {
   const name = cursor.name();
@@ -80,13 +99,10 @@ export function tablesChangedIn(
   statement: string,
   dialect: SupportedDialect
 ): string[] | undefined {
-  const cursor = cursorOf(statement, dialect);
+  const cursor = cursorOf(statement, dialect, EXACT);
   if (cursor.accept("CREATE")) return createdOn(cursor);
   if (cursor.accept("ALTER", "TABLE")) return alteredTables(cursor);
-  if (cursor.accept("DROP", "TABLE")) {
-    cursor.acceptCondition();
-    return cursor.names();
-  }
+  if (cursor.accept("DROP", "TABLE")) return droppedTables(cursor);
   if (cursor.accept("DROP", "INDEX")) {
     // Only MySQL's form names the table; elsewhere the index alone is named.
     cursor.acceptCondition();
@@ -109,7 +125,7 @@ export function indexesDroppedBy(
   statement: string,
   dialect: SupportedDialect
 ): string[] | undefined {
-  const cursor = cursorOf(statement, dialect);
+  const cursor = cursorOf(statement, dialect, EXACT);
   if (!cursor.accept("DROP", "INDEX")) return undefined;
   cursor.accept("CONCURRENTLY");
   cursor.acceptCondition();
@@ -127,7 +143,7 @@ export function indexesRenamedBy(
   statement: string,
   dialect: SupportedDialect
 ): string[] | undefined {
-  const cursor = cursorOf(statement, dialect);
+  const cursor = cursorOf(statement, dialect, EXACT);
   if (!cursor.accept("ALTER", "INDEX")) return undefined;
   cursor.acceptCondition();
   const from = cursor.name();
@@ -144,10 +160,9 @@ export function tablesDroppedBy(
   statement: string,
   dialect: SupportedDialect
 ): string[] | undefined {
-  const cursor = cursorOf(statement, dialect);
+  const cursor = cursorOf(statement, dialect, EXACT);
   if (!cursor.accept("DROP", "TABLE")) return undefined;
-  cursor.acceptCondition();
-  return cursor.names();
+  return droppedTables(cursor);
 }
 
 /** A registry row a statement writes: the registry table and the row's slug. */
@@ -239,7 +254,7 @@ export function registryRowWrittenBy(
   statement: string,
   dialect: SupportedDialect
 ): RegistryRowWrite | undefined {
-  const cursor = cursorOf(statement, dialect);
+  const cursor = cursorOf(statement, dialect, EXACT);
   if (cursor.accept("INSERT", "INTO")) return insertedRow(cursor);
   if (cursor.accept("UPDATE")) return updatedRow(cursor);
   return undefined;
@@ -339,7 +354,7 @@ export function archiveWriteOf(
   statement: string,
   dialect: SupportedDialect
 ): ArchiveWrite | undefined {
-  const cursor = cursorOf(statement, dialect);
+  const cursor = cursorOf(statement, dialect, EXACT);
   if (cursor.accept("CREATE")) {
     return createsArchive(cursor) ? { kind: "create" } : undefined;
   }

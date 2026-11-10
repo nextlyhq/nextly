@@ -2804,6 +2804,8 @@ function appliedFilesChanged(
 const HISTORY_REFUSAL_CODES: ReadonlySet<string> = new Set([
   "MIGRATION_MISSING",
   "MIGRATION_TAMPERED",
+  // A marked old Builder file that gained a snapshot, refused by the same check.
+  "OLD_BUILDER_FILE_SNAPSHOT_ADDED",
   "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
 ]);
 

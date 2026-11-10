@@ -298,8 +298,14 @@ function staysInEntity(
     statement => hasExecutableText(statement, file.dialect)
   );
   if (statements.length === 0) return false;
+  // A name read as one of the entity's tables (a junction-shaped one) that
+  // is another entity's declared table is that entity's: only the entity's
+  // own main table may be both.
+  const declaredElsewhere = (table: string) =>
+    file.declaredTables?.has(table) === true &&
+    entity.anchors?.(table) !== true;
   const owns = (table: string) =>
-    entity.owns(table) ||
+    (entity.owns(table) && !declaredElsewhere(table)) ||
     file.declaredJunctions?.get(entity.slug)?.has(table) === true;
   if (verb === "drop") {
     return dropsKeepToEntity(entity, statements, file.dialect, owns);

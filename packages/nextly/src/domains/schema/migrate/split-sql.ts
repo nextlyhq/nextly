@@ -183,6 +183,11 @@ export interface QuotedToken {
    * then the text as written, not the name the server reads.
    */
   escaped?: boolean;
+  /**
+   * A quoted name's content as written, its case kept: `name` is folded to
+   * upper case for comparing, which PostgreSQL's quoted names do not do.
+   */
+  written?: string;
 }
 
 /**
@@ -232,6 +237,7 @@ function* serverTokens(
           name: segment.unterminated
             ? undefined
             : segment.content.toUpperCase(),
+          ...(segment.unterminated ? {} : { written: segment.content }),
           ...(segment.unicodeEscaped ? { escaped: true } : {}),
         };
         break;

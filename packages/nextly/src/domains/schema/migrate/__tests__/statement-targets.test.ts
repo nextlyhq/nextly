@@ -125,6 +125,64 @@ describe.each(["postgresql", "mysql"] as const)(
   }
 );
 
+// A DROP TABLE is read only in the shape the Builder wrote: its names, then at most the one
+// CASCADE it added on PostgreSQL and MySQL, and nothing after. Any other trailing clause is a
+// statement the Builder never wrote, and reads as unread.
+describe.each(["postgresql", "mysql"] as const)(
+  "a DROP TABLE's trailing clause on %s",
+  dialect => {
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+    it("reads the Builder's own CASCADE", () => {
+      const sql = `DROP TABLE IF EXISTS ${q("dc_posts")} CASCADE;`;
+      expect(tablesDroppedBy(sql, dialect)).toEqual(["dc_posts"]);
+      expect(tablesChangedIn(sql, dialect)).toEqual(["dc_posts"]);
+    });
+    it.each([
+      ["RESTRICT", `RESTRICT`],
+      ["a second CASCADE", `CASCADE CASCADE`],
+      ["a word after CASCADE", `CASCADE PURGE`],
+    ])("is undefined with %s after the names", (_form, tail) => {
+      const sql = `DROP TABLE ${q("dc_posts")} ${tail};`;
+      expect(tablesDroppedBy(sql, dialect)).toBeUndefined();
+      expect(tablesChangedIn(sql, dialect)).toBeUndefined();
+    });
+  }
+);
+
+// A quoted name keeps its case on PostgreSQL ("DC_POSTS" is not dc_posts), and a table name's
+// case matters on MySQL too: a quoted name not written in lower case, as the Builder never wrote
+// one, reads as unread, so a reader judging which entity a statement belongs to fails closed.
+describe.each(["postgresql", "mysql"] as const)(
+  "a quoted table name's case on %s",
+  dialect => {
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+    it("reads a quoted lower-case name, and an unquoted name folded", () => {
+      expect(
+        tablesChangedIn(
+          `ALTER TABLE ${q("dc_posts")} ADD COLUMN x text`,
+          dialect
+        )
+      ).toEqual(["dc_posts"]);
+      expect(
+        tablesChangedIn(`ALTER TABLE DC_POSTS ADD COLUMN x text`, dialect)
+      ).toEqual(["dc_posts"]);
+    });
+    it("is undefined for a quoted name written in another case", () => {
+      expect(
+        tablesChangedIn(
+          `ALTER TABLE ${q("DC_POSTS")} ADD COLUMN x text`,
+          dialect
+        )
+      ).toBeUndefined();
+      expect(
+        tablesDroppedBy(`DROP TABLE ${q("Dc_Posts")};`, dialect)
+      ).toBeUndefined();
+    });
+  }
+);
+
 // The registry row a statement writes, keyed on its slug. The positive cells
 // read the upsert the Builder itself generated, so a change to its shape
 // shows up here; each negative cell is one way a statement could reach a
