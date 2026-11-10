@@ -10,19 +10,24 @@
  */
 import userEvent from "@testing-library/user-event";
 import type { DeliveredAdminEntry } from "nextly/config";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 import { registerComponent } from "@admin/lib/plugins/component-registry";
 
 import { declaredColumns } from "../declared-columns";
 import { EntryTable, type EntryTableProps } from "../EntryTable";
 import type { CollectionForColumns } from "../EntryTableColumns";
 
+/** The permissions the reader holds. */
+const held = vi.hoisted(() => ({ slugs: ["delete-posts"] as string[] }));
 vi.mock("@admin/hooks/useCan", () => ({
   // Deleting is allowed, so rows can be selected and the bulk bar shows.
-  useCan: (slug: string) => slug === "delete-posts",
+  useCan: (slug: string) => held.slugs.includes(slug),
 }));
+afterEach(() => {
+  held.slugs = ["delete-posts"];
+});
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     enabled: false,
@@ -49,6 +54,17 @@ registerComponent(CELL, ((props: { row: { id: string } }) => {
   if (props.row.id === "p1") throw new Error("this cell failed to draw");
   return <span>plugin cell {props.row.id}</span>;
 }) as never);
+
+const CONTROL_CELL = "@acme/a/admin#ControlCell";
+const pressed = vi.fn();
+registerComponent(CONTROL_CELL, ((props: { row: { id: string } }) => (
+  <span>
+    text of {props.row.id}{" "}
+    <button type="button" onClick={() => pressed(props.row.id)}>
+      Act on {props.row.id}
+    </button>
+  </span>
+)) as never);
 
 function column(id: string, label: string, extra: object): DeliveredAdminEntry {
   return {
@@ -128,7 +144,134 @@ describe("the entry table's declared columns", () => {
   });
 });
 
+describe("the entry table's declared columns, beside the row", () => {
+  it("a control in a cell runs without opening the row's entry", async () => {
+    const user = userEvent.setup();
+    window.history.pushState(null, "", "/admin/collections/posts");
+    renderTable({
+      declaredColumns: declaredColumns(
+        [
+          column("acme-a.control", "Fixture: control", {
+            component: CONTROL_CELL,
+          }),
+        ],
+        posts,
+        CONTEXT
+      ),
+    });
+
+    await user.click(table().getByRole("button", { name: "Act on p2" }));
+    expect(pressed).toHaveBeenCalledWith("p2");
+    expect(window.location.pathname).toBe("/admin/collections/posts");
+    // Enter on the focused control stays in the cell too.
+    fireEvent.keyDown(table().getByRole("button", { name: "Act on p2" }), {
+      key: "Enter",
+    });
+    expect(window.location.pathname).toBe("/admin/collections/posts");
+
+    // The cell's plain text is the row's: a click there opens the entry.
+    await user.click(table().getByText("text of p2", { exact: false }));
+    expect(window.location.pathname).toBe("/admin/collections/posts/p2");
+  });
+
+  it("a declared column is drawn but not offered in the column chooser", async () => {
+    const user = userEvent.setup();
+    renderTable({
+      columnsControl: {
+        columns: [],
+        isColumnVisible: () => true,
+        onToggleColumn: vi.fn(),
+      },
+      declaredColumns: declaredColumns(
+        [column("acme-a.cell", "Fixture: cell", { component: CELL })],
+        posts,
+        CONTEXT
+      ),
+    });
+
+    expect(
+      table().getByRole("columnheader", { name: "Fixture: cell" })
+    ).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /columns/i }));
+    const offered = screen
+      .getAllByRole("menuitemcheckbox")
+      .map(item => item.textContent?.trim());
+    expect(offered).toContain("Title");
+    expect(offered).not.toContain("Fixture: cell");
+  });
+
+  it("a field inside a group is not drawn as a column of its own", () => {
+    const withGroup: CollectionForColumns = {
+      ...posts,
+      fields: [
+        ...posts.fields,
+        {
+          type: "group",
+          name: "seo",
+          label: "SEO",
+          fields: [{ type: "text", name: "metaTitle", label: "Meta title" }],
+        } as never,
+      ],
+    };
+    const drawn = declaredColumns(
+      [
+        column("acme-a.meta", "Fixture: meta", { field: "metaTitle" }),
+        column("acme-a.excerpt", "Fixture: excerpt", { field: "excerpt" }),
+      ],
+      withGroup,
+      CONTEXT
+    );
+    expect(drawn.map(c => c.header)).toEqual(["Fixture: excerpt"]);
+  });
+});
+
 describe("the entry table's declared bulk actions", () => {
+  it("with no bulk action allowed, rows are not selectable", () => {
+    // No built-in bulk action is allowed and none is declared: there is
+    // nothing to select for.
+    held.slugs = [];
+    renderTable();
+    expect(table().queryAllByRole("checkbox")).toHaveLength(0);
+  });
+
+  it("rows are selectable when only a declared bulk action is offered", () => {
+    held.slugs = [];
+    renderTable({
+      declaredBulkActions: [
+        {
+          id: "declared:acme-a.inspect",
+          label: "Fixture: inspect selected",
+          isDisabled: () => false,
+          heldBackNote: () => undefined,
+          onSelect: vi.fn(),
+        },
+      ],
+    });
+    expect(table().getAllByRole("checkbox").length).toBeGreaterThan(0);
+  });
+
+  it("says why a declared action is held back", async () => {
+    const user = userEvent.setup();
+    renderTable({
+      declaredBulkActions: [
+        {
+          id: "declared:acme-a.inspect",
+          label: "Fixture: inspect selected",
+          isDisabled: () => true,
+          heldBackNote: () =>
+            "Fixture: inspect selected runs on at most 100 entries at a time.",
+          onSelect: vi.fn(),
+        },
+      ],
+    });
+    await user.click(table().getAllByRole("checkbox")[1]!);
+    expect(
+      within(screen.getByRole("region", { name: "Bulk actions" })).getByText(
+        "Fixture: inspect selected runs on at most 100 entries at a time."
+      )
+    ).toBeTruthy();
+  });
+
   it("a declared bulk action shows with a selection and runs with the selected rows", async () => {
     const onSelect = vi.fn();
     const user = userEvent.setup();
@@ -138,6 +281,7 @@ describe("the entry table's declared bulk actions", () => {
           id: "declared:acme-a.inspect",
           label: "Fixture: inspect selected",
           isDisabled: () => false,
+          heldBackNote: () => undefined,
           onSelect,
         },
       ],
@@ -167,6 +311,7 @@ describe("the entry table's declared bulk actions", () => {
           id: "declared:acme-a.inspect",
           label: "Fixture: inspect selected",
           isDisabled: ids => ids.includes("p2"),
+          heldBackNote: () => undefined,
           onSelect: vi.fn(),
         },
       ],

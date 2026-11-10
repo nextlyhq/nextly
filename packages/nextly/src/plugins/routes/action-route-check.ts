@@ -28,9 +28,12 @@ import { rowMatches, type RowPredicate } from "../row-predicate";
 import type { PluginSelf } from "../self";
 
 import { resolveRoutePermission } from "./route-permission";
+import { MAX_ACTION_ROWS } from "./route-types";
 
-/** @experimental The most rows one request to an action's route may name. */
-export const MAX_ACTION_ROWS = 100;
+// The row limit lives with the route types, which hold no runtime imports, so
+// the admin can read it from `nextly/config` to hold an action back before a
+// request this check would refuse. Re-exported here, where it is enforced.
+export { MAX_ACTION_ROWS };
 
 /**
  * @experimental The largest body the check reads of a request to an action's

@@ -292,24 +292,33 @@ export const EntryTable: ForwardRefExoticComponent<
 
   const [globalFilter, setGlobalFilter] = useState("");
   // Rows are selectable only when some bulk action is offered on them, and a
-  // row's Delete only with the delete permission.
+  // row's Delete only with the delete permission. A plugin's declared bulk
+  // action counts as one: the server sends it only to a reader who may run
+  // it, and a reader holding none of the built-in ones still needs the
+  // checkboxes to reach it.
   const offered = useEntryBulkActions(collection);
   const { selection, selected, versions, selectAll, clear } = useEntrySelection(
-    offered.any
+    offered.any || (declaredBulkActions?.length ?? 0) > 0
   );
 
   // -------------------------------------------------------------------------
   // Columns
   // -------------------------------------------------------------------------
 
-  const columns = useMemo(
-    () => [
-      ...buildEntryColumns(collection, columnsControl?.isColumnVisible, {
+  // The collection's own columns, which the column chooser offers and hides.
+  const ownColumns = useMemo(
+    () =>
+      buildEntryColumns(collection, columnsControl?.isColumnVisible, {
         openInLocale: (entryId, locale) => onEdit(entryId, locale),
       }),
-      ...(declaredColumns ?? []),
-    ],
-    [collection, columnsControl, onEdit, declaredColumns]
+    [collection, columnsControl, onEdit]
+  );
+  // Plugins' declared columns are drawn after them and always shown: they
+  // arrive only once the reader is known, and the chooser's stored choice is
+  // kept against a fixed set of columns, so they are not offered there.
+  const columns = useMemo(
+    () => [...ownColumns, ...(declaredColumns ?? [])],
+    [ownColumns, declaredColumns]
   );
 
   const titleField = useMemo(
@@ -456,7 +465,9 @@ export const EntryTable: ForwardRefExoticComponent<
         placeholder: `Search ${collection.label}...`,
         inputProps: { "data-entry-search-input": true },
       }}
-      columnsControl={columnsControl && { ...columnsControl, columns }}
+      columnsControl={
+        columnsControl && { ...columnsControl, columns: ownColumns }
+      }
       hasActiveFilters={hasAnyActiveFilters}
       filters={
         showFilterDropdown ? (
@@ -604,6 +615,7 @@ export const EntryTable: ForwardRefExoticComponent<
               id: action.id,
               label: action.label,
               disabled: action.isDisabled(selected),
+              note: action.heldBackNote(selected),
               onSelect: () => action.onSelect(selected),
             }))}
           />

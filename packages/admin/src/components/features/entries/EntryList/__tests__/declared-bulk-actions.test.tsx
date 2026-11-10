@@ -7,6 +7,7 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { MAX_ACTION_ROWS } from "nextly/config";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -119,6 +120,25 @@ describe("the declared bulk actions a list offers", () => {
     expect(inspect?.isDisabled(["1", "9"])).toBe(false);
     // And on none, nothing.
     expect(inspect?.isDisabled([])).toBe(true);
+  });
+});
+
+describe("the most rows a declared bulk action runs on", () => {
+  it("holds an action back on more rows than its route takes, and says why", () => {
+    const { result } = renderHook(
+      () => useDeclaredBulkActions("tickets", ROWS),
+      { wrapper }
+    );
+    // An action without a rule, so only the count decides.
+    const inspect = result.current.bulkActions[1]!;
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `id-${i}`);
+
+    expect(inspect.isDisabled(ids(MAX_ACTION_ROWS))).toBe(false);
+    expect(inspect.heldBackNote(ids(MAX_ACTION_ROWS))).toBeUndefined();
+    expect(inspect.isDisabled(ids(MAX_ACTION_ROWS + 1))).toBe(true);
+    expect(inspect.heldBackNote(ids(MAX_ACTION_ROWS + 1))).toBe(
+      `Inspect runs on at most ${MAX_ACTION_ROWS} entries at a time.`
+    );
   });
 });
 

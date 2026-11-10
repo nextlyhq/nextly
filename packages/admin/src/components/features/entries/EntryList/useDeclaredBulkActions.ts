@@ -7,11 +7,15 @@
  * access control: the action's route checks its permission and its rule on
  * every row before its handler runs, and refuses the whole request when one
  * row fails. A selected row not on this page cannot be judged here, so an
- * action carrying a rule is not offered while one is selected.
+ * action carrying a rule is not offered while one is selected. Nor is any
+ * action on more rows than one request to its route may name, which the
+ * route would refuse whole: the bar says why.
  *
  * @module components/features/entries/EntryList/useDeclaredBulkActions
  */
 import { useCallback, useMemo } from "react";
+
+import { MAX_ACTION_ROWS } from "nextly/config";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 
@@ -31,6 +35,8 @@ export interface DeclaredBulkAction {
   label: string;
   /** Whether it is held back for this selection. */
   isDisabled: (selectedIds: readonly string[]) => boolean;
+  /** Why it is held back, where the bar should say so. */
+  heldBackNote: (selectedIds: readonly string[]) => string | undefined;
   onSelect: (selectedIds: readonly string[]) => void;
 }
 
@@ -86,7 +92,14 @@ export function useDeclaredBulkActions<Row extends { id?: unknown }>(
         (action): DeclaredBulkAction => ({
           id: `declared:${action.id}`,
           label: action.label,
-          isDisabled: ids => pending.has(action.id) || !offeredOn(action, ids),
+          isDisabled: ids =>
+            pending.has(action.id) ||
+            ids.length > MAX_ACTION_ROWS ||
+            !offeredOn(action, ids),
+          heldBackNote: ids =>
+            ids.length > MAX_ACTION_ROWS
+              ? `${action.label} runs on at most ${MAX_ACTION_ROWS} entries at a time.`
+              : undefined,
           onSelect: ids => void run(action, ids),
         })
       ),
