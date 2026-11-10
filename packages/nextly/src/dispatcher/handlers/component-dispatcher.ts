@@ -867,8 +867,8 @@ export const COMPONENTS_METHODS: Record<
           // The cost that argues for `false` elsewhere does not apply here. Collections take that
           // shape outside development because they record a migration FILE and must keep working
           // for a role holding DML but no DDL. This is builder surface — refused in production
-          // unless `showBuilder` is explicitly on — so a deployment that can reach it is one that
-          // already accepts schema changes from a browser, and creating a one-time lock table is
+          // whatever `showBuilder` says — so a server that can reach it is one that already
+          // accepts schema changes from a browser, and creating a one-time lock table is
           // strictly less than what it has already permitted.
           issuesDdl: true,
         },
