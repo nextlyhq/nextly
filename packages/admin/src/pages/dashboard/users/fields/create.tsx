@@ -1,5 +1,6 @@
 "use client";
 
+import { PageHeader } from "@nextlyhq/ui";
 import { useCallback, type JSX } from "react";
 
 import {
@@ -52,23 +53,16 @@ export default function CreateUserFieldPage(): JSX.Element {
   return (
     <PermissionGuard requiredPermission={READ_SETTINGS}>
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        <PageContainer width="form">
+        <PageContainer type="form">
           <div>
             <div className="mb-6">
               <UserBreadcrumbs currentPage="fields-create" />
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-              <div>
-                <h1 className="text-xl font-semibold tracking-tight">
-                  Create Field
-                </h1>
-                {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-                <p className="text-sm font-normal text-muted-foreground mt-1">
-                  Add a new custom attribute to user accounts
-                </p>
-              </div>
-            </div>
+            <PageHeader
+              title="Create Field"
+              description="Add a new custom attribute to user accounts"
+            />
 
             <UserFieldForm
               mode="create"

@@ -84,9 +84,23 @@ describe("page shell stylesheet", () => {
     expect(flat).toContain("[full-start] minmax(var(--nx-gutter), 1fr)");
     expect(flat).toContain("[content-end] minmax(var(--nx-gutter), 1fr)");
 
-    // Rejecting the bare form explicitly, because the line-name assertions
-    // above are satisfied by it too.
-    expect(flat).not.toContain("[full-start] var(--nx-gutter)");
+    // Every template keeps at least its TRAILING track flexible, which is what
+    // stretches the grid to the panel's far edge. The centred template has
+    // both outer tracks flexible; the start-aligned one fixes the leading
+    // gutter so the column starts where the header does, and must not fix
+    // the trailing one as well. Rejecting a fixed trailing track explicitly,
+    // because the line-name assertions above are satisfied by it too.
+    expect(flat).not.toContain("[content-end] var(--nx-gutter)");
+  });
+
+  it("starts a start-aligned column at the gutter and gives the surplus to the trailing track", () => {
+    const start = flat.match(
+      /\.nx-page-shell\[data-align="start"\] \{([^}]*)\}/
+    );
+    expect(start, "the start-aligned template exists").not.toBeNull();
+    const rule = start?.[1] ?? "";
+    expect(rule).toContain("[full-start] var(--nx-gutter) [content-start]");
+    expect(rule).toContain("[content-end] minmax(var(--nx-gutter), 1fr)");
   });
 
   it("reads the measure through the custom property the component sets", () => {

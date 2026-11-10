@@ -111,13 +111,26 @@ export type PageContainerProps = React.HTMLAttributes<HTMLDivElement> & {
    *
    * @example
    * ```tsx
-   * <PageContainer width="form">
+   * <PageContainer type="form">
    *   <PageHeader title="Webhooks" />
    *   <WebhookForm />
    * </PageContainer>
    * ```
    */
   width?: "form" | "wide" | "full";
+
+  /**
+   * Which kind of page this is. The shared frame turns it into a width:
+   *
+   * - `list`: full width within the gutter, as a padded block (so a page that
+   *   hands its height down through `height: 100%` keeps it).
+   * - `form`: a 56rem column, left-aligned under the page header.
+   * - `editor`: full width; the editor bounds its own field column.
+   * - `workspace`: no gutter and no padding; the page draws its own surface.
+   *
+   * Prefer this to `width`. When both are given, `type` wins.
+   */
+  type?: "list" | "form" | "editor" | "workspace";
 };
 
 /**
