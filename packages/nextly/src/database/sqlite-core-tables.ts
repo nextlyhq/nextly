@@ -748,6 +748,23 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_one_time_secrets" ("subject_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_expires_idx"
       ON "nextly_one_time_secrets" ("expires_at")`,
+    // The webhooks plugins have received, one claim per plugin, provider and
+    // delivery. Columns match schemas/received-webhooks/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_received_webhooks" (
+      "delivery_key" TEXT PRIMARY KEY NOT NULL,
+      "owner" TEXT NOT NULL,
+      "provider" TEXT NOT NULL,
+      "delivery_id" TEXT,
+      "freshness" TEXT NOT NULL,
+      "status" TEXT NOT NULL,
+      "claim_token" TEXT NOT NULL,
+      "lease_until" INTEGER,
+      "received_at" INTEGER NOT NULL,
+      "completed_at" INTEGER,
+      "prune_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_received_webhooks_prune_idx"
+      ON "nextly_received_webhooks" ("prune_at")`,
     // Durable plugin events and their deliveries. Columns match
     // schemas/plugin-events/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_plugin_events" (
