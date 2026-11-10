@@ -573,6 +573,8 @@ export {
   type PluginTransaction,
   type PluginHookPointDeclaration,
   type PluginSettingsApi,
+  type PluginCacheApi,
+  pluginCacheTag,
   type PluginDeclaration,
   type PluginDefinition,
   type PluginPermission,
