@@ -31,6 +31,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { eq } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { columnsDeclaredBy } from "../../schema/services/field-column-descriptor";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import type {
   EnablingTransition,
@@ -374,17 +375,28 @@ interface LocaleScanDb {
  * What a restore copies back: the entity's own fields as `restorableFields`
  * judges them, then the fields a plugin's scope holds back from it, judged
  * apart, so they never change which of its own fields are restored.
+ *
+ * Exported for its tests.
  */
-function fieldsToRestore(
+export function fieldsToRestore(
   args: Pick<RestoreCompanionArgs, "fields" | "heldBack">
 ): RestorableField[] {
   const own = restorableFields(args.fields);
-  // One to a name: of several scopes' declarations of a name, the first the
-  // companion owned while translated is the one whose values are there.
-  const taken = new Set(own.map(field => field.name));
-  const held = restorableFields(args.heldBack ?? []).filter(field => {
-    if (taken.has(field.name)) return false;
-    taken.add(field.name);
+  const heldBack = args.heldBack ?? [];
+  // A held-back field is restored only when it classifies as translated: the
+  // fallback for an entity whose own flags were cleared with its translation
+  // says nothing about a field the entity no longer declares, and a shared
+  // one's companion column is abandoned, its current value on main.
+  const translated = new Set(resolveLocalizedFieldNames(heldBack, true));
+  // One to a physical column, as the schema keeps them: never one the
+  // entity's own fields restore, and of several declarations of a name, in
+  // any case, the first translated one, whose values the companion holds.
+  const taken = new Set(own.flatMap(field => [...columnsDeclaredBy([field])]));
+  const held = heldBack.filter(field => {
+    if (field.localized === false || !translated.has(field.name)) return false;
+    const columns = [...columnsDeclaredBy([field])];
+    if (columns.some(column => taken.has(column))) return false;
+    for (const column of columns) taken.add(column);
     return true;
   });
   return [...own, ...held];
