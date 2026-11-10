@@ -80,7 +80,13 @@ vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
   useCanRequest: () => true,
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
-  useCurrentUserPermissions: () => ({ hasPermission: () => true }),
+  // A reader allowed everything, whose answer is in.
+  useCurrentUserPermissions: () => ({
+    hasPermission: () => true,
+    canAccessCollection: () => true,
+    content: { isPlaceholder: false, hasAnswer: true },
+    retry: vi.fn(),
+  }),
 }));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
@@ -96,7 +102,7 @@ vi.mock("@admin/hooks/useSearchParams", () => ({
 }));
 vi.mock("@admin/components/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/components/ui")>()),
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
 }));
 
 // The editors' document lock, autosave and banners, as the edit-place tests
@@ -267,11 +273,24 @@ function contribution(kind: Kind): Record<string, unknown> {
   return { ...base, component: FIXTURE };
 }
 
+/**
+ * One contribution of each kind the place accepts, after the place's own
+ * parts of that kind, as the server sends a place's list: built-in markers
+ * and contributions, in order.
+ */
 function contributeEveryKind(place: CoreAdminPlaceId): void {
   const accepts: readonly Kind[] = CORE_ADMIN_PLACES[place].accepts;
+  const builtIns: Partial<Record<Kind, readonly string[]>> =
+    CORE_ADMIN_PLACES[place].builtIns;
   meta.contributions = {
     [place]: Object.fromEntries(
-      accepts.map(kind => [kind, [contribution(kind)]])
+      accepts.map(kind => [
+        kind,
+        [
+          ...(builtIns[kind] ?? []).map(name => ({ builtIn: name })),
+          contribution(kind),
+        ],
+      ])
     ),
   } as AdminContributionsMeta;
 }
