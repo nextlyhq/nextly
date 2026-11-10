@@ -42,7 +42,10 @@ import type { ComponentType } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { DocumentLockGates } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
-import type { PlaceContributionProps } from "@admin/components/shared/target-slot";
+import type {
+  PlaceContributionProps,
+  PlaceTabProps,
+} from "@admin/components/shared/target-slot";
 
 import {
   componentRegistry,
@@ -271,6 +274,37 @@ export interface DocumentPanelSectionProps {
 export type SidebarSectionProps =
   | (PlaceContributionProps<"collection.edit"> & DocumentPanelSectionProps)
   | PlaceContributionProps<"single.edit">;
+
+/**
+ * @experimental Props passed to a tab a plugin declares at an edit page's
+ * place (`kind: "tab"` at `collection.edit` or `single.edit`): what every
+ * contributed tab receives (the place's `context` and `entry`, and
+ * `setBadge`), and the document's form and lock, on a saved entry, a new one
+ * and a Single alike.
+ *
+ * The tab is drawn inside the document's editor, under the same bar, so Save
+ * and Publish store what it writes through `control` with everything else,
+ * and `useDocumentLocale()` and `useDocumentActions()` answer for the same
+ * document. It stays mounted while another tab is open, so what it holds is
+ * kept across tabs and its count stays current.
+ */
+export type DocumentTabProps = (
+  | PlaceTabProps<"collection.edit">
+  | PlaceTabProps<"single.edit">
+) & {
+  /**
+   * The document form's control, the one its fields write through and a
+   * document view is handed: read values the author typed and has not saved,
+   * and write values the bar's Save and Publish then store.
+   */
+  control: Control<FieldValues>;
+  /**
+   * What holds the document right now, the answer a side panel section is
+   * given: `readOnly` as the fields are held, when the tab takes no edits,
+   * and `actionsDisabled` as a plugin's own writes are held.
+   */
+  documentLock: DocumentLockGates;
+};
 
 /**
  * Props passed to injection point components (BeforeListTable, etc.).
