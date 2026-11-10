@@ -99,6 +99,22 @@ describe("EntryList for a collection removed from code", () => {
     expect(screen.queryByRole("menuitem", { name: /delete/i })).toBeNull();
   });
 
+  it("lists its entries where its stored List view is no longer in the component map", () => {
+    // Its stored metadata still names the view it had while declared; the
+    // regenerated map, which no longer declares it, does not register it.
+    collection = {
+      ...pages({ state: "not-dropped" }),
+      admin: {
+        components: {
+          views: { List: { Component: "@acme/gone/admin#PagesList" } },
+        },
+      },
+    };
+    renderWithProviders(<EntryList collectionSlug="pages" />);
+
+    expect(screen.getAllByText("About us").length).toBeGreaterThan(0);
+  });
+
   it("names the migration that retires it while that is pending", () => {
     collection = pages({
       state: "drop-pending",

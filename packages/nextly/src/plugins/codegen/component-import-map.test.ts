@@ -116,7 +116,7 @@ describe("buildComponentImportMap", () => {
     expect(code).toMatch(/"@acme\/x\/admin\/Default": _p\d+\.default,/);
   });
 
-  it("skips disabled plugins and returns a no-op module when empty", () => {
+  it("skips disabled plugins, and registers an empty map as the whole map", () => {
     expect(
       collectAdminComponentPaths(
         plugin({ pages: [{ path: "a", component: "@x#Y" }] }, false)
@@ -125,7 +125,9 @@ describe("buildComponentImportMap", () => {
 
     const code = buildComponentImportMap([]);
     expect(code).toContain("const registered = {\n};");
-    expect(code).not.toContain("registerComponentMap");
+    // Still called: an empty map tells the admin nothing more is on its way,
+    // as a full one does.
+    expect(code).toContain("registerComponentMap(registered);");
   });
 });
 
@@ -305,7 +307,8 @@ describe("buildImportMapArtifacts", () => {
     const p = plugin({ menu: [{ label: "X", to: "/x" }] }); // menu has no component
     for (const plugins of [[p], []]) {
       const [map, list] = buildImportMapArtifacts(plugins, "./types.ts");
-      expect(map.code).not.toContain("registerComponentMap");
+      expect(map.code).toContain("const registered = {\n};");
+      expect(map.code).toContain("registerComponentMap(registered);");
       expect(list.code).toContain(
         "export const registeredComponentPaths = [] as const;"
       );
@@ -455,7 +458,12 @@ describe("block editor entries", () => {
     );
     expect(code).toContain(`"${ENTRY}": _p0.editorBlocks`);
     // Definitions are not a component: the component registry never sees it.
-    expect(code).not.toContain("registerComponentMap(");
+    const registered = code.slice(
+      code.indexOf("const registered = {"),
+      code.indexOf("};", code.indexOf("const registered = {"))
+    );
+    expect(registered).toContain("const registered = {");
+    expect(registered).not.toContain(ENTRY);
   });
 
   it("lists no entry while the page builder is absent or disabled", () => {

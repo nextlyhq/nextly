@@ -830,9 +830,9 @@ export function buildComponentImportMap(
   const reference = (p: ParsedPath) => `${alias.get(importOf(p))}.${p.member}`;
 
   const lines: string[] = [HEADER, ""];
-  if (paths.length > 0) {
-    lines.push('import { registerComponentMap } from "@nextlyhq/admin";');
-  }
+  // Imported whatever the map holds: an empty map is still the whole map, and
+  // its call is what tells the admin nothing more is on its way.
+  lines.push('import { registerComponentMap } from "@nextlyhq/admin";');
   if (blockEditor.used) {
     lines.push(
       `import { ${BLOCK_EDITOR_REGISTRAR} } from "${PAGE_BUILDER_ADMIN_MODULE}";`
@@ -886,9 +886,10 @@ export function buildComponentImportMap(
   lines.push("");
   // Registered as the app's map rather than one plugin's components: once it
   // has run, nothing more is on its way, so a component still missing draws
-  // its fallback rather than loading. A map with nothing in it registers
-  // nothing, and no surface waits on a component it never named.
-  if (paths.length > 0) lines.push("registerComponentMap(registered);");
+  // its fallback rather than loading. Called on an empty map too: one whose
+  // every contribution was left out for want of its file still names them,
+  // and their places draw their fallback rather than loading forever.
+  lines.push("registerComponentMap(registered);");
   if (blockEditor.used) {
     // The block inspectors are in `registered` too, which keeps them
     // resolvable by path like any component; they are handed over here as

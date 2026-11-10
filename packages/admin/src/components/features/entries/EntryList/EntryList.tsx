@@ -46,7 +46,10 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { revsFor } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
-import type { InjectionPointProps } from "@admin/lib/plugins/component-registry";
+import {
+  hasComponent,
+  type InjectionPointProps,
+} from "@admin/lib/plugins/component-registry";
 import { getSearchParam } from "@admin/lib/search-params";
 import type { Entry } from "@admin/types/collection";
 
@@ -685,7 +688,16 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // isolated via PluginSlot.
   const beforeListTablePath = collection?.admin?.components?.BeforeListTable;
   const afterListTablePath = collection?.admin?.components?.AfterListTable;
-  const listViewPath = collection?.admin?.components?.views?.List?.Component;
+  // A collection's own List view, where the generated map registered it. One
+  // it did not register draws the default list instead of a blank page: the
+  // map registers every component before the admin draws, so nothing would
+  // bring it later. A collection removed from code is the usual case: its
+  // stored metadata still names the view, and the map no longer lists it.
+  const declaredListViewPath =
+    collection?.admin?.components?.views?.List?.Component;
+  const listViewPath = hasComponent(declaredListViewPath)
+    ? declaredListViewPath
+    : undefined;
 
   // Props for injection point components
   const injectionPointProps: InjectionPointProps = {
