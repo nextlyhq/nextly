@@ -323,14 +323,61 @@ describe.each(getConfiguredTestDialects())(
       const award = (await deliveries()).find(
         row => row.subscriber === "@test/loyalty:award"
       );
-      // Kept as it was, owed to its own subscriber, its next try put off so it
-      // is not read again on every pass.
+      // Kept as it was, owed to its own subscriber, its next look put off a
+      // quarter of an hour, so it is not read again on every pass.
       expect(award).toMatchObject({ status: "pending", attemptCount: 1 });
       expect(award?.lastError).toContain("not registered");
-      expect(msOf(award?.nextAttemptAt)).toBeGreaterThan(clock.getTime());
+      expect(msOf(award?.nextAttemptAt)).toBeGreaterThanOrEqual(
+        clock.getTime() + 15 * 60 * SECOND
+      );
       expect(receipts).toBe(1);
       const [event] = await eventRows();
       expect(event?.finishedAt ?? null).toBeNull();
+
+      // Still put off after a while, however many passes it has been held.
+      clock = new Date(T0.getTime() + 60 * SECOND);
+      expect(await dispatch(after)).toMatchObject({ held: 0 });
+      clock = new Date(T0.getTime() + 2 * SECOND + 15 * 60 * SECOND);
+      expect(await dispatch(after)).toMatchObject({ held: 1 });
+      clock = new Date(clock.getTime() + 60 * SECOND);
+      expect(await dispatch(after)).toMatchObject({ held: 0 });
+    });
+
+    it("a handler that fails slowly is tried again its backoff after it failed", async () => {
+      const { events, dispatch, deliveries } = await boot();
+      const subscribers = createDurableSubscribers();
+      subscribers.register("@test/email", PAID, "receipt", () => {
+        // The failure comes a minute after the try began.
+        clock = new Date(T0.getTime() + 60 * SECOND);
+        throw new Error("the mail server timed out");
+      });
+      await events.record(PAID, { order: "o-8" });
+      expect(await dispatch(subscribers)).toMatchObject({ retried: 1 });
+      const [row] = await deliveries();
+      expect(msOf(row?.nextAttemptAt)).toBeGreaterThan(
+        T0.getTime() + 60 * SECOND
+      );
+    });
+
+    it("a failure is kept with its credentials taken out and no NUL in it", async () => {
+      const { events, dispatch, deliveries } = await boot();
+      const token = "Zq8xR2mN5vL7tK3wP9yB4cH6";
+      const subscribers = createDurableSubscribers();
+      subscribers.register("@test/email", PAID, "receipt", () => {
+        throw new Error(
+          // The NUL ahead of the credential, which redaction takes out with
+          // the rest of its line.
+          `the provider refused a\u0000b with Authorization: Bearer ${token}`
+        );
+      });
+      await events.record(PAID, { order: "o-9" });
+      // PostgreSQL's text refuses NUL: kept anyway, on every dialect.
+      expect(await dispatch(subscribers)).toMatchObject({ retried: 1 });
+      const [row] = await deliveries();
+      expect(row).toMatchObject({ status: "pending", attemptCount: 1 });
+      expect(row?.lastError).toContain("the provider refused a\uFFFDb with");
+      expect(row?.lastError).not.toContain(token);
+      expect(row?.lastError).not.toContain("\u0000");
     });
 
     it("the events:dispatch job delivers on a jobs run", async () => {

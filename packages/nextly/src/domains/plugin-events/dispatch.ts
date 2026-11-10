@@ -7,8 +7,8 @@
  * runner's backoff, across restarts, since what a delivery is owed lives only
  * in the database; one that runs out of attempts is kept as `failed`. A
  * delivery whose subscriber is no longer registered is not run, and never
- * given to another: it is held, its next look put off, until its subscriber
- * returns or an operator abandons it.
+ * given to another: it is held, looked at again every quarter of an hour,
+ * until its subscriber returns or an operator abandons it.
  *
  * Two dispatchers at once make one delivery per event and subscriber: fanning
  * an event out and finishing it both lock the event's row first, so they run
@@ -39,6 +39,7 @@ import {
   PLUGIN_EVENTS_TABLE,
   pluginEventsTables,
 } from "../../schemas/plugin-events";
+import { redactCredentialsInText } from "../../observability/mask-emails";
 import { nextAttempt } from "../jobs/job-backoff";
 
 import type { DurableSubscribers } from "./subscribers";
@@ -51,6 +52,14 @@ const DEFAULT_LEASE_MS = 60_000;
 const DEFAULT_BATCH = 100;
 /** The longest failure kept on a delivery. */
 const MAX_ERROR_LENGTH = 1000;
+/**
+ * How long a delivery whose subscriber is not registered waits for its next
+ * look. Fixed, since a held delivery is charged no attempt: short enough that
+ * one an instance without the subscriber held during a rolling deployment is
+ * soon run by one that has it, long enough that deliveries held for a
+ * subscriber removed for good are not read on every pass.
+ */
+const HOLD_MS = 15 * 60 * 1000;
 
 /** What dispatching needs from the database adapter. */
 export type DispatchAdapter = Pick<
@@ -141,10 +150,19 @@ async function lockEvent(
   return row;
 }
 
-/** A failure as kept on a delivery: its message, bounded. */
+/**
+ * A failure as kept on a delivery: its message with any credential in it
+ * taken out, bounded, and storable on every dialect. PostgreSQL's text cannot
+ * hold NUL, so a NUL would fail the write there alone, leaving the delivery
+ * leased and its attempt uncounted; each is replaced instead.
+ */
 function failureOf(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.slice(0, MAX_ERROR_LENGTH);
+  const bounded = redactCredentialsInText(message)
+    .replaceAll("\u0000", "\uFFFD")
+    .slice(0, MAX_ERROR_LENGTH);
+  // A cut between the halves of a surrogate pair leaves a lone half.
+  return /[\uD800-\uDBFF]$/.test(bounded) ? bounded.slice(0, -1) : bounded;
 }
 
 /** Run one dispatch pass. */
@@ -239,6 +257,7 @@ export async function dispatchDurableEvents(
       delivery,
       runnerId,
       at: now(),
+      now,
       leaseMs,
       maxAttempts,
       random: options.random,
@@ -266,7 +285,10 @@ interface RunDelivery {
   subscribers: DurableSubscribers;
   delivery: DeliveryRow;
   runnerId: string;
+  /** When the delivery was claimed. */
   at: Date;
+  /** The pass's clock, read again after a handler fails. */
+  now: () => Date;
   leaseMs: number;
   maxAttempts: number;
   random?: () => number;
@@ -300,21 +322,14 @@ async function runDelivery(
 
   const handler = run.subscribers.handlerOf(delivery.subscriber);
   if (!handler) {
-    // Held for its own subscriber, never another's, its next look put off on
-    // the backoff so a long-gone subscriber is not read on every pass.
-    const next = nextAttempt({
-      attemptCount: delivery.attemptCount + 1,
-      maxAttempts: Number.POSITIVE_INFINITY,
-      now: at,
-      random: run.random,
-    });
+    // Held for its own subscriber, never another's, its next look put off so
+    // a long-gone subscriber is not read on every pass.
     await adapter.transaction(tx =>
       tx.updateCount(
         PLUGIN_EVENT_DELIVERIES_TABLE,
         {
           ...released,
-          nextAttemptAt:
-            next.outcome === "retry" ? ceilToSecond(next.at.getTime()) : at,
+          nextAttemptAt: ceilToSecond(at.getTime() + HOLD_MS),
           lastError: `The subscriber "${delivery.subscriber}" is not registered.`,
         },
         { and: mine }
@@ -336,10 +351,12 @@ async function runDelivery(
       attempt,
     });
   } catch (error) {
+    // The backoff counts from the failure, not from the claim: a handler
+    // slower than its delay would otherwise be due again at once.
     const next = nextAttempt({
       attemptCount: attempt,
       maxAttempts: run.maxAttempts,
-      now: at,
+      now: run.now(),
       random: run.random,
     });
     const recorded = {
