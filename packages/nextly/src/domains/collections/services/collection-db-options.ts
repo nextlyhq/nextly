@@ -45,6 +45,23 @@ export interface CollectionDbOptions {
    * and that has to be opted into rather than inherited.
    */
   allowIdOnCreate?: boolean;
+  /**
+   * Whether an entry's `slug` may hold several `/`-separated segments, such
+   * as `docs/getting-started/install`, so the entry is served at an address
+   * beneath another. Defaults to false: a slug is one segment, and a `/` in
+   * it is stripped as before.
+   *
+   * Each segment is normalised as a one-segment slug is, and a slug with an
+   * empty segment (`docs//install`), a `.` or `..` segment or a segment that
+   * normalises to nothing is refused rather than rewritten, and so is any
+   * slug, one segment or several, that names a reserved path (`admin`,
+   * `api/...`) or runs past 255 characters. A one-segment slug is otherwise
+   * normalised exactly as without the option, and turning it on rewrites no
+   * stored address. The value stays one column, so no migration follows.
+   *
+   * @experimental Settles with multi-segment page addresses.
+   */
+  slugPaths?: boolean;
 }
 
 // Keyed by every option and nothing else, so adding an option to the
@@ -53,6 +70,7 @@ export interface CollectionDbOptions {
 const OPTION_NAMES: Record<keyof CollectionDbOptions, true> = {
   idType: true,
   allowIdOnCreate: true,
+  slugPaths: true,
 };
 
 /**

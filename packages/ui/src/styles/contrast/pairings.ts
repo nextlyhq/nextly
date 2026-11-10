@@ -238,14 +238,20 @@ const STATUS_ON_SOLID: Pairing[] = ["destructive", "success"].map(
   })
 );
 
-// A success toast: its text on its own surface, both handed to the toast
-// library by the Toaster in place of the library's own colours.
+// A success or warning toast: its text on its own surface, both handed to the
+// toast library by the Toaster in place of the library's own colours.
 const TOAST: Pairing[] = [
   {
     fg: "--nx-toast-success-text",
     bg: "--nx-toast-success-bg",
     kind: "text",
     label: "success toast text on its surface",
+  },
+  {
+    fg: "--nx-toast-warning-text",
+    bg: "--nx-toast-warning-bg",
+    kind: "text",
+    label: "warning toast text on its surface",
   },
 ];
 

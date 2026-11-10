@@ -14,10 +14,10 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 
 ## What you get
 
-- **21 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
-  accordion item, spacer, divider), content (heading, paragraph, rich text, list, quote,
-  image, gallery, icon, button, embed, form), and one that reads from your content
-  ([Collection list](#reading-content-into-a-page)).
+- **22 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
+  accordion item, spacer, divider), content (heading, paragraph, rich text, table of
+  contents, list, quote, image, gallery, icon, button, embed, form), and one that reads
+  from your content ([Collection list](#reading-content-into-a-page)).
 - **Icons.** The Icon block draws one icon from the built-in [Lucide](https://lucide.dev)
   set as inline SVG, rendered on the server, so a published page ships no script for it.
   Its **Icon** control (Content tab) opens a search-first picker that offers the icons you
@@ -43,11 +43,11 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 
 ## Availability
 
-| | |
+|            |                                                                                                 |
 | ---------- | ----------------------------------------------------------------------------------------------- |
-| Package | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app |
-| Status | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
-| Permission | Editing a page requires update access to the collection holding it |
+| Package    | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app                      |
+| Status     | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
+| Permission | Editing a page requires update access to the collection holding it                              |
 
 ## Install
 
@@ -110,7 +110,10 @@ import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
-import type { NextlyContentReader } from "nextly/runtime";
+import type {
+  NextlyContentReader,
+  PublicSiteSettingsSource,
+} from "nextly/runtime";
 
 import nextlyConfig from "../../../../nextly.config";
 
@@ -120,11 +123,16 @@ const instance = () => getNextly({ config: nextlyConfig });
 
 // Annotated rather than inferred: without a contextual type these `args`
 // parameters are implicitly `any`, which fails `next build` under strict mode.
-const reader: NextlyContentReader & {
-  media: Pick<NextlyInstance["media"], "findByID">;
-} = {
+const reader: NextlyContentReader &
+  PublicSiteSettingsSource & {
+    media: Pick<NextlyInstance["media"], "findByID">;
+  } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
+  // The site's name, address, logo and time zone a page shows, read from this
+  // instance. Omit it and the page shows the settings of the process's
+  // registered instance, and the route warns once.
+  publicSiteSettings: async () => (await instance()).publicSiteSettings(),
   // Images that store a media id resolve through this. Omit it and those images
   // render nothing, while images holding a literal URL keep working.
   media: {
@@ -158,6 +166,24 @@ export default ContentPage;
   them, and pages come out structurally correct and visually bare. Declare at
   least a `base` breakpoint.
 </Callout>
+
+### One process, several sites
+
+A page reads everything through the `nextly` it is given: its entry, the lists and Singles it
+shows, and the site settings, the site's name, address, logo and the time zone its dates and day
+filters use. A process serving several sites, each through an instance of its own, gives each
+route its own `nextly`, and each page shows its own site. Only a route given no `nextly` reads the
+process's registered instance.
+
+Give each of those routes its own `cacheScope` too, such as the site's id. Every public read a
+route makes, its site settings among them, is cached under it, and two routes over different
+instances with the same scope, or none, share their cached reads.
+
+A reader of your own forwards `publicSiteSettings` from the instance, as the example above does.
+A reader without it still shows the settings of the process's registered instance, as it did
+before, so a single-site app keeps working. On a process serving several sites those are
+another site's settings, so the route warns once per reader, in every environment, naming the
+line to add.
 
 ### Public sites read differently
 
@@ -263,7 +289,11 @@ import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 import { getNextly } from "nextly";
-import type { NextlyContentReader, NextlySingleReader } from "nextly/runtime";
+import type {
+  NextlyContentReader,
+  NextlySingleReader,
+  PublicSiteSettingsSource,
+} from "nextly/runtime";
 
 import nextlyConfig from "../../../../nextly.config";
 
@@ -272,13 +302,15 @@ type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 const instance = () => getNextly({ config: nextlyConfig });
 
 const reader: NextlyContentReader &
-  NextlySingleReader & {
+  NextlySingleReader &
+  PublicSiteSettingsSource & {
     media: Pick<NextlyInstance["media"], "findByID">;
   } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
   // The site style is a single, read through this.
   findSingle: async args => (await instance()).findSingle(args),
+  publicSiteSettings: async () => (await instance()).publicSiteSettings(),
   media: {
     findByID: async args => (await instance()).media.findByID(args),
   },
@@ -362,6 +394,150 @@ export const Homepage = defineSingle({
 });
 ```
 
+## A page's address
+
+A page's address is its slug, and it may sit beneath another page's: type
+`docs/getting-started/install` in the slug and the page is served at
+`/docs/getting-started/install`. Each part is normalised as a one-part address
+is (`Getting Started` becomes `getting-started`), and one leading or trailing `/`
+is dropped. An address with an empty part (`docs//install`), a `.` or `..` part, a
+part with no letters or numbers left, a reserved path (`admin`, `api/...`,
+`_next/...`, one part or several) or more than 255 characters is refused when the page is saved, with
+the reason under the slug, rather than rewritten into an address nobody chose. A
+copy of a nested page stays beside it (`docs/copy-of-install`).
+
+The Pages collection opts into this with `db: { slugPaths: true }`, which any
+collection may set. It is a rule about the stored value only: no schema change
+or migration follows, no stored address is rewritten, and a collection
+without it keeps stripping `/` from its slugs. Two pages at one address are kept
+apart by the slug's uniqueness, as before.
+
+### One address, one page
+
+A published page holds its address, and a page whose Collection list is split into
+pages also holds that list's later pages (`/news/page/2`, `/news/page/3`, …) as one
+space, however many pages the list has today. Saving a page that would share an
+address with another document is refused, naming the other document: publishing a
+page at `/news/page/2` while the page at `/news` splits its list into pages, or
+splitting the list at `/news` into pages while a page is published at
+`/news/page/2`. The other document is named by its title where you may read it, and
+by its id where you may not. The address is held from the save that publishes the
+page, in the same transaction, so two saves at once can't both take it, whichever
+way the pages were saved (the editor, the API, a batch, a release or a scheduled
+publish). Unpublishing or deleting the page frees its address; turning off Split
+into pages frees the later pages and keeps the page's own address. A site upgrading
+to this claims its published pages' addresses in the background after start-up,
+oldest first; a page that clashes with an older one waits for it and appears in the
+waiting report.
+
+### Serving a collection's entries
+
+A collection defined in code can serve each of its entries at its own address,
+drawn with the collection's template. Declare where in the plugin's options:
+
+```ts
+pageBuilder({ templates: { addresses: { posts: "/blog" } } });
+```
+
+Once the collection's template is published, each published post is served at
+`/blog/<its slug>`. Write the address as a visitor requests it: starting with
+`/`, ending without one, with no empty or `.` segment, and not `/` itself or under
+a path the runtime keeps (`/admin`, `/api`, …). Two collections may not share an
+address, and the collection needs a `slug` text field. Anything else stops the
+site from starting, naming what is wrong.
+
+An entry's address is held like a page's, from the save that publishes it: saving
+an entry at an address another document holds is refused, naming it, and
+unpublishing, deleting or renaming the entry frees it. When a template is first
+published over entries whose addresses a page already holds, those entries wait
+and are served as soon as the page frees the address.
+
+Pages and entries are served by one route, which answers every path from the
+addresses the site holds:
+
+```tsx title="app/(frontend)/[...slug]/page.tsx"
+import { createContentPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderContent } from "@nextlyhq/plugin-page-builder";
+import { previewDraftGate } from "nextly/runtime";
+
+const { ContentPage, generateMetadata } = createContentPage({
+  ...pageBuilderContent(),
+  pages: {
+    collections: ["pages"],
+    field: "content",
+    draft: previewDraftGate(),
+  },
+});
+
+export { generateMetadata };
+export default ContentPage;
+```
+
+A page is served as `createBlocksPage` serves it. An entry is drawn with its
+collection's published template, reading the entry as a visitor would, and takes
+its title, description and image from the template's SEO settings. A path nobody
+holds is not found, and so is an entry with neither a published template nor a
+published own design (below). `createPublicContentPage` is the cached, pre-rendered
+form.
+
+An entry with its own design ([An entry's own design](/docs/page-builder/compose-through-the-api#an-entrys-own-design))
+is drawn with that design instead, and takes its SEO settings from it, once the design
+is published. Until then, and after it is removed, the entry keeps its collection's
+template. A draft own design is never drawn by this route, in preview mode too:
+preview it in the editor. Publishing, unpublishing or
+removing an own design refreshes the entry's cached page, as a change to the template
+does. The design is read with the template in one query, through
+`pageBuilderContent()`'s `templates.readFor`; a provider written by hand without it
+draws every entry with its collection's template.
+
+#### An entry's list split into pages
+
+Where the design drawing an entry (its published own design, else its collection's
+published template) splits a Collection list into pages, the entry holds that list's
+later pages beside its address, as a page does: `/blog/hello/page/2`,
+`/blog/hello/page/3` and on, as one claim, and the route serves each by drawing the
+entry with that page of the list. `/blog/hello/page/1` redirects to `/blog/hello`,
+and a page past the list's last is not found. Saving an entry where a document is
+published among those later pages is refused, naming it. Publishing a paged template,
+turning on Split into pages in a published one, or publishing a paged own design
+leaves an entry whose later pages a page already holds at its own address, waiting:
+its list shows one page, linking to no later page, until the page frees the address,
+then pages without the entry being saved. An entry left waiting for its own address,
+because another document holds it, waits for its later pages as well, and is given both
+together once that document frees the address. Turning Split into pages off, unpublishing the paged design, or
+removing it frees the later pages and keeps the entry's address. Later pages are not
+pre-rendered by `createPublicContentPage`; each renders on its first request.
+
+An entry keeps its address while its own design is published, even when its
+collection's template is unpublished or deleted: those entries stay served, and
+every other entry of the collection gives its address up. Unpublishing or removing
+the own design then gives the entry's address up too, unless the template is
+published. Publishing an own design claims the entry's address without the entry
+being saved; where another document holds it, the entry waits for it. The address
+itself still comes from the collection: an address declared in code, or the one
+stored on its template. A collection made in the Schema Builder whose template is
+deleted has no address left, so none of its entries is served, own design or not.
+
+#### Collections made in the Schema Builder
+
+A collection made in the Schema Builder has no code to declare its address in, so
+its template stores it. Open **Templates** in the page builder's menu, open the
+collection's template and set its **Address**; once the template is published its
+entries are served there, with no restart. The same rules apply as to an address
+declared in code, and an address declared in code wins over a stored one. When you
+promote such a collection into code with `nextly db:sync --promote`, the line that
+declares its address is printed beside its code; the stored address keeps serving
+until the declaration takes over at the next start.
+
+Setting or changing an address needs the **Manage template routing** permission
+(`manage-template-routing`), apart from updating templates, since it moves every
+entry's live address. Anyone else sees the address read-only, and an address they
+send through the API is left out of their save. Changing a template's address frees
+the old address of every entry it serves (all of them while it is published, those
+with a published own design while it is not) and serves each at the new one; an
+entry whose new address another document holds waits for it. API clients use the
+`set-template-address` template action, which has a dry run.
+
 ## Reading content into a page
 
 The **Collection list** block (stored as `core/collection-loop`) queries one of your
@@ -379,11 +555,18 @@ In the editor, the list's Content tab edits its query:
 - **Sort**: one row per key, each with its direction in words (Newest first, A–Z, Highest
   first). Entries with the same values keep a fixed order, and entries with no value come
   last.
-- **How many**: Number of items (1 to 100) and Skip the first. Under Number of items the
-  selected list says how many entries match and how many show, for example "4 entries
-  match, so 3 show.", counted as you read them on the canvas.
+- **How many**: Number of items (1 to 100), Skip the first, and Split into pages. Under
+  Number of items the selected list says how many entries match and how many show, for
+  example "4 entries match, so 3 show.", counted as you read them on the canvas. Under
+  Split into pages, while it is on, it says how many pages that makes, for example "24
+  entries match, so 3 pages of 10." See [Splitting a list into pages](#splitting-a-list-into-pages).
 - **When nothing matches**: Canvas shows Entries or When empty, to design the list's empty
   state, which visitors see when no entry matches.
+
+A prop bound to the page's own entry or to a Single shows, on the canvas, the value you could
+see in the admin, your drafts included, read with your own access; one you may not read shows
+its fallback. The published page reads the same sources as a visitor. The site settings and the
+fields a binding is checked against are the public's on both.
 
 The canvas draws each list with the entries you could see in the admin: your drafts
 included, and only the entries and fields your own access lets you read. The published
@@ -395,6 +578,36 @@ fallen-back sort's note has a **Choose a field** button that takes the author to
 Near midnight the canvas may differ from the published page for a day filter: the canvas
 compares days in UTC, the published page in the site's time zone. The same query can be
 set through the API with [`set-list-query`](/docs/page-builder/compose-through-the-api).
+
+### Splitting a list into pages
+
+Turn on **Split into pages** and the list shows Number of items entries on each page, each
+page at its own address: the list on `/news` shows its first page there, the second at
+`/news/page/2`, the third at `/news/page/3`, and so on. Under its entries the list draws
+links to the previous and next pages and the page numbers, as ordinary links a visitor can
+share and a search engine can follow. The links are parts of the list (Pages, Page link,
+Current page and Page gap), so the Style tab styles them as it styles the list; by default
+they are outlined boxes, with the current page filled in the site's primary colour.
+
+- Skip the first is applied once, before paging: with 25 entries, 10 skipped and 10 on a
+  page, page 1 shows entries 11 to 20 and page 2 entries 21 to 25, the last.
+- `/news/page/1` redirects permanently to `/news`, so the first page has one address. A
+  number past the last page, or written any other way (`/page/0`, `/page/02`,
+  `/page/1.5`), answers not found.
+- When no entry matches, `/news` shows the list's empty state and every later page is not
+  found.
+- Each page has its own canonical URL. On a public route, every page that exists at build
+  is pre-rendered, within the route's `staticParamsLimit`; a page that comes to exist later,
+  as the list grows, renders on its first visit and is cached from then on.
+- An entry stored at such an address (a page whose slug is `news/page/2`) is served as
+  itself, ahead of the list's page.
+
+One list on a page can be split into pages, so the page's address names one list's page.
+The save is refused, naming the reason, for a second list split into pages on the same
+page, a list split into pages inside another list (it repeats once per outer entry, with no
+address of its own), a list of related entries (they have no count of pages), and a list in
+a component or a Layout region (each shows on many pages). A list on a Single's page shows
+its first page only, since a Single's route serves no later pages.
 
 The loop reads through the route's **public reader**, which every blocks route binds to each
 render. With no `data` option the loop reads through it directly, so a published page lists
@@ -446,10 +659,16 @@ database, for letters outside ASCII too (the Turkish "İ" matches a plain "i").
 
 ### Singles, site settings and field shapes
 
-The same reader also reads one Single, as an anonymous visitor would:
+The public reader also reads one Single, as an anonymous visitor would:
 
 ```ts
-const banner = await reader.findSingle({
+import { createPublicReader, type PublicReaderSource } from "nextly/runtime";
+
+// A Nextly instance, such as the one `getNextly()` answers.
+declare const nextly: PublicReaderSource;
+
+const publicReader = createPublicReader(nextly);
+const banner = await publicReader.findSingle({
   slug: "banner",
   select: ["headline"],
 });
@@ -461,21 +680,29 @@ read. It never creates the Single's document. `select` keeps the id and the fiel
 read takes no other option, and refuses `status`, `draft`, `depth`, `populate` and the rest by
 name, as a list's read does.
 
-Two more reads sit beside it in `nextly/runtime`, both `@experimental`:
+Three more reads sit beside it in `nextly/runtime`, each `@experimental`:
 
 - `readPublicSiteSettings()` answers the site's `applicationName`, `siteUrl`, `logoUrl` and
   `timezone` from the General Settings, each `null` until it is set. Nothing else in the settings
   comes back: not the administrator's email, not the preview links' revocation counter, and not
   a setting added later. Saving the settings expires the tag `nextlySiteSettingsTags()` names, so
   tag a cached read with it and a page shows a new site name or time zone on its next request.
+  Given an instance, `readPublicSiteSettings(nextly)` reads that instance's settings instead,
+  through the same allowlist; an instance answers the same from `nextly.publicSiteSettings()`.
 - `bindingFieldShapes({ collection })` or `bindingFieldShapes({ single })` answers the fields a
   visitor may read, each with its `type`, and where they apply `hasMany`, `relationTo`, the
   select or radio `options`, and `dateOnly` or `monthOnly` for a date picked as a day or a month.
   A field the visitor's field rules hide is left out, and so is one whose rule needs an entry to
   decide. A source the visitor may not read, or one that does not exist, has no shapes
   (`undefined`).
+- `declaredFieldShapes({ collection })` or `declaredFieldShapes({ single })` answers the same
+  shapes for every field the source declares, whoever may read it: what a save checks a
+  binding against (see [Bindings checked when a document is
+  saved](/docs/api-reference/block-document-format#bindings-checked-when-a-document-is-saved)).
+  A source that does not exist has no shapes (`undefined`).
 
-The settings and the shapes read the process's running instance, as `requireNextly` does.
+The shapes, and the settings when no instance is given, read the process's running instance,
+as `requireNextly` does.
 
 <Callout type="warn">
   Field bindings inside a loop are stored but not resolved yet. Each repeated
@@ -483,6 +710,30 @@ The settings and the shapes read the process's running instance, as `requireNext
   fields. See [Block document
   format](/docs/api-reference/block-document-format).
 </Callout>
+
+### A table of contents
+
+The **Table of contents** block (stored as `core/table-of-contents`) lists the headings
+of a passage of rich text, each linking to its heading. On a collection's template,
+bind its **Content** to the same field as the article's Rich text block, and every
+entry gets contents drawn from its own body:
+
+- **Headings listed**: H2 only, H2 and H3 (the default), or H2 to H4. An H1 is the
+  page's title and is never listed. Each heading sits inside the heading above it, in a
+  nested list, so a screen reader announces the structure as well as the words.
+- **Title**: the label above the list (On this page by default), which also names the
+  block's navigation landmark.
+- **Can be folded away**: on by default, so the list starts open under its title and a
+  reader can close it, with no script.
+
+Every heading a Rich text block draws carries an id, made from its words: lower-cased,
+punctuation dropped, spaces as hyphens (`Getting started` is `#getting-started`), with a
+repeated heading numbered (`#notes`, `#notes-2`). The ids are unique within one passage.
+Two Rich text blocks on one page that share a heading give it the same id, and a link to
+it reaches the first.
+
+A visitor sees nothing when there are no headings to list, so an entry without any shows
+no empty box. On the canvas the block keeps its frame and says why it is empty.
 
 ## Related
 

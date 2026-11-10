@@ -10,6 +10,7 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
+  defineNamedQuery,
   DOCUMENT_FORMAT_VERSION,
   type BindingFieldShape,
   type BlockDocument,
@@ -18,11 +19,13 @@ import type {
   BindingFieldShape as NextlyBindingFieldShape,
   BindingSourceRef,
   PublicSiteSettings,
+  PublicSiteSettingsSource,
   PublicSourceReader,
 } from "nextly/runtime";
 import { createElement, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import {
+  afterAll,
   afterEach,
   beforeEach,
   describe,
@@ -37,7 +40,9 @@ import {
 // fake's declarations (it hides no field), since no Nextly services are
 // registered in this process for it to read a schema from.
 const runtime = vi.hoisted(() => ({
-  site: null as Record<string, string | null> | null,
+  site: null as PublicSiteSettings | null,
+  /** How often the process's registered instance was read for the site settings. */
+  processSiteReads: 0,
   shapes: new Map<string, unknown>(),
   tags: [] as string[][],
   /** Each cached read's key parts, beside its tags. */
@@ -84,7 +89,14 @@ vi.mock("nextly/runtime", async importOriginal => {
       });
       return actual.cachedFind(() => inCache.run(true, read), options);
     },
-    readPublicSiteSettings: async () => {
+    // The real read when given an instance, so the allowlist judges what the
+    // instance answers; a read given none reaches for the process's
+    // registered instance, which is counted and answers with `runtime.site`.
+    readPublicSiteSettings: async (source?: PublicSiteSettingsSource) => {
+      if (source !== undefined) {
+        return await actual.readPublicSiteSettings(source);
+      }
+      runtime.processSiteReads += 1;
       if (runtime.site === null) throw new Error("no site settings");
       return runtime.site;
     },
@@ -115,6 +127,7 @@ vi.mock("@nextlyhq/blocks-engine", async importOriginal => {
 
 import { nextlySingleTags, nextlySiteSettingsTags } from "nextly/runtime";
 
+import { afterOverrunLines } from "./__tests__/overrun-quiet";
 import { throughBoundary } from "./__tests__/through-boundary";
 import { coreBlocks } from "./blocks";
 import type {
@@ -240,7 +253,19 @@ function instance(content: BlockDocument, extras: SiteExtras = {}) {
     findSingle: vi.fn(async (args: { slug: string }) =>
       args.slug === "home" ? { id: "h1", tagline: "From the Single" } : null
     ),
-    media: { findByID: vi.fn(async () => null) },
+    // The instance's own site settings: what the test's site has set.
+    publicSiteSettings: vi.fn(async (): Promise<PublicSiteSettings> => {
+      if (runtime.site === null) throw new Error("no site settings");
+      return runtime.site;
+    }),
+    media: {
+      findByID: vi.fn(
+        async (_args: {
+          id: string;
+          disableErrors?: boolean;
+        }): Promise<Record<string, unknown> | null> => null
+      ),
+    },
   };
 }
 
@@ -269,6 +294,7 @@ function publicReads(nextly: Instance): Record<string, unknown>[] {
 
 beforeEach(() => {
   runtime.site = null;
+  runtime.processSiteReads = 0;
   runtime.shapes = new Map();
   runtime.tags = [];
   runtime.reads = [];
@@ -380,6 +406,56 @@ describe("a routed page's bindings", () => {
     });
     await route.generateMetadata({ params: { slug: ["about"] } });
     expect(title).toBe("Public");
+  });
+
+  it("offers a list item's bound image outside any list as the page draws it: its fallback, never its own", async () => {
+    // An image bound to a list item, placed outside every list: the page
+    // draws the binding's fallback there, so the share image is that too,
+    // not the picture the block holds of its own. The heading bound to the
+    // entry makes the page read its bindings, which is when an item's are
+    // filled at all; with none read, the page and its metadata both keep the
+    // block's own value.
+    const document = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "h",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Own", level: "h1" },
+            bindings: { text: { $bind: "title" } },
+          },
+          {
+            id: "picture",
+            type: "core/image",
+            version: 1,
+            props: { src: "/own.jpg", alt: "Own" },
+            bindings: {
+              mediaId: {
+                source: "item",
+                $bind: "photo",
+                fallback: "/fallback.jpg",
+              },
+            },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    let image: string | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks,
+      nextly: instance(document) as never,
+      metadata: (_entry, _context, derived) => {
+        image = derived.image;
+        return {};
+      },
+    });
+    await route.generateMetadata({ params: { slug: ["about"] } });
+    expect(image).toBe("/fallback.jpg");
   });
 
   it("metadata takes the document's own title, joined from literal and bound segments, over its blocks'", async () => {
@@ -522,10 +598,10 @@ describe("a routed page's bindings", () => {
     expect(html).toContain("Public");
   });
 
-  it("a binding on a node the page withholds or de-duplicates claims no read", async () => {
-    // A condition-gated heading and a later node reusing the list's address:
-    // neither reaches the page, so neither may spend the one claim the list
-    // needs.
+  it("a binding on a node the page de-duplicates claims no read", async () => {
+    // A later node reusing the list's address never reaches the page, so it
+    // may not spend the one claim the list needs. (A conditioned block may
+    // show once its entry is read, so its bindings do read: covered below.)
     const entryBound = (id: string, extra: Record<string, unknown> = {}) => ({
       id,
       type: "core/heading",
@@ -539,11 +615,6 @@ describe("a routed page's bindings", () => {
         formatVersion: DOCUMENT_FORMAT_VERSION,
         kind: "page",
         nodes: [
-          entryBound("gated", {
-            visibility: {
-              conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
-            },
-          }),
           {
             id: "loop",
             type: "core/collection-loop",
@@ -705,6 +776,137 @@ describe("a routed page's bindings", () => {
         select: { id: true, name: true },
       }),
     ]);
+  });
+
+  describe("a link to the entry a to-one relation names", () => {
+    /** A page of one button linking to the author, else to `/authors`. */
+    const linkPage = (): BlockDocument =>
+      JSON.parse(
+        JSON.stringify({
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "page",
+          nodes: [
+            {
+              id: "by",
+              type: "core/button",
+              version: 1,
+              props: {
+                label: "The author",
+                href: "/authors",
+                entryCollection: "authors",
+              },
+              bindings: { entryId: { $bind: "author.id" } },
+            },
+          ],
+        })
+      ) as BlockDocument;
+
+    const config: PageConfig = {
+      collections: ["pages"],
+      field: "content",
+      blocks,
+      resolveEntryPath: async (collection, id) => `/${collection}/${id}`,
+    };
+
+    beforeEach(() => {
+      runtime.shapes.set("collection:pages", [
+        { name: "title", type: "text" },
+        { name: "author", type: "relationship", relationTo: "authors" },
+      ]);
+      // As declared: the authors list no `id`, which every entry carries.
+      runtime.shapes.set("collection:authors", [
+        { name: "name", type: "text" },
+      ]);
+    });
+
+    it("links to the author's page, its id read from the author as the public reads it", async () => {
+      const nextly = instance(linkPage());
+      const { html } = await renderedPage(createBlocksPage, config, nextly);
+      expect(html).toContain('href="/authors/a1"');
+      expect(publicReads(nextly)).toEqual([
+        expect.objectContaining({
+          collection: "pages",
+          select: { id: true, author: true },
+        }),
+        expect.objectContaining({
+          collection: "authors",
+          where: { and: [{ id: { equals: "a1" } }] },
+          select: { id: true },
+        }),
+      ]);
+    });
+
+    it("links to its own address where the public may not read the author", async () => {
+      const nextly = instance(linkPage());
+      const answer = nextly.find.getMockImplementation();
+      // The authors' read refused, as a collection the public may not read
+      // is; the post still holds the author's id, which never fills the link.
+      nextly.find.mockImplementation(async (args: Record<string, unknown>) => {
+        if (args.collection === "authors" && isPublicRead(args)) {
+          throw new Error("forbidden");
+        }
+        if (answer === undefined) throw new Error("no find");
+        return await answer(args);
+      });
+      const { html } = await renderedPage(createBlocksPage, config, nextly);
+      expect(html).toContain('href="/authors"');
+      expect(html).not.toContain("/authors/a1");
+    });
+
+    it("links to its own address where the author's entry has no page", async () => {
+      const nextly = instance(linkPage());
+      // The author is read, so the entry is named, but no path is found.
+      const resolved: string[] = [];
+      const { html } = await renderedPage(
+        createBlocksPage,
+        {
+          ...config,
+          resolveEntryPath: async (collection, id) => {
+            resolved.push(`${collection}:${id}`);
+            return null;
+          },
+        },
+        nextly
+      );
+      expect(resolved).toEqual(["authors:a1"]);
+      expect(html).toContain('href="/authors"');
+    });
+  });
+
+  it("follows a relation into the media library through the library, as the page's images are read", async () => {
+    runtime.shapes.set("collection:pages", [
+      { name: "title", type: "text" },
+      { name: "cover", type: "upload", relationTo: "media" },
+    ]);
+    const page = boundPage({ $bind: "cover.altText" });
+    const nextly = instance(page);
+    // The page's public row points at its cover, and `media` is no
+    // collection a list read finds: asking it for one fails, as it does on
+    // a real instance.
+    nextly.find.mockImplementation(async (args: Record<string, unknown>) => {
+      if (args.collection === "media") throw new Error("not a collection");
+      const rows = rowsFor(args, page, {});
+      const items = isPublicRead(args)
+        ? rows.map(row => ({ ...row, cover: "m1" }))
+        : rows;
+      return { items, meta: { total: 1 } };
+    });
+    nextly.media.findByID.mockImplementation(async ({ id }) =>
+      id === "m1"
+        ? { id: "m1", url: "/m1.jpg", altText: "A harbour at dawn" }
+        : null
+    );
+    const { html } = await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks },
+      nextly
+    );
+    expect(html).toContain("A harbour at dawn");
+    expect(html).not.toContain("Fallback");
+    expect(nextly.media.findByID).toHaveBeenCalledWith({
+      id: "m1",
+      disableErrors: true,
+    });
   });
 
   it("judges what the public may see inside the cached reads, so a prerender can cache the page", async () => {
@@ -1032,3 +1234,609 @@ describe("a routed page's bindings", () => {
     expectTypeOf<BlocksFieldShapeRef>().toExtend<BindingSourceRef>();
   });
 });
+
+describe("a page's site settings, in a process serving several sites", () => {
+  /** An instance of one site, whose own settings name it and set its zone. */
+  function siteInstance(
+    content: BlockDocument,
+    applicationName: string,
+    timezone: string
+  ): Instance {
+    const nextly = instance(content);
+    nextly.publicSiteSettings.mockImplementation(async () => ({
+      applicationName,
+      siteUrl: null,
+      logoUrl: null,
+      timezone,
+    }));
+    return nextly;
+  }
+
+  /** A page showing its site's name and the entry's date-time in the site's zone. */
+  const sitePage = JSON.parse(
+    JSON.stringify({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "name",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Own", level: "h1" },
+          bindings: {
+            text: {
+              fallback: "No name",
+              $bind: "applicationName",
+              source: "site",
+            },
+          },
+        },
+        {
+          id: "when",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Own", level: "h2" },
+          bindings: {
+            text: {
+              fallback: "No time",
+              $bind: "startsAt",
+              format: {
+                type: "date",
+                options: {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  hourCycle: "h23",
+                },
+              },
+            },
+          },
+        },
+      ],
+    })
+  ) as BlockDocument;
+
+  /** A list filtering by a day, which compares days in the site's zone. */
+  const dayList: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [
+      {
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: {
+          collection: "posts",
+          filters: [
+            {
+              field: "publishedAt",
+              op: "greater_than_equal",
+              value: "2026-09-01",
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  const base = { collections: ["pages"], field: "content", blocks };
+
+  /** The site settings reads made, by their cache keys. */
+  function siteReadKeys(): string[][] {
+    return runtime.reads
+      .filter(read =>
+        nextlySiteSettingsTags().every(tag => read.tags.includes(tag))
+      )
+      .map(read => read.keyParts);
+  }
+
+  beforeEach(() => {
+    // The process has a registered instance with a site of its own, so a
+    // page that reached for it would show that site rather than nothing.
+    runtime.site = {
+      applicationName: "Process site",
+      siteUrl: null,
+      logoUrl: null,
+      timezone: "Asia/Tokyo",
+    };
+  });
+
+  it("each route's page shows its own instance's site name and time zone, never the process's", async () => {
+    const acme = siteInstance(sitePage, "Acme", "Europe/Paris");
+    const globex = siteInstance(sitePage, "Globex", "America/New_York");
+
+    const acmePage = await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "acme" },
+      acme
+    );
+    const globexPage = await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "globex" },
+      globex
+    );
+
+    // 18:30 UTC on 29 March 2026: 20:30 in Paris, 14:30 in New York, and
+    // 03:30 the next day in the process site's Tokyo.
+    expect(acmePage.html).toContain("Acme");
+    expect(acmePage.html).toContain("20:30");
+    expect(acmePage.element.props.bindings?.timeZone).toBe("Europe/Paris");
+    expect(globexPage.html).toContain("Globex");
+    expect(globexPage.html).toContain("14:30");
+    expect(globexPage.element.props.bindings?.timeZone).toBe(
+      "America/New_York"
+    );
+    for (const html of [acmePage.html, globexPage.html]) {
+      expect(html).not.toContain("Process site");
+      expect(html).not.toContain("03:30");
+    }
+    expect(acmePage.html).not.toContain("Globex");
+    expect(globexPage.html).not.toContain("Acme");
+
+    // Read from each route's own instance, and never from the process's.
+    expect(acme.publicSiteSettings).toHaveBeenCalled();
+    expect(globex.publicSiteSettings).toHaveBeenCalled();
+    expect(runtime.processSiteReads).toBe(0);
+    // Cached under each route's own scope, so the two never share an entry.
+    expect(siteReadKeys()).toEqual([
+      ["nextly-public-site-settings", "acme"],
+      ["nextly-public-site-settings", "globex"],
+    ]);
+  });
+
+  it("a list filtering by a day compares days in its own instance's time zone", async () => {
+    const zoneOf = async (nextly: Instance, cacheScope: string) => {
+      const route = createBlocksPage({
+        ...base,
+        cacheScope,
+        nextly: nextly as never,
+      });
+      const element = await throughBoundary<PageRendererProps>(
+        route.ContentPage({ params: { slug: ["about"] } })
+      );
+      return element.props.context?.timeZone;
+    };
+
+    await expect(
+      zoneOf(siteInstance(dayList, "Acme", "Europe/Paris"), "acme")
+    ).resolves.toBe("Europe/Paris");
+    await expect(
+      zoneOf(siteInstance(dayList, "Globex", "America/New_York"), "globex")
+    ).resolves.toBe("America/New_York");
+    expect(runtime.processSiteReads).toBe(0);
+  });
+
+  it("reads the site settings once for a page whose list compares days and whose query asks today", async () => {
+    // A custom source of rows with their own date field, its items hidden
+    // by a condition ordering that date: the list's days need the zone, and
+    // the query's run asks for today in it. One question, asked twice.
+    const soon = defineNamedQuery({
+      name: "events.soon",
+      label: "Events soon",
+      reads: {},
+      rows: {
+        key: "id",
+        fields: [
+          { name: "id", type: "text" },
+          { name: "startsAt", type: "date" },
+        ],
+      },
+      run: () => Promise.resolve({ rows: [{ id: "e1", startsAt: null }] }),
+    });
+    const events = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "list",
+            type: "core/collection-loop",
+            version: 1,
+            props: { namedQuery: { name: "events.soon", params: {} } },
+            slots: {
+              children: [
+                {
+                  id: "badge",
+                  type: "core/heading",
+                  version: 1,
+                  props: { text: "Soon", level: "h3" },
+                  visibility: {
+                    conditions: [
+                      [
+                        {
+                          field: "startsAt",
+                          op: "greater_than",
+                          value: "2026-11-01",
+                        },
+                      ],
+                    ],
+                  },
+                },
+              ],
+              empty: [],
+            },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    const route = createBlocksPage({
+      ...base,
+      cacheScope: "acme",
+      namedQueries: {
+        definitionOf: name => (name === soon.name ? soon : undefined),
+      },
+      nextly: siteInstance(events, "Acme", "Europe/Paris") as never,
+    });
+    const element = await throughBoundary<PageRendererProps>(
+      route.ContentPage({ params: { slug: ["about"] } })
+    );
+    // The zone was read, from this instance's settings.
+    expect(element.props.context?.timeZone).toBe("Europe/Paris");
+    const siteReads = runtime.reads.filter(
+      read => read.keyParts[0] === "nextly-public-site-settings"
+    );
+    expect(siteReads).toHaveLength(1);
+  });
+
+  /** A reader of the app's own that forwards no site-settings read. */
+  function readerWithoutSite(
+    content: BlockDocument
+  ): Omit<Instance, "publicSiteSettings"> {
+    const { publicSiteSettings: _dropped, ...rest } = instance(content);
+    return rest;
+  }
+
+  /** The warnings that name a reader's missing site-settings read. */
+  function standInWarnings(warn: { mock: { calls: unknown[][] } }): string[] {
+    return warn.mock.calls
+      .map(([message]) => String(message))
+      .filter(message => message.includes("has no `publicSiteSettings`"));
+  }
+
+  it("a reader of the app's own with no site-settings read shows the process's, and says so once per reader", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const reader = readerWithoutSite(sitePage);
+
+    const first = await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "acme" },
+      reader as Instance
+    );
+    // The process's settings, as a route like this read them before an
+    // instance could be asked: a single-site app's page keeps its site name.
+    expect(first.html).toContain("Process site");
+    expect(first.html).toContain("03:30");
+    expect(runtime.processSiteReads).toBe(1);
+    // Said once, naming the line that makes the route read its own instance.
+    const said = standInWarnings(warn);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain(
+      "publicSiteSettings: async () => (await instance()).publicSiteSettings()"
+    );
+
+    // The same reader again is not said again; another reader is.
+    await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "acme" },
+      reader as Instance
+    );
+    expect(standInWarnings(warn)).toHaveLength(1);
+    await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "globex" },
+      readerWithoutSite(sitePage) as Instance
+    );
+    expect(standInWarnings(warn)).toHaveLength(2);
+  });
+
+  it("a reader that forwards the site-settings read is never warned about", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "acme" },
+      siteInstance(sitePage, "Acme", "Europe/Paris")
+    );
+    // The control: the page did read its site settings.
+    expect(siteReadKeys()).toEqual([["nextly-public-site-settings", "acme"]]);
+    expect(standInWarnings(warn)).toEqual([]);
+  });
+});
+
+describe("a page's blocks shown by their visibility conditions", () => {
+  /** A heading shown only when `conditions` hold for the page's entry. */
+  const shownWhen = (id: string, text: string, conditions: unknown) => ({
+    id,
+    type: "core/heading",
+    version: 1,
+    props: { text, level: "h2" },
+    visibility: { conditions },
+  });
+  const page = (...nodes: Record<string, unknown>[]): BlockDocument =>
+    JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes,
+      })
+    ) as BlockDocument;
+  const base = { collections: ["pages"], field: "content", blocks };
+
+  beforeEach(() => {
+    runtime.shapes.set("collection:pages", [{ name: "title", type: "text" }]);
+  });
+
+  it("draws a block whose conditions hold for the public entry and leaves the other out", async () => {
+    const nextly = instance(
+      page(
+        shownWhen("yes", "Shown to everyone", [
+          [{ field: "title", op: "equals", value: "Public" }],
+        ]),
+        shownWhen("no", "Never shown", [
+          [{ field: "title", op: "equals", value: "Elsewhere" }],
+        ])
+      )
+    );
+    const { html } = await renderedPage(createBlocksPage, base, nextly);
+    expect(html).toContain("Shown to everyone");
+    expect(html).not.toContain("Never shown");
+  });
+
+  it("decides by the entry as the public reads it, never the route's own read", async () => {
+    // The route's row says "Trusted"; the public's says "Public".
+    const { html } = await renderedPage(
+      createBlocksPage,
+      base,
+      instance(
+        page(
+          shownWhen("trusted", "Only for trusted", [
+            [{ field: "title", op: "equals", value: "Trusted" }],
+          ])
+        )
+      )
+    );
+    expect(html).not.toContain("Only for trusted");
+  });
+
+  it("reads the entry once, for the fields its conditions check, though nothing binds it", async () => {
+    const nextly = instance(
+      page(shownWhen("yes", "Shown", [[{ field: "title", op: "exists" }]]))
+    );
+    runtime.reads = [];
+    await renderedPage(createBlocksPage, base, nextly);
+    expect(publicReads(nextly)).toEqual([
+      expect.objectContaining({
+        collection: "pages",
+        select: { id: true, title: true },
+      }),
+    ]);
+    // Cached under the collection's tags, so editing a field a condition
+    // checks refreshes the page and its show-or-hide with it.
+    const { nextlyTags } = await import("nextly/runtime");
+    expect(
+      runtime.reads.some(read =>
+        nextlyTags("pages").every(tag => read.tags.includes(tag))
+      )
+    ).toBe(true);
+  });
+
+  it("reads the field shapes of the collection a bound list draws, for its items' conditions", async () => {
+    // The list's collection is filled from the entry's title ("Public"); the
+    // stored "posts" is only the fallback beside the binding.
+    const nextly = instance(
+      page({
+        id: "loop",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "posts", limit: 1 },
+        bindings: { collection: { $bind: "title" } },
+        slots: {
+          children: [
+            shownWhen("pill", "Featured", [[{ field: "title", op: "exists" }]]),
+          ],
+        },
+      })
+    );
+    await renderedPage(createBlocksPage, base, nextly);
+    // Read only from the stored "posts" before, so the bound list's items
+    // had no shapes and every condition failed closed.
+    expect(runtime.judged).toContain("shapes collection:Public");
+  });
+
+  it("reads the site's zone for a list's item conditions only when one orders a date", async () => {
+    runtime.shapes.set("collection:posts", [
+      { name: "title", type: "text" },
+      { name: "rating", type: "number" },
+      { name: "publishedAt", type: "date" },
+    ]);
+    const listWith = (field: string, op: string, value?: unknown) =>
+      instance(
+        page({
+          id: "loop",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts", limit: 1 },
+          slots: {
+            children: [
+              shownWhen("pill", "Featured", [
+                [
+                  {
+                    field,
+                    op,
+                    ...(value === undefined ? {} : { value }),
+                  },
+                ],
+              ]),
+            ],
+          },
+        })
+      );
+    const siteRead = () =>
+      runtime.tags.some(tags =>
+        nextlySiteSettingsTags().every(tag => tags.includes(tag))
+      );
+    // A text match needs the item's field shapes, never the zone, so it
+    // spends none of the page's budget on the site and its list still draws.
+    runtime.tags = [];
+    const { html } = await renderedPage(
+      createBlocksPage,
+      { ...base, maxQueries: 2 },
+      listWith("title", "equals", "Public")
+    );
+    expect(siteRead()).toBe(false);
+    expect(html).toContain("Featured");
+    // Nor does ordering a number, which compares no day.
+    runtime.tags = [];
+    await renderedPage(
+      createBlocksPage,
+      base,
+      listWith("rating", "greater_than", 3)
+    );
+    expect(siteRead()).toBe(false);
+    // CONTROL: ordering a date reads it.
+    runtime.tags = [];
+    await renderedPage(
+      createBlocksPage,
+      base,
+      listWith("publishedAt", "greater_than", "2026-01-01")
+    );
+    expect(siteRead()).toBe(true);
+  });
+
+  it("prepares a conditioned page three times, never a fourth for metadata's question", async () => {
+    await renderedPage(
+      createBlocksPage,
+      base,
+      instance(
+        page(
+          shownWhen("yes", "Shown", [
+            [{ field: "title", op: "equals", value: "Public" }],
+          ])
+        )
+      )
+    );
+    // Once as stored, once with every conditioned block kept for the reads,
+    // once decided by the entry. Metadata's own question about the Layout
+    // isn't asked by a render, so it prepares nothing more.
+    expect(runtime.pipelineRuns).toBe(3);
+  });
+
+  it("prepares a conditioned page three times for its metadata too, reusing the page kept for its question", async () => {
+    const route = createBlocksPage({
+      ...base,
+      nextly: instance(
+        page(
+          shownWhen("yes", "Shown", [
+            [{ field: "title", op: "equals", value: "Public" }],
+          ])
+        )
+      ) as never,
+      metadata: (_entry, _context, derived) => ({
+        title: derived.title ?? "Page",
+      }),
+    });
+    runtime.pipelineRuns = 0;
+    await route.generateMetadata({ params: { slug: ["about"] } });
+    // The page kept to ask whether it reads anything is the one its reads
+    // are taken from: a fourth preparation would be the same work again.
+    expect(runtime.pipelineRuns).toBe(3);
+  });
+
+  it("leaves out, and reports, a block whose condition checks a field the public can't read", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { html } = await renderedPage(
+      createBlocksPage,
+      base,
+      instance(
+        page(
+          shownWhen("hidden", "Hidden field", [
+            [{ field: "secret", op: "exists" }],
+          ])
+        )
+      )
+    );
+    expect(html).not.toContain("Hidden field");
+    expect(
+      warn.mock.calls.some(([message]) =>
+        String(message).includes("condition-field-unknown")
+      )
+    ).toBe(true);
+  });
+
+  it("describes the page in its metadata by the blocks it draws", async () => {
+    let title: string | undefined;
+    const route = createBlocksPage({
+      ...base,
+      nextly: instance(
+        page(
+          {
+            id: "h1",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Members area", level: "h1" },
+            visibility: {
+              conditions: [
+                [{ field: "title", op: "equals", value: "Elsewhere" }],
+              ],
+            },
+          },
+          {
+            id: "h2",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Public area", level: "h1" },
+            visibility: {
+              conditions: [[{ field: "title", op: "equals", value: "Public" }]],
+            },
+          }
+        )
+      ) as never,
+      metadata: (_entry, _context, derived) => {
+        title = derived.title;
+        return {};
+      },
+    });
+    await route.generateMetadata({ params: { slug: ["about"] } });
+    expect(title).toBe("Public area");
+  });
+});
+
+describe("the route's log of conditions it can't check", () => {
+  it("counts blocks, not conditions, and names each code", async () => {
+    runtime.shapes.set("collection:pages", [{ name: "title", type: "text" }]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const content = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "one",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Two bad conditions", level: "h2" },
+            visibility: {
+              conditions: [
+                [
+                  { field: "secret", op: "exists" },
+                  { field: "other", op: "exists" },
+                ],
+              ],
+            },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks },
+      instance(content)
+    );
+    const said = warn.mock.calls
+      .map(([message]) => String(message))
+      .find(message => message.includes("visibility conditions"));
+    expect(said).toContain("1 block(s)");
+    expect(said).toContain("condition-field-unknown x2");
+  });
+});
+
+// Pages here outrun their caps, and a route logs that after a short quiet.
+afterAll(afterOverrunLines);

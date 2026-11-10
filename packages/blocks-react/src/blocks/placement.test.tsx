@@ -150,6 +150,8 @@ const VARIANTS: readonly Variant[] = [
     without: ["main"],
   },
   { name: "Collection loop", type: "core/collection-loop", props: {}, ...FLOW },
+  // A plain `div` around the entry's own blocks.
+  { name: "Entry content", type: "core/entry-content", props: {}, ...FLOW },
   { name: "Spacer", type: "core/spacer", props: {}, ...FLOW },
   { name: "Heading", type: "core/heading", props: { text: "Hi" }, ...FLOW },
   {
@@ -197,6 +199,15 @@ const VARIANTS: readonly Variant[] = [
     type: "core/embed",
     props: {},
     is: [],
+    without: [],
+  },
+  // A navigation landmark of links in a disclosure: interactive whether or
+  // not its passage has headings yet, so it is never offered inside a link.
+  {
+    name: "Table of contents",
+    type: "core/table-of-contents",
+    props: {},
+    is: ["flow", "interactive"],
     without: [],
   },
   { name: "List", type: "core/list", props: { items: ["a"] }, ...FLOW },

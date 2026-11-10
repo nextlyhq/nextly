@@ -74,7 +74,11 @@ import type { RetiredExposures } from "./retired-exposures";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { hashId } from "./style/node-class";
 import { mintDomId, remapIdReferences } from "./tree";
-import { isConditionGated } from "./visibility";
+import {
+  conditionGatesOf,
+  isConditionGated,
+  placementGatesOf,
+} from "./visibility";
 
 /**
  * Why an instance was left standing instead of being replaced by its
@@ -274,6 +278,18 @@ export interface ResolveComponentOptions {
    * leaves it off, and its output carries no map.
    */
   exposures?: boolean;
+  /**
+   * What happens to an instance carrying visibility conditions. `"stand"`,
+   * the default, leaves it standing, gate and all, for the pass that prunes
+   * hidden nodes to remove: a reader that decides no condition composes
+   * nothing it will not serve. `"carry"` expands it, and every root that
+   * replaces it carries the instance's conditions joined to its own, for a
+   * reader that decides each condition against the entry or the list item:
+   * the composed tree then shows exactly where the instance would have.
+   *
+   * @experimental Settles with the editor's condition controls.
+   */
+  conditioned?: "stand" | "carry";
 }
 
 /** One instance that was left standing, and why. */
@@ -961,6 +977,7 @@ export function resolveComponentInstances(
     maxNodes: limits.maxNodes,
     maxComposedDepth: options.maxComposedDepth ?? MAX_COMPOSED_DEPTH,
     exposures: options.exposures === true,
+    carryConditions: options.conditioned === "carry",
     // What is LEFT under the cap, not the cap itself. `maxNodes` bounds a
     // document, and the composed tree IS the document every later pass walks —
     // the style compiler, the renderer, the SEO derivation. Starting a fresh
@@ -1010,6 +1027,8 @@ interface ResolveRun {
   maxComposedDepth: number;
   /** Whether composed nodes record the exposures that feed them. */
   exposures: boolean;
+  /** Whether an instance carrying conditions is expanded, carrying them. */
+  carryConditions: boolean;
   /** Nodes this resolution may still produce, across every instance. */
   budget: number;
   /**
@@ -1671,7 +1690,7 @@ function expandInstance(
   // the later pass sees a tree with nothing left to prune. That is the
   // direction `visibility.ts` names as the unrecoverable one — content shown
   // to a reader it was withheld from cannot be taken back.
-  if (isConditionGated(instance)) return [instance];
+  if (isConditionGated(instance) && !run.carryConditions) return [instance];
 
   const componentId = componentIdOf(instance);
   if (componentId === undefined) {
@@ -1810,7 +1829,43 @@ function inlinedDefinition(
     ctx
   );
   if (inlined === null) return null;
-  return withInstanceDevices(inlined, instance);
+  return withInstanceConditions(
+    withInstanceDevices(inlined, instance),
+    instance
+  );
+}
+
+/**
+ * Carry an instance's visibility conditions onto the roots that replace it,
+ * for a resolution that expands conditioned instances (`conditioned:
+ * "carry"`). A root shows where the instance would have AND where it would
+ * itself, so each of the instance's gates joins the root's own as a gate of
+ * its own (`within`), judged separately rather than multiplied into the
+ * root's groups: the product of two ORs grows with every nesting level, and
+ * past the per-block limit would hide a block whose conditions all hold.
+ *
+ * An instance gated by a shape nothing can read passes that shape on as a
+ * gate, so each root fails closed as the instance would have. A root whose
+ * own envelope nothing can read is left as it is, still gated by it.
+ */
+function withInstanceConditions(
+  roots: ResolvedBlockNode[],
+  instance: ResolvedBlockNode
+): ResolvedBlockNode[] {
+  const carried = conditionGatesOf(instance.visibility);
+  if (carried.length === 0) return roots;
+  return roots.map(root => {
+    const own: unknown = root.visibility;
+    if (own !== undefined && own !== null && !isPlainRecord(own)) return root;
+    const earlier = isPlainRecord(own) ? placementGatesOf(own) : [];
+    const kept: NodeVisibility = root.visibility ?? {};
+    // A render-time key, outside the stored visibility's type: only this
+    // pass writes it, on the document being drawn.
+    const visibility: NodeVisibility = Object.assign({}, kept, {
+      within: [...earlier, ...carried],
+    });
+    return { ...root, visibility };
+  });
 }
 
 /**
@@ -3277,7 +3332,7 @@ function cloneDefinitionNode(
   // The node stands, gated, exactly as the host case leaves it standing — the
   // pass that prunes it wants it there — and its planned slot content is given
   // back, because nothing will place it.
-  if (!survivesGating(node, plan)) {
+  if (!survivesGating(node, plan, ctx.run)) {
     if (plan !== undefined) refundPlannedSlots(plan, ctx.run);
     return [scoped];
   }
@@ -3344,7 +3399,7 @@ function composeSurvivingSlots(
     if (!chargePrepassEntry(work, ctx.run)) return;
     if (!isPlainRecord(node) || typeof node.id !== "string") continue;
     const plan = ctx.plans.get(node.id);
-    if (!survivesGating(node, plan)) {
+    if (!survivesGating(node, plan, ctx.run)) {
       // Refunded for the OVERRIDE only, because that is the one the clone
       // refunds. The two ways a node stops being served end differently there:
       // an override that hides emits nothing and the charge comes back, while
@@ -3637,10 +3692,15 @@ function composeOwnedSlots(
  */
 function survivesGating(
   node: ResolvedBlockNode,
-  plan: NodePlan | undefined
+  plan: NodePlan | undefined,
+  run: ResolveRun
 ): boolean {
   if (plan?.visible === false) return false;
   if (plan?.visible === true) return true;
+  // A resolution carrying conditions expands a gated instance at any depth,
+  // as `expandInstance` does at the page's own level, and hands the gate to
+  // the roots that replace it.
+  if (run.carryConditions && node.type === COMPONENT_INSTANCE_TYPE) return true;
   return !isConditionGated(node);
 }
 
@@ -3966,12 +4026,54 @@ function placedContent(
  * same suffix lands on the same node on every render.
  */
 function claimDomId(run: ResolveRun, base: string): string {
-  if (!run.takenDomIds.has(base)) return heldDomId(run, base);
+  return heldDomId(run, freeDomId(base, run.takenDomIds));
+}
+
+/**
+ * `base`, or the first spelling of it (`base-2`, `base-3`, ...) `taken` does
+ * not hold. Deterministic, so the same claims made in the same order land on
+ * the same spellings on every render.
+ */
+function freeDomId(base: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(base)) return base;
   // Terminates: the set is finite and the suffix strictly increases.
   for (let n = 2; ; n += 1) {
     const candidate = `${base}-${n}`;
-    if (!run.takenDomIds.has(candidate)) return heldDomId(run, candidate);
+    if (!taken.has(candidate)) return candidate;
   }
+}
+
+/**
+ * Take a minted DOM id outside a composition run: `base`, or the first
+ * spelling of it nothing in `taken` uses, recorded in `taken`. The claim a
+ * component's inlined nodes make (`claimDomId`), for another composition
+ * drawing content into a host page, such as an entry's blocks drawn inside
+ * its template, so neither ever renders an id the host already publishes.
+ */
+export function claimedDomId(base: string, taken: Set<string>): string {
+  const id = freeDomId(base, taken);
+  taken.add(id);
+  return id;
+}
+
+/**
+ * The node ids and DOM ids a host forest already holds, read at most
+ * `maxNodes` entries deep: what a composition drawing content into it mints
+ * against, read by the same walk the component resolver surveys a host by.
+ */
+export function hostIdsIn(
+  nodes: readonly unknown[],
+  maxNodes: number
+): {
+  readonly ids: Set<string>;
+  readonly domIds: Set<string>;
+  /** How many entries the walk read, at most `maxNodes`. */
+  readonly count: number;
+  /** Whether the forest holds more than `maxNodes` entries. */
+  readonly truncated: boolean;
+} {
+  const { ids, domIds, count, truncated } = surveyHost(nodes, maxNodes);
+  return { ids, domIds, count, truncated };
 }
 
 /** Take a DOM id, recording it so a refused expansion can give it back. */
@@ -4001,18 +4103,37 @@ function mintScopedId(
   instanceId: string,
   definitionNodeId: string
 ): string {
-  const base = `${SCOPED_ID_PREFIX}${hashId(`${instanceId} ${definitionNodeId}`)}`;
-  if (!run.taken.has(base)) {
-    run.taken.add(base);
-    run.minted.push(base);
+  const minted = composedNodeId(instanceId, definitionNodeId, run.taken);
+  run.minted.push(minted);
+  return minted;
+}
+
+/**
+ * The id a node drawn inside another wears for one render: a digest of the
+ * node it is drawn inside (`scopeId`) and its own id, disambiguated against
+ * every id in `taken` and then added to it. Deterministic, so the same
+ * document and sources mint the same ids in the same order on every render.
+ * A component's inlined nodes are minted by it, and so are an entry's blocks
+ * drawn inside its template's Entry content block, so neither can take an
+ * id the document already holds.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export function composedNodeId(
+  scopeId: string,
+  nodeId: string,
+  taken: Set<string>
+): string {
+  const base = `${SCOPED_ID_PREFIX}${hashId(`${scopeId} ${nodeId}`)}`;
+  if (!taken.has(base)) {
+    taken.add(base);
     return base;
   }
   // Terminates: `taken` is finite and the suffix strictly increases.
   for (let n = 2; ; n += 1) {
     const candidate = `${base}-${n}`;
-    if (run.taken.has(candidate)) continue;
-    run.taken.add(candidate);
-    run.minted.push(candidate);
+    if (taken.has(candidate)) continue;
+    taken.add(candidate);
     return candidate;
   }
 }

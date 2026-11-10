@@ -17,8 +17,8 @@
  *
  * @module runtime/routing/declared-fields
  */
-import type { FieldConfig } from "../../collections/fields/types";
 import { getService, isServicesRegistered } from "../../di/service-access";
+import { withSystemTextFields } from "../../domains/collections/system-text-fields";
 import { buildEnvelope } from "../../domains/webhooks/envelope";
 import { expandComponentFields } from "../../domains/webhooks/expand-component-fields";
 import {
@@ -33,17 +33,43 @@ export interface SourceEntity {
   slug: string;
 }
 
-/** The fields the registry holds for the source, or `undefined` when it has no such source. */
-async function declaredFields(
+/** What the registry holds for a source that a read of it is shaped by. */
+interface Declaration {
+  readonly fields: readonly SensitiveFieldSource[];
+  /**
+   * The timestamps a read of it returns: a collection's entries carry
+   * `createdAt` and `updatedAt` unless it turns timestamps off, as its type
+   * and schema are generated; a Single's document carries `updatedAt` alone.
+   */
+  readonly timestamps: readonly ("createdAt" | "updatedAt")[];
+}
+
+/** What the registry holds for the source, or `undefined` when it has no such source. */
+async function declarationOf(
   source: SourceEntity
-): Promise<readonly FieldConfig[] | undefined> {
-  const record =
-    source.kind === "collection"
-      ? await getService("collectionRegistryService").getCollectionBySlug(
-          source.slug
-        )
-      : await getService("singleRegistryService").getSingleBySlug(source.slug);
-  return record?.fields;
+): Promise<Declaration | undefined> {
+  if (source.kind === "collection") {
+    const record = await getService(
+      "collectionRegistryService"
+    ).getCollectionBySlug(source.slug);
+    if (record === null) return undefined;
+    return {
+      // A collection's own `title` and `slug` are read with every entry. A
+      // plugin's collection holds only the fields it declares, as its writes
+      // treat it, so nothing is added for one.
+      fields:
+        record.admin?.isPlugin === true
+          ? record.fields
+          : withSystemTextFields(record.fields),
+      timestamps: record.timestamps === false ? [] : ["createdAt", "updatedAt"],
+    };
+  }
+  const record = await getService("singleRegistryService").getSingleBySlug(
+    source.slug
+  );
+  return record === null
+    ? undefined
+    : { fields: record.fields, timestamps: ["updatedAt"] };
 }
 
 /**
@@ -55,12 +81,29 @@ async function declaredFields(
 export async function expandedFields(
   source: SourceEntity
 ): Promise<readonly SensitiveFieldSource[] | undefined> {
-  const fields = await declaredFields(source);
-  if (fields === undefined) return undefined;
+  return (await expandedDeclaration(source))?.fields;
+}
+
+/**
+ * The source's expanded fields ({@link expandedFields}), and whether its
+ * entries carry timestamps, from one registry read.
+ */
+export async function expandedDeclaration(source: SourceEntity): Promise<
+  | {
+      readonly fields: readonly SensitiveFieldSource[];
+      readonly timestamps: readonly ("createdAt" | "updatedAt")[];
+    }
+  | undefined
+> {
+  const declaration = await declarationOf(source);
+  if (declaration === undefined) return undefined;
   const fieldGroups = getService("fieldGroupDataService");
-  return expandComponentFields(fields, slug =>
-    fieldGroups.getComponentFields(slug)
-  );
+  return {
+    fields: await expandComponentFields(declaration.fields, slug =>
+      fieldGroups.getComponentFields(slug)
+    ),
+    timestamps: declaration.timestamps,
+  };
 }
 
 const NONE: ReadonlySet<string> = new Set();

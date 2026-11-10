@@ -262,6 +262,56 @@ describe("migrate --dry-run", () => {
     });
   });
 
+  it("names an applied migration the folder lacks, as the refusal a real run makes, exit 3", async () => {
+    const repo = new SchemaEventsRepository(testDb.db, "sqlite");
+    await repo.insertEvent({
+      eventType: "file_apply",
+      status: "applied",
+      source: "cli-migrate",
+      filename: "20260102_000000_000_newer.sql",
+      sha256: "a".repeat(64),
+    });
+
+    await preview();
+
+    expect(
+      lines.filter(line =>
+        line.includes("would refuse before applying anything")
+      )
+    ).toEqual([
+      expect.stringMatching(
+        /^ {2}✖ a real run would refuse before applying anything \(exit code 3\): .*20260102_000000_000_newer\.sql/
+      ),
+    ]);
+  });
+
+  it("names an unresolved attempt at a file still in the folder, as the refusal a real run makes", async () => {
+    // Run outside a transaction, so the attempt may have stopped part-way.
+    writeFileSync(
+      join(dir, "20260101_000000_000_init.sql"),
+      "-- nextly:no-transaction\n-- UP\nSELECT 1;"
+    );
+    const repo = new SchemaEventsRepository(testDb.db, "sqlite");
+    await repo.insertEvent({
+      eventType: "file_apply",
+      status: "failed",
+      source: "cli-migrate",
+      filename: "20260101_000000_000_init.sql",
+    });
+
+    await preview();
+
+    expect(
+      lines.filter(line =>
+        line.includes("would refuse before applying anything")
+      )
+    ).toEqual([
+      expect.stringMatching(
+        /^ {2}✖ a real run would refuse before applying anything \(exit code 1\): .*20260101_000000_000_init\.sql/
+      ),
+    ]);
+  });
+
   it("reads an absent ledger as nothing applied, and creates none", async () => {
     testDb.sqlite.exec("DROP TABLE nextly_schema_events");
 

@@ -228,6 +228,42 @@ export { PLUGIN_CATEGORIES, isPluginCategory, pluginAdminSlug } from "nextly";
 export { isLocaleSelector } from "nextly";
 
 /**
+ * Where an entry is served, and what names it, as the core answers both.
+ * @experimental `previewUrlFromTemplate` fills a path template such as
+ *   `/blog/{slug}` from an entry, the way the admin's preview and page search
+ *   do, so a plugin holding or linking an entry's address names the one the
+ *   host serves rather than a second spelling of it. `readableTitleText`
+ *   answers whether a title field's value can name an entry, and as what
+ *   text, the way the admin and the activity feed read it. Intended to be
+ *   stable; `plugin-page-builder`'s address claims exercise both, and they
+ *   graduate per D55 once that ships in a release.
+ */
+export { previewUrlFromTemplate, readableTitleText } from "nextly/config";
+
+/**
+ * @experimental A field's key as the admin's screens word it, where the
+ * field carries no label of its own: `humanizeFieldName("membersOnly")` is
+ * "Members Only". Core's one humaniser, from a module that imports nothing,
+ * so a plugin's server code names a field as the admin does. The same
+ * function `./admin` offers a plugin's admin code. `plugin-page-builder`
+ * names a template's blocks fields with it.
+ */
+export { humanizeFieldName } from "nextly/field-label";
+
+/**
+ * Which entries have changes waiting to be published.
+ * @experimental `PENDING_CHANGE_KEY` — the reserved filter key that keeps,
+ *   in a `where` handed to `ctx.services.collections`, only the entries whose
+ *   working draft differs from their published row. A plugin that must not
+ *   publish someone's unfinished edits as a side effect of its own write asks
+ *   the core with this key rather than spelling it, so it names the key the
+ *   query layer reads. Held experimental with the other workflow keys until
+ *   the dashboard's Needs attention card is complete; `plugin-page-builder`
+ *   exercises it when a template delete unlinks its copies.
+ */
+export { PENDING_CHANGE_KEY } from "nextly/reserved-filter-keys";
+
+/**
  * Core plugin contract types.
  * @public `PluginDefinition`, `PluginContributions`, `PluginContext`,
  *   `PluginPermission`, `PermissionSlug`, `ServiceOpts`, `AuthUser`.
@@ -355,8 +391,10 @@ export type {
  *   `TxOption`. Held experimental until a first-party plugin signs people in
  *   with them (see STABILITY.md). `PluginReceivedWebhooks`
  *   (`ctx.security.webhooks`), verifying a received webhook against a
- *   `standardWebhooks` or a plugin's own `InboundWebhookScheme`, is
- *   experimental too, until a first-party plugin receives webhooks with it.
+ *   `standardWebhooks` or a plugin's own `InboundWebhookScheme` and claiming
+ *   it once (`claimDelivery`, with `ClaimDeliveryOptions`, `DeliveryClaim`,
+ *   `DeliveryClaimResult` and `VerifiedWebhook`), is experimental too, until
+ *   a first-party plugin receives webhooks with it.
  */
 export { PasswordTooLongError, standardWebhooks } from "nextly";
 export type {
@@ -370,6 +408,10 @@ export type {
   SecretData,
   TxOption,
   PluginReceivedWebhooks,
+  ClaimDeliveryOptions,
+  DeliveryClaim,
+  DeliveryClaimResult,
+  VerifiedWebhook,
   InboundWebhookScheme,
   InboundWebhookDelivery,
   InboundWebhookReading,
@@ -712,6 +754,25 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental Whether a person may delete one entry, asked of the delete's
+ *   own gate without deleting it. Graduates with the stored reads above.
+ *
+ * `ctx.caller.can(action, resource, { anyEntry: true })` answers yes for a
+ *   rule that lets a person delete only some entries, so a plugin that does
+ *   work before a delete cannot rely on it. `mayDeleteEntry` runs the very
+ *   gate the collection delete runs before its hooks: the person's grant, and
+ *   a rule's row filter matched against this entry, in every language it
+ *   holds. No hook runs, nothing is written, and an entry that does not exist
+ *   answers `false`, as one the person may not delete. `mayWriteEntry` asks
+ *   the same of a write: the update gate, the lifecycle gate only where the
+ *   status the write names moves the document into or out of published (as
+ *   core's update decides it), and each named field's update rule, for an
+ *   entry or a Single.
+ */
+export { mayDeleteEntry, mayWriteEntry } from "nextly";
+export type { PluginDeleteCheck, PluginWriteCheck } from "nextly";
+
+/**
  * Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.
  * The component-registration runtime lives on `@nextlyhq/plugin-sdk/admin`.
  *
@@ -731,6 +792,51 @@ export type {
   PluginNavSection,
   PluginCollectionView,
   PluginMenuItem,
+} from "nextly";
+
+/**
+ * @experimental A collection's document screen, changed by a plugin for that
+ * collection only (`contributes.admin.views[slug]`):
+ *
+ * - `documentActions` hides a built-in action (`"hidden"`) or replaces it
+ *   with the plugin's own component (`{ component, label? }`), for the
+ *   `OverridableDocumentAction`s `"delete"` and `"unpublish"`. A replaced
+ *   action keeps its row, the permission it needs and every reason it cannot
+ *   run, and opens the component instead of the built-in write.
+ * - `panelSections` adds `PluginPanelSection`s, `{ title, component }`, to the
+ *   document panel after Details, under a heading the admin draws.
+ *
+ * Collections only; a Single's screen is unchanged. Boot refuses an action
+ * that cannot be overridden, an override or section with nothing to draw, and
+ * two plugins overriding one action on one collection. The props the
+ * components receive are on `@nextlyhq/plugin-sdk/admin`.
+ *
+ * ```ts
+ * contributes: {
+ *   admin: {
+ *     views: {
+ *       layouts: {
+ *         documentActions: {
+ *           unpublish: "hidden",
+ *           delete: {
+ *             component: "@acme/plugin-layouts/admin#RemoveLayoutDialog",
+ *             label: "Remove layout…",
+ *           },
+ *         },
+ *         panelSections: [
+ *           { title: "Used by", component: "@acme/plugin-layouts/admin#LayoutUsage" },
+ *         ],
+ *       },
+ *     },
+ *   },
+ * },
+ * ```
+ */
+export type {
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
+  PluginDocumentActionOverrides,
+  PluginPanelSection,
 } from "nextly";
 
 /**
@@ -763,7 +869,8 @@ export type {
  * Contributions a plugin adds to admin places (`contributes.admin.contributions`):
  * blocks, tabs, list columns, row and bulk actions and side panel sections,
  * each ordered at its place, with a declared visibility rule and permission.
- * @experimental Nothing in the admin draws them yet (see STABILITY.md).
+ * @experimental The admin draws blocks and tabs at four places so far (see
+ * STABILITY.md).
  */
 export type {
   AdminBlockContribution,
@@ -807,6 +914,36 @@ export type {
   InTransactionContext,
   InTransactionHandler,
 } from "nextly";
+
+/**
+ * @experimental `recordAdvisoryNotice(notice)` — tell the person whose write
+ * this is something TRUE about the state it leaves behind, from a hook that
+ * runs inside the write's request (an `after*` hook, say): "this page now uses
+ * the site's default layout". The write still reports success, and the admin
+ * shows the notice beside it as its own advisories are shown, in an info
+ * toast, never in failure wording. Throwing from a hook is how a hook says
+ * something FAILED; this is for what did not.
+ *
+ * `AdvisoryNotice` is what it takes: `phase` (the hook's phase), `collection`
+ * (the slug, or `single:<slug>`), a stable `code` of the plugin's own, the
+ * whole `message`, and the `entryId` it is about when there is one. The
+ * message is shown as written: put nothing in it the person could not already
+ * see. A no-op outside a request, where there is nobody to tell. Core's own,
+ * re-exported deliberately; intended to stay as it is once a first-party
+ * plugin has used it in production.
+ *
+ * ```ts
+ * // In an afterChange hook, with `recordAdvisoryNotice` imported from here:
+ * recordAdvisoryNotice({
+ *   phase: "afterChange",
+ *   collection: "pages",
+ *   code: "LAYOUT_FELL_BACK",
+ *   message: "This page now uses the site's default layout.",
+ *   entryId: id,
+ * });
+ * ```
+ */
+export { recordAdvisoryNotice, type AdvisoryNotice } from "nextly";
 
 /**
  * Event bus (D8/D51) — `ctx.events` surface + types.

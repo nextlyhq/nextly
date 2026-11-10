@@ -11,6 +11,10 @@
  * dynamic-import race** (the P5 gap) — completing the string-path component
  * registry.
  *
+ * Declared contributions to admin places (`contributes.admin.contributions`)
+ * add each component they name: a block's, a tab's or a side panel section's,
+ * a drawn column's cell, and the component an action opens.
+ *
  * Menu items carry only a route (`to`), not a component, so they contribute no
  * paths. A widget contributes one only where it SHIPS a component: the
  * declarative archetypes name an archetype and a query, and the host draws them
@@ -47,6 +51,7 @@ export type ComponentMapUse =
   | "collection view"
   | "document view"
   | "slot"
+  | "contribution"
   | "field type"
   | "block editor"
   | "block editor entry";
@@ -113,7 +118,8 @@ function collectAdminSlotPaths(admin: PluginAdminContributions): string[] {
 /**
  * Collect every admin `ComponentPath` a plugin contributes that the admin
  * can resolve by string: pages, settings, per-collection views, header and
- * schema-builder and form-toolbar slots, and field-type editor components.
+ * schema-builder and form-toolbar slots, declared contributions to admin
+ * places, and field-type editor components.
  * Behavioral UI (everything but field types) exists only for an ENABLED
  * plugin; field-type editors are collected regardless, because a disabled
  * plugin keeps its collections and their fields — admin-meta serializes
@@ -201,7 +207,34 @@ function collectAdminEntries(
       entry(view.component, owner, "document view")
     ),
     ...collectAdminSlotPaths(admin).map(tagged("slot")),
+    ...collectContributionPaths(admin.contributions).map(
+      tagged("contribution")
+    ),
   ];
+}
+
+/**
+ * Every component the plugin's declared contributions to admin places name:
+ * a block's, a tab's and a side panel section's `component`, a column's when
+ * it draws its own cell rather than showing a field, and the component a row
+ * or bulk action opens. The admin resolves each by this string when it draws
+ * the place, so a plugin whose only admin UI is one of these needs its module
+ * in the map as much as one with a page; without it the place draws nothing.
+ *
+ * Read as plain JavaScript hands it over, as a widget's is, since generation
+ * runs before startup checks the declarations: an entry naming no component
+ * is skipped here and refused, by name, when the app starts.
+ */
+function collectContributionPaths(contributions: unknown): string[] {
+  if (!Array.isArray(contributions)) return [];
+  return contributions.flatMap((contribution: unknown): string[] => {
+    if (!isRecord(contribution)) return [];
+    const action = contribution.action;
+    const opened = isRecord(action) ? action.open : undefined;
+    return [contribution.component, opened].filter(
+      (path): path is string => typeof path === "string" && path.trim() !== ""
+    );
+  });
 }
 
 /**
@@ -323,6 +356,21 @@ function collectCollectionOwnViewPaths(
 }
 
 /**
+ * What a collection's document screen resolves by string beyond its views:
+ * the component a replaced document action opens, and each panel section's.
+ * A hidden action names none.
+ */
+function documentSurfacePaths(
+  view: NonNullable<PluginAdminContributions["views"]>[string]
+): string[] {
+  const replacements = Object.values(view.documentActions ?? {}).map(
+    override => (typeof override === "object" ? override.component : "")
+  );
+  const sections = (view.panelSections ?? []).map(section => section.component);
+  return [...replacements, ...sections].filter(Boolean);
+}
+
+/**
  * Every override and injection point a plugin declares per collection.
  *
  * Its own function rather than two nested loops inline, because the six slots
@@ -349,6 +397,7 @@ function collectCollectionViewPaths(
     for (const documentView of view.documentViews ?? []) {
       paths.push(documentView.component);
     }
+    paths.push(...documentSurfacePaths(view));
   }
   return paths;
 }
@@ -485,9 +534,16 @@ export function componentUses(
   // map as a plugin's do.
   siteDashboard?: unknown,
   /** The site config's own collections, whose own views the map lists beside the plugins'. */
-  siteCollections?: readonly CollectionConfig[]
+  siteCollections?: readonly CollectionConfig[],
+  /**
+   * Contributed components whose module has no file behind it
+   * (`unbackedContributions`), left out: importing a module that is not there
+   * would stop the app compiling, where a contribution left out of the map
+   * only draws its place's fallback.
+   */
+  unbacked?: ReadonlySet<string>
 ): ComponentMapEntry[] {
-  return [
+  const uses = [
     ...plugins.flatMap(plugin => collectAdminComponentEntries(plugin)),
     ...siteWidgetEntries(siteDashboard),
     ...siteCollectionViewEntries(siteCollections),
@@ -496,6 +552,13 @@ export function componentUses(
     // import -- the same guarantee admin contributions already have.
     ...collectBlockEditorEntries(plugins),
   ];
+  // Only a contribution is left out: every other use keeps its path, so a
+  // missing widget component still reaches the checks that name its card.
+  return unbacked === undefined || unbacked.size === 0
+    ? uses
+    : uses.filter(
+        each => !(each.use === "contribution" && unbacked.has(each.path))
+      );
 }
 
 /**
@@ -516,10 +579,17 @@ export function componentImportMapEntries(
   plugins: readonly PluginDefinition[],
   siteDashboard?: unknown,
   /** The site config's own collections, whose own views the map lists beside the plugins'. */
-  siteCollections?: readonly CollectionConfig[]
+  siteCollections?: readonly CollectionConfig[],
+  /** Contributed components left out, as {@link componentUses} leaves them out. */
+  unbacked?: ReadonlySet<string>
 ): ComponentMapEntry[] {
   const byPath = new Map<string, ComponentMapEntry>();
-  for (const each of componentUses(plugins, siteDashboard, siteCollections)) {
+  for (const each of componentUses(
+    plugins,
+    siteDashboard,
+    siteCollections,
+    unbacked
+  )) {
     const kept = byPath.get(each.path);
     if (
       kept === undefined ||
@@ -536,11 +606,15 @@ export function componentImportMapPaths(
   plugins: readonly PluginDefinition[],
   siteDashboard?: unknown,
   /** The site config's own collections, whose own views the map lists beside the plugins'. */
-  siteCollections?: readonly CollectionConfig[]
+  siteCollections?: readonly CollectionConfig[],
+  unbacked?: ReadonlySet<string>
 ): string[] {
-  return componentImportMapEntries(plugins, siteDashboard, siteCollections).map(
-    each => each.path
-  );
+  return componentImportMapEntries(
+    plugins,
+    siteDashboard,
+    siteCollections,
+    unbacked
+  ).map(each => each.path);
 }
 
 /**
@@ -717,12 +791,15 @@ export function buildComponentImportMap(
   configImport?: string,
   siteDashboard?: unknown,
   /** The site config's own collections, whose own views the map lists beside the plugins'. */
-  siteCollections?: readonly CollectionConfig[]
+  siteCollections?: readonly CollectionConfig[],
+  /** Contributed components with no file behind them, left out of the map. */
+  unbacked?: ReadonlySet<string>
 ): string {
   const entries = componentImportMapEntries(
     plugins,
     siteDashboard,
-    siteCollections
+    siteCollections,
+    unbacked
   );
   const blockEditor = blockEditorHandOff(plugins, entries);
   // An editor entry exports block definitions, not a component, so it is
@@ -754,7 +831,7 @@ export function buildComponentImportMap(
 
   const lines: string[] = [HEADER, ""];
   if (paths.length > 0) {
-    lines.push('import { registerComponents } from "@nextlyhq/admin";');
+    lines.push('import { registerComponentMap } from "@nextlyhq/admin";');
   }
   if (blockEditor.used) {
     lines.push(
@@ -807,7 +884,11 @@ export function buildComponentImportMap(
       : AGREEMENT_CHECK
   );
   lines.push("");
-  if (paths.length > 0) lines.push("registerComponents(registered);");
+  // Registered as the app's map rather than one plugin's components: once it
+  // has run, nothing more is on its way, so a component still missing draws
+  // its fallback rather than loading. A map with nothing in it registers
+  // nothing, and no surface waits on a component it never named.
+  if (paths.length > 0) lines.push("registerComponentMap(registered);");
   if (blockEditor.used) {
     // The block inspectors are in `registered` too, which keeps them
     // resolvable by path like any component; they are handed over here as
@@ -900,9 +981,11 @@ export function buildComponentPathsModule(
   plugins: readonly PluginDefinition[],
   siteDashboard?: unknown,
   /** The site config's own collections, whose own views the map lists beside the plugins'. */
-  siteCollections?: readonly CollectionConfig[]
+  siteCollections?: readonly CollectionConfig[],
+  /** Left out of the list as the map leaves them out, so the two agree. */
+  unbacked?: ReadonlySet<string>
 ): string {
-  return `${PATHS_HEADER}\n\n${pathListExport(componentImportMapPaths(plugins, siteDashboard, siteCollections))}\n`;
+  return `${PATHS_HEADER}\n\n${pathListExport(componentImportMapPaths(plugins, siteDashboard, siteCollections, unbacked))}\n`;
 }
 
 /**
@@ -921,7 +1004,9 @@ export function buildImportMapArtifacts(
   configImport?: string,
   siteDashboard?: unknown,
   /** The site config's own collections, whose own views the map lists beside the plugins'. */
-  siteCollections?: readonly CollectionConfig[]
+  siteCollections?: readonly CollectionConfig[],
+  /** Contributed components with no file behind them, left out of both files. */
+  unbacked?: ReadonlySet<string>
 ): { path: string; code: string }[] {
   const dir = dirname(typesOutputPath);
   return [
@@ -931,12 +1016,18 @@ export function buildImportMapArtifacts(
         plugins,
         configImport,
         siteDashboard,
-        siteCollections
+        siteCollections,
+        unbacked
       ),
     },
     {
       path: join(dir, COMPONENT_PATHS_FILENAME),
-      code: buildComponentPathsModule(plugins, siteDashboard, siteCollections),
+      code: buildComponentPathsModule(
+        plugins,
+        siteDashboard,
+        siteCollections,
+        unbacked
+      ),
     },
   ];
 }

@@ -38,13 +38,21 @@ export function addressClaimsCollection(): CollectionConfig {
         required: true,
         unique: true,
       }),
-      text({ name: "kind", label: "Kind", required: true }),
+      // Indexed: the waiting report pages and counts by kind alone, and the
+      // lock rows kept for every address ever claimed outgrow the waits.
+      text({ name: "kind", label: "Kind", required: true, index: true }),
       text({ name: "locale", label: "Locale" }),
       // The address as the key spells it, so a report reads it back without
       // parsing keys. Long text, so an address of any length fits.
       textarea({ name: "path", label: "Path" }),
-      // Indexed because releasing a document's claims finds them by holder.
-      text({ name: "holderCollection", label: "Holder collection" }),
+      // Indexed because releasing a document's claims finds them by holder,
+      // and the addresses listed for pre-rendering are those of entry
+      // holders' collections.
+      text({
+        name: "holderCollection",
+        label: "Holder collection",
+        index: true,
+      }),
       text({ name: "holderId", label: "Holder id", index: true }),
       // For an address claim, the stored key of the space that would hold
       // it, so a list paginating there finds the addresses already inside.

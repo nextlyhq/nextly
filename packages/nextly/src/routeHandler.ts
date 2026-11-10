@@ -153,6 +153,7 @@ import {
 import { genericPublicMessage } from "./errors/error-codes";
 import { NextlyError } from "./errors/nextly-error";
 import { retryAfterHeader } from "./errors/retry-after";
+import { ruleCouldNotRunIn } from "./errors/rule-could-not-run";
 import {
   currentFlattenedErrors,
   logFlattenedErrors,
@@ -184,6 +185,7 @@ import {
   contributionAudienceFor,
   NOBODY,
 } from "./plugins/contribution-audience";
+import { assertDocumentSurfaces } from "./plugins/document-surfaces";
 import { assertNoRemovedWidgetKeys } from "./plugins/removed-widget-keys";
 import {
   pluginRouteAuthRequired,
@@ -1741,15 +1743,20 @@ async function serveServiceRequest(
       if (servesVisitor(service, method) && carriesNoCredential(req)) {
         await ensureServicesInitialized();
       }
-      const authResult = await resolveAuthorization(
-        req,
-        service,
-        method,
-        operation,
-        routeParams,
-        httpMethod,
-        entryInPath
-      );
+      let authResult: Awaited<ReturnType<typeof resolveAuthorization>>;
+      try {
+        authResult = await resolveAuthorization(
+          req,
+          service,
+          method,
+          operation,
+          routeParams,
+          httpMethod,
+          entryInPath
+        );
+      } catch (error) {
+        return gateRuleCouldNotRun(req, error);
+      }
       if (isErrorResponse(authResult)) {
         return refuseRequest(req, method, authResult);
       }
@@ -2273,6 +2280,25 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
  * belong to one caller, the refusal does too: a shared cache replaying one
  * person's 401 or 403 to another hides from them what they may read.
  */
+/**
+ * The answer for a route whose gate asked a rule that could not run, its own
+ * query having waited out the bound for a database connection: 503 with the
+ * rule's subject and the retry hint, built and RETURNED as the refusals beside
+ * it are, since the gate runs outside the dispatcher's error mapping and a
+ * throw would surface as the framework's bare 500. Anything else the gate
+ * throws is rethrown as before.
+ */
+function gateRuleCouldNotRun(req: Request, error: unknown): Response {
+  const couldNotRun = ruleCouldNotRunIn(error);
+  if (!couldNotRun) throw error;
+  // Who asked decides which rule ran, so no shared cache may replay it.
+  return withSessionCacheHeaders(
+    buildErrorResponse(couldNotRun, {
+      requestId: readOrGenerateRequestId(req),
+    })
+  );
+}
+
 function refuseRequest(
   req: Request,
   method: string,
@@ -2685,6 +2711,9 @@ export function createDynamicHandlers(options?: {
     // And the document views: two screens claiming one address on one
     // document would leave the admin drawing whichever it reached first.
     assertDocumentViews(options.config.plugins ?? []);
+    // And the document actions and panel sections, refused here for the
+    // same reason.
+    assertDocumentSurfaces(options.config.plugins ?? []);
     setHandlerConfig(options.config);
   }
 

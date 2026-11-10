@@ -18,13 +18,20 @@
  *
  * @module address-claims/claim-key
  */
-import { slugToStaticParam } from "@nextlyhq/plugin-sdk/routing";
+import {
+  LIST_PAGE_SEGMENT,
+  listPageNumber,
+  slugToStaticParam,
+} from "@nextlyhq/plugin-sdk/routing";
 
 /** An address a document is served at, in its canonical form. */
 export interface ServedAddress {
   /** The language it is served in. */
   readonly locale: string;
-  /** The path's segments, decoded and NFC-normalised; none is empty. */
+  /**
+   * The path's segments, decoded and otherwise as the route reads them;
+   * none is empty.
+   */
   readonly segments: readonly string[];
 }
 
@@ -46,15 +53,6 @@ const NAMESPACE: Readonly<Record<ClaimKind, string>> = {
   waiting: "wait",
   lock: "lock",
 };
-
-/** The segment that numbers a list's later pages: `/news/page/2`. */
-const PAGE_SEGMENT = "page";
-
-/**
- * A later page's number as a list spells it: from 2, with no sign and no
- * leading zero. Page 1 is the list's own address, not one of its space's.
- */
-const PAGE_NUMBER = /^(?:[2-9]|[1-9]\d+)$/;
 
 /**
  * Whether `path` holds what a browser rewrites before it asks for a path: a
@@ -108,7 +106,10 @@ export function servedAddress(
   for (const piece of local.split("/").filter(piece => piece !== "")) {
     let segment: string;
     try {
-      segment = decodeURIComponent(piece).normalize("NFC");
+      // Decoded only. The content route matches the segments a browser
+      // sends without normalising them, so a composed `café` and a
+      // decomposed one are two addresses there and must be two here.
+      segment = decodeURIComponent(piece);
     } catch {
       return null;
     }
@@ -151,6 +152,45 @@ export function waitingKey(
 }
 
 /**
+ * The key of `waiter`'s wait for the later pages of its list at `list` on the
+ * claim keyed `blocking`. Spelled apart from an address's wait (its
+ * namespace is followed by `space:` and two encoded parts, where an
+ * address's has one, and no encoded part holds a `:`), since a page waits
+ * for its own address and its list's later pages on separate claims.
+ */
+export function spaceWaitingKey(
+  waiter: { readonly collection: string; readonly id: string },
+  list: ServedAddress,
+  blocking: string
+): string {
+  return `${NAMESPACE.waiting}:space:${encodeURIComponent(waiter.collection)}:${encodeURIComponent(waiter.id)}|${list.locale}|${pathOf(list)}|${blocking}`;
+}
+
+/**
+ * The key of the lock row a holder's own claims are reconciled under, so the
+ * start-up pass and a save of the same page take turns. Its namespace is the
+ * lock's, but it holds no `|`, which every address's lock key does after its
+ * language, so the two never meet.
+ */
+export function holderLockKey(holder: {
+  readonly collection: string;
+  readonly id: string;
+}): string {
+  return `${NAMESPACE.lock}:holder:${encodeURIComponent(holder.collection)}:${encodeURIComponent(holder.id)}`;
+}
+
+/**
+ * The key of the lock row a collection's entries are claimed under, so an
+ * entry's save, its template's publish and a change of its address take
+ * turns. Keyed by the collection rather than its address, so a save that has
+ * not yet read the address takes the same lock as a change that moves it.
+ * Like a holder's lock key, it holds no `|`, so it never meets an address's.
+ */
+export function collectionLockKey(collection: string): string {
+  return `${NAMESPACE.lock}:collection:${encodeURIComponent(collection)}`;
+}
+
+/**
  * The list whose page-segment space holds `address`, or null when `address`
  * is not a later page of any list. `/news/page/2` is in the space of `/news`;
  * `/news` itself is not, since the list's first page is a document's own
@@ -158,14 +198,43 @@ export function waitingKey(
  */
 export function spaceHolding(address: ServedAddress): ServedAddress | null {
   const { segments } = address;
-  const number = segments.at(-1);
+  // The route's own reading of a later page, so a list's space holds
+  // exactly the addresses the route serves as its pages: from page 2 (page
+  // 1 is the list's own address), and no number it would refuse.
+  const page = listPageNumber(segments.at(-1) ?? "");
   if (
     segments.length < 2 ||
-    segments.at(-2) !== PAGE_SEGMENT ||
-    number === undefined ||
-    !PAGE_NUMBER.test(number)
+    segments.at(-2) !== LIST_PAGE_SEGMENT ||
+    page === null ||
+    page < 2
   ) {
     return null;
   }
   return { locale: address.locale, segments: segments.slice(0, -2) };
+}
+
+/**
+ * The space key of the list whose later pages hold `address`, as
+ * {@link spaceHolding} places it, or null where it is no list's later page:
+ * the one answer to which list's space a document is published inside,
+ * which a page's save asks of the pages in a space, and an entry's of an
+ * index of every published page by the space each stands in.
+ */
+export function spaceKeyHolding(address: ServedAddress): string | null {
+  const space = spaceHolding(address);
+  return space === null ? null : claimKey("space", space);
+}
+
+/**
+ * The addresses among `addresses` that are later pages of one of the lists
+ * whose space keys are `spaces`, as {@link spaceKeyHolding} places them.
+ */
+export function addressesInSpaces(
+  addresses: readonly ServedAddress[],
+  spaces: ReadonlySet<string>
+): ServedAddress[] {
+  return addresses.filter(address => {
+    const space = spaceKeyHolding(address);
+    return space !== null && spaces.has(space);
+  });
 }

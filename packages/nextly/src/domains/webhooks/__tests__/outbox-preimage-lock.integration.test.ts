@@ -132,17 +132,20 @@ for (const leg of LEGS) {
 
         // Two writers touching disjoint fields of the same row at once. The
         // lock forces one to wait for the other's commit, so each reads a
-        // settled prior state rather than one that changes under it.
-        await Promise.all([
+        // settled prior state rather than one that changes under it. Each
+        // overwrites, so both apply: judged instead by the version both read,
+        // the second to commit would be refused as out of date.
+        const saved = await Promise.all([
           h.updateEntry(
             { collectionName: SLUG, entryId: id, overrideAccess: true },
-            { alpha: "a1" }
+            { alpha: "a1", _overwrite: true }
           ),
           h.updateEntry(
             { collectionName: SLUG, entryId: id, overrideAccess: true },
-            { beta: "b1" }
+            { beta: "b1", _overwrite: true }
           ),
         ]);
+        expect(saved.map(result => result.success)).toEqual([true, true]);
 
         const rows = await handle.adapter.select<{
           type: string;

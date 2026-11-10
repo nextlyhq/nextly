@@ -935,6 +935,39 @@ export class VersionsRepository {
     return newest;
   }
 
+  /**
+   * The newest durable version recorded as published, snapshot included: of
+   * one language when `locale` is a string, of the part with no language when
+   * it is null, and of any part when it is undefined. Undefined when the
+   * document has none. What a review compares with when nothing was approved:
+   * the content that last went live.
+   */
+  async findNewestPublished(
+    ref: VersionRef,
+    locale: string | null | undefined
+  ): Promise<VersionRow | undefined> {
+    const rows = await this.db.select<VersionRow>(TABLE, {
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NOT NULL" },
+          { column: "status", op: "=", value: "published" },
+          ...(locale === undefined
+            ? []
+            : [
+                locale === null
+                  ? { column: "locale", op: "IS NULL" as const }
+                  : { column: "locale", op: "=" as const, value: locale },
+              ]),
+        ],
+      },
+      orderBy: [{ column: "versionNo", direction: "desc" }],
+      limit: 1,
+    });
+    return rows[0];
+  }
+
   /** Fetch one durable version by its number, snapshot included. */
   async findByVersionNo(
     ref: VersionRef,

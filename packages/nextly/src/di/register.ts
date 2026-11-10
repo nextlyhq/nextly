@@ -75,6 +75,7 @@ import {
   resolveKnownTypeColumns,
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
+import { stopGrantsExpiryRetry } from "../domains/flush-content-change";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
@@ -143,6 +144,7 @@ import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/w
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
+import { withdrawApprovalsUnderEarlierDefinitions } from "../domains/workflows/approval-follows-content";
 import {
   buildWorkflowRegistry,
   publishWorkflows,
@@ -1177,6 +1179,11 @@ async function registerServicesOnce(
         adapter,
         logger: resolvedLogger,
       });
+
+      // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
+      // this boot registered are published, unless the definition keeps them. After the migrations,
+      // so the review states table is there to read where it exists at all.
+      await withdrawApprovalsUnderEarlierDefinitions(adapter, workflows.values());
 
       // The stored language list is read before any plugin starts and before registration publishes:
       // until its first read the registry knows no stored languages, and a plugin's `init` writing
@@ -4552,6 +4559,9 @@ async function initializePlugins(
       | EmailService
       | VersionsService
       | SingleRegistryService
+      | SingleEntryService
+      | CollectionRegistryService
+      | FieldGroupRegistryService
       | DatabaseInstance
       | AnyRelations
       | SupportedDialect
@@ -4573,6 +4583,16 @@ async function initializePlugins(
       services.container.get<VersionsService>("versionsService"),
     singleRegistryService: () =>
       services.container.get<SingleRegistryService>("singleRegistryService"),
+    singleEntryService: () =>
+      services.container.get<SingleEntryService>("singleEntryService"),
+    collectionRegistryService: () =>
+      services.container.get<CollectionRegistryService>(
+        "collectionRegistryService"
+      ),
+    fieldGroupRegistryService: () =>
+      services.container.get<FieldGroupRegistryService>(
+        "fieldGroupRegistryService"
+      ),
     db: () => adapterDrizzleDb,
     // The adapter's own answer. Everything that turns a plugin's settings into
     // SQL picks its table metadata and its upsert spelling from this, and the
@@ -4982,6 +5002,10 @@ export async function shutdownServices(): Promise<void> {
 async function releaseServices(opts: {
   disconnectAdapter: boolean;
 }): Promise<void> {
+  // This registration's retries of grants expiries flush through the services
+  // released below, so they stop first; what they owe stays queued for the
+  // next registration's jobs runs.
+  stopGrantsExpiryRetry();
   // Before the adapter disconnects, so destroy can still use db.
   await destroyRegisteredPlugins();
   // Before the adapter disconnects, so a sweep under way finishes with it.
@@ -5041,6 +5065,8 @@ async function releaseServices(opts: {
  * tears them down in reverse before it initialises any plugin.
  */
 export function clearServices(): void {
+  // Stopped first, for the reason `releaseServices` gives.
+  stopGrantsExpiryRetry();
   // Plugins still running are torn down at the next registration, and their
   // `destroy` may still need the services they were started with: those move
   // aside for them rather than vanish, their contexts re-pointed at them for

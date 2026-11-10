@@ -65,7 +65,7 @@ import {
   type Context,
 } from "react";
 
-import { asOverwrite } from "../document-version";
+import { asOverwrite, documentVersionOf } from "../document-version";
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_BREAKPOINTS_ROUTE_PATH,
@@ -81,12 +81,21 @@ import {
   type FontCatalogueRead,
 } from "../site-fonts/contract";
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
+import type { MergeWinner } from "../site-style-merge";
 import {
   readSiteStyleRecord,
   unreadableStoredFonts,
 } from "../site-style-record";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
+import {
+  revisionNumber,
+  saveSectionMerged,
+  sectionOf,
+  type SaveConflicts,
+  type VersionedSiteStyle,
+} from "../site-style-versioned-save";
 
+import { KEPT_CHANGING_WORDS } from "./conflict-words";
 import { useStoredSiteStyle } from "./site-style-read";
 
 /**
@@ -202,6 +211,25 @@ export interface SiteStyleSaveResult {
    * its own section rather than a document-wide error over one bad row.
    */
   readonly issues: Readonly<Record<string, string>>;
+  /**
+   * The section as it was written, when the save was merged onto a newer
+   * stored copy: the author's change with every other save since kept. A
+   * studio adopts it, so what someone else saved appears and the next save
+   * builds on it. Absent for a save not merged (one the server gave no
+   * version to merge onto, or the breakpoints).
+   */
+  readonly stored?: unknown;
+  /**
+   * The true conflicts the merge settled, when there were any: entries both
+   * sides changed differently, or one removed while the other changed it.
+   * What a studio tells the author; nothing is said here.
+   */
+  readonly conflicts?: SaveConflicts;
+  /**
+   * Set when the save was refused because the site's design kept changing:
+   * every try was made from a version another save had already replaced.
+   */
+  readonly keptChanging?: true;
 }
 
 /**
@@ -318,6 +346,12 @@ export interface SiteStyleReplay {
   readonly section: SiteStyleSection;
   /** The section's value once the write answered. */
   readonly value: unknown;
+  /**
+   * The true conflicts the replay's merge settled, theirs kept: where a
+   * change made since stood, this one could not be taken back or put
+   * forward, which the history says.
+   */
+  readonly conflicts?: SaveConflicts;
 }
 
 /**
@@ -345,7 +379,13 @@ export interface SiteStyleHistory {
   readonly preview?: (
     section: SiteStyleSection,
     value: unknown,
-    state: "held" | "stored" | "dropped"
+    state: "held" | "stored" | "dropped",
+    /**
+     * For `"stored"`: what the write stored, when it was merged onto a newer
+     * save and so differs from `value`. Drawn in its place until the read
+     * moves on, so the other save shows at once.
+     */
+    stored?: unknown
   ) => void;
 }
 
@@ -501,8 +541,7 @@ export function storedSection(
   document: unknown,
   section: SiteStyleSection
 ): unknown {
-  if (typeof document !== "object" || document === null) return null;
-  return (document as Record<string, unknown>)[section] ?? null;
+  return sectionOf(document, section);
 }
 
 /** How a save is made. */
@@ -513,6 +552,13 @@ export interface SiteStyleSaveOptions {
    * with whatever of its section is waiting.
    */
   readonly hold?: boolean;
+  /**
+   * The section as the studio built `value` from. A save is merged onto the
+   * section as stored now, keeping what was saved since this base; without
+   * one, the section as this editor last held it stands in. A held burst
+   * keeps its first save's base.
+   */
+  readonly base?: unknown;
 }
 
 /** Saving one section, and what the last attempt said. */
@@ -533,7 +579,12 @@ export type SiteStyleReplayed =
  * entry is undone at that entry, so a change made to another since is kept.
  */
 export interface SiteStyleInverse {
-  readonly undo: (held: unknown) => SiteStyleReplayed;
+  /**
+   * `replaced` is the section as the change's write found it stored, set only
+   * where that write was merged onto another author's newer save: what Undo
+   * puts back is then their value, not the one this editor started from.
+   */
+  readonly undo: (held: unknown, replaced?: unknown) => SiteStyleReplayed;
   readonly redo: (held: unknown) => SiteStyleReplayed;
 }
 
@@ -544,7 +595,9 @@ export interface SiteStyleSlot {
    */
   readonly save: (
     value: unknown,
-    inverse?: SiteStyleInverse
+    inverse?: SiteStyleInverse,
+    /** As a section save takes it: the base `value` was built from. */
+    options?: Pick<SiteStyleSaveOptions, "base">
   ) => Promise<SiteStyleSaveResult>;
   /** Give the place up: nothing is saved. */
   readonly cancel: () => void;
@@ -564,6 +617,11 @@ export interface SiteStyleWrite {
   readonly reserve: (section: SiteStyleSection) => SiteStyleSlot;
   /** Whether a save is in flight. */
   readonly saving: boolean;
+  /**
+   * Read the stored site style again, for a surface dropping its own copy
+   * after a save met someone else's ("Reload").
+   */
+  readonly reread: () => void;
 }
 
 /**
@@ -588,18 +646,47 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     keepalive: () => true,
   });
   // The stored document, read at the moment of a save rather than closed over.
-  const { data, refetch } = useStoredSiteStyle();
+  const { data, refetch, readFresh } = useStoredSiteStyle();
   const stored = useRef(data);
   stored.current = data;
   const history = useContext(SiteStyleHistoryContext);
   // The entry form's storing gate, which every write in turn is tracked with.
   const track = useTrackedWrite();
+  /*
+   * Each section as this hook's last write answered it, with the version
+   * the same answer gave. Newer than the read until the read catches up, so
+   * the next save merges onto it rather than onto a read from before.
+   */
+  const written = useRef(new Map<SiteStyleSection, VersionedSiteStyle>());
 
-  const write = useCallback(
+  /**
+   * The newest stored copy of a section in hand, with its version: the
+   * read's, or this hook's last write's when that is newer. `undefined` when
+   * neither carries a version, as from a server that gives none.
+   */
+  const newest = useCallback(
+    (section: SiteStyleSection): VersionedSiteStyle | undefined => {
+      const read: VersionedSiteStyle = {
+        doc: stored.current,
+        rev: documentVersionOf(stored.current),
+      };
+      const own = written.current.get(section);
+      const readAt = revisionNumber(read.rev);
+      const ownAt = revisionNumber(own?.rev);
+      if (own !== undefined && ownAt !== undefined) {
+        if (readAt === undefined || ownAt > readAt) return own;
+      }
+      return readAt === undefined ? undefined : read;
+    },
+    []
+  );
+
+  const writeSection = useCallback(
     async (
       section: SiteStyleSection,
-      value: unknown
-    ): Promise<SiteStyleSaveResult> => {
+      value: unknown,
+      plan: SectionPlan
+    ): Promise<SectionWritten> => {
       try {
         if (section === "breakpoints") {
           // The site's breakpoints change through Settings' route, the one
@@ -614,24 +701,74 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             keepalive: true,
           });
           await refetch();
-        } else {
-          // Saved over whatever the style holds now, on purpose: the last
-          // writer wins, as it always has here. Each studio keeps its own
-          // copy, so no one version could stand for what this editor saw.
-          await mutation.mutateAsync(asOverwrite({ [section]: value }));
-          // The editor reads the style through the plugin's route, which the
-          // Single's own write does not invalidate, so it is asked again.
-          // Not awaited, as the Single's own invalidation is not: the save has
-          // answered, and the history waits for this read where it must.
-          void refetch();
+          return { result: { saved: true, issues: {} } };
         }
-        return { saved: true, issues: {} };
+        const latest = newest(section);
+        if (latest === undefined) {
+          // No version to merge onto or send: the write says it is made
+          // over whatever the style holds, as it always was. A write naming
+          // neither a version nor an overwrite is refused.
+          await mutation.mutateAsync(asOverwrite({ [section]: value }));
+          void refetch();
+          return { result: { saved: true, issues: {} } };
+        }
+        // Merged onto the newest stored copy and sent with its version; a
+        // save made in between refuses it, and it is read and merged again.
+        const saved = await saveSectionMerged({
+          section,
+          // Without a base, the section as it stands is taken for one, so
+          // the value is written whole, as it was before merging.
+          base:
+            plan.base === undefined
+              ? sectionOf(latest.doc, section)
+              : plan.base.value,
+          mine: value,
+          prefer: plan.prefer,
+          latest,
+          read: async () => {
+            const doc = await readFresh();
+            return { doc, rev: documentVersionOf(doc) };
+          },
+          write: async body => {
+            const item = await mutation.mutateAsync(body);
+            return writtenSection(item, section, body[section]);
+          },
+          staleOf: staleRefusalData,
+        });
+        written.current.set(section, saved.latest);
+        // The editor reads the style through the plugin's route, which the
+        // Single's own write does not invalidate, so it is asked again.
+        // Not awaited, as the Single's own invalidation is not: the save has
+        // answered, and the history waits for this read where it must.
+        void refetch();
+        return {
+          result: {
+            saved: true,
+            issues: {},
+            stored: saved.stored,
+            ...(saved.conflicts === undefined
+              ? {}
+              : { conflicts: saved.conflicts }),
+          },
+          merged: { stored: saved.stored, replaced: saved.replaced },
+        };
       } catch (reason) {
         // Caught rather than propagated, because a studio needs the reason
         // beside the section that produced it. Letting this reject would push
         // the same decision onto four surfaces, and the one that forgot would
         // show an unhandled rejection where a field message belongs.
         const issues = issuesFromRejection(reason);
+        // Refused as stale after every try: the design kept changing, said
+        // in the editor's one sentence for it wherever the refusal shows.
+        if (staleRefusalData(reason) !== undefined) {
+          return {
+            result: {
+              saved: false,
+              issues: { [section]: KEPT_CHANGING_WORDS },
+              keptChanging: true,
+            },
+          };
+        }
         // A rejection carrying no per-path detail is still a refusal. Answering
         // `saved: true` because nothing could be read from it would report a
         // save that did not happen, which is the one outcome worth failing
@@ -641,30 +778,50 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             reason instanceof Error
               ? reason.message
               : "This could not be saved.";
-          return { saved: false, issues: { [section]: message } };
+          return { result: { saved: false, issues: { [section]: message } } };
         }
-        return { saved: false, issues };
+        return { result: { saved: false, issues } };
       }
     },
-    [mutation, refetch]
+    [mutation, refetch, readFresh, newest]
+  );
+
+  /** A save with no history around it: mine kept on a true conflict. */
+  const write = useCallback(
+    async (
+      section: SiteStyleSection,
+      value: unknown,
+      base: unknown
+    ): Promise<SiteStyleSaveResult> =>
+      (
+        await writeSection(section, value, {
+          prefer: "mine",
+          ...(base === undefined ? {} : { base: { value: base } }),
+        })
+      ).result,
+    [writeSection]
   );
 
   /**
    * Write a section after every write already made to it in this editor, and
    * hand on what it then holds. `value` is read only once those have
    * answered, so an undo can write back a "before" that is still settling.
+   * `plan` says how the write is merged onto the newest stored copy: from
+   * the studio's base, or else from what the section held before it, with
+   * mine or theirs kept on a true conflict.
    */
   const inTurn = useCallback(
     (
       chain: SectionChain,
       section: SiteStyleSection,
-      value: (before: unknown) => unknown
+      value: (before: unknown) => unknown,
+      plan: TurnPlan | (() => Promise<TurnPlan>) = { prefer: "mine" }
     ) => {
       const before = chain.tail;
       chain.pending += 1;
       // This write, as the section's latest attempt names the one it was.
       const turn = {};
-      const done = before.then(async held => {
+      const done = before.then(async (held): Promise<TurnAnswer> => {
         const next = await value(held);
         // A write whose step was withdrawn while it waited stores nothing,
         // and says nothing new about the section either.
@@ -692,8 +849,23 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             wrote: false,
           };
         }
-        const result = await write(section, next);
-        return { result, holds: result.saved ? next : held, wrote: true };
+        // A replay's plan is read once its target is known, from the step.
+        const how = typeof plan === "function" ? await plan() : plan;
+        const { result, merged } = await writeSection(section, next, {
+          prefer: how.prefer,
+          base: { value: how.base === undefined ? held : how.base },
+        });
+        // What the section holds now is what was written: the merge, where
+        // the write was merged onto a newer save.
+        if (!result.saved) return { result, holds: held, wrote: true };
+        return merged === undefined
+          ? { result, holds: next, wrote: true }
+          : {
+              result,
+              holds: merged.stored,
+              wrote: true,
+              replaced: merged.replaced,
+            };
       });
       chain.attempt = attemptOf(chain.attempt, turn, done);
       track(SECTION_LABELS[section], chain.attempt.settled);
@@ -707,7 +879,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       });
       return { before, done, turn };
     },
-    [write, track]
+    [writeSection, track]
   );
 
   /**
@@ -771,12 +943,16 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   const reserve = useCallback(
     (section: SiteStyleSection): SiteStyleSlot => {
       if (history === null) {
-        return { save: value => write(section, value), cancel: () => {} };
+        return {
+          save: (value, _inverse, options) =>
+            write(section, value, options?.base),
+          cancel: () => {},
+        };
       }
       const { settled } = history;
       type Filled = {
-        before: unknown;
-        value: unknown;
+        before: Promise<unknown>;
+        done: Promise<TurnAnswer>;
         inverse: SiteStyleInverse | undefined;
       };
       let fill: (filled: Filled | null) => void = () => {};
@@ -787,26 +963,46 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       // queued in the meantime then writes nothing.
       let withdrawn = false;
       const replay =
-        (pick: (known: Filled, held: unknown) => unknown) =>
+        (
+          pick: (known: Filled, held: unknown) => unknown,
+          /** The half of the step the replay moves away from. */
+          from: (known: Filled) => Promise<unknown>
+        ) =>
         async (): Promise<SiteStyleReplay> => {
           const known = await filled;
           const { result, holds } = await inTurn(
             chainOf(settled, section),
             section,
-            held => (withdrawn || known === null ? SKIP : pick(known, held))
+            held => (withdrawn || known === null ? SKIP : pick(known, held)),
+            // A replay is merged onto the newest stored copy too, and yields
+            // to theirs where the change to take back is no longer there. A
+            // whole-section step is merged from its own recorded half; one
+            // composed against the section as it stands, from that.
+            known === null || known.inverse !== undefined
+              ? REPLAY_PLAN
+              : recordedPlan(() => from(known))
           ).done;
-          return { stored: result.saved, section, value: holds };
+          return replayOf(result, section, holds);
         };
       const withdraw = history.record({
-        undo: replay((known, held) =>
-          known.inverse === undefined
-            ? known.before
-            : replayedValue(known.inverse.undo(held))
+        // Back to what stood just before the change was stored, as the
+        // write found it, so a save it was merged onto stays.
+        undo: replay(
+          async (known, held) =>
+            known.inverse === undefined
+              ? replacedBy(await known.done, known.before)
+              : replayedValue(
+                  known.inverse.undo(held, (await known.done).replaced)
+                ),
+          async known => (await known.done).holds
         ),
-        redo: replay((known, held) =>
-          known.inverse === undefined
-            ? known.value
-            : replayedValue(known.inverse.redo(held))
+        // What the change stored: the merge, not the studio's value alone.
+        redo: replay(
+          async (known, held) =>
+            known.inverse === undefined
+              ? (await known.done).holds
+              : replayedValue(known.inverse.redo(held)),
+          async known => replacedBy(await known.done, known.before)
         ),
       });
       const drop = (): void => {
@@ -816,7 +1012,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       };
       return {
         cancel: drop,
-        save: async (value, inverse) => {
+        save: async (value, inverse, options) => {
           const chain = chainOf(settled, section);
           // A save that leaves the section as it stands is no step to take
           // back.
@@ -824,8 +1020,11 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             drop();
             return writeWithoutStep(chain, section, value);
           }
-          const { before, done } = inTurn(chain, section, () => value);
-          fill({ before, value, inverse });
+          const { before, done } = inTurn(chain, section, () => value, {
+            prefer: "mine",
+            base: options?.base,
+          });
+          fill({ before, done, inverse });
           const { result } = await done;
           // A refused save changed nothing, so its step is withdrawn.
           if (!result.saved) drop();
@@ -849,7 +1048,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       value: unknown,
       options?: SiteStyleSaveOptions
     ): Promise<SiteStyleSaveResult> => {
-      if (history === null) return write(section, value);
+      if (history === null) return write(section, value, options?.base);
       const { settled } = history;
       const chain = chainOf(settled, section);
       if (chain.waiting !== undefined) {
@@ -867,8 +1066,13 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         return writeWithoutStep(chain, section, value);
       }
       const held = options?.hold === true ? holdFor(chain, value) : undefined;
-      const { before, done, turn } = inTurn(chain, section, prior =>
-        held === undefined ? value : held.next(prior)
+      // Merged from the studio's base, the first save's for a held burst:
+      // the later saves joining it only change the value.
+      const { before, done, turn } = inTurn(
+        chain,
+        section,
+        prior => (held === undefined ? value : held.next(prior)),
+        { prefer: "mine", base: options?.base }
       );
       if (held !== undefined) {
         held.settle(done.then(({ result }) => result));
@@ -879,7 +1083,12 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       // step left to take it back.
       let withdrawn = false;
       const replay =
-        (target: () => unknown) => async (): Promise<SiteStyleReplay> => {
+        (
+          target: () => unknown,
+          /** The half of the step the replay moves away from. */
+          from: () => Promise<unknown>
+        ) =>
+        async (): Promise<SiteStyleReplay> => {
           let sent: unknown = SKIP;
           const chainNow = chainOf(settled, section);
           // Whether this step's write is still the section's latest attempt,
@@ -904,38 +1113,49 @@ export function useSaveSiteStyle(): SiteStyleWrite {
               // read may already hold this value, and then never moves on.
               history.preview?.(section, sent, "held");
               return sent;
-            }
+            },
+            // Merged from the step's own recorded half, not from what the
+            // section holds now: a save read in since then is theirs, kept.
+            recordedPlan(from)
           ).done;
           if (sent !== SKIP) {
-            history.preview?.(
-              section,
-              sent,
-              result.saved ? "stored" : "dropped"
-            );
+            // Drawn as written, the merge with any save it met.
+            if (result.saved) history.preview?.(section, sent, "stored", holds);
+            else history.preview?.(section, sent, "dropped");
           }
-          return { stored: result.saved, section, value: holds };
+          return replayOf(result, section, holds);
         };
       const withdraw = history.record({
         // A change still waiting is written before it is taken back, so the
         // step's two halves are the two values the section really held.
+        // Back to what stood just before the change was stored, as the write
+        // found it: a save it was merged onto is kept, and Undo puts theirs
+        // back where mine replaced it.
         undo: () => {
           chainOf(settled, section).waiting?.release();
-          return replay(() => before)();
+          return replay(
+            async () => replacedBy(await done, before),
+            async () => (await done).holds
+          )();
         },
-        // The value the burst came to, read when the step is replayed.
-        redo: replay(() => (held === undefined ? value : held.write.value)),
+        // What the change stored, read when the step is replayed: the value
+        // the burst came to, merged onto any save it met.
+        redo: replay(
+          async () => (await done).holds,
+          async () => replacedBy(await done, before)
+        ),
       });
-      const { result, wrote } = await done;
+      const { result, wrote, holds } = await done;
       // Refused, or not written because the edits came back to where they
       // started: either way nothing changed, so the step is withdrawn (which
       // also gives back the redo it cut off) and nothing new is drawn.
       const changed = result.saved && wrote;
       if (held !== undefined) {
-        history.preview?.(
-          section,
-          held.write.value,
-          changed ? "stored" : "dropped"
-        );
+        // Stored, the section is drawn as written: the merge, with any save
+        // it met, rather than the burst's value alone.
+        if (changed) {
+          history.preview?.(section, held.write.value, "stored", holds);
+        } else history.preview?.(section, held.write.value, "dropped");
       }
       if (!changed) {
         withdrawn = true;
@@ -946,7 +1166,119 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     [write, writeWithoutStep, history, inTurn, chainOf]
   );
 
-  return { save, reserve, saving: mutation.isPending };
+  const reread = useCallback(() => {
+    void refetch();
+  }, [refetch]);
+
+  return { save, reserve, saving: mutation.isPending, reread };
+}
+
+/** How one section write is merged onto the newest stored copy. */
+interface SectionPlan {
+  /** Whose value a true conflict keeps. */
+  readonly prefer: MergeWinner;
+  /** The section the value was built from; absent, the stored one stands in. */
+  readonly base?: { readonly value: unknown };
+}
+
+/** What one section write came to, and the merge where there was one. */
+interface SectionWritten {
+  readonly result: SiteStyleSaveResult;
+  /** The section as written and as it stood just before, for a merged write. */
+  readonly merged?: { readonly stored: unknown; readonly replaced: unknown };
+}
+
+/** How a write in turn is merged: from `base`, else from what the section held. */
+interface TurnPlan {
+  readonly prefer: MergeWinner;
+  readonly base?: unknown;
+}
+
+/**
+ * An undo or redo composed against the section as it stands: merged from
+ * what the section held, theirs kept on a conflict.
+ */
+const REPLAY_PLAN: TurnPlan = { prefer: "theirs" };
+
+/**
+ * An undo or redo of a whole-section step: merged from the half of the step
+ * it moves away from, as recorded (the section after the change, for an
+ * undo; before it, for a redo), theirs kept on a conflict. Not from what the
+ * section holds now, which may already be another author's save read in
+ * since: taken as the base, their edits would read as unchanged and be
+ * replaced by the step's other half.
+ */
+function recordedPlan(from: () => Promise<unknown>): () => Promise<TurnPlan> {
+  return async () => ({ prefer: "theirs", base: await from() });
+}
+
+/** What a write in turn answers once it is done. */
+interface TurnAnswer {
+  readonly result: SiteStyleSaveResult;
+  /** What the section holds once this write has answered. */
+  readonly holds: unknown;
+  readonly wrote: boolean;
+  readonly skipped?: boolean;
+  /** The section as the merged write found it stored, which Undo puts back. */
+  readonly replaced?: unknown;
+}
+
+/** What one half of a step came to, with the conflicts its merge settled. */
+function replayOf(
+  result: SiteStyleSaveResult,
+  section: SiteStyleSection,
+  holds: unknown
+): SiteStyleReplay {
+  return {
+    stored: result.saved,
+    section,
+    value: holds,
+    ...(result.conflicts === undefined ? {} : { conflicts: result.conflicts }),
+  };
+}
+
+/**
+ * What a step's undo writes: the section as its merged write found it, or,
+ * for a write not merged, what the section held before it in this editor.
+ */
+async function replacedBy(
+  answer: TurnAnswer,
+  before: Promise<unknown>
+): Promise<unknown> {
+  return "replaced" in answer ? answer.replaced : await before;
+}
+
+/**
+ * The document a section write answered with, and its version. The write's
+ * own response carries the whole stored document; one that does not is
+ * taken for the section as sent, with the version it gave, which is still a
+ * true pair for this section alone.
+ */
+function writtenSection(
+  item: unknown,
+  section: SiteStyleSection,
+  sent: unknown
+): VersionedSiteStyle {
+  const rev = documentVersionOf(item);
+  return typeof item === "object" && item !== null && section in item
+    ? { doc: item, rev }
+    : { doc: { [section]: sent }, rev };
+}
+
+/**
+ * The public data of a refusal made because the Site Style changed since
+ * the version the write was sent with, or `undefined` for any other failure.
+ * Read from the transport's error as the admin raises it: status 409 with
+ * the `STALE_VERSION` code, its data naming the version stored now.
+ */
+function staleRefusalData(reason: unknown): unknown {
+  if (typeof reason !== "object" || reason === null) return undefined;
+  const { status, code, data } = reason as {
+    readonly status?: unknown;
+    readonly code?: unknown;
+    readonly data?: unknown;
+  };
+  return status === 409 && code === "STALE_VERSION" ? (data ?? {}) : undefined;
 }
 
 /**

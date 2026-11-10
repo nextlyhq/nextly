@@ -22,6 +22,7 @@ import {
   type AuthContext,
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
+import { refusedInsideNamedQuery } from "../../auth/named-query-scope";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { visitorReadsSystemResource } from "../../auth/resource-readable";
@@ -103,6 +104,10 @@ export async function runAsCaller<
   // One memo of access lookups for the call, so a list whose field rules ask
   // about the caller on every row looks the caller up once. A call made inside
   // a request shares that request's memo.
+  // Inside a page builder named query's run, no call is made: the query
+  // reads only through the reader it is handed, whose reads leave the frame.
+  const refused = refusedInsideNamedQuery("a collection or Single operation");
+  if (refused !== undefined) throw refused;
   return withCurrentLanguages(() =>
     runWithAccessMemo(() => runAsCallerInMemo(defaultConfig, args, operation))
   );

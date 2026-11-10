@@ -32,7 +32,7 @@ import {
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
 import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
-import { versionsHref } from "@admin/components/features/versions/VersionComparePage";
+import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
   mayRecordRecovery,
   useViewedVersion,
@@ -42,6 +42,7 @@ import {
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { toast } from "@admin/components/ui";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
@@ -60,6 +61,10 @@ import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { versionForLanguage } from "@admin/lib/document-version";
+import {
+  panelOrderFor,
+  placePanelParts,
+} from "@admin/lib/plugins/document-surfaces";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -111,10 +116,12 @@ import {
   EntryFormContextProvider,
   hasPendingWorkingDraft,
 } from "./EntryFormContext";
+import { EntryFormPlace } from "./EntryFormPlace";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
 import { EntryMetaStrip } from "./EntryMetaStrip";
 import { FormErrorSummary } from "./FormErrorSummary";
+import { PanelSectionsAboveForm } from "./panels";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { readerStatusWrite, statusWritesHeld } from "./reader-status-write";
 import type { RecoveryPointState } from "./SaveStateIndicator";
@@ -136,6 +143,7 @@ import {
   type EntryFormMode,
 } from "./useEntryForm";
 import { useLockWithHeldChange } from "./useHeldDocumentChange";
+import { usePluginDocumentSurfaces } from "./usePluginDocumentSurfaces";
 import {
   heldLocaleChange,
   heldWhileRecovering,
@@ -394,6 +402,9 @@ export function EntryForm({
   // and the version on screen are known. Read by the form when a refused
   // publish's recovery runs, which writes like the handlers below do.
   const writesHeldNow = useRef(false);
+  // Read when a plugin asks whether it may write, which can be long after the
+  // render that drew it: a dialog stays open while the document changes hands.
+  const pluginWritesHeldNow = useRef(false);
   // The entry's Save that never publishes, handed up from inside its
   // document's actions, where the Save lives.
   const saveWithoutPublishing = useRef<
@@ -419,6 +430,7 @@ export function EntryForm({
     holdForVersionChange,
     releaseVersionHold,
     stopAwaitingCurrentVersion,
+    expectOwnChange,
   } = useEntryForm({
     collection,
     entry,
@@ -855,7 +867,12 @@ export function EntryForm({
   // The quick-edit and quick-create modals save only with the update or
   // create permission their mode needs: those modals open from a related
   // field, not through the route guard the full editor sits behind.
-  const canDelete = useCan(`delete-${collectionSlug}`);
+  // A collection whose entries are deleted through an action of their own
+  // (`admin.disableDelete`) is offered no Delete of its own here, unless a
+  // plugin replaces that Delete with its action (below): the server refuses
+  // the plain delete.
+  const mayDelete = useCan(`delete-${collectionSlug}`);
+  const canDelete = mayDelete && collection.admin?.disableDelete !== true;
   // The modals send no language, so the server writes the default one: a
   // create is answered so already, and an update by its own cell.
   const canCreate = useCan(`create-${collectionSlug}`);
@@ -868,6 +885,13 @@ export function EntryForm({
   // A refused publish's recovery changes the content, so it is held exactly
   // as the content's own saves are.
   writesHeldNow.current = editsHeld;
+  // What a plugin's own write is held by at this instant: a colleague's claim,
+  // a past version on screen or a recovery, as the built-in Delete is, and a
+  // collection removed from code, where the server refuses every write and
+  // the editor offers none. A reader's page is not among them: like Delete, a
+  // plugin's action follows its own permission, which its route judges.
+  const pluginWritesHeld = writesHeld || recovering || removedFromCode;
+  pluginWritesHeldNow.current = pluginWritesHeld;
 
   /*
    * The one gate every write passes through.
@@ -1095,6 +1119,38 @@ export function EntryForm({
     pendingOfferAt: recovery.offer?.savedAt ?? null,
   };
 
+  // What plugins change on this collection's document screen: the actions
+  // they hide or replace, and the sections they add to the panel. A section
+  // is told what holds the document as the fields and the writes are held.
+  const pluginSurfaces = usePluginDocumentSurfaces({
+    collectionSlug: collection.name,
+    entryId: savedEntryId,
+    documentLock: {
+      readOnly: contentHeld,
+      // The same hold `mayWrite` reads, so the two cannot disagree.
+      actionsDisabled: pluginWritesHeld,
+    },
+    mayWrite: () => !pluginWritesHeldNow.current,
+    onDeleted: onDelete,
+    onOwnChange: expectOwnChange,
+    locale,
+  });
+  // The panel's sections in the order the server placed them, with the side
+  // panel sections plugins declared for this collection's entries among them,
+  // each judged on the entry as this reader's read returned it.
+  const { contributions } = useBranding();
+  // On a phone the panel is a sheet opened only from the document's menu, so
+  // a section declared to sit above the form there moves out of the panel
+  // and above the fields, where the author meets it first.
+  const { panel: panelOrder, aboveForm: sectionsAboveForm } = useMemo(
+    () =>
+      placePanelParts(
+        panelOrderFor(contributions, collection.name, entry),
+        panel.mode === "sheet"
+      ),
+    [contributions, collection.name, entry, panel.mode]
+  );
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
     hasStatus,
@@ -1112,6 +1168,7 @@ export function EntryForm({
     canEdit: mayEdit,
     writesRefused: removedFromCode,
     contributedActions: documentActions,
+    actionOverrides: pluginSurfaces.actionOverrides,
     // Read when a contribution is chosen: the page above holds only the
     // saved entry, and a schedule says when edits are not saved yet.
     currentValues: () => form.getValues(),
@@ -1120,7 +1177,12 @@ export function EntryForm({
     ...storingHandlers(handleSubmit),
     onCancel: handleCancel,
     // No handler, no Delete: the action bar draws no action it cannot run.
-    ...(canDelete ? { onDelete: handleDelete } : {}),
+    // A plugin's replacement keeps the row (and its permission and holds),
+    // so it needs the built-in Delete to replace.
+    ...(canDelete ||
+    (mayDelete && pluginSurfaces.actionOverrides.delete?.kind === "replaced")
+      ? { onDelete: handleDelete }
+      : {}),
     onDiscardWorkingDraft: handleDiscardWorkingDraft,
   };
 
@@ -1168,6 +1230,8 @@ export function EntryForm({
         collectionSlug={collection.name}
         isCreateMode={mode === "create"}
         {...contextDocumentStatus}
+        // The fields, so a field inside a repeater's row has an address.
+        fields={getCollectionFields(collection)}
       >
         <EntryFormProvider
           form={form}
@@ -1246,6 +1310,7 @@ export function EntryForm({
             />
           </div>
           {conflictDialog}
+          {pluginSurfaces.replacement}
         </EntryFormProvider>
       </EntryFormContextProvider>
     );
@@ -1334,6 +1399,9 @@ export function EntryForm({
                   collectionSlug={collection.name}
                   isCreateMode={mode === "create"}
                   {...contextDocumentStatus}
+                  // The fields, so a field inside a repeater's row has an
+                  // address the Page Builder and other views open it by.
+                  fields={getCollectionFields(collection)}
                   // Only where a takeover can happen. The embedded branch renders
                   // the whole body in a modal and hides nothing, so a panel there
                   // would offer a second copy of fields already on screen.
@@ -1365,6 +1433,11 @@ export function EntryForm({
                       hasUnsavedWork={hasUnsavedWork}
                       isSubmitting={isSubmitting}
                     />
+                    {/* A plugin's replacement for a document action, drawn
+                      inside the document's providers so it reads the
+                      language being edited and the document's actions as
+                      any surface of the editor does. */}
+                    {pluginSurfaces.replacement}
                     {documentView ? (
                       <DocumentViewBody
                         view={documentView}
@@ -1529,6 +1602,22 @@ export function EntryForm({
                                   panelCarriesId={panelDocked}
                                   documentId={entry?.id}
                                 />
+                                {/* A plugin's section that asks to be met
+                                  first, above the fields on a phone rather
+                                  than in the sheet. */}
+                                {mode === "edit" ? (
+                                  <PanelSectionsAboveForm
+                                    sections={sectionsAboveForm}
+                                    className={DOCUMENT_COLUMN_INSET}
+                                    {...(pluginSurfaces.sectionProps ===
+                                    undefined
+                                      ? {}
+                                      : {
+                                          pluginSectionProps:
+                                            pluginSurfaces.sectionProps,
+                                        })}
+                                  />
+                                ) : null}
 
                                 {/* The language panel, inline: the exact
                         complement of the docked panel, shown wherever that
@@ -1594,21 +1683,28 @@ export function EntryForm({
                                   }
                                   bannerSlot={versionBannerSlot}
                                 >
-                                  {mainFields.length > 0 && (
-                                    <div className="@4xl/content:p-8 pt-6">
-                                      {/* Forward the form mode: in edit mode a blank password
+                                  <EntryFormPlace
+                                    kind="collection"
+                                    slug={collectionSlug}
+                                    entryId={entry?.id ?? null}
+                                    {...(entry ? { entry } : {})}
+                                  >
+                                    {mainFields.length > 0 && (
+                                      <div className="@4xl/content:p-8 pt-6">
+                                        {/* Forward the form mode: in edit mode a blank password
                         field means "keep the current password" rather than a
                         required-field violation (see note on the layout form
                         above). */}
-                                      <EntryFormContent
-                                        fields={mainFields}
-                                        disabled={savePending}
-                                        readOnly={lock.readOnly}
-                                        withCard
-                                        mode={mode}
-                                      />
-                                    </div>
-                                  )}
+                                        <EntryFormContent
+                                          fields={mainFields}
+                                          disabled={savePending}
+                                          readOnly={lock.readOnly}
+                                          withCard
+                                          mode={mode}
+                                        />
+                                      </div>
+                                    )}
+                                  </EntryFormPlace>
                                 </ViewedVersionBody>
                               </div>
 
@@ -1653,6 +1749,17 @@ export function EntryForm({
                                     }
                                     // A reader may still open the other languages.
                                     navigationDisabled={navigationHeld}
+                                    pluginSections={pluginSurfaces.sections}
+                                    {...(panelOrder === undefined
+                                      ? {}
+                                      : { panelOrder })}
+                                    {...(pluginSurfaces.sectionProps ===
+                                    undefined
+                                      ? {}
+                                      : {
+                                          pluginSectionProps:
+                                            pluginSurfaces.sectionProps,
+                                        })}
                                   />
                                 </DocumentSidePanel>
                               ) : null}

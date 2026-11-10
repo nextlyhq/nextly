@@ -297,6 +297,33 @@ describe("ledgerRecords", () => {
     ]);
   });
 
+  it("reads an applied migration whose removal was recorded as removed on purpose, not missing", () => {
+    const removal = {
+      ...event("0001_a.sql", "recorded", 2000),
+      eventType: "file_removed" as const,
+    };
+    const records = ledgerRecords(
+      [
+        event("0001_a.sql", "applied", 1000),
+        event("0002_b.sql", "applied", 1000),
+      ],
+      undefined,
+      [removal]
+    );
+    expect(records.map(r => [r.filename, r.removed === true])).toEqual([
+      ["0001_a.sql", true],
+      ["0002_b.sql", false],
+    ]);
+    // Neither file is in the folder: the removed one is information, the
+    // other still the problem a missing file is.
+    expect(
+      buildMigrationStatuses([], records).map(s => [s.filename, s.status])
+    ).toEqual([
+      ["0001_a", "applied (file removed)"],
+      ["0002_b", "applied (file missing)"],
+    ]);
+  });
+
   it("lists no failure for a rollback that ended with nothing applied", () => {
     // Resolved: it changed nothing, and the migration is still applied. An
     // older failure it came after is resolved too, so it is not reported

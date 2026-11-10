@@ -54,11 +54,24 @@ export async function listLoopCollections(
     // save in that language takes.
     path: loopCollectionsPath(locale),
   });
+  const collections = loopCollectionsOf(body);
+  if (collections === undefined) throw new Error(UNEXPLAINED);
+  return collections;
+}
+
+/**
+ * The collections a loop collections answer lists, each kept only when it is
+ * the shape the contract promises; `undefined` where the answer is not a list
+ * of collections at all, which a caller says rather than showing none.
+ */
+export function loopCollectionsOf(
+  body: unknown
+): readonly LoopCollectionItem[] | undefined {
   const items =
     typeof body === "object" && body !== null
       ? (body as Partial<LoopCollectionsResponse>).items
       : undefined;
-  if (!Array.isArray(items)) throw new Error(UNEXPLAINED);
+  if (!Array.isArray(items)) return undefined;
   return items.flatMap((item: unknown) => {
     const collection = collectionOf(item);
     return collection === undefined ? [] : [collection];
@@ -143,6 +156,7 @@ function readableOf(value: unknown): LoopReadableField | undefined {
   const { relationTo, storage } = record;
   return {
     name: record.name,
+    ...(typeof record.label === "string" ? { label: record.label } : {}),
     type: record.type,
     ...(record.hasMany === true ? { hasMany: true as const } : {}),
     ...(typeof relationTo === "string" ||

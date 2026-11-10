@@ -10,6 +10,17 @@
  * - **set-layout** chooses the page's Layout, or switches it off.
  * - **set-list-query** changes a collection list's source, filters, sort,
  *   limit and offset, as the list's inspector does.
+ * - **set-conditions** sets a block's visibility conditions, as the block's
+ *   "Show when" controls do.
+ * - **place-entry-content** places a template's Entry content block, and
+ *   **set-entry-content-field** chooses the blocks field it draws, as the
+ *   Add panel and the block's Field menu do.
+ * - **bind-prop** binds a block's prop to a field, as the inspector's bind
+ *   button does.
+ * - **unbind-prop** unbinds it, keeping in its place what a visitor sees now,
+ *   resolved here on the server (`unbind-kept`), or the value of a named
+ *   entry or list item, or a value given; the answer says what was kept and
+ *   why.
  *
  * Each is read, planned and written as the caller. The stored page is read as
  * its working draft, as the editor opens it, and written back as a draft
@@ -30,6 +41,9 @@
 import {
   applyOps,
   COLLECTION_LIST_TYPE,
+  ENTRY_CONTENT_FIELD_PROP,
+  ENTRY_CONTENT_TYPE,
+  namesListSource,
   COMPONENT_INSTANCE_TYPE,
   findNode,
   isComponentInstance,
@@ -43,10 +57,17 @@ import {
   type DocumentLimits,
   type OpPosition,
 } from "@nextlyhq/blocks-engine";
-import { pageActionJsonSchema, pageActionSchema } from "@nextlyhq/builder/ops";
+import {
+  bindOp,
+  conditionsOp,
+  pageActionJsonSchema,
+  pageActionSchema,
+  unbindOp,
+} from "@nextlyhq/builder/ops";
 import {
   getCachedNextly,
   NextlyError,
+  resolvedCollectionView,
   respondMutation,
   type PluginCollectionTransaction,
   type PluginRouteContext,
@@ -61,6 +82,7 @@ import {
   type PageAction,
   type PageActionRequest,
   type PageActionResult,
+  type UnbindAnswer,
 } from "./composition-actions-contract";
 import {
   actingCaller,
@@ -77,12 +99,30 @@ import {
   type CompositionRouteContext,
 } from "./composition-route-kit";
 import { relationId } from "./default-layout/store";
+import type { StoredForms } from "./fields/added-undefined-ids";
+import {
+  newBindingIssues,
+  type BindingJudging,
+} from "./fields/binding-judgement";
 import {
   JUDGEMENT_CONTEXT,
   judgeInTransaction,
   storedFingerprint,
 } from "./judged-writes";
 import { readingAsUser, type ComponentStore } from "./library-route";
+import { readEntryBlocksFields } from "./templates/entry-content-fields";
+import {
+  carryingTemplateTarget,
+  templateTargetOf,
+  type TemplateTarget,
+} from "./templates/template-target";
+import {
+  planUnbind,
+  unboundAsWritten,
+  type UnbindReads,
+  type UnbindSource,
+} from "./unbind-kept";
+import { unbindReadsOf } from "./visitor-entry-title";
 
 /** The blocks field a page action edits when the address names none. */
 const DEFAULT_FIELD = "content";
@@ -137,6 +177,8 @@ export function pageActionRequestOf(raw: unknown): PageActionRequest {
 export interface PageActionsSetup {
   readonly store?: ComponentStore;
   readonly limits?: () => DocumentLimits;
+  /** What an action's bindings are judged with; absent, they are not. */
+  readonly bindings?: () => BindingJudging | undefined;
 }
 
 /** The context the page actions run with. */
@@ -163,6 +205,8 @@ interface StoredPage {
 interface ReadPage {
   readonly page: StoredPage;
   readonly version: unknown;
+  /** The collection the row names, where it is a template's. */
+  readonly templateTarget: TemplateTarget | undefined;
 }
 
 /** What an action plans: the write it makes, and what it answers with. */
@@ -172,6 +216,8 @@ interface PlannedWrite {
   readonly document?: BlockDocument;
   readonly layout?: { layout: string | null; noHeaderFooter: boolean };
   readonly insertedId?: string;
+  /** For an unbind: what was kept in the prop's place, and why. */
+  readonly unbound?: UnbindAnswer;
 }
 
 /**
@@ -207,16 +253,33 @@ export async function runPageAction(
     body.action,
     read.page,
     field,
-    page.collection,
+    {
+      collection: page.collection,
+      id: page.id,
+      ...(page.locale === undefined ? {} : { locale: page.locale }),
+      ...(read.templateTarget === undefined
+        ? {}
+        : { templateTarget: read.templateTarget.collection }),
+    },
     setup
   );
-  const data = {
-    ...planned.data,
-    ...(body.publish === true ? { status: "published" } : {}),
-    ...(read.version === undefined ? {} : { [VERSION_KEY]: read.version }),
-  };
+  // A template's collection with it, read with the page, so the write is
+  // judged against it inside the transaction below.
+  const data = carryingTemplateTarget(
+    ctx.self,
+    page.collection,
+    read.templateTarget,
+    {
+      ...planned.data,
+      ...(body.publish === true ? { status: "published" } : {}),
+      ...(read.version === undefined ? {} : { [VERSION_KEY]: read.version }),
+    }
+  );
   const options = asCaller(ctx, page.locale);
   await collections.warmLocalizedReadiness(page.collection);
+  // Before the transaction opens: a save inside one does not read the schema
+  // its bindings are judged against, so the dry run below can't see them.
+  const unbindable = await bindingRefusals(ctx, page, field, data, read, setup);
   const judged = await judgeInTransaction(
     run => collections.withTransaction(run),
     (tx: PluginCollectionTransaction) =>
@@ -240,17 +303,26 @@ export async function runPageAction(
       ...(planned.insertedId === undefined
         ? {}
         : { insertedId: planned.insertedId }),
+      ...(planned.unbound === undefined || body.action.kind !== "unbind-prop"
+        ? {}
+        : unboundAsWritten(
+            planned.unbound,
+            shown.document,
+            body.action.nodeId,
+            body.action.prop
+          )),
       refusals,
       fingerprint: read.fingerprint,
       by,
     };
   };
 
-  if (judged.refusal !== null) {
-    if (body.dryRun !== true) throw refusedAction(judged.refusal.messages);
+  const refusals = [...unbindable, ...(judged.refusal?.messages ?? [])];
+  if (judged.refusal !== null || refusals.length > 0) {
+    if (body.dryRun !== true) throw refusedAction(refusals);
     return {
       message: "Nothing was written: the site would refuse this action.",
-      item: result(true, undefined, judged.refusal.messages),
+      item: result(true, undefined, refusals),
     };
   }
   if (body.dryRun === true) {
@@ -271,6 +343,86 @@ export async function runPageAction(
     message: "The page was changed.",
     item: result(false, applied.item, []),
     ...(applied.warnings === undefined ? {} : { warnings: applied.warnings }),
+  };
+}
+
+/**
+ * The messages the action's document is refused with for its bindings, by the
+ * rule a save judges them by: a problem either stored form already holds is
+ * kept, and only one this action makes is refused.
+ */
+async function bindingRefusals(
+  ctx: PageActionsContext,
+  page: PageActionRequest["page"],
+  field: string,
+  data: Record<string, unknown>,
+  read: ReadPage,
+  setup: PageActionsSetup
+): Promise<readonly string[]> {
+  const judging = setup.bindings?.();
+  if (judging === undefined || data[field] === undefined) return [];
+  const issues = await newBindingIssues(
+    data[field],
+    {
+      data,
+      path: field,
+      write: {
+        kind: "collection",
+        slug: page.collection,
+        id: page.id,
+        inTransaction: false,
+        ...(page.locale === undefined ? {} : { locale: page.locale }),
+      },
+    },
+    await fieldLabelOf(ctx, page.collection, field),
+    {
+      ...judging,
+      storedForms: () => storedFormsOf(ctx, page, field, read),
+    }
+  );
+  return issues.map(issue => issue.message);
+}
+
+/** The field's label as its collection declares it, else its name. */
+async function fieldLabelOf(
+  ctx: PageActionsContext,
+  collection: string,
+  field: string
+): Promise<string> {
+  const { fields } = resolvedCollectionView(
+    await ctx.services.collections.getCollection(collection, {})
+  );
+  const declared = fields.find(
+    candidate => (candidate as { name?: unknown }).name === field
+  ) as { label?: unknown } | undefined;
+  return typeof declared?.label === "string" ? declared.label : field;
+}
+
+/**
+ * The live and working-draft forms of the page, as the caller may read them.
+ * A form the caller can't read leaves the page unreadable, so nothing can tell
+ * a new problem from one it held, and the save's own judgement decides.
+ */
+async function storedFormsOf(
+  ctx: PageActionsContext,
+  page: PageActionRequest["page"],
+  field: string,
+  read: ReadPage
+): Promise<StoredForms> {
+  const live = await readStoredPage(
+    ctx,
+    page.collection,
+    page.id,
+    field,
+    page.locale,
+    false
+  );
+  if (live === null) return { forms: [], readable: false };
+  return {
+    forms: [live.page.document, read.page.document].filter(
+      (form): form is BlockDocument => form !== null
+    ),
+    readable: true,
   };
 }
 
@@ -308,13 +460,17 @@ async function readForAction(
   return { ...read, fingerprint };
 }
 
-/** The stored page as the caller may read it, its working draft first. */
+/**
+ * The stored page as the caller may read it: its working draft first, unless
+ * `draft` asks for the live row alone.
+ */
 async function readStoredPage(
   ctx: PageActionsContext,
   collection: string,
   pageId: string,
   field: string,
-  locale: string | undefined
+  locale: string | undefined,
+  draft = true
 ): Promise<ReadPage | null> {
   const row = await readOrNull(async () =>
     (await getCachedNextly()).findByID({
@@ -323,13 +479,17 @@ async function readStoredPage(
       ...(await readingAsUser(ctx)),
       ...(locale === undefined ? {} : { locale }),
       status: "all",
-      draft: true,
+      draft,
       depth: 0,
     })
   );
   if (typeof row !== "object" || row === null) return null;
   const record = row as Record<string, unknown>;
-  return { page: storedPageOf(record, field), version: record[VERSION_KEY] };
+  return {
+    page: storedPageOf(record, field),
+    version: record[VERSION_KEY],
+    templateTarget: templateTargetOf(record),
+  };
 }
 
 /** The parts of a page row an action reads and writes. */
@@ -378,10 +538,12 @@ async function planAction(
   action: PageAction,
   stored: StoredPage,
   field: string,
-  collection: string,
+  source: UnbindSource,
   setup: PageActionsSetup
 ): Promise<PlannedWrite> {
-  if (action.kind === "set-layout") return planLayout(ctx, action, collection);
+  if (action.kind === "set-layout") {
+    return planLayout(ctx, action, source.collection);
+  }
   const document = stored.document;
   if (document === null) {
     throw refusedAction([`This entry has no "${field}" blocks to change.`]);
@@ -391,7 +553,8 @@ async function planAction(
     ctx,
     action,
     document,
-    storeOf(ctx, setup).collection
+    storeOf(ctx, setup).collection,
+    source
   );
   let next: BlockDocument;
   try {
@@ -405,6 +568,7 @@ async function planAction(
     ops: ops.ops,
     document: next,
     ...(ops.insertedId === undefined ? {} : { insertedId: ops.insertedId }),
+    ...(ops.unbound === undefined ? {} : { unbound: ops.unbound }),
   };
 }
 
@@ -413,9 +577,20 @@ async function opsFor(
   ctx: PageActionsContext,
   action: Exclude<PageAction, { kind: "set-layout" }>,
   document: BlockDocument,
-  components: string
-): Promise<{ ops: readonly BuilderOp[]; insertedId?: string }> {
+  components: string,
+  source: UnbindSource
+): Promise<{
+  ops: readonly BuilderOp[];
+  insertedId?: string;
+  unbound?: UnbindAnswer;
+}> {
   switch (action.kind) {
+    case "place-entry-content":
+      return placeEntryContentOps(ctx, action, document, source.templateTarget);
+    case "set-entry-content-field":
+      return {
+        ops: [entryContentFieldUpdate(document, action.nodeId, action.field)],
+      };
     case "insert-pattern":
       return insertPatternOps(ctx, action.patternId, action.at, document);
     case "place-component":
@@ -432,6 +607,19 @@ async function opsFor(
       return {
         ops: [listQueryUpdate(document, action.listId, action.query)],
       };
+    case "set-conditions":
+      return {
+        ops: [conditionsUpdate(document, action.nodeId, action.conditions)],
+      };
+    case "bind-prop":
+      return { ops: [bindUpdate(document, action)] };
+    case "unbind-prop":
+      return unbindOps(
+        document,
+        action,
+        source,
+        unbindReadsOf(ctx.services.collections)
+      );
     case "choose-variant":
       return {
         ops: [
@@ -532,6 +720,77 @@ async function requireReadable(
   }
 }
 
+/**
+ * The insert op that places an Entry content block: with the field named,
+ * else the template's collection's one top-level blocks field where it has
+ * exactly one, so the stored choice is explicit. With several and none
+ * named, it is placed naming none, and the write is refused until one is
+ * chosen. Whether it may be placed here at all (a template, one of them) is
+ * the write's to judge, as an editor save is.
+ */
+async function placeEntryContentOps(
+  ctx: PageActionsContext,
+  action: Extract<PageAction, { kind: "place-entry-content" }>,
+  document: BlockDocument,
+  templateTarget: string | undefined
+): Promise<{ ops: readonly BuilderOp[]; insertedId: string }> {
+  const field = action.field ?? (await onlyBlocksFieldOf(ctx, templateTarget));
+  const node: BlockNode = {
+    id: newId(),
+    type: ENTRY_CONTENT_TYPE,
+    version: 1,
+    props: field === undefined ? {} : { [ENTRY_CONTENT_FIELD_PROP]: field },
+  };
+  return {
+    ops: [
+      {
+        kind: "insert",
+        node,
+        at: action.at ?? { index: document.nodes.length },
+      },
+    ],
+    insertedId: node.id,
+  };
+}
+
+/**
+ * The template's collection's one top-level blocks field, or nothing where
+ * it has none or several, or the page is no template.
+ */
+async function onlyBlocksFieldOf(
+  ctx: PageActionsContext,
+  templateTarget: string | undefined
+): Promise<string | undefined> {
+  if (templateTarget === undefined) return undefined;
+  // A failed read aborts the action rather than placing the block with a
+  // guess; a collection the site does not have offers no field to choose.
+  const read = await readEntryBlocksFields(
+    ctx.services.collections,
+    templateTarget
+  );
+  const fields = read?.fields ?? [];
+  return fields.length === 1 ? fields[0]?.name : undefined;
+}
+
+/** The update op that chooses the field an Entry content block draws. */
+function entryContentFieldUpdate(
+  document: BlockDocument,
+  nodeId: string,
+  field: string
+): BuilderOp {
+  const node = findNode(document.nodes, nodeId);
+  if (node === undefined || node.type !== ENTRY_CONTENT_TYPE) {
+    throw refusedAction([
+      `There is no Entry content block "${nodeId}" on this page.`,
+    ]);
+  }
+  return {
+    kind: "update",
+    id: nodeId,
+    patch: { props: { ...node.props, [ENTRY_CONTENT_FIELD_PROP]: field } },
+  };
+}
+
 /** The update op that rewrites one placement's props. */
 function placementUpdate(
   document: BlockDocument,
@@ -551,9 +810,18 @@ function placementUpdate(
   };
 }
 
+/** The parts of a list's query a custom source replaces, as one source. */
+const SOURCE_PARTS = ["collection", "relation", "filters", "sort"] as const;
+
 /**
  * The update op that changes one collection list's query: each part given
  * is set, each `null` removed, and the rest of its props kept as stored.
+ *
+ * A list has one source. Choosing a custom source (`namedQuery`) removes the
+ * collection, related entries, filters and sort in the same write, as the
+ * editor's Source menu does, so one action is one undo step; a change that
+ * sets both is refused. Choosing a collection or related entries removes a
+ * custom source.
  */
 function listQueryUpdate(
   document: BlockDocument,
@@ -566,13 +834,112 @@ function listQueryUpdate(
       `There is no collection list "${listId}" on this page.`,
     ]);
   }
-  const props: Record<string, unknown> = { ...node.props };
+  return {
+    kind: "update",
+    id: listId,
+    patch: { props: listPropsWith({ ...node.props }, change) },
+  };
+}
+
+/**
+ * A list's props with `change` applied: each part given set, each `null`
+ * removed. A list has one source: a change setting a custom source removes
+ * the collection, related entries, filters and sort, and is refused when it
+ * also names one of them (empty forms name none, as the save reads them); a
+ * change naming a collection or related entries removes a custom source.
+ */
+function listPropsWith(
+  props: Record<string, unknown>,
+  change: ListQueryChange
+): Record<string, unknown> {
+  const settingNamed =
+    change.namedQuery !== undefined && change.namedQuery !== null;
+  if (settingNamed) {
+    if (namesListSource({ ...change })) {
+      throw refusedAction([
+        "This list's source is a custom source, so it can't also name a collection, related entries, filters or sort.",
+      ]);
+    }
+    for (const part of SOURCE_PARTS) delete props[part];
+  } else if (
+    namesListSource({
+      collection: change.collection,
+      relation: change.relation,
+    })
+  ) {
+    delete props.namedQuery;
+  }
+  // A custom source's write leaves the source parts it removed removed,
+  // whatever empty form they were sent in.
+  const skipped: readonly string[] = settingNamed ? SOURCE_PARTS : [];
   for (const [part, value] of Object.entries(change)) {
-    if (value === undefined) continue;
+    if (value === undefined || skipped.includes(part)) continue;
     if (value === null) delete props[part];
     else props[part] = value;
   }
-  return { kind: "update", id: listId, patch: { props } };
+  return props;
+}
+
+/**
+ * The update op that sets one block's visibility conditions, through the
+ * editor's own writer, so the devices it shows on are kept and a block shown
+ * to everyone stores no visibility. Whether each condition fits is the
+ * blocks field's to judge on the write, as for an editor save.
+ */
+function conditionsUpdate(
+  document: BlockDocument,
+  nodeId: string,
+  conditions: Extract<PageAction, { kind: "set-conditions" }>["conditions"]
+): BuilderOp {
+  const op = conditionsOp(document, nodeId, conditions);
+  if (op === null) {
+    throw refusedAction([`There is no block "${nodeId}" on this page.`]);
+  }
+  return op;
+}
+
+/**
+ * The op binding a block's prop, through the editor's own writer. Whether the
+ * binding fits is the blocks field's to judge on the write, as for an editor
+ * save.
+ */
+function bindUpdate(
+  document: BlockDocument,
+  action: Extract<PageAction, { kind: "bind-prop" }>
+): BuilderOp {
+  const op = bindOp(document, action.nodeId, action.prop, action.binding);
+  if (op === null) {
+    throw refusedAction([`There is no block "${action.nodeId}" on this page.`]);
+  }
+  return op;
+}
+
+/**
+ * The op unbinding a block's prop, keeping in its place what the one
+ * server-side decision says (`unbind-kept`): what a visitor sees now, read as
+ * the published page reads it, unless the caller named an entry or item, or
+ * gave the value. The answer says what was kept and why.
+ */
+async function unbindOps(
+  document: BlockDocument,
+  action: Extract<PageAction, { kind: "unbind-prop" }>,
+  source: UnbindSource,
+  reads: UnbindReads
+): Promise<{ ops: readonly BuilderOp[]; unbound: UnbindAnswer }> {
+  const plan = await planUnbind(
+    source,
+    document,
+    action.nodeId,
+    action.prop,
+    action.keep ?? "visitor",
+    reads
+  );
+  if ("refusal" in plan) throw refusedAction([plan.refusal]);
+  const op = unbindOp(document, action.nodeId, action.prop, plan.kept);
+  if (op === null) {
+    throw refusedAction([`There is no block "${action.nodeId}" on this page.`]);
+  }
+  return { ops: [op], unbound: plan.answer };
 }
 
 /** A placement's props with values set and some fields reset to what they inherit. */
