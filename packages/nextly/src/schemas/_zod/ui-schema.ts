@@ -269,8 +269,9 @@ export type FieldNode = {
 /**
  * The name the Schema Builder gives a field: snake case. The definition file
  * takes a camelCase name too (a plugin's or the API's collection may declare
- * one, and the file records it as the registry does), but the Builder's own
- * payload keeps this rule (`assertValidFieldsPayload`).
+ * one, and the file records it as the registry does). The Builder's own
+ * payload keeps this rule for every name it creates, and takes a name the
+ * entity already holds whatever its case (`assertBuilderFieldNames`).
  */
 export const BUILDER_FIELD_NAME_RE = /^[a-z][a-z0-9_]*$/;
 

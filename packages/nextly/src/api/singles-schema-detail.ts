@@ -43,7 +43,10 @@ import type { FieldGroupRegistryService } from "../services/field-groups/field-g
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
 
-import { assertValidFieldsPayload } from "./fields-payload";
+import {
+  assertBuilderFieldNames,
+  assertValidFieldsPayload,
+} from "./fields-payload";
 import { respondDoc, respondMutation } from "./response-shapes";
 import {
   requireRouteAllPermissions,
@@ -175,7 +178,8 @@ export const PATCH = withErrorHandler(
 
     if (body.fields !== undefined) {
       // Same rules as the ui-schema.json mirror (see api/fields-payload).
-      assertValidFieldsPayload(body.fields);
+      // The names are judged under the lock below, against the row as stored then.
+      assertValidFieldsPayload(body.fields, { stored: "under-lock" });
       updateData.fields = body.fields;
       // The registry re-validates the field config; cast through `unknown`
       // to avoid `any` while keeping the existing trust boundary.
@@ -264,19 +268,28 @@ export const PATCH = withErrorHandler(
         issuesDdl: false,
       },
       async () => {
-        if (Object.keys(adminOverrides).length > 0) {
+        const hasOverrides = Object.keys(adminOverrides).length > 0;
+        if (hasOverrides || body.fields !== undefined) {
           // As stored, past the registry row cache: the overrides merge into it, so a cached row
-          // would write back an admin setting another instance changed a moment ago.
+          // would write back an admin setting another instance changed a moment ago, and the
+          // field names are judged against the fields it holds now.
           const existing = await registry.getSingleForWrite(slug);
           if (!existing) {
             throw NextlyError.notFound({
               logContext: { entity: "Single", slug },
             });
           }
-          updateData.admin = {
-            ...(existing.admin || {}),
-            ...adminOverrides,
-          };
+          if (body.fields !== undefined) {
+            // A field name the Single already holds keeps working whatever its case; one this
+            // save creates is the Builder's own.
+            assertBuilderFieldNames(body.fields, existing.fields ?? []);
+          }
+          if (hasOverrides) {
+            updateData.admin = {
+              ...(existing.admin || {}),
+              ...adminOverrides,
+            };
+          }
         }
 
         // Update Single (source: "ui" to enforce locking rules)

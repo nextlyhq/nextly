@@ -21,6 +21,7 @@
 import { z } from "zod";
 
 import {
+  assertBuilderFieldNames,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
 } from "../../api/fields-payload";
@@ -691,7 +692,11 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields, { kind: "collection" });
+      // A field name the collection already holds keeps working whatever its case.
+      assertValidFieldsPayload(fields, {
+        kind: "collection",
+        stored: collection.fields ?? [],
+      });
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -850,7 +855,10 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields, { kind: "collection" });
+      assertValidFieldsPayload(fields, {
+        kind: "collection",
+        stored: "under-lock",
+      });
 
       // Log a debug line when hints arrive so we can track adoption
       // without surprising operators with errors. The current version
@@ -886,6 +894,9 @@ const COLLECTIONS_METHODS: Record<
           );
           if (!collection) throw new Error("Collection not found");
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
+          // A field name the collection already holds keeps working whatever its case; one this
+          // save creates is the Builder's own. Judged against the row as stored now.
+          assertBuilderFieldNames(fields, collection.fields ?? []);
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write; one the entity already holds keeps working. Asked here because this
           // road reaches its DDL through no shared service that could ask it.

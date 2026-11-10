@@ -102,17 +102,28 @@ export function assertValidPluginFieldOptions(fields: unknown): void {
  *   column name (`created_by` / `createdBy`) is additionally reserved, since it
  *   only exists on collection tables. Singles and components have no owner
  *   column, so those names stay valid there.
+ * @param opts.stored - The entity's fields as stored, for a change to one that
+ *   exists: a name it already holds keeps working whatever its case
+ *   (`assertBuilderFieldNames`). Absent, as for a new entity, every name is
+ *   held to the Builder's own. `"under-lock"` leaves the names to the caller,
+ *   which reads the stored fields only once it holds the schema lock and asks
+ *   `assertBuilderFieldNames` there, before any write.
  */
 export function assertValidFieldsPayload(
   fields: unknown,
-  opts: { kind?: "collection" | "single" | "component" } = {}
+  opts: {
+    kind?: "collection" | "single" | "component";
+    stored?: readonly unknown[] | "under-lock";
+  } = {}
 ): void {
   const parsed = fieldsArraySchema.safeParse(fields);
   if (!parsed.success) {
     throw nextlyValidationFromZod(parsed.error);
   }
   assertValidPluginFieldOptions(fields);
-  assertBuilderFieldNames(fields as readonly FieldName[], "");
+  if (opts.stored !== "under-lock") {
+    assertBuilderFieldNames(fields, opts.stored ?? []);
+  }
   if (opts.kind === "collection" && Array.isArray(fields)) {
     fields.forEach((field, index) => {
       const name = (field as { name?: unknown } | null)?.name;
@@ -134,22 +145,43 @@ export function assertValidFieldsPayload(
 /** A field as its name and nested fields are read here. */
 interface FieldName {
   name?: unknown;
-  fields?: readonly FieldName[];
+  fields?: unknown;
+}
+
+/** The fields of a list read as `FieldName`s, skipping anything that is not one. */
+function fieldNames(list: unknown): readonly FieldName[] {
+  return Array.isArray(list)
+    ? list.filter(
+        (field): field is FieldName =>
+          field !== null && typeof field === "object"
+      )
+    : [];
 }
 
 /**
- * Refuses a field, at any depth, whose name is not the Builder's own
- * (`BUILDER_FIELD_NAME_RE`). The definition file's schema takes a camelCase
- * name a plugin or the API declared; the Builder's payload does not.
+ * Refuses a field, at any depth, whose name is neither the Builder's own
+ * (`BUILDER_FIELD_NAME_RE`) nor one `stored` already holds at the same place.
+ * The definition file takes a camelCase name a plugin or the API declared, and
+ * the admin sends every field the entity has on each save, so such a name
+ * keeps working where it is stored; a name the save creates, or one moved to
+ * another place, is the Builder's and so is snake case.
  */
-function assertBuilderFieldNames(
-  fields: readonly FieldName[],
-  path: string
+export function assertBuilderFieldNames(
+  fields: unknown,
+  stored: readonly unknown[],
+  path = ""
 ): void {
-  fields.forEach((field, index) => {
+  const held = new Map<string, FieldName>();
+  for (const field of fieldNames(stored)) {
+    if (typeof field.name === "string") held.set(field.name, field);
+  }
+  fieldNames(fields).forEach((field, index) => {
     const at = `${path}${index}`;
+    const kept =
+      typeof field.name === "string" ? held.get(field.name) : undefined;
     if (
       typeof field.name === "string" &&
+      kept === undefined &&
       !BUILDER_FIELD_NAME_RE.test(field.name)
     ) {
       throw NextlyError.validation({
@@ -163,7 +195,11 @@ function assertBuilderFieldNames(
       });
     }
     if (Array.isArray(field.fields)) {
-      assertBuilderFieldNames(field.fields, `${at}.fields.`);
+      assertBuilderFieldNames(
+        field.fields,
+        fieldNames(kept?.fields),
+        `${at}.fields.`
+      );
     }
   });
 }
