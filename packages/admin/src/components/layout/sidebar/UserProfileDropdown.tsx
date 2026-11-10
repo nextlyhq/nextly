@@ -14,7 +14,7 @@ import {
 import type { JSX } from "react";
 
 import { User as UserIcon, LogOut } from "@admin/components/icons";
-import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { ROUTES } from "@admin/constants/routes";
 import {
   useSetInterfaceLanguage,
   useStoredInterfaceLanguage,
@@ -140,10 +140,9 @@ export function UserProfileDropdown({
           <InterfaceLanguageChoice />
           {/* Muted foreground so this menu label meets contrast; a faint primary alpha did not. */}
           <DropdownMenuItem
-            onClick={() => {
-              if (!user?.id) return;
-              navigateTo(buildRoute(ROUTES.USERS_EDIT, { id: user.id }));
-            }}
+            // The signed-in person's own page, which every one of them may
+            // open: the users edit page needs a permission many lack.
+            onClick={() => navigateTo(ROUTES.ACCOUNT)}
             className="group flex w-full cursor-pointer items-center gap-3 rounded-sm px-3 py-2.5 text-sm font-medium transition-colors hover-subtle-row text-muted-foreground"
           >
             <UserIcon className="h-4 w-4 transition-colors" />

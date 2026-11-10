@@ -86,16 +86,32 @@ async function answer(args: string[], folder: string) {
     NEXTLY_READ_PROBE_OUT: out,
   });
   const touched = JSON.parse(readFileSync(out, "utf8")) as string[];
-  const named = (text: string) => text.split(folder).join("<folder>");
   return {
     run,
     touched,
     shown: {
       status: run.status,
-      stdout: named(run.stdout),
-      stderr: named(run.stderr),
+      stdout: shownAlike(run.stdout, folder),
+      stderr: shownAlike(run.stderr, folder),
     },
   };
+}
+
+/**
+ * `text` with the path of `folder` named alike wherever it appears, and
+ * `--cwd`'s default, which is that folder too, named alike whatever form the
+ * help prints it in: quoted and escaped, as commander prints a default, and on
+ * Windows under the temp folder's short name, a spelling of the path the test
+ * never made.
+ */
+function shownAlike(text: string, folder: string): string {
+  return text
+    .split(folder)
+    .join("<folder>")
+    .replace(
+      /(--cwd <path>[^\n]*\(default: )"(?:[^"\\]|\\.)*"/g,
+      '$1"<folder>"'
+    );
 }
 
 describe("an answer-only invocation reads neither the configuration nor the environment files", () => {
@@ -103,6 +119,19 @@ describe("an answer-only invocation reads neither the configuration nor the envi
     // The population: removing a command is a decision this count makes
     // visible, rather than a case that quietly stops being run.
     expect(INVOCATIONS.length).toBeGreaterThanOrEqual(43);
+  });
+
+  it("names the folder alike however the help prints `--cwd`'s default", () => {
+    // As Windows printed it: quoted, each backslash doubled, and the temp
+    // folder under its short name, which is not the path the test made.
+    const help =
+      '  --cwd <path>  Working directory (default: "C:\\\\Users\\\\RUNNER~1\\\\AppData\\\\Local\\\\Temp\\\\nextly-answer-kNUdBN\\\\empty")';
+    expect(
+      shownAlike(
+        help,
+        "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\nextly-answer-kNUdBN\\empty"
+      )
+    ).toBe('  --cwd <path>  Working directory (default: "<folder>")');
   });
 
   // The control: the probe does see a read, so an empty list below means the

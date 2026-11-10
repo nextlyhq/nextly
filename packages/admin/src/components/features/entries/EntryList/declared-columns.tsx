@@ -46,12 +46,16 @@ const CONTROL =
 /**
  * A click on a control the plugin drew in its cell stays in the cell: the row
  * around it opens its entry on a click, which would follow the control's own
- * action. A click on the cell's plain content still opens the row.
+ * action. So does any click from something the cell drew elsewhere in the
+ * page through a portal, a menu or a popover, which React still passes up
+ * through the cell. A click on the cell's plain content still opens the row.
  */
 function keepControlClickInCell(event: MouseEvent<HTMLElement>): void {
-  const control =
-    event.target instanceof Element ? event.target.closest(CONTROL) : null;
-  if (control && event.currentTarget.contains(control)) {
+  const target = event.target;
+  const drawnElsewhere =
+    !(target instanceof Node) || !event.currentTarget.contains(target);
+  const control = target instanceof Element ? target.closest(CONTROL) : null;
+  if (drawnElsewhere || (control && event.currentTarget.contains(control))) {
     event.stopPropagation();
   }
 }

@@ -284,6 +284,66 @@ describe("refuseRequiredColumnsOverNulls", () => {
     ]);
   });
 
+  // The classifier reads a required field a confirmed rename fills as added, before the renames
+  // are answered. The apply renames the column, so its rows keep their values: they are counted
+  // in the column it is renamed from, never as every row of the table.
+  describe("a required field a confirmed rename fills", () => {
+    const renamedInto = (from: string): Operation[] => [
+      {
+        type: "rename_column",
+        tableName: "dc_posts",
+        fromColumn: from,
+        toColumn: "sub_title",
+        fromType: "text",
+        toType: "text",
+      },
+    ];
+    const renamed: DesiredSchema = {
+      ...posts,
+      collections: {
+        posts: {
+          ...posts.collections.posts,
+          fields: [{ name: "subTitle", type: "text", required: true }] as never,
+        },
+      },
+    };
+    const judge = (operations: Operation[]) =>
+      refuseRequiredColumnsOverNulls({
+        db,
+        dialect: "sqlite",
+        desired: renamed,
+        events: [addedRequired("dc_posts", "sub_title")],
+        resolutions: [],
+        operations,
+        fieldGroupRegistryTable: undefined,
+      }).then(
+        () => null,
+        (error: unknown) => {
+          if (!NextlyError.isValidation(error)) throw error;
+          const data = error.publicData as { errors: { message: string }[] };
+          return data.errors.map(e => e.message);
+        }
+      );
+
+    it("is let through when every row holds a value in the column it is renamed from", async () => {
+      sqlite.exec(`UPDATE dc_posts SET body = 'filled'`);
+      expect(await judge(renamedInto("body"))).toBeNull();
+    });
+
+    it("is refused for the rows holding no value in the column it is renamed from", async () => {
+      expect(await judge(renamedInto("body"))).toEqual([
+        "Collection 'posts': field 'subTitle' cannot become required while 2 rows hold no value in it. Give those rows a value first, or keep the field optional.",
+      ]);
+    });
+
+    it("is counted as added when the field is added rather than renamed", async () => {
+      sqlite.exec(`UPDATE dc_posts SET body = 'filled'`);
+      expect(await judge([])).toEqual([
+        "Collection 'posts': field 'subTitle' cannot be added as required without a default while 3 rows exist, which would hold no value in it. Give it a default, or add it as optional.",
+      ]);
+    });
+  });
+
   it("lets a column through when no row holds null in it any more", async () => {
     // The control the refusals need: the count is read now, not taken from the event.
     sqlite.exec(`UPDATE dc_posts SET summary = 'filled'`);

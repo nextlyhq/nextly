@@ -237,6 +237,7 @@ vi.mock("@admin/components/features/auth-login", () => ({
 
 import LoginPage from "@admin/pages/(auth)/login";
 import DashboardPage from "@admin/pages/dashboard";
+import AccountPage from "@admin/pages/dashboard/account";
 import SettingsGeneralPage from "@admin/pages/dashboard/settings";
 import EditUserPage from "@admin/pages/dashboard/users/edit";
 import { EntryForm } from "@admin/components/features/entries/EntryForm/EntryForm";
@@ -399,17 +400,16 @@ const homepageDocument = {
   status: "draft",
 } as unknown as SingleDocumentData;
 
-/**
- * The host of every core place. The account page is not on this branch: it
- * joins this map, and the `Exclude` goes, when this branch takes the change
- * that adds it.
- */
-const PLACE_HOSTS: {
-  [P in Exclude<CoreAdminPlaceId, "account">]: PlaceHost;
-} = {
+/** The host of every core place: a place without one fails to compile here. */
+const PLACE_HOSTS: { [P in CoreAdminPlaceId]: PlaceHost } = {
   dashboard: {
     render: () => render(<DashboardPage />, { wrapper: Providers }),
     own: () => screen.findByRole("heading", { name: "Welcome, Ada" }),
+  },
+  account: {
+    render: () => render(<AccountPage />, { wrapper: Providers }),
+    // The page's own card: the person's profile form.
+    own: () => screen.findByLabelText("Name"),
   },
   "collection.list": {
     render: () =>
@@ -468,7 +468,7 @@ afterEach(() => {
 
 describe("every core place's host", () => {
   for (const [place, host] of Object.entries(PLACE_HOSTS) as [
-    Exclude<CoreAdminPlaceId, "account">,
+    CoreAdminPlaceId,
     PlaceHost,
   ][]) {
     const accepts: readonly Kind[] = CORE_ADMIN_PLACES[place].accepts;
@@ -489,4 +489,29 @@ describe("every core place's host", () => {
       expect(screen.queryByRole("tab", { name: "Fixture tab" })).toBeNull();
     });
   }
+});
+
+describe("the entry list's place", () => {
+  it("lays out its own parts and a contributed block as one column, spaced by one gap", async () => {
+    contributeEveryKind("collection.list");
+    PLACE_HOSTS["collection.list"].render();
+
+    const table = await screen.findByRole("table", { name: "Entries table" });
+    const block = (await screen.findAllByTestId("fixture-block"))[0]!;
+    const heading = screen.getByRole("heading", { level: 1 });
+    const place = block.closest(".gap-8");
+    expect(place?.className).toContain("flex-col");
+
+    // The part of the place each sits in: its child of the place's column.
+    const partOf = (element: Element): Element => {
+      let node = element;
+      while (node.parentElement !== place) node = node.parentElement!;
+      return node;
+    };
+    const parts = [heading, block, table].map(partOf);
+    // Three parts, not one: the gap stands between each.
+    expect(new Set(parts).size).toBe(3);
+    // The gap is the only space: the header keeps no margin of its own.
+    expect(parts[0]!.className).not.toMatch(/\bmb-/);
+  });
 });

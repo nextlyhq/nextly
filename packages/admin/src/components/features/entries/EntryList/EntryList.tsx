@@ -776,137 +776,152 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       )}
       {/* The list's own parts are the place's built-ins, `toolbar` (the
           header) and `table` (the list itself): plugins' blocks draw around
-          them in the order sent. */}
-      <TargetSlot
-        place="collection.list"
-        context={placeContext}
-        builtIns={{
-          toolbar: (
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-              <div>
-                <h1 className="text-xl font-semibold tracking-tight">
-                  {labels.plural}
-                </h1>
-                {collection?.description && (
-                  <p className="text-sm font-normal text-muted-foreground mt-1">
-                    {collection.description}
-                  </p>
-                )}
-              </div>
-              <div className="flex items-center gap-2 w-full sm:w-auto">
-                <Button
-                  variant="outline"
-                  onClick={handleApiPlaygroundClick}
-                  className="flex-1 sm:flex-initial hover-unified"
-                >
-                  <Code className="h-4 w-4" />
-                  API
-                </Button>
-                {/* Machine-created collections (disableCreate) never offer "New" —
-                      a hand-typed entry there would be fiction, not data — and nor
-                      does a collection the caller may not create in. */}
-                {createAllowed && (
+          them in the order sent. One gap spaces every part the place lays
+          out, built-in or contributed, so a block never sits against the
+          list; with nothing contributed it is the header's space above the
+          list, as before. */}
+      <div className="flex flex-col gap-8">
+        <TargetSlot
+          place="collection.list"
+          context={placeContext}
+          builtIns={{
+            toolbar: (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h1 className="text-xl font-semibold tracking-tight">
+                    {labels.plural}
+                  </h1>
+                  {collection?.description && (
+                    <p className="text-sm font-normal text-muted-foreground mt-1">
+                      {collection.description}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 w-full sm:w-auto">
                   <Button
-                    onClick={handleCreateClick}
+                    variant="outline"
+                    onClick={handleApiPlaygroundClick}
                     className="flex-1 sm:flex-initial hover-unified"
                   >
-                    <Plus className="h-4 w-4" />
-                    New {labels.singular}
+                    <Code className="h-4 w-4" />
+                    API
                   </Button>
+                  {/* Machine-created collections (disableCreate) never offer "New" —
+                      a hand-typed entry there would be fiction, not data — and nor
+                      does a collection the caller may not create in. */}
+                  {createAllowed && (
+                    <Button
+                      onClick={handleCreateClick}
+                      className="flex-1 sm:flex-initial hover-unified"
+                    >
+                      <Plus className="h-4 w-4" />
+                      New {labels.singular}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ),
+            table: (
+              // One part of the place: what the list draws inside it keeps its
+              // own spacing.
+              <div>
+                {/* BeforeListTable injection point */}
+                {beforeListTablePath && (
+                  <PluginSlot
+                    path={beforeListTablePath}
+                    props={injectionProps}
+                  />
+                )}
+
+                {/* Content — a plugin List override replaces the default table (D23) */}
+                {listViewPath ? (
+                  <PluginSlot path={listViewPath} props={injectionProps} />
+                ) : tableGone ? null : lostPluginFilters ? (
+                  <Alert variant="destructive">
+                    <AlertDescription>
+                      This link chooses a plugin&apos;s filter, and the filters
+                      couldn&apos;t be loaded, so the list isn&apos;t shown.
+                      Reload the page to try again.
+                    </AlertDescription>
+                  </Alert>
+                ) : entriesError ? (
+                  // A list the server refused says so in its own words where the rows
+                  // would be. Without this a failed read has no rows and is not
+                  // loading, which draws the empty state and calls the collection empty.
+                  <Alert variant="destructive">
+                    <AlertDescription>
+                      {apiErrorMessage(
+                        entriesError,
+                        "The entries couldn't be loaded."
+                      )}
+                    </AlertDescription>
+                  </Alert>
+                ) : entries.length === 0 &&
+                  !entriesLoading &&
+                  !search &&
+                  whereFilter === undefined ? (
+                  // Only an unfiltered list is empty. A filtered one with no rows keeps
+                  // its table, and with it the toolbar that clears the filter.
+                  <EntryEmptyState
+                    collectionName={labels.plural}
+                    singularName={labels.singular}
+                    onCreateClick={
+                      createAllowed ? handleCreateClick : undefined
+                    }
+                  />
+                ) : (
+                  <EntryTable
+                    ref={tableRef}
+                    declaredRowActions={declaredActions.rowActions}
+                    declaredBulkActions={declaredBulk.bulkActions}
+                    declaredColumns={declaredTableColumns}
+                    collection={collectionForColumns}
+                    entries={entries}
+                    pagination={pagination}
+                    isLoading={entriesLoading}
+                    currentSort={sort}
+                    onPageChange={handlePageChange}
+                    onLimitChange={handleLimitChange}
+                    onSortChange={handleSortChange}
+                    onSearchChange={handleSearchChange}
+                    onEdit={handleEdit}
+                    onDelete={handleDelete}
+                    onBulkDelete={handleBulkDelete}
+                    onBulkPublish={handleBulkPublish}
+                    onBulkUnpublish={handleBulkUnpublish}
+                    isBulkPublishing={bulkUpdate.isPending}
+                    onSelectionChange={handleSelectionChange}
+                    status={status}
+                    onStatusChange={handleStatusChange}
+                    translationFilter={translationFilter}
+                    onTranslationFilterChange={handleTranslationFilterChange}
+                    pluginFilters={pluginFilters}
+                    chosenPluginFilters={chosenPluginFilterOptions}
+                    onPluginFilterChange={handlePluginFilterChange}
+                    createdFrom={createdFrom}
+                    createdTo={createdTo}
+                    updatedFrom={updatedFrom}
+                    updatedTo={updatedTo}
+                    onCreatedFromChange={handleCreatedFromChange}
+                    onCreatedToChange={handleCreatedToChange}
+                    onUpdatedFromChange={handleUpdatedFromChange}
+                    onUpdatedToChange={handleUpdatedToChange}
+                    columnsControl={columnsControl}
+                  />
+                )}
+
+                {/* AfterListTable injection point (D23) */}
+                {afterListTablePath && (
+                  <PluginSlot
+                    path={afterListTablePath}
+                    props={injectionProps}
+                  />
                 )}
               </div>
-            </div>
-          ),
-          table: (
-            <>
-              {/* BeforeListTable injection point */}
-              {beforeListTablePath && (
-                <PluginSlot path={beforeListTablePath} props={injectionProps} />
-              )}
-
-              {/* Content — a plugin List override replaces the default table (D23) */}
-              {listViewPath ? (
-                <PluginSlot path={listViewPath} props={injectionProps} />
-              ) : tableGone ? null : lostPluginFilters ? (
-                <Alert variant="destructive">
-                  <AlertDescription>
-                    This link chooses a plugin&apos;s filter, and the filters
-                    couldn&apos;t be loaded, so the list isn&apos;t shown.
-                    Reload the page to try again.
-                  </AlertDescription>
-                </Alert>
-              ) : entriesError ? (
-                // A list the server refused says so in its own words where the rows
-                // would be. Without this a failed read has no rows and is not
-                // loading, which draws the empty state and calls the collection empty.
-                <Alert variant="destructive">
-                  <AlertDescription>
-                    {apiErrorMessage(
-                      entriesError,
-                      "The entries couldn't be loaded."
-                    )}
-                  </AlertDescription>
-                </Alert>
-              ) : entries.length === 0 &&
-                !entriesLoading &&
-                !search &&
-                whereFilter === undefined ? (
-                // Only an unfiltered list is empty. A filtered one with no rows keeps
-                // its table, and with it the toolbar that clears the filter.
-                <EntryEmptyState
-                  collectionName={labels.plural}
-                  singularName={labels.singular}
-                  onCreateClick={createAllowed ? handleCreateClick : undefined}
-                />
-              ) : (
-                <EntryTable
-                  ref={tableRef}
-                  declaredRowActions={declaredActions.rowActions}
-                  declaredBulkActions={declaredBulk.bulkActions}
-                  declaredColumns={declaredTableColumns}
-                  collection={collectionForColumns}
-                  entries={entries}
-                  pagination={pagination}
-                  isLoading={entriesLoading}
-                  currentSort={sort}
-                  onPageChange={handlePageChange}
-                  onLimitChange={handleLimitChange}
-                  onSortChange={handleSortChange}
-                  onSearchChange={handleSearchChange}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                  onBulkDelete={handleBulkDelete}
-                  onBulkPublish={handleBulkPublish}
-                  onBulkUnpublish={handleBulkUnpublish}
-                  isBulkPublishing={bulkUpdate.isPending}
-                  onSelectionChange={handleSelectionChange}
-                  status={status}
-                  onStatusChange={handleStatusChange}
-                  translationFilter={translationFilter}
-                  onTranslationFilterChange={handleTranslationFilterChange}
-                  pluginFilters={pluginFilters}
-                  chosenPluginFilters={chosenPluginFilterOptions}
-                  onPluginFilterChange={handlePluginFilterChange}
-                  createdFrom={createdFrom}
-                  createdTo={createdTo}
-                  updatedFrom={updatedFrom}
-                  updatedTo={updatedTo}
-                  onCreatedFromChange={handleCreatedFromChange}
-                  onCreatedToChange={handleCreatedToChange}
-                  onUpdatedFromChange={handleUpdatedFromChange}
-                  onUpdatedToChange={handleUpdatedToChange}
-                  columnsControl={columnsControl}
-                />
-              )}
-
-              {/* AfterListTable injection point (D23) */}
-              {afterListTablePath && (
-                <PluginSlot path={afterListTablePath} props={injectionProps} />
-              )}
-            </>
-          ),
-        }}
-      />
+            ),
+          }}
+        />
+      </div>
 
       {/* Bulk Delete Confirmation Dialog */}
       <BulkDeleteDialog

@@ -42,9 +42,16 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-/** What the logger printed as info, without its symbol. */
+/**
+ * What the logger printed as info, without its symbol. Colour codes are
+ * dropped first: the symbol is coloured wherever the terminal takes colour,
+ * which Windows does by default.
+ */
 const info = () =>
-  output.filter(line => line.startsWith("ℹ ")).map(line => line.slice(2));
+  output
+    .map(line => line.replace(/\u001b\[[0-9;]*m/g, ""))
+    .filter(line => line.startsWith("ℹ "))
+    .map(line => line.slice(2));
 
 /** A command with no global options given, as the program hands one over. */
 const command = () => new Command("telemetry").option("--no-color");
