@@ -595,12 +595,19 @@ async function fontsFolder(
     return await claimedFontsFolder(
       {
         list: () => api.media.folders.list({ overrideAccess: true }),
+        // The library refuses a second root "Fonts" folder as a duplicate:
+        // another process made one since this add listed the folders.
         create: () =>
-          api.media.folders.create({
-            name: FONTS_FOLDER,
-            overrideAccess: true,
-            ...(user === null ? {} : { user: { id: user.id } }),
-          }),
+          api.media.folders
+            .create({
+              name: FONTS_FOLDER,
+              overrideAccess: true,
+              ...(user === null ? {} : { user: { id: user.id } }),
+            })
+            .catch((error: unknown) => {
+              if (NextlyError.isCode(error, "DUPLICATE")) return null;
+              throw error;
+            }),
         remove: async id => {
           // Trusted, as the folder was made, and refused unless empty.
           await ctx.services.media.deleteFolder(id);

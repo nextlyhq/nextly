@@ -38,8 +38,10 @@ import {
 // The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
-import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
-import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
+import {
+  mainTableFields,
+  storesPerLanguage,
+} from "../../domains/i18n/per-language-storage";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -106,25 +108,6 @@ import type { LoadConfigResult } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
 import type { ResolvedDevOptions } from "./db-sync";
-
-/**
- * The fields whose columns belong on an entity's main table: every one, or for an entity whose
- * translatable values live in its companion (`storesPerLanguage`), its shared ones only, so a
- * column top-up never puts a translatable column back on the main table.
- */
-function mainTableFields<F extends { name?: string; type: string }>(
-  entity: { localized?: unknown },
-  fields: F[]
-): F[] {
-  if (!storesPerLanguage(entity)) return fields;
-  const translatable = new Set(
-    resolveLocalizedFieldNames(
-      fields as Parameters<typeof resolveLocalizedFieldNames>[0],
-      true
-    )
-  );
-  return fields.filter(field => !field.name || !translatable.has(field.name));
-}
 
 // ============================================================================
 // Core Table Creation

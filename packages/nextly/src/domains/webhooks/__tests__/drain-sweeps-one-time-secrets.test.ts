@@ -21,6 +21,7 @@ import {
   EMAIL_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_GATE_KEY,
+  PLUGIN_EVENTS_RETENTION_DRAIN_GATE_KEY,
   PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
   RECEIVED_WEBHOOKS_RETENTION_DRAIN_GATE_KEY,
   type RetentionGateStore,
@@ -61,6 +62,10 @@ const DRAIN_PASS: Record<
   receivedWebhooks: {
     input: { receivedWebhooks: true },
     claims: RECEIVED_WEBHOOKS_RETENTION_DRAIN_GATE_KEY,
+  },
+  pluginEvents: {
+    input: { pluginEvents: true },
+    claims: PLUGIN_EVENTS_RETENTION_DRAIN_GATE_KEY,
   },
   previewLinks: {
     input: { previewLinks: true },
@@ -337,6 +342,44 @@ describe("the scheduled drain and plugins' one-purpose secrets", () => {
     expect(store.tables).not.toContain("nextly_one_time_secrets");
     expect(result.pruned.oneTimeSecrets).toBe(0);
     expect(released).toContain(ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY);
+  });
+});
+
+describe("the scheduled drain and plugins' durable events", () => {
+  it("sweeps finished events with their deliveries, with no other retention configured", async () => {
+    let left = 1;
+    const removed: string[] = [];
+    const select = async (table: string) =>
+      table === "nextly_plugin_events" && left > 0 ? [{ id: "finished" }] : [];
+    const remove = vi.fn(async (table: string) => {
+      removed.push(table);
+      if (table !== "nextly_plugin_events") return 1;
+      left = 0;
+      return 1;
+    });
+    const result = await drain({
+      pluginEvents: true,
+      prune: {
+        adapter: {
+          select,
+          delete: remove,
+          transaction: async (
+            fn: (tx: {
+              delete: typeof remove;
+              select: typeof select;
+            }) => Promise<unknown>
+          ) => fn({ delete: remove, select }),
+        },
+      } as never,
+      gate: { claim: async () => true, release: async () => undefined },
+    });
+
+    // The deliveries first, then their event, in one transaction.
+    expect(removed).toEqual([
+      "nextly_plugin_event_deliveries",
+      "nextly_plugin_events",
+    ]);
+    expect(result.pruned.pluginEvents).toBe(1);
   });
 });
 

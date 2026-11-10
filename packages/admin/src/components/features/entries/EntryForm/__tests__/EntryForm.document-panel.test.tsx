@@ -64,6 +64,10 @@ vi.mock("@admin/hooks/queries/useReleasesContaining", () => ({
   }),
 }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
+// A viewer signed in: a section a plugin declares waits for one.
+vi.mock("@admin/hooks/useDashboardUser", () => ({
+  useDashboardUser: () => ({ user: { id: "u1" } }),
+}));
 vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   ...(await importOriginal<
     typeof import("@admin/context/providers/BrandingProvider")

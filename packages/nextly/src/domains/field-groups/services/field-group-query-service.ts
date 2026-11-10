@@ -335,8 +335,9 @@ export class FieldGroupQueryService extends BaseService {
     // resolve/write per language via the component's companion `comp_<slug>_locales` table.
     private readonly localizationSource?: LocalizationSource,
     // The tables registered for this database, so a component's instances can be read with their
-    // translations in one statement. Without it they are read first and translated after.
-    private readonly tables?: InstanceTables
+    // translations in one statement. Without it they are read first and translated after. Named
+    // apart from the base service's `tables`, the dialect's own tables, which it would shadow.
+    private readonly instanceTables?: InstanceTables
   ) {
     super(adapter, logger);
     this.registryService = registryService;
@@ -1579,11 +1580,11 @@ export class FieldGroupQueryService extends BaseService {
     if (
       !plan ||
       plan.readiness !== "ready" ||
-      !this.tables?.hasTable(tableName)
+      !this.instanceTables?.hasTable(tableName)
     ) {
       return null;
     }
-    const table = this.tables.getTable(tableName);
+    const table = this.instanceTables.getTable(tableName);
     const columns = Object.values(getColumns(table as never)) as {
       name: string;
     }[];

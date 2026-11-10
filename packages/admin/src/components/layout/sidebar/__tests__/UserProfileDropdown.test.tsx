@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 import { AdminI18nProvider } from "@admin/context/providers/AdminI18nProvider";
+import { navigateTo } from "@admin/lib/navigation";
 
 import { UserProfileDropdown } from "../UserProfileDropdown";
 
@@ -192,5 +193,21 @@ describe("the user menu's interface language", () => {
       )
     );
     expect(me.written).toEqual([]);
+  });
+});
+
+describe("the user menu's My Account", () => {
+  it("My Account opens /admin/account", async () => {
+    // The person's own page, which they may always open; the users edit page
+    // asks a permission many of them lack.
+    const user = userEvent.setup();
+    renderMenu();
+    await openMenu(user);
+
+    await user.click(
+      await screen.findByRole("menuitem", { name: "My Account" })
+    );
+
+    expect(navigateTo).toHaveBeenCalledWith("/admin/account");
   });
 });
