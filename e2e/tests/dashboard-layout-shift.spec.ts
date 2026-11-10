@@ -371,7 +371,9 @@ for (const size of WIDTHS) {
     if (wide) {
       // The second panel is open beside the column, holding the collection's link.
       await expect(
-        page.getByTestId("sub-sidebar").getByRole("link", { name: "Posts" })
+        page
+          .getByTestId("sub-sidebar")
+          .getByRole("link", { name: "Posts", exact: true })
       ).toBeVisible();
     }
     await page.waitForTimeout(1_000);

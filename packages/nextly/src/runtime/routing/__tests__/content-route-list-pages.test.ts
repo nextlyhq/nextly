@@ -31,6 +31,8 @@ import type { ContentEntry, NextlyContentReader } from "../resolve-content";
 
 vi.mock("../../next-api", () => ({
   loadNextModule: () => ({
+    // What the route awaits before reading: a request is already in hand here.
+    connection: async () => undefined,
     notFound: () => {
       throw new Error("not found");
     },

@@ -105,11 +105,30 @@ describe("NextCacheRevalidator", () => {
     const outcome = await revalidator.flush([{ tags: ["a", "b"] }]);
     // Each tag is tried twice, and one throwing tag does not stop the rest.
     expect(next.revalidateTag).toHaveBeenCalledTimes(4);
-    expect(outcome).toEqual({ deferredTags: ["a", "b"] });
+    // A hand-off that does not say it recorded them leaves them this process's.
+    expect(outcome).toEqual({
+      deferredTags: ["a", "b"],
+      keptInProcess: ["a", "b"],
+    });
     expect(handoff.handOff).toHaveBeenCalledWith(
       ["a", "b"],
       "cache handler unavailable"
     );
+  });
+
+  it("keeps no tag in this process when the hand-off records them where every instance reads", async () => {
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(() => {
+      throw new Error("cache handler unavailable");
+    });
+    const recording = { handOff: vi.fn(async () => true) };
+
+    const outcome = await new NextCacheRevalidator(
+      () => next,
+      () => recording
+    ).flush([{ tags: ["a", "b"] }]);
+
+    expect(outcome).toEqual({ deferredTags: ["a", "b"] });
   });
 
   it("does not throw when next/cache cannot be resolved", async () => {
@@ -173,7 +192,7 @@ describe("NextCacheRevalidator, when an expiry fails or the context differs", ()
       () => handoff
     ).flush([{ tags: ["a", "b", "c"] }]);
 
-    expect(outcome).toEqual({ deferredTags: ["b"] });
+    expect(outcome).toEqual({ deferredTags: ["b"], keptInProcess: ["b"] });
     expect(handoff.handOff).toHaveBeenCalledWith(["b"], "cache handler down");
   });
 
@@ -225,7 +244,10 @@ describe("NextCacheRevalidator, when an expiry fails or the context differs", ()
 
     expect(next.updateTag).toHaveBeenCalledTimes(2);
     expect(next.revalidateTag).not.toHaveBeenCalled();
-    expect(outcome).toEqual({ deferredTags: ["nextly:posts"] });
+    expect(outcome).toEqual({
+      deferredTags: ["nextly:posts"],
+      keptInProcess: ["nextly:posts"],
+    });
   });
 
   it("keeps the write when the hand-off itself throws or rejects", async () => {
@@ -247,13 +269,13 @@ describe("NextCacheRevalidator, when an expiry fails or the context differs", ()
         () => next,
         () => throwing
       ).flush([{ tags: ["a"] }])
-    ).toEqual({ deferredTags: ["a"] });
+    ).toEqual({ deferredTags: ["a"], keptInProcess: ["a"] });
     expect(
       await new NextCacheRevalidator(
         () => next,
         () => rejecting
       ).flush([{ tags: ["a"] }])
-    ).toEqual({ deferredTags: ["a"] });
+    ).toEqual({ deferredTags: ["a"], keptInProcess: ["a"] });
   });
 });
 
@@ -391,7 +413,11 @@ describe("NextCacheRevalidator, deferring rather than dropping", () => {
     ).flush([{ tags: ["a"] }]);
     await vi.advanceTimersByTimeAsync(HANDOFF_TIMEOUT_MS);
 
-    expect(await flushed).toEqual({ deferredTags: ["a"] });
+    // Unanswered, so not known to be recorded: kept in this process only.
+    expect(await flushed).toEqual({
+      deferredTags: ["a"],
+      keptInProcess: ["a"],
+    });
     expect(
       error.mock.calls.some(([line]) => String(line).includes("did not answer"))
     ).toBe(true);
@@ -411,6 +437,7 @@ describe("NextCacheRevalidator, deferring rather than dropping", () => {
       await revalidator.flush([{ tags: ["nextly:posts", "nextly:posts:id:1"] }])
     ).toEqual({
       deferredTags: ["nextly:posts", "nextly:posts:id:1"],
+      keptInProcess: ["nextly:posts", "nextly:posts:id:1"],
     });
     expect(handoff.handOff).toHaveBeenCalledTimes(1);
   });
@@ -573,7 +600,10 @@ describe("NextCacheRevalidator, reporting only this write's tags", () => {
       () => failing,
       () => ({ handOff: vi.fn() })
     ).flush([{ tags: ["nextly:pages"] }]);
-    expect(outcome).toEqual({ deferredTags: ["nextly:pages"] });
+    expect(outcome).toEqual({
+      deferredTags: ["nextly:pages"],
+      keptInProcess: ["nextly:pages"],
+    });
   });
 });
 

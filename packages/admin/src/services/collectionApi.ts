@@ -75,6 +75,34 @@ export const deleteCollection = async (collectionId: string): Promise<void> => {
   );
 };
 
+/** What one plugin says deleting collections takes with it. */
+export interface CollectionDeleteImpactGroup {
+  /** The plugin's name, which the dialog lists the items under. */
+  plugin: string;
+  items: Array<{ label: string; kind: string }>;
+}
+
+/**
+ * What deleting `slugs` together takes with it besides their own entries, by
+ * plugin: the server asks each plugin's collection-delete hook, and deletes
+ * nothing. The first slug goes in the path and the rest in `?together=`, as
+ * the delete itself sends them.
+ */
+export const fetchCollectionDeleteImpact = async (
+  slugs: readonly string[]
+): Promise<CollectionDeleteImpactGroup[]> => {
+  const [first, ...rest] = slugs;
+  if (first === undefined) return [];
+  const together =
+    rest.length > 0 ? `?together=${encodeURIComponent(rest.join(","))}` : "";
+  const result = await protectedApi.get<{
+    impact: CollectionDeleteImpactGroup[];
+  }>(
+    `/collections/schema/${encodeURIComponent(first)}/delete-impact${together}`
+  );
+  return result.impact;
+};
+
 /** The type of {@link collectionApi}. */
 type CollectionApiType = {
   readonly fetchCollections: typeof fetchCollections;

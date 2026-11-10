@@ -34,6 +34,9 @@ test.describe.configure({ mode: "serial" });
 
 const ENTRIES = "/admin/api/collections/block-pages/entries";
 
+/** Whether the suite runs against a production build rather than `next dev`. */
+const PRODUCTION = process.env.E2E_SERVER === "production";
+
 const PUBLISHED_SLUG = "dogfood";
 const DRAFT_SLUG = "dogfood-draft";
 
@@ -340,7 +343,9 @@ test("an unpublished entry is not served", async ({ page }) => {
   // `noindex`, and none of the draft's content.
   for (const [request, status] of [
     ["first", 200],
-    ["second", 404],
+    // Next keeps the render only in a production build: under `next dev`
+    // nothing is kept, so every request renders it afresh and answers 200.
+    ["second", PRODUCTION ? 404 : 200],
   ] as const) {
     const response = await page.request.get(`/blocks/${DRAFT_SLUG}`);
     const html = await response.text();

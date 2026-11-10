@@ -28,6 +28,7 @@ import {
   type ComponentDocument,
   type DocumentLimits,
   type RegionArea,
+  type NamedQueryDeclaration,
 } from "@nextlyhq/blocks-engine";
 import {
   DEFINITION_ACTION_KINDS,
@@ -45,6 +46,7 @@ import { z } from "nextly/zod";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGES_SLUG } from "./collections/pages";
 import { PATTERNS_SLUG } from "./collections/patterns";
+import { TEMPLATES_SLUG } from "./collections/templates";
 import {
   DEFINITION_ACTIONS_ROUTE_PATH,
   PAGE_ACTIONS_ROUTE_PATH,
@@ -61,6 +63,8 @@ import {
   readPatternLibrary,
   type ComponentStore,
 } from "./library-route";
+import { namedQueryItem, namedQueryParamsSchema } from "./named-queries";
+import type { NamedQueryRowField } from "./named-queries-contract";
 import { pageActionRequestJsonSchema } from "./page-actions-route";
 import { TEMPLATE_ACTIONS_ROUTE_PATH } from "./templates/template-actions-contract";
 import { templateActionRequestJsonSchema } from "./templates/template-actions-route";
@@ -151,6 +155,29 @@ export interface ManifestAction {
   readonly request: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * One named query a `set-list-query` action may set as a list's custom
+ * source, without its run function: its inputs as a JSON Schema object, and
+ * what its rows are.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface ManifestNamedQuery {
+  readonly name: string;
+  readonly label: string;
+  readonly description?: string;
+  /** What a list's `namedQuery.params` may hold. */
+  readonly params: Readonly<Record<string, unknown>>;
+  readonly rows:
+    | { readonly collection: string }
+    | {
+        readonly key: string;
+        readonly fields: readonly ManifestRowField[];
+      };
+  /** Whether it returns how many rows match before the window. */
+  readonly total: boolean;
+}
+
 /** @experimental Settles when the composition API ships. */
 export interface CompositionManifest {
   readonly formatVersion: typeof MANIFEST_FORMAT_VERSION;
@@ -162,6 +189,18 @@ export interface CompositionManifest {
     /** The field of a component row its definition is stored in. */
     readonly componentField: string;
     readonly layouts: string;
+    /**
+     * The collection templates and entries' own designs are kept in, as the
+     * host named it: the collection a page action on a template names, and
+     * where a `templateAction`'s template ids live.
+     *
+     * Optional while the format stays at version 1: a server from before
+     * templates were listed here sends a manifest without it, and a client
+     * reading that manifest still parses it. Absent, the server named no
+     * templates collection, and a client falls back to the default slug,
+     * `templates`.
+     */
+    readonly templates?: string;
   };
   readonly patterns: ManifestTier<ManifestPattern>;
   readonly components: ManifestTier<ManifestComponent>;
@@ -170,10 +209,34 @@ export interface CompositionManifest {
     readonly defaultLayout: string | null;
   };
   readonly actions: readonly ManifestAction[];
+  /** The site's named queries, which a list's `namedQuery` may name. */
+  readonly namedQueries: readonly ManifestNamedQuery[];
+}
+
+/**
+ * One field of a named query's rows as the manifest lists it: its name and
+ * type, and a group's own fields, however deep, so a client can address
+ * every path a row's bindings may name (`seo.title`).
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface ManifestRowField {
+  readonly name: string;
+  readonly type: string;
+  readonly fields?: readonly ManifestRowField[];
 }
 
 const text = z.string();
 const id = z.string().min(1);
+
+/** A row field's schema, a group's own fields held to the same one. */
+const rowFieldSchema: z.ZodType<ManifestRowField> = z.lazy(() =>
+  z.strictObject({
+    name: id,
+    type: text,
+    fields: z.array(rowFieldSchema).optional(),
+  })
+);
 
 function tier<T extends z.ZodType>(item: T) {
   return z.strictObject({
@@ -199,6 +262,8 @@ export const compositionManifestSchema: z.ZodType<CompositionManifest> =
       components: id,
       componentField: id,
       layouts: id,
+      // Optional so a manifest from a server that predates it still parses.
+      templates: id.optional(),
     }),
     patterns: tier(
       z.strictObject({
@@ -251,12 +316,30 @@ export const compositionManifestSchema: z.ZodType<CompositionManifest> =
         request: z.record(z.string(), z.unknown()),
       })
     ),
+    namedQueries: z.array(
+      z.strictObject({
+        name: id,
+        label: text,
+        description: text.optional(),
+        params: z.record(z.string(), z.unknown()),
+        rows: z.union([
+          z.strictObject({ collection: id }),
+          z.strictObject({
+            key: id,
+            fields: z.array(rowFieldSchema),
+          }),
+        ]),
+        total: z.boolean(),
+      })
+    ),
   });
 
 /** What the manifest reads with besides the caller. */
 export interface ManifestSetup {
   readonly store?: ComponentStore;
   readonly limits?: () => DocumentLimits;
+  /** This site's named queries; none are listed when absent. */
+  readonly namedQueries?: () => readonly NamedQueryDeclaration[];
 }
 
 /** What a manifest read is asked for. */
@@ -287,6 +370,9 @@ export async function readCompositionManifest(
     components: store.collection,
     componentField: store.field,
     layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+    // Named, not read: a client needs the slug to address a template with
+    // the page actions, whether or not it may read the templates.
+    templates: ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG,
   };
   const [patterns, components, layouts] = await Promise.all([
     readableTier(ctx, collections.patterns, () => patternTier(ctx)),
@@ -304,6 +390,45 @@ export async function readCompositionManifest(
     components,
     layouts: { defaultLayout: null, ...layouts },
     actions: manifestActions(),
+    namedQueries: (setup.namedQueries?.() ?? []).map(manifestNamedQuery),
+  };
+}
+
+/** A row field as the manifest lists it: the editor's, without its kind. */
+function manifestRowField(field: NamedQueryRowField): ManifestRowField {
+  return {
+    name: field.name,
+    type: field.type,
+    ...(field.fields === undefined
+      ? {}
+      : { fields: field.fields.map(manifestRowField) }),
+  };
+}
+
+/**
+ * One registered query as the manifest lists it, without its run function:
+ * read off the declaration as the editor's route reads it
+ * (`namedQueryItem`), so the two never list different rows.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export function manifestNamedQuery(
+  definition: NamedQueryDeclaration
+): ManifestNamedQuery {
+  const item = namedQueryItem(definition);
+  const rows = item.rows;
+  return {
+    name: item.name,
+    label: item.label,
+    ...(item.description === undefined
+      ? {}
+      : { description: item.description }),
+    params: namedQueryParamsSchema(definition),
+    rows:
+      "fields" in rows
+        ? { key: rows.key, fields: rows.fields.map(manifestRowField) }
+        : { collection: rows.collection },
+    total: item.total,
   };
 }
 

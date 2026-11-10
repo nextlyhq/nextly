@@ -19,7 +19,10 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { importedSpecifiers } from "@nextlyhq/module-specifiers";
+import {
+  importedSpecifiers,
+  moduleSpecifierRefs,
+} from "@nextlyhq/module-specifiers";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -73,7 +76,10 @@ describe("the ops module stays server-safe", () => {
     const specifiers = [...importedSpecifiers(read("src/ops.ts"), "ops.ts")];
 
     expect([...new Set(specifiers)].sort()).toEqual([
+      "./binding-ops",
+      "./binding-services",
       "./composition-actions",
+      "./condition-ops",
       "./op-vocabulary",
       "./template-actions",
       "@nextlyhq/blocks-engine",
@@ -104,6 +110,24 @@ describe("the ops module stays server-safe", () => {
     ]);
   });
 
+  it("reaches through its binding and condition ops only the engine", () => {
+    for (const module of ["binding-ops.ts", "condition-ops.ts"]) {
+      const loaded = moduleSpecifierRefs(read(`src/${module}`), module)
+        .filter(ref => !ref.typeOnly)
+        .map(ref => ref.specifier);
+      expect(loaded, module).toEqual(["@nextlyhq/blocks-engine"]);
+    }
+  });
+
+  it("names its binding services for their types alone", () => {
+    const refs = moduleSpecifierRefs(
+      read("src/binding-services.ts"),
+      "binding-services.ts"
+    );
+    expect(refs.length).toBeGreaterThan(0);
+    expect(refs.filter(ref => !ref.typeOnly)).toEqual([]);
+  });
+
   it("reaches through its template actions only zod", () => {
     const specifiers = [
       ...importedSpecifiers(
@@ -126,11 +150,14 @@ describe("the editor does not load the composition schemas", () => {
       .filter(name => !/\.test(-d)?\.(ts|tsx)$/.test(name))
       .filter(name => name !== "ops.ts")
       .filter(name =>
-        importedSpecifiers(read(`src/${name}`), name).some(
-          specifier =>
-            specifier === "./ops" ||
-            specifier === "./composition-actions" ||
-            specifier === "./template-actions"
+        // What loads at runtime: an `import type` is erased before the
+        // bundle, so it carries no schema into the editor.
+        moduleSpecifierRefs(read(`src/${name}`), name).some(
+          ({ specifier, typeOnly }) =>
+            !typeOnly &&
+            (specifier === "./ops" ||
+              specifier === "./composition-actions" ||
+              specifier === "./template-actions")
         )
       );
 

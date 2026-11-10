@@ -376,7 +376,7 @@ describe("a style field's row", () => {
     // "Semibold 600" wrapped to two lines in a 9rem list, making its row
     // twice the height of every other.
     const value = ruleBody(
-      '.nx-style-inspector__select [data-slot="select-value"]'
+      '.nx-style-inspector__select [data-slot="select-value"], .nx-binding__format [data-slot="select-value"]'
     );
     expect(value).toContain("white-space: nowrap");
     expect(value).toContain("text-overflow: ellipsis");

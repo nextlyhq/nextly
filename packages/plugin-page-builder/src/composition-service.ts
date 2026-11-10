@@ -27,7 +27,11 @@
  * @experimental Settles when the composition API ships.
  * @module composition-service
  */
-import type { DocumentLimits, RetiredExposures } from "@nextlyhq/blocks-engine";
+import type {
+  DocumentLimits,
+  NamedQueryDeclaration,
+  RetiredExposures,
+} from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   type PluginContext,
@@ -49,7 +53,11 @@ import {
 import type { ActionAnswer } from "./composition-route-kit";
 import { runDefinitionAction } from "./definition-actions-route";
 import type { ComponentStore } from "./library-route";
-import { pageActionRequestOf, runPageAction } from "./page-actions-route";
+import {
+  pageActionRequestOf,
+  runPageAction,
+  type PageActionsSetup,
+} from "./page-actions-route";
 import type {
   TemplateActionRequest,
   TemplateActionResult,
@@ -115,6 +123,10 @@ export interface CompositionServiceSetup {
     ctx: PluginRouteContext
   ) => (componentId: string) => Promise<RetiredExposures | null>;
   readonly templates: TemplateActionsSetup;
+  /** This site's named queries, which the manifest lists. */
+  readonly namedQueries?: () => readonly NamedQueryDeclaration[];
+  /** What a page action's bindings are judged with. */
+  readonly bindings?: PageActionsSetup["bindings"];
 }
 
 /**

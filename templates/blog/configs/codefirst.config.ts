@@ -12,6 +12,7 @@
 import { defineConfig, text, textarea } from "nextly/config";
 import { formBuilderPlugin } from "@nextlyhq/plugin-form-builder";
 
+import { Authors } from "./src/collections/Authors";
 import { Categories } from "./src/collections/Categories";
 import { Posts } from "./src/collections/Posts";
 import { Tags } from "./src/collections/Tags";
@@ -20,7 +21,7 @@ import { Navigation } from "./src/singles/Navigation";
 import { SiteSettings } from "./src/singles/SiteSettings";
 
 export default defineConfig({
-  collections: [Posts, Categories, Tags],
+  collections: [Posts, Authors, Categories, Tags],
   singles: [SiteSettings, Navigation, Homepage],
 
   // Form builder plugin: powers the homepage/footer newsletter form

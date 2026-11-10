@@ -20,6 +20,16 @@ export interface ListedChoice {
   readonly label: string;
   /** The group it is listed under, when the list has groups. */
   readonly group?: string;
+  /**
+   * What the search matches it by, when not its label alone: a label and
+   * the line drawn under it, so what is searched is what is seen.
+   */
+  readonly search?: string;
+  /**
+   * Listed, and reached by the arrow keys, but never picked: a choice whose
+   * row says why it can't be had yet.
+   */
+  readonly disabled?: boolean;
 }
 
 /** How many entries the list holds before it offers a search. */
@@ -43,6 +53,7 @@ export interface ChoiceListProps<C extends ListedChoice> {
   readonly groups?: ReadonlyArray<{ group: string; heading: string }>;
   /** What an entry draws: its label unless said otherwise. */
   readonly renderChoice?: (choice: C) => React.ReactNode;
+
   /**
    * An entry's tooltip: its label unless said otherwise, such as a label and
    * a value the row may cut short.
@@ -79,7 +90,9 @@ function drawnChoices<C extends ListedChoice>(
   const matching =
     needle === ""
       ? choices
-      : choices.filter(choice => choice.label.toLowerCase().includes(needle));
+      : choices.filter(choice =>
+          (choice.search ?? choice.label).toLowerCase().includes(needle)
+        );
   return groups === undefined
     ? matching
     : groups.flatMap(({ group }) =>
@@ -144,7 +157,7 @@ export function ChoiceList<C extends ListedChoice>({
     }
     if (event.key === "Enter" && activeChoice !== undefined) {
       event.preventDefault();
-      onPick(activeChoice);
+      if (activeChoice.disabled !== true) onPick(activeChoice);
     }
   };
 
@@ -157,6 +170,7 @@ export function ChoiceList<C extends ListedChoice>({
       id={optionId(choice)}
       role="option"
       aria-selected={choice === activeChoice}
+      aria-disabled={choice.disabled === true ? "true" : undefined}
       data-current={choice.key === currentKey ? "" : undefined}
       className={
         choiceClassName === undefined
@@ -167,7 +181,9 @@ export function ChoiceList<C extends ListedChoice>({
       title={choiceTitle === undefined ? choice.label : choiceTitle(choice)}
       style={choiceStyle?.(choice)}
       onMouseMove={() => setActive(shown.indexOf(choice))}
-      onClick={() => onPick(choice)}
+      onClick={() => {
+        if (choice.disabled !== true) onPick(choice);
+      }}
     >
       {renderChoice === undefined ? choice.label : renderChoice(choice)}
     </li>

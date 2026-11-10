@@ -26,7 +26,11 @@ import type {
   ComponentDocument,
   ValidationIssue,
 } from "@nextlyhq/blocks-engine";
-import type { DefinitionAction, PageAction } from "@nextlyhq/builder/ops";
+import type {
+  DefinitionAction,
+  PageAction,
+  UnbindAnswer,
+} from "@nextlyhq/builder/ops";
 
 import type { ActionBy } from "./component-actions-contract";
 import type { StoredPageAddress } from "./library-contract";
@@ -48,6 +52,8 @@ export type {
   ExposureTargetInput,
   ListQueryChange,
   PageAction,
+  UnbindAnswer,
+  UnbindKeep,
 } from "@nextlyhq/builder/ops";
 
 /** @experimental Settles when the composition API ships. */
@@ -60,6 +66,7 @@ export interface PageActionRequest {
   /** Publish the page with the change, rather than saving its working draft. */
   readonly publish?: boolean;
 }
+
 
 /** @experimental Settles when the composition API ships. */
 export interface PageActionResult {
@@ -76,6 +83,8 @@ export interface PageActionResult {
   };
   /** The id of a block the action added, for the next action to address. */
   readonly insertedId?: string;
+  /** For `unbind-prop`: what was kept in the prop's place, and why. */
+  readonly unbound?: UnbindAnswer;
   /** Why the site would refuse the write, in its own words; empty when it accepts it. */
   readonly refusals: readonly string[];
   /** The stored state this answer was planned against, for `expect`. */

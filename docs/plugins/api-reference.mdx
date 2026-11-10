@@ -68,7 +68,7 @@ interface PluginContributions {
     pages?: PluginAdminPage[]; // { path, component, requiredPermission? }
     settings?: { component: ComponentPath };
     views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, documentActions and panelSections, by collection slug
-    documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a field of one of this plugin's field types, at the top level or inside named groups
+    documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a field of one of this plugin's field types, at the top level, inside named groups, or in a repeater's rows
     places?: PluginAdminPlaceDeclaration[]; // @experimental: { name, description? }, places on your own pages; your slug and a dot, or boot fails
     filters?: PluginListFilterDeclaration[]; // @experimental: { name, label, collections?, options: [{ value, label, where }] }, in the entry list's toolbar
   };
@@ -253,6 +253,7 @@ Reads are unchanged and return their value directly.
 ```ts
 ctx.hooks.on(type, collectionSlug | "*", handler); // beforeCreate/afterCreate/… — can modify/abort
 ctx.hooks.onInTransaction(collectionSlug | `single:${slug}` | "*", handler); // @experimental: inside the write's transaction, with a bound `db`; throwing aborts; may run again on a retry
+ctx.hooks.onCollectionDelete({ impact?, inTransaction? }); // @experimental: what deleting a collection takes with it, for the delete dialog, and its removal in the delete's transaction; throwing refuses the delete
 ctx.events.on(eventName, handler); // observe-only; e.g. `collection.${slug}.created`
 ctx.events.emit(eventName, payload); // your own `<slug>.…` names, declared in contributes.events
 ```
@@ -896,6 +897,13 @@ content `content`, the entry form names its fields `fields`, and the login page
 names the sign-in form `form`. A plugin that replaces the login page's `form`
 takes over sign-in for the site.
 
+**On a phone.** Where a collection entry's editor is too narrow to keep the
+side panel beside the fields, the panel opens only when asked for. A side
+panel section declared with `narrow: "above-form"` (`@experimental`) is drawn
+there under the title, above the fields, and left out of the panel, so an
+author meets it without opening the panel. Without it, the section stays in
+the panel at every width.
+
 **Who sees one.** Contributions are sent only in the signed-in workspace
 metadata, the login page's alone in the public one, and each reader receives
 only what they may see:
@@ -983,7 +991,11 @@ what was addressed to you with `collectDeclarations` from
 configured plugin (name, version, enabled, capabilities, declarations):
 
 ```ts
-// `ctx` is the plugin context, in init or a route handler.
+import { collectDeclarations, type PluginContext } from "@nextlyhq/plugin-sdk";
+
+// The plugin context, in init or a route handler.
+declare const ctx: PluginContext;
+
 const declared = collectDeclarations(
   ctx.config.plugins ?? [],
   "@acme/nextly-plugin-blocks"

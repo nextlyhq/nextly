@@ -741,7 +741,8 @@ test.describe("Removing a breakpoint in Settings", () => {
       await expect(
         dialog.getByRole("heading", { name: "Put Small back?" })
       ).toBeVisible();
-      await dialog.getByRole("button", { name: "Back" }).click();
+      // Exact: "Put Small back" is the step's other button.
+      await dialog.getByRole("button", { name: "Back", exact: true }).click();
       expect((await storedTextStyles(page.request, id))[small]).toBeUndefined();
 
       // Put back: the breakpoint is defined again and the page's styles return.
@@ -750,7 +751,8 @@ test.describe("Removing a breakpoint in Settings", () => {
       await expect(
         dialog.getByText("Small is back, with its styles")
       ).toBeVisible();
-      await expect(dialog.getByText("put back")).toBeVisible();
+      // Exact: the sentence above says "put back" too.
+      await expect(dialog.getByText("put back", { exact: true })).toBeVisible();
       await expect
         .poll(async () => (await storedTextStyles(page.request, id))[small])
         .toBeDefined();
@@ -847,15 +849,15 @@ test.describe("Removing a breakpoint in Settings", () => {
       await dialog.getByRole("button", { name: "Close" }).click();
 
       // Opened again, the tab's read reports that run still open, as it
-      // would while the removal job carries a large one on.
-      let reported = false;
+      // would while the removal job carries a large one on: every read until
+      // the run finishes, as the tab may read more than once.
+      let stillOpen = true;
       await page.route("**/plugin-page-builder/site/settings", async route => {
         try {
-          if (reported) {
+          if (!stillOpen) {
             await route.fallback();
             return;
           }
-          reported = true;
           const response = await route.fetch();
           const json = (await response.json()) as Record<string, unknown>;
           await route.fulfill({
@@ -892,6 +894,7 @@ test.describe("Removing a breakpoint in Settings", () => {
         "title",
         "Breakpoints can be changed again once it has finished."
       );
+      stillOpen = false;
       carried.release();
       await expect(step(again, "done")).toContainText("Small was removed");
       await expect(step(again, "done")).toContainText(
@@ -941,7 +944,7 @@ test.describe("Removing a breakpoint in Settings", () => {
     try {
       // An edit saved without publishing: a pending draft over the live row.
       const edited = await page.request.patch(`${ENTRIES}/${id}`, {
-        data: { title: "Styled, edited" },
+        data: { title: "Styled, edited", _overwrite: true },
       });
       expect(edited.ok(), `saving a draft: ${edited.status()}`).toBe(true);
       await openEditor(page, id);
@@ -969,7 +972,7 @@ test.describe("Removing a breakpoint in Settings", () => {
       );
     } finally {
       await page.request.patch(`${ENTRIES}/${id}`, {
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       });
       await storeSiteBreakpoints(page.request, null);
     }

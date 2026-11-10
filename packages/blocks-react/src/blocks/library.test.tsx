@@ -24,6 +24,17 @@ import { section } from "./section";
 
 const NODE: BlockNode = { id: "n1", type: "core/box", version: 1, props: {} };
 
+/**
+ * The elements a list drew for its entries: what stands between its note and
+ * its page links, the entries themselves or its empty state.
+ */
+function drawnEntries(element: ReactElement): ReactElement<unknown>[] {
+  const { children } = (
+    element as ReactElement<{ children: (ReactElement<unknown>[] | null)[] }>
+  ).props;
+  return children.find(child => Array.isArray(child)) ?? [];
+}
+
 /** Coerce deliberately-malformed stored props, the way a document can hold them. */
 function storedProps(props: unknown): ContainerProps {
   return props as ContainerProps;
@@ -341,10 +352,7 @@ describe("core/collection-loop", () => {
         testContext({ data: provider })
       )
     );
-    const children = (
-      element as ReactElement<{ children: ReactElement<unknown>[] }>
-    ).props.children;
-    expect(children.map(child => child.key)).toEqual(["0", "1"]);
+    expect(drawnEntries(element).map(child => child.key)).toEqual(["0", "1"]);
   });
 
   it("draws its template again per entry, under that entry's context", async () => {
@@ -395,10 +403,7 @@ describe("core/collection-loop", () => {
         testContext({ data: provider })
       )
     );
-    const children = (
-      element as ReactElement<{ children: ReactElement<unknown>[] }>
-    ).props.children;
-    expect(children.map(child => child.key)).toEqual(["7", "8"]);
+    expect(drawnEntries(element).map(child => child.key)).toEqual(["7", "8"]);
   });
 
   it("leaves its empty body structurally editable", () => {
@@ -462,7 +467,11 @@ describe("core/collection-loop", () => {
       )
     );
     expect(calls).toEqual([]);
-    expect(renderToStaticMarkup(element)).toBe('<div class="nx-n1"></div>');
+    // Past the allowance a visitor sees the list's designed empty state, as
+    // for a list with no matches, with the page's other content around it.
+    expect(renderToStaticMarkup(element)).toBe(
+      '<div class="nx-n1"><span>empty</span></div>'
+    );
   });
 });
 

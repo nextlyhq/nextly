@@ -21,6 +21,7 @@ const CONTENT: Record<string, readonly string[]> = {
   "core/card": ["link"],
   "core/text": ["text"],
   "core/rich-text": ["content"],
+  "core/table-of-contents": ["title"],
   "core/image": [
     "mediaId",
     "src",

@@ -60,9 +60,9 @@ import {
   isPlainRecord,
   migrateDocument,
   resolveComponentInstances,
+  SITE_SETTING_FIELD_SHAPES,
 } from "@nextlyhq/blocks-engine";
 import type {
-  BindingFieldShape,
   BindingIssue,
   BindingRun,
   BindingSchemaSource,
@@ -79,15 +79,18 @@ import type {
   UnresolvedInstance,
 } from "@nextlyhq/blocks-engine";
 
-import type { BlocksSiteSettings, PageBindings } from "./context";
+import { queryRowFields } from "./blocks/named-read";
+import type { NamedQueryHost, PageBindings } from "./context";
 import type { BlockResolver } from "./resolver";
 import { migrationSourceFor } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
   entryConditionedIn,
   gateByConditions,
+  markByConditions,
   pruneHiddenNodes,
   type ConditionGate,
+  type EntryJudgement,
 } from "./visibility";
 
 export interface PrepareDocumentArgs {
@@ -116,23 +119,22 @@ export interface PrepareDocumentArgs {
    * the bound stage is the stage before it.
    */
   bindings?: BindingRun;
+  /**
+   * Keep the blocks a list's item decides, for each list to judge against
+   * the items it draws, holding back every other conditioned block, as an
+   * editor drawing a page with its conditions applied does. Absent, every
+   * conditioned block is held back until a route decides them.
+   */
+  itemsDecided?: boolean;
+  /**
+   * Judge the page's conditions for an entry as an editor shows it to a
+   * visitor reading that entry: each block judged as the route's gate judges
+   * it, one whose conditions hold drawn with them lifted, one they hide
+   * replaced by the judgement's own node, and one a list's item decides kept
+   * for the list. Wins over {@link itemsDecided}, which it includes.
+   */
+  entryJudged?: EntryJudgement;
 }
-
-/**
- * The type of each site setting a page may bind, keyed by the setting, so a
- * setting added to the allowlist cannot be left without a shape.
- */
-const SITE_FIELD_TYPES: { readonly [K in keyof BlocksSiteSettings]: string } = {
-  applicationName: "text",
-  siteUrl: "url",
-  logoUrl: "url",
-  timezone: "text",
-};
-
-/** The site settings' field shapes, derived from the table above. */
-const SITE_FIELD_SHAPES: readonly BindingFieldShape[] = Object.entries(
-  SITE_FIELD_TYPES
-).map(([name, type]) => ({ name, type }));
 
 /**
  * One render's binding pass over a page's bindings, in the page's language.
@@ -143,12 +145,27 @@ const SITE_FIELD_SHAPES: readonly BindingFieldShape[] = Object.entries(
 export function pageBindingRun(
   bindings: PageBindings,
   locale: string | undefined,
-  resolver: BlockResolver
+  resolver: BlockResolver,
+  /**
+   * The render's named queries, whose declared rows a list item's bindings
+   * are checked against: the same lookup the list runs its query through.
+   */
+  namedQueries?: Pick<NamedQueryHost, "definitionOf">
 ): BindingRun {
   const shapes = bindings.fieldShapes;
   const schema: BindingSchemaSource = {
-    fieldsOf: ref =>
-      "site" in ref ? SITE_FIELD_SHAPES : shapes?.fieldsOf(ref),
+    fieldsOf: ref => {
+      // The settings a page is handed, typed by the engine's one table.
+      if ("site" in ref) return SITE_SETTING_FIELD_SHAPES;
+      // A named query's rows with their own field schema: the fields it
+      // declares, as the process registry holds it.
+      if ("query" in ref) {
+        return queryRowFields(namedQueries, ref.query, slug =>
+          shapes?.fieldsOf({ collection: slug })
+        );
+      }
+      return shapes?.fieldsOf(ref);
+    },
   };
   return createBindingRun({
     sources: {
@@ -163,6 +180,9 @@ export function pageBindingRun(
     schema,
     ...(locale === undefined ? {} : { locale }),
     ...(bindings.timeZone === undefined ? {} : { timeZone: bindings.timeZone }),
+    ...(bindings.mediaCollection === undefined
+      ? {}
+      : { mediaCollection: bindings.mediaCollection }),
     props: resolver,
   });
 }
@@ -385,8 +405,28 @@ export function prepareDocumentReadStages(
   document: BlockDocument,
   args: PrepareDocumentArgs
 ): DocumentReadStages | null {
-  const before = stagesBeforeBindings(document, args);
+  const before = stagesBeforeBindings(document, args, decideFor(args));
   return before === null ? null : withBindings(before, args);
+}
+
+/** The gating a reading asks for, where it asks for one of its own. */
+function decideFor(
+  args: PrepareDocumentArgs
+): ((migrated: BlockDocument) => BlockDocument) | undefined {
+  const judgement = args.entryJudged;
+  if (judgement !== undefined) {
+    return migrated => markByConditions(migrated, judgement).document;
+  }
+  return args.itemsDecided === true ? itemsKept : undefined;
+}
+
+/**
+ * The gating an editor applies while a list's items are judged: no entry is
+ * known, so a block reading it is held back, and one a list's item decides is
+ * kept for the list.
+ */
+function itemsKept(migrated: BlockDocument): BlockDocument {
+  return gateByConditions(migrated, {}).document;
 }
 
 /** The stages up to and including address repair: none depends on bindings. */
@@ -662,8 +702,12 @@ export function readStagesFor(
   prepared: PreparedDocument | undefined
 ): DocumentReadStages | null {
   const record = prepared === undefined ? undefined : PREPARED.get(prepared);
+  // A route's preparation gates as the route does; a reading that judges
+  // the page itself, an editor's, never reuses one.
   const reusable =
     record !== undefined &&
+    args.entryJudged === undefined &&
+    args.itemsDecided !== true &&
     record.document === document &&
     record.resolver === args.resolver &&
     record.definitions === definitionsKey(args.definitions) &&

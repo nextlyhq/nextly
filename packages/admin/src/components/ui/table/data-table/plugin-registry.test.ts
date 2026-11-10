@@ -81,4 +81,49 @@ describe("data-table plugin-registry", () => {
     ]);
     expect(getPluginRowActions("posts")).toEqual([]);
   });
+
+  it("takes back one registration, leaving the rest, and only once", () => {
+    const seo = () => [{ name: "seo", header: "SEO" }];
+    const removeSeo = registerColumns("posts", seo);
+    registerColumns("posts", () => [{ name: "design", header: "Design" }]);
+    // The same provider registered again is a second registration.
+    registerColumns("posts", seo);
+    const removeMove = transformColumns("posts", columns => [
+      ...columns.slice(1),
+      ...columns.slice(0, 1),
+    ]);
+
+    removeSeo();
+    removeMove();
+    expect(resolvePluginColumns("posts", base).map(c => c.name)).toEqual([
+      "title",
+      "design",
+      "seo",
+    ]);
+    // A second call does not take back the provider's other registration.
+    removeSeo();
+    expect(resolvePluginColumns("posts", base).map(c => c.name)).toEqual([
+      "title",
+      "design",
+      "seo",
+    ]);
+  });
+
+  it("takes back row and bulk actions", () => {
+    const removeRow = registerRowAction("users", {
+      id: "a",
+      label: "A",
+      onSelect: () => {},
+    });
+    const removeBulk = registerBulkAction("users", {
+      id: "x",
+      label: "X",
+      onSelect: () => {},
+    });
+    registerBulkAction("users", { id: "y", label: "Y", onSelect: () => {} });
+    removeRow();
+    removeBulk();
+    expect(getPluginRowActions("users")).toEqual([]);
+    expect(getPluginBulkActions("users").map(a => a.id)).toEqual(["y"]);
+  });
 });

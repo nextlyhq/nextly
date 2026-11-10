@@ -36,6 +36,7 @@ import {
   isChipsField,
   isDataField,
 } from "../../../collections/fields/guards";
+import { declaresOwnId } from "../../../collections/fields/repeater-row-identity";
 import {
   ICON_ID_MAX_LENGTH,
   ICON_ID_PATTERN,
@@ -762,8 +763,13 @@ export class ZodGenerator {
         ? (field.fields as FieldConfig[])
         : [];
 
-    // Build object schema for array items
-    const itemSchema = this.buildNestedObjectSchema(nestedFields);
+    // Build object schema for array items. Each row is saved with an id,
+    // which a write keeps when it is sent back: optional, as a create may
+    // leave it out, and absent where the rows declare an `id` of their own.
+    const itemSchema = this.buildNestedObjectSchema(
+      nestedFields,
+      declaresOwnId(nestedFields) ? [] : ["id: z.string().optional()"]
+    );
     let arraySchema = `z.array(${itemSchema})`;
 
     // Apply min/max rows
@@ -812,8 +818,11 @@ export class ZodGenerator {
    * Derives each nested field's schema from the canonical per-field generator,
    * preserving field-level validation rules across top-level and nested contexts.
    */
-  private buildNestedObjectSchema(fields: FieldConfig[]): string {
-    const fieldSchemas: string[] = [];
+  private buildNestedObjectSchema(
+    fields: FieldConfig[],
+    leading: readonly string[] = []
+  ): string {
+    const fieldSchemas: string[] = [...leading];
 
     for (const field of fields) {
       if (!isDataField(field) && !isPluginDataField(field)) continue;
