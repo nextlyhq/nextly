@@ -79,6 +79,7 @@ import {
   heldBackChanges,
   noteHeldBackServed,
   keptScopeFields,
+  unclaimedHeldBack,
 } from "../domains/schema/pipeline/kept-scope-fields";
 import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor";
 import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
@@ -113,7 +114,6 @@ import type {
 import {
   currentWithheldScopeFields,
   publishWithheldScopeFields,
-  withheldScopeFieldsOf,
 } from "../domains/schema/pipeline/withheld-scope-fields";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
@@ -1052,38 +1052,37 @@ async function unlessLeavingRefused(
   return pass();
 }
 
-/** A field as the localization restore reads it. */
-type RestoredField = { name: string; type: string; localized?: boolean };
-
 /**
- * `entity`'s fields, then those a plugin's scope holds back from it, one to a
- * name, the entity's own first. Restoring an entity whose translation is
- * turned off copies these back from its translations table: a held-back
- * field's values would otherwise stay behind there, and switching the field
- * on again would find an empty column. A field with no column in both tables
- * is passed over by the restore.
+ * The fields a plugin's scope holds back from `entity`, as the localization
+ * restore reads them: not the entity's own by name or by column
+ * (`unclaimedHeldBack`), one to a name, the fold's preferred first. Restoring
+ * an entity whose translation is turned off copies them back from its
+ * translations table too: their values would otherwise stay behind there, and
+ * switching the field on again would find an empty column.
  */
-function withHeldBackFields(
+function heldBackForRestore(
   kind: I18nTransitionKind,
-  entity: { slug?: string; fields?: RestoredField[] }
-): RestoredField[] {
-  const own = entity.fields ?? [];
-  if (kind === "fieldGroup" || entity.slug === undefined) return own;
-  const seen = new Set(own.map(field => field.name.toLowerCase()));
-  const held: RestoredField[] = [];
-  for (const field of withheldScopeFieldsOf(kind, entity.slug)) {
-    const { name, type } = field as { name?: unknown; type?: unknown };
-    if (typeof name !== "string" || typeof type !== "string") continue;
-    if (seen.has(name.toLowerCase())) continue;
-    seen.add(name.toLowerCase());
-    held.push({
-      name,
-      type,
-      localized: (field as { localized?: boolean }).localized,
-    });
-  }
-  return [...own, ...held];
+  entity: { slug?: string; fields?: { name: string; type: string }[] }
+): { name: string; type: string; localized?: boolean }[] {
+  if (kind === "fieldGroup" || entity.slug === undefined) return [];
+  const seen = new Set<string>();
+  return unclaimedHeldBack(kind, {
+    slug: entity.slug,
+    fields: entity.fields ?? [],
+  }).flatMap(field => {
+    const name = field.name.toLowerCase();
+    if (seen.has(name)) return [];
+    seen.add(name);
+    return [
+      {
+        name: field.name,
+        type: field.type,
+        localized: (field as { localized?: boolean }).localized,
+      },
+    ];
+  });
 }
+
 /**
  * Create, and bring into step, the `_locales` companion of every localized collection, single
  * and field group in the reloaded config.
@@ -1273,10 +1272,10 @@ async function ensureLocalizedCompanionsForReload(
               kind,
               slug: entity.slug,
               tableName: resolveTableName(entity),
-              // With the fields a plugin's scope holds back from it: their
-              // values go back to the main table too, where the apply kept
-              // their columns, so switching the field on again finds them.
-              fields: withHeldBackFields(kind, entity),
+              fields: entity.fields ?? [],
+              // Its held-back fields' values go back to the main table too,
+              // where the apply kept their columns.
+              heldBack: heldBackForRestore(kind, entity),
               dialect: adapter.dialect,
               defaultLocale: transitions?.defaultLocale,
               store: transitionStore,

@@ -95,14 +95,28 @@ export function keptScopeFields(
   type: TypeShape,
   existing: ExistingColumns
 ): NamedField[] {
-  const withheld = withheldScopeFieldsOf(kind, type.slug);
-  if (withheld.length === 0) return [];
   const held = new Set([
     ...(existing.names.get(type.tableName) ?? []),
     ...(existing.names.get(companionTableOf(type.tableName)) ?? []),
   ]);
-  // A type that declares a field of the name itself keeps its own, as does
-  // one whose own field, spelled otherwise, is stored in the same column.
+  const candidates = unclaimedHeldBack(kind, type).filter(field =>
+    [...columnsDeclaredBy([field])].some(column => held.has(column))
+  );
+  return onePerName(candidates, type.tableName, existing).map(asOptional);
+}
+
+/**
+ * The fields held back from `type` that are not its own: a type that
+ * declares a field of the name itself keeps its own, as does one whose own
+ * field, spelled otherwise, is stored in the same column. Every declaration
+ * of a name, in the order the fold prefers them.
+ */
+export function unclaimedHeldBack(
+  kind: ScopedKind,
+  type: Pick<TypeShape, "slug" | "fields">
+): NamedField[] {
+  const withheld = withheldScopeFieldsOf(kind, type.slug);
+  if (withheld.length === 0) return [];
   const declared = new Set(
     type.fields.flatMap(field => {
       const name = (field as { name?: unknown }).name;
@@ -112,16 +126,11 @@ export function keptScopeFields(
   const claimed = columnsDeclaredBy(
     type.fields as Parameters<typeof columnsDeclaredBy>[0]
   );
-  const candidates = withheld.filter((field): field is NamedField => {
+  return withheld.filter((field): field is NamedField => {
     if (typeof field.name !== "string") return false;
     if (declared.has(field.name.toLowerCase())) return false;
-    const columns = [...columnsDeclaredBy([field])];
-    return (
-      !columns.some(column => claimed.has(column)) &&
-      columns.some(column => held.has(column))
-    );
+    return ![...columnsDeclaredBy([field])].some(column => claimed.has(column));
   });
-  return onePerName(candidates, type.tableName, existing).map(asOptional);
 }
 
 /**

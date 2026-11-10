@@ -67,6 +67,12 @@ export interface RestoreCompanionArgs {
   slug: string;
   tableName: string;
   fields: RestorableField[];
+  /**
+   * Fields a plugin's scope holds back from the entity, whose values are
+   * restored beside its own. Judged apart from `fields`, each by its own
+   * flag, so they never change which of the entity's own fields are restored.
+   */
+  heldBack?: RestorableField[];
   dialect: SupportedDialect;
   /**
    * The locale whose companion values become the main table's content, when the app still names
@@ -131,7 +137,7 @@ export async function restoreDisabledCompanion(
       adapter,
       args.tableName,
       companionTableName,
-      restorableFields(args.fields)
+      fieldsToRestore(args)
     );
     // Confirmed through the write path's own probe. The snapshot above answers from introspection,
     // and a false negative is not recoverable: it decides both whether a record is deleted and
@@ -157,7 +163,7 @@ export async function restoreDisabledCompanion(
     // transition over. `restored` is terminal, so no later pass would retry.
     const restoreLocale = await resolveRestoreLocale(adapter, {
       tableName: args.tableName,
-      fields: restorableFields(args.fields),
+      fields: fieldsToRestore(args),
       dialect: args.dialect,
       preferred: args.defaultLocale,
       recorded: based.sourceLocale,
@@ -167,7 +173,7 @@ export async function restoreDisabledCompanion(
       await copyDefaultLocaleOntoMain(adapter, {
         tableName: args.tableName,
         companionTableName,
-        fields: restorableFields(args.fields),
+        fields: fieldsToRestore(args),
         dialect: args.dialect,
         locale: restoreLocale,
         // The other candidate, so a parent without a row in the chosen locale still comes back
@@ -336,7 +342,7 @@ async function anyLocaleInCompanion(
   const companion = buildCompanionRuntimeTable({
     slug: args.tableName,
     tableName: args.tableName,
-    fields: restorableFields(args.fields).map(f => ({
+    fields: fieldsToRestore(args).map(f => ({
       ...f,
       localized: true,
     })),
@@ -364,6 +370,23 @@ interface LocaleScanDb {
   };
 }
 
+/**
+ * What a restore copies back: the entity's own fields as `restorableFields`
+ * judges them, then the fields a plugin's scope holds back from it, judged
+ * apart, so they never change which of its own fields are restored.
+ */
+function fieldsToRestore(
+  args: Pick<RestoreCompanionArgs, "fields" | "heldBack">
+): RestorableField[] {
+  const own = restorableFields(args.fields);
+  const taken = new Set(own.map(field => field.name));
+  return [
+    ...own,
+    ...restorableFields(args.heldBack ?? []).filter(
+      field => !taken.has(field.name)
+    ),
+  ];
+}
 /**
  * The fields whose values the companion is still entitled to supply.
  *
