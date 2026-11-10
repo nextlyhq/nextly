@@ -557,6 +557,12 @@ export { useSuppressAdminChrome } from "./components/layout/ChromeSuppression";
  * plugin's own page draws the contributions sent to a place it declared with
  * the parts core's pages use.
  */
+// A document's live values, for a plugin's component inside the editor.
+export {
+  useDocumentField,
+  useDocumentValues,
+  type DocumentField,
+} from "./components/features/entries/EntryForm/document-values";
 export { PlaceTabs, TargetSlot } from "./components/shared/target-slot";
 export type {
   PlaceContributionProps,

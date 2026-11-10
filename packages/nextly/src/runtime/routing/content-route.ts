@@ -33,6 +33,12 @@ import { requireNextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { NextlyError } from "../../errors/nextly-error";
 import { consoleLogger } from "../../shared/types";
+import { nextlyTags } from "../cache/nextly-tags";
+import {
+  knownNoPageMetadataProvider,
+  pageMetadataFor,
+} from "../seo/page-metadata";
+import type { PageMetadataValues } from "../seo/page-metadata-contract";
 
 import { triggerNotFound, triggerPermanentRedirect } from "./not-found";
 import { isReservedPath } from "./reserved-paths";
@@ -145,11 +151,29 @@ export interface ContentRouteConfig<TNode> {
     entry: ContentEntry,
     context: RenderContext
   ) => TNode | Promise<TNode>;
-  /** Optional per-entry metadata (e.g. via `buildMetadata`). */
+  /**
+   * Optional per-entry metadata (e.g. via `buildMetadata`).
+   *
+   * Where a plugin provides page metadata, such as `@nextlyhq/plugin-seo`, its
+   * answer decides the page's head and this is one of its inputs: the title,
+   * description and social values set here are used where nobody set them for
+   * the page, and its `robots` and canonical are not used at all. Without such
+   * a plugin, this is served as returned.
+   */
   buildMetadata?: (
     entry: ContentEntry,
     context: RenderContext
   ) => Metadata | Promise<Metadata>;
+  /**
+   * @experimental What the entry's own content offers for its head, such as
+   * the title and image a Page Builder page's blocks show. Asked only where a
+   * plugin provides page metadata, and handed to it as the level below every
+   * value somebody set.
+   */
+  derivedMetadata?: (
+    entry: ContentEntry,
+    context: RenderContext
+  ) => PageMetadataValues | Promise<PageMetadataValues>;
   /** Field holding the slug (default `"slug"`). */
   slugField?: string;
   /**
@@ -832,8 +856,9 @@ function buildRoute<TNode>(
   }
 
   async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
-    const buildMetadata = config.buildMetadata;
-    if (!buildMetadata) return {};
+    // Nothing of its own to serve and no provider to ask: the page is not
+    // resolved for its head at all, as before providers existed.
+    if (!config.buildMetadata && knownNoPageMetadataProvider()) return {};
     const slug = joinSlug(await args.params);
     if (isReservedPath(`/${slug}`)) return {};
     // One memo of access lookups for the resolution and the callback, so the
@@ -843,7 +868,14 @@ function buildRoute<TNode>(
       const resolved = await resolvePath(slug);
       // A redirect's metadata is never read: the page answers with it.
       if (!resolved || "redirect" in resolved) return {};
-      return buildMetadata(resolved.entry, resolved.context);
+      const { entry, context } = resolved;
+      // The address this request was served at: a later page of the entry's
+      // list is its own address, not the list's first page.
+      const path =
+        context.page !== undefined && context.listPagePath !== undefined
+          ? context.listPagePath(context.page)
+          : addressOf(context.slug);
+      return contentPageMetadata(config, entry, context, path);
     });
   }
 
@@ -862,6 +894,50 @@ function buildRoute<TNode>(
   }
 
   return { generateStaticParams, generateMetadata, ContentPage };
+}
+
+/**
+ * The head of a page this route resolved: the page-metadata provider's answer
+ * where a plugin provides one, otherwise the route's own `buildMetadata`, as
+ * returned.
+ *
+ * Exported for a route that resolves its entries its own way and serves them
+ * with a content route's config, so its pages ask the provider exactly as the
+ * content route's do. `path` is the address the request was served at.
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export async function contentPageMetadata<TNode>(
+  config: Pick<
+    ContentRouteConfig<TNode>,
+    "buildMetadata" | "derivedMetadata" | "tags" | "revalidate"
+  >,
+  entry: ContentEntry,
+  context: RenderContext,
+  path: string
+): Promise<Metadata> {
+  const code = config.buildMetadata
+    ? await config.buildMetadata(entry, context)
+    : undefined;
+  // What the content offers costs reads of its own, so it is not worked out
+  // for a process known to have nobody to give it to.
+  if (knownNoPageMetadataProvider()) return code ?? {};
+  const derived = config.derivedMetadata
+    ? await config.derivedMetadata(entry, context)
+    : undefined;
+  return pageMetadataFor({
+    path,
+    ...(context.locale === undefined ? {} : { locale: context.locale }),
+    source: { kind: "entry", collection: context.collection, entry },
+    ...(derived === undefined ? {} : { derived }),
+    code,
+    // The tags the page's own read carries, so a write to its document
+    // expires its head as it expires its body.
+    tags: [...nextlyTags(context.collection), ...(config.tags ?? [])],
+    ...(config.revalidate === undefined
+      ? {}
+      : { revalidate: config.revalidate }),
+  });
 }
 
 /**

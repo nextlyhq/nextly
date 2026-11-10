@@ -652,6 +652,26 @@ export { useSuppressAdminChrome } from "@nextlyhq/admin";
 export type { AdminChromeLayer } from "@nextlyhq/admin";
 
 /**
+ * The live values of the document being edited (@experimental), for any
+ * component a plugin draws inside the editor: a block, a side panel section
+ * or a tab, on an entry, a new one or a Single. A place's `entry` prop is the
+ * document as it was read; these are the document as it is being typed.
+ *
+ * - `useDocumentValues(paths)`: the named fields by their dot paths
+ *   (`"seo.title"`), drawing again only when one of them changes.
+ * - `useDocumentField(path)`: one field's value, whether it may be written
+ *   now, and `set(next)`, which writes as the author typing would and marks the
+ *   document changed, or writes nothing and answers `false` while the
+ *   document's content is held. `set(null)` returns a field to automatic.
+ *
+ * Both read the editor's own form, never the nearest form context, so a
+ * plugin component with a form of its own still reads the document. Both
+ * answer `null` outside a document editor.
+ */
+export { useDocumentField, useDocumentValues } from "@nextlyhq/admin";
+export type { DocumentField } from "@nextlyhq/admin";
+
+/**
  * Draw the contributions sent to an admin place (@experimental): blocks with
  * `TargetSlot`, tabs with `PlaceTabs`, in the order the server sent them and
  * each behind its own error boundary, as core's pages draw theirs.

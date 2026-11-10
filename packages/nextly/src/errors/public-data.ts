@@ -57,8 +57,6 @@ export type SingleAbsentPublicData = {
  * words: `published` (the record of what went live), `committed` (scheduled
  * or stopped; cancel it first) or `was-scheduled` (cancelled after it was
  * scheduled, so it may have run and is kept).
- *
- * @experimental
  */
 export type ReleaseNotDeletablePublicData = {
   reason: "published" | "committed" | "was-scheduled";

@@ -35,6 +35,7 @@ import {
 } from "../services/collections/trust-grant";
 import { listRoleSlugsForUserOrRefuse } from "../services/lib/permissions";
 import type { RequestContext } from "../services/shared";
+import { refuseSchemaChangeInProduction } from "../shared/builder-refusal";
 import {
   type ReadLock,
   runReadsInTransaction,
@@ -800,8 +801,24 @@ export function wrapCollectionsForPlugin(
         )
       );
     };
+  // A collection's definition is schema, which reaches production only
+  // through migrations: a plugin's create, update or delete of one is refused
+  // there with the builder's own refusal, before its `ServiceOpts` is resolved
+  // or the service is reached. Async, so the refusal is a rejection like every
+  // other failure of these methods.
+  const schemaChange =
+    (method: "createCollection" | "updateCollection" | "deleteCollection") =>
+    async (...args: unknown[]): Promise<unknown> => {
+      refuseSchemaChangeInProduction(`ctx.services.collections.${method}`);
+      return (
+        facade[method] as unknown as (...args: unknown[]) => Promise<unknown>
+      )(...args);
+    };
   return Object.freeze({
     ...facade,
+    createCollection: schemaChange("createCollection"),
+    updateCollection: schemaChange("updateCollection"),
+    deleteCollection: schemaChange("deleteCollection"),
     withTransaction: <T>(
       work: (tx: PluginCollectionTransaction) => Promise<T>
     ): Promise<T> =>

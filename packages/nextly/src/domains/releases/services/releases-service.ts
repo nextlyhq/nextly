@@ -176,8 +176,6 @@ export { RELEASES_RESOURCE };
  * What scheduling a document in one step takes, declared beside the plan
  * that reads it and exported here, where the service's callers find its
  * other inputs.
- *
- * @experimental
  */
 export type { ScheduleDocumentInput };
 
@@ -238,8 +236,6 @@ export interface ReleaseActor {
 /**
  * The reads a readiness check needs from outside the releases domain; the
  * rest of {@link ReleaseCheckReads} the service answers from its repository.
- *
- * @experimental
  */
 export type ReleaseDocumentChecks = Omit<
   ReleaseCheckReads,
@@ -359,8 +355,6 @@ export interface ReleasesServiceDeps {
    * documents are live. Held by this service, so every call it serves reads
    * through the one registration it was built with. Optional: without it no
    * link is checked.
-   *
-   * @experimental
    */
   linkReads?: ReleaseLinkReads;
   /**
@@ -370,8 +364,6 @@ export interface ReleasesServiceDeps {
    * actor as a read applies them. A link in any other field is reported
    * without its field or target. Optional: without it, an untrusted reader is
    * shown no linked field at all.
-   *
-   * @experimental
    */
   visibleLinkFields?: (
     scans: ReadonlyArray<{ id: string; scanned: ScannedLinks }>,
@@ -383,11 +375,8 @@ export interface ReleasesServiceDeps {
  * A member as an add answers it: the stored member, and the documents it
  * links to that will not be live at its release's moment, so a client can
  * offer to add them too.
- *
- * @experimental
  */
 export type AddedReleaseMember = ReleaseMemberRow & {
-  /** @experimental */
   unpublishedLinks: UnpublishedLinksReport;
 };
 
@@ -397,8 +386,6 @@ export type AddedReleaseMember = ReleaseMemberRow & {
  * the step scheduled it; `members` are the new ones, in the order given, each
  * with the documents it links to that will not be live at the release's
  * moment, as {@link AddedReleaseMember} carries them.
- *
- * @experimental
  */
 export interface ReleaseWithAddedMembers {
   release: ReleaseRow;
@@ -410,8 +397,6 @@ export interface ReleaseWithAddedMembers {
  * of a single-document release that has not run cancels that release and
  * keeps the document in it, so a caller is told which of the two happened
  * rather than told the document was removed.
- *
- * @experimental
  */
 export interface ReleaseMemberRemoval {
   /** True when the release was cancelled instead of the document removed. */
@@ -602,8 +587,6 @@ function assertTitleFits(title: string): void {
 
 /**
  * What a rename may change: the title, the description, or both.
- *
- * @experimental
  */
 export interface ReleaseDetailsChange {
   /** A new title: not empty, and at most {@link MAX_RELEASE_TITLE_LENGTH}. */
@@ -803,8 +786,6 @@ export type ReleaseDocument = DocumentRef & { id: string };
  * All a reader is told about them: how many, and in which collection or
  * Single. No title, id or field, so a release cannot show anyone a document
  * they could not open themselves, while it still reads as the size it is.
- *
- * @experimental
  */
 export interface HiddenReleaseMembers {
   scopeKind: VersionScopeKind;
@@ -821,8 +802,6 @@ export interface HiddenReleaseMembers {
 /**
  * A collection's or Single's display names, the singular for one document
  * and the plural for several.
- *
- * @experimental
  */
 export interface ReleaseScopeLabels {
   singular: string;
@@ -835,8 +814,6 @@ export interface ReleaseScopeLabels {
  * have a hard problem and a soft one. Counted by document, as a reader counts
  * what needs fixing, so one document with two problems is one. Enough to tell
  * that the release is not ready without naming any of them.
- *
- * @experimental
  */
 export interface HiddenReleaseProblems extends HiddenReleaseMembers {
   /** Documents among them with at least one hard problem. */
@@ -848,8 +825,6 @@ export interface HiddenReleaseProblems extends HiddenReleaseMembers {
 /**
  * A release's documents as one reader sees them: those they may read, and
  * the rest counted by collection.
- *
- * @experimental
  */
 export interface ReleaseMembersView {
   items: ReleaseMemberRow[];
@@ -860,8 +835,6 @@ export interface ReleaseMembersView {
  * What stands between a release and its instant, as one reader sees it: the
  * blockers on documents they may read, and how many blocked documents they
  * may not, by collection.
- *
- * @experimental
  */
 export interface ReleaseBlockersView {
   items: ReleaseBlocker[];
@@ -873,8 +846,6 @@ export interface ReleaseBlockersView {
  * they may read, and the rest counted in `hidden`. Judged over every
  * document, so the release is ready only when `hard` is empty AND no hidden
  * document has a hard problem.
- *
- * @experimental
  */
 export interface ReleaseReadinessView extends ReleaseReadiness {
   hidden: HiddenReleaseProblems[];
@@ -894,8 +865,6 @@ interface FindReleasesFilters {
    * Restrict to one kind of release: `release` leaves out single-document
    * releases, `single` lists only them. Filtered on the stored kind, never on
    * how many documents a release holds.
-   *
-   * @experimental
    */
   kind?: ReleaseKind;
   /**
@@ -914,8 +883,6 @@ interface FindReleasesFilters {
   limit?: number;
   /**
    * Which page, counting from 1.
-   *
-   * @experimental
    */
   page?: number;
 }
@@ -923,19 +890,14 @@ interface FindReleasesFilters {
 /**
  * The page size a listing gets when it asks for none, and the most it may ask
  * for. Declared once here so the REST route and the Direct API page alike.
- *
- * @experimental
  */
 export const DEFAULT_RELEASE_PAGE_SIZE = 50;
-/** @experimental */
 export const MAX_RELEASE_PAGE_SIZE = 200;
 
 /**
  * The most releases one batch readiness read answers for: the admin list's
  * largest page. Each release's documents are all checked, so the bound is on
  * the work one request can ask for, not only on its length.
- *
- * @experimental
  */
 export const MAX_RELEASE_READINESS_BATCH = 50;
 
@@ -946,8 +908,6 @@ export const MAX_RELEASE_READINESS_BATCH = 50;
  * now hold, one made before the limit: checking it would be that whole
  * release's worth of reads inside a read of a page, so the batch leaves it to
  * the single read, which checks it in full.
- *
- * @experimental
  */
 export type ReleaseReadinessEntry =
   | (ReleaseReadinessView & { checked: true })
@@ -987,15 +947,11 @@ function releaseIdBatch(
  * The longest search accepted. Well above any title a person types, and a
  * bound on the pattern a caller can hand the database to match against every
  * release.
- *
- * @experimental
  */
 export const MAX_RELEASE_SEARCH_LENGTH = 200;
 
 /**
  * One day in a named time zone, as the list's day filter takes it.
- *
- * @experimental
  */
 export interface ReleaseDayFilter {
   /** The day, written `YYYY-MM-DD`. */
@@ -1006,8 +962,6 @@ export interface ReleaseDayFilter {
 
 /**
  * What a calendar read asks for: a window of days in a zone.
- *
- * @experimental
  */
 export interface ReleaseCalendarQuery {
   /** The first day, written `YYYY-MM-DD`. */
@@ -1023,16 +977,12 @@ export interface ReleaseCalendarQuery {
 /**
  * What {@link ReleasesService.count} narrows by: the list's filters, without
  * a page or an order.
- *
- * @experimental
  */
 export interface ReleaseCountQuery {
   /**
    * Only the releases placed on this day in this zone, whatever their state:
    * the releases a calendar shows on that day. A published release is placed
    * where it went out, any other where it is scheduled.
-   *
-   * @experimental
    */
   day?: ReleaseDayFilter;
   tab?: ReleaseTab;
@@ -1047,8 +997,6 @@ export interface ReleaseCountQuery {
 
 /**
  * One page of a release listing, and the size of the whole of it.
- *
- * @experimental
  */
 export interface ReleaseListPage {
   /**
@@ -1664,22 +1612,16 @@ export type FindReleasesQuery = FindReleasesFilters &
          * One of the list's four views (`release-tabs`). Not combined with
          * `state`: a tab is already a set of states, and the two together
          * would be a second way of saying which releases to show.
-         *
-         * @experimental
          */
         tab?: ReleaseTab;
         /**
          * With `tab: "attention"`, only its `"stopped"` or only its
          * `"overdue"` releases — for example, to count overdue releases alone.
-         *
-         * @experimental
          */
         reason?: ReleaseAttentionReason;
         /**
          * Text in the title or the description, without regard to case, matched
          * as written. Applied in the database, before the page and the total.
-         *
-         * @experimental
          */
         search?: string;
         /**
@@ -1687,8 +1629,6 @@ export type FindReleasesQuery = FindReleasesFilters &
          * soonest first unless `order` says otherwise: the day a calendar in
          * that zone shows, read in full and paged. A published release is
          * placed where it went out, any other where it is scheduled.
-         *
-         * @experimental
          */
         day?: ReleaseDayFilter;
         /**
@@ -2215,8 +2155,6 @@ export class ReleasesService {
    * What a page outside Releases asks — "how many need attention?" — answered
    * by the list's own rules, so a count shown elsewhere is always the count the
    * list would show.
-   *
-   * @experimental
    */
   async count(query: ReleaseCountQuery, actor: ReleaseActor): Promise<number> {
     await this.authorize(actor, "read");
@@ -2370,8 +2308,6 @@ export class ReleasesService {
    * The days and their instants are worked out before the read, so a window
    * that is inverted, longer than six weeks, or in an unknown zone is refused
    * without touching the database.
-   *
-   * @experimental
    */
   async calendar(
     query: ReleaseCalendarQuery,
@@ -2419,8 +2355,6 @@ export class ReleasesService {
    * documents they may read, and how many blocked documents they may not, by
    * collection. Checked over every document first, so a release blocked only
    * by documents the reader cannot see still reads as blocked.
-   *
-   * @experimental
    */
   async blockersOf(
     releaseId: string,
@@ -2497,8 +2431,6 @@ export class ReleasesService {
    * given only once all of them are: a problem in the last document of a large
    * release is reported like one in the first. Worked out on each call, so a
    * problem somebody fixed reads as fixed on the next one.
-   *
-   * @experimental
    */
   async readiness(
     releaseId: string,
@@ -2541,8 +2473,6 @@ export class ReleasesService {
    * Every release asked about is answered, one holding nothing (or not
    * there) with zeros, so a missing entry never has to be read as "none".
    * Under the same authority as the list it summarises.
-   *
-   * @experimental
    */
   async memberCounts(
     releaseIds: readonly string[],
@@ -2577,8 +2507,6 @@ export class ReleasesService {
    * A release that does not exist is left out, as the single read would have
    * answered not found for it. One holding more documents than the limit is
    * returned unchecked (see {@link ReleaseReadinessEntry}).
-   *
-   * @experimental
    */
   async readinessOf(
     releaseIds: readonly string[],
@@ -2962,8 +2890,6 @@ export class ReleasesService {
    * is still judged as its own author, as the run would judge it. Runs after
    * the event's own write has committed and opens one transaction per
    * release it stops, never inside another.
-   *
-   * @experimental
    */
   async stopOnHardProblems(target: ReleaseRecheckTarget): Promise<string[]> {
     const now = new Date();
@@ -3077,8 +3003,6 @@ export class ReleasesService {
    * history lists no document the release's own document list would not. An
    * event about no document is kept, and a document event that does not say
    * which document is left out. A trusted actor is shown everything.
-   *
-   * @experimental
    */
   async historyVisibleTo<
     E extends { id: string; kind: string; payload: unknown },
@@ -3159,8 +3083,6 @@ export class ReleasesService {
   /**
    * A release's documents as this actor sees them: those they may read, in
    * the order they were added, and the rest counted by collection.
-   *
-   * @experimental
    */
   async membersOf(
     releaseId: string,
@@ -3200,8 +3122,6 @@ export class ReleasesService {
    * live, what it links to that will not be live at the release's moment,
    * naming only documents the caller may read and counting the rest. Empty
    * for a document coming down.
-   *
-   * @experimental The `unpublishedLinks` field.
    */
   async addMember(
     releaseId: string,
@@ -3386,8 +3306,6 @@ export class ReleasesService {
    *
    * The accepted linked documents an add offers are added this way too, each
    * going live.
-   *
-   * @experimental
    */
   async addMembers(
     releaseId: string,
@@ -3416,8 +3334,6 @@ export class ReleasesService {
    *
    * One transaction whatever the path: the release, its documents and its
    * schedule land together, or nothing does, not even the release.
-   *
-   * @experimental
    */
   async scheduleDocument(
     input: ScheduleDocumentInput,
@@ -3812,8 +3728,6 @@ export class ReleasesService {
    * action is checked as that author, and a switch that would leave a hard
    * problem, such as an author who may publish the document but not unpublish
    * it, is refused with the release left as it was.
-   *
-   * @experimental
    */
   async changeMemberAction(
     memberId: string,
@@ -4250,8 +4164,6 @@ export class ReleasesService {
    * running the drain (or it is waiting to retry), or the drain could not be
    * started. A `scheduled` release is due, so that runner or the next pass
    * finishes it.
-   *
-   * @experimental
    */
   async publishNow(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
     await this.authorize(actor, "publish");
@@ -4412,8 +4324,6 @@ export class ReleasesService {
    * nothing writes nothing and records nothing, and answers the release as it
    * is: a form that submits both fields after one edit must not move the
    * release, since every move sends a schedule judged before it round again.
-   *
-   * @experimental
    */
   async update(
     id: string,
@@ -4464,8 +4374,6 @@ export class ReleasesService {
    * a cancelled one that was ever scheduled may have begun to run. A release
    * that is not there is NOT_FOUND. Answers the release as the delete found
    * it under its lock.
-   *
-   * @experimental
    */
   async delete(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
     await this.authorize(actor, "delete");

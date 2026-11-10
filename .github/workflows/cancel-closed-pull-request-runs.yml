@@ -4,20 +4,20 @@ name: Cancel closed pull request runs
 # pull-request runs can no longer decide anything, yet each holds a runner
 # other pull requests are waiting for. A concurrency group cancels a run only
 # when a newer one joins it, and closing starts none, so this cancels them, for
-# every workflow at once. Runs of a push to `main`, the merge queue and
-# schedules are never touched: see `scripts/cancel-closed-pull-request-runs.mjs`.
+# every workflow at once. Runs of a push to `main` or `dev`, the merge queue
+# and schedules are never touched: see `scripts/cancel-closed-pull-request-runs.mjs`.
 #
 # The same job then deletes the Actions caches a closed pull request's runs
 # saved under its merge ref, which nothing reads once it is closed and which would
 # otherwise hold the repository's cache allowance until eviction reaches them,
-# taking `main`'s caches with them: see
+# taking `main`'s and `dev`'s caches with them: see
 # `scripts/delete-closed-pull-request-caches.mjs`.
 #
 # On a fork's pull request the token cannot cancel runs or delete caches, so
 # the job fails and says so; those runs then finish on their own.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
     types: [closed]
 
 permissions: {}

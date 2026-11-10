@@ -8,6 +8,7 @@
     "security-helpers",
     "lifecycle",
     "services",
+    "caching",
     "permissions",
     "security",
     "routes",

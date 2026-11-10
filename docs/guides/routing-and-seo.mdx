@@ -438,6 +438,24 @@ A `canonical` is validated to a root-relative path or an absolute http(s) URL
 (a `mailto:`/`javascript:` value falls back), and a page ships `index, follow`
 unless `seo.noindex` is set.
 
+## When a plugin provides page metadata
+
+A plugin can take over every page's head by providing page metadata (see
+[Providing page metadata](/docs/plugins/api-reference#providing-page-metadata)). With one
+installed, the route helpers ask it for each page they serve: `createContentRoute`,
+`createPublicContentRoute`, `createSingleRoute`, `createPublicSingleRoute`, and the Page
+Builder's `createBlocksPage` and `createContentPage`. A route needs no `buildMetadata` for this.
+
+A route that still passes `buildMetadata`, or `metadata` on a Page Builder route, keeps working,
+but its result becomes one input rather than the answer:
+
+- its title, description and social card values are used where nobody set one for the page;
+- its `robots` and canonical are not used, so the page and the sitemap built from the same answer
+  agree on whether a page is listed and where it lives;
+- anything else it sets, such as an Open Graph `type` or `publishedTime`, is kept.
+
+Without such a plugin, a route's metadata is served exactly as it returns it.
+
 ## nextlySitemap and nextlyRobots
 
 `nextlySitemap({ entries, tags })` builds the default export for

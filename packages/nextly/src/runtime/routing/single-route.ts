@@ -38,6 +38,11 @@ import { NextlyError } from "../../errors/nextly-error";
 import { cachedFind } from "../cache/cached-find";
 import { nextlySingleTags, readTags } from "../cache/nextly-tags";
 import { releaseBoundedRevalidate } from "../cache/release-cache-window";
+import {
+  knownNoPageMetadataProvider,
+  pageMetadataFor,
+} from "../seo/page-metadata";
+import type { PageMetadataValues } from "../seo/page-metadata-contract";
 
 import { deferToRequest } from "./defer-to-request";
 import { isMissOrDenied } from "./miss-or-denied";
@@ -163,11 +168,29 @@ export interface SingleRouteConfig<TNode> {
     document: SingleDocument,
     context: SingleContext
   ) => TNode | Promise<TNode>;
-  /** Optional metadata for the page. */
+  /**
+   * Optional metadata for the page.
+   *
+   * Where a plugin provides page metadata, such as `@nextlyhq/plugin-seo`, its
+   * answer decides the page's head and this is one of its inputs: the title,
+   * description and social values set here are used where nobody set them for
+   * the page, and its `robots` and canonical are not used at all. Without such
+   * a plugin, this is served as returned.
+   */
   buildMetadata?: (
     document: SingleDocument,
     context: SingleContext
   ) => Metadata | Promise<Metadata>;
+  /**
+   * @experimental What the Single's own content offers for its head, such as
+   * the title and image a Page Builder page's blocks show. Asked only where a
+   * plugin provides page metadata, and handed to it as the level below every
+   * value somebody set, as a content route's `derivedMetadata` is.
+   */
+  derivedMetadata?: (
+    document: SingleDocument,
+    context: SingleContext
+  ) => PageMetadataValues | Promise<PageMetadataValues>;
   /**
    * A booted Nextly instance. Defaults to the runtime singleton, which requires
    * services to be registered — pass one explicitly (the value from
@@ -417,14 +440,38 @@ function buildSingleRoute<TNode>(
 
   async function generateMetadata(): Promise<Metadata> {
     const buildMetadata = config.buildMetadata;
-    if (!buildMetadata) return {};
+    // Nothing of its own to serve and no provider to ask: the document is not
+    // read for its head at all, as before providers existed.
+    if (!buildMetadata && knownNoPageMetadataProvider()) return {};
     // One memo of access lookups for the resolution and the callback, so a
     // preview's draft gate, the read it grants and any read the callback makes
     // look the person up once.
     return runWithAccessMemo(async () => {
       const document = await resolve();
       if (!document) return {};
-      return buildMetadata(document, context);
+      const code = buildMetadata
+        ? await buildMetadata(document, context)
+        : undefined;
+      // Worked out only where a provider may be asked: with none known, the
+      // route's own metadata is served and the content is not walked for it.
+      const derived =
+        config.derivedMetadata && !knownNoPageMetadataProvider()
+          ? await config.derivedMetadata(document, context)
+          : undefined;
+      // A Single route is mounted by the app and never told where, so the
+      // provider is asked without a path and finds the Single's address itself.
+      return pageMetadataFor({
+        ...(context.locale === undefined ? {} : { locale: context.locale }),
+        source: { kind: "single", slug: config.slug, document },
+        code,
+        ...(derived === undefined ? {} : { derived }),
+        // The tags the document's own read carries, so a write to the Single
+        // expires its head as it expires its body.
+        tags: readTags(nextlySingleTags(config.slug), config.tags),
+        ...(config.revalidate === undefined
+          ? {}
+          : { revalidate: config.revalidate }),
+      });
     });
   }
 
