@@ -168,7 +168,12 @@
    * shades exist because a status needs more than its solid colour: a tinted
    * surface, a border on that surface, and text dark enough to read on it.
    * Mixing toward white and black keeps 50 pale and 900 deep in both modes,
-   * which is what a `dark:` pair at the call site already assumes. */
+   * which is what a `dark:` pair at the call site already assumes.
+   *
+   * Deprecated for status colour: the status tokens below (`-surface`,
+   * `-border`, `-text`, `-solid`) replace these shades wherever a status is
+   * drawn. The shades stay so existing callers and plugins keep building,
+   * and are removed in a later minor release. */
   --color-destructive: var(--nx-destructive);
   --color-destructive-50: color-mix(in srgb, var(--nx-destructive), white 95%);
   --color-destructive-100: color-mix(in srgb, var(--nx-destructive), white 90%);
@@ -216,6 +221,25 @@
   --color-warning-900: color-mix(in srgb, var(--nx-warning), black 70%);
   --color-warning-950: color-mix(in srgb, var(--nx-warning), black 85%);
   --color-warning-foreground: var(--nx-warning-foreground);
+
+  /* Status tokens: surface, border, text and solid per status (theme.css
+   * :root explains each). The numbered shades above stay for existing callers
+   * and are deprecated; new code uses these. */
+  --color-success-surface: var(--nx-success-surface);
+  --color-success-border: var(--nx-success-border);
+  --color-success-text: var(--nx-success-text);
+  --color-warning-surface: var(--nx-warning-surface);
+  --color-warning-border: var(--nx-warning-border);
+  --color-warning-text: var(--nx-warning-text);
+  --color-warning-solid: var(--nx-warning-solid);
+  --color-danger-surface: var(--nx-danger-surface);
+  --color-danger-border: var(--nx-danger-border);
+  --color-danger-text: var(--nx-danger-text);
+  --color-danger-solid: var(--nx-danger-solid);
+  --color-info-surface: var(--nx-info-surface);
+  --color-info-border: var(--nx-info-border);
+  --color-info-text: var(--nx-info-text);
+  --color-info-solid: var(--nx-info-solid);
 
   /* The editor's highlight mark. A token rather than a literal because it
    * styles authored content, which an integrator restyles to their own site
@@ -816,6 +840,29 @@
   --nx-warning-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 - REQUIRED for AA contrast (warning-500 on white = 3.4:1, fails AA) */
 
+  /* Status tokens. Each status has a faint SURFACE (an alert, a highlighted
+   * row), a BORDER for anything drawn on that surface, TEXT that reads at 4.5:1
+   * on its surface, on a card and on the page, and a SOLID for dots and icons
+   * that meets 3:1 on the page. They replace the white/black mixes of the
+   * numbered shades (`success-100`, `warning-700`), which tinted every chip.
+   * `danger` is a status (Failed, Error); `destructive` stays the colour of a
+   * destructive action. Success keeps its existing `-solid`. */
+  --nx-success-surface: oklch(0.975 0.013 150);
+  --nx-success-border: oklch(0.86 0.06 150);
+  --nx-success-text: oklch(0.43 0.12 150);
+  --nx-warning-surface: oklch(0.978 0.018 80);
+  --nx-warning-border: oklch(0.86 0.08 80);
+  --nx-warning-text: oklch(0.47 0.11 65);
+  --nx-warning-solid: oklch(0.64 0.15 62);
+  --nx-danger-surface: oklch(0.975 0.013 25);
+  --nx-danger-border: oklch(0.86 0.06 25);
+  --nx-danger-text: oklch(0.5 0.17 27);
+  --nx-danger-solid: oklch(0.6 0.2 27);
+  --nx-info-surface: oklch(0.975 0.012 250);
+  --nx-info-border: oklch(0.86 0.05 250);
+  --nx-info-text: oklch(0.45 0.13 255);
+  --nx-info-solid: oklch(0.58 0.16 255);
+
   /* The highlighter mark in authored content. Kept a light yellow in both
    * modes on purpose: it stands for a marker pen drawn over the text, and the
    * pairing below is what keeps that readable rather than the page's own
@@ -1111,6 +1158,24 @@
   /* amber-500 */
   --nx-warning-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 */
+
+  /* Status tokens, dark: a deep tinted surface, a mid border, light text and a
+   * bright solid, so each reads on the black page as its light twin does. */
+  --nx-success-surface: oklch(0.22 0.03 150);
+  --nx-success-border: oklch(0.37 0.07 150);
+  --nx-success-text: oklch(0.82 0.13 150);
+  --nx-warning-surface: oklch(0.23 0.035 75);
+  --nx-warning-border: oklch(0.4 0.08 75);
+  --nx-warning-text: oklch(0.85 0.12 80);
+  --nx-warning-solid: oklch(0.78 0.15 75);
+  --nx-danger-surface: oklch(0.23 0.04 25);
+  --nx-danger-border: oklch(0.4 0.09 25);
+  --nx-danger-text: oklch(0.8 0.11 25);
+  --nx-danger-solid: oklch(0.68 0.19 25);
+  --nx-info-surface: oklch(0.22 0.035 255);
+  --nx-info-border: oklch(0.38 0.08 255);
+  --nx-info-text: oklch(0.82 0.09 250);
+  --nx-info-solid: oklch(0.68 0.14 255);
 
   /* Dimmed so the mark reads as highlighted rather than as a lamp on a dark
    * page, while its own foreground stays dark enough to read against it. */
