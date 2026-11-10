@@ -30,6 +30,30 @@ import {
 import { applyMigrationWhole } from "../../schema/services/apply-migration-statements";
 import type { SingleEntryService } from "../services/single-entry-service";
 
+/**
+ * Stops one save between its main-table step and its companion step, as a process that dies
+ * there would: the companion reconcile fails once when armed, and runs as it is otherwise.
+ */
+const companionStop = vi.hoisted(() => ({ armed: false }));
+vi.mock("../services/reconcile-single-companion", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("../services/reconcile-single-companion")
+    >();
+  return {
+    ...actual,
+    reconcileSingleCompanion: async (
+      ...args: Parameters<typeof actual.reconcileSingleCompanion>
+    ) => {
+      if (companionStop.armed) {
+        companionStop.armed = false;
+        throw new Error("stopped between the main table and the companion");
+      }
+      return actual.reconcileSingleCompanion(...args);
+    },
+  };
+});
+
 const localization = { locales: ["en", "es"], defaultLocale: "en" };
 
 describeEachDialect(
@@ -300,6 +324,39 @@ describeEachDialect(
       expect(await archived()).toEqual(
         expect.arrayContaining([expect.stringMatching(/\/es$/)])
       );
+    });
+
+    // A rename that leaves translation runs in steps that each commit: the companion column is
+    // renamed first, then the main table gains the new column, then the companion's values are
+    // copied over and its column dropped. A save stopped after the main-table step leaves the new
+    // column on both tables and the old one on neither, so saving again is not a move onto a
+    // taken column: the check passes it, as it passes any move whose old column is gone.
+    //
+    // What the finished retry reads back is the companion reconcile's to answer, not this check's,
+    // and is not asserted here.
+    it("does not refuse saving again a rename leaving translation that stopped after its main-table step", async () => {
+      await hero(true);
+      const leaving = [
+        { name: "headline", type: "text", localized: false },
+        { name: "body", type: "text" },
+      ];
+
+      companionStop.armed = true;
+      await refusal(save(leaving, { localized: true }));
+      expect(companionStop.armed, "the stop was reached").toBe(false);
+      // Past its main-table step a save records the fields it made (reported as a failed
+      // migration), so saving again renames nothing and the check is not asked.
+      expect(await registeredFieldNames()).toEqual(["headline", "body"]);
+      // Where the stop left the columns: the new one on both tables, the old one on neither.
+      expect(await columnsOf("single_hero")).toContain("headline");
+      const companion = await columnsOf("single_hero_locales");
+      expect(companion).toContain("headline");
+      expect(companion).not.toContain("heading");
+
+      const again = await refusal(save(leaving, { localized: true }));
+
+      expect(again).toBeUndefined();
+      expect(await registeredFieldNames()).toEqual(["headline", "body"]);
     });
 
     it("refuses a translated field renamed as it leaves translation, onto a column its companion has, before archiving", async () => {
