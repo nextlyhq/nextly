@@ -77,6 +77,7 @@ import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fiel
 import { describeError } from "../../errors/index";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
+import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors";
 import { CliError } from "../errors/cli-error";
 import {
@@ -92,8 +93,14 @@ import {
 import {
   requireDatabaseEnv,
   loadConfigOrExit,
+  openOrConnect,
+  type ValidDatabaseEnv,
 } from "../utils/command-prerequisites";
-import { watchConfig, clearConfigCache } from "../utils/config-loader";
+import {
+  watchConfig,
+  clearConfigCache,
+  type LoadConfigResult,
+} from "../utils/config-loader";
 import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration } from "../utils/logger";
 
@@ -174,6 +181,12 @@ export interface DbSyncCommandOptions {
    * `--remove-orphaned` deletes. `true` alone, the list when one is given.
    */
   acceptDataLoss?: string | boolean;
+
+  /**
+   * `--dry-run`: report what the sync would change, read over a read-only connection, with no
+   * lock taken and nothing asked or written.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -248,6 +261,12 @@ export async function runDbSync(
     `Connecting to ${getDialectDisplayName(dbValidation.dialect)}...`
   );
 
+  // A dry run reads the database read-only and reports, changing nothing.
+  if (options.dryRun === true) {
+    await reportSyncDryRun(configResult, dbValidation, options, context);
+    return;
+  }
+
   let adapter: CLIDatabaseAdapter;
   // Held beyond the connect block so component schemas can be added once the core tables
   // are known to exist — `dynamic_components` has to be readable before it can be listed.
@@ -264,17 +283,7 @@ export async function runDbSync(
     // queries to system tables (users, dynamic_collections, etc.) work via
     // the Drizzle query API path. This MUST happen before any sync or seed
     // operations that query these tables.
-    const dialect = (adapter as unknown as DrizzleAdapter).getCapabilities()
-      .dialect;
-    schemaRegistry = new SchemaRegistry(dialect);
-    // Both spellings of the field-group registry: the schema registry keys a
-    // table by the physical name its Drizzle object carries, so a database
-    // whose storage migration has run has no handle for its registry otherwise.
-    schemaRegistry.registerStaticSchemas({
-      ...getDialectTables(dialect),
-      ...getFieldGroupRegistryAliases(dialect),
-    });
-    (adapter as unknown as DrizzleAdapter).setTableResolver(schemaRegistry);
+    schemaRegistry = installStaticSchemaRegistry(adapter);
     logger.debug("Schema registry initialized with static tables");
   } catch (error) {
     exitWithError(logger, error);
@@ -492,6 +501,62 @@ export async function runDbSync(
   }
 }
 
+/**
+ * A schema registry holding the static system tables, installed as `adapter`'s table resolver, so
+ * the system tables are addressable through the Drizzle query API. Both spellings of the
+ * field-group registry: the schema registry keys a table by the physical name its Drizzle object
+ * carries, so a database whose storage migration has run has no handle for its registry otherwise.
+ */
+function installStaticSchemaRegistry(
+  adapter: CLIDatabaseAdapter
+): SchemaRegistry {
+  const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+  const dialect = drizzleAdapter.getCapabilities().dialect;
+  const schemaRegistry = new SchemaRegistry(dialect);
+  schemaRegistry.registerStaticSchemas({
+    ...getDialectTables(dialect),
+    ...getFieldGroupRegistryAliases(dialect),
+  });
+  drizzleAdapter.setTableResolver(schemaRegistry);
+  return schemaRegistry;
+}
+
+/**
+ * The dry run of a sync: the database opened read-only (one that is not there has been said, and
+ * ends the run), the schema registry set up in memory as a real run sets it up, and the plan
+ * reported. Nothing is locked, asked or written.
+ */
+async function reportSyncDryRun(
+  configResult: LoadConfigResult,
+  dbValidation: ValidDatabaseEnv,
+  options: ResolvedDevOptions,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const adapter = await openOrConnect(
+    {
+      dialect: dbValidation.dialect,
+      databaseUrl: dbValidation.databaseUrl,
+      logger: options.verbose ? logger : undefined,
+    },
+    true,
+    logger
+  );
+  if (adapter === undefined) return;
+  try {
+    installStaticSchemaRegistry(adapter);
+    // Loaded only for a dry run, so a real sync loads none of the preview's modules.
+    const { planDbSync } = await import("./db-sync-dry-run");
+    reportDryRun(
+      logger,
+      await planDbSync(configResult, adapter, options, context)
+    );
+  } finally {
+    await adapter.disconnect();
+    clearConfigCache();
+  }
+}
+
 // ============================================================================
 // Command Action
 // ============================================================================
@@ -553,10 +618,17 @@ export async function dbSyncAction(
   // Promote / demote short-circuit the full db:sync flow because
   // they operate on a single slug and do not need the normal
   // multi-collection sync pipeline.
+  // A dry run of either asks no confirmation, takes no lock and writes nothing.
+  const dryRun = cmdOptions.dryRun === true;
   if (cmdOptions.promote) {
     try {
-      const { runPromote } = await import("./db-sync-promote");
-      await runPromote(cmdOptions.promote, context);
+      const { runPromote, runPromoteDryRun } = await import(
+        "./db-sync-promote"
+      );
+      await (dryRun ? runPromoteDryRun : runPromote)(
+        cmdOptions.promote,
+        context
+      );
       return;
     } catch (error) {
       exitWithError(context.logger, error);
@@ -565,8 +637,8 @@ export async function dbSyncAction(
 
   if (cmdOptions.demote) {
     try {
-      const { runDemote } = await import("./db-sync-demote");
-      await runDemote(cmdOptions.demote, context);
+      const { runDemote, runDemoteDryRun } = await import("./db-sync-demote");
+      await (dryRun ? runDemoteDryRun : runDemote)(cmdOptions.demote, context);
       return;
     } catch (error) {
       exitWithError(context.logger, error);

@@ -8,6 +8,7 @@ import { Option, type Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/typescript-config-defaults";
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -19,7 +20,7 @@ import { lazyAction } from "../lazy-action";
 // also dropped the `--seed` flag — demo seeding is now Payload-style and
 // runs from the project's auth-gated POST route.
 export function registerDbSyncCommand(program: Command): void {
-  program
+  const command = program
     .command("db:sync")
     .alias("sync")
     .description("Sync database schema with nextly.config.ts.")
@@ -71,6 +72,10 @@ export function registerDbSyncCommand(program: Command): void {
     // The data-loss consent for the push's column drops, handed on as
     // NEXTLY_ACCEPT_DATA_LOSS (`exportDataLossConsent`). Only drops: renames
     // and type changes still need a terminal to answer their prompts.
-    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
-    .action(lazyAction(async () => (await import("./db-sync")).dbSyncAction));
+    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP);
+  // `--dry-run` carries the one meaning and help line it has everywhere. Refused with `--watch`,
+  // which never ends: a dry run reports once and exits 0.
+  withDryRun(command, { conflicts: ["watch"] }).action(
+    lazyAction(async () => (await import("./db-sync")).dbSyncAction)
+  );
 }
