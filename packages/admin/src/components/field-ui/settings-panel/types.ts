@@ -7,7 +7,7 @@
  * definition, a user field). It writes nothing itself, so a surface's storage
  * and save stay that surface's.
  */
-import type { FieldSurface } from "nextly/field-catalog";
+import type { FieldSurface, FieldValidationRule } from "nextly/field-catalog";
 import type { ComponentType, ReactNode } from "react";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
@@ -42,7 +42,15 @@ export interface FieldSettingsControlProps {
 export interface FieldSettingsSurfaceControlProps
   extends FieldSettingsControlProps {
   ancestors: readonly FieldSettingsField[];
+  /** The other fields beside it, for a setting that names one of them. */
+  siblings: readonly FieldSettingsField[];
 }
+
+/**
+ * What a surface's own Conditions tab is given: the field, where its changes
+ * go, and the fields beside it that a condition may read.
+ */
+export type FieldSettingsConditionsProps = FieldSettingsSurfaceControlProps;
 
 /**
  * A field type's own settings, as the panel shows them.
@@ -85,9 +93,35 @@ export interface FieldSettingsSurface {
   >;
   /**
    * Its conditions: `sibling`, a condition on a field beside this one, as the
-   * entry form evaluates it; `none`, where fields carry no conditions.
+   * entry form evaluates it; `none`, where fields carry no conditions; or the
+   * surface's own editor, drawn as the whole Conditions tab, for a surface
+   * whose conditions take a shape the shared one does not (a form's show or
+   * hide on several conditions, say).
    */
-  conditions: "sibling" | "none";
+  conditions: "sibling" | "none" | ComponentType<FieldSettingsConditionsProps>;
+  /**
+   * @experimental Narrows the validation rules the Validation tab offers for a
+   * type to those this surface enforces. Given the rules core allows for the
+   * type; absent, all of them are offered. A rule the surface's runtime ignores
+   * would let an author set a limit that is never applied.
+   */
+  validationRules?: (
+    type: string,
+    allowed: readonly FieldValidationRule[]
+  ) => readonly FieldValidationRule[];
+  /**
+   * @experimental Whether Display offers "Read only" and "Hidden", which mean
+   * something in the record editor; false on a surface they mean nothing on.
+   * Shown when absent.
+   */
+  displaySwitches?: boolean;
+  /**
+   * @experimental A type's own settings on this surface, by type id, used in
+   * place of the core table's: a form's checkbox is one yes/no, where the
+   * entry form's is a set of choices. A type named here is known at once,
+   * without waiting for the plugin list.
+   */
+  typeSettings?: Readonly<Partial<Record<string, FieldTypeSettings>>>;
 }
 
 export interface FieldSettingsPanelProps {

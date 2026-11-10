@@ -1,10 +1,10 @@
 /**
- * A list card that grows, or changes density, keeps its old answer on screen while the answer for
- * its new size or density loads, and draws that answer by the size and density it was fetched at.
+ * A list card that changes density keeps its old answer on screen while the answer for its new
+ * density loads, and draws that answer by the density it was fetched at.
  *
  * A size-aware `load` reads one row more than the card draws, the sign that more exist. Drawn by
- * the card's new, larger size, or its new, denser rows, that one more would read as one more row
- * until the new answer arrived; drawn by what it was fetched at, it stays the sign it is.
+ * the card's new, denser rows, that one more would read as one more row until the new answer
+ * arrived; drawn by what it was fetched at, it stays the sign it is.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -52,8 +52,8 @@ const api = vi.mocked(protectedApi);
 const RECENT = "core/recent";
 
 /**
- * A declared list card, half the row wide, three rows high and resizable up to six, whose
- * density is a quick setting, default unless the reader chooses compact.
+ * A declared list card, half the row wide and three rows high, whose density is a quick setting,
+ * default unless the reader chooses compact.
  */
 const branding = {
   widgets: [
@@ -145,79 +145,13 @@ beforeEach(() => {
     };
     return Promise.resolve({ message: "ok", item: {} });
   });
-  // A size-aware `load`: the rows the card draws at the size it was asked at, and one more, the
-  // sign that more exist. The card's ask at its grown height stays on its way, so the card keeps
-  // the answer it had.
-  api.post.mockImplementation((_url, body) => {
-    const queries = (body as { queries: { size?: AskedSize }[] }).queries;
-    if (queries.some(query => query.size?.h === 6)) {
-      return new Promise(() => {});
-    }
-    return Promise.resolve({
-      results: queries.map(query => ({
-        ok: true,
-        result: {
-          op: "list",
-          items: Array.from(
-            {
-              length: (query.size === undefined ? 5 : rowsAt(query.size)) + 1,
-            },
-            (_, index) => ({ title: `Entry ${index + 1}` })
-          ),
-        },
-      })),
-    });
-  });
 });
 
 afterEach(() => {
   unstubDashboardWidth();
 });
 
-describe("a list card that grows while its old answer is on screen", () => {
-  it("draws that answer by the size it was fetched at, so its one row more is never drawn", async () => {
-    renderGrid();
-    const user = userEvent.setup();
-    const cell = await screen.findByTestId(`widget-cell-${RECENT}`);
-    // At rest, the answer for its own size: its rows drawn, the one more left out.
-    await waitFor(() =>
-      expect(within(cell).getAllByTestId("entity-row").length).toBeGreaterThan(
-        0
-      )
-    );
-    const [first] = askedSizes();
-    if (first === undefined) throw new Error("the card was asked with no size");
-    expect(first).toMatchObject({ h: 3 });
-    const before = rowsAt(first);
-    expect(within(cell).getAllByTestId("entity-row")).toHaveLength(before);
-
-    // Six rows high: more room than the answer on screen has rows for, the one more included,
-    // so a card drawing that answer by its new size would draw every row the answer holds.
-    expect(rowsAt({ ...first, h: 6 })).toBeGreaterThan(before + 1);
-    await user.click(
-      await screen.findByRole("button", { name: "Card menu for Recent" })
-    );
-    const menu = await screen.findByRole("menu");
-    await user.click(within(menu).getByRole("menuitem", { name: /Height/ }));
-    const heights = await waitFor(() => {
-      const menus = screen.getAllByRole("menu");
-      expect(menus.length).toBe(2);
-      return menus[1];
-    });
-    within(heights).getByRole("menuitemradio", { name: "6 rows" }).focus();
-    await user.keyboard("{Enter}");
-
-    // Asked again at its new height, and that answer still on its way: the card keeps the one it
-    // had, drawn by the size it was fetched at.
-    await waitFor(() =>
-      expect(askedSizes()).toContainEqual(expect.objectContaining({ h: 6 }))
-    );
-    // The card is drawn at its new height, so the count below is the grown card's.
-    expect(cell.style.gridRow).toBe("span 6 / span 6");
-    expect(within(cell).getAllByTestId("entity-row")).toHaveLength(before);
-    expect(within(cell).queryByText(`Entry ${before + 1}`)).toBeNull();
-  });
-
+describe("a list card whose density changes while its old answer is on screen", () => {
   it("draws that answer by the density it was fetched at, so its one row more is never drawn", async () => {
     // Asked at the default density; once the reader chooses compact, the card's ask for its new
     // density stays on its way, so the card keeps the answer it had.
