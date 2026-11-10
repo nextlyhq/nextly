@@ -12,6 +12,8 @@
 import type { AdminContributionsMeta } from "nextly/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import userEvent from "@testing-library/user-event";
+
 import { render, screen, within } from "@admin/__tests__/utils";
 import {
   registerComponent,
@@ -68,6 +70,18 @@ registerComponent(NOTES, ((props: {
     })}
   </pre>
 )) as never);
+const OWN_FORM = "@acme/a/admin#OwnForm";
+registerComponent(OWN_FORM, (() => (
+  <form
+    onSubmit={event => {
+      event.preventDefault();
+      ownSubmit();
+    }}
+  >
+    <button type="submit">Send</button>
+  </form>
+)) as never);
+const ownSubmit = vi.fn();
 const THROWS = "@acme/a/admin#Throws";
 registerComponent(THROWS, (() => {
   throw new Error("the section failed");
@@ -98,7 +112,11 @@ const DOCUMENT_PROPS = {
 } as unknown as DocumentPanelSectionProps;
 
 /** The panel on a post's edit page, as the viewer `context` names, or none yet. */
-function panel(context: typeof SHOWN | null = SHOWN) {
+/** The panel inside a document form, as the editors draw it. */
+function panel(
+  context: typeof SHOWN | null = SHOWN,
+  onDocumentSubmit: () => void = () => {}
+) {
   const place: DocumentPlace = {
     place: "collection.edit",
     context,
@@ -107,28 +125,35 @@ function panel(context: typeof SHOWN | null = SHOWN) {
   const order = placedPanelOrder(meta.contributions, place.place, place);
   const props = sidebarSectionProps(place, DOCUMENT_PROPS);
   return render(
-    <EntryLocaleProvider
-      value={{
-        locale: "fr",
-        rtl: false,
-        collectionLocalized: true,
-        isNonDefaultLocale: true,
+    <form
+      onSubmit={event => {
+        event.preventDefault();
+        onDocumentSubmit();
       }}
     >
-      <DocumentPanel
-        {...(order === undefined ? {} : { panelOrder: order })}
-        {...(props === undefined ? {} : { placedSectionProps: props })}
-        mode="edit"
-        entry={ENTRY}
-        hasStatus
-        documentStatus={{ status: "draft", hasWorkingDraft: false }}
-        releaseDocument={{
-          scopeKind: "collection",
-          scopeSlug: "posts",
-          entryId: "e1",
+      <EntryLocaleProvider
+        value={{
+          locale: "fr",
+          rtl: false,
+          collectionLocalized: true,
+          isNonDefaultLocale: true,
         }}
-      />
-    </EntryLocaleProvider>
+      >
+        <DocumentPanel
+          {...(order === undefined ? {} : { panelOrder: order })}
+          {...(props === undefined ? {} : { placedSectionProps: props })}
+          mode="edit"
+          entry={ENTRY}
+          hasStatus
+          documentStatus={{ status: "draft", hasWorkingDraft: false }}
+          releaseDocument={{
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: "e1",
+          }}
+        />
+      </EntryLocaleProvider>
+    </form>
   );
 }
 
@@ -252,6 +277,23 @@ describe("plugins' sections in the document panel", () => {
         "status"
       )
     ).toHaveTextContent("This part of the page couldn't be loaded.");
+  });
+
+  it("keeps a section's own form from submitting the document", async () => {
+    const documentSubmit = vi.fn();
+    ownSubmit.mockClear();
+    sections(
+      { builtIn: "status" },
+      section("acme-a.form", "Own form", { component: OWN_FORM }),
+      { builtIn: "publishing" },
+      { builtIn: "language" },
+      { builtIn: "details" }
+    );
+    panel(SHOWN, documentSubmit);
+
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(ownSubmit).toHaveBeenCalledTimes(1);
+    expect(documentSubmit).not.toHaveBeenCalled();
   });
 
   it("draws no plugin's section before the viewer is known", () => {
