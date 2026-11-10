@@ -21,7 +21,7 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { AnyColumn, AnyRelations, SQL, Table } from "drizzle-orm";
-import { eq, getColumns, inArray } from "drizzle-orm";
+import { count as countAll, eq, getColumns, inArray } from "drizzle-orm";
 
 import { isMissingNamedColumnError } from "../../database/missing-column";
 import type { SupportedDialect } from "../../database/schema-registry";
@@ -66,6 +66,12 @@ export interface PortableSelect<TDefinition> {
   offset(count: number): PortableSelect<TDefinition>;
   all(): Promise<InferRow<TDefinition>[]>;
   first(): Promise<InferRow<TDefinition> | null>;
+  /**
+   * @experimental How many rows match the `where`, counted in the database:
+   * no row is read into the process. `orderBy`, `limit` and `offset` are
+   * ignored, as a count has no order and no page.
+   */
+  count(): Promise<number>;
 }
 
 export interface PluginDatabaseDeps {
@@ -1305,7 +1311,25 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           const rows = await build({ ...state, limit: 1 }).all();
           return rows[0] ?? null;
         },
+        count: () => track(countRows(state), "read"),
       });
+      // One aggregate statement; PostgreSQL answers a count as a string.
+      const countRows = async (state: SelectState): Promise<number> => {
+        const { table } = resolveTable(definition, deps);
+        const db = deps.db() as {
+          select: (fields: unknown) => {
+            from: (t: unknown) => Record<string, (...a: never[]) => unknown>;
+          };
+        };
+        let query = db.select({ n: countAll() }).from(table);
+        if (state.where) {
+          query = query.where(state.where as never) as typeof query;
+        }
+        const rows = (await (query as unknown as Promise<unknown>)) as {
+          n: unknown;
+        }[];
+        return Number(rows[0]?.n ?? 0);
+      };
       const selectRows = async (
         state: SelectState
       ): Promise<InferRow<typeof definition>[]> => {

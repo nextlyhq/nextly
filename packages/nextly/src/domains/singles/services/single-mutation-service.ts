@@ -104,6 +104,10 @@ import {
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import {
+  assignRepeaterRowIds,
+  reachesRepeaterField,
+} from "../../../shared/lib/repeater-row-ids";
+import {
   issuesTheReaderMaySee,
   type IssueReader,
 } from "../../../shared/lib/unreadable-field-issues";
@@ -511,14 +515,15 @@ export class SingleMutationService extends BaseService {
    * without languages, which has no shared values apart from its languages'.
    */
   /**
-   * Put back in an update's `data` the stored hash of each password it leaves
-   * out of a container written whole (`carryStoredPasswords`), and return
-   * those hashes for the hashing pass to keep. `stored` is the document as
-   * stored, hashes included; a translated container's stored value is the
-   * write language's row of the translations table.
+   * The stored value an update's containers are written over, for the two
+   * steps that pair what it sends with what is stored: the passwords it keeps
+   * (`carryStoredPasswords`) and the repeater row ids it keeps
+   * (`assignRepeaterRowIds`). `stored` is the document as stored, hashes
+   * included; a translated container's stored value is the write language's
+   * row of the translations table. `undefined` where the fields hold neither
+   * a password nor a repeater, so such an update reads nothing more.
    */
-  private async storedPasswordsCarried(args: {
-    data: Record<string, unknown>;
+  private async storedContainersForWrite(args: {
     stored: Record<string, unknown>;
     fields: Parameters<typeof carryStoredPasswords>[2];
     reach: FieldGroupReach;
@@ -526,8 +531,13 @@ export class SingleMutationService extends BaseService {
     writeLocale: string | undefined;
     documentId: string;
     mainTableName: string;
-  }): Promise<Set<string>> {
-    if (!reachesPasswordField(args.fields, args.reach)) return new Set();
+  }): Promise<Record<string, unknown> | undefined> {
+    if (
+      !reachesPasswordField(args.fields, args.reach) &&
+      !reachesRepeaterField(args.fields, args.reach)
+    ) {
+      return undefined;
+    }
     // Read only once the translations table is there: before its migration,
     // a translated value is still on the Single's own row, in `stored`.
     const companion =
@@ -568,12 +578,7 @@ export class SingleMutationService extends BaseService {
       const value = row?.[field.name] ?? row?.[field.column];
       if (value !== undefined) translated[field.name] = value;
     }
-    return carryStoredPasswords(
-      args.data,
-      { ...args.stored, ...translated },
-      args.fields,
-      args.reach
-    );
+    return { ...args.stored, ...translated };
   }
 
   private translationsOf(
@@ -2226,6 +2231,14 @@ export class SingleMutationService extends BaseService {
       if (accessDenied) {
         return accessDenied;
       }
+      // A conditional write naming a key no update stores is refused here: its
+      // access has been judged, so a caller who may not update is refused
+      // alike whatever it names, and no hook has run.
+      storedFieldRead.refuseUnstoredKeys(
+        options.context,
+        { kind: "single", slug },
+        { tableName: singleMeta.tableName, fields: singleMeta.fields }
+      );
 
       // 2. Resolve the document to write against. When the Single has never been
       // written, build its default in memory but DO NOT persist it yet. The
@@ -2816,24 +2829,31 @@ export class SingleMutationService extends BaseService {
       // At every depth, through the field groups held inline in a container:
       // their passwords are stored in that container's value.
       // A password the update leaves out of a container keeps its stored hash.
+      // The same stored value is what its repeater rows keep their ids
+      // against, below.
       const passwordReach = await passwordReachOf(
         fieldConfigs,
         this.fieldGroupDataService
       );
+      const storedContainers = await this.storedContainersForWrite({
+        stored: existingDeserialized,
+        fields: fieldConfigs,
+        reach: passwordReach,
+        companion,
+        writeLocale,
+        documentId: String(documentId),
+        mainTableName: singleMeta.tableName,
+      });
       await hashPasswordFieldValues(
         currentData,
         fieldConfigs,
         passwordReach,
-        await this.storedPasswordsCarried({
-          data: currentData,
-          stored: existingDeserialized,
-          fields: fieldConfigs,
-          reach: passwordReach,
-          companion,
-          writeLocale,
-          documentId: String(documentId),
-          mainTableName: singleMeta.tableName,
-        })
+        carryStoredPasswords(
+          currentData,
+          storedContainers,
+          fieldConfigs,
+          passwordReach
+        )
       );
 
       // 6.5. Normalize upload field values (strip expanded media objects to IDs)
@@ -2843,6 +2863,19 @@ export class SingleMutationService extends BaseService {
       // them to the references they stand for rather than storing a snapshot
       // of the related row.
       normalizeRelationshipFields(currentData, fieldConfigs);
+
+      // 6.6. Every repeater row gets its saved id: after the field rules and
+      // the password pass have decided the value, and after references are
+      // reduced to ids so an unchanged row compares equal to the stored one.
+      // A first write pairs against the default document built in memory.
+      // The field groups placed on the Single were taken off above, and their
+      // own write gives their rows ids.
+      assignRepeaterRowIds(
+        currentData,
+        storedContainers,
+        fieldConfigs,
+        passwordReach
+      );
 
       // 6.6. Coerce date-field strings into `Date` objects so Drizzle can
       // bind them to `timestamp` columns. Without this step the adapter

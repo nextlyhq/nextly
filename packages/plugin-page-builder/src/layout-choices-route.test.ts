@@ -682,22 +682,31 @@ describe("parseChoicesQuery", () => {
 });
 
 describe("readPageCollection", () => {
-  it("answers the pages and Layouts collections' resolved slugs, renamed or not", () => {
+  it("answers the pages, Layouts and templates collections' resolved slugs, renamed or not", () => {
     expect(
       readPageCollection({
         self: {
-          collections: { pages: "site-pages", layouts: "site-layouts" },
+          collections: {
+            pages: "site-pages",
+            layouts: "site-layouts",
+            templates: "site-templates",
+          },
           singles: {},
         },
       } as unknown as Parameters<typeof readPageCollection>[0])
     ).toEqual({
       pagesCollection: "site-pages",
       layoutsCollection: "site-layouts",
+      templatesCollection: "site-templates",
     });
     expect(
       readPageCollection({
         self: { collections: {}, singles: {} },
       } as unknown as Parameters<typeof readPageCollection>[0])
-    ).toEqual({ pagesCollection: "pages", layoutsCollection: "layouts" });
+    ).toEqual({
+      pagesCollection: "pages",
+      layoutsCollection: "layouts",
+      templatesCollection: "templates",
+    });
   });
 });

@@ -120,6 +120,10 @@ const ALLOWED_RUNTIME_IMPORTS = [
 
 /** Node built-ins and test-only tooling, which never reach a consumer's bundle. */
 const ALLOWED_IN_TESTS = [
+  // The core block library, for the test that walks every core block's props
+  // and expects a bind button on each bindable one: the definitions alone,
+  // which the editor itself never imports.
+  "@nextlyhq/blocks-react/blocks",
   "@nextlyhq/module-specifiers",
   "@testing-library/react",
   "node:fs",

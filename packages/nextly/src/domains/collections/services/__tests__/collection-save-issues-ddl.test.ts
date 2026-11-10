@@ -53,14 +53,12 @@ describe("collectionSaveIssuesDdl", () => {
 describe("updateCollection's schema lock", () => {
   /** The service's own method, with nothing behind it: the lock is recorded, not taken. */
   function service(): CollectionMetadataService {
-    const instance = Object.create(
-      CollectionMetadataService.prototype
-    ) as CollectionMetadataService;
-    Object.assign(instance, {
-      adapter: {},
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    });
-    return instance;
+    return new CollectionMetadataService(
+      {} as never,
+      { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      {} as never,
+      {} as never
+    );
   }
 
   it("asks for no DDL for a label-only save in development", async () => {

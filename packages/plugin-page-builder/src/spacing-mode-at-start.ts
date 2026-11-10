@@ -47,6 +47,7 @@ import type { Nextly } from "nextly";
 
 import { readLayoutSettings } from "./default-layout/store";
 import type { SpacingModeStore } from "./spacing-mode-store";
+import { storedValuesAt } from "./stored-blocks-values";
 import { readStoredJson } from "./stored-json";
 
 /** The RESOLVED slugs the step reads: a host may rename either. */
@@ -243,16 +244,6 @@ async function holdsAny(
   return found.items.length > 0;
 }
 
-/** The value at a form path (`hero.body`) of a stored document. */
-function valueAt(doc: unknown, path: string): unknown {
-  let value: unknown = doc;
-  for (const key of path.split(".")) {
-    if (typeof value !== "object" || value === null) return undefined;
-    value = readStoredJson((value as Record<string, unknown>)[key]);
-  }
-  return readStoredJson(value);
-}
-
 /** Whether a stored blocks value is a document holding at least one block. */
 function holdsBlocks(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
@@ -285,7 +276,10 @@ async function singleHoldsBlocks(
         overrideAccess: true,
         createIfMissing: false,
       });
-      if (paths.some(path => holdsBlocks(valueAt(doc, path)))) return true;
+      // Every row's value, for a field inside a repeater's rows.
+      if (paths.some(path => storedValuesAt(doc, path).some(holdsBlocks))) {
+        return true;
+      }
     }
   }
   return false;

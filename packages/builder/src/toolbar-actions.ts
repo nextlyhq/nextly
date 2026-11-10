@@ -51,6 +51,10 @@ import {
 import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
 import type { RefusalWording } from "./drag-refusal";
+import {
+  compositionEntryContentRefusal,
+  duplicationRefusal,
+} from "./entry-content-rules";
 import type { Rect } from "./geometry";
 import { placedComponentId } from "./instance-inspector";
 import {
@@ -215,6 +219,15 @@ export function turnIntoChoice(
   nesting: NestingSource,
   ask?: LockQuestion
 ): TurnIntoChoice {
+  // Entry content first: neither way makes a component that may hold it.
+  const entryContent = compositionEntryContentRefusal(
+    document,
+    ids,
+    "component"
+  );
+  if (entryContent !== undefined) {
+    return { replaceRefused: entryContent, keepRefused: entryContent };
+  }
   const saving = saveAsPatternRefusal(document, ids, nesting);
   const converting = planConvertToComponent(
     document,
@@ -373,15 +386,9 @@ function updatePatternAction(
       { ...action, enabled: false, reason: UPDATE_PATTERN_GRANT_REFUSAL },
     ];
   }
-  const refusal = saveAsPatternRefusal(document, ids, nesting);
+  const reason = patternSaveRefusal(document, ids, nesting);
   return [
-    refusal === undefined
-      ? action
-      : {
-          ...action,
-          enabled: false,
-          reason: compositionRefusalReason(refusal),
-        },
+    reason === undefined ? action : { ...action, enabled: false, reason },
   ];
 }
 
@@ -608,15 +615,28 @@ function saveAction(
       enabled: false,
       reason: SAVE_PATTERN_GRANT_REFUSAL,
     };
-  const refusal = saveAsPatternRefusal(document, ids, nesting);
-  if (refusal === undefined)
+  const reason = patternSaveRefusal(document, ids, nesting);
+  if (reason === undefined)
     return { id: "save-as-pattern", label, enabled: true };
-  return {
-    id: "save-as-pattern",
-    label,
-    enabled: false,
-    reason: compositionRefusalReason(refusal),
-  };
+  return { id: "save-as-pattern", label, enabled: false, reason };
+}
+
+/**
+ * Why the selection cannot be saved as a pattern, in the words the menu and
+ * the keys say, or `undefined` where it can: Entry content first, which a
+ * pattern may not hold (`compositionEntryContentRefusal`), then the save's
+ * planner. One answer for Save as pattern and Update a pattern, whichever
+ * route asks.
+ */
+export function patternSaveRefusal(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource
+): string | undefined {
+  const entryContent = compositionEntryContentRefusal(document, ids, "pattern");
+  if (entryContent !== undefined) return entryContent;
+  const refusal = saveAsPatternRefusal(document, ids, nesting);
+  return refusal === undefined ? undefined : compositionRefusalReason(refusal);
 }
 
 /**
@@ -842,7 +862,7 @@ export function toolbarActions(
     // same reading the keyboard duplicate takes. A slot's lock is another
     // matter: a copy changes what a slot whose blocks are fixed holds.
     heldByLock(
-      { id: "duplicate", label: "Duplicate", enabled: duplication !== null },
+      duplicateAction(document, selectedId, duplication !== null),
       lockRefusalFor,
       duplication?.ops
     ),
@@ -1124,4 +1144,20 @@ export function depthMoveActions(
           direction: move.direction,
         }
   );
+}
+
+/**
+ * The Duplicate item for one selected block: refused, with the words the
+ * Add panel's tile uses, where the block is or holds a template's one Entry
+ * content block, since a copy would be a second.
+ */
+function duplicateAction(
+  document: BlockDocument,
+  selectedId: string,
+  duplicable: boolean
+): ToolbarAction {
+  const reason = duplicationRefusal(document, selectedId);
+  return reason === undefined
+    ? { id: "duplicate", label: "Duplicate", enabled: duplicable }
+    : { id: "duplicate", label: "Duplicate", enabled: false, reason };
 }

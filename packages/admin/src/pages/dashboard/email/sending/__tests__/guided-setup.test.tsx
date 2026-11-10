@@ -113,7 +113,8 @@ async function connect(
   await user.click(screen.getByRole("button", { name: "Continue" }));
   // Pasted rather than typed: typing each key is slow enough to time out
   // under a loaded test run, and the form reads the value either way.
-  await user.click(screen.getByLabelText(/Provider Name/));
+  // The form's code arrives apart from the page's, so it is waited for.
+  await user.click(await screen.findByLabelText(/Provider Name/));
   await user.paste("Dev log");
   await user.click(screen.getByLabelText(/From Email/));
   await user.paste("dev@example.com");
@@ -144,7 +145,7 @@ async function acceptedTest(user: ReturnType<typeof userEvent.setup>) {
   );
   render(<CreateEmailProviderPage />);
   await connect(user, "SMTP");
-  await user.click(screen.getByRole("button", { name: "Send a test" }));
+  await user.click(await screen.findByRole("button", { name: "Send a test" }));
   await screen.findByText("SMTP accepted the test email.");
 }
 
@@ -207,10 +208,14 @@ describe("adding a provider", () => {
 
     // The person's own address, which the server sends to whatever is
     // asked: it can't be changed here.
-    const sendTo = screen.getByLabelText("Send to") as HTMLInputElement;
+    const sendTo = (await screen.findByLabelText(
+      "Send to"
+    )) as HTMLInputElement;
     expect(sendTo.value).toBe("me@example.com");
     expect(sendTo.readOnly).toBe(true);
-    await user.click(screen.getByRole("button", { name: "Send a test" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Send a test" })
+    );
 
     expect(
       await screen.findByText("SMTP accepted the test email.")
@@ -241,7 +246,9 @@ describe("adding a provider", () => {
     );
     render(<CreateEmailProviderPage />);
     await connect(user, "SMTP");
-    await user.click(screen.getByRole("button", { name: "Send a test" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Send a test" })
+    );
 
     expect(
       await screen.findByText("SMTP refused me@example.com.")
@@ -362,7 +369,9 @@ describe("adding a provider", () => {
     );
     render(<CreateEmailProviderPage />);
     await connect(user, "Log");
-    await user.click(screen.getByRole("button", { name: "Send a test" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Send a test" })
+    );
 
     expect(
       await screen.findByText("The test email was logged, not sent.")

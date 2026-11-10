@@ -31,6 +31,7 @@ import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
 import type { RemovalDryRun } from "./breakpoint-removal/dry-run";
+import type { CspAddition, CspCheck } from "./site-code/csp";
 
 /**
  * The name this plugin registers under, which is also how its routes are
@@ -706,6 +707,16 @@ export interface SiteBreakpointRemoval {
 export const SITE_BREAKPOINT_UNDO_ROUTE_PATH = "/site/breakpoints/removal/undo";
 
 /**
+ * The code an undo is refused with (409) when its breakpoints no longer fit
+ * the set: one is a breakpoint again, would end at another's width, or its
+ * axis is full. Editing the breakpoints is the way on; any other refusal is
+ * answered by reading Settings again.
+ *
+ * @experimental
+ */
+export const SITE_BREAKPOINT_UNDO_DOES_NOT_FIT = "BREAKPOINT_UNDO_DOES_NOT_FIT";
+
+/**
  * Values an undo could not put back into one document, for one reason (a
  * document may be listed once per reason):
  * - `changed`: something else was set there after the removal;
@@ -720,6 +731,16 @@ export interface SiteBreakpointUndoSkipped {
   readonly kind: "collection" | "single";
   readonly slug: string;
   readonly id?: string;
+  /**
+   * What the person asking knows the document by; absent for one they may
+   * not read, or one deleted since.
+   */
+  readonly name?: string;
+  /**
+   * Set on the site's shared styles, whatever slug their Single is
+   * registered under, so the person is told of them as such.
+   */
+  readonly sharedStyles?: true;
   readonly values: number;
   readonly reason:
     | "changed"
@@ -765,7 +786,8 @@ export const SITE_STYLE_ROUTE_PATH = "/site/style";
 
 /**
  * The stored site style as the route answers it: the Single's four sections
- * exactly as stored, each `null` where nothing is stored, and nothing else.
+ * exactly as stored, each `null` where nothing is stored, the version the
+ * read gave, and nothing else.
  *
  * Raw rather than narrowed, so the editor narrows a stored record with the
  * same reader the published render does and can still say which stored font
@@ -783,6 +805,12 @@ export interface StoredSiteStyle {
    * nothing recorded.
    */
   readonly spacingMode?: unknown;
+  /**
+   * The Single's version, as the same read gave it: what a save of a section
+   * made from this read sends back, so a save made in between refuses it
+   * rather than being overwritten. Absent where the server gives none.
+   */
+  readonly _rev?: string;
 }
 
 /**
@@ -842,6 +870,43 @@ export interface SiteSettingsRead {
    * @experimental
    */
   readonly removals?: readonly SiteBreakpointRemovalStatus[];
+  /**
+   * The removal Settings may still undo: the newest, within its 30 days, not
+   * undone yet. `null` when there is none; absent where the site carries no
+   * removals out.
+   *
+   * @experimental
+   */
+  readonly undoable?: SiteBreakpointUndoable | null;
+}
+
+/**
+ * The removal that can still be undone, as the Site tab offers it.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointUndoable {
+  readonly runId: string;
+  /** The breakpoints it removed, by id. */
+  readonly ids: readonly string[];
+  /** The same breakpoints, by the names the author knew them by. */
+  readonly labels: readonly string[];
+  /** When it was made, as an ISO date and time. */
+  readonly removedAt: string;
+  /** When its 30 days end, as an ISO date and time. */
+  readonly until: string;
+}
+
+/**
+ * What reading the removals alone answers (`GET` on the removal route with no
+ * run named): what the Site tab's read reports of them, without the rest of
+ * Settings, for an open Settings watching for a removal another tab started.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemovalsRead {
+  readonly removals: readonly SiteBreakpointRemovalStatus[];
+  readonly undoable: SiteBreakpointUndoable | null;
 }
 
 /**
@@ -851,8 +916,13 @@ export interface SiteSettingsRead {
  */
 export interface SiteBreakpointRemovalStatus {
   readonly runId: string;
-  /** The breakpoints it removed, by the names the author knew them by. */
+  /**
+   * The breakpoints it removed, by the names the author knew them by; for an
+   * undo, the ones it puts back.
+   */
   readonly labels: readonly string[];
+  /** For an undo: the removal it puts back. */
+  readonly undoes?: string;
   /** Whether it is still walking the site. */
   readonly open: boolean;
   /**
@@ -1221,6 +1291,15 @@ export interface VariableUseItem {
   readonly title: string;
   readonly collection: string;
   readonly kind: VariableUseKind;
+  /**
+   * For a shared style that is a block look, the block type it is bound to.
+   * Two block types' own looks may share an id, so a look is named by the
+   * pair: the panel opens the look `{ id, blockType }`. Absent for every
+   * other place.
+   *
+   * @experimental Settles when the Variables panel shows usage.
+   */
+  readonly blockType?: string;
 }
 
 /**
@@ -1261,4 +1340,100 @@ export function variableWhereUsedPath(id: string, page: number): string {
     [VARIABLE_PAGE_PARAM]: String(page),
   });
   return `${VARIABLE_WHERE_USED_ROUTE_PATH}?${params.toString()}`;
+}
+
+/**
+ * Where the site's code is read and changed: `GET` reads it, `POST` checks it
+ * ({@link SiteCodeRequest} with `dryRun`) or saves it. Under the site settings
+ * permission; a save is a signed-in person's alone, never an API key's.
+ *
+ * @experimental
+ */
+export const SITE_CODE_ROUTE_PATH = "/site/code";
+
+/** The site's code as Settings reads it, to edit. */
+export interface SiteCodeRead {
+  /** What was written for the head, as it was saved. */
+  readonly head: string;
+  /** What was written for the end of the body. */
+  readonly body: string;
+  /** The version the read was of, which a save hands back. */
+  readonly version: string | null;
+  /** Whether the site declared its Content Security Policy to the plugin. */
+  readonly policyDeclared: boolean;
+  /**
+   * What each place holds, in plain words, from the stored entries ("A
+   * script from www.googletagmanager.com", "an inline script"): what Settings
+   * shows before the code is opened. Empty for a place with nothing in it.
+   */
+  readonly described: {
+    readonly head: readonly string[];
+    readonly body: readonly string[];
+  };
+  /** When the code was last saved, as an ISO date; `null` before any save. */
+  readonly changedAt: string | null;
+  /** The name of the person who saved it last, when it can be read. */
+  readonly changedBy: string | null;
+}
+
+/**
+ * Checking or saving the site's code. `livePolicy` is the policy the
+ * editor's browser read from the site's own response: advice, checked beside
+ * the declared policy, never trusted to admit anything.
+ */
+export interface SiteCodeRequest {
+  readonly head: string;
+  readonly body: string;
+  readonly dryRun?: boolean;
+  /** The version the code was read at; a save made since refuses this one. */
+  readonly version?: string;
+  /**
+   * The check's `cspKey`: saving code a policy would block is a choice made
+   * after seeing what it blocks, and only for those findings.
+   */
+  readonly acknowledgeCsp?: string;
+  readonly livePolicy?: {
+    readonly policy: string;
+    readonly reportOnly: boolean;
+  };
+}
+
+/** What one place's code came to: why it can't be stored, and what changed. */
+export interface SiteCodeSlotJudged {
+  readonly refusals: readonly string[];
+  readonly notes: readonly string[];
+  /** The elements it holds when it can be stored. */
+  readonly elements: number;
+}
+
+/** One policy the code was checked against: the declared one, or the live one. */
+export interface SiteCodePolicyChecked {
+  readonly source: "declared" | "live";
+  readonly check: CspCheck;
+  /**
+   * What to add to this policy for the code to run, as
+   * `mergeSiteCodeIntoCsp` adds it: per directive, the sources it lacks. A
+   * directive the policy doesn't name yet comes whole, as it must be added.
+   * Empty when nothing is blocked or nothing was checked.
+   */
+  readonly additions: readonly CspAddition[];
+  /**
+   * How many policies the checked header carries, comma-separated: an
+   * addition names which by its `policy`. `0` when no policy was known.
+   */
+  readonly policies: number;
+}
+
+/** What checking the site's code answers, and what a save answers too. */
+export interface SiteCodeChecked {
+  readonly head: SiteCodeSlotJudged;
+  readonly body: SiteCodeSlotJudged;
+  readonly csp: readonly SiteCodePolicyChecked[];
+  /** What `acknowledgeCsp` must be to save despite findings; `null` with none. */
+  readonly cspKey: string | null;
+}
+
+/** What saving the site's code answers: the check, and the version saved. */
+export interface SiteCodeSaved extends SiteCodeChecked {
+  readonly version: string | null;
 }

@@ -80,6 +80,9 @@ function initContext(renameMap: Record<string, string> = {}) {
       off: vi.fn(),
       onBeforeOperation: vi.fn(),
       offBeforeOperation: vi.fn(),
+      onInTransaction: vi.fn(),
+      offInTransaction: vi.fn(),
+      onCollectionDelete: vi.fn(),
     },
     services: {
       collections: { getCollection: vi.fn(async () => ({})) },
@@ -146,8 +149,10 @@ describe("installing the page-builder plugin", () => {
   });
 });
 
-describe("the warning for a blocks field inside a repeater", () => {
+describe("the warning for a blocks field the Page Builder cannot open", () => {
   it("is said through the plugin's logger when it is installed", () => {
+    // A repeater whose rows declare their own `id` gives its rows no saved
+    // id, so a blocks field in one is the case still warned about.
     const { ctx } = initContext();
     Object.assign(ctx.config, {
       collections: [
@@ -157,7 +162,10 @@ describe("the warning for a blocks field inside a repeater", () => {
             {
               name: "rows",
               type: "repeater",
-              fields: [{ name: "layout", type: "blocks" }],
+              fields: [
+                { name: "id", type: "text" },
+                { name: "layout", type: "blocks" },
+              ],
             },
           ],
         },

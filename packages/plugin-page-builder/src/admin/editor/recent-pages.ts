@@ -43,10 +43,23 @@ export function recentPagesStore(userId: string | null): PreferenceStore {
 
 /** The remembered list, newest first; empty when there is none or it is unreadable. */
 export function readRecentPages(store: PreferenceStore): RecentPage[] {
+  return readStoredList(store, storedSchema);
+}
+
+/**
+ * A list a store holds as JSON, read through `schema`: empty when there is
+ * none, when the store refuses, or when what it holds is not that list.
+ * Shared with the template preview's memory, which keeps its list the same
+ * way.
+ */
+export function readStoredList<T>(
+  store: PreferenceStore,
+  schema: z.ZodType<T[]>
+): T[] {
   try {
     const raw = store.read();
     if (raw === null) return [];
-    const parsed = storedSchema.safeParse(JSON.parse(raw));
+    const parsed = schema.safeParse(JSON.parse(raw));
     return parsed.success ? parsed.data : [];
   } catch {
     return [];

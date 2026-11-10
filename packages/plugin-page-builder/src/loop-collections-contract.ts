@@ -110,6 +110,8 @@ export interface LoopCollectionItem {
  */
 export interface LoopReadableField {
   readonly name: string;
+  /** What the admin calls it, for a menu offering a field no list filters by. */
+  readonly label?: string;
   readonly type: string;
   readonly hasMany?: true;
   readonly relationTo?: string | readonly string[];

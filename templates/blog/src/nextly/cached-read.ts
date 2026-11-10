@@ -5,15 +5,24 @@
  * Components is on, and the directive works only in code Next.js compiles, so
  * Nextly reads through this function of the app's own. It receives the read's
  * key, its tags and its lifetime, and runs the reader Nextly registered for
- * that key. The query modules import this file, so it is registered wherever
- * content is read.
+ * that key. The root layout imports this file, so it is registered on every
+ * route before anything is read (`<SiteCode>` refuses to read without it),
+ * and the query modules import it too, so a module read on its own has it.
+ *
+ * The same import also tells Nextly how to start with the app's config when a
+ * read finds it not started, so the root layout's import both registers the
+ * cached read and covers a read made before any page starts Nextly, during
+ * `next build` too.
  *
  * It works with `cacheComponents: true` and Nextly's cache handlers in
  * `next.config.ts`, as this app ships:
  * https://nextlyhq.com/docs/guides/isr-caching#cache-components
  */
 import { cacheLife, cacheTag } from "next/cache";
+import { getNextly, registerNextlyStart } from "nextly";
 import { registerCachedRead, runRegisteredRead } from "nextly/runtime";
+
+import config from "@nextly-config";
 
 export async function cachedRead(
   key: string,
@@ -35,3 +44,10 @@ export async function cachedRead(
 }
 
 registerCachedRead(cachedRead, process.env.__NEXT_CACHE_COMPONENTS);
+
+// Tells Nextly how this app starts it, for a read that finds it not started,
+// such as the root layout's `<SiteCode>` on `/_not-found` while `next build`
+// prerenders, where nothing else starts it. Nothing starts here: a page that
+// calls `getNextly` first is the start that counts. An app that passes
+// `getNextly` more than its config passes the same options here.
+registerNextlyStart(() => getNextly({ config }));

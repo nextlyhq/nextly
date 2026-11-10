@@ -222,7 +222,7 @@ const LOCKED_REASON = /^Locked: it can't be moved, deleted or edited/;
  */
 async function lockAndUnlock(page: Page): Promise<void> {
   const content = page.getByRole("tabpanel", { name: "Content" });
-  await expect(content.getByLabel("Text")).toBeEnabled();
+  await expect(content.getByLabel("Text", { exact: true })).toBeEnabled();
   await page.getByRole("tab", { name: "Style" }).click();
   const style = page.locator(".nx-style-inspector");
   // A control of the open section, enabled before the lock, so its being
@@ -241,7 +241,7 @@ async function lockAndUnlock(page: Page): Promise<void> {
   // The reason is said once, on the card; the Style tab does not repeat it.
   const lock = page.locator('[data-lock="layers"]');
   await expect(lock).toContainText("Locked");
-  await expect(content.getByLabel("Text")).toBeDisabled();
+  await expect(content.getByLabel("Text", { exact: true })).toBeDisabled();
   await page.getByRole("tab", { name: "Style" }).click();
   await expect(field).toBeDisabled();
   await expect(page.getByText(LOCKED_REASON)).toHaveCount(1);
@@ -257,7 +257,7 @@ async function lockAndUnlock(page: Page): Promise<void> {
   await expect(lock).toHaveCount(0);
   await expect(field).toBeEnabled();
   await page.getByRole("tab", { name: "Content" }).click();
-  await expect(content.getByLabel("Text")).toBeEnabled();
+  await expect(content.getByLabel("Text", { exact: true })).toBeEnabled();
 }
 
 /** A Style section's header, by catalog key. */
@@ -474,19 +474,22 @@ test.describe("the inspector", () => {
       ((site.item ?? site) as Record<string, unknown>).classes ?? [];
     const storeClasses = async (value: unknown): Promise<void> => {
       const stored = await page.request.patch(SITE_STYLE, {
-        data: { classes: value },
+        data: { classes: value, _overwrite: true },
       });
       expect(stored.ok(), `storing shared styles: ${stored.status()}`).toBe(
         true
       );
     };
     await storeClasses([CARD]);
+    let id: string | undefined;
     try {
-      const id = await createPage(page.request, [CARD.id]);
+      id = await createPage(page.request, [CARD.id]);
       await openBuilder(page, id);
       await select(page, HEADING);
       await lockAndUnlock(page);
     } finally {
+      // The page goes first: a shared style still in use cannot be removed.
+      if (id !== undefined) await page.request.delete(`${ENTRIES}/${id}`);
       await storeClasses(classes);
     }
   });

@@ -40,6 +40,8 @@ describe.each(getConfiguredTestDialects())(
       current = await createTestNextly({
         dialect,
         plugins: [pageBuilder()],
+        // The route serves what visitors may read, so visitors may read pages.
+        seedPublic: true,
         collections: [
           defineCollection({
             slug: POSTS,
@@ -115,7 +117,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: "pages",
             id: item.id,
-            data: { slug: "docs//install" },
+            data: { slug: "docs//install", _overwrite: true },
             overrideAccess: true,
           })
         )

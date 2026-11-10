@@ -379,6 +379,7 @@ describe.each(getConfiguredTestDialects())(
             editor,
             {
               title: "  New name  ",
+              rev: page.rev,
             }
           )
         );
@@ -401,22 +402,22 @@ describe.each(getConfiguredTestDialects())(
 
     describe("renaming a published page", () => {
       it("keeps the new title as the page's working draft, as every save of a published page does", async () => {
-        const id = String(
-          (
-            await direct.create({
-              collection: PAGES,
-              data: {
-                title: "Live name",
-                slug: "live-name",
-                status: "published",
-              },
-            })
-          ).item.id
-        );
+        const live = (
+          await direct.create({
+            collection: PAGES,
+            data: {
+              title: "Live name",
+              slug: "live-name",
+              status: "published",
+            },
+          })
+        ).item as { id: unknown; _rev?: string };
+        const id = String(live.id);
 
         const renamed = await written<PageItem>(
           await ask("PATCH", pagePath({ collection: PAGES, id }), editor, {
             title: "Next name",
+            rev: live._rev,
           })
         );
 
@@ -504,7 +505,7 @@ describe.each(getConfiguredTestDialects())(
               authorization: `Bearer ${editor}`,
               "content-type": "application/json",
             },
-            body: JSON.stringify({ title: "A note" }),
+            body: JSON.stringify({ title: "A note", _overwrite: true }),
           }),
           { params: Promise.resolve({ params: segments }) }
         );

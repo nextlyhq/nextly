@@ -1270,7 +1270,7 @@ function inBlockOrder<TEntry extends InsertEntry>(
 /**
  * The words a category's heading is drawn with.
  *
- * The library's category ids are words for code ("content"), so the four it
+ * The library's category ids are words for code ("content"), so the ones it
  * declares are named as an author reads them; "content" is "Text" because that
  * is what the blocks under it are. The two groups the panel itself makes are
  * named here too. A plugin's category is a free string it chose to be read,
@@ -1290,6 +1290,8 @@ export function categoryHeading(category: string): string {
 const CATEGORY_HEADINGS: Readonly<Record<string, string>> = {
   layout: "Layout",
   content: "Text",
+  // What a template draws of the entry itself.
+  entry: "Entry",
   media: "Media",
   interactive: "Interactive",
   // The two groups the panel makes are named with the editor's words.

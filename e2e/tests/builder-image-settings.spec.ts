@@ -188,6 +188,7 @@ test.describe("an image's settings", () => {
             },
           ],
         },
+        _overwrite: true,
       },
     });
     await servePicture(page, { width: 120, height: 80 });

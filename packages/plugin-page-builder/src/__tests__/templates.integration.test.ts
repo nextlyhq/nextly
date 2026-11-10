@@ -17,19 +17,25 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { definePlugin, NextlyError } from "@nextlyhq/plugin-sdk";
+import { COMPONENT_INSTANCE_TYPE } from "@nextlyhq/blocks-engine";
+import {
+  definePlugin,
+  NextlyError,
+  type PluginContext,
+} from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text } from "nextly/config";
+import { defineCollection, relationship, text } from "nextly/config";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { TEMPLATES_SLUG } from "../collections/templates";
 import { asOverwrite } from "../document-version";
 import { pageBuilder } from "../plugin";
+import type { PageActionResult } from "../composition-actions-contract";
 import type { TemplateActionResult } from "../templates/template-actions-contract";
 
 import { created, holding, person, post } from "./transfer-harness";
@@ -74,6 +80,54 @@ const racingCreates = definePlugin({
   },
 });
 
+/** The context of a plugin of someone else's, for its own transactional writes. */
+let captured: PluginContext | undefined;
+const capturing = definePlugin({
+  name: "@t/capturing",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init(ctx) {
+    captured = ctx;
+  },
+});
+
+/**
+ * A template's design holding a list of the entry's related tags: judged
+ * against the posts it draws, which relate to tags, it is sound; judged
+ * against the templates collection, which holds no `tags`, it is refused.
+ */
+function relatedTagsDesign(limit?: number) {
+  return {
+    formatVersion: 1,
+    kind: "template",
+    nodes: [
+      {
+        id: "a",
+        type: "core/heading",
+        version: 1,
+        props: { text: "A", level: "h2" },
+      },
+      {
+        id: "b",
+        type: "core/heading",
+        version: 1,
+        props: { text: "B", level: "h2" },
+      },
+      {
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: {
+          collection: "tags",
+          relation: { of: "entry", field: "tags" },
+          ...(limit === undefined ? {} : { limit }),
+        },
+        slots: { children: [] },
+      },
+    ],
+  };
+}
+
 function errorOf(body: Record<string, unknown>): {
   code?: string;
   message?: string;
@@ -92,20 +146,28 @@ describe.each(getConfiguredTestDialects())(
       race.release();
       await current?.destroy();
       current = undefined;
+      captured = undefined;
     });
 
     async function boot(): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder(), racingCreates],
+        plugins: [pageBuilder(), racingCreates, capturing],
         collections: [
+          defineCollection({
+            slug: "tags",
+            access: { read: () => true },
+            fields: [text({ name: "title" })],
+          }),
           defineCollection({
             slug: "posts",
             labels: { singular: "Post", plural: "Posts" },
             status: true,
+            access: { read: () => true },
             fields: [
               text({ name: "title" }),
               text({ name: "slug", unique: true }),
+              relationship({ name: "tags", relationTo: "tags", hasMany: true }),
             ],
           }),
           // A plugin-private collection: kept out of the admin, and so no
@@ -421,6 +483,164 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(answered.status).toBe(400);
       expect(errorOf(answered.body).data?.errors?.[0]?.path).toBe("action");
+    });
+
+    describe("a template's lists, judged against the collection it draws on every write", () => {
+      /** A template of posts, its design holding a list of related tags. */
+      async function postsTemplate(t: TestNextly): Promise<string> {
+        return created(t, TEMPLATES_SLUG, {
+          title: "Post page",
+          collection: "posts",
+          content: relatedTagsDesign(),
+        });
+      }
+
+      /** The template's list as stored, its working draft first. */
+      async function storedList(t: TestNextly, id: string) {
+        const row = (await t.nextly.findByID({
+          collection: TEMPLATES_SLUG,
+          id,
+          overrideAccess: true,
+          status: "all",
+          draft: true,
+          depth: 0,
+        })) as unknown as {
+          content: {
+            nodes: {
+              id: string;
+              type: string;
+              props: Record<string, unknown>;
+            }[];
+          };
+        };
+        return row.content.nodes.find(node => node.id === "list");
+      }
+
+      it("runs a page action on a template, dry and applied, judged against its collection", async () => {
+        const t = await boot();
+        const id = await postsTemplate(t);
+        const { cookie } = await holding(t, TEMPLATE_AUTHOR);
+        const action = {
+          page: { collection: TEMPLATES_SLUG, id },
+          action: {
+            kind: "set-list-query",
+            listId: "list",
+            query: { limit: 5 },
+          },
+        };
+
+        // Made inside a transaction: the template's collection is carried
+        // with the write, so it is neither refused for want of it nor
+        // judged against the templates collection, which has no tags.
+        const dry = await post(cookie, ["pages", "actions"], {
+          ...action,
+          dryRun: true,
+        });
+        expect(dry.status).toBe(200);
+        expect((dry.body.item as PageActionResult).refusals).toEqual([]);
+        expect((await storedList(t, id))?.props.limit).toBeUndefined();
+
+        const applied = await post(cookie, ["pages", "actions"], action);
+        expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+        expect((await storedList(t, id))?.props.limit).toBe(5);
+        expect((await stored(t, id)).collection).toBe("posts");
+      });
+
+      it("publishes a template holding a list of the entry's related entries", async () => {
+        const t = await boot();
+        const id = await postsTemplate(t);
+        const { cookie } = await holding(t, TEMPLATE_AUTHOR);
+
+        // A status-only write: the content goes live as it was judged when
+        // saved, and the publish judges the document going live, which
+        // names its collection.
+        const dry = await act(cookie, {
+          action: { kind: "publish-template", id },
+          dryRun: true,
+        });
+        expect((dry.body.item as TemplateActionResult).refusals).toEqual([]);
+        const published = await act(cookie, {
+          action: { kind: "publish-template", id },
+        });
+        expect(published.status, JSON.stringify(published.body)).toBe(200);
+        expect((await stored(t, id)).status).toBe("published");
+      });
+
+      it("makes a component from a selection on a template", async () => {
+        const t = await boot();
+        const id = await postsTemplate(t);
+        const { cookie } = await holding(t, [
+          ...TEMPLATE_AUTHOR,
+          "create-components",
+          "publish-components",
+          "read-components",
+          "update-components",
+        ]);
+
+        const answered = await post(cookie, ["components", "from-selection"], {
+          action: "convert",
+          apply: "stored",
+          page: { collection: TEMPLATES_SLUG, id },
+          selectedIds: ["b"],
+          fields: { title: "Second heading" },
+        });
+        expect(answered.status, JSON.stringify(answered.body)).toBe(201);
+        const types = (
+          (await t.nextly.findByID({
+            collection: TEMPLATES_SLUG,
+            id,
+            overrideAccess: true,
+            status: "all",
+            draft: true,
+            depth: 0,
+          })) as unknown as { content: { nodes: { type: string }[] } }
+        ).content.nodes.map(node => node.type);
+        // The selected heading is now a placement of the new component.
+        expect(types).toEqual([
+          "core/heading",
+          COMPONENT_INSTANCE_TYPE,
+          "core/collection-loop",
+        ]);
+      });
+
+      it("refuses another writer's transactional content write that names no collection", async () => {
+        const t = await boot();
+        const id = await postsTemplate(t);
+        const ctx = captured;
+        if (ctx === undefined) throw new Error("the test plugin never started");
+        const write = (data: Record<string, unknown>) =>
+          ctx.services.collections
+            .withTransaction(tx =>
+              ctx.services.collections.updateEntryInTransaction(
+                tx,
+                TEMPLATES_SLUG,
+                id,
+                data
+              )
+            )
+            .then(
+              () => undefined,
+              (caught: unknown) => caught
+            );
+
+        const refused = (await write(
+          asOverwrite({ content: relatedTagsDesign(3) })
+        )) as NextlyError | undefined;
+        expect(NextlyError.isValidation(refused)).toBe(true);
+        expect(JSON.stringify(refused?.publicData)).toContain(
+          "TEMPLATE_COLLECTION_UNKNOWN"
+        );
+        expect((await storedList(t, id))?.props.limit).toBeUndefined();
+
+        // The control: the same write naming the collection is judged
+        // against it and kept.
+        expect(
+          await write(
+            asOverwrite({ content: relatedTagsDesign(3), collection: "posts" })
+          )
+        ).toBeUndefined();
+        expect((await storedList(t, id))?.props.limit).toBe(3);
+      });
     });
   }
 );

@@ -65,7 +65,10 @@ import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
-import type { NextlyContentReader } from "nextly/runtime";
+import type {
+  NextlyContentReader,
+  PublicSiteSettingsSource,
+} from "nextly/runtime";
 
 import nextlyConfig from "../../../nextly.config";
 
@@ -75,11 +78,16 @@ type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 // handles. `getNextly` caches, so later calls are a lookup.
 const instance = () => getNextly({ config: nextlyConfig });
 
-const reader: NextlyContentReader & {
-  media: Pick<NextlyInstance["media"], "findByID">;
-} = {
+const reader: NextlyContentReader &
+  PublicSiteSettingsSource & {
+    media: Pick<NextlyInstance["media"], "findByID">;
+  } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
+  // The site's name, logo and time zone a page shows, read from this instance.
+  // Omit it and pages show the process's registered instance's settings, and
+  // the route warns once.
+  publicSiteSettings: async () => (await instance()).publicSiteSettings(),
   // Images storing a media id resolve through this; omit it and they draw nothing
   // while images with a literal URL keep working.
   media: {
@@ -147,12 +155,16 @@ Render a single the same way you render a collection, reading it with
 
 ## Built-in blocks
 
-Twenty, from `@nextlyhq/blocks-react/blocks`:
+Twenty-two, from `@nextlyhq/blocks-react/blocks`:
 
 `core/accordion`, `core/accordion-item`, `core/box`, `core/button`,
 `core/collection-loop`, `core/card`, `core/column`, `core/columns`, `core/divider`,
-`core/embed`, `core/form`, `core/gallery`, `core/heading`, `core/image`, `core/list`,
-`core/quote`, `core/rich-text`, `core/section`, `core/spacer`, `core/text`.
+`core/embed`, `core/entry-content`, `core/form`, `core/gallery`, `core/heading`,
+`core/icon`, `core/image`, `core/list`, `core/quote`, `core/rich-text`, `core/section`,
+`core/spacer`, `core/text`.
+
+`core/entry-content` is offered only in a collection's template, where it draws the
+entry's own blocks field (see [Editing a template](https://nextlyhq.com/docs/page-builder/editor#editing-a-template)).
 
 Each declares its props (Content tab) and which style groups it supports, and those drive
 the inspector.
