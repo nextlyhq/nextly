@@ -1296,7 +1296,7 @@ export async function runMigrateDown(
   const opened = await openMigrationCommand(options, logger);
   // A dry run whose database is not there has said so, and ends here.
   if (opened === undefined) return;
-  const { dbValidation, configResult, migrationsDir, adapter } = opened;
+  const { dbValidation, configResult, migrationsDir, adapter, cwd } = opened;
   const dialect = dbValidation.dialect;
 
   try {

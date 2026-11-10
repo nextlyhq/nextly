@@ -100,6 +100,8 @@ function recordingRepo(
         () => "dry-run"
       ),
     listFileRemovals: () => repo.listFileRemovals(),
+    // A read, as the real run reads it: a dry run records nothing.
+    currentOldBuilderMarks: () => repo.currentOldBuilderMarks(),
   };
 }
 
