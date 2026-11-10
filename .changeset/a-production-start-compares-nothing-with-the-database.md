@@ -32,8 +32,9 @@
 A production start no longer compares the configuration with the live schema.
 It used to read every collection's table on each start through `getNextly()`
 to look for drift, and every core table on each start, to warn about core
-columns, core tables and retired auth tables or image sizes. Those reports are
-now a development start's (`NODE_ENV` set to `development`). Run
+columns, core tables and retired auth tables or image sizes, and the indexes of
+each translated collection with a field marked unique, to warn that one was
+missing. Those reports are now a development start's (`NODE_ENV` set to `development`). Run
 `nextly migrate` before serving: it brings the core tables up to date and
 names what it finds.
 

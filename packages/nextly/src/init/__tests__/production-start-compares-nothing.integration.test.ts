@@ -3,7 +3,8 @@
  * ledger, on every dialect, begun by the Direct API and by a request.
  *
  * The database is migrated for the configuration (three collections that each
- * hold a component, a Single and the component), with one plugin installed.
+ * hold a component, a translated collection with a field marked unique, a
+ * Single and the component), with one plugin installed.
  * Every statement a production start sends is recorded at the driver
  * (`record-statements`), the work it leaves running after it resolves
  * included (`startSettled`), and each is told apart by the code that asked:
@@ -24,11 +25,13 @@
  * - on SQLite, the one-time timestamp repair, upkeep the start runs after it
  *   resolves, which reads each table's columns to find the timestamps.
  * Anything else that reads a table's shape (the drift check of each
- * collection, the core schema check) or the ledger fails the test. Each kept
+ * collection, the core schema check, the check that a translated unique field
+ * has its per-language index) or the ledger fails the test. Each kept
  * reader must also be seen, so none of the exceptions is satisfied by absence.
  *
  * The control: a development start, recorded the same way, still compares
- * each collection with the live schema.
+ * each collection with the live schema and reads the translated collection's
+ * indexes.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -86,6 +89,12 @@ interface Asker {
    * nearest first) and the tables it read.
    */
   introspection?: { caller: string; tables: readonly string[] };
+  /**
+   * The check that each translated unique field has its per-language index.
+   * Not a reader a production start keeps: labelled so the failure names it,
+   * and so the development control can see it ran.
+   */
+  translatedUniqueCheck?: true;
 }
 
 const asking = vi.hoisted(() => {
@@ -195,6 +204,21 @@ vi.mock("../../database/repair-sqlite-timestamps", async original => {
     }))(actual.repairSqliteTimestamps),
   };
 });
+vi.mock(
+  "../../domains/i18n/runtime/translated-unique-boot-check",
+  async original => {
+    const actual =
+      await original<
+        typeof import("../../domains/i18n/runtime/translated-unique-boot-check")
+      >();
+    return {
+      ...actual,
+      warnAboutUnindexedTranslatedUnique: asking.label(() => ({
+        translatedUniqueCheck: true,
+      }))(actual.warnAboutUnindexedTranslatedUnique),
+    };
+  }
+);
 // Every introspection, labelled with the code that called it and the tables
 // it was asked for, so a comparison is named wherever it comes from.
 vi.mock(
@@ -231,15 +255,25 @@ const PLUGIN = definePlugin({
   nextly: ">=0.0.0",
   init() {},
 });
-const COLLECTIONS = ["pcna", "pcnb", "pcnc"].map(slug =>
+const COLLECTIONS = [
+  ...["pcna", "pcnb", "pcnc"].map(slug =>
+    defineCollection({
+      slug,
+      fields: [
+        text({ name: "title" }),
+        fieldGroup({ name: "hero", component: "pcnhero" }),
+      ],
+    })
+  ),
+  // Translated, with a field held unique within each language: the check
+  // that its per-language index is there reads the companion's indexes.
   defineCollection({
-    slug,
-    fields: [
-      text({ name: "title" }),
-      fieldGroup({ name: "hero", component: "pcnhero" }),
-    ],
-  })
-);
+    slug: "pcnloc",
+    localized: true,
+    fields: [text({ name: "handle", unique: true })],
+  }),
+];
+const LOCALIZATION = { locales: ["en", "fr"], defaultLocale: "en" };
 const SINGLES = [
   defineSingle({ slug: "pcnsite", fields: [text({ name: "title" })] }),
 ];
@@ -251,6 +285,7 @@ const CONFIG = defineConfig({
   singles: SINGLES,
   fieldGroups: FIELD_GROUPS,
   plugins: [PLUGIN],
+  localization: LOCALIZATION,
 });
 
 /**
@@ -299,6 +334,13 @@ function breach(call: RecordedStatement): string | undefined {
   const asker = call.context as Asker | undefined;
   const sent = call.text.replace(/\s+/g, " ").slice(0, 90);
   if (asker?.kept) return undefined;
+  if (
+    asker?.translatedUniqueCheck &&
+    CATALOG.test(call.text) &&
+    !EXISTENCE.test(call.text)
+  ) {
+    return `the translated unique index check read the catalog: ${sent}`;
+  }
   const introspection = asker?.introspection;
   if (introspection === undefined) return unlabelledBreach(call.text, sent);
   if (readsRetiredAccessRules(introspection)) return undefined;
@@ -342,6 +384,7 @@ describe.each(getConfiguredTestDialects())(
         singles: SINGLES,
         fieldGroups: FIELD_GROUPS,
         plugins: [PLUGIN],
+        localization: LOCALIZATION,
       });
       await recordPluginLifecycle(
         new SchemaEventsRepository(setup.getDrizzle(), dialect),
@@ -433,7 +476,7 @@ describe.each(getConfiguredTestDialects())(
       180_000
     );
 
-    it("a development start, recorded the same way, still compares each collection with the live schema", async () => {
+    it("a development start, recorded the same way, still compares each collection with the live schema and reads the translated collection's indexes", async () => {
       const calls = await recordStart("the Direct API", "development");
 
       const compared = new Set(
@@ -450,6 +493,17 @@ describe.each(getConfiguredTestDialects())(
           `dc_${slug}`
         );
       }
+      // The fixture reaches the translated unique index check: it reads the
+      // companion's indexes, which a production start must not.
+      expect(
+        calls.filter(
+          call =>
+            (call.context as Asker | undefined)?.translatedUniqueCheck &&
+            CATALOG.test(call.text) &&
+            !EXISTENCE.test(call.text)
+        ),
+        "the translated unique index check reads the companion's indexes"
+      ).not.toEqual([]);
     }, 180_000);
   }
 );
