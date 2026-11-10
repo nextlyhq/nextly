@@ -12,17 +12,21 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import {
+  countEntriesByKeptLocale,
   countParentsWithoutLocale,
+  countValuesInColumns,
   countValuesByLocale,
   queryRows,
 } from "../../schema/pipeline/classifier/count-helpers";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
+import { fieldsJoiningTranslation } from "./field-joins-translation";
 import {
   type LeavingFieldLike,
   refusalsForFieldsLeavingTranslation,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
+import { chosenLocaleOf, copyLiveness } from "./generate-down";
 import { refusalsForConstrainedFieldsLeaving } from "./leaving-constraint-preconditions";
 import { fieldsLeavingTranslation } from "./reconcile-companion";
 
@@ -48,7 +52,14 @@ export interface LeavingTranslationPreview {
    * the shared one: the first language by code. Null when it could not be counted.
    */
   entriesWithoutDefault: number | null;
-  /** The language whose value becomes the shared one, and so is not archived. */
+  /**
+   * The entries whose shared value comes from a language other than the default one, by that
+   * language: what their default-language readers will see instead. With `byLocale`, whose
+   * languages' readers will see the shared value, it names every reader whose page changes. Null
+   * when it could not be counted.
+   */
+  sharedFrom: Record<string, number> | null;
+  /** The language whose value becomes the shared one where it is live, and so is not archived. */
   defaultLocale: string;
   /** The command that brings the archived values back once the field is translated again. */
   restoreCommand: string;
@@ -75,6 +86,12 @@ export interface PreviewLeavingArgs {
   tableName: string;
   builtBy: ColumnOrigin;
   defaultLocale: string;
+  /**
+   * The site's languages in its order and whether each language publishes on its own: they decide
+   * the language each entry's shared value comes from, as the apply decides it (`copyLiveness`).
+   */
+  languageOrder?: readonly string[];
+  companionHasStatus?: boolean;
   oldFields: readonly LeavingFieldLike[];
   newFields: readonly LeavingFieldLike[];
   wasLocalized: boolean;
@@ -140,6 +157,7 @@ export async function previewFieldsLeavingTranslation(
           ? null
           : Object.values(byLocale).reduce((sum, n) => sum + n, 0),
       entriesWithoutDefault: counts?.withoutDefault ?? null,
+      sharedFrom: counts?.sharedFrom ?? null,
       defaultLocale: args.defaultLocale,
       restoreCommand: `nextly i18n:restore --collection ${args.slug} --field ${field.name}`,
       ...(refusal !== undefined ? { refusal } : {}),
@@ -183,8 +201,21 @@ async function countsOf(
 ): Promise<{
   byColumn: Map<string, Record<string, number>>;
   withoutDefault: number;
+  sharedFrom: Record<string, number>;
 } | null> {
   const companion = `${args.tableName}_locales`;
+  // The language an entry keeps, ranked as the apply ranks it (`chosenRowOrder`), so the counts
+  // say what the apply will do.
+  const keptLocaleOf = (parent: string) =>
+    chosenLocaleOf(
+      {
+        dialect: args.dialect,
+        companionTable: companion,
+        defaultLocale: args.defaultLocale,
+        liveness: copyLiveness(args.languageOrder, args.companionHasStatus),
+      },
+      parent
+    );
   try {
     return {
       byColumn: await countValuesByLocale(
@@ -192,7 +223,15 @@ async function countsOf(
         args.dialect,
         companion,
         columns,
-        args.defaultLocale
+        args.defaultLocale,
+        keptLocaleOf
+      ),
+      sharedFrom: await countEntriesByKeptLocale(
+        args.db,
+        args.dialect,
+        companion,
+        args.defaultLocale,
+        keptLocaleOf
       ),
       withoutDefault: await countParentsWithoutLocale(
         args.db,
@@ -201,6 +240,74 @@ async function countsOf(
         args.defaultLocale
       ),
     };
+  } catch {
+    return null;
+  }
+}
+
+/** One field becoming translated, as the preview reports it. */
+export interface JoiningTranslationPreview {
+  /** The field's name. */
+  name: string;
+  /** Its column on the main table, which its values leave for the translations table. */
+  column: string;
+  /**
+   * How many entries hold a value in it: each becomes the default language's value, and every
+   * other language falls back to it until it is translated. Null when it could not be counted.
+   */
+  values: number | null;
+  /** The language whose value each one becomes. */
+  defaultLocale: string;
+}
+
+/**
+ * The fields becoming translated in this change, with how many values each keeps as the default
+ * language's. Nothing unless the entity is translated before and after the change, as for the
+ * fields leaving it. A count that cannot be read is reported as unknown rather than failing the
+ * preview: the counts inform, and the apply moves every value whatever they say.
+ */
+export async function previewFieldsJoiningTranslation(
+  args: PreviewLeavingArgs
+): Promise<JoiningTranslationPreview[]> {
+  if (!args.wasLocalized || !args.isLocalized) return [];
+  const joining = new Set(
+    fieldsJoiningTranslation(args.oldFields, args.newFields)
+  );
+  if (joining.size === 0) return [];
+  const fields = args.newFields
+    .filter(f => joining.has(f.name))
+    .flatMap(field => {
+      const spec = fieldToLocalizedColumnSpec(
+        field,
+        args.dialect,
+        args.builtBy
+      );
+      return spec ? [{ field, column: spec.name }] : [];
+    });
+  const counts = await mainValueCounts(
+    args,
+    fields.map(({ column }) => column)
+  );
+  return fields.map(({ field, column }) => ({
+    name: field.name,
+    column,
+    values: counts?.get(column) ?? null,
+    defaultLocale: args.defaultLocale,
+  }));
+}
+
+/** How many entries hold a value in each of `columns` on the main table. */
+async function mainValueCounts(
+  args: PreviewLeavingArgs,
+  columns: readonly string[]
+): Promise<Map<string, number> | null> {
+  try {
+    return await countValuesInColumns(
+      args.db,
+      args.dialect,
+      args.tableName,
+      columns
+    );
   } catch {
     return null;
   }
@@ -232,18 +339,29 @@ export function withLeavingTranslation<T extends { hasChanges: boolean }>(
  */
 export async function previewBodyWithLeavingTranslation(
   preview: { hasChanges: boolean },
-  args: Omit<PreviewLeavingArgs, "wasLocalized" | "isLocalized"> & {
-    entity: { localized?: unknown };
+  args: Omit<
+    PreviewLeavingArgs,
+    "wasLocalized" | "isLocalized" | "companionHasStatus"
+  > & {
+    entity: { localized?: unknown; status?: unknown };
     requestedLocalized: boolean | undefined;
   },
   rest: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   const { entity, requestedLocalized, ...common } = args;
   const wasLocalized = entity.localized === true;
-  const leaving = await previewFieldsLeavingTranslation({
+  const judged = {
     ...common,
+    // A translated Draft/Published entity's translations table holds each language's own state.
+    companionHasStatus: wasLocalized && entity.status === true,
     wasLocalized,
     isLocalized: requestedLocalized ?? wasLocalized,
-  });
-  return { ...withLeavingTranslation(preview, leaving), ...rest };
+  };
+  const leaving = await previewFieldsLeavingTranslation(judged);
+  const joining = await previewFieldsJoiningTranslation(judged);
+  const body = withLeavingTranslation(preview, leaving);
+  // A field becoming translated is a change even when nothing else is, as one leaving it is.
+  return joining.length > 0
+    ? { ...body, hasChanges: true, joiningTranslation: joining, ...rest }
+    : { ...body, ...rest };
 }

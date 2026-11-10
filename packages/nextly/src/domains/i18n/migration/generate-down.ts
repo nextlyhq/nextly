@@ -213,7 +213,7 @@ export function chosenRowOrder(
  * The language of the row an entry's shared value is taken from, for the entry whose id is
  * `parent`: the same ranking as {@link restoredValue}, read beside a row of another table.
  */
-function chosenLocaleOf(
+export function chosenLocaleOf(
   spec: Pick<
     CompanionCopyRef,
     "dialect" | "companionTable" | "defaultLocale" | "liveness"

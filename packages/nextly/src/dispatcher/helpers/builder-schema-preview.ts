@@ -9,7 +9,10 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { appLocalization } from "../../domains/i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../domains/i18n/configured-locales";
 import { offeredCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { previewBodyWithLeavingTranslation } from "../../domains/i18n/migration/preview-leaving-translation";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
@@ -28,8 +31,8 @@ export async function builderSchemaPreviewBody(args: {
   slug: string;
   tableName: string;
   builtBy: ColumnOrigin;
-  /** The entity's registry record, which says whether it is translated now. */
-  entity: { localized?: unknown };
+  /** The entity's registry record, which says whether it is translated now, and publishes so. */
+  entity: { localized?: unknown; status?: unknown };
   currentFields: FieldDefinition[];
   newFields: FieldDefinition[];
   /** The request's localized flag, when the Builder sent one. */
@@ -75,6 +78,7 @@ export async function builderSchemaPreviewBody(args: {
       tableName,
       builtBy: args.builtBy,
       defaultLocale: appLocalization()?.defaultLocale ?? "en",
+      languageOrder: appLanguageOrder(),
       oldFields: currentFields,
       newFields,
       entity: args.entity,

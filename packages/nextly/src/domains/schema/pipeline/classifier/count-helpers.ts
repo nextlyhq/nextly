@@ -250,7 +250,12 @@ export async function countValuesByLocale(
   dialect: SupportedDialect,
   companionTable: string,
   columns: readonly string[],
-  excludeLocale: string
+  excludeLocale: string,
+  /**
+   * The language kept for an entry, as an SQL expression of its `_parent` column: the row the
+   * copy takes the shared value from, which is not archived. Given, it replaces `excludeLocale`.
+   */
+  keptLocaleOf?: (parent: string) => string
 ): Promise<Map<string, Record<string, number>>> {
   const counts = new Map<string, Record<string, number>>(
     columns.map(c => [c, {}])
@@ -261,9 +266,15 @@ export async function countValuesByLocale(
   const perColumn = columns
     .map((c, i) => `COUNT(${quoteIdent(c, dialect)}) AS n${i}`)
     .join(", ");
-  const query = sql`${sql.raw(
-    `SELECT ${locale} AS locale, ${perColumn} FROM ${tbl} WHERE ${locale} <> `
-  )}${excludeLocale}${sql.raw(` GROUP BY ${locale}`)}`;
+  const query =
+    keptLocaleOf === undefined
+      ? sql`${sql.raw(
+          `SELECT ${locale} AS locale, ${perColumn} FROM ${tbl} WHERE ${locale} <> `
+        )}${excludeLocale}${sql.raw(` GROUP BY ${locale}`)}`
+      : sql.raw(
+          `SELECT ${locale} AS locale, ${perColumn} FROM ${tbl} ` +
+            `WHERE ${locale} <> ${keptLocaleOf(`${tbl}.${quoteIdent("_parent", dialect)}`)} GROUP BY ${locale}`
+        );
   const rows =
     dialect === "sqlite"
       ? (db as { all(q: unknown): GroupCountRow[] }).all(query)
@@ -303,6 +314,61 @@ export async function countParentsWithoutLocale(
     return asNumber(row?.count);
   }
   return extractCount(await (db as PgMysqlExecute).execute(query), dialect);
+}
+
+/**
+ * How many entries of a companion `<table>_locales` take their kept value from each language,
+ * other than `defaultLocale`: `keptLocaleOf` names the language for an entry, as an SQL
+ * expression of its `_parent`. A language no entry takes its value from is absent.
+ */
+export async function countEntriesByKeptLocale(
+  db: unknown,
+  dialect: SupportedDialect,
+  companionTable: string,
+  defaultLocale: string,
+  keptLocaleOf: (parent: string) => string
+): Promise<Record<string, number>> {
+  const tbl = quoteIdent(companionTable, dialect);
+  const parent = quoteIdent("_parent", dialect);
+  const query = sql`${sql.raw(
+    `SELECT k.locale AS locale, COUNT(*) AS n FROM (SELECT DISTINCT ${tbl}.${parent} AS entry, ` +
+      `${keptLocaleOf(`${tbl}.${parent}`)} AS locale FROM ${tbl}) k WHERE k.locale <> `
+  )}${defaultLocale}${sql.raw(" GROUP BY k.locale")}`;
+  const rows =
+    dialect === "sqlite"
+      ? (db as { all(q: unknown): GroupCountRow[] }).all(query)
+      : extractRows<GroupCountRow>(
+          await (db as PgMysqlExecute).execute(query),
+          dialect
+        );
+  const counts: Record<string, number> = {};
+  for (const row of rows) {
+    const n = asNumber(row.n);
+    if (n > 0) counts[String(row.locale)] = n;
+  }
+  return counts;
+}
+
+/**
+ * How many rows of `table` hold a value in each of `columns`, in one query: `COUNT(column)` counts
+ * exactly the non-null ones. What a field becoming translated keeps as the default language's.
+ */
+export async function countValuesInColumns(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string,
+  columns: readonly string[]
+): Promise<Map<string, number>> {
+  if (columns.length === 0) return new Map();
+  const perColumn = columns
+    .map((c, i) => `COUNT(${quoteIdent(c, dialect)}) AS n${i}`)
+    .join(", ");
+  const [row] = await queryRows<Record<string, string | number>>(
+    db,
+    dialect,
+    `SELECT ${perColumn} FROM ${quoteIdent(table, dialect)}`
+  );
+  return new Map(columns.map((c, i) => [c, asNumber(row?.[`n${i}`])]));
 }
 
 /** The rows that would break a column becoming NOT NULL. */

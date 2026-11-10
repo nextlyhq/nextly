@@ -37,14 +37,24 @@ interface LeavingTranslation {
   byLocale: Record<string, number> | null;
   total: number | null;
   entriesWithoutDefault: number | null;
+  sharedFrom?: Record<string, number> | null;
   defaultLocale: string;
   restoreCommand: string;
   refusal?: { reason: string; steps: string[] };
 }
 
+/** What the preview reports for one field becoming translated. */
+interface JoiningTranslation {
+  name: string;
+  column: string;
+  values: number | null;
+  defaultLocale: string;
+}
+
 interface Preview {
   hasChanges: boolean;
   leavingTranslation?: LeavingTranslation[];
+  joiningTranslation?: JoiningTranslation[];
 }
 
 interface Entries {
@@ -173,6 +183,8 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
         byLocale: { ar: 1, es: 2 },
         total: 3,
         entriesWithoutDefault: 0,
+        // Every entry has an English value, so none takes its shared value from another language.
+        sharedFrom: {},
         defaultLocale: "en",
         restoreCommand:
           "nextly i18n:restore --collection posts --field heading",
@@ -252,6 +264,51 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     const preview = await previewShared();
 
     expect(preview.leavingTranslation?.[0]?.entriesWithoutDefault).toBe(1);
+  });
+
+  // The summary names whose page changes: an entry with no default-language value takes its shared
+  // value from another language, which its default-language readers will now see, and that
+  // language's value is the shared one rather than one sent to the archive.
+  it("names the language an entry without a default-language value takes its shared value from", async () => {
+    await seedCollection();
+    await query(
+      `DELETE FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
+    );
+
+    const [leaving] = (await previewShared()).leavingTranslation ?? [];
+
+    expect(leaving?.sharedFrom).toEqual({ es: 1 });
+    // "Dos" becomes the shared value, so only "Uno" and "واحد" go to the archive.
+    expect(leaving?.byLocale).toEqual({ es: 1, ar: 1 });
+  });
+
+  // The other direction says what it does too: a shared field becoming translated keeps each
+  // entry's value as the default language's, and every other language falls back to it until
+  // translated. The summary says how many values that is.
+  it("counts the values a field becoming translated keeps as the default language's", async () => {
+    const made = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      localized: true,
+      fields: SHARED,
+    });
+    expect(made.success, JSON.stringify(made)).toBe(true);
+    for (const heading of ["One", "Two", null]) {
+      const entry = await handler()
+        .getEntryService()
+        .createEntry(
+          { collectionName: "posts", overrideAccess: true, locale: "en" },
+          { heading, views: 1 }
+        );
+      expect(entry.success, JSON.stringify(entry)).toBe(true);
+    }
+
+    const preview = await previewShared(TRANSLATED);
+
+    expect(preview.hasChanges).toBe(true);
+    expect(preview.joiningTranslation).toEqual([
+      { name: "heading", column: "heading", values: 2, defaultLocale: "en" },
+    ]);
   });
 
   it("names the refusal before Apply when the entries cannot take a Required field's setting", async () => {
