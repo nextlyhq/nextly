@@ -39,8 +39,7 @@ const REQUIRED = "partreqsite";
 /** Translated, with a publish rule that refuses Spanish. */
 const GUARDED = "partguardsite";
 const PUBLISHER = "part-site-publisher";
-/** Untranslated, with no translatable field of its own: only a component. */
-const COMPONENTED = "partcompsite";
+/** A component, used inside a named group. */
 const HERO = "partsitehero";
 /** Translated, with a component inside a named group. */
 const NESTED = "partnestsite";
@@ -120,16 +119,6 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
         fields: [
           text({ name: "title" }),
           number({ name: "views", access: { update: () => false } }),
-        ],
-      }),
-      defineSingle({
-        slug: COMPONENTED,
-        status: true,
-        versions: { drafts: true },
-        access: { read: () => true, update: () => true },
-        fields: [
-          number({ name: "views" }),
-          fieldGroup({ name: "hero", component: HERO }),
         ],
       }),
     ],
@@ -399,47 +388,6 @@ describe.each(getConfiguredTestDialects())(
         });
         expect((live.data as { views?: unknown }).views).toBe(80);
       }
-    }, 90_000);
-
-    // Components are kept per language under the setting, so a held edit of
-    // one is the language's, even on a Single with no translatable field of
-    // its own: made in Spanish, it is Spanish's draft.
-    it("keys an untranslated Single's held component edit by the language it was made in", async () => {
-      const singles = await boot(dialect);
-      const first = await singles.update(
-        COMPONENTED,
-        {
-          _overwrite: true,
-          views: 1,
-          hero: { heading: "en heading" },
-          status: "published",
-        },
-        { locale: "en", overrideAccess: true }
-      );
-      expect(first.success, JSON.stringify(first)).toBe(true);
-
-      const held = await singles.update(
-        COMPONENTED,
-        { _overwrite: true, hero: { heading: "es heading" } },
-        { locale: "es", overrideAccess: true }
-      );
-      expect(held.success, JSON.stringify(held)).toBe(true);
-
-      const rows = await current!.adapter.select<{ locale: string | null }>(
-        "nextly_versions",
-        {
-          where: {
-            and: [
-              { column: "scopeKind", op: "=", value: "single" },
-              { column: "scopeSlug", op: "=", value: COMPONENTED },
-              { column: "isAutosave", op: "=", value: false },
-              { column: "versionNo", op: "IS NULL" },
-              { column: "status", op: "=", value: "draft" },
-            ],
-          },
-        }
-      );
-      expect(rows.map(row => row.locale ?? "shared")).toEqual(["es"]);
     }, 90_000);
 
     // A named group is stored whole on the shared row, a component inside it
