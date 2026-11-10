@@ -98,6 +98,7 @@ import type {
 import { withForeignKeysLiftedForTypeChanges } from "../pipeline/foreign-key-lift";
 import { operationsToJudge } from "../pipeline/moved-to-companion";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
+import { builtByFor } from "../pipeline/registered-collections";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { refuseSwitchesWithRename } from "../pipeline/several-references-refusal";
@@ -2673,21 +2674,20 @@ function assertFieldsMayJoinTranslation(
 }
 
 /**
- * The column rule an entity's tables are described by: a Builder collection's
- * (`settings.source === "builder"`) is the Builder's own, which it creates its
- * main table and its translations table by; every other entity's is the
- * code-first rule. On MySQL the two read an unstated text width differently,
- * so describing a Builder table by the code-first rule wrote a column the
- * table never had. Every place a table or a translated column is described
- * asks this one question.
+ * The column rule an entity's tables are described by: a Builder entity's
+ * (`settings.source === "builder"`) is the rule of the Builder creator that
+ * builds its tables (a collection's and a Single's one, a field group's
+ * another), and every other entity's is the code-first rule. On MySQL they
+ * read an unstated text width differently, so describing a Builder table by
+ * the code-first rule wrote a column the table never had. Every place a table
+ * or a translated column is described asks this one question, and it is
+ * answered by `builtByFor`, as `nextly migrate` and the runtime answer it.
  */
 function columnOriginOf(
   entity: MinimalConfigEntity,
   kind: I18nTransitionKind
 ): ColumnOrigin {
-  return kind === "collection" && entity.settings?.source === "builder"
-    ? "collection"
-    : "codeFirst";
+  return builtByFor(kind, entity.settings?.source === "builder");
 }
 
 /**

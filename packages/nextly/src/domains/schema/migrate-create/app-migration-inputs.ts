@@ -44,7 +44,7 @@ import {
   hasAppStreamTables,
   type AppStreamTables,
 } from "./app-stream";
-import { toMinimalEntities, withBuilderSettingsAll } from "./config-entities";
+import { toMinimalEntities } from "./config-entities";
 import type { EntitySettingsRecord, SettingsObject } from "./entity-settings";
 import { removedCollectionTables, type MinimalConfigEntity } from "./generate";
 import { assertMigrationSiblingFields } from "./sibling-fields";
@@ -169,11 +169,9 @@ export async function appMigrationInputs(
     );
   }
   // Each Builder entity carries its manifest entry as its settings, as each
-  // code-first one carries its config entry, so the snapshot records both.
-  const { collections, singles, components } = withBuilderSettingsAll(
-    merged,
-    manifest
-  );
+  // code-first one carries its config entry, so the snapshot records both;
+  // the merge sets them (`uiToMinimal`).
+  const { collections, singles, components } = merged;
 
   // Checked on the config's and the manifest's own entries rather than the
   // merged ones: the merge has already dropped shadowed Builder entities by

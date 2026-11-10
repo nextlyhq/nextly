@@ -21,6 +21,7 @@ import type {
   UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { settingsOf } from "../migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../migrate-create/generate";
 
 export interface MergeUiEntitiesArgs {
@@ -45,6 +46,14 @@ export interface MergeUiEntitiesResult {
  * column descriptor reads keys a chosen list would have to be kept in step
  * with (`virtual`, `options`, `dbType`, `validation`), and a key left out is a
  * column described differently from the one dev push builds.
+ *
+ * It carries its manifest entry as its settings, marked as the Builder's, as a
+ * code-first entity carries its config entry (`toMinimalEntities`). The mark is
+ * also what picks the Builder's column rule (`columnOriginOf` in `generate.ts`),
+ * so it is set here, where every reader reduces a manifest entry, rather than
+ * by each reader afterwards: a reader that skipped that step described a
+ * Builder table by the code-first rule, which on MySQL bounds a text column
+ * the Builder made unbounded.
  */
 export function uiToMinimal(
   entity: UiSchemaEntity,
@@ -56,6 +65,7 @@ export function uiToMinimal(
     fields: [...entity.fields],
     status: entity.status === true,
     localized: entity.localized === true,
+    settings: { source: "builder", settings: settingsOf(entity, "builder") },
   };
 }
 
