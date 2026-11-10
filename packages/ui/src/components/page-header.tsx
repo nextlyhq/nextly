@@ -1,6 +1,8 @@
 import { Slot } from "@radix-ui/react-slot";
 import {
+  cloneElement,
   forwardRef,
+  isValidElement,
   type AnchorHTMLAttributes,
   type HTMLAttributes,
   type ReactNode,
@@ -213,8 +215,20 @@ export type PageTabProps = PageTabAnchorProps & {
 export const PageTab: ForwardRefExoticComponent<
   PropsWithoutRef<PageTabProps> & RefAttributes<HTMLAnchorElement>
 > = forwardRef<HTMLAnchorElement, PageTabProps>(
-  ({ current = false, asChild = false, className, ...props }, ref) => {
+  (
+    { current = false, asChild = false, className, children, ...props },
+    ref
+  ) => {
     const Comp = asChild ? Slot : "a";
+    const marker = current ? "page" : undefined;
+    // `Slot` lets the wrapped element's own props win over the ones set here,
+    // so a router link carrying its own `aria-current` would be announced by
+    // that instead of by `current`. Setting the marker on the child itself
+    // keeps `current` the one source of it.
+    const content =
+      asChild && isValidElement<{ "aria-current"?: string }>(children)
+        ? cloneElement(children, { "aria-current": marker })
+        : children;
     return (
       <Comp
         // The caller's attributes first, so nothing they pass can replace the
@@ -222,7 +236,7 @@ export const PageTab: ForwardRefExoticComponent<
         {...props}
         ref={ref}
         data-slot="page-tab"
-        aria-current={current ? "page" : undefined}
+        aria-current={marker}
         className={cn(
           // The current tab's underline sits on the row's own bottom border,
           // so the row reads as one rule with one section marked.
@@ -232,7 +246,9 @@ export const PageTab: ForwardRefExoticComponent<
             : "border-transparent text-muted-foreground hover:text-foreground",
           className
         )}
-      />
+      >
+        {content}
+      </Comp>
     );
   }
 );

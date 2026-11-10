@@ -118,6 +118,33 @@ describe("a page header's tabs", () => {
     ).toBe("page");
   });
 
+  it("keeps the marker its own when the wrapped link carries one", () => {
+    // `Slot` lets a child's props win, so a router link's own aria-current
+    // would otherwise decide how the tab is announced.
+    render(
+      <PageTabs label="Sections">
+        <PageTab asChild current>
+          <a href="/builder" aria-current="step">
+            Builder
+          </a>
+        </PageTab>
+        <PageTab asChild>
+          <a href="/settings" aria-current="page">
+            Settings
+          </a>
+        </PageTab>
+      </PageTabs>
+    );
+    expect(
+      screen.getByRole("link", { name: "Builder" }).getAttribute("aria-current")
+    ).toBe("page");
+    expect(
+      screen
+        .getByRole("link", { name: "Settings" })
+        .getAttribute("aria-current")
+    ).toBeNull();
+  });
+
   it("renders a plain tab as a link with its destination", () => {
     render(
       <PageTabs label="Sections">
