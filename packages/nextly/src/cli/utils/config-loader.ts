@@ -40,7 +40,10 @@ import {
   snapshotFieldTypes,
   withoutDisabledBehavior,
 } from "../../domains/schema/field-types/field-type-registry";
-import { publishWithheldScopeFields } from "../../domains/schema/pipeline/withheld-scope-fields";
+import {
+  currentWithheldScopeFields,
+  publishWithheldScopeFields,
+} from "../../domains/schema/pipeline/withheld-scope-fields";
 import {
   resolvePostgresSchema,
   setActivePostgresSchema,
@@ -588,6 +591,10 @@ async function loadConfigInternal(
   // `db:sync` watcher, the HMR reload — would otherwise resolve that config's
   // plugin field types against an empty registry.
   const previousFieldTypes = snapshotFieldTypes();
+  // So is what the fold publishes as held back from switched-off types: a
+  // refused load leaves the previous config running, whose kept columns a
+  // sync must still keep.
+  const previousWithheld = currentWithheldScopeFields();
 
   try {
     // bundleAndRequire is our Turbopack-safe alternative to the
@@ -844,6 +851,7 @@ async function loadConfigInternal(
     // The load owns the registry from the clear above until it returns, so
     // every failure between them leaves it half-built or empty.
     restoreFieldTypes(previousFieldTypes);
+    publishWithheldScopeFields(previousWithheld);
 
     if (NextlyError.is(error)) {
       throw error;

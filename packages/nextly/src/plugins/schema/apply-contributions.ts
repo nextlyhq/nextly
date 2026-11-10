@@ -629,23 +629,23 @@ function holdBack(
 ): void {
   const { type, allOn, folded } = judged;
   const { target, fields } = clause;
-  if (type !== undefined && allOn !== undefined) {
-    if (type.kind === "fieldGroup") return;
-    // The fold's answer first, then the clause's own declaration, in case
-    // the column was made by a scope the fold with every type on passes over
-    // (`keptScopeFields` keeps the one the column matches).
-    const key = scopedTypeKey(type.kind, slug);
-    const held =
-      withheld.get(key) ?? fieldsOnlyIn(allOn, folded, type.kind, slug);
-    withheld.set(key, [...held, ...fields]);
-    return;
-  }
   const candidates: ContentTypeCandidate[] =
     type === undefined ? target.every.map(kind => ({ slug, kind })) : [type];
+  // Judged as the scope judges a type it adds to: an `except` naming a type
+  // of another kind, a plugin's or a system one holds nothing back from it.
   for (const reached of typesReachedBy({ every: target.every }, candidates)) {
     if (reached.kind === "fieldGroup") continue;
     const key = scopedTypeKey(reached.kind, slug);
-    withheld.set(key, [...(withheld.get(key) ?? []), ...fields]);
+    // A configured type: the fold's answer first, then the clause's own
+    // declaration, in case the column was made by a scope the fold with
+    // every type on passes over (`keptScopeFields` keeps the one the column
+    // matches).
+    const held =
+      withheld.get(key) ??
+      (type !== undefined && allOn !== undefined
+        ? fieldsOnlyIn(allOn, folded, reached.kind, slug)
+        : []);
+    withheld.set(key, [...held, ...fields]);
   }
 }
 

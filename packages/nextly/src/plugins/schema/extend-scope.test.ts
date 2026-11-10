@@ -483,3 +483,23 @@ describe("extend with a scope — a switched-off type given the field another wa
     publishWithheldScopeFields(new Map());
   });
 });
+
+describe("extend with a scope — an except naming a type the scope never reaches", () => {
+  it("holds nothing back from a Single a collections-only scope excepts", async () => {
+    const { withheldScopeFieldsOf, publishWithheldScopeFields } = await import(
+      "../../domains/schema/pipeline/withheld-scope-fields"
+    );
+    applyPluginSchemaContributionsDeferred(siteConfig(), [
+      seoPlugin({ every: ["collection"], except: ["homepage", "pages"] }),
+    ]);
+
+    expect(withheldScopeFieldsOf("single", "homepage")).toEqual([]);
+    // A collection it excepts is still held back.
+    expect(
+      withheldScopeFieldsOf("collection", "pages").map(
+        f => (f as { name?: string }).name
+      )
+    ).toContain("seo");
+    publishWithheldScopeFields(new Map());
+  });
+});

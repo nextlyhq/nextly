@@ -59,4 +59,64 @@ describe("loading a configuration with no plugin", () => {
 
     expect([...currentWithheldScopeFields().keys()]).toEqual([]);
   });
+
+  it("puts back what was held back when a load is refused after its fold", async () => {
+    const previous = new Map([
+      ["collection:posts", [{ name: "seo", type: "text" } as never]],
+    ]);
+    publishWithheldScopeFields(previous);
+    // Its plugin switches `pages` off, and its field group closes a cycle
+    // with the Builder's, which the load refuses after the fold has run.
+    exported.config = {
+      collections: [
+        { slug: "pages", fields: [{ name: "title", type: "text" }] },
+      ],
+      fieldGroups: [
+        {
+          slug: "hero",
+          fields: [{ name: "card", type: "component", component: "card" }],
+        },
+      ],
+      plugins: [
+        {
+          name: "@t/seo",
+          version: "1.0.0",
+          nextly: ">=0.0.0",
+          contributes: {
+            extend: [
+              {
+                target: { every: ["collection"], except: ["pages"] },
+                fields: [{ name: "seo", type: "text" }],
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    const cwd = project();
+    // The Builder's `card` places `hero` back: a cycle judged once the
+    // Builder's field groups are read, after the fold.
+    writeFileSync(
+      join(cwd, "ui-schema.json"),
+      JSON.stringify({
+        version: 1,
+        components: [
+          {
+            slug: "card",
+            fields: [{ name: "hero", type: "component", component: "hero" }],
+          },
+        ],
+      })
+    );
+
+    await expect(loadConfig({ cwd })).rejects.toMatchObject({
+      publicData: {
+        errors: [expect.objectContaining({ code: "FIELD_GROUP_CYCLE" })],
+      },
+    });
+
+    // The running configuration is still the previous one.
+    expect(currentWithheldScopeFields()).toBe(previous);
+  });
 });
