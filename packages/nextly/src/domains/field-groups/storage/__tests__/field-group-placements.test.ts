@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { fieldGroupPlacements } from "../field-group-field-type";
+import { fieldGroupPlacements } from "../field-group-placements";
 
 describe("fieldGroupPlacements", () => {
   it("finds a single slot at the top level as direct", () => {
@@ -130,6 +130,50 @@ describe("fieldGroupPlacements", () => {
     expect(fieldGroupPlacements([loop])).toEqual([
       { path: "loop.hero", slugs: ["hero"], direct: false },
     ]);
+  });
+
+  it("walks one container object at every place it is put", () => {
+    const shared = {
+      name: "box",
+      type: "group",
+      fields: [{ name: "hero", type: "component", component: "hero" }],
+    };
+    expect(
+      fieldGroupPlacements([
+        { name: "left", type: "group", fields: [shared] },
+        { name: "right", type: "group", fields: [shared] },
+      ])
+    ).toEqual([
+      { path: "left.box.hero", slugs: ["hero"], direct: false },
+      { path: "right.box.hero", slugs: ["hero"], direct: false },
+    ]);
+  });
+
+  it("does not read a contributed field's own `fields` option as a field list", () => {
+    expect(
+      fieldGroupPlacements([
+        {
+          name: "picker",
+          type: "my-plugin-field",
+          fields: [{ name: "hero", type: "component", component: "hero" }],
+        },
+      ])
+    ).toEqual([]);
+  });
+
+  it("reaches a placement under thousands of nested groups", () => {
+    // Deep enough that one stack frame per level would overflow.
+    let level: Record<string, unknown> = {
+      name: "hero",
+      type: "component",
+      component: "hero",
+    };
+    for (let i = 0; i < 20_000; i++) {
+      level = { name: "g", type: "group", fields: [level] };
+    }
+    const placements = fieldGroupPlacements([level]);
+    expect(placements).toHaveLength(1);
+    expect(placements[0]).toMatchObject({ slugs: ["hero"], direct: false });
   });
 
   it("answers nothing for a value that is not a list", () => {
