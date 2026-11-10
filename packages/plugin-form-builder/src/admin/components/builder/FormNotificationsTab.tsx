@@ -47,6 +47,10 @@ import {
 } from "lucide-react";
 import { type JSX, useCallback, useEffect, useMemo, useState } from "react";
 
+import {
+  FORM_CONFIRMATION_TEMPLATE,
+  starterTemplateFor,
+} from "../../../emails/starter-messages";
 import type { ConditionalLogicCondition } from "../../../types";
 import {
   useFormBuilder,
@@ -1068,10 +1072,30 @@ function NotificationIdentityFields({
             )}
           </FieldShell>
           {!form.templateSlug && (
-            <p className="flex items-center gap-1 text-xs text-destructive">
-              <TriangleAlert className="h-3 w-3" aria-hidden="true" />
-              Required — a notification without a template is never sent.
-            </p>
+            // A notification saved before the starter messages existed has no
+            // message and sends nothing; it never gains one by itself, since
+            // an email that starts going out after an upgrade would surprise
+            // the site. One press gives it the starter for its kind.
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <p className="flex items-center gap-1 text-xs text-destructive">
+                <TriangleAlert className="h-3 w-3" aria-hidden="true" />
+                Required — a notification without a template is never sent.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  update("templateSlug", starterTemplateFor(form.recipientType))
+                }
+              >
+                Use{" "}
+                {starterTemplateFor(form.recipientType) ===
+                FORM_CONFIRMATION_TEMPLATE
+                  ? "Form confirmation"
+                  : "Form submission"}
+              </Button>
+            </div>
           )}
           {selectedTemplate && (
             // A new tab, so unsaved changes to this form aren't lost by
@@ -1179,7 +1203,16 @@ function NotificationEditor({
 
   const changeRecipientType = useCallback(
     (kind: "static" | "field") => {
-      onChange({ ...notification, recipientType: kind, to: "" });
+      // Still on the starter for the old kind, the rule follows to the
+      // starter for the new one, so a notification turned to the visitor sends
+      // the confirmation rather than the team's email. A message the author
+      // chose is theirs and stays.
+      const templateSlug =
+        notification.templateSlug ===
+        starterTemplateFor(notification.recipientType)
+          ? starterTemplateFor(kind)
+          : notification.templateSlug;
+      onChange({ ...notification, recipientType: kind, to: "", templateSlug });
     },
     [notification, onChange]
   );

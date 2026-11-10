@@ -14,7 +14,7 @@
  *
  * A row of seven icon buttons per card was seven Tab stops per card and a
  * header too crowded for a narrow card. One named button opens every action,
- * and the card's size is shown beside it in columns by rows, so the reader can
+ * and the card's width is shown beside it as a share of the row, so the reader can
  * see what the Width and Height submenus will change without opening them.
  *
  * ## Sizes within the widget's bounds, and only those
@@ -63,6 +63,7 @@ import {
   sizeName,
   widthChoiceName,
   widthChoices,
+  widthPercent,
 } from "../sizes";
 
 import { settingsIntent } from "./settings-sheet-code";
@@ -104,7 +105,7 @@ const MOVES: ReadonlyArray<{
 ];
 
 /**
- * The card's size as columns by rows, with its full name for a screen reader.
+ * The card's width as a share of the row ("50%"), with its full size for a screen reader.
  * Shown beside the menu button while customising.
  */
 export function CardSizeLabel({ size }: { size: GridSize }): JSX.Element {
@@ -113,11 +114,8 @@ export function CardSizeLabel({ size }: { size: GridSize }): JSX.Element {
       className="inline-flex h-6 min-w-6 items-center justify-center rounded border border-border px-1 text-xs tabular-nums text-muted-foreground"
       data-testid="card-size-label"
     >
-      {/* The glyphs are for sight; the name is what is read, so "6×4" is not
-          announced as "six times four" beside a menu that says "6 columns". */}
-      <span aria-hidden>
-        {size.w}×{size.h}
-      </span>
+      {/* The percentage is for sight; the whole size is what is read. */}
+      <span aria-hidden>{widthPercent(size.w)}</span>
       <span className="sr-only">{sizeName(size)}</span>
     </span>
   );

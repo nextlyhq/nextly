@@ -44,8 +44,8 @@ let layoutResponse: DashboardLayoutResponse | undefined;
 
 // The header's New button reads collections and permissions of its own,
 // which this test does not set up; it is a marker here.
-vi.mock("@admin/components/features/dashboard/header/NewSplitButton", () => ({
-  NewSplitButton: () => <div data-testid="dashboard-new" />,
+vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
+  NewMenu: () => <div data-testid="dashboard-new" />,
 }));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
@@ -352,9 +352,7 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
       });
       // By keyboard: jsdom has no geometry, so a pointer crossing into the
       // submenu reads as leaving it.
-      within(widths)
-        .getByRole("menuitemradio", { name: "Half width, 6 columns" })
-        .focus();
+      within(widths).getByRole("menuitemradio", { name: "50% width" }).focus();
       await user.keyboard("{Enter}");
     },
   ],
@@ -384,7 +382,7 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
         within(popover).getByRole("combobox", { name: "Width" })
       );
       await user.click(
-        await screen.findByRole("option", { name: "Half width, 6 columns" })
+        await screen.findByRole("option", { name: "50% width" })
       );
       await user.keyboard("{Escape}");
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -485,14 +483,12 @@ describe("the card menu and quick popover while customising", () => {
       name: "Quick settings for Notes",
     });
     await user.click(within(popover).getByRole("combobox", { name: "Width" }));
-    await user.click(
-      await screen.findByRole("option", { name: "Half width, 6 columns" })
-    );
+    await user.click(await screen.findByRole("option", { name: "50% width" }));
 
     // Drawn at once in the draft, the popover still open over the card, and nothing written.
     await waitFor(() => expect(sizeLabels()).not.toEqual(before));
-    // The label's glyphs, then the name a screen reader hears.
-    expect(sizeLabels()).toContain("6×36 columns by 3 rows");
+    // The label's percent, then the name a screen reader hears.
+    expect(sizeLabels()).toContain("50%50% wide by 3 rows");
     expect(
       screen.getByRole("dialog", { name: "Quick settings for Notes" })
     ).toBeInTheDocument();

@@ -86,18 +86,16 @@ describe("a card's menu at rest", () => {
       .getAllByRole("menuitemradio")
       .map(item => item.getAttribute("aria-label"));
     expect(widths).toEqual([
-      "Quarter width, 3 columns",
-      "Third width, 4 columns",
-      "Half width, 6 columns",
-      "Two thirds width, 8 columns",
+      "25% width",
+      "33% width",
+      "50% width",
+      "66% width",
       "2 rows",
       "3 rows",
       "4 rows",
     ]);
     // By keyboard: jsdom has no geometry for a pointer to cross the items.
-    within(menu)
-      .getByRole("menuitemradio", { name: "Half width, 6 columns" })
-      .focus();
+    within(menu).getByRole("menuitemradio", { name: "50% width" }).focus();
     await user.keyboard("{Enter}");
     expect(onSetSize).toHaveBeenCalledWith({ w: 6, h: 3 });
   });

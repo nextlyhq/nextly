@@ -108,9 +108,20 @@ vi.mock(
       findOrphanedCollections() {
         return Promise.resolve([{ slug: "nw_old", tableName: "dc_nw_old" }]);
       }
+      // No type keeps a column for a switched-off plugin field.
+      getAllCollections() {
+        return Promise.resolve([]);
+      }
     },
   })
 );
+vi.mock("../../domains/singles/services/single-registry-service", () => ({
+  SingleRegistryService: class {
+    getAllSingles() {
+      return Promise.resolve([]);
+    }
+  },
+}));
 vi.mock(
   "../../domains/field-groups/services/register-field-group-schemas",
   () => ({ registerComponentSchemas: () => Promise.resolve() })
