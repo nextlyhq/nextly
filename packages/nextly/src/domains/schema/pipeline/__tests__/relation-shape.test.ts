@@ -178,7 +178,8 @@ describe("the change planned from the shapes", () => {
 });
 
 describe("the guard requiring a column empty, run on SQLite", () => {
-  function guard(values: Array<string | null>): void {
+  /** The column's values after the guard's statements ran over `values`. */
+  function guard(values: Array<string | null>): Array<string | null> {
     const db = new Database(":memory:");
     try {
       db.exec(`CREATE TABLE "dc_posts" ("n" integer, "author" text)`);
@@ -197,6 +198,10 @@ describe("the guard requiring a column empty, run on SQLite", () => {
       )) {
         db.exec(statement);
       }
+      return db
+        .prepare(`SELECT "author" FROM "dc_posts" ORDER BY "n"`)
+        .pluck()
+        .all() as Array<string | null>;
     } finally {
       db.close();
     }
@@ -207,6 +212,18 @@ describe("the guard requiring a column empty, run on SQLite", () => {
       guard([null, "", "[]", "null"]);
       guard([null]);
     }).not.toThrow();
+  });
+
+  // The column is text on both sides of the switch, so nothing after the guard rewrites it: an
+  // empty the guard accepts would stay, in the old shape, under the new one. Each becomes no value.
+  it("leaves every empty it accepts as no value", () => {
+    expect(guard([null, "", " [] ", "[]", "null"])).toEqual([
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
   });
 
   it("refuses, naming the column, while a row holds one", () => {
@@ -281,6 +298,16 @@ describe("the SQLite statements, run twice over every stored shape", () => {
     expect(
       convert("referenceScalar", [null, '["a"]', "[]", "3f2a", '"3f2a"'])
     ).toEqual([null, "a", null, "3f2a", "3f2a"]);
+  });
+
+  // The same empties the target guard accepts: an empty string or JSON null is no reference either,
+  // and left as it is it would read as an id.
+  it("empties an empty string and JSON null as it empties an empty list", () => {
+    expect(convert("referenceScalar", ["", "null", " [] "])).toEqual([
+      null,
+      null,
+      null,
+    ]);
   });
 
   // A generated migration runs no count before its statements, so the file itself refuses a list

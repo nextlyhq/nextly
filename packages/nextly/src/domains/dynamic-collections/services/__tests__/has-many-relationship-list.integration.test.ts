@@ -633,6 +633,27 @@ for (const dialect of getConfiguredTestDialects()) {
       });
     });
 
+    it("switches a list across several collections to one, leaving a row that held an empty list with no value", async () => {
+      const t = await boot();
+      await postsWithAuthors(t, true, ["authors", "tags"]);
+      const post = (
+        await t.nextly.create({ collection: "posts", data: { title: "P1" } })
+      ).item.id as string;
+      // A row holding an empty list, which the switch's guard accepts as no value.
+      await database.adapter.executeQuery(
+        `UPDATE dc_posts SET author = '[]' WHERE id = '${post}'`
+      );
+
+      expect(
+        await switchAuthor(database.adapter, { relationTo: "authors" })
+      ).toEqual({ accepted: true });
+      // Read as stored: the list's empty left under the one reference's shape would read as an id.
+      const [row] = await database.adapter.executeQuery<{ author: unknown }>(
+        `SELECT author FROM dc_posts WHERE id = '${post}'`
+      );
+      expect(row?.author ?? null).toBeNull();
+    });
+
     it("switches to several collections when no row holds a value, and then saves and reads one", async () => {
       const t = await boot();
       const { a } = await postsWithAuthors(t, false);

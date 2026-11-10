@@ -209,9 +209,41 @@ function sqliteReferenceScalarRewrite(
 }
 
 /**
+ * Whether a stored relation value is empty, given the column's quoted identifier: an empty string,
+ * an empty list or JSON null, as text on every dialect. NULL is not matched, being no value
+ * already. The one definition of "empty" for the target guard and for clearing what it accepts.
+ */
+function emptyValueCondition(c: string, dialect: SupportedDialect): string {
+  const empties = `('', '[]', 'null')`;
+  if (dialect === "postgresql") return `btrim(${c}::text) IN ${empties}`;
+  if (dialect === "mysql") return `TRIM(CAST(${c} AS CHAR)) IN ${empties}`;
+  return `trim(${c}) IN ${empties}`;
+}
+
+/**
+ * The one step that makes every empty stored value NULL, the no-value every relation shape reads
+ * the same way. A switch whose rewrite does not reach them would otherwise leave them in the old
+ * shape under the new one: on SQLite the column is text on both sides, and a plain retype keeps
+ * `[]` as text. Safe to run again. On a column that refuses NULL it fails before any DDL, so the
+ * switch changes nothing rather than keeping a value the new shape misreads.
+ */
+function clearEmptyValuesStatement(
+  tableName: string,
+  columnName: string,
+  dialect: SupportedDialect
+): string {
+  const c = quoteIdent(columnName, dialect);
+  return (
+    `UPDATE ${quoteIdent(tableName, dialect)} SET ${c} = NULL ` +
+    `WHERE ${c} IS NOT NULL AND ${emptyValueCondition(c, dialect)}`
+  );
+}
+
+/**
  * The guard a relation's switch to or from naming several collections runs before any DDL: it
- * fails, naming the column, while a row holds a value, and changes nothing either way. A value is
- * anything but NULL, an empty string, an empty list or JSON null.
+ * fails, naming the column, while a row holds a value. A value is anything but NULL, an empty
+ * string, an empty list or JSON null. Once it passes, every such empty is made NULL, since no
+ * rewrite follows a switch between these shapes to put it in the new one.
  *
  * Each dialect raises in the one way it has outside a stored routine: PostgreSQL from a `DO` block;
  * MySQL by adding a CHECK no row holding a value satisfies, then dropping it; SQLite from a
@@ -228,11 +260,13 @@ function requireEmptyStatements(
     `Column ${tableName}.${columnName} cannot change between one target collection and several ` +
     `while a row holds a value. Clear it on every row first, or keep its targets as they are.`;
   const literal = `'${message.replace(/'/g, "''")}'`;
+  const clear = clearEmptyValuesStatement(tableName, columnName, dialect);
   if (dialect === "postgresql") {
     return [
       `DO $nextly$ BEGIN IF EXISTS (SELECT 1 FROM ${table} WHERE ${c} IS NOT NULL ` +
-        `AND btrim(${c}::text) NOT IN ('', '[]', 'null')) THEN RAISE EXCEPTION ${literal}; ` +
+        `AND NOT ${emptyValueCondition(c, dialect)}) THEN RAISE EXCEPTION ${literal}; ` +
         `END IF; END $nextly$`,
+      clear,
     ];
   }
   if (dialect === "mysql") {
@@ -241,16 +275,20 @@ function requireEmptyStatements(
       dialect
     );
     return [
-      `ALTER TABLE ${table} ADD CONSTRAINT ${guard} CHECK (${c} IS NULL OR TRIM(CAST(${c} AS CHAR)) IN ('', '[]', 'null'))`,
+      `ALTER TABLE ${table} ADD CONSTRAINT ${guard} CHECK (${c} IS NULL OR ${emptyValueCondition(c, dialect)})`,
       `ALTER TABLE ${table} DROP CHECK ${guard}`,
+      clear,
     ];
   }
   if (dialect === "sqlite") {
-    return sqliteGuardStatements(
-      tableName,
-      `${c} IS NOT NULL AND trim(${c}) NOT IN ('', '[]', 'null')`,
-      message
-    );
+    return [
+      ...sqliteGuardStatements(
+        tableName,
+        `${c} IS NOT NULL AND NOT ${emptyValueCondition(c, dialect)}`,
+        message
+      ),
+      clear,
+    ];
   }
   throw unsupportedDialect({
     type: "change_column_type",
@@ -288,6 +326,8 @@ function referenceScalarStatements(
   dialect: SupportedDialect
 ): string[] {
   if (dialect === "postgresql") {
+    // No clearing step: the expression already reads an empty list and JSON null as NULL, and a
+    // `jsonb` column cannot hold an empty string.
     return [
       `ALTER TABLE ${quoteIdent(op.tableName, dialect)} ` +
         `ALTER COLUMN ${quoteIdent(op.columnName, dialect)} ` +
@@ -306,6 +346,8 @@ function referenceScalarStatements(
     return [
       `ALTER TABLE ${table} ADD CONSTRAINT ${guard} CHECK (${c} IS NULL OR JSON_LENGTH(${c}) <= 1)`,
       `ALTER TABLE ${table} DROP CHECK ${guard}`,
+      // JSON null would be unquoted below into the text `null`, which reads as an id.
+      clearEmptyValuesStatement(op.tableName, op.columnName, dialect),
       `ALTER TABLE ${table} MODIFY COLUMN ${c} text ${nullability}`,
       `UPDATE ${table} SET ${c} = CASE ` +
         `WHEN JSON_TYPE(${c}) <> 'ARRAY' THEN JSON_UNQUOTE(${c}) ` +
@@ -326,6 +368,8 @@ function referenceScalarStatements(
         `Column ${op.tableName}.${op.columnName} cannot change to one related entry while a row ` +
           `holds more than one. Remove the extra entries first, or keep it holding many.`
       ),
+      // An empty string and JSON null pass the rewrite below unchanged and would read as an id.
+      clearEmptyValuesStatement(op.tableName, op.columnName, dialect),
       sqliteReferenceScalarRewrite(op.tableName, op.columnName),
     ];
   }
