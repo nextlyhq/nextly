@@ -20,6 +20,12 @@ import type { Logger } from "../../shared/types";
 const REPORT_PAGE = 500;
 /** How often a subscriber that stays stuck is warned about again. */
 const WARN_INTERVAL_MS = 60 * 60 * 1000;
+/**
+ * How long past due a held delivery whose subscriber is registered again may
+ * wait before it is warned about: it is due to run, but a lasting backlog can
+ * keep every pass from reaching it.
+ */
+const OVERDUE_MS = 60 * 60 * 1000;
 /** The statuses that need an operator. */
 const STUCK = { column: "status", op: "IN" as const, value: ["held", "failed"] };
 
@@ -75,17 +81,25 @@ export async function reportStuckDeliveries(
   }
 }
 
-/** What a subscriber has stuck: deliveries held for it, out of attempts, or both. */
+/**
+ * What a subscriber has stuck: deliveries held for it while it is not
+ * registered, held over an hour past due though it is, out of attempts, or
+ * any of these.
+ */
 interface Stuck {
   subscriber: string;
   held: boolean;
+  overdue: boolean;
   failed: boolean;
 }
 
 /** The warning for one stuck subscriber. */
-function warningOf({ subscriber, held, failed }: Stuck): string {
+function warningOf({ subscriber, held, overdue, failed }: Stuck): string {
   const what = [
     ...(held ? ["some are held for a subscriber that is not registered"] : []),
+    ...(overdue
+      ? ["some are held and have waited over an hour past due to run"]
+      : []),
     ...(failed ? ["some ran out of attempts"] : []),
   ].join(", and ");
   return `Durable event deliveries to "${subscriber}" are stuck: ${what}. List them with \`nextly events report\`; give them up with \`nextly events abandon --subscriber ${subscriber}\`.`;
@@ -99,27 +113,78 @@ interface StuckRow {
 }
 
 /**
- * What each subscriber has stuck, by its key, leaving out a delivery held for
- * a subscriber that is registered again: the pass runs it.
+ * What each subscriber has stuck, by its key. A delivery held for a
+ * subscriber that is registered again is left out, as a pass will run it,
+ * unless it has waited over an hour past due (`overdue`): then a backlog is
+ * keeping every pass from reaching it.
  */
 function stuckBySubscriber(
   rows: readonly StuckRow[],
-  isRegistered: (subscriber: string) => boolean
+  isRegistered: (subscriber: string) => boolean,
+  overdue: ReadonlySet<string>
 ): Map<string, Stuck> {
   const stuck = new Map<string, Stuck>();
   for (const row of rows) {
-    const held = row.status === "held";
-    if (held && isRegistered(row.subscriber)) continue;
+    const kind = kindOf(row, isRegistered, overdue);
+    if (kind === undefined) continue;
     const entry = stuck.get(row.subscriberKey) ?? {
       subscriber: row.subscriber,
       held: false,
+      overdue: false,
       failed: false,
     };
-    entry.held ||= held;
-    entry.failed ||= !held;
+    entry[kind] = true;
     stuck.set(row.subscriberKey, entry);
   }
   return stuck;
+}
+
+/**
+ * Why one stuck row is warned about, or undefined when it is not: a held
+ * delivery whose subscriber is back and not yet overdue will be run.
+ */
+function kindOf(
+  row: StuckRow,
+  isRegistered: (subscriber: string) => boolean,
+  overdue: ReadonlySet<string>
+): "held" | "overdue" | "failed" | undefined {
+  if (row.status !== "held") return "failed";
+  if (!isRegistered(row.subscriber)) return "held";
+  return overdue.has(row.subscriberKey) ? "overdue" : undefined;
+}
+
+/**
+ * The subscribers with a held delivery over an hour past due, read only when
+ * some held delivery's subscriber is registered again.
+ */
+async function overdueHeld(
+  adapter: Pick<DrizzleAdapter, "select">,
+  rows: readonly StuckRow[],
+  isRegistered: (subscriber: string) => boolean,
+  now: Date
+): Promise<ReadonlySet<string>> {
+  const anyBack = rows.some(
+    row => row.status === "held" && isRegistered(row.subscriber)
+  );
+  if (!anyBack) return new Set();
+  const late = await adapter.select<{ subscriberKey: string }>(
+    PLUGIN_EVENT_DELIVERIES_TABLE,
+    {
+      columns: ["subscriberKey"],
+      where: {
+        and: [
+          { column: "status", op: "=", value: "held" },
+          {
+            column: "nextAttemptAt",
+            op: "<",
+            value: new Date(now.getTime() - OVERDUE_MS),
+          },
+        ],
+      },
+      distinct: true,
+    }
+  );
+  return new Set(late.map(row => row.subscriberKey));
 }
 
 /**
@@ -128,9 +193,9 @@ function stuckBySubscriber(
  * memory, so a restart warns again, which is as it should be.
  *
  * One read a pass, however many subscribers are stuck: the distinct
- * subscribers and statuses, with no count of each (the report has those).
- * A delivery held for a subscriber that is registered again is left out: the
- * pass runs it. A logger that throws fails nothing, and the subscriber is
+ * subscribers and statuses, with no count of each (the report has those),
+ * and a second only when a held delivery's subscriber is registered again. Such
+ * a delivery is left out until it has waited over an hour past due. A logger that throws fails nothing, and the subscriber is
  * warned about again on the next pass.
  */
 export function createStuckWarnings(logger: Pick<Logger, "warn">): {
@@ -150,6 +215,7 @@ export function createStuckWarnings(logger: Pick<Logger, "warn">): {
       logger.warn(warningOf(entry), {
         subscriber: entry.subscriber,
         held: entry.held,
+        overdue: entry.overdue,
         failed: entry.failed,
       });
       // Only once the warning is written.
@@ -170,7 +236,11 @@ export function createStuckWarnings(logger: Pick<Logger, "warn">): {
           distinct: true,
         }
       );
-      const stuck = stuckBySubscriber(rows, isRegistered);
+      const stuck = stuckBySubscriber(
+        rows,
+        isRegistered,
+        await overdueHeld(adapter, rows, isRegistered, now)
+      );
       // A subscriber no longer stuck is forgotten: stuck again later, it is
       // warned about at once.
       for (const key of warnedAt.keys()) {

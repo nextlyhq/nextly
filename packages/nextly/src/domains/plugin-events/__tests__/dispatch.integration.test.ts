@@ -588,6 +588,71 @@ describe.each(getConfiguredTestDialects())(
       expect(warned[0]).toContain("ran out of attempts");
     });
 
+    it("a subscriber's open deliveries are all abandoned, a page at a time", async () => {
+      const { first, events, dispatch, deliveries } = await boot();
+      const subscribers = createDurableSubscribers();
+      subscribers.register("@test/email", PAID, "receipt", () => {
+        throw new Error("the address is refused");
+      });
+      for (let i = 0; i < 5; i++) {
+        await events.record(PAID, { order: `o-bulk-${i}` });
+      }
+      await dispatch(subscribers, { maxAttempts: 1 });
+      const selector = { subscriber: "@test/email:receipt" };
+      expect(
+        await abandonDurableDeliveries(first, selector, {
+          now,
+          dryRun: true,
+          pageSize: 2,
+        })
+      ).toHaveLength(5);
+      expect(
+        await abandonDurableDeliveries(first, selector, { now, pageSize: 2 })
+      ).toHaveLength(5);
+      const statuses = (await deliveries()).map(row => row.status);
+      expect(statuses).toEqual(Array(5).fill("abandoned"));
+    });
+
+    it("a returned subscriber's held delivery is warned about once it has waited an hour unrun", async () => {
+      const { first, events, dispatch } = await boot();
+      const before = createDurableSubscribers();
+      before.register("@test/loyalty", PAID, "award", () => {
+        throw new Error("the points service is down");
+      });
+      await events.record(PAID, { order: "o-18" });
+      await dispatch(before);
+      clock = new Date(T0.getTime() + 2 * SECOND);
+      expect(await dispatch(createDurableSubscribers())).toMatchObject({
+        held: 1,
+      });
+      // Due again a quarter of an hour on. Its subscriber is back, but every
+      // pass runs out of time before it reaches the delivery.
+      const back = createDurableSubscribers();
+      back.register("@test/loyalty", PAID, "award", () => {});
+      const warned: string[] = [];
+      const warnings = createStuckWarnings({
+        warn: message => {
+          warned.push(message);
+        },
+      });
+      const outOfTime = () =>
+        dispatchDurableEvents({
+          adapter: first,
+          subscribers: back,
+          now,
+          deadline: Date.now() - 1,
+          warnings,
+        });
+      clock = new Date(T0.getTime() + 30 * 60 * SECOND);
+      await outOfTime();
+      expect(warned).toEqual([]);
+      clock = new Date(T0.getTime() + 80 * 60 * SECOND);
+      await outOfTime();
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toContain('"@test/loyalty:award"');
+      expect(warned[0]).toContain("over an hour");
+    });
+
     it("a held delivery whose subscriber is back is not warned about", async () => {
       const { events, dispatch } = await boot();
       const before = createDurableSubscribers();
