@@ -215,7 +215,7 @@ function formDefaultValue(
   field: FieldSettingsField,
   formDefault: unknown
 ): unknown {
-  const picked = field.defaultValue;
+  const picked = dateOnly(field);
   if (picked === undefined || picked === null) {
     // A list kept for a dropdown that now takes one choice: its one value, or
     // none, since the form checks a one-choice answer as a single value.
@@ -231,6 +231,23 @@ function formDefaultValue(
   return field.hasMany === true && typeof picked === "string"
     ? [picked]
     : picked;
+}
+
+/**
+ * The panel's default, with a date's in the form's own shape. The panel's
+ * date editor stores the chosen day as that day's UTC midnight
+ * (`2026-01-01T00:00:00.000Z`); a form's date is the day alone, as its date
+ * input shows it and a visitor's answer arrives, so the day is kept.
+ */
+function dateOnly(
+  field: FieldSettingsField
+): FieldSettingsField["defaultValue"] {
+  const value = field.defaultValue;
+  return field.type === "date" &&
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T/.test(value)
+    ? value.slice(0, 10)
+    : value;
 }
 
 /**

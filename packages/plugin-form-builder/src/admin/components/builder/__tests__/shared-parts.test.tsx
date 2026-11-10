@@ -435,6 +435,24 @@ describe("the Form Builder on the shared picker and panel", () => {
     expect(topic).not.toHaveProperty("defaultValue");
   });
 
+  it("does not count a field added under a name deleted mid-save as stored", async () => {
+    let finish!: () => void;
+    const { user } = view({}, [], () => new Promise<void>(r => (finish = r)));
+    await addPhone(user, "Mobile");
+    await save(user);
+    // While the save is pending: delete Email, then add another "Email".
+    await user.click(screen.getByRole("button", { name: "Actions for Email" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    await addPhone(user, "Email");
+    finish();
+
+    // Once the save has landed (Mobile reads as stored), the new Email does not.
+    await open(user, "Mobile");
+    expect(await screen.findByText(SAVED_TYPE_REASON)).toBeInTheDocument();
+    await open(user, "Email");
+    expect(screen.queryByText(SAVED_TYPE_REASON)).toBeNull();
+  });
+
   it("clears a failed host save's message once a retry succeeds", async () => {
     let attempt = 0;
     const { user } = view({}, [], () => {

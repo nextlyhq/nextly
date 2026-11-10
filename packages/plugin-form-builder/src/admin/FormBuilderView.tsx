@@ -191,6 +191,7 @@ function FormBuilderViewInner({
     seedNotifications,
     updateFormData,
     markAsSaved,
+    beginSave,
     markFieldsSaved,
   } = useFieldBookkeeping();
 
@@ -365,6 +366,7 @@ function FormBuilderViewInner({
       notifications,
     };
 
+    beginSave();
     if (onSave) {
       // The host's save. A field it stored is stored like one the builder
       // saved itself, so its type is fixed; the form's unsaved state is the
@@ -443,6 +445,7 @@ function FormBuilderViewInner({
     entryId,
     queryClient,
     markAsSaved,
+    beginSave,
     markFieldsSaved,
     // Read inside, so it belongs here. Without it the callback closes over the
     // claim as it stood when the form mounted, and a colleague taking the

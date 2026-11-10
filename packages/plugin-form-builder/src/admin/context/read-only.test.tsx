@@ -63,7 +63,13 @@ const CHANGES_THE_DOCUMENT: Record<
 };
 
 /** The actions that are navigation or bookkeeping rather than an edit. */
-const READS = ["selectField", "setActiveTab", "markAsSaved", "markFieldsSaved"];
+const READS = [
+  "selectField",
+  "setActiveTab",
+  "markAsSaved",
+  "beginSave",
+  "markFieldsSaved",
+];
 
 function mount(readOnly: boolean) {
   let ctx!: FormBuilderContextValue;

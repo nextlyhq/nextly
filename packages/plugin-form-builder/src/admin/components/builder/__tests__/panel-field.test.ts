@@ -283,4 +283,12 @@ describe("the panel's spelling of a form's settings", () => {
       "defaultValue"
     );
   });
+
+  it("stores a date default as the day alone", () => {
+    const date = toPanelField(EVERY_TYPE[10]!, "f-10");
+    // The panel's date editor writes the chosen day as its UTC midnight.
+    expect(
+      fromPanelField({ ...date, defaultValue: "2026-03-04T00:00:00.000Z" })
+    ).toMatchObject({ defaultValue: "2026-03-04" });
+  });
 });

@@ -244,4 +244,19 @@ describe("moving references with a renamed field", () => {
       { field: "email_2", comparison: "isNotEmpty" },
     ]);
   });
+
+  it("renames in a stored notification that predates the cc and bcc lists", () => {
+    const { cc: _cc, bcc: _bcc, ...older } = notification;
+    const [next] = renameInNotifications(
+      [older as FormNotification],
+      "email",
+      "work"
+    );
+    expect(next).toEqual({
+      ...older,
+      to: "{{work}}",
+      replyTo: "{{work}}",
+      condition: { field: "work", comparison: "isNotEmpty" },
+    });
+  });
 });

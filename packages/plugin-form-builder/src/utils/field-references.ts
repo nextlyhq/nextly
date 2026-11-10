@@ -151,12 +151,15 @@ export function renameInNotifications(
   const rename = (template: string): string =>
     template.replace(pattern, `{{${to}}}`);
   return notifications.map(notification => {
+    // Stored notifications can predate the cc and bcc lists, so each part is
+    // renamed only where it is there.
+    const { cc, bcc } = notification as Partial<FormNotification>;
     const next: FormNotification = {
       ...notification,
       to: rename(notification.to),
-      cc: notification.cc.map(rename),
-      bcc: notification.bcc.map(rename),
     };
+    if (cc) next.cc = cc.map(rename);
+    if (bcc) next.bcc = bcc.map(rename);
     if (notification.replyTo !== undefined) {
       next.replyTo = rename(notification.replyTo);
     }

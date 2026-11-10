@@ -19,6 +19,7 @@ import {
   useContext,
   useCallback,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -146,10 +147,13 @@ export interface FieldBookkeeping {
     next: AnyFormField,
     referencesFrom?: string
   ) => void;
+  /** Called as a save begins, before anything is sent. */
+  beginSave: () => void;
   /**
    * Records the fields a save stored, by the names they were saved under.
    * Given the names the save was handed, so an edit made while it was under
-   * way is not counted as stored.
+   * way is not counted as stored; and a name deleted or renamed away since
+   * the save began is not either, since a field under it now is another one.
    */
   markFieldsSaved: (names: readonly string[]) => void;
   /** Whether a colleague holds the form, so nothing in it may change. */
@@ -199,6 +203,7 @@ const READS_ONLY = new Set([
   "selectField",
   "setActiveTab",
   "markAsSaved",
+  "beginSave",
   "markFieldsSaved",
 ]);
 
@@ -383,6 +388,10 @@ export function FormBuilderProvider({
     "builder" | "preview" | "settings" | "notifications"
   >("builder");
   const [isDirty, setIsDirty] = useState(false);
+  // The names that stopped meaning the field they named (deleted, or renamed
+  // away) since the save under way began.
+  const vacatedRef = useRef(new Set<string>());
+
   const [savedFieldNames, setSavedFieldNames] = useState<ReadonlySet<string>>(
     () => new Set((initialData?.fields ?? []).map(field => field.name))
   );
@@ -431,6 +440,7 @@ export function FormBuilderProvider({
    */
   const followRename = useCallback((from: string, to: string | undefined) => {
     if (to === undefined || to === from) return;
+    vacatedRef.current.add(from);
     setSelectedFieldId(to);
     setSavedFieldNames(prev => {
       if (!prev.has(from)) return prev;
@@ -478,6 +488,7 @@ export function FormBuilderProvider({
   const deleteField = useCallback(
     (fieldName: string) => {
       setFieldsState(prev => prev.filter(f => f.name !== fieldName));
+      vacatedRef.current.add(fieldName);
       // The name no longer stands for a stored field: a new field given it
       // later is a new field, with its type and name still its own to choose.
       setSavedFieldNames(prev => {
@@ -613,9 +624,14 @@ export function FormBuilderProvider({
     setIsDirty(false);
   }, []);
 
+  const beginSave = useCallback(() => {
+    vacatedRef.current = new Set();
+  }, []);
+
   const markFieldsSaved = useCallback((names: readonly string[]) => {
     // What was saved is what the stored form now holds.
-    setSavedFieldNames(new Set(names));
+    const vacated = vacatedRef.current;
+    setSavedFieldNames(new Set(names.filter(name => !vacated.has(name))));
   }, []);
 
   // Memoized context value
@@ -648,6 +664,7 @@ export function FormBuilderProvider({
       deleteNotification,
       seedNotifications,
       markAsSaved,
+      beginSave,
       markFieldsSaved,
       readOnly,
     }),
@@ -676,6 +693,7 @@ export function FormBuilderProvider({
       deleteNotification,
       seedNotifications,
       markAsSaved,
+      beginSave,
       markFieldsSaved,
       readOnly,
     ]
