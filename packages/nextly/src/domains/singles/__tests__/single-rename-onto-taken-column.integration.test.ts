@@ -120,15 +120,16 @@ describeEachDialect(
     }
 
     /**
-     * How many archived values `field` of `hero` has. A table that is not there holds none: the
-     * archive is created by the first write to it.
+     * Every value archived for `hero`, by field and language. A table that is not there holds
+     * none: the archive is created by the first write to it.
      */
-    async function archivedFor(field: string): Promise<number> {
-      if (!(await current.adapter.tableExists("nextly_i18n_archive"))) return 0;
-      const rows = await query<{ n: number | string }>(
-        `SELECT COUNT(*) AS n FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = 'hero' AND ${q("field")} = '${field}'`
+    async function archived(): Promise<string[]> {
+      if (!(await current.adapter.tableExists("nextly_i18n_archive")))
+        return [];
+      const rows = await query<{ field: string; locale: string }>(
+        `SELECT ${q("field")} AS field, ${q("locale")} AS locale FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = 'hero' ORDER BY ${q("field")}, ${q("locale")}`
       );
-      return Number(rows[0]?.n ?? 0);
+      return rows.map(row => `${row.field}/${row.locale}`);
     }
 
     /** `heading`'s value on the main table and in each language of the companion. */
@@ -255,7 +256,7 @@ describeEachDialect(
       const refused = await refusal(
         save(
           [
-            { name: "headline", type: "text" },
+            { name: "headline", type: "text", localized: false },
             { name: "body", type: "text" },
           ],
           { localized: true }
@@ -273,12 +274,32 @@ describeEachDialect(
         },
       });
       expect(await registeredFieldNames()).toEqual(["heading", "body"]);
-      expect(await archivedFor("headline")).toBe(0);
+      expect(await archived()).toEqual([]);
       const [leftover] = await query<{ headline: unknown }>(
         `SELECT ${q("headline")} AS headline FROM ${q("single_hero")}`
       );
       expect(leftover?.headline ?? null).toBeNull();
       expect((await storedHeadings()).companion).toEqual(companionBefore);
+    });
+
+    // The positive control for the archive readings above: with nothing in the way, the same save
+    // goes through and archives the second language's value, so an empty archive after a refused
+    // save is the refusal's doing and not a reading that finds nothing.
+    it("archives the other languages of a translated field renamed as it leaves translation, with nothing in the way", async () => {
+      await hero(true);
+
+      await save(
+        [
+          { name: "headline", type: "text", localized: false },
+          { name: "body", type: "text" },
+        ],
+        { localized: true }
+      );
+
+      expect(await registeredFieldNames()).toEqual(["headline", "body"]);
+      expect(await archived()).toEqual(
+        expect.arrayContaining([expect.stringMatching(/\/es$/)])
+      );
     });
 
     it("refuses a translated field renamed as it leaves translation, onto a column its companion has, before archiving", async () => {
@@ -290,7 +311,7 @@ describeEachDialect(
       const refused = await refusal(
         save(
           [
-            { name: "headline", type: "text" },
+            { name: "headline", type: "text", localized: false },
             { name: "body", type: "text" },
           ],
           { localized: true }
@@ -308,7 +329,7 @@ describeEachDialect(
         },
       });
       expect(await registeredFieldNames()).toEqual(["heading", "body"]);
-      expect(await archivedFor("headline")).toBe(0);
+      expect(await archived()).toEqual([]);
       expect(await headingRead(true)).toBe("Kept");
     });
 
