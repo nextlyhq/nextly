@@ -76,6 +76,7 @@ import {
   validateCrossPluginRelations,
 } from "../../plugins/schema/validate-relations";
 import { assertSettingsPermissionsOwned } from "../../plugins/settings-permission";
+import { assertFieldTypeSettings } from "../../plugins/validate-field-type-settings";
 import {
   CONFIG_FILE_NAMES,
   CONFIG_SEARCH_DIRS,
@@ -711,6 +712,9 @@ async function loadConfigInternal(
       // storage primitive when reading ui-schema.json — parity with runtime boot
       // (di/register.ts). Clear-and-rebuild; ALL plugins (incl. disabled, per
       // D49) since field types are declarative + schema-affecting.
+      // Their declared settings are judged first, as the boot judges them, so
+      // a malformed list refuses the CLI and a development reload too.
+      assertFieldTypeSettings(transformedPlugins);
       for (const fieldTypePlugin of transformedPlugins) {
         for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
           registerFieldType(

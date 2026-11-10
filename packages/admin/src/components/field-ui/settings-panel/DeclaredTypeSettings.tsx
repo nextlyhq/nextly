@@ -72,14 +72,24 @@ function DeclaredSetting({
     switch (setting.control) {
       case "boolean":
         return (
-          <Switch
-            id={id}
-            aria-label={setting.label}
-            aria-describedby={describedBy}
-            checked={stored === true}
-            disabled={readOnly}
-            onCheckedChange={set}
-          />
+          <div className="flex items-center gap-2">
+            <Switch
+              id={id}
+              aria-label={setting.label}
+              aria-describedby={describedBy}
+              checked={stored === true}
+              disabled={readOnly}
+              onCheckedChange={set}
+            />
+            {/* Off is stored as false, which the plugin can tell from never
+                set; Clear takes it back to unset. */}
+            {stored !== undefined && !readOnly && (
+              <ClearSetting
+                label={setting.label}
+                onClear={() => set(undefined)}
+              />
+            )}
+          </div>
         );
       case "number":
         return (
@@ -120,15 +130,10 @@ function DeclaredSetting({
             {/* A choice left unset is the plugin's default, so a chosen one can
               be taken back to that rather than only swapped for another. */}
             {typeof stored === "string" && !readOnly && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-label={`Clear ${setting.label}`}
-                onClick={() => set(undefined)}
-              >
-                Clear
-              </Button>
+              <ClearSetting
+                label={setting.label}
+                onClear={() => set(undefined)}
+              />
             )}
           </div>
         );
@@ -229,6 +234,30 @@ function NumberSettingInput({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Takes a set value back to unset, the plugin's default. Shared by the
+ * controls whose own input cannot express "unset" once a value is chosen.
+ */
+function ClearSetting({
+  label,
+  onClear,
+}: {
+  label: string;
+  onClear: () => void;
+}): JSX.Element {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-label={`Clear ${label}`}
+      onClick={onClear}
+    >
+      Clear
+    </Button>
   );
 }
 

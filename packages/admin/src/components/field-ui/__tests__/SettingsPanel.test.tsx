@@ -689,6 +689,39 @@ describe("FieldSettingsPanel", () => {
       }
     });
 
+    it("takes a switched setting back to unset, not only to off", async () => {
+      const user = userEvent.setup();
+      branding.current = withSettings([
+        { key: "half", label: "Half stars", control: "boolean" },
+      ]);
+      try {
+        let current = rating;
+        render(
+          <Host
+            initial={rating}
+            onChange={next => {
+              current = next;
+            }}
+          />
+        );
+        expect(
+          screen.queryByRole("button", { name: "Clear Half stars" })
+        ).toBeNull();
+        const half = screen.getByRole("switch", { name: "Half stars" });
+        await user.click(half);
+        await user.click(half);
+        // Off is a value the plugin can tell from never set.
+        expect(current.pluginOptions?.half).toBe(false);
+        await user.click(
+          screen.getByRole("button", { name: "Clear Half stars" })
+        );
+        expect(current).not.toHaveProperty("pluginOptions");
+        expect(countDirtyFields([rating], [current])).toBe(0);
+      } finally {
+        branding.current = {};
+      }
+    });
+
     it("says a number it cannot read is not saved, and shows the saved one again on leaving", async () => {
       const user = userEvent.setup();
       branding.current = withSettings([
