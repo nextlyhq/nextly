@@ -42,6 +42,8 @@ const CHANGES_THE_DOCUMENT: Record<
   setFields: c => c.setFields([FIELD]),
   addField: c => c.addField(FIELD),
   updateField: c => c.updateField("email", { label: "Changed" }),
+  replaceField: c =>
+    c.replaceField("email", { type: "email", name: "email", label: "Changed" }),
   deleteField: c => c.deleteField("email"),
   moveField: c => c.moveField(0, 1),
   duplicateField: c => c.duplicateField("email"),

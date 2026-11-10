@@ -61,6 +61,12 @@ export interface FormBuilderState {
   activeTab: "builder" | "preview" | "settings" | "notifications";
   /** Whether form has unsaved changes */
   isDirty: boolean;
+  /**
+   * The names of the fields the stored form holds, as of the last load or
+   * save. A field named here has answers stored under its name and type, so
+   * its type is fixed; a renamed one keeps its place here under its new name.
+   */
+  savedFieldNames: ReadonlySet<string>;
   /** Form metadata */
   formData: {
     id?: string;
@@ -84,6 +90,11 @@ export interface FormBuilderActions {
   addField: (field: AnyFormField, index?: number) => void;
   /** Update a field by name */
   updateField: (fieldName: string, updates: Partial<AnyFormField>) => void;
+  /**
+   * Replace a field by name with the whole of its next definition, so a
+   * setting the next one leaves out is gone rather than kept from before.
+   */
+  replaceField: (fieldName: string, next: AnyFormField) => void;
   /** Delete a field by name */
   deleteField: (fieldName: string) => void;
   /** Move a field from one index to another */
@@ -337,6 +348,9 @@ export function FormBuilderProvider({
     "builder" | "preview" | "settings" | "notifications"
   >("builder");
   const [isDirty, setIsDirty] = useState(false);
+  const [savedFieldNames, setSavedFieldNames] = useState<ReadonlySet<string>>(
+    () => new Set((initialData?.fields ?? []).map(field => field.name))
+  );
   const [formData, setFormData] = useState<FormBuilderState["formData"]>({
     id: initialData?.id,
     name: initialData?.name || "",
@@ -373,23 +387,43 @@ export function FormBuilderProvider({
     setIsDirty(true);
   }, []);
 
+  /**
+   * What a field's rename moves with it. The selection follows it, so the
+   * open settings stay open — including when the name passes through the
+   * empty string, where a rename that clears the input first goes: skipping it
+   * there would stop the renamed field matching its own selection and close
+   * its settings mid-rename. And a saved field stays saved under its new name.
+   */
+  const followRename = useCallback((from: string, to: string | undefined) => {
+    if (to === undefined || to === from) return;
+    setSelectedFieldId(to);
+    setSavedFieldNames(prev => {
+      if (!prev.has(from)) return prev;
+      const next = new Set(prev);
+      next.delete(from);
+      next.add(to);
+      return next;
+    });
+  }, []);
+
   const updateField = useCallback(
     (fieldName: string, updates: Partial<AnyFormField>) => {
       setFieldsState(prev =>
         prev.map(f => (f.name === fieldName ? { ...f, ...updates } : f))
       );
-      // If the field name is being changed, also update selectedFieldId.
-      // This prevents the sidebar from disappearing when renaming a field —
-      // including when the change is TO the empty string, which is where a
-      // rename that clears the input first passes through: skipping it there
-      // would stop the renamed field matching its own selection, collapsing
-      // the card (and unmounting the editor) mid-rename.
-      if (updates.name !== undefined && updates.name !== fieldName) {
-        setSelectedFieldId(updates.name);
-      }
+      followRename(fieldName, updates.name);
       setIsDirty(true);
     },
-    []
+    [followRename]
+  );
+
+  const replaceField = useCallback(
+    (fieldName: string, next: AnyFormField) => {
+      setFieldsState(prev => prev.map(f => (f.name === fieldName ? next : f)));
+      followRename(fieldName, next.name);
+      setIsDirty(true);
+    },
+    [followRename]
   );
 
   const deleteField = useCallback(
@@ -520,7 +554,9 @@ export function FormBuilderProvider({
 
   const markAsSaved = useCallback(() => {
     setIsDirty(false);
-  }, []);
+    // What was saved is what the stored form now holds.
+    setSavedFieldNames(new Set(fields.map(field => field.name)));
+  }, [fields]);
 
   // Memoized context value
   const value = useMemo<FormBuilderContextValue>(
@@ -530,6 +566,7 @@ export function FormBuilderProvider({
       selectedFieldId,
       activeTab,
       isDirty,
+      savedFieldNames,
       formData,
       settings,
       notifications,
@@ -537,6 +574,7 @@ export function FormBuilderProvider({
       setFields,
       addField,
       updateField,
+      replaceField,
       deleteField,
       moveField,
       duplicateField,
@@ -556,12 +594,14 @@ export function FormBuilderProvider({
       selectedFieldId,
       activeTab,
       isDirty,
+      savedFieldNames,
       formData,
       settings,
       notifications,
       setFields,
       addField,
       updateField,
+      replaceField,
       deleteField,
       moveField,
       duplicateField,

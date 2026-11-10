@@ -12,7 +12,10 @@
 
 "use client";
 
-import type { DocumentLockGates } from "@nextlyhq/plugin-sdk/admin";
+import type {
+  DocumentLockGates,
+  FieldPickerChoice,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
   Card,
@@ -35,7 +38,7 @@ import type { FormFieldCatalogType } from "nextly/field-catalog";
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 import { type JSX, useCallback, useEffect, useRef, useState } from "react";
 
-import type { FormField, FormFieldTypeId } from "../types";
+import type { AnyFormField, FormField } from "../types";
 
 import { FieldCards } from "./components/builder/FieldCards";
 import {
@@ -53,6 +56,7 @@ import {
   useFormBuilder,
   createFieldFromType,
   createNotification,
+  generateFieldName,
   type FormNotification,
 } from "./context/FormBuilderContext";
 
@@ -298,12 +302,20 @@ function FormBuilderViewInner({
     ]);
   }, [isCreating, notificationDefaults, seedNotifications]);
 
+  // A field from the picker: the type's defaults, the label the person typed,
+  // and the name it gives, made unique on this form (a second "Email" becomes
+  // `email_2`). A label that gives no name falls back to one from the type.
   const handleAddField = useCallback(
-    (type: FormFieldTypeId) => {
-      const newField = createFieldFromType(
-        type,
-        fields.map(f => f.name)
-      );
+    (choice: FieldPickerChoice) => {
+      const names = fields.map(f => f.name);
+      const fromType = createFieldFromType(choice.type, names);
+      const newField: AnyFormField = {
+        ...fromType,
+        label: choice.label.trim() || fromType.label,
+        name: choice.name
+          ? generateFieldName(choice.name, names)
+          : fromType.name,
+      };
       addField(newField);
       selectField(newField.name);
     },
@@ -639,6 +651,7 @@ function FormBuilderViewInner({
           enabledTypes={enabledTypes}
           disabledFieldTypes={disabledFieldTypes}
           onAddField={handleAddField}
+          readOnly={documentLock?.readOnly === true}
         />
       )}
 
