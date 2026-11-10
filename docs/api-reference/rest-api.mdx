@@ -173,8 +173,11 @@ When an error carries `error.data.retryAfterSeconds` the runtime also sets `Retr
 | `403`  | `FORBIDDEN`                                 | Authenticated but lacks permission.                                                                                                                                                                                                                                                 |
 | `403`  | `EMAIL_NOT_VERIFIED`                        | Login with the correct password for an address not yet verified.                                                                                                                                                                                                                    |
 | `403`  | `API_KEY_ROLE_ABOVE_CREATOR`                | Creating an API key (or its summary) with a role that allows more than you can.                                                                                                                                                                                                     |
+| `403`  | `ACTION_NOT_AVAILABLE`                      | A plugin's action asked of an entry its rule does not hold for, or outside its collections.                                                                                                                                                                                         |
 | `404`  | `NOT_FOUND`                                 | Resource does not exist.                                                                                                                                                                                                                                                            |
-| `409`  | `CONFLICT`, `DUPLICATE`                     | Concurrent edit, duplicate email, etc.                                                                                                                                                                                                                                              |
+| `409`  | `STALE_VERSION`                             | The document changed since the `_rev` you sent. See [Versions and conflicts](#versions-and-conflicts).                                                                                                                                                                              |
+| `409`  | `CONFLICT`, `DUPLICATE`                     | A state that refuses the request, a duplicate email, etc.                                                                                                                                                                                                                           |
+| `428`  | `VERSION_REQUIRED`                          | An update sent neither the `_rev` from your last read nor `"_overwrite": true`. See [Versions and conflicts](#versions-and-conflicts).|
 | `413`  | `PAYLOAD_TOO_LARGE`                         | Upload bigger than configured cap.                                                                                                                                                                                                                                                  |
 | `415`  | `UNSUPPORTED_MEDIA_TYPE`                    | Wrong `Content-Type`.                                                                                                                                                                                                                                                               |
 | `422`  | `INVALID_INPUT`                             | Semantic validation failed.                                                                                                                                                                                                                                                         |
@@ -182,6 +185,142 @@ When an error carries `error.data.retryAfterSeconds` the runtime also sets `Retr
 | `500`  | `INTERNAL_ERROR`, `DATABASE_ERROR`          | Server-side failure.                                                                                                                                                                                                                                                                |
 | `503`  | `SERVICE_UNAVAILABLE`                       | Health probe / dependency outage.                                                                                                                                                                                                                                                   |
 | `503`  | `DATABASE_BUSY`                             | The request waited `pool.connectionTimeoutMs` for a database connection and none was free, or a SQLite file stayed locked past `busyTimeout`. The statement or transaction that waited did not run; anything the request committed before it stays committed. `Retry-After` is set. |
+
+## Versions and conflicts
+
+Every entry and Single carries a version, returned as `_rev`. Send it back with an update, and
+the update is applied only if nobody has saved the document since you read it. Otherwise it is
+refused, so a save never silently replaces someone else's.
+
+### The version, `_rev`
+
+`_rev` is on every read of an entry or a Single (by id, in a list, in any language) and on the
+answer to every create and update. Treat it as opaque: send back exactly what you read, and don't
+parse or compare it. Keep it with your copy of the document until you write, however long that
+is, and replace it with the one each save answers. Reads never change it, every save does, and
+two saves in the same second get different versions.
+
+It covers the fields every language shares and, for a read in one language, that language: a
+read in Spanish gives something like `7.es:3`, and a read of every language (`locale=all`) names
+each one. It is not a version number in the document's [history](/docs/versions).
+
+### Sending it back
+
+Put `_rev` in the update's body, beside the values you change:
+
+```bash
+curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries/abc-123" \
+  -H "Authorization: Bearer $NEXTLY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Hello again","_rev":"7"}'
+```
+
+The answer carries the new `_rev`, which the next save sends. Code that reads a document once and
+then saves it several times takes `_rev` from each save's answer.
+
+Every update must say which version it changes. One that sends neither `_rev` nor
+`"_overwrite": true` (see [Choosing to overwrite](#choosing-to-overwrite)) is refused, and nothing
+is written:
+
+```json
+{
+  "error": {
+    "code": "VERSION_REQUIRED",
+    "message": "This update must say which version of the document it changes. Send back the `_rev` from your last read of it, or set `_overwrite: true` to replace whatever is stored.",
+    "data": { "versionKey": "_rev", "overwriteKey": "_overwrite" }
+  }
+}
+```
+
+The status is `428`. Creates, deletes and autosave send neither.
+
+A save in one language is judged on that language and on the shared fields, never on another
+language's translations. A version read in every language is accepted for a save of one of them.
+A `_rev` that isn't in the form a read returns, or that names no version of the language you save,
+is a `400 VALIDATION_ERROR`. One in that form but above the document's current version is answered
+as a conflict, `409 STALE_VERSION`.
+
+### When the document changed
+
+A save from an out-of-date version is refused with `409 STALE_VERSION`, and nothing is written:
+no history, no hook after the change, no webhook. The document lock stays as it was.
+
+```json
+{
+  "error": {
+    "code": "STALE_VERSION",
+    "message": "This document changed since the version you gave. Its current version is 8.",
+    "requestId": "req_nlwxzwtnlvqsu3lc",
+    "data": {
+      "currentVersion": "8",
+      "changedBy": { "kind": "person", "name": "Ana Ruiz" },
+      "changedAt": "2026-11-04T10:42:00.000Z",
+      "historyVersion": { "version": 12, "locale": null }
+    }
+  }
+}
+```
+
+- `currentVersion` is always there, spelled for the languages your save is judged on.
+- `changedBy` and `changedAt` are there only when you may read the document in those languages,
+  as a read of it would decide, read rules included. Anonymous visitors never get them.
+  - `kind` is `person`, `apiKey`, `release`, `agent`, `principal` or `system`.
+  - A person is named by the name on their account, never by email, and `name` is `null` once
+    the account is gone.
+  - A plugin-defined person (`principal`) is given by `principalKind`, such as `member`, never by
+    name.
+  - A document not saved since its versions began has no recorded changer, so neither field is
+    there.
+- `historyVersion` is there when the document keeps [history](/docs/versions) and you may read
+  it: the newest recorded version of what you saved, to
+  [compare](/docs/versions#comparing-two-versions) with.
+
+To go on, read the document again, apply your change to what you get, and save with the new
+`_rev`, or [overwrite](#choosing-to-overwrite). Nextly never retries a `STALE_VERSION` for you.
+
+### Choosing to overwrite
+
+Send `"_overwrite": true` with the values, beside the `_rev` you read, and the update is applied
+whatever the document's current version. Code that never read the document sends `_overwrite`
+alone:
+
+```bash
+curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries/abc-123" \
+  -H "Authorization: Bearer $NEXTLY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Hello again","_rev":"7","_overwrite":true}'
+```
+
+It needs no permission beyond the update itself. Every overwrite is recorded in the document's
+history, whether or not it keeps versions: when the `_rev` was out of date the history names whose
+changes it replaced ("Overwrote changes by Ana"), and otherwise it says the save was an overwrite.
+`_overwrite` is never stored, and any value other than `true` or `false` is a
+`400 VALIDATION_ERROR`.
+
+### Which writes are judged
+
+| Write | How it is judged |
+|---|---|
+| `PATCH` an entry or a Single | On the shared fields and the language it saves. |
+| Publish or unpublish every language (`.../publish-all`, `.../unpublish-all`), and an update with `locale=*` | On every language. The `_rev` must come from a read of every language; one that doesn't name each is a `400`. |
+| Restore a version (`.../versions/<n>/restore`) | In the version's language. The answer carries the new `_rev`. |
+| Take a working draft live (`.../versions/working-draft/take-live`) | On the shared fields and the language of the pending change, once there is one. |
+| Discard a working draft (`DELETE .../versions/working-draft`) | Before anything is removed. `_rev` and `_overwrite` go in the query string: `?locale=en&_rev=7`. |
+| Bulk update by ids (`.../entries/bulk-update`) | Each id on its own, through `"revs": { "<id>": "<_rev>" }`. An out-of-date id comes back in `errors` with `STALE_VERSION`, and the others are applied. A `revs` that leaves out an id is a `428 VERSION_REQUIRED`. To write them whatever they hold, send `"_overwrite": true` in `data` instead; `revs` and `_overwrite` together are a `400`. |
+| Bulk update by query (`PATCH` on `.../entries` with a `where`) | Not by version: a `_rev` or `revs` there is a `400`, since one version can't speak for every document the query matches. It needs `"_overwrite": true` in `data`. |
+| Create, delete, a [release](/docs/releases)'s scheduled run, an autosave | Not judged. |
+
+Every write above the last row needs `_rev` (or `revs`) or `_overwrite: true`, and one that sends
+neither is a `428 VERSION_REQUIRED`.
+
+An entry's paths sit under `/admin/api/collections/<slug>/entries/<id>`, and a Single's under
+`/admin/api/singles/<slug>`.
+
+### The document lock doesn't change any of this
+
+The [document lock](#document-locks) tells editors in the admin who is working on a document, and
+refuses no write. A save that sends the current `_rev` succeeds while someone else holds the
+document, and one that sends an out-of-date `_rev` is refused even while you hold it.
 
 ## Endpoint inventory
 
@@ -209,7 +348,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `POST`          | `/admin/api/auth/verify-email/resend`                  | Resend the verification email.                                                                                                                                                                       | Public                                                          |
 | `PATCH`         | `/admin/api/auth/change-password`                      | Change current user's password.                                                                                                                                                                      | Cookie                                                          |
 | `GET`           | `/admin/api/me`                                        | Current user profile.                                                                                                                                                                                | Cookie / Bearer                                                 |
-| `PATCH`         | `/admin/api/me`                                        | Update current user profile.                                                                                                                                                                         | Cookie / Bearer                                                 |
+| `PATCH`         | `/admin/api/me`                                        | Update current user profile: `name`, `image`, `interfaceLanguage`.                                                                                                                                   | Cookie / Bearer                                                 |
 | `GET`           | `/admin/api/me/permissions`                            | Resolved permissions for current user.                                                                                                                                                               | Cookie / Bearer                                                 |
 | `GET`           | `/admin/api/users`                                     | List users.                                                                                                                                                                                          | `read-users`                                                    |
 | `POST`          | `/admin/api/users`                                     | Create user.                                                                                                                                                                                         | `create-users`                                                  |
@@ -265,6 +404,10 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `PATCH`         | `/admin/api/singles/{slug}/schema`                     | Update single schema (Schema Builder).                                                                                                                                                               | `create-settings`, `update-settings` and `delete-settings`                                               |
 | `POST`          | `/admin/api/singles/schema/{slug}/preview`             | Dry-run single schema diff.                                                                                                                                                                          | `create-settings`, `update-settings` and `delete-settings`                                               |
 | `POST`          | `/admin/api/singles/schema/{slug}/apply`               | Apply single schema changes.                                                                                                                                                                         | `create-settings`, `update-settings` and `delete-settings`                                               |
+| `GET`           | `/admin/api/document-lock`                             | Who is editing an entry or a Single. See [Document locks](#document-locks).                                                                                                                         | Read access to that document                                    |
+| `POST`          | `/admin/api/document-lock`                             | Claim a document, take it over, or ask for edit access.                                                                                                                                              | The same access an update of that document needs                |
+| `PATCH`         | `/admin/api/document-lock`                             | Renew a claim.                                                                                                                                                                                       | The same access an update of that document needs                |
+| `DELETE`        | `/admin/api/document-lock`                             | Give up a claim.                                                                                                                                                                                     | `update-{slug}`                                                 |
 | `GET`           | `/admin/api/field-groups`                              | List field group definitions.                                                                                                                                                                        | Authenticated                                                   |
 | `POST`          | `/admin/api/field-groups`                              | Create field group.                                                                                                                                                                                  | `create-settings`                                               |
 | `GET`           | `/admin/api/field-groups/{slug}`                       | Get field group.                                                                                                                                                                                     | Authenticated                                                   |
@@ -466,13 +609,14 @@ curl -X POST "http://localhost:3000/admin/api/collections/posts/entries" \
 }
 ```
 
-Update (PATCH a single field set; everything not in the body is left alone):
+Update (PATCH a single field set; everything not in the body is left alone), with the `_rev`
+your last read returned (see [Versions and conflicts](#versions-and-conflicts)):
 
 ```bash
 curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries/abc-123" \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
-  -d '{"status":"published"}'
+  -d '{"status":"published","_rev":"7"}'
 ```
 
 Delete:
@@ -521,7 +665,7 @@ Bulk update by IDs:
 curl -X POST "http://localhost:3000/admin/api/collections/posts/entries/bulk-update" \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
-  -d '{"ids":["post-1","post-2"],"data":{"status":"archived"}}'
+  -d '{"ids":["post-1","post-2"],"data":{"status":"archived"},"revs":{"post-1":"7","post-2":"3"}}'
 ```
 
 Bulk update by query (PATCH on the collection root with a `where` clause in the body):
@@ -530,7 +674,7 @@ Bulk update by query (PATCH on the collection root with a `where` clause in the 
 curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries" \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
-  -d '{"where":{"status":{"equals":"draft"}},"data":{"status":"archived"}}'
+  -d '{"where":{"status":{"equals":"draft"}},"data":{"status":"archived","_overwrite":true}}'
 ```
 
 ### Singles
@@ -553,8 +697,155 @@ Update content:
 curl -X PATCH http://localhost:3000/admin/api/singles/site-settings \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
-  -d '{"siteName":"My New Site","maintenanceMode":false}'
+  -d '{"siteName":"My New Site","maintenanceMode":false,"_rev":"4"}'
 ```
+
+### Document locks
+
+The admin claims an entry or a Single while someone has it open, so that a colleague who opens
+it is told who is editing (see [Editing with others](/docs/admin/editing-together)). The claim is
+advisory: no write is refused because someone else holds the document, through this API or any
+other. Saves are kept from replacing each other by the document's version instead (see
+[Versions and conflicts](#versions-and-conflicts)).
+
+A document is named by three values: `scopeKind` (`collection` or `single`), `slug` (the
+collection's or Single's slug) and `entryId` (the entry's id, or the `id` a Single's content read
+returns). They go in the query string of a `GET`, and in the JSON body of every other request. A
+missing or unusable value is a `400 VALIDATION_ERROR` whose `error.data.errors[]` entry has the
+code `invalid_document_ref`.
+
+Who is editing:
+
+```bash
+curl "http://localhost:3000/admin/api/document-lock?scopeKind=collection&slug=posts&entryId=abc-123" \
+  -H "Authorization: Bearer $NEXTLY_API_KEY"
+```
+
+```json
+{
+  "holder": { "ownerId": "user-1", "ownerLabel": "Ana Silva", "expiresInSeconds": 132 }
+}
+```
+
+`holder` is `null` when nobody holds the document. The answer is sent `private, no-store`,
+because it names a colleague.
+
+Claim it:
+
+```bash
+curl -X POST "http://localhost:3000/admin/api/document-lock" \
+  -H "Authorization: Bearer $NEXTLY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"scopeKind":"collection","slug":"posts","entryId":"abc-123"}'
+```
+
+```json
+{
+  "message": "Document claimed.",
+  "item": {
+    "status": "acquired",
+    "holder": { "ownerId": "user-1", "ownerLabel": "Ana Silva's API key", "expiresInSeconds": 150 },
+    "claimToken": "…"
+  }
+}
+```
+
+When someone else holds it, the claim is still answered `200`, not refused:
+
+```json
+{
+  "message": "Document is being edited by someone else.",
+  "item": {
+    "status": "held",
+    "holder": { "ownerId": "user-2", "ownerLabel": "Ben Okafor", "expiresInSeconds": 97 },
+    "waiting": false
+  }
+}
+```
+
+"Someone else is editing" is an answer to show, not an error, so a held document never comes
+back as `409`. The claim token is given only to the caller whose claim succeeded.
+
+`ownerLabel` is what the admin calls the holder. A person is named by their
+name, or by their email when they have no name. An API key is named as a key, by the name of the
+person who made it ("Ana Silva's API key"), or as "An API key" when that person has no name. A
+claim with nothing to name it by reads "Someone". A claim taken before Nextly named its holders
+has `ownerLabel: null` until it is released or lapses, so read it as possibly `null`; the admin
+shows it as "Someone". `ownerId` is the user's id, which for an API key is the id of the person
+who made it.
+
+Two options ride on the claim:
+
+- `"takeover": true` takes the document from its holder. The holder's next renewal finds the claim
+  gone. Taking over from someone else is recorded in the document's
+  [history](/docs/versions); if that record cannot be written, the takeover is refused and the
+  holder keeps the document.
+- `"requestAccess": true` marks that someone is waiting. It moves nothing: the holder is told on
+  their next renewal, without being told who asked, and `waiting` is `true` on both sides until
+  the request lapses. The document passes on only when the holder leaves or their claim lapses.
+
+Renew it, with the token the claim returned:
+
+```bash
+curl -X PATCH "http://localhost:3000/admin/api/document-lock" \
+  -H "Authorization: Bearer $NEXTLY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"scopeKind":"collection","slug":"posts","entryId":"abc-123","claimToken":"…"}'
+```
+
+The `item` is `{ "status": "renewed", "holder": …, "waiting": false }`, or `{ "status": "lost" }`
+when the claim lapsed or was taken over. A lost claim carries `holder` when someone else now holds
+the document.
+
+**Told of a change.** A claim or a renewal may also send `_rev`, the version the caller's copy of
+the document started from. When the document has changed since, an answer that holds it
+(`acquired` or `renewed`) carries `changed`, with the same fields as a refused save's
+`publicData`, under the same rules: `currentVersion` always, and who changed it, when, and the
+matching history version only for a caller who may read the document (see
+[Versions and conflicts](#versions-and-conflicts)). A copy read in one language is judged on the
+shared fields and that language. A `held` or `lost` answer never carries `changed`, and a claim
+without `_rev` is answered as before. A malformed `_rev` is a `400 VALIDATION_ERROR`, refused
+before anything is claimed. One in the form a read returns is only compared, never refused: a
+version no read gave, such as one above the current version, is claimed and answered with
+`changed` like any other copy that differs. The admin sends its copy's `_rev`, so an editor hears
+of a colleague's change within one renewal, before saving, and an editor taking a document back
+learns it changed while they were away.
+
+Give it up with `DELETE` and the same body. The `item` is `{ "released": true }`, and releasing a
+claim already lost is not an error. A renewal or release without `claimToken` is a
+`400 VALIDATION_ERROR`.
+
+**Who may call.**
+
+- Reading who holds a document needs read access to that document. Under a read rule that
+  allows only some entries, that means one the rule matches (see
+  [Permissions](/docs/permissions)).
+- Claiming, renewing and taking over are judged exactly as an update of that document: the
+  `update-{slug}` permission, and the collection's or Single's own update rule for that
+  document. An API key needs both its grant and the rule.
+- Giving up a claim needs `update-{slug}`, and the claim token proves it is the same claim.
+- The claimant is always taken from the session or API key, never from the body.
+- A refusal is `403 FORBIDDEN`, and it does not say whether the document exists.
+
+**Timings.** The admin renews its claim every 15 seconds. A claim that is not renewed lapses 150
+seconds after its last renewal, timed by the database's clock, and every read ignores a lapsed
+claim at once.
+
+The admin gives its claim up as soon as the editor closes, including when the tab is closed or
+reloaded or the browser leaves the admin. A claim is left to lapse only when the admin cannot say
+it is done: after a crash, a lost connection, or a computer that went to sleep. A script that
+claims a document should release it with `DELETE` when it is done, so nobody waits out the lapse.
+
+**One holder per person.** A claim by the person who already holds the document is always
+granted, and moves the claim to the new caller. One person in two tabs holds the document once,
+and so do a person and an API key they made, because both claim as that person. The admin tells
+the tab the claim moved from that the document was opened in another tab, even when it was the
+key that claimed it. Moving a claim between one person's tabs and keys is not a takeover, and
+history records nothing.
+
+**Cleaning up.** Lapsed claims are deleted by the `document-lock:sweep` job, which runs whenever
+the [scheduled jobs run](/docs/jobs#running-the-queue) does. Nothing depends on it for
+correctness: it only keeps the table from growing.
 
 ### Email send
 

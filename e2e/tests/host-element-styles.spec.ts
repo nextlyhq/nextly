@@ -222,6 +222,7 @@ test("the Page Builder's canvas is a document of its own, which the admin's elem
           },
         ],
       },
+      _overwrite: true,
     },
   });
   expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(

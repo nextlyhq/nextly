@@ -32,13 +32,15 @@ import {
 } from "../../domains/i18n/migration/resolve-entity-table";
 import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
+import { NextlyError } from "../../errors/nextly-error";
 import { createContext, type CommandContext } from "../context";
+import { reportDryRun, type DryRunChange } from "../dry-run";
 import { exitWithError } from "../errors";
 import {
   restoreCollectionRequired,
   restoreEntityRefusal,
 } from "../errors/areas/sync";
-import { withAdapter } from "../utils/adapter";
+import { openCommandAdapter, withAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
@@ -64,6 +66,8 @@ export interface I18nRestoreCommandOptions {
   purge?: boolean;
   /** The data-loss consent `--purge` needs, which deletes from the archive. */
   acceptDataLoss?: AcceptDataLossOption;
+  /** `--dry-run`: read and check as a restore does, name its writes, make none. */
+  dryRun?: boolean;
   config?: string;
   cwd?: string;
   verbose?: boolean;
@@ -127,6 +131,24 @@ export async function runI18nRestore(
   if (options.locale) logger.keyValue("Locale", options.locale);
   if (options.field) logger.keyValue("Field", options.field);
 
+  // What a restore reads and checks, the same for a real run and a dry run.
+  const restoreArgs = {
+    collection: slug,
+    kind: entity.kind,
+    // Naming the kind is what lets a restore take rows whose owner the archive does not know.
+    claimUnknown: options.kind !== undefined,
+    companionTableName,
+    locale: options.locale,
+    field: options.field,
+    purge: options.purge,
+  };
+
+  // A dry run deletes nothing, so it needs no consent, and opens read-only.
+  if (options.dryRun === true) {
+    await previewRestore(restoreArgs, logger);
+    return;
+  }
+
   // `--purge` deletes the replayed rows from the archive, so it takes the
   // data-loss consent, decided before the database is reached: without it, a
   // person is asked where one can be, and otherwise nothing changes, not even
@@ -148,14 +170,7 @@ export async function runI18nRestore(
     async adapter => {
       const result = await restoreI18nArchive({
         adapter: adapter as unknown as DrizzleAdapter,
-        collection: slug,
-        kind: entity.kind,
-        // Naming the kind is what lets a restore take rows whose owner the archive does not know.
-        claimUnknown: options.kind !== undefined,
-        companionTableName,
-        locale: options.locale,
-        field: options.field,
-        purge: options.purge,
+        ...restoreArgs,
       });
 
       const reportUnattributed = () => {
@@ -195,6 +210,54 @@ export async function runI18nRestore(
     },
     { logger }
   );
+}
+
+/**
+ * What a restore would do, named and not done: the translation rows it writes,
+ * the archived values it claims, and with `--purge` the ones it deletes, from
+ * the database opened read-only. A field the restore refuses is named as the
+ * real run's refusal.
+ */
+async function previewRestore(
+  restoreArgs: Omit<Parameters<typeof restoreI18nArchive>[0], "adapter">,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const adapter = await openCommandAdapter({ dryRun: true }, logger);
+  // Its database is not there, which the open has already said.
+  if (adapter === undefined) return;
+  try {
+    const result = await restoreI18nArchive({
+      adapter: adapter as unknown as DrizzleAdapter,
+      ...restoreArgs,
+      dryRun: true,
+    });
+    const changes: DryRunChange[] = [];
+    if (result.rowsRestored > 0) {
+      changes.push({
+        action: "write",
+        target: `${result.rowsRestored} translation row(s) into ${restoreArgs.companionTableName} (${result.locales.join(", ")})`,
+      });
+    }
+    if (result.rowsClaimed > 0) {
+      changes.push({
+        action: "record",
+        target: `${result.rowsClaimed} archived value(s) of unknown kind as this entity's`,
+      });
+    }
+    if (restoreArgs.purge && result.rowsRead > 0) {
+      changes.push({
+        action: "remove",
+        target: `${result.rowsRead} archived value(s) from the archive`,
+      });
+    }
+    reportDryRun(logger, { changes });
+  } catch (error) {
+    // A field not translated now: the real restore's refusal.
+    if (!NextlyError.is(error) || error.code !== "CONFLICT") throw error;
+    reportDryRun(logger, { changes: [], refusals: [error.publicMessage] });
+  } finally {
+    await adapter.disconnect();
+  }
 }
 
 /** The action of `nextly i18n:restore`, loaded when it runs. */

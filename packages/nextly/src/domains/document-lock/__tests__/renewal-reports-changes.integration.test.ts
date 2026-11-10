@@ -104,7 +104,7 @@ async function post(t: TestNextly): Promise<string> {
   const id = String((created.data as Doc).id);
   await handlerOf(t).updateEntry(
     { collectionName: POSTS, entryId: id, overrideAccess: true, locale: "es" },
-    { title: "hola" }
+    { title: "hola", _overwrite: true }
   );
   return id;
 }
@@ -120,7 +120,7 @@ async function readRev(t: TestNextly, id: string, locale: string) {
   return String(read._rev);
 }
 
-/** Ana saves `data` on the post, in `locale`. */
+/** Ana saves `data` on the post, in `locale`, from the version she just read. */
 async function anaSaves(
   t: TestNextly,
   id: string,
@@ -135,7 +135,7 @@ async function anaSaves(
       locale,
       user: ANA as never,
     },
-    data
+    { ...data, _rev: await readRev(t, id, locale) }
   );
 }
 
@@ -337,7 +337,7 @@ describe.each(getConfiguredTestDialects())(
       const singles = t.getService("singleEntryService") as SingleEntryService;
       const first = (await singles.update(
         BANNER,
-        { notice: "first" },
+        { notice: "first", _overwrite: true },
         { overrideAccess: true }
       )) as { data?: Doc };
       const id = String(first.data?.id);
@@ -348,7 +348,7 @@ describe.each(getConfiguredTestDialects())(
       );
       await singles.update(
         BANNER,
-        { notice: "Ana's notice" },
+        { notice: "Ana's notice", _rev: startedFrom },
         { overrideAccess: true, user: ANA as never }
       );
 

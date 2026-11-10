@@ -61,6 +61,11 @@ export interface HeldDocumentChangeOptions {
   keepsEdits: () => boolean;
   /** Let go of a hold the form no longer needs: nothing unsaved is left to keep. */
   release: () => void;
+  /**
+   * The editor keeps editing after all: a current version asked for and not
+   * yet read no longer replaces the edits when it arrives.
+   */
+  stopLoading: () => void;
 }
 
 export interface HeldDocumentChange {
@@ -108,6 +113,26 @@ function changeNotice(
   return { tone, message, takeOverLabel: null, accessRequest: null, choices };
 }
 
+/**
+ * A change over unsaved edits, offered to load or keep editing; where the
+ * document keeps no recovery points, saying that loading discards them.
+ */
+function overEditsNotice(
+  said: string,
+  whileAway: boolean,
+  keepsEdits: boolean
+): DocumentLockNotice {
+  const away = whileAway ? " while you were away" : "";
+  const discards = keepsEdits
+    ? ""
+    : " Loading the current version discards them.";
+  return changeNotice(
+    "changed",
+    `${said}${away}. Your unsaved edits are still here.${discards}`,
+    [LOAD_CURRENT, KEEP_EDITING]
+  );
+}
+
 export function useHeldDocumentChange({
   change,
   settleChange,
@@ -117,6 +142,7 @@ export function useHeldDocumentChange({
   reload,
   keepsEdits,
   release,
+  stopLoading,
 }: HeldDocumentChangeOptions): HeldDocumentChange {
   const [notice, setNotice] = useState<DocumentLockNotice | null>(null);
   const [holding, setHolding] = useState(false);
@@ -129,6 +155,7 @@ export function useHeldDocumentChange({
     reload,
     keepsEdits,
     release,
+    stopLoading,
   });
   pieces.current = {
     dirty,
@@ -137,6 +164,7 @@ export function useHeldDocumentChange({
     reload,
     keepsEdits,
     release,
+    stopLoading,
   };
   // The change being answered: what the strip says of it, and its version.
   const answering = useRef<{ said: string; change: DocumentLockChange } | null>(
@@ -258,17 +286,7 @@ export function useHeldDocumentChange({
     // 🔴 Where nothing can keep the edits, loading the current version
     // discards them, so it waits for the editor, taken back or not.
     if (!whileAway || !pieces.current.keepsEdits()) {
-      const away = whileAway ? " while you were away" : "";
-      const discards = pieces.current.keepsEdits()
-        ? ""
-        : " Loading the current version discards them.";
-      setNotice(
-        changeNotice(
-          "changed",
-          `${said}${away}. Your unsaved edits are still here.${discards}`,
-          [LOAD_CURRENT, KEEP_EDITING]
-        )
-      );
+      setNotice(overEditsNotice(said, whileAway, pieces.current.keepsEdits()));
       return;
     }
     // Taken back: the edits could not be saved while away, and the form
@@ -293,12 +311,29 @@ export function useHeldDocumentChange({
     (choice: HeldChangeChoice) => {
       const current = answering.current;
       if (choice === "try-again" && current) {
+        // 🔴 The form unlocks under the failed try's strip, so what is typed
+        // there since is unsaved work a reload would replace: the editor
+        // chooses, as over any edits.
+        if (pieces.current.dirty()) {
+          pieces.current.hold(current.change);
+          setNotice(
+            overEditsNotice(current.said, false, pieces.current.keepsEdits())
+          );
+          return;
+        }
         void refreshClean(current.said, current.change);
         return;
       }
-      if (choice !== "load-current") {
+      if (choice === "keep-editing") {
         // Keep editing leaves the form held on the change, so no read
         // replaces the edits; a save from them is refused and says it again.
+        // 🔴 A load chosen before, whose read failed, may still wait for the
+        // current version: once kept editing, it no longer replaces them.
+        pieces.current.stopLoading();
+        setNotice(null);
+        return;
+      }
+      if (choice !== "load-current") {
         setNotice(null);
         return;
       }
@@ -365,6 +400,11 @@ export interface HeldChangeEditorNow {
    * someone else's change alike.
    */
   keepEditsAndLoad: () => Promise<void>;
+  /**
+   * Stop waiting for a current version a load asked for and has not read:
+   * the editor keeps editing, so it no longer replaces the edits.
+   */
+  stopLoadingCurrent: () => void;
 }
 
 export function useLockWithHeldChange<T extends DocumentLockAffordances>(
@@ -387,6 +427,7 @@ export function useLockWithHeldChange<T extends DocumentLockAffordances>(
     hasUnsavedWork: false,
     keepsEdits: false,
     keepEditsAndLoad: async () => {},
+    stopLoadingCurrent: () => {},
   });
   const held = useHeldDocumentChange({
     change: editor.surface.change,
@@ -397,6 +438,7 @@ export function useLockWithHeldChange<T extends DocumentLockAffordances>(
     reload: () => editor.latest?.reload() ?? Promise.resolve(),
     keepsEdits: () => now.current.keepsEdits,
     release: editor.release,
+    stopLoading: () => now.current.stopLoadingCurrent(),
   });
   return { ...withHeldChange(lock, held), now: now.current };
 }

@@ -62,7 +62,9 @@ async function writeThroughApi(
   path: string,
   data: Record<string, unknown>
 ): Promise<void> {
-  const written = await api.patch(path, { data });
+  const written = await api.patch(path, {
+    data: { ...data, _overwrite: true },
+  });
   expect(written.ok(), await written.text()).toBe(true);
 }
 

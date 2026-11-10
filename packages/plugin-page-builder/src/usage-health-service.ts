@@ -27,16 +27,25 @@ import {
   hostGeneration,
   type BackfillHost,
 } from "./usage-backfill-wiring";
-import type { UsageIndex, UsageSubject } from "./usage-index";
+import type {
+  GroupedUsageReader,
+  UsageIndex,
+  UsageSubject,
+} from "./usage-index";
 import {
-  readUsageIndexHealth,
+  usageIndexHealthFrom,
   type UsageIndexHealth,
 } from "./usage-index-health";
+import {
+  anyUndetermined,
+  usageTableGroups,
+  usageTableOf,
+} from "./usage-index-tables";
 
 /** The service key a host reads this through. */
 export const USAGE_HEALTH_SERVICE = "usage-health";
 
-/** What the service offers: the index-wide facts, for one index. */
+/** What the service offers: the index-wide facts, for one index, and its counts. */
 export interface UsageHealthService {
   /**
    * Read how much of one index is there.
@@ -44,12 +53,22 @@ export interface UsageHealthService {
    * Takes the INDEX rather than assuming the component one, because the class
    * index answers the same question and a surface asking about classes should
    * not get an answer about components.
+   *
+   * The index's rows are read from the table the plugin keeps them in, which
+   * the index names; `indexCollection` is accepted for the callers written
+   * when they lived in a collection, and is not consulted.
    */
   read<TRow extends UsageSubject>(
     index: UsageIndex<TRow>,
-    /** Which index collection to read, RESOLVED — an integrator may rename it. */
-    indexCollection: string
+    indexCollection?: string
   ): Promise<UsageIndexHealth>;
+  /**
+   * The grouped read a count of one index is asked through
+   * (`componentUsageCount`'s `read`), over the table its rows live in.
+   */
+  counts<TRow extends UsageSubject>(
+    index: UsageIndex<TRow>
+  ): GroupedUsageReader;
 }
 
 /**
@@ -64,7 +83,7 @@ export function usageHealthService(
   host: () => BackfillHost
 ): UsageHealthService {
   return {
-    read: async (index, indexCollection) => {
+    read: async index => {
       const installed = host();
 
       // ONE registry walk, both answers. Asking for the scopes and for what the
@@ -72,29 +91,25 @@ export function usageHealthService(
       // render and let the two answers come from different moments.
       const survey = await backfillSurvey(installed);
 
-      return readUsageIndexHealth({
-        index,
-        // The plugin's own read: no site hook on the index collection can hide
-        // the marker rows that make every count a floor.
-        read: installed.ownIndexReader(indexCollection),
-        backfill: {
-          scopes: () => Promise.resolve(survey.scopes),
-          progress: async () => {
-            const snapshot = await installed.bookkeeping().snapshot();
-            return {
-              current: snapshot.generation === hostGeneration(installed),
-              dirty: snapshot.dirty,
-              completed: snapshot.done,
-            };
+      // The run, its progress, the dirty mark and the index's own marker rows,
+      // all from ONE snapshot, so the markers are the ones the recorded run
+      // left, whatever writers do meanwhile.
+      const snapshot = await installed
+        .bookkeeping()
+        .snapshot(tx => anyUndetermined(tx, index));
+      return usageIndexHealthFrom(
+        {
+          scopes: survey.scopes,
+          progress: {
+            current: snapshot.generation === hostGeneration(installed),
+            dirty: snapshot.dirty,
+            completed: snapshot.done,
           },
-          // Either kind of out-of-reach content withholds completeness, and they
-          // are independent: a Single holds blocks no plugin can read, and a
-          // nested blocks field has no subject a row can name. A site can have
-          // one, both or neither.
-          unreachable: async () =>
-            survey.unaddressable || (await installed.singlesHoldBlocks()),
+          unreachable: survey.unaddressable,
         },
-      });
+        snapshot.probed
+      );
     },
+    counts: index => usageTableGroups(host().db, usageTableOf(index)),
   };
 }

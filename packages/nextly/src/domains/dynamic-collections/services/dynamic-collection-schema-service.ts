@@ -3786,6 +3786,9 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
       type === "text" ||
       type === "textarea" ||
       type === "email" ||
+      // An icon id ("lucide:star") is a string; its config gate admits only
+      // lowercase letters, digits, hyphens and one colon, so it quotes safely.
+      type === "icon" ||
       type === "password" ||
       type === "richText" ||
       type === "code" ||

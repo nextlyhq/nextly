@@ -342,7 +342,7 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       await t.nextly.update({
         collection: "drafted",
         id,
-        data: { body: { v: "pending" } },
+        data: { body: { v: "pending" }, _overwrite: true },
         overrideAccess: true,
       });
       const read = poolReader(t, "probe");
@@ -370,7 +370,7 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       await t.nextly.update({
         collection: "drafted",
         id,
-        data: { body: { v: "pending" } },
+        data: { body: { v: "pending" }, _overwrite: true },
         overrideAccess: true,
       });
       schemaExecutors.length = 0;
@@ -481,6 +481,7 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
             body: { v: "pending" },
             inner: { body: { v: "pending deep" } },
           },
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -529,7 +530,10 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       await t.nextly.update({
         collection: "grouped",
         id,
-        data: { hero: { body: "null", inner: { body: "123" } } },
+        data: {
+          hero: { body: "null", inner: { body: "123" } },
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       expect(await at("hero.body", "draft")).toEqual({
@@ -619,7 +623,7 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
         collection: "worded",
         id,
         locale: "de",
-        data: { body: { said: "de" } },
+        data: { body: { said: "de" }, _overwrite: true },
         overrideAccess: true,
       } as never);
       const read = languagesReader(t, "probe");
@@ -715,7 +719,7 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
         collection: "staged",
         id,
         locale: "de",
-        data: { body: { said: "de" }, status: "draft" },
+        data: { body: { said: "de" }, status: "draft", _overwrite: true },
         overrideAccess: true,
       } as never);
 
@@ -832,13 +836,13 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       await t.nextly.updateSingle({
         slug: "site",
         locale: "de",
-        data: { body: { said: "de" } },
+        data: { body: { said: "de" }, _overwrite: true },
         overrideAccess: true,
       } as never);
       await t.nextly.updateSingle({
         slug: "site",
         locale: "en",
-        data: { body: { said: "en" } },
+        data: { body: { said: "en" }, _overwrite: true },
         overrideAccess: true,
       } as never);
 
@@ -850,7 +854,7 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       const t = await bootLanguages(dialect);
       await t.nextly.updateSingle({
         slug: "site",
-        data: { body: { said: "single" } },
+        data: { body: { said: "single" }, _overwrite: true },
         overrideAccess: true,
       } as never);
       const read = languagesReader(t, "probe");
@@ -890,8 +894,11 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       const result = await entries.updateEntries(
         { collectionName: "plain", overrideAccess: true },
         [
-          { id: x, data: { body: { v: "written in the batch" } } },
-          { id: y, data: { body: { peek: x } } },
+          {
+            id: x,
+            data: { body: { v: "written in the batch" }, _overwrite: true },
+          },
+          { id: y, data: { body: { peek: x }, _overwrite: true } },
         ],
         { skipHooks: true }
       );

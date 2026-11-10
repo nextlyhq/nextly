@@ -11,6 +11,7 @@
  * @since 1.0.0
  */
 
+import type { FieldConfig } from "nextly/config";
 import {
   createContext,
   useContext,
@@ -116,6 +117,17 @@ export interface EntryFormContextValue {
    * Preview action is absent, for the same reasons.
    */
   preview?: DocumentPreview;
+
+  /**
+   * The document's own fields, as the form draws them.
+   *
+   * A field is rendered with its own declaration and its form path, and
+   * nothing about what holds it. Where it sits inside a repeater's row, its
+   * address — the row named by its saved id, never its position — is read
+   * from these (`useFieldAddress`). Absent where the surface does not say,
+   * and then no row's field has an address.
+   */
+  fields?: readonly FieldConfig[];
 }
 
 /**
@@ -253,6 +265,9 @@ export interface EntryFormContextProviderProps {
    */
   openPreview?: () => void | Promise<void>;
 
+  /** The document's own fields, for a field's address inside a row. */
+  fields?: readonly FieldConfig[];
+
   /**
    * Child components.
    */
@@ -294,6 +309,7 @@ export function EntryFormContextProvider({
   documentStatus,
   renderEntryFields,
   openPreview,
+  fields,
   children,
 }: EntryFormContextProviderProps): JSX.Element {
   /*
@@ -325,6 +341,8 @@ export function EntryFormContextProvider({
       ...(renderEntryFields === undefined ? {} : { renderEntryFields }),
       // Spread for the same reason: absent means the editor offers no preview.
       ...(openPreview === undefined ? {} : { preview: { open: openPreview } }),
+      // Spread for the same reason: absent means the surface did not say.
+      ...(fields === undefined ? {} : { fields }),
     }),
     [
       entryId,
@@ -335,6 +353,7 @@ export function EntryFormContextProvider({
       hasWorkingDraft,
       renderEntryFields,
       openPreview,
+      fields,
     ]
   );
 

@@ -153,7 +153,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect, true);
       await t.nextly.updateSingle({
         slug: "site",
-        data: { tagline: "Welcome", visits: 2 },
+        data: { tagline: "Welcome", visits: 2, _overwrite: true },
       });
       expect(await t.nextly.findSingle({ slug: "site" })).toMatchObject({
         tagline: "Welcome",
@@ -192,7 +192,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "articles",
         id,
-        data: { headline: "Hello again" },
+        data: { headline: "Hello again", _overwrite: true },
       });
       expect(
         await t.nextly.findByID({ collection: "articles", id })
@@ -799,7 +799,7 @@ describe.each(getConfiguredTestDialects())(
             collection: "articles",
             id: (created.item as { id: string }).id,
             locale: "de",
-            data: { headline: "Hallo" },
+            data: { headline: "Hallo", _overwrite: true },
           });
           await before.destroy();
 

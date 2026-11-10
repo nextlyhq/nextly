@@ -269,6 +269,16 @@ const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
   "PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA",
   "PLUGIN_SCHEMA_VERSION_NOT_ADVANCED",
   "NEXTLY_LEGACY_BOOKKEEPING_DETECTED",
+  // `upgrade`'s: an events table of the wrong shape, and a backup nobody
+  // confirmed.
+  "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
+  "NEXTLY_UPGRADE_IN_PROGRESS",
+  // `migrate:resolve`'s checks: the file, its snapshot, the live schema
+  // against it, and the ledger's state for the mode asked for.
+  "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+  "NEXTLY_MIGRATION_FILE_MISSING",
+  "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
+  "NEXTLY_MIGRATION_RESOLVE_DRIFT",
 ]);
 
 /** The refusal a dry run reports for `error`, in the real run's own words. */

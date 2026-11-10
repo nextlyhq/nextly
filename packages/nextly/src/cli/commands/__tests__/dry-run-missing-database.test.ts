@@ -24,7 +24,12 @@ afterEach(() => {
 });
 
 describe("a dry run against a SQLite file that is not there", () => {
-  it.each([["migrate"], ["migrate:down"], ["migrate:baseline"]])(
+  it.each([
+    ["migrate"],
+    ["migrate:down"],
+    ["migrate:baseline"],
+    ["webhooks:prune"],
+  ])(
     "%s --dry-run names it and makes nothing",
     async command => {
       const project = mkdtempSync(join(tmpdir(), "nextly-dry-missing-db-"));
@@ -66,6 +71,28 @@ describe("a dry run against a SQLite file that is not there", () => {
 
       expect(run.status, run.stdout + run.stderr).toBe(0);
       expect(run.stdout).toContain("Dry run: nothing was changed.");
+      expect(existsSync(join(project, "data"))).toBe(false);
+      expect(folderSnapshot(project)).toEqual(before);
+    },
+    NEXTLY_RUN_TIMEOUT
+  );
+
+  it(
+    "migrate:fresh --dry-run plans as for an empty database, which a real run makes, and makes nothing",
+    async () => {
+      const project = mkdtempSync(join(tmpdir(), "nextly-dry-missing-db-"));
+      projects.push(project);
+      writeFileSync(join(project, "nextly.config.ts"), "export default {};\n");
+      const before = folderSnapshot(project);
+
+      const run = await runNextly(["migrate:fresh", "--dry-run"], project, {
+        DB_DIALECT: "sqlite",
+        DATABASE_URL: `file:${join(project, "data/app.db")}`,
+      });
+
+      expect(run.status, run.stdout + run.stderr).toBe(0);
+      expect(run.stdout).not.toContain("A real run would refuse");
+      expect(run.stdout).toContain("Would run the core tables' setup");
       expect(existsSync(join(project, "data"))).toBe(false);
       expect(folderSnapshot(project)).toEqual(before);
     },

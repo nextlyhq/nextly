@@ -19,6 +19,7 @@ import {
   useReportUnsavedWork,
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
+import { toast } from "@nextlyhq/ui";
 import {
   useCallback,
   useEffect,
@@ -38,7 +39,10 @@ import {
 
 import { usePageLayoutAsk } from "../page-layout";
 import { usePublishOffer } from "../publish-offer";
+import { useRemovalHold } from "../removal-hold-client";
 import { withValueAtPath } from "../snapshot-merge";
+
+import { RowCommitRefused } from "./row-commit";
 
 /**
  * Record the LIVE document as this author's recovery point while the editor is
@@ -274,9 +278,18 @@ function useCommitOnUnmount(
         return;
       }
       committed.current = true;
-      held.onCommit(
-        finishInlineEdit(held.inline, held.editor.document).document
-      );
+      try {
+        held.onCommit(
+          finishInlineEdit(held.inline, held.editor.document).document
+        );
+      } catch (error) {
+        // The repeater row this field sits in is not where the editor was
+        // bound, so the write was refused rather than put in another row.
+        // Nothing can stay open to keep the work now; the recovery point
+        // recorded while editing still holds it. Anything else is not this
+        // refusal and is not swallowed.
+        if (!(error instanceof RowCommitRefused)) throw error;
+      }
     },
     []
   );
@@ -297,14 +310,21 @@ function useCommitOnUnmount(
  */
 export function useHostCommit<TFieldValues extends FieldValues>({
   name,
+  address,
   control,
   editor,
   inline,
   onCommit,
   onClose,
   savePoint,
+  removalReach,
 }: {
   name: Path<TFieldValues>;
+  /**
+   * The field's address, which stays the same while `name` follows a
+   * repeater's row to a new position: what unsaved work is reported under.
+   */
+  address: string;
   control: Control<TFieldValues>;
   editor: { document: BlockDocument; undoDepth: number };
   inline: {
@@ -316,6 +336,14 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   onClose: () => void;
   /** Where the history stood at the last store; see `useSavePoint`. */
   savePoint: ReturnType<typeof useSavePoint>;
+  /**
+   * For a component, how many documents placing it the removal dialog says
+   * now. The hold keeps the number as it stood when each field was removed:
+   * the count a publish removing fields confirms (see `useRemovalHold`).
+   */
+  removalReach?: () =>
+    | { readonly count: number; readonly complete: boolean }
+    | undefined;
 }): {
   done: () => void;
   /**
@@ -323,6 +351,8 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    * rendered anywhere inside the editor.
    */
   publishOffer: JSX.Element;
+  /** The question asked again when a removal's count grew, rendered likewise. */
+  removalHold: JSX.Element;
 } {
   useCheckpoints({ name, control, document: editor.document });
 
@@ -335,9 +365,14 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    *
    * Retracted when this component unmounts, which is the same moment `done`
    * commits the document and makes the form dirty for real.
+   *
+   * Reported under the field's address, not its form path: inside a
+   * repeater's row the path changes when the row moves under the open editor,
+   * and a report under the old path would stay behind with nothing left to
+   * retract it, keeping the document marked unsaved after a save or exit.
    */
   useReportUnsavedWork(
-    `blocks:${name}`,
+    `blocks:${address}`,
     hasUnsavedWork(editor, inline, savePoint.savedAt)
   );
 
@@ -385,6 +420,16 @@ export function useHostCommit<TFieldValues extends FieldValues>({
     ...usePageLayoutAsk(control),
     subject: editor.document.kind === "component" ? "component" : "page",
   });
+  /*
+   * A publish removing a component's fields, held at the count the designer
+   * confirmed. Registered last, so it runs after the questions above: a
+   * publish they call off takes no hold.
+   */
+  const removalHold = useRemovalHold({
+    document: storing,
+    editing: editor.document,
+    reach: () => removalReach?.(),
+  });
 
   /*
    * Writing back on the way out rather than on every keystroke.
@@ -419,7 +464,16 @@ export function useHostCommit<TFieldValues extends FieldValues>({
      * told what happened, and their text is still where they left it.
      */
     if (!finished.mayClose) return;
-    onCommit(finished.document);
+    try {
+      onCommit(finished.document);
+    } catch (error) {
+      // The row this field sits in is gone, or not where the editor was
+      // bound: nothing was written, so the editor stays open with the work in
+      // it, and the author is told why rather than left at a silent button.
+      if (!(error instanceof RowCommitRefused)) throw error;
+      toast.error(error.message);
+      return;
+    }
     markCommitted();
     onClose();
   }, [editor.document, inline, onCommit, onClose, markCommitted]);
@@ -447,5 +501,5 @@ export function useHostCommit<TFieldValues extends FieldValues>({
     canExit: true,
   });
 
-  return { done, publishOffer };
+  return { done, publishOffer, removalHold };
 }

@@ -513,6 +513,28 @@ export function leafAcceptsValue(leaf: StyleLeaf, value: unknown): boolean {
   return leafIssues(leaf, value, "").every(issue => issue.severity !== "error");
 }
 
+/** The factors a token may be scaled by: enough for sizes, never absurd. */
+const TOKEN_SCALE = { min: 0.25, max: 4 } as const;
+
+/**
+ * Why a token reference's `times` cannot be written, if it cannot: only a
+ * length or a number scales, and only by a finite factor in range.
+ */
+function scaleProblem(leaf: StyleLeaf, times: unknown): string | undefined {
+  if (leaf.kind !== "dimension" && leaf.kind !== "number") {
+    return "Only a length or a number token can be scaled.";
+  }
+  if (
+    typeof times !== "number" ||
+    !Number.isFinite(times) ||
+    times < TOKEN_SCALE.min ||
+    times > TOKEN_SCALE.max
+  ) {
+    return `A design token is scaled by a number from ${TOKEN_SCALE.min} to ${TOKEN_SCALE.max}.`;
+  }
+  return undefined;
+}
+
 /** Validate a value against one leaf descriptor. */
 function leafIssues(
   leaf: StyleLeaf,
@@ -529,14 +551,24 @@ function leafIssues(
     // A reference stands in for the whole value, so it carries nothing else.
     // Anything beside `$token` is data a reader would discard in silence,
     // which is worse than being told the shape is wrong.
-    const extra = Object.keys(value).filter(key => key !== "$token");
+    const extra = Object.keys(value).filter(
+      key => key !== "$token" && key !== "times"
+    );
     if (extra.length > 0) {
       return [
         invalid(
           path,
-          `A design token reference carries only "$token", not ${describeValue(extra[0])}.`,
+          `A design token reference carries only "$token" and "times", not ${describeValue(extra[0])}.`,
           "Remove the extra fields, or store a literal value instead."
         ),
+      ];
+    }
+    // Left undefined, a scale is absent, as any optional field is.
+    const scaling =
+      value.times === undefined ? undefined : scaleProblem(leaf, value.times);
+    if (scaling !== undefined) {
+      return [
+        invalid(path, scaling, "Store the token alone, or a factor in range."),
       ];
     }
     if (leaf.tokenKinds.length === 0) {

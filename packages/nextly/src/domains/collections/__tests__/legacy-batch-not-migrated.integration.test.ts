@@ -295,7 +295,7 @@ describe.each(getConfiguredTestDialects())(
 
         const result = (await services.collections.updateMany(
           POSTS,
-          ids.map(id => ({ id, data: { subtitle: "Uno" } })),
+          ids.map(id => ({ id, data: { subtitle: "Uno", _overwrite: true } })),
           { as: "system" }
         )) as BatchResult;
 
@@ -366,8 +366,8 @@ describe.each(getConfiguredTestDialects())(
         POSTS,
         // The second item names no row.
         [
-          { id: ids[0], data: { subtitle: "Uno" } },
-          { id: "lb-missing-id", data: { subtitle: "Dos" } },
+          { id: ids[0], data: { subtitle: "Uno", _overwrite: true } },
+          { id: "lb-missing-id", data: { subtitle: "Dos", _overwrite: true } },
         ],
         { as: "system" }
       )) as BatchResult;
@@ -387,8 +387,11 @@ describe.each(getConfiguredTestDialects())(
             tx,
             { collectionName: POSTS },
             [
-              { id: ids[0], data: { subtitle: "Uno" } },
-              { id: "lb-missing-id", data: { subtitle: "Dos" } },
+              { id: ids[0], data: { subtitle: "Uno", _overwrite: true } },
+              {
+                id: "lb-missing-id",
+                data: { subtitle: "Dos", _overwrite: true },
+              },
             ],
             { stopOnError: true }
           )

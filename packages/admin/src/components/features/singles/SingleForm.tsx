@@ -50,6 +50,10 @@ import {
   DocumentViewBody,
   type DocumentViewMount,
 } from "@admin/components/features/entries/EntryForm/DocumentViewBody";
+import {
+  editedLanguageUntranslated,
+  effectiveEntryStatus,
+} from "@admin/components/features/entries/EntryForm/entry-address";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import {
   EntryFormContextProvider,
@@ -117,7 +121,7 @@ import {
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
 import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
-import { versionsHref } from "@admin/components/features/versions/VersionComparePage";
+import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
   mayRecordRecovery,
   useViewedVersion,
@@ -1346,14 +1350,6 @@ export function SingleForm({
     slugFieldName,
     enabled: false,
   });
-  const documentStatus =
-    (document as { status?: string } | undefined)?.status ?? "draft";
-  // The status the bar's pill shows and the context carries, once, so the two
-  // cannot disagree.
-  const editedStatus = {
-    status: documentStatus,
-    hasWorkingDraft: hasPendingWorkingDraft(document),
-  };
 
   // i18n: per-locale writing direction (RTL) + the app default locale, for the content-locale
   // context passed to field components and the language pills. Inert for non-localized singles.
@@ -1362,6 +1358,17 @@ export function SingleForm({
     defaultLocale,
     enabled: localizationEnabled,
   } = useLocalization();
+  // The status of the language being edited, read as the entry editor reads
+  // it, not the main row's: an untranslated language of a published Single
+  // is not published. The status the bar's pill shows and the context
+  // carries, once, so the two cannot disagree.
+  const documentStatus =
+    effectiveEntryStatus(document, locale, defaultLocale) ?? "draft";
+  const editedStatus = {
+    status: documentStatus,
+    hasWorkingDraft: hasPendingWorkingDraft(document),
+    untranslated: editedLanguageUntranslated(document, locale, defaultLocale),
+  };
 
   // One decision rather than three: which language the link is for, whether it
   // can be offered at all, and the mint itself. No site URL is computed here —
@@ -1537,6 +1544,11 @@ export function SingleForm({
     await loadCurrentVersion(keepsRecoveryPoints);
     if (keepsRecoveryPoints) recovery.recheck();
   };
+  // Kept editing after a load that has not read the current version: that
+  // version no longer replaces the edits when it arrives.
+  lock.now.stopLoadingCurrent = () => {
+    awaitingCurrent.current = false;
+  };
 
   /*
    * Throwing away this language's pending change, through the same gate as a
@@ -1650,6 +1662,8 @@ export function SingleForm({
           // The same status, and pending-draft fact, the document bar's pill
           // shows: a field covering the bar reports what the bar would have.
           documentStatus={editedStatus}
+          // The fields, so a field inside a repeater's row has an address.
+          fields={schema.fields}
         >
           <EntryLocaleProvider value={localeCtx}>
             {/* Above the header — which mounts the history panel — and above

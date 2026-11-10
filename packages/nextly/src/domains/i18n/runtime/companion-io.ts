@@ -22,6 +22,7 @@ import type { RequestActor } from "../../../auth/request-actor";
 import { isUniqueViolation } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
+import { readsOnTransaction } from "../../../shared/lib/read-transaction-scope";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import {
   readIndexUniqueness,
@@ -1127,6 +1128,15 @@ function isMissingTableError(error: unknown): boolean {
   );
 }
 
+/** Whether `adapter` can ask the catalog for a table. */
+function hasTableExists(
+  adapter: object
+): adapter is { tableExists(tableName: string): Promise<boolean> } {
+  return (
+    typeof (adapter as { tableExists?: unknown }).tableExists === "function"
+  );
+}
+
 /**
  * Whether the companion `_locales` table physically exists (its migration has
  * run). Returns false ONLY for a verified missing-table error; any other probe
@@ -1147,6 +1157,12 @@ export async function companionTableExists(
   adapter: CompanionWriteAdapter,
   companionTableName: string
 ): Promise<boolean> {
+  // Inside a read routed to a transaction, asked of the catalog: on
+  // PostgreSQL a statement naming a missing table aborts the transaction it
+  // runs in, and the read's caller holds that transaction open for its write.
+  if (readsOnTransaction(adapter) && hasTableExists(adapter)) {
+    return adapter.tableExists(companionTableName);
+  }
   const q =
     adapter.dialect === "mysql"
       ? `\`${companionTableName}\``

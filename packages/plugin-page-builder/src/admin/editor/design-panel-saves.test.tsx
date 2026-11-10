@@ -59,7 +59,11 @@ vi.mock("../site-style-read", () => ({
   }),
 }));
 
-/** What the Single was asked to store, in order. */
+/**
+ * What the Single was asked to store, in order. Each write is saved over
+ * whatever the style holds and says so with `_overwrite: true`, which the
+ * expectations state.
+ */
 const writes: Record<string, unknown>[] = [];
 /**
  * Whether the Single refuses the next writes, and what it says; whether each
@@ -183,8 +187,16 @@ function Canvas(): React.JSX.Element {
   );
   // How many sections are drawn over the read, beside what is drawn.
   const previewing = React.useContext(SiteStylePreviewContext).size;
+  // Every token drawn, by name, for a case where a save met another's.
+  const names = (siteStyle.tokens?.tokens ?? [])
+    .map(token => token.name)
+    .join(" ");
   return (
-    <output data-testid="canvas" data-previewing={previewing}>
+    <output
+      data-testid="canvas"
+      data-previewing={previewing}
+      data-tokens={names}
+    >
       {brand?.values.light ?? "none"}
     </output>
   );
@@ -366,6 +378,39 @@ describe("the Design panel's writes", () => {
     expect(canvas()).toBe("none");
   });
 
+  it("draws what a held edit stored once merged onto a token another author added", async () => {
+    // The read gives a version, so the held edit is merged onto the newest
+    // copy. Another author adds Other while the edit waits; the read brings
+    // it in before the write. Once stored, the canvas draws the merge, both
+    // tokens, without waiting for the read after the write.
+    const brand = {
+      name: "color.brand",
+      kind: "color",
+      values: { light: "#1d2b6b" },
+    };
+    const other = {
+      name: "color.other",
+      kind: "color",
+      values: { light: "#abcdef" },
+    };
+    stored.data = { tokens: { tokens: [brand] }, _rev: "3" };
+    const steps: EditorStep[] = [];
+    const { rerender } = render(<Editor steps={steps} />);
+    enter(openBrand(), "#000006");
+    expect(writes).toEqual([]);
+    stored.data = { tokens: { tokens: [brand, other] }, _rev: "4" };
+    rerender(<Editor steps={steps} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?._rev).toBe("4");
+    expect(canvas()).toBe("#000006");
+    expect(
+      screen.getByTestId("canvas").getAttribute("data-tokens")?.split(" ")
+    ).toEqual(expect.arrayContaining(["color.brand", "color.other"]));
+  });
+
   it("stops drawing an edit whose write is refused", async () => {
     single.refuse = "That colour cannot be stored.";
     render(<Editor steps={[]} />);
@@ -447,7 +492,7 @@ describe("the Design panel's writes", () => {
     // Written, then taken back; the read has not moved on, and the canvas
     // shows what the section holds again.
     expect(writes).toHaveLength(2);
-    expect(writes[1]).toEqual({ tokens: null });
+    expect(writes[1]).toEqual({ _overwrite: true, tokens: null });
     expect(canvas()).toBe("none");
   });
   it("sends a write released while the page is visible so it outlives the page", async () => {

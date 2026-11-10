@@ -25,15 +25,18 @@ import {
   findNode,
   getBlock,
   isComponentInstance,
+  isRichTextValue,
   registryBlockSource,
   type BlockDocument,
   type BlockNode,
   type ResolvedBlockNode,
+  type RichTextValue,
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
 import { composedHolds } from "./component-holds";
 import { inlinePropKind } from "./inline-prop-kind";
+import { richTextChanged } from "./inline-rich-text";
 import { setOverrideOp } from "./instance-inspector";
 import { lockBlockingEdit } from "./locking";
 import type { BuilderOp } from "./op-vocabulary";
@@ -52,9 +55,26 @@ export interface ExposedTextTarget {
   readonly value: string;
 }
 
+/**
+ * An exposed passage the canvas may edit in place, addressed through its
+ * placement. The passage itself is read when the editor opens and again when
+ * it closes ({@link exposedPassage}), never carried, so a change made to it
+ * meanwhile is seen.
+ */
+export interface ExposedRichTarget {
+  /** The composed node the element belongs to, as the canvas addresses it. */
+  readonly nodeId: string;
+  readonly prop: string;
+  /** The placement the passage is stored on, a node of the page document. */
+  readonly placementId: string;
+  /** The exposure id the passage is stored under. */
+  readonly exposureId: string;
+}
+
 /** What a double-click on a component's text means. */
 export type ComposedTextAnswer =
   | { readonly kind: "exposed"; readonly target: ExposedTextTarget }
+  | { readonly kind: "exposed-rich"; readonly target: ExposedRichTarget }
   /**
    * Not editable here: the text belongs to the component's design, or, with
    * `heldExposureId`, the exposure feeding it is held by a lock the component
@@ -70,12 +90,12 @@ export type ComposedTextAnswer =
  * What the canvas may do with a value of a composed node, or `null` when the
  * node is the page's own and the ordinary inline edit answers for it.
  *
- * Text a `text` exposure feeds, on an unlocked placement, is editable. Anything else in a
- * component is "part of" it: text it does not expose, a placement locked in
- * Layers, a value the component's own locks hold (a block it locks in Layers,
- * or a prop that is not content inside an area locked to its content; the
- * panel holds that row read-only, with the reason), and rich text, which has
- * no inline editor for a placement yet.
+ * Text a `text` exposure feeds, and a passage a `richText` exposure feeds, on
+ * an unlocked placement, are editable. Anything else in a component is "part
+ * of" it: text it does not expose, a placement locked in Layers, and a value
+ * the component's own locks hold (a block it locks in Layers, or a prop that
+ * is not content inside an area locked to its content; the panel holds that
+ * row read-only, with the reason).
  *
  * @param document - the page document, which holds the placement
  * @param composed - the editor's composition of it, with the exposure map
@@ -94,8 +114,18 @@ export function composedTextAt(
   const found = placedNode(document, composed, nodeId);
   if (found === null) return null;
   const { node, placement } = found;
-  const exposureId = textExposureOf(document, node, prop, placement);
   const schema = getBlock(node.type)?.props?.[prop];
+  const kind = inlinePropKind(schema);
+  // Free text through a text exposure, a passage through a rich-text one: an
+  // exposure of another type aimed at the prop is edited in the panel, where
+  // its control keeps the value valid.
+  const exposureId = exposureOf(
+    document,
+    node,
+    prop,
+    placement,
+    kind === "rich" ? "richText" : "text"
+  );
   // The judgement the panel's rows are held by, so the canvas offers exactly
   // the text the panel lets change.
   if (
@@ -108,8 +138,14 @@ export function composedTextAt(
       heldExposureId: exposureId,
     };
   }
-  if (exposureId === undefined || inlinePropKind(schema) !== "plain") {
+  if (exposureId === undefined || kind === null) {
     return { kind: "part-of", placementId: placement.id };
+  }
+  if (kind === "rich") {
+    return {
+      kind: "exposed-rich",
+      target: { nodeId, prop, placementId: placement.id, exposureId },
+    };
   }
   // The text the page draws for this value, through the projection every
   // reader shares, so an untouched edit compares equal and writes nothing.
@@ -149,15 +185,15 @@ function placedNode(
 }
 
 /**
- * The id of the `text` exposure feeding this prop, when the placement may
- * change it. Free text only through a text exposure: a choice or a link aimed
- * at a text prop is edited in the panel, where its control keeps it valid.
+ * The id of the exposure of this type feeding this prop, when the placement
+ * may change it.
  */
-function textExposureOf(
+function exposureOf(
   document: BlockDocument,
   node: ResolvedBlockNode,
   prop: string,
-  placement: BlockNode
+  placement: BlockNode,
+  type: "text" | "richText"
 ): string | undefined {
   const fed = node.exposedProps;
   const exposure =
@@ -165,7 +201,7 @@ function textExposureOf(
   // The placement's Layers lock, its own or one around it: either holds every
   // value the placement stores.
   if (
-    exposure?.type !== "text" ||
+    exposure?.type !== type ||
     lockBlockingEdit(document, placement.id) !== undefined
   ) {
     return undefined;
@@ -201,4 +237,71 @@ export function exposedTextOp(
     target.exposureId,
     next === "" ? { $unset: true } : next
   );
+}
+
+/**
+ * The passage an exposed target shows now, raw as the composition holds it, or
+ * `null` once it is no longer editable in place (the placement was locked or
+ * removed, or the exposure stopped feeding it). Judged by
+ * {@link composedTextAt}, the one answer the canvas opens a passage by, so the
+ * editor closes on exactly the rules it opened on.
+ */
+export function exposedPassage(
+  document: BlockDocument,
+  composed: BlockDocument | undefined,
+  target: ExposedRichTarget,
+  locks: SlotDefaultSource = registryBlockSource()
+): {
+  readonly stored: unknown;
+  readonly value: RichTextValue | undefined;
+} | null {
+  const answer = composedTextAt(
+    document,
+    composed,
+    target.nodeId,
+    target.prop,
+    locks
+  );
+  if (
+    answer?.kind !== "exposed-rich" ||
+    answer.target.placementId !== target.placementId ||
+    answer.target.exposureId !== target.exposureId ||
+    composed === undefined
+  ) {
+    return null;
+  }
+  const node = findNode(composed.nodes, target.nodeId);
+  const stored = node?.props?.[target.prop];
+  return { stored, value: isRichTextValue(stored) ? stored : undefined };
+}
+
+/**
+ * The op that stores an edited passage as the placement's value, or `null`
+ * when there is nothing to write: the passage is unchanged, the editor did not
+ * return a passage, it is no longer editable, or the page's copy changed while
+ * it was open (the older copy is never written over the newer). One op, the
+ * same the panel's field writes, so one undo step.
+ *
+ * @param next - what the editor read when the edit finished
+ * @param before - what it read when the passage opened
+ * @param opened - the raw passage the session was handed
+ */
+export function exposedRichOp(
+  document: BlockDocument,
+  composed: BlockDocument | undefined,
+  target: ExposedRichTarget,
+  next: unknown,
+  before: unknown,
+  opened: unknown,
+  locks: SlotDefaultSource = registryBlockSource()
+): BuilderOp | null {
+  const now = exposedPassage(document, composed, target, locks);
+  if (now === null || richTextChanged(opened, now.stored)) return null;
+  if (!isRichTextValue(next) || !richTextChanged(before, next)) return null;
+  const placement: BlockNode | undefined = findNode(
+    document.nodes,
+    target.placementId
+  );
+  if (placement === undefined) return null;
+  return setOverrideOp(placement, target.exposureId, next);
 }

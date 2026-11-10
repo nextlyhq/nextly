@@ -30,8 +30,10 @@ import {
   emitTokenBlocks,
   isPlainRecord,
   isSpacingMode,
+  isDefaultLook,
   isLook,
   isUsableNamedClass,
+  ownLooksRead,
   namedClassesRead,
   newStyleIssueBudget,
   resolveSiteTokens,
@@ -652,6 +654,9 @@ function mergedLibraryIssues(
   const before = referableClassIds(policy.defaults?.classes ?? []);
   const after = referableClassIds(merged);
   const shadowed = looksShadowed(merged, after);
+  // A block's own look is never a class a page refers to: it takes effect when
+  // it is the one own look of its type the engine reads as that type's base.
+  const ownRead = new Set(ownLooksRead(merged).map(entry => entry.id));
 
   const issues: string[] = [];
   // A class the site used to render and no longer does. This write caused it,
@@ -668,7 +673,7 @@ function mergedLibraryIssues(
   // A class in this write that will not render. Reported by id, because that is
   // what a node references and what the author can act on.
   for (const entry of classes) {
-    if (!after.has(entry.id)) {
+    if (!after.has(entry.id) && !ownRead.has(entry.id)) {
       issues.push(
         `The class "${entry.id}" would not render: once merged with this site's config another class claims its slug or id first, or it falls past the ${MAX_NAMED_CLASSES} the compiler reads.`
       );
@@ -803,12 +808,15 @@ export function checkStoredClasses(
       issues.push(`classes[${index}] repeats the id "${entry.id}".`);
       return;
     }
-    if (slugs.has(entry.slug)) {
+    // A block's own look is never written as a class and claims no slug, as
+    // the engine's claim rules have it, so a style may share its name.
+    const claimsSlug = !isDefaultLook(entry);
+    if (claimsSlug && slugs.has(entry.slug)) {
       issues.push(`classes[${index}] repeats the slug "${entry.slug}".`);
       return;
     }
     ids.add(entry.id);
-    slugs.add(entry.slug);
+    if (claimsSlug) slugs.add(entry.slug);
     // Reported but still returned, as this module's two postures require: a
     // write refuses the section on any issue, while a read keeps the entry the
     // compiler will narrow for itself.

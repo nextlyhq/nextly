@@ -20,7 +20,9 @@ import {
 
 export const BoundEntries = defineCollection({
   slug: "bound-entries",
-  labels: { singular: "Bound entry", plural: "Bound entries" },
+  // Named as a site would name such a collection, so the editor's lists of
+  // it read as they would on a real site; "Posts" is the playground's own.
+  labels: { singular: "Blog post", plural: "Blog posts" },
   // A draft row must never reach a published page.
   status: true,
   // The public reads this collection, as a page's list does; the protected

@@ -79,6 +79,8 @@ These ship today but carry no guarantee yet — use them, but expect change:
   columns a plugin contributed to a table it does not own
 - `createTestNextly`'s `pluginConsent` option
 - `ctx.hooks` plugin registration (`PluginHookRegistry`, `HookType`, `HookHandler`)
+- The in-transaction hook phase: `ctx.hooks.onInTransaction` / `offInTransaction`,
+  `InTransactionHandler`, `InTransactionContext`
 - Filters & actions (D63): `ctx.filters` / `ctx.actions` + seam types
 - Secrets (D37): `secret`, `Secret`, `isSecret`
 - Client UX (`@nextlyhq/plugin-sdk/client`): `useCan`, `<Can>`
@@ -87,7 +89,7 @@ These ship today but carry no guarantee yet — use them, but expect change:
 - Schema extensibility: `contributes.schema` (`tables`, `extend`,
   `migrations`), the `defineTable` / `col.*` DSL, `schema.extendTable`,
   `schema.adoptTable` and `db.schema.afterDrizzle`
-- Collection `db` options: `db.idType`, `db.allowIdOnCreate`
+- Collection `db` options: `db.idType`, `db.allowIdOnCreate`, `db.slugPaths`
 - `db.postgres.schema` (accepts only `"public"` for now)
 - The manifest's declaration of reach: `capabilities` (`net.outbound`,
   `db.rawSql`, `secrets`, `auth.login`), `provides` and `requires`
@@ -103,6 +105,11 @@ These ship today but carry no guarantee yet — use them, but expect change:
 - Admin places: `CORE_ADMIN_PLACES`, `AdminPlaces`, `AdminPlaceId`,
   `CoreAdminPlaceId`, `PluginAdminPlaceDeclaration` and
   `contributes.admin.places`
+- Entry-list filters: `contributes.admin.filters`,
+  `PluginListFilterDeclaration` and `PluginListFilterOption`
+- Admin contributions: `contributes.admin.contributions`, `AdminContribution`
+  and its kinds, `AdminContributionAction`, `AdminContributionKind`,
+  `RowPredicate` and `RowPredicateValue`
 - `ctx.security`: the password helpers, and the opaque and one-purpose secret
   stores
 - Account events: `UserEvents` — core emits `user.created` and `user.deleted`

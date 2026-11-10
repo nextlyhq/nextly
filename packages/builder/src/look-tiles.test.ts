@@ -12,6 +12,7 @@ import {
   lookChoice,
   lookLineWords,
   lookTiles,
+  lookStageStyle,
   lookTileStyle,
   withLook,
   wornLook,
@@ -173,6 +174,17 @@ describe("how a tile draws a look", () => {
   } as unknown as SiteTokenSet;
   const base = values({ backgroundColor: "#ffffff", borderRadius: "8px" });
 
+  it("sets a tile's stage in the site's own page colours, for the mode", () => {
+    expect(lookStageStyle(undefined, "light")).toEqual({
+      backgroundColor: "#ffffff",
+      color: "#111827",
+    });
+    expect(lookStageStyle(undefined, "dark")).toEqual({
+      backgroundColor: "#0b0f19",
+      color: "#f9fafb",
+    });
+  });
+
   it("lays the look over the block's base, its tokens resolved for the mode", () => {
     expect(lookTileStyle(base, outline.styles, tokens, "light")).toMatchObject({
       backgroundColor: "#ffffff",
@@ -244,6 +256,31 @@ describe("a token-built look's tile", () => {
       borderBlockStartWidth: "1px",
       borderColor: "#2563eb",
     });
+  });
+});
+
+describe("a look built from scaled tokens", () => {
+  it("draws each token at its factor, as the page compiles it", () => {
+    // The page writes `calc(var(--…space-4) * 0.25)`; the tile, which has no
+    // variables, writes the token's value at the same factor.
+    const side = { $token: "space.4", times: 0.25 };
+    const tile = lookTileStyle(
+      undefined,
+      values({
+        border: {
+          width: {
+            blockStart: side,
+            blockEnd: side,
+            inlineStart: side,
+            inlineEnd: side,
+          },
+          style: "solid",
+        },
+      }),
+      undefined,
+      "light"
+    );
+    expect(tile.borderBlockStartWidth).toBe("calc(1rem * 0.25)");
   });
 });
 

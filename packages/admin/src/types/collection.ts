@@ -6,7 +6,7 @@ import type { RemovedFromCodeMark } from "./removed-from-code";
  * All supported field types in Nextly
  *
  * These map to the field types available in FieldPalette.tsx:
- * - Text: text, textarea, richText, email, password, code
+ * - Text: text, textarea, richText, email, password, code, icon
  * - Number: number
  * - Selection: checkbox, date, select, radio
  * - Media: upload
@@ -21,6 +21,7 @@ export type FieldPrimitiveType =
   | "email"
   | "password"
   | "code"
+  | "icon"
   // Number types
   | "number"
   // Selection types
@@ -238,6 +239,8 @@ export interface Collection extends RemovedFromCodeMark {
     isPlugin?: boolean;
     /** Hide the "New …" affordances (machine-created collections) */
     disableCreate?: boolean;
+    /** Hide the admin's own Delete (deleted through a plugin's own action) */
+    disableDelete?: boolean;
     /** Custom components for admin UI */
     components?: CollectionAdminComponents;
   };

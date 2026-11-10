@@ -76,7 +76,7 @@ describe("version capture on update (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { title: "v2" }
+      { title: "v2", _overwrite: true }
     );
 
     const rows = await versions(current, "posts");
@@ -104,7 +104,7 @@ describe("version capture on update (integration)", () => {
 
     await singles.update(
       "preferences",
-      { title: "hello" },
+      { title: "hello", _overwrite: true },
       { overrideAccess: true }
     );
 
@@ -146,7 +146,7 @@ describe("version capture on update (integration)", () => {
     // defaulted `siteName` is never in the patch, only in the auto-create seed.
     await singles.update(
       "preferences",
-      { tagline: "hi" },
+      { tagline: "hi", _overwrite: true },
       { overrideAccess: true, locale: "en" }
     );
 
@@ -186,13 +186,13 @@ describe("version capture on update (integration)", () => {
     // Establish both German translations.
     await singles.update(
       "preferences",
-      { siteName: "Meine Seite", tagline: "hallo" },
+      { siteName: "Meine Seite", tagline: "hallo", _overwrite: true },
       { overrideAccess: true, locale: "de" }
     );
     // Partial German edit: touch only `siteName`, leaving `tagline` untouched.
     await singles.update(
       "preferences",
-      { siteName: "Meine Seite 2" },
+      { siteName: "Meine Seite 2", _overwrite: true },
       { overrideAccess: true, locale: "de" }
     );
 
@@ -233,13 +233,13 @@ describe("version capture on update (integration)", () => {
     // Establish a German translation.
     await singles.update(
       "preferences",
-      { tagline: "hallo" },
+      { tagline: "hallo", _overwrite: true },
       { overrideAccess: true, locale: "de" }
     );
     // Shared-field-only write at the same locale: touches no translatable field.
     await singles.update(
       "preferences",
-      { siteName: "Acme" },
+      { siteName: "Acme", _overwrite: true },
       { overrideAccess: true, locale: "de" }
     );
 
@@ -278,18 +278,18 @@ describe("version capture on update (integration)", () => {
     // Default locale published; then a draft German translation.
     await singles.update(
       "preferences",
-      { siteName: "Acme", status: "published" },
+      { siteName: "Acme", status: "published", _overwrite: true },
       { overrideAccess: true, locale: "en" }
     );
     await singles.update(
       "preferences",
-      { tagline: "hallo" },
+      { tagline: "hallo", _overwrite: true },
       { overrideAccess: true, locale: "de" }
     );
     // Shared-field write at German: no status, but folds in the translation.
     await singles.update(
       "preferences",
-      { siteName: "Acme 2" },
+      { siteName: "Acme 2", _overwrite: true },
       { overrideAccess: true, locale: "de" }
     );
 
@@ -334,7 +334,7 @@ describe("version capture on update (integration)", () => {
 
     await singles.update(
       "preferences",
-      { region: "us" },
+      { region: "us", _overwrite: true },
       { overrideAccess: true, locale: "en" }
     );
 
@@ -374,7 +374,7 @@ describe("version capture on update (integration)", () => {
     // First update auto-creates at "de" and touches only `tagline`.
     await singles.update(
       "preferences",
-      { tagline: "hallo" },
+      { tagline: "hallo", _overwrite: true },
       { overrideAccess: true, locale: "de" }
     );
 
@@ -433,7 +433,7 @@ describe("version capture on update (integration)", () => {
           // The concurrent writer persists the row with a REAL siteName.
           await singles.update(
             "preferences",
-            { siteName: "Real Name" },
+            { siteName: "Real Name", _overwrite: true },
             { overrideAccess: true, locale: "en" }
           );
         }
@@ -445,7 +445,7 @@ describe("version capture on update (integration)", () => {
     // the concurrent writer just inserted.
     const outer = await singles.update(
       "preferences",
-      { region: "us" },
+      { region: "us", _overwrite: true },
       { overrideAccess: true, locale: "en" }
     );
     // The adopting write itself must succeed and be captured, otherwise the
@@ -497,7 +497,7 @@ describe("version capture on update (integration)", () => {
     // Scalar-only update — the component field is NOT in the payload.
     await handler.updateEntry(
       { collectionName: "pages", entryId: id, overrideAccess: true },
-      { title: "v2" }
+      { title: "v2", _overwrite: true }
     );
 
     const rows = await versions(current, "pages");
@@ -533,7 +533,7 @@ describe("version capture on update (integration)", () => {
     const id = (created.data as { id: string }).id;
     await handler.updateEntry(
       { collectionName: "docs", entryId: id, overrideAccess: true },
-      { title: "d2", meta: { views: 4, tags: ["c"] } }
+      { title: "d2", meta: { views: 4, tags: ["c"] }, _overwrite: true }
     );
 
     const rows = await versions(current, "docs");
@@ -608,7 +608,7 @@ describe("version capture on update (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { title: "t2" }
+      { title: "t2", _overwrite: true }
     );
 
     const rows = await versions(current, "pages");
@@ -666,7 +666,7 @@ describe("version capture on update (integration)", () => {
         overrideAccess: true,
         locale: "de",
       },
-      { hero: { heading: "Willkommen" } }
+      { hero: { heading: "Willkommen" }, _overwrite: true }
     );
 
     const rows = await versions(current, "pages");
@@ -712,7 +712,7 @@ describe("version capture on update (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "pages", entryId: id, overrideAccess: true },
-      { hero: { heading: "Welcome back" } }
+      { hero: { heading: "Welcome back" }, _overwrite: true }
     );
 
     const rows = await versions(current, "pages");
@@ -755,7 +755,7 @@ describe("version capture on update (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "pages", entryId: id, overrideAccess: true },
-      { title: "Page v2" }
+      { title: "Page v2", _overwrite: true }
     );
 
     const rows = await versions(current, "pages");
@@ -794,7 +794,7 @@ describe("version capture on update (integration)", () => {
 
     await singles.update(
       "preferences",
-      { meta: { hero: { heading: "Welcome" } } },
+      { meta: { hero: { heading: "Welcome" } }, _overwrite: true },
       { overrideAccess: true }
     );
 
@@ -826,7 +826,7 @@ describe("version capture on update (integration)", () => {
     const id = (created.data as { id: string }).id;
     await handler.updateEntry(
       { collectionName: "notes", entryId: id, overrideAccess: true },
-      { title: "b" }
+      { title: "b", _overwrite: true }
     );
 
     expect(await versions(current, "notes")).toHaveLength(0);

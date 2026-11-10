@@ -1607,6 +1607,170 @@ function capitalise(text: string): string {
   return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1);
 }
 
+/**
+ * What a read of the schema lock learned. `unknown` is its own answer: a lock this run could not
+ * read (a role without SELECT on a lock table, a database another connection holds) is not a lock
+ * nothing holds, and reporting it as free would tell a reader no schema change is running when
+ * none could be ruled out.
+ */
+export type SchemaLockReading =
+  | { readonly state: "free" }
+  | { readonly state: "held"; readonly holder: SchemaLockHolder }
+  | { readonly state: "unknown"; readonly reason: string };
+
+/** The driver's code for a failed read, from the error or the first cause that names one. */
+function errorCode(error: unknown): string | null {
+  let link: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && typeof link === "object" && link !== null;
+    depth++
+  ) {
+    const code = (link as { code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) return code;
+    link = (link as { cause?: unknown }).cause;
+  }
+  return null;
+}
+
+/** One lock's holder, or what kept it from being read. */
+async function readOneLock(
+  name: string,
+  read: () => Promise<SchemaLockHolder | null>
+): Promise<SchemaLockHolder | null | { unreadable: string }> {
+  try {
+    return await read();
+  } catch (error) {
+    const code = errorCode(error);
+    return {
+      unreadable: `${name} could not be read${code === null ? "" : ` (${code})`}`,
+    };
+  }
+}
+
+/**
+ * Who holds the schema lock now, read without taking it.
+ *
+ * For a run that must write nothing, such as a report: taking the lock writes a claim, so this only
+ * reads each lock a schema change takes and creates no table. A lock table that does not exist yet
+ * is free, since the first run that claims it creates it. Any lock found held makes the answer
+ * held; otherwise any lock that could not be read makes it unknown. The answer can be stale the
+ * moment it is read; a run that acts on it takes the lock instead.
+ */
+export async function readSchemaLockState(
+  adapter: DrizzleAdapter
+): Promise<SchemaLockReading> {
+  const dialect = adapter.getCapabilities().dialect;
+  const observed = await observeMigrationLock(adapter, dialect);
+  const readings = [
+    await readOneLock("the schema lock", () =>
+      readSchemaRowHolder(adapter, dialect)
+    ),
+    await readOneLock("the earlier migrate lock", () =>
+      readEarlierLockHolder(adapter, dialect)
+    ),
+    // The field-group lock's own read already tells a free lock from one it could not read.
+    observed.kind === "unknown"
+      ? {
+          unreadable: `the field-group lock could not be read (${observed.reason})`,
+        }
+      : observed.kind === "held"
+        ? { kind: "earlier-field-group-lock" as const, owner: observed.owner }
+        : null,
+  ];
+  for (const reading of readings) {
+    if (reading !== null && !("unreadable" in reading)) {
+      return { state: "held", holder: reading };
+    }
+  }
+  const unreadable = readings
+    .filter((r): r is { unreadable: string } => r !== null && "unreadable" in r)
+    .map(r => r.unreadable);
+  return unreadable.length === 0
+    ? { state: "free" }
+    : { state: "unknown", reason: unreadable.join("; ") };
+}
+
+/** The schema lock's row while a claim on it is live; a table never created holds nothing. */
+async function readSchemaRowHolder(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect
+): Promise<SchemaLockHolder | null> {
+  let state: RowState | undefined;
+  try {
+    const rows = await adapter.queryStatement<RawState>(stateQuery(dialect, 0));
+    state = toState(rows[0]);
+  } catch (error) {
+    if (isMissingTable(error, dialect)) return null;
+    throw error;
+  }
+  return state?.live === true ? holderOf(state) : null;
+}
+
+/**
+ * The earlier migrate lock's holder, read without taking it: PostgreSQL's row while its lease runs,
+ * and MySQL's named locks, this database's and the server-wide one earlier versions took.
+ */
+async function readEarlierLockHolder(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect
+): Promise<SchemaLockHolder | null> {
+  if (dialect === "mysql") return readMysqlNamedLockHolder(adapter);
+  if (dialect === "postgresql") return readEarlierMigrateRowHolder(adapter);
+  return null;
+}
+
+/** MySQL's named locks: this database's, then the server-wide one earlier versions took. */
+async function readMysqlNamedLockHolder(
+  adapter: DrizzleAdapter
+): Promise<SchemaLockHolder | null> {
+  const [used] = toRows(
+    await adapter.queryStatement(
+      sql`SELECT IS_USED_LOCK(${MYSQL_MIGRATE_LOCK_NAME}) AS ${id("current")},
+            IS_USED_LOCK(${MYSQL_LEGACY_LOCK_NAME}) AS ${id("legacy")}`
+    )
+  );
+  const named: Array<[string, string | null]> = [
+    // The connection holding each, or null where it is free.
+    ["nextly:migrate:<this database>", connectionIdOf(used?.current)],
+    [MYSQL_LEGACY_LOCK_NAME, connectionIdOf(used?.legacy)],
+  ];
+  const held = named.find(([, connection]) => connection !== null);
+  return held === undefined
+    ? null
+    : {
+        kind: "earlier-mysql-lock",
+        name: held[0],
+        connectionId: held[1],
+      };
+}
+
+/** PostgreSQL's earlier migrate row while its lease runs; a table never created holds nothing. */
+async function readEarlierMigrateRowHolder(
+  adapter: DrizzleAdapter
+): Promise<SchemaLockHolder | null> {
+  let rows: Array<{ owner: string | null; lapses_in: unknown }>;
+  try {
+    rows = await adapter.queryStatement(
+      sql`SELECT ${id("owner")},
+            ${remainingSecondsExpression("postgresql", "expires_at")} AS ${id("lapses_in")}
+          FROM ${id(EARLIER_MIGRATE_LOCK_TABLE)}
+          WHERE ${id("id")} = ${ROW_ID} AND ${id("expires_at")} > ${nowExpression("postgresql")}`
+    );
+  } catch (error) {
+    if (isMissingTable(error, "postgresql")) return null;
+    throw error;
+  }
+  const row = rows[0];
+  return row === undefined
+    ? null
+    : {
+        kind: "earlier-migrate-lock",
+        owner: row.owner,
+        lapsesInSeconds: seconds(row.lapses_in),
+      };
+}
+
 /** An interrupt that arrived before the work began: nothing ran, and nothing is held. */
 function interruptedBeforeStart(command: string): NextlyError {
   return NextlyError.serviceUnavailable({

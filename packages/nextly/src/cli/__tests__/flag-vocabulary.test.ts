@@ -137,34 +137,32 @@ const WRITES = [
   "generate:manifest",
   "generate:types",
   "generate:widget",
+  "i18n:restore",
   "init",
+  "media reindex-usage",
   "migrate",
   "migrate:baseline",
   "migrate:create",
-  "migrate:down",
-  "telemetry disable",
-  "telemetry enable",
-  "telemetry reset",
-  "webhooks:prune",
-];
-/**
- * Commands that write by default and do not offer `--dry-run` yet. This list
- * may only shrink: a command leaves it in the change that gives it the flag.
- */
-const WRITES_WITHOUT_DRY_RUN_YET = [
-  "db:sync",
-  "i18n:restore",
-  "media reindex-usage",
   "migrate:fresh",
+  "migrate:down",
   "migrate:resolve",
   "permissions:cleanup",
   "plugins install",
   "plugins uninstall",
   "prune",
   "setup-token",
+  "telemetry disable",
+  "telemetry enable",
+  "telemetry reset",
   "upgrade",
   "users:create-admin",
+  "webhooks:prune",
 ];
+/**
+ * Commands that write by default and do not offer `--dry-run` yet. This list
+ * may only shrink: a command leaves it in the change that gives it the flag.
+ */
+const WRITES_WITHOUT_DRY_RUN_YET = ["db:sync"];
 const PREVIEWS = [
   "media orphans",
   "media remove-sizes",

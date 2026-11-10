@@ -188,7 +188,11 @@ describe("resolveContent (integration)", () => {
     await current.nextly.update({
       collection: "pages",
       id: String(created.item.id),
-      data: { title: "About (pending)", secret: "draft-secret" },
+      data: {
+        title: "About (pending)",
+        secret: "draft-secret",
+        _overwrite: true,
+      },
     });
 
     const seen = (await resolveContent("pages", "about", {
@@ -237,7 +241,11 @@ describe("resolveContent (integration)", () => {
     await current.nextly.update({
       collection: "pages",
       id: String(created.item.id),
-      data: { title: "About (pending)", secret: "draft-secret" },
+      data: {
+        title: "About (pending)",
+        secret: "draft-secret",
+        _overwrite: true,
+      },
     });
 
     const seen = (await resolveContent("pages", "about", {

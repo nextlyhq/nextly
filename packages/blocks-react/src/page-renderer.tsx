@@ -2,28 +2,37 @@ import {
   compileSiteSheet,
   compileSiteTokenSheet,
   DOCUMENT_FORMAT_VERSION,
+  isDefaultLook,
+  ownLooksRead,
   PAGE_ROOT_CLASS,
   resolveSiteTokens,
   type BlockDocument,
+  type NamedClass,
   type DefinitionsById,
   type DocumentLimits,
   type SiteSheetInput,
   type StyleCompileContext,
   type BreakpointSet,
-  type BindingIssue,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement, ReactNode } from "react";
 
-import { BlockList, type BoundaryBindings } from "./block-boundary";
+import {
+  BlockList,
+  type BoundaryBindings,
+  type BoundaryConditions,
+  type ItemHiddenAs,
+} from "./block-boundary";
 import {
   createStandaloneContext,
   type BindingIssuesHandler,
   type BlockHostPolicy,
   type PageBindings,
   type PageContext,
+  type PageIssue,
 } from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import {
+  heldConditionsOf,
   pageBindingRun,
   readStagesFor,
   rendersOwnMarkup,
@@ -38,12 +47,13 @@ import {
   gatedMapCoversPrunedNodes,
   hasDuplicateNodeIds,
   migrationChangedWhatDraws,
+  itemDecidedRules,
   readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
   type PageStyles,
 } from "./styles";
-import { pruneNodes } from "./visibility";
+import { pruneNodes, type EntryJudgement } from "./visibility";
 
 export interface PageRendererProps {
   /** The stored document to render. */
@@ -181,6 +191,26 @@ export interface PageRendererProps {
    * @experimental
    */
   prepared?: PreparedDocument;
+  /**
+   * What to draw in place of a block a list's item hides, for an editor
+   * showing where such blocks sit: the node it returns is drawn in the
+   * block's place, and nothing is drawn when it returns nothing.
+   *
+   * Absent, a block an item hides is not drawn, as on every published page.
+   * It is never called for a block the item shows, nor outside a list.
+   *
+   * @experimental
+   */
+  itemHiddenAs?: ItemHiddenAs;
+  /**
+   * Judge the page's conditions for an entry as an editor shows the page to a
+   * visitor reading it: every block, a placed component's own among them,
+   * judged as the page's route judges it, one they hide drawn as the node the
+   * judgement gives. Absent, as on every published page, nothing changes.
+   *
+   * @experimental
+   */
+  entryJudged?: EntryJudgement;
 }
 
 /**
@@ -189,12 +219,14 @@ export interface PageRendererProps {
  */
 function bindingIssueReport(
   handler: BindingIssuesHandler | undefined
-): (issues: readonly BindingIssue[]) => void {
+): (issues: readonly PageIssue[]) => void {
   const seen = new Set<string>();
   return issues => {
     if (handler === undefined) return;
     const fresh = issues.filter(issue => {
-      const key = `${issue.nodeId}\u0000${issue.prop}\u0000${issue.code}`;
+      // A binding is placed by its prop, a condition by where it is stored.
+      const at = "prop" in issue ? issue.prop : issue.path;
+      const key = `${issue.nodeId}\u0000${at}\u0000${issue.code}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -459,7 +491,10 @@ export function sharedStyleInputs(
   const stored: Partial<SiteSheetInput> = site ?? {};
   return defined({
     breakpoints: firstStated(stored.breakpoints, route.breakpoints),
-    namedClasses: firstStated(route.namedClasses, stored.classes),
+    namedClasses: withSiteOwnLooks(
+      firstStated(route.namedClasses, stored.classes),
+      stored.classes
+    ),
     blockBases: firstStated(stored.blockBases, route.blockBases),
     tokenPrefix: firstStated(
       stored.tokenPrefix,
@@ -486,6 +521,29 @@ export function sharedStyleInputs(
     // wins, as it does for the block defaults the model decides.
     spacingMode: firstStated(stored.spacingMode, route.spacingMode),
   });
+}
+
+/**
+ * The page context's classes with the site's own looks in place of any the
+ * context states: a block type's own look edits its base for every page on
+ * the site, so it is a fact about the site, as the stored bases are, and a
+ * route stating its own classes for attribution must not lose it. An own look
+ * is never written as a class, so this changes no class rule, only the bases.
+ */
+function withSiteOwnLooks(
+  classes: StyleCompileContext["namedClasses"],
+  site: SiteSheetInput["classes"]
+): StyleCompileContext["namedClasses"] {
+  if (classes === site || !Array.isArray(classes) || !Array.isArray(site)) {
+    return classes;
+  }
+  const siteOwn = ownLooksRead(site);
+  // Unchanged where neither tier holds one, so the stamp keeps its identity.
+  if (siteOwn.length === 0 && !classes.some(isDefaultLook)) return classes;
+  return [
+    ...classes.filter((entry: NamedClass) => !isDefaultLook(entry)),
+    ...siteOwn,
+  ];
 }
 
 /**
@@ -606,6 +664,8 @@ export function PageRenderer({
   bindings,
   onBindingIssues,
   prepared,
+  itemHiddenAs,
+  entryJudged,
 }: PageRendererProps): ReactElement {
   const resolver = blocks ?? registeredBlocks();
   // Passed through untouched. The policy travels beside the context rather than
@@ -666,7 +726,12 @@ export function PageRenderer({
   const bindingRun =
     bindings === undefined
       ? undefined
-      : pageBindingRun(bindings, pageContext.locale, resolver);
+      : pageBindingRun(
+          bindings,
+          pageContext.locale,
+          resolver,
+          pageContext.namedQueries
+        );
   const stages = readStagesFor(
     document,
     {
@@ -675,6 +740,13 @@ export function PageRenderer({
       styleContext,
       definitions,
       ...(bindingRun === undefined ? {} : { bindings: bindingRun }),
+      // An editor drawing a list item's hidden block keeps such blocks for
+      // the list to judge; a published page's route decides them itself.
+      ...(itemHiddenAs === undefined ? {} : { itemsDecided: true }),
+      // An editor showing the page as a visitor reading an entry judges
+      // every block for it, the route's way, drawing its own node in place of
+      // one hidden.
+      ...(entryJudged === undefined ? {} : { entryJudged }),
     },
     prepared
   );
@@ -705,7 +777,11 @@ export function PageRenderer({
   const boundaryBindings: BoundaryBindings | undefined =
     bindingRun === undefined
       ? undefined
-      : { run: bindingRun, bound: stages.boundValues, report };
+      : {
+          run: bindingRun,
+          bound: stages.boundValues,
+          report,
+        };
 
   // The scope comes from whichever input supplied the stylesheet, never from a
   // separate prop. Two inputs would have to agree, and when they did not the
@@ -871,7 +947,7 @@ export function PageRenderer({
     remotePatterns: hostPolicy?.remotePatterns,
   });
 
-  const { css, classes, scope } = resolvePageStyles(
+  const resolvedStyles = resolvePageStyles(
     styleInput,
     styles,
     compileContext,
@@ -880,6 +956,9 @@ export function PageRenderer({
     {
       fetchPolicyId,
       ...(mayFetchUrl === undefined ? {} : { mayFetchUrl }),
+      // This tree is the one drawn: a conditioned block still in it was kept
+      // because its conditions held, so a compile serves its rules.
+      drawn: true,
       // The tree the stored artifact describes. This render prunes before it
       // resolves — a gated drop and a drawless drop are both covered by the
       // artifact and licensed to keep it — and both can remove the last node of
@@ -889,6 +968,22 @@ export function PageRenderer({
       storedDocument: doc,
     }
   );
+  const { css, classes, scope } = resolvedStyles;
+  // The rules of each block a list's item decides, served beside the first
+  // instance a list draws, so a block no item shows publishes nothing.
+  const itemRules = itemDecidedRules(resolvedStyles, styleInput, drawsNothing);
+  // Threaded apart from the bindings, so a page drawn with list data and no
+  // bindings still decides its items' conditions and serves their rules.
+  const boundaryConditions: BoundaryConditions = {
+    // The blocks the route kept because their conditions held for the page's
+    // entry, drawn where any other conditioned block is not.
+    held: heldConditionsOf(prepared),
+    report,
+    ...(itemHiddenAs === undefined ? {} : { hiddenAs: itemHiddenAs }),
+    ...(itemRules.size === 0
+      ? {}
+      : { itemRules, itemRulesServed: new Set<string>() }),
+  };
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 
   // Tokens LAYERED over the defaults, never replacing them: a site supplying
@@ -1029,6 +1124,7 @@ export function PageRenderer({
         {...(boundaryBindings === undefined
           ? {}
           : { bindings: boundaryBindings })}
+        conditions={boundaryConditions}
       />
     </div>
   );

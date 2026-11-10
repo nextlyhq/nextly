@@ -144,7 +144,7 @@ describe("version reference hydration (integration)", () => {
     const entryId = idOf(created);
     await handler.updateEntry(
       { collectionName: "posts", entryId, overrideAccess: true },
-      { title: "Two", author: grace, tags: [design, eng] }
+      { title: "Two", author: grace, tags: [design, eng], _overwrite: true }
     );
 
     const diff = await diffDocumentVersions({
@@ -191,7 +191,7 @@ describe("version reference hydration (integration)", () => {
     const entryId = idOf(created);
     await handler.updateEntry(
       { collectionName: "posts", entryId, overrideAccess: true },
-      { title: "Two", author: bob }
+      { title: "Two", author: bob, _overwrite: true }
     );
 
     const editor = { id: "ed", roles: ["editor"] };

@@ -83,6 +83,14 @@ export const CONTENT_WIDTH_CLASS: `${typeof NODE_CLASS_PREFIX}contained` = `${NO
 export const CHILD_GAP_CLASS: `${typeof NODE_CLASS_PREFIX}gap` = `${NODE_CLASS_PREFIX}gap`;
 
 /**
+ * The icon an Accordion section draws in its title row, and the title beside
+ * it: marked by the section, styled by the Accordion's icon choices, which
+ * reach them through child selectors (see `style/disclosure`).
+ */
+export const DISCLOSURE_ICON_CLASS: `${typeof NODE_CLASS_PREFIX}disclosure-icon` = `${NODE_CLASS_PREFIX}disclosure-icon`;
+export const DISCLOSURE_TITLE_CLASS: `${typeof NODE_CLASS_PREFIX}disclosure-title` = `${NODE_CLASS_PREFIX}disclosure-title`;
+
+/**
  * A 53-bit hash of an id, in base 36.
  *
  * Two FNV-1a lanes with different multipliers, combined into one integer that a

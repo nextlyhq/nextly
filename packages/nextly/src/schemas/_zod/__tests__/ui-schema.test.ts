@@ -75,6 +75,33 @@ describe("ui-schema field types (widened set)", () => {
     ).toBe(true);
   });
 
+  it("accepts an icon field whose default is an icon id", () => {
+    expect(
+      uiSchemaManifest.safeParse(
+        manifestWith({
+          name: "badge",
+          type: "icon",
+          defaultValue: "lucide:star",
+        })
+      ).success
+    ).toBe(true);
+  });
+
+  it("refuses an icon default that the write path would refuse", () => {
+    // Each is a string, so a check of the default's type alone passes it.
+    for (const bad of [
+      "Star",
+      "lucide:Star",
+      `lucide:${"a".repeat(256 - "lucide:".length)}`,
+    ]) {
+      const r = uiSchemaManifest.safeParse(
+        manifestWith({ name: "badge", type: "icon", defaultValue: bad })
+      );
+      expect(r.success, bad.slice(0, 20)).toBe(false);
+      expect(r.error?.issues.map(i => i.path.at(-1))).toEqual(["defaultValue"]);
+    }
+  });
+
   it("losslessly round-trips a fully-configured field", () => {
     const field = {
       name: "cover",

@@ -11,10 +11,11 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { canonicalJson } from "@admin/lib/canonical-json";
 import {
   DOCUMENT_VERSION_KEY,
@@ -146,9 +147,10 @@ function usePutOff(
 function holdsStored(
   point: AutosaveDetail,
   stored: unknown,
-  locale: string | null
+  locale: string | null,
+  defaultLocale: string | null
 ): boolean {
-  if ((point.locale ?? null) !== locale) return false;
+  if (!recordedIn(point, locale, defaultLocale)) return false;
   return canonicalJson(pointValues(point.snapshot)) === canonicalJson(stored);
 }
 
@@ -320,6 +322,24 @@ export interface UseAutosaveRecoveryResult {
 }
 
 /**
+ * Whether `point` was recorded in the editor's language `locale`.
+ *
+ * A point belongs to the language it was recorded in: restored into another
+ * language's form it would put one language's text in another's fields. The
+ * default language has two spellings, no language on the editor's canonical
+ * address and its code under `?locale=`, so both sides are read as the
+ * default first. The offer and the restore both ask this, so the two cannot
+ * disagree about which language a point is in.
+ */
+function recordedIn(
+  point: Pick<AutosaveDetail, "locale">,
+  locale: string | null,
+  defaultLocale: string | null
+): boolean {
+  return (point.locale ?? defaultLocale) === (locale ?? defaultLocale);
+}
+
+/**
  * An offer, asked about again before it is restored: still as offered, or the
  * answer the offer should now be drawn from (from an older version, or gone).
  * One already shown as older is not asked again, since the author chose it
@@ -360,6 +380,8 @@ function useRestoreOffer({
   form,
   queryKey,
   setDismissed,
+  locale,
+  defaultLocale,
   onRestored,
 }: {
   offer: AutosaveRecoveryOffer | null;
@@ -369,9 +391,23 @@ function useRestoreOffer({
   form: UseFormReturn<Record<string, unknown>>;
   queryKey: readonly unknown[];
   setDismissed: (dismissed: boolean) => void;
+  /** The language the editor shows now. */
+  locale: string | null;
+  defaultLocale: string | null;
   onRestored?: (startedFrom: string | undefined) => void;
 }): Pick<UseAutosaveRecoveryResult, "restore" | "take"> {
   const queryClient = useQueryClient();
+  // The language the editor shows when the re-read below answers, which may
+  // not be the one the restore was asked in: the author can switch language
+  // during the round trip. Kept in a ref, since the answer arrives after the
+  // render that asked.
+  //
+  // Set during render, not in an effect: an answer can settle after the
+  // render that switched language has committed and before its passive
+  // effects run, and a ref still holding the old language then would let the
+  // old language's work through.
+  const currentLocale = useRef(locale);
+  currentLocale.current = locale;
   const take = useCallback(() => {
     if (!offer) return;
     /*
@@ -396,11 +432,16 @@ function useRestoreOffer({
   const restore = useCallback(
     (apply?: () => void) => {
       if (!offer || !point) return;
-      void askedAgain(offer, point, scope).then(answer =>
-        answer.stillCurrent ? (apply ?? take)() : redraw(answer.fresh)
-      );
+      void askedAgain(offer, point, scope).then(answer => {
+        // Switched language meanwhile: the point is another language's work
+        // now, and written it would fill this language's fields with it. The
+        // editor draws its own offer for the language it shows.
+        if (!recordedIn(point, currentLocale.current, defaultLocale)) return;
+        if (answer.stillCurrent) (apply ?? take)();
+        else redraw(answer.fresh);
+      });
     },
-    [offer, point, scope, take, redraw]
+    [offer, point, scope, take, redraw, defaultLocale]
   );
   return { restore, take };
 }
@@ -414,9 +455,12 @@ function offerOf(
   dismissed: boolean,
   isPutOff: (identity: string) => boolean,
   stored: Parameters<typeof holdsStored>[1],
-  locale: string | null
+  locale: string | null,
+  defaultLocale: string | null
 ): AutosaveRecoveryOffer | null {
   if (dismissed || !data) return null;
+  // Offered only in the language it was typed in: see `recordedIn`.
+  if (!recordedIn(data, locale, defaultLocale)) return null;
   const savedAt = new Date(data.updatedAt);
   if (Number.isNaN(savedAt.getTime())) return null;
   // Put off in this tab already: see `dismiss`.
@@ -424,7 +468,7 @@ function offerOf(
   // A recovery point holding what the document already stores is no unsaved
   // work: an author who undid back to the saved document left one behind,
   // and offering it back on every load restores nothing.
-  if (holdsStored(data, stored, locale)) return null;
+  if (holdsStored(data, stored, locale, defaultLocale)) return null;
   const startedFrom = versionOf(data.snapshot);
   return {
     savedAt,
@@ -471,6 +515,9 @@ export function useAutosaveRecovery({
   // account signed in to this tab is offered its own point.
   const author = useCurrentUserId();
   const queryKey = useRecoveryQueryKey(scope);
+  // Which language "no language" is, so the two spellings of the default
+  // language name one language.
+  const { defaultLocale } = useLocalization();
   const [dismissed, setDismissed] = useState(false);
   // Withdrawn once a save lands: see `savedCount`. Both answers belong to the
   // document they were given for: an editor that moves to another document
@@ -526,8 +573,9 @@ export function useAutosaveRecovery({
   // can close over it: hooks run unconditionally, and a `useCallback` cannot sit
   // after a `return`.
   const offer = useMemo(
-    () => offerOf(data, dismissed, isPutOff, stored, locale),
-    [dismissed, data, stored, locale, isPutOff]
+    () =>
+      offerOf(data, dismissed, isPutOff, stored, locale, defaultLocale ?? null),
+    [dismissed, data, stored, locale, defaultLocale, isPutOff]
   );
 
   const { restore, take } = useRestoreOffer({
@@ -538,6 +586,8 @@ export function useAutosaveRecovery({
     queryKey,
     // Taken, not put off: the form holds the work now, so nothing is offered.
     setDismissed,
+    locale,
+    defaultLocale: defaultLocale ?? null,
     onRestored,
   });
 

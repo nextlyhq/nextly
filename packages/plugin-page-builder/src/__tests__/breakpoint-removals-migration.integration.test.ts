@@ -1,16 +1,21 @@
 /**
- * An existing install upgrading to the breakpoint removal's table, with the
- * command a deployment runs, on every configured dialect.
+ * An existing install upgrading to the breakpoint removal's tables, with the
+ * command a deployment runs, on every configured dialect: from a release
+ * before the removal's runs table (schema 4), from one with it but before
+ * the table keeping what each removal took out (schema 5), and from one with
+ * both but before a run could mark the removal it undoes (schema 7).
  *
- * The install is made the way a site at the previous release made it: a
- * scratch project configured with this plugin as that release shipped it
- * (its first four migration modules, schema version 4, without the new
- * table), migrated with `nextly migrate`. A row is stored in one of its
- * tables. The project is then configured with the plugin as it ships now and
- * migrated again. Exactly the new module must run: the new table exists with
- * its one-open-run index, the earlier row and the earlier modules' records
- * are untouched, the module is recorded applied once, and migrating again
- * does nothing.
+ * The install is made the way a site at that release made it: a scratch
+ * project configured with this plugin as that release shipped it (its first
+ * migration modules, without the later tables), migrated with `nextly
+ * migrate`. A row is stored in one of its tables. The project is then
+ * configured with the plugin as it ships now and migrated again. Exactly the
+ * modules after it must run: the runs table takes one open run at a time and
+ * a run marks the removal it undoes, a run stored before the upgrade undoes
+ * nothing, the fragments table keeps a row with its JSON (the shared styles'
+ * with no host), the earlier row and the earlier modules' records are
+ * untouched, each
+ * new module is recorded applied once, and migrating again does nothing.
  *
  * The database is one of the test's own on Postgres and MySQL (created beside
  * the integration database and dropped after), and a scratch file on SQLite,
@@ -36,6 +41,7 @@ import { describe, expect, it } from "vitest";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { migrations } from "../schema/migrations";
 import {
+  breakpointRemovalFragments,
   breakpointRemovals,
   SCHEMA_PREFIX,
   siteOptions,
@@ -46,13 +52,31 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /** The tables as the database names them. */
 const REMOVALS_TABLE = `${SCHEMA_PREFIX}__${breakpointRemovals.name}`;
+const FRAGMENTS_TABLE = `${SCHEMA_PREFIX}__${breakpointRemovalFragments.name}`;
 const OPTIONS_TABLE = `${SCHEMA_PREFIX}__${siteOptions.name}`;
 
-/** How many modules the previous release shipped: all but the newest. */
-const PREVIOUS = migrations.length - 1;
+/** How many modules ship before the one named `suffix`. */
+function shippedBefore(suffix: string): number {
+  const index = migrations.findIndex(module => module.name.endsWith(suffix));
+  if (index < 1) throw new Error(`no module ${suffix} after the first`);
+  return index;
+}
 
-/** The newest module, the one the upgrade must apply. */
-const NEWEST = migrations[migrations.length - 1];
+/** The releases an install upgrades from, by how many modules they shipped. */
+const RELEASES = [
+  {
+    release: "before the removal's runs (schema 4)",
+    shipped: shippedBefore("_create_breakpoint_removals"),
+  },
+  {
+    release: "before the removal's fragments (schema 5)",
+    shipped: shippedBefore("_create_breakpoint_removal_fragments"),
+  },
+  {
+    release: "before a run marks the removal it undoes (schema 7)",
+    shipped: shippedBefore("_add_breakpoint_removal_undoes"),
+  },
+];
 
 /** What a ledger entry of this plugin's modules reads as. */
 interface LedgerEntry {
@@ -277,97 +301,182 @@ function rowsOn(
 const ledgerName = (name: string) =>
   `plugin:${PAGE_BUILDER_PLUGIN_NAME}/${name}`;
 
+/** A JSON column's value as a driver hands it back: parsed, or its text. */
+function json(value: unknown): unknown {
+  return typeof value === "string" ? (JSON.parse(value) as unknown) : value;
+}
+
 describe.each(getConfiguredTestDialects())(
-  "an install of the previous release upgrading to the breakpoint removal's table (%s)",
+  "an install upgrading to the breakpoint removal's tables (%s)",
   (dialect: TestDialect) => {
-    it("applies only the new module, keeps what was stored, and does nothing the second time", async () => {
-      if (NEWEST === undefined) throw new Error("no migration modules");
-      const folder = mkdtempSync(join(tmpdir(), "pb-upgrade-db-"));
-      const database = await scratchDatabase(dialect, folder);
-      const site = project(database);
-      let opened: Awaited<ReturnType<typeof openAdapter>> | undefined;
-      try {
-        // The previous release's install.
-        const first = await site.nextly(PREVIOUS, "migrate");
-        expect(first.stdout).toContain(
-          `Plugin migrations: ${String(PREVIOUS)} applied`
-        );
-        // Read with the current release's list: the earlier modules applied,
-        // the new one listed and not applied.
-        const before = await ledger(site.nextly);
-        expect(before.map(entry => entry.filename)).toEqual(
-          migrations.map(module => ledgerName(module.name))
-        );
-        expect(
-          before.slice(0, PREVIOUS).every(entry => entry.status === "applied")
-        ).toBe(true);
-        expect(before[PREVIOUS]?.status).not.toBe("applied");
-        opened = await openAdapter(database);
-        let { adapter } = opened;
-        // CONTROL: the previous release has no removal table.
-        expect(await adapter.tableExists(REMOVALS_TABLE)).toBe(false);
-        await rowsOn(dialect, adapter).insert(OPTIONS_TABLE, {
-          id: "kept-option",
-          name: "upgrade-probe",
-          value: "kept",
-        });
-        await opened.close();
-        opened = undefined;
+    it.each(RELEASES)(
+      "applies only the modules after the release $release, keeps what was stored, and does nothing the second time",
+      async ({ shipped }) => {
+        const folder = mkdtempSync(join(tmpdir(), "pb-upgrade-db-"));
+        const database = await scratchDatabase(dialect, folder);
+        const site = project(database);
+        let opened: Awaited<ReturnType<typeof openAdapter>> | undefined;
+        try {
+          // The earlier release's install.
+          const first = await site.nextly(shipped, "migrate");
+          expect(first.stdout).toContain(
+            `Plugin migrations: ${String(shipped)} applied`
+          );
+          // Read with the current release's list: the earlier modules
+          // applied, the new ones listed and not applied.
+          const before = await ledger(site.nextly);
+          expect(before.map(entry => entry.filename)).toEqual(
+            migrations.map(module => ledgerName(module.name))
+          );
+          expect(
+            before.slice(0, shipped).every(entry => entry.status === "applied")
+          ).toBe(true);
+          expect(
+            before.slice(shipped).every(entry => entry.status !== "applied")
+          ).toBe(true);
+          opened = await openAdapter(database);
+          let { adapter } = opened;
+          // CONTROL: the runs table only from schema 5, the fragments
+          // table only from schema 6.
+          const hadRuns =
+            shipped > shippedBefore("_create_breakpoint_removals");
+          expect(await adapter.tableExists(FRAGMENTS_TABLE)).toBe(
+            shipped > shippedBefore("_create_breakpoint_removal_fragments")
+          );
+          expect(await adapter.tableExists(REMOVALS_TABLE)).toBe(hadRuns);
+          // A removal stored before the upgrade, where the release had runs.
+          if (hadRuns) {
+            await rowsOn(dialect, adapter).insert(REMOVALS_TABLE, {
+              id: "stored-before",
+              removed_ids: '["mobile"]',
+              before: "null",
+              started_by: "user:upgrade",
+              open_key: null,
+            });
+          }
+          await rowsOn(dialect, adapter).insert(OPTIONS_TABLE, {
+            id: "kept-option",
+            name: "upgrade-probe",
+            value: "kept",
+          });
+          await opened.close();
+          opened = undefined;
 
-        // The upgrade.
-        const upgrade = await site.nextly(undefined, "migrate");
-        expect(upgrade.stdout).toContain(
-          `Plugin migrations: 1 applied, 0 adopted, ${String(PREVIOUS)} already recorded`
-        );
+          // The upgrade.
+          const upgrade = await site.nextly(undefined, "migrate");
+          expect(upgrade.stdout).toContain(
+            `Plugin migrations: ${String(migrations.length - shipped)} applied, 0 adopted, ${String(shipped)} already recorded`
+          );
 
-        opened = await openAdapter(database);
-        adapter = opened.adapter;
-        expect(await adapter.tableExists(REMOVALS_TABLE)).toBe(true);
-        // One open run at a time: a second open row is refused, and any
-        // number of closed ones are kept.
-        const row = (id: string, openKey: string | null) => ({
-          id,
-          removed_ids: '["mobile"]',
-          before: "null",
-          started_by: "user:upgrade",
-          open_key: openKey,
-        });
-        const rows = rowsOn(dialect, adapter);
-        await rows.insert(REMOVALS_TABLE, row("open-1", "site"));
-        await expect(
-          rows.insert(REMOVALS_TABLE, row("open-2", "site"))
-        ).rejects.toBeDefined();
-        await rows.insert(REMOVALS_TABLE, row("done-1", null));
-        await rows.insert(REMOVALS_TABLE, row("done-2", null));
-        expect(await rows.column(REMOVALS_TABLE, "done-2", "open_key")).toBe(
-          null
-        );
-        expect(await rows.column(REMOVALS_TABLE, "open-1", "phase")).toBe(
-          "converting"
-        );
-        // The row stored before the upgrade is as it was.
-        expect(await rows.column(OPTIONS_TABLE, "kept-option", "value")).toBe(
-          "kept"
-        );
+          opened = await openAdapter(database);
+          adapter = opened.adapter;
+          expect(await adapter.tableExists(REMOVALS_TABLE)).toBe(true);
+          expect(await adapter.tableExists(FRAGMENTS_TABLE)).toBe(true);
+          // One open run at a time: a second open row is refused, and any
+          // number of closed ones are kept.
+          const row = (id: string, openKey: string | null) => ({
+            id,
+            removed_ids: '["mobile"]',
+            before: "null",
+            started_by: "user:upgrade",
+            open_key: openKey,
+          });
+          const rows = rowsOn(dialect, adapter);
+          await rows.insert(REMOVALS_TABLE, row("open-1", "site"));
+          await expect(
+            rows.insert(REMOVALS_TABLE, row("open-2", "site"))
+          ).rejects.toBeDefined();
+          await rows.insert(REMOVALS_TABLE, row("done-1", null));
+          await rows.insert(REMOVALS_TABLE, row("done-2", null));
+          expect(await rows.column(REMOVALS_TABLE, "done-2", "open_key")).toBe(
+            null
+          );
+          expect(await rows.column(REMOVALS_TABLE, "open-1", "phase")).toBe(
+            "converting"
+          );
+          // A run marks the removal it undoes; any other run undoes nothing,
+          // the one stored before the upgrade included.
+          // A run's id, as every run is named: the column holds one whole.
+          const undone = "0190a000-0000-7000-8000-0000000000d1";
+          await rows.insert(REMOVALS_TABLE, {
+            ...row("undo-1", null),
+            undoes: undone,
+          });
+          expect(await rows.column(REMOVALS_TABLE, "undo-1", "undoes")).toBe(
+            undone
+          );
+          expect(await rows.column(REMOVALS_TABLE, "done-1", "undoes")).toBe(
+            null
+          );
+          if (hadRuns) {
+            expect(
+              await rows.column(REMOVALS_TABLE, "stored-before", "undoes")
+            ).toBe(null);
+          }
+          // What a removal took out, with its JSON kept whole, and the shared
+          // styles' row with no host.
+          const fragment = {
+            nodes: {
+              t1: { styles: { base: { mobile: { color: "#1155cc" } } } },
+            },
+          };
+          await rows.insert(FRAGMENTS_TABLE, {
+            id: "fragment-1",
+            run_id: "0190a000-0000-7000-8000-000000000001",
+            document_key: "collection\u001fpages\u001fp1",
+            host: JSON.stringify({
+              kind: "collection",
+              slug: "pages",
+              id: "p1",
+              path: ["content"],
+            }),
+            form: "draft",
+            fragment: JSON.stringify(fragment),
+          });
+          await rows.insert(FRAGMENTS_TABLE, {
+            id: "fragment-2",
+            run_id: "0190a000-0000-7000-8000-000000000001",
+            document_key: "site-style",
+            host: null,
+            form: "site",
+            fragment: JSON.stringify({ classes: {}, overridden: [] }),
+          });
+          expect(
+            json(await rows.column(FRAGMENTS_TABLE, "fragment-1", "fragment"))
+          ).toEqual(fragment);
+          expect(
+            await rows.column(FRAGMENTS_TABLE, "fragment-2", "host")
+          ).toBeNull();
+          expect(
+            await rows.column(FRAGMENTS_TABLE, "fragment-1", "created_at")
+          ).not.toBeNull();
+          // The row stored before the upgrade is as it was.
+          expect(await rows.column(OPTIONS_TABLE, "kept-option", "value")).toBe(
+            "kept"
+          );
 
-        // The earlier modules' records untouched, the new one applied once.
-        const after = await ledger(site.nextly);
-        expect(after.slice(0, PREVIOUS)).toEqual(before.slice(0, PREVIOUS));
-        expect(
-          after.filter(entry => entry.filename === ledgerName(NEWEST.name))
-        ).toEqual([expect.objectContaining({ status: "applied" })]);
-        expect(after).toHaveLength(migrations.length);
+          // The earlier modules' records untouched, each new one applied once.
+          const after = await ledger(site.nextly);
+          expect(after.slice(0, shipped)).toEqual(before.slice(0, shipped));
+          for (const module of migrations.slice(shipped)) {
+            expect(
+              after.filter(entry => entry.filename === ledgerName(module.name))
+            ).toEqual([expect.objectContaining({ status: "applied" })]);
+          }
+          expect(after).toHaveLength(migrations.length);
 
-        // Migrating again does nothing.
-        const again = await site.nextly(undefined, "migrate");
-        expect(again.stdout).toContain("Nothing to migrate");
-        expect(await ledger(site.nextly)).toEqual(after);
-      } finally {
-        await opened?.close();
-        site.close();
-        await database.drop();
-        rmSync(folder, { recursive: true, force: true });
-      }
-    }, 300_000);
+          // Migrating again does nothing.
+          const again = await site.nextly(undefined, "migrate");
+          expect(again.stdout).toContain("Nothing to migrate");
+          expect(await ledger(site.nextly)).toEqual(after);
+        } finally {
+          await opened?.close();
+          site.close();
+          await database.drop();
+          rmSync(folder, { recursive: true, force: true });
+        }
+      },
+      300_000
+    );
   }
 );

@@ -37,6 +37,7 @@ import type {
   EmailFieldConfig,
   PasswordFieldConfig,
   CodeFieldConfig,
+  IconFieldConfig,
   // Numeric field types
   NumberFieldConfig,
   // Selection field types
@@ -253,6 +254,32 @@ export const code = <
 ): CodeFieldConfig & { name: Name; virtual?: NoInfer<Virtual> } => ({
   ...config,
   type: "code",
+});
+
+/**
+ * Creates an icon field configuration.
+ *
+ * Icon fields store one icon id of the form `<set>:<name>`, for example
+ * `"lucide:star"`, and render an icon picker in the Admin UI. The id's
+ * shape is checked on save; whether the icon exists is not.
+ *
+ * @param config - Field configuration without the `type` property
+ * @returns Complete icon field configuration
+ *
+ * @example
+ * ```typescript
+ * // A feature card's icon
+ * icon({ name: 'icon', defaultValue: 'lucide:star' })
+ * ```
+ */
+export const icon = <
+  const Name extends string,
+  Virtual extends boolean = false,
+>(
+  config: Omit<IconFieldConfig, "type"> & { name: Name; virtual?: Virtual }
+): IconFieldConfig & { name: Name; virtual?: NoInfer<Virtual> } => ({
+  ...config,
+  type: "icon",
 });
 
 // ============================================================

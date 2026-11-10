@@ -85,7 +85,7 @@ the published type advertised less than the component actually promised.
 Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialog`,
 `Avatar`, `Card`, `Collapsible`, `Command`, `ContextMenu` and its family, `Popover`,
 `Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
-`Skeleton`, `Slider`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`,
+`Skeleton`, `Slider`, `Spinner`, `Table` and its family, `IconField`, `IconPicker`, `IconGlyph`, `TableSearch`, `TableSkeleton`,
 `TreeView` and its `TREE_INDENT_PX`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`,
 `PageShell`, `Bleed`, `PageHeader`, `SHELL_MEASURE`),
 `Toaster` and the shortcut manager (`ShortcutProvider`, `ShortcutScope`, `useShortcuts`,
@@ -106,6 +106,13 @@ letter spacing, a colour's alpha — is the single most repeated control in an e
 and a hand-rolled one gets pointer capture, step rounding and the per-thumb ARIA pattern wrong
 quietly. Its `value` is an array even for one thumb, which is what makes a range slider the
 same component rather than a second one.
+
+`IconField`, `IconPicker` and `IconGlyph` (with `IconSource` and `IconSourceIcon`) are the icon
+field's controls: one button that shows the chosen icon and opens a search-first picker. The kit
+stays free of icon data; a host passes `loadIcons`, resolving to an `IconSource` that searches one
+set and resolves a stored id like `lucide:star`, so the set loads only where a field needs it.
+`IconGlyph` draws an icon's body from flat SVG shape elements alone and draws any other markup as
+nothing, so a body is never inserted as HTML.
 
 The shortcut manager is the third editor-shell primitive, and the one that cannot live in a
 plugin at all: its whole purpose is to be the only listener, so a plugin shipping its own copy

@@ -59,6 +59,11 @@ export interface PageRenderInputs {
   hostPolicy?: PageRendererProps["hostPolicy"];
   limits?: PageRendererProps["limits"];
   /**
+   * What the editor's canvas draws where a list's item hides a block, while
+   * conditions are applied. Never set for a published surface.
+   */
+  itemHiddenAs?: PageRendererProps["itemHiddenAs"];
+  /**
    * The component definitions the page's instances resolve against.
    *
    * REQUIRED on the way in and always present on the way out, unlike on the

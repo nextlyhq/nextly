@@ -15,6 +15,7 @@ import type { eq as drizzleEq } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
 import { resolveRelations } from "../../database/resolve-relations";
+import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
 import {
   buildAuditLogWriter,
@@ -541,6 +542,11 @@ export function buildAuthRouterDeps(
     // The jobs runner's database is the container's adapter, under the
     // name the plugin context asks for it by.
     if (name === "jobsDatabase") return getService("adapter");
+    // Optional where webhooks are not registered, so asked for without
+    // throwing: the context reads `null` and offers no drain.
+    if (name === "webhookFastDrainScheduler") {
+      return container.has(name) ? container.get(name) : null;
+    }
     return getService(name);
   }) as Parameters<typeof createPluginContext>[0];
   const pluginCtx = createPluginContext(ctxGetService, getHookRegistry());

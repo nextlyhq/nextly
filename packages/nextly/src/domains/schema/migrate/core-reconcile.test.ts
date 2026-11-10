@@ -134,4 +134,64 @@ describe("reconcileCore (Phase 1)", () => {
     ).rejects.toMatchObject({ code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED" });
     expect(applyCore).not.toHaveBeenCalled();
   });
+  it("dev-loose asks nothing about a drop its push strips, says it is left in place, and applies the rest", async () => {
+    const live = liveWithExtraTable();
+    const applyCore = vi
+      .fn()
+      .mockResolvedValue({ statementsExecuted: ["CREATE INDEX …"] });
+    const confirmDestructive = vi.fn().mockResolvedValue(true);
+    const warnings: string[] = [];
+
+    const result = await reconcileCore({
+      db: testDb.db,
+      dialect: "sqlite",
+      mode: "dev-loose",
+      confirmDestructive,
+      introspect: () => Promise.resolve(live),
+      applyCore,
+      planPush: () =>
+        Promise.resolve({
+          runnable: [],
+          blocked: ['DROP TABLE "legacy_extra";'],
+          degraded: false,
+        }),
+      logger: { info: () => {}, warn: line => warnings.push(line) },
+    });
+
+    expect(confirmDestructive).not.toHaveBeenCalled();
+    expect(warnings.join("\n")).toMatch(/Left in place: .*legacy_extra/);
+    expect(applyCore).toHaveBeenCalledOnce();
+    expect(result.changed).toBe(true);
+  });
+
+  it("dev-loose asks only about the destructive changes its push makes", async () => {
+    const live = liveWithExtraTable();
+    live.tables.push({
+      name: "legacy_other",
+      columns: [{ name: "id", type: "text", nullable: false }],
+    });
+    const applyCore = vi.fn().mockResolvedValue({ statementsExecuted: [] });
+    const confirmDestructive = vi.fn().mockResolvedValue(true);
+
+    await reconcileCore({
+      db: testDb.db,
+      dialect: "sqlite",
+      mode: "dev-loose",
+      confirmDestructive,
+      introspect: () => Promise.resolve(live),
+      applyCore,
+      // The push strips one drop and runs the other.
+      planPush: () =>
+        Promise.resolve({
+          runnable: ['DROP TABLE "legacy_other";'],
+          blocked: ['DROP TABLE "legacy_extra";'],
+          degraded: false,
+        }),
+    });
+
+    expect(confirmDestructive).toHaveBeenCalledOnce();
+    const asked = (confirmDestructive.mock.calls[0]?.[0] ?? []) as string[];
+    expect(asked.join("\n")).toContain("legacy_other");
+    expect(asked.join("\n")).not.toContain("legacy_extra");
+  });
 });

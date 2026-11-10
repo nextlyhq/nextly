@@ -1,4 +1,4 @@
-import { defineCollection, text, textarea } from "nextly/config";
+import { defineCollection, icon, text, textarea } from "nextly/config";
 
 // Demo Categories collection for the contributor playground. Trivial
 // taxonomy used to exercise relationship pickers from Posts.
@@ -15,5 +15,8 @@ export const Categories = defineCollection({
     text({ name: "title", required: true }),
     text({ name: "slug", required: true, unique: true }),
     textarea({ name: "description" }),
+    // An icon per category, drawn beside its name on a site's listings: the
+    // playground's example of the icon field.
+    icon({ name: "icon", label: "Icon" }),
   ],
 });

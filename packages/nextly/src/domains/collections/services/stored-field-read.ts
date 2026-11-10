@@ -47,10 +47,16 @@ import type {
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
+import { keysNoUpdateStores } from "../../../lib/immutable-system-fields";
+import {
+  DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_VERSION_KEY,
+} from "../../../lib/system-columns";
 import type {
   PluginStoredValue,
   PluginStoredValueTarget,
 } from "../../../plugins/contributions";
+import { addressableFields } from "../../../shared/addressable-fields";
 import type { EntryWriteContext } from "../../../shared/lib/entry-validation";
 import type { LocalizedFieldRef } from "../../i18n/companion-join";
 import {
@@ -65,7 +71,7 @@ import {
   cachedCompanionReadiness,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
-import { getFieldType } from "../../schema/field-types/field-type-registry";
+import { classifyFieldKind } from "../../schema/services/field-column-descriptor";
 import type { VersionsDbApi } from "../../versions/db-api";
 import {
   draftDocumentFacts,
@@ -124,6 +130,73 @@ export function entryWriteContext(args: {
   };
 }
 
+/** What {@link storedReadsOn} answers. */
+export interface StoredReads {
+  /** One stored value of `allowedType`, as {@link readStoredField} reads it. */
+  read(
+    allowedType: string,
+    target: StoredFieldTarget
+  ): Promise<PluginStoredValue>;
+  /** The document's fields of `allowedType`, as a stored read names them. */
+  fieldPaths(
+    document: { readonly collection: string } | { readonly single: string },
+    allowedType: string
+  ): Promise<string[]>;
+}
+
+/**
+ * Stored reads on one connection for one handler: values of a field type, and
+ * which of a document's fields are of it, sharing one registry lookup per
+ * collection as a write context does ({@link entryWriteContext}).
+ */
+export function storedReadsOn(connection: StoredFieldConnection): StoredReads {
+  const records = registryRecords(connection);
+  return {
+    read: (allowedType, target) =>
+      readStoredField(connection, allowedType, target, records),
+    fieldPaths: async (document, allowedType) => {
+      const fields =
+        "single" in document
+          ? ((
+              await getService("singleRegistryService").getSingleBySlug(
+                document.single,
+                connection.executor
+              )
+            )?.fields as unknown as FieldDefinition[] | undefined)
+          : await records(document.collection).then(record =>
+              record === null ? undefined : collectionFields(record)
+            );
+      return fields === undefined ? [] : pathsOfType(fields, allowedType);
+    },
+  };
+}
+
+/**
+ * The paths of the fields of `allowedType` among `fields`, at their level and
+ * through named groups, as a stored read names them (`hero.body`). Unnamed
+ * groups store their fields at the level they sit in; a repeater's rows and a
+ * field-group instance are not walked, being stored elsewhere. A group kept
+ * per language is walked: the write holds a value for a field inside it,
+ * though a stored read of that field is refused.
+ */
+function pathsOfType(
+  fields: readonly FieldDefinition[],
+  allowedType: string,
+  prefix = ""
+): string[] {
+  const paths: string[] = [];
+  for (const field of storedAtLevel(fields)) {
+    if (typeof field.name !== "string" || field.name === "") continue;
+    const path = `${prefix}${field.name}`;
+    if (field.type === allowedType) {
+      paths.push(path);
+    } else if (field.type === "group" && Array.isArray(field.fields)) {
+      paths.push(...pathsOfType(field.fields, allowedType, `${path}.`));
+    }
+  }
+  return paths;
+}
+
 /** A collection's registry record by slug, or `null` where there is none. */
 type RegistryRecords = (
   slug: string
@@ -162,8 +235,8 @@ function registryRecords(connection: StoredFieldConnection): RegistryRecords {
 export interface FieldScope {
   /** What a refusal says the scope is, as one sentence; empty to say nothing. */
   readonly only: string;
-  /** Whether a field declared with `type` is one this read may answer. */
-  admits(type: string): boolean;
+  /** Whether a field declared as `field` is one this read may answer. */
+  admits(field: FieldDefinition): boolean;
   /**
    * Why a field the scope admits by type must still not be answered, asked of
    * the field's top-level name; `undefined` where nothing stops it.
@@ -182,7 +255,7 @@ export interface StoredEntityFacts {
 function scopeOfType(allowedType: string): FieldScope {
   return {
     only: `Only top-level "${allowedType}" fields, or ones inside named groups, can be read.`,
-    admits: type => type === allowedType,
+    admits: field => field.type === allowedType,
   };
 }
 
@@ -455,7 +528,7 @@ function storedValueOf(
     kind: "value",
     value:
       path.within.length === 0
-        ? decoded(reached.value, path.type)
+        ? decoded(reached.value, path.json)
         : reached.value,
   };
 }
@@ -503,7 +576,8 @@ interface StoredFieldPath {
   readonly column: string;
   /** Empty for a top-level field; the group names after the first, then the field's own. */
   readonly within: readonly string[];
-  readonly type: string;
+  /** Whether the field is stored as JSON, which a column may hold as text. */
+  readonly json: boolean;
 }
 
 /**
@@ -528,12 +602,12 @@ function storedFieldPath(
   const column = names[0] ?? target.field;
   const fields = innermostGroupFields(entity, names.slice(0, -1), refuse);
   const field = fields.find(entry => entry.name === names.at(-1));
-  if (field === undefined || !scope.admits(field.type)) {
+  if (field === undefined || !scope.admits(field)) {
     throw refuse("is not a field of that type");
   }
   const why = scope.refusal?.(entity, column);
   if (why !== undefined) throw refuse(why);
-  return { column, within: names.slice(1), type: field.type };
+  return { column, within: names.slice(1), json: storesJson(field) };
 }
 
 /** A named group: a `group` field that declares fields of its own. */
@@ -541,25 +615,36 @@ type NamedGroup = FieldDefinition & { fields: FieldDefinition[] };
 
 /**
  * The fields of the innermost group `groups` names, walking from the entity's
- * top level; the entity's own fields for a top-level read. Refused with
- * `refuse`'s error where a name is not a named group, or names one kept per
- * language.
+ * top level; the entity's own fields for a top-level read. Each level is read
+ * with its unnamed groups flattened, as they store their fields at the level
+ * they sit in. Refused with `refuse`'s error where a name is not a named
+ * group, or names one kept per language.
  */
 function innermostGroupFields(
   entity: StoredEntity,
   groups: readonly string[],
   refuse: (why: string) => NextlyError
 ): readonly FieldDefinition[] {
-  let fields: readonly FieldDefinition[] = entity.fields;
+  let fields = storedAtLevel(entity.fields);
   for (const [depth, name] of groups.entries()) {
     const group = namedGroupIn(fields, name);
     if (group === undefined) throw refuse("is not inside named groups alone");
     if (groupKeptPerLanguage(entity, group, depth)) {
       throw refuse("is inside a group kept per language");
     }
-    fields = group.fields;
+    fields = storedAtLevel(group.fields);
   }
   return fields;
+}
+
+/**
+ * The fields whose values a level stores, as core's addressable-field walk
+ * answers it: a presentational (unnamed) group's fields are its parent's.
+ */
+function storedAtLevel(
+  fields: readonly FieldDefinition[]
+): readonly FieldDefinition[] {
+  return addressableFields(fields) as unknown as FieldDefinition[];
 }
 
 /** The named group `name` among `fields`, or `undefined` where it is none. */
@@ -1012,11 +1097,18 @@ async function pendingWorkingDraft(
  * every read path parses it. Anything that does not parse is returned as stored,
  * for the caller to judge — the same choice the read shape makes.
  */
-function decoded(value: unknown, type: string): unknown {
-  if (typeof value !== "string" || getFieldType(type)?.storage !== "json") {
-    return value;
-  }
+function decoded(value: unknown, json: boolean): unknown {
+  if (typeof value !== "string" || !json) return value;
   return parsedJson(value);
+}
+
+/**
+ * Whether `field` is stored as JSON, as the schema builds its column: a
+ * repeater, a named group, `json`, or a plugin type declaring JSON storage.
+ * Asked of the one classification the DDL is built from.
+ */
+export function storesJson(field: FieldDefinition): boolean {
+  return classifyFieldKind(field, "codeFirst") === "json";
 }
 
 /** `value` parsed as JSON, or as it is where it does not parse. */
@@ -1150,6 +1242,53 @@ export interface PinnedExpectation {
   readonly expect: StoredExpectation;
   /** Set once the expectation held under the row lock of the write's own transaction. */
   checked: boolean;
+  /** Every key of the data the write sent. */
+  readonly sentKeys: readonly string[];
+  /** Set once the write path judged those keys (see {@link refuseUnstoredKeys}). */
+  keysJudged?: boolean;
+  /**
+   * The write is made whole or not at all (see {@link refuseUnlessWhole}).
+   * Set for a write made under field rules.
+   */
+  readonly whole?: WholeWrite;
+}
+
+/**
+ * What a write made whole sent, and what its write path has done to it so far.
+ */
+export interface WholeWrite {
+  /** Each field the write sent, by name, with {@link storedValueHash} of its value as sent. */
+  readonly sent: ReadonlyMap<string, string>;
+  /** The fields the write path's field-access pass took out or changed. */
+  readonly cut: string[];
+  /** Set once {@link refuseUnlessWhole} judged the final payload whole. */
+  judged: boolean;
+}
+
+/**
+ * The whole-write record of `data`, as a conditional write sends it: each
+ * field's hash taken now, before the write path (whose passes change nested
+ * values in place) has touched it.
+ */
+export async function wholeWriteOf(
+  data: Record<string, unknown>
+): Promise<WholeWrite> {
+  const sent = new Map<string, string>();
+  for (const [name, value] of Object.entries(data)) {
+    sent.set(name, await storedValueHash(payloadValueOf(data, name, value)));
+  }
+  return { sent, cut: [], judged: false };
+}
+
+/** A payload's value for `name` as the stored hash compares it. */
+function payloadValueOf(
+  data: Record<string, unknown>,
+  name: string,
+  value: unknown = data[name]
+): PluginStoredValue {
+  return name in data && value !== undefined
+    ? { kind: "value", value }
+    : { kind: "absent" };
 }
 
 /**
@@ -1173,6 +1312,156 @@ export function expectStoredValue(
 }
 
 /**
+ * Run `pass`, a write path's one field-access pass over `data` (the data as
+ * its hooks so far left it), for the write called with `context`.
+ *
+ * Field access takes out of an ordinary update, silently, a field the writer
+ * may not update, and keeps a denied value inside a container as stored, then
+ * writes the rest. For a write made whole, what the pass took out or changed
+ * is recorded, and {@link refuseUnlessWhole} refuses the write for it once
+ * every hook has run, even where a later hook put the value back. Every other
+ * write runs the pass alone, exactly as before.
+ */
+export async function fieldAccessPass(
+  context: Record<string, unknown> | undefined,
+  document: ExpectedDocument,
+  data: Record<string, unknown>,
+  pass: () => Promise<void>
+): Promise<void> {
+  const whole = wholeWriteFor(context, document);
+  if (whole === undefined) {
+    await pass();
+    return;
+  }
+  const before = new Map(
+    Object.entries(data).map(([name, value]) => [name, JSON.stringify(value)])
+  );
+  await pass();
+  for (const [name, value] of before) {
+    if (!(name in data) || JSON.stringify(data[name]) !== value) {
+      whole.cut.push(name);
+    }
+  }
+}
+
+/**
+ * Refuse with `FORBIDDEN`, before anything is written, a write made whole
+ * whose final payload does not hold what it sent; nothing happens for any
+ * other write.
+ *
+ * Called by a write path once with the payload it is about to persist, after
+ * every hook has run (the collection's and the field's `beforeChange` last),
+ * and before its own shaping, which only serializes. Each field the write
+ * sent must be there exactly as sent, compared by {@link storedValueHash},
+ * and the field-access pass must have taken nothing out of it: a hook may not
+ * change, drop or put back a value the write sent, and a field rule may not
+ * strip one. Either way the write would be reported as made while what it
+ * sent was not, so it is refused rather than written in part. Refused as
+ * forbidden, not as a conflict: reading again changes nothing, since a hook
+ * or rule of the site decides it. Only then is the write judged whole, which
+ * {@link holdStoredExpectation} requires under the row lock.
+ *
+ * Every key the write sent is judged, the lifecycle `status` among them, but
+ * the {@link WRITE_TRANSPORT_KEYS}, which say how to write and are never
+ * stored. So a hook that turns a publish into a draft, or takes the status
+ * out, refuses it; and since a write is held as a working draft only when it
+ * names no status (`resolveDraftHold`), one that keeps the status it sent is
+ * never held as a draft in place of the state it named.
+ */
+export async function refuseUnlessWhole(
+  context: Record<string, unknown> | undefined,
+  document: ExpectedDocument,
+  data: Record<string, unknown>
+): Promise<void> {
+  const whole = wholeWriteFor(context, document);
+  if (whole === undefined) return;
+  const changed: string[] = [];
+  for (const [name, hash] of whole.sent) {
+    if (WRITE_TRANSPORT_KEYS.has(name)) continue;
+    if ((await storedValueHash(payloadValueOf(data, name))) !== hash) {
+      changed.push(name);
+    }
+  }
+  const cut = whole.cut.filter(name => whole.sent.has(name));
+  if (changed.length > 0 || cut.length > 0) {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "conditional-write-not-whole",
+        kind: document.kind,
+        slug: document.slug,
+        ...(document.id === undefined ? {} : { id: document.id }),
+        changed,
+        cut,
+      },
+    });
+  }
+  whole.judged = true;
+}
+
+/**
+ * The keys a write sends that say how to write, not what: the version it was
+ * read at (`_rev`) and the overwrite of a save made since (`_overwrite`). The
+ * write path reads them at its boundary and stores neither, so a whole write
+ * is judged on every other key it sends.
+ */
+const WRITE_TRANSPORT_KEYS: ReadonlySet<string> = new Set([
+  DOCUMENT_VERSION_KEY,
+  DOCUMENT_OVERWRITE_KEY,
+]);
+
+/**
+ * Refuse with `INVALID_INPUT` a conditional write naming a key no update of
+ * this entity stores, asked of `keysNoUpdateStores` with the entity's own
+ * table and fields: an immutable system column, a column schema hooks
+ * contributed, a field stored nowhere, or another spelling of a field kept in
+ * its own table. Nothing happens for any other write. The
+ * {@link WRITE_TRANSPORT_KEYS} are not among them, being read before the
+ * strip and never stored.
+ *
+ * Called by a write path once its access to the entry has been judged and
+ * before any hook runs or anything is written: a caller who may not update
+ * the entry is refused by that judgment alike, whatever the data names, so
+ * the answer tells them nothing of the table's columns. Only then is the
+ * write's data judged, which {@link holdStoredExpectation} requires under the
+ * row lock.
+ */
+export function refuseUnstoredKeys(
+  context: Record<string, unknown> | undefined,
+  document: ExpectedDocument,
+  entity: {
+    readonly tableName: string;
+    readonly fields: Parameters<typeof keysNoUpdateStores>[3];
+  }
+): void {
+  const pin = context === undefined ? undefined : expectations.get(context);
+  if (pin === undefined || !sameDocument(pin.document, document)) return;
+  const unstored = keysNoUpdateStores(
+    Object.fromEntries(pin.sentKeys.map(key => [key, true])),
+    document.kind,
+    entity.tableName,
+    entity.fields
+  ).filter(key => !WRITE_TRANSPORT_KEYS.has(key));
+  if (unstored.length > 0) {
+    throw NextlyError.invalidInput({
+      message: `A conditional write cannot write ${unstored.map(key => `"${key}"`).join(", ")}: an update never stores ${unstored.length === 1 ? "it" : "them"}, so the write would be made in part.`,
+    });
+  }
+  pin.keysJudged = true;
+}
+
+/** The whole-write record of the write called with `context`, for this document. */
+function wholeWriteFor(
+  context: Record<string, unknown> | undefined,
+  document: ExpectedDocument
+): WholeWrite | undefined {
+  const pin = context === undefined ? undefined : expectations.get(context);
+  if (pin?.whole === undefined || !sameDocument(pin.document, document)) {
+    return undefined;
+  }
+  return pin.whole;
+}
+
+/**
  * Refuse, by throwing, a write whose caller registered an expectation for
  * `context` that no longer holds; nothing happens for any other write. Called
  * by a write path inside its transaction, once it holds the entry's row lock
@@ -1192,6 +1481,31 @@ export async function holdStoredExpectation(
 ): Promise<void> {
   const pin = context === undefined ? undefined : expectations.get(context);
   if (pin === undefined || !sameDocument(pin.document, document)) return;
+  // A write whose path never judged the keys it sent, after its access, was
+  // never judged at all: refused under the lock, so it rolls back.
+  if (pin.keysJudged !== true) {
+    refused.refusal = NextlyError.internal({
+      logContext: {
+        reason: "conditional-write-keys-not-judged",
+        kind: document.kind,
+        slug: document.slug,
+      },
+    });
+    throw refused.refusal;
+  }
+  // A write that must be made whole, whose path never judged its final
+  // payload through `refuseUnlessWhole`, was never judged whole: refused
+  // under the lock, so it rolls back rather than landing unjudged.
+  if (pin.whole !== undefined && !pin.whole.judged) {
+    refused.refusal = NextlyError.internal({
+      logContext: {
+        reason: "conditional-write-fields-not-judged",
+        kind: document.kind,
+        slug: document.slug,
+      },
+    });
+    throw refused.refusal;
+  }
   refused.refusal = await storedExpectationRefusal(
     pin,
     {

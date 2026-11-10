@@ -121,7 +121,13 @@ function readValue(token: string, rule: FieldRule, source: string): number {
 /** A list item's step: 1 when it names none. */
 function readStep(step: string | undefined, source: string): number {
   if (step === undefined) return 1;
-  if (!/^\d+$/.test(step) || Number(step) === 0) {
+  // A safe integer: hundreds of digits read as Infinity, which would step
+  // past every value but the first.
+  if (
+    !/^\d+$/.test(step) ||
+    !Number.isSafeInteger(Number(step)) ||
+    Number(step) === 0
+  ) {
     throw invalid(source, `the step "${step}" is not a positive whole number`);
   }
   return Number(step);
@@ -191,6 +197,17 @@ export function parseCron(source: string): CronExpression {
   const [minutes, hours, daysOfMonth, months, daysOfWeek] = fields.map(
     (text, index) => readField(text, FIELD_RULES[index], source)
   );
+  const anyDayOfMonth = fields[2].startsWith("*");
+  const anyDayOfWeek = fields[4].startsWith("*");
+  // With the weekday written from `*`, a day must be one of the named dates:
+  // a date no month has (30 February) would never fire, and would pass
+  // start-up only to stay silent on every pass.
+  if (!anyDayOfMonth && anyDayOfWeek && !someDateExists(daysOfMonth, months)) {
+    throw invalid(
+      source,
+      "no month it names has the day of the month it names"
+    );
+  }
   return {
     source,
     minutes,
@@ -198,18 +215,35 @@ export function parseCron(source: string): CronExpression {
     daysOfMonth,
     months,
     daysOfWeek,
-    anyDayOfMonth: fields[2].startsWith("*"),
-    anyDayOfWeek: fields[4].startsWith("*"),
+    anyDayOfMonth,
+    anyDayOfWeek,
   };
+}
+
+/** The most days each month has, 29 for February in a leap year. */
+const MONTH_DAYS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/** Whether any of `months` has any of `days`. */
+function someDateExists(
+  days: ReadonlySet<number>,
+  months: ReadonlySet<number>
+): boolean {
+  for (const month of months) {
+    for (const day of days) {
+      if (day <= MONTH_DAYS[month - 1]) return true;
+    }
+  }
+  return false;
 }
 
 const MINUTE = 60_000;
 const DAY = 86_400_000;
 /**
- * How far a search runs before deciding the expression never fires: eight
- * years holds every 29 February, the rarest day an expression can name.
+ * How far a search runs before deciding the expression never fires: the
+ * Gregorian calendar repeats every 400 years, so a date and weekday pair as
+ * rare as a Sunday 29 February is found within it.
  */
-const SEARCH_LIMIT = 8 * 366 * DAY;
+const SEARCH_LIMIT = 400 * 366 * DAY;
 
 /**
  * A local wall-clock time is held as the epoch milliseconds that time would
@@ -371,7 +405,7 @@ function fireOf(wallClock: WallClock, timeZone: string): number | undefined {
 
 /**
  * The first time `cron` fires after `after`, in `timeZone`; null when it
- * never does within eight years.
+ * never does within a calendar cycle.
  */
 export function nextFireAfter(
   cron: CronExpression,
@@ -396,7 +430,7 @@ export function nextFireAfter(
 
 /**
  * The latest time `cron` fired at or before `at`, in `timeZone`; null when it
- * did not within eight years.
+ * did not within a calendar cycle.
  */
 export function latestFireAtOrBefore(
   cron: CronExpression,

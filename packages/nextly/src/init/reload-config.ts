@@ -1191,9 +1191,11 @@ async function ensureLocalizedCompanionsForReload(
   );
   const transitionStore = await resolveTransitionStore(adapter);
   // The same store, plus the locale a newly created companion gets recorded with.
+  // `AdapterLike` is a narrow view of the registered adapter, which is a
+  // `DrizzleAdapter` at runtime.
   const transitions = bindTransitionRecorder(
     transitionStore,
-    await transitionDefaultLocale(adapter, config)
+    await transitionDefaultLocale(adapter as unknown as DrizzleAdapter, config)
   );
 
   for (const [kind, entities, resolveTableName] of groups) {
@@ -1570,10 +1572,25 @@ async function applyReload(opts?: {
     "../plugins/principals/registry"
   );
   const principalKinds = stagePrincipalKinds();
+  // The webhook event types the reloaded config declares, held the same way:
+  // subscriptions are judged against them only once the reload lands.
+  const { stageWebhookEventTypes } = await import(
+    "../domains/webhooks/event-type-registry"
+  );
+  const webhookEventTypes = stageWebhookEventTypes();
   try {
-    await applyReloadHolding(principalKinds, opts);
+    await applyReloadHolding(
+      {
+        commit: () => {
+          principalKinds.commit();
+          webhookEventTypes.commit();
+        },
+      },
+      opts
+    );
   } finally {
     principalKinds.abandon();
+    webhookEventTypes.abandon();
   }
 }
 

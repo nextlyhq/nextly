@@ -67,10 +67,16 @@ describe("collecting the places plugins declare", () => {
     expect(places.get("acme-billing.invoice")).toMatchObject({
       name: "acme-billing.invoice",
       owner: "@acme/billing",
+      // A plugin's place that names no kinds takes blocks alone.
+      accepts: ["block"],
     });
     for (const id of CORE_IDS) {
-      // Core's own: no owner.
-      expect(places.get(id), id).toEqual({ name: id });
+      // Core's own: no owner, and the kinds the catalogue says it takes.
+      expect(places.get(id), id).toEqual({
+        name: id,
+        accepts:
+          CORE_ADMIN_PLACES[id as keyof typeof CORE_ADMIN_PLACES].accepts,
+      });
     }
     expect(places.size).toBe(CORE_IDS.length + 1);
   });

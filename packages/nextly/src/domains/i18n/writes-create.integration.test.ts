@@ -208,7 +208,7 @@ describe("updateEntry — localized write routing (M5a)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { heading: "Hallo2" }
+      { heading: "Hallo2", _overwrite: true }
     );
     // Update the English heading (insert a new companion row).
     await handler.updateEntry(
@@ -218,7 +218,7 @@ describe("updateEntry — localized write routing (M5a)", () => {
         locale: "en",
         overrideAccess: true,
       },
-      { heading: "Hi" }
+      { heading: "Hi", _overwrite: true }
     );
 
     const adapter = t.adapter as unknown as {

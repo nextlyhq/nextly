@@ -28,8 +28,8 @@ import { useState } from "react";
 import { useFormContext } from "react-hook-form";
 
 import { useHistoryAddress } from "@admin/components/features/versions/history-address";
+import { LazyVersionHistorySheet } from "@admin/components/features/versions/LazyVersionHistorySheet";
 import { useVersionActions } from "@admin/components/features/versions/version-actions";
-import { VersionHistorySheet } from "@admin/components/features/versions/VersionHistorySheet";
 import {
   Globe,
   History,
@@ -704,7 +704,7 @@ function DocumentBarLive({
   pendingRecovery: boolean;
   entry: EntryData | null | undefined;
 }) {
-  const { defaultLocale, locales } = useLocalization();
+  const { locales } = useLocalization();
   // Present only when the entry was fetched with `?translation-status=1` on a
   // localized collection; undefined otherwise, which the region treats as
   // "nothing to report" rather than as zero progress.
@@ -713,8 +713,7 @@ function DocumentBarLive({
     | undefined;
   const counts = translationCounts(
     entryTranslations,
-    locales.map(l => l.code),
-    defaultLocale
+    locales.map(l => l.code)
   );
   return (
     <DocumentStatusLive
@@ -747,7 +746,7 @@ function DocumentBarHistory({
   const canUpdateDocument = useCan(`update-${props.collectionSlug}`);
   const busy = props.documentLocked === true || props.isSubmitting === true;
   return (
-    <VersionHistorySheet
+    <LazyVersionHistorySheet
       open={open}
       onOpenChange={onOpenChange}
       scope={

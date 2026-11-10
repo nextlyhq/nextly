@@ -731,3 +731,40 @@ describe("reaching blocks fields through named groups", () => {
     ).toEqual([["a", "b", "c", "body"]]);
   });
 });
+
+describe("reading a field group through the site's definitions", () => {
+  const groups = new Map<string, { fields: unknown[] }>([
+    ["seo", { fields: [{ type: "text", name: "metaTitle" }] }],
+    ["hero", { fields: [{ type: "blocks", name: "body" }] }],
+    // A group holding only a reference to the one holding blocks.
+    [
+      "band",
+      { fields: [{ type: "component", name: "inner", component: "hero" }] },
+    ],
+  ]);
+  const resolve = (slug: string) => groups.get(slug);
+  const reachOf = (component: string, withGroups = true) =>
+    blocksFieldReach(
+      { fields: [{ type: "component", name: "group", component }] },
+      undefined,
+      withGroups ? resolve : undefined
+    );
+
+  it("finds no possible copy in a known group of plain fields", () => {
+    expect(reachOf("seo")).toEqual({ fields: [], unreachable: false });
+  });
+
+  it("keeps a known group holding a blocks field, directly or nested, as possibly holding one", () => {
+    // Stored apart from the row, so noticed, never reached.
+    expect(reachOf("hero")).toEqual({ fields: [], unreachable: true });
+    expect(reachOf("band")).toEqual({ fields: [], unreachable: true });
+  });
+
+  it("keeps a group the definitions do not know as possibly holding one", () => {
+    expect(reachOf("never-made").unreachable).toBe(true);
+  });
+
+  it("CONTROL: without the site's definitions, every group may hold one", () => {
+    expect(reachOf("seo", false).unreachable).toBe(true);
+  });
+});

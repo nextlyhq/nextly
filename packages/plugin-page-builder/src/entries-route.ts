@@ -224,8 +224,9 @@ export interface EntriesReads {
  * Whether core refused the read because the search filters on a field this
  * caller may not read. Core answers that as a validation error whose errors
  * name `FIELD_NOT_FILTERABLE`, not as an error with that code of its own.
+ * Exported for the template preview's search, which reads it the same way.
  */
-function refusesTheFilter(error: unknown): boolean {
+export function refusesTheFilter(error: unknown): boolean {
   if (!NextlyError.isCode(error, "VALIDATION_ERROR")) return false;
   const data = error.publicData as { errors?: unknown } | undefined;
   return (

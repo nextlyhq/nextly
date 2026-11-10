@@ -54,7 +54,7 @@ describe("an update carrying an own undefined", () => {
 
     const updated = await handler(current).updateEntry(
       { collectionName: "undefnotes", entryId: id, overrideAccess: true },
-      { title: undefined, body: "two" }
+      { title: undefined, body: "two", _overwrite: true }
     );
     expect(updated.success).toBe(true);
 
@@ -77,7 +77,7 @@ describe("an update carrying an own undefined", () => {
 
     const updated = await handler(current).updateEntry(
       { collectionName: "undefnotes", entryId: id, overrideAccess: true },
-      { title: null }
+      { title: null, _overwrite: true }
     );
     expect(updated.success).toBe(true);
     expect((await storedRow(current, id)).title).toBeNull();

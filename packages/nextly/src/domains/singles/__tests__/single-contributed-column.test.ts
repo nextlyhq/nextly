@@ -132,7 +132,7 @@ describe("a column a schema hook contributed to a Single's table", () => {
 
     const result = await service.update(
       "site-settings",
-      { siteName: "New" },
+      { siteName: "New", _overwrite: true },
       { overrideAccess: true }
     );
 
@@ -148,7 +148,12 @@ describe("a column a schema hook contributed to a Single's table", () => {
 
     const result = await service.update(
       "site-settings",
-      { siteName: "New", searchVector: "a", search_vector: "b" },
+      {
+        siteName: "New",
+        searchVector: "a",
+        search_vector: "b",
+        _overwrite: true,
+      },
       { overrideAccess: true }
     );
 
