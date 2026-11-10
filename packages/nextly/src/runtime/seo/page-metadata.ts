@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto";
 
 import type { Metadata } from "next";
+import { z } from "zod";
 
 import { getUnstableRethrow } from "../../actions/next-runtime";
 import { NextlyError } from "../../errors/nextly-error";
@@ -253,6 +254,38 @@ export interface PageMetadataRequest {
   revalidate?: number | false;
 }
 
+/** An image on a provider's social card, as the contract states it. */
+const answerImageSchema = z.object({
+  url: z.string(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  alt: z.string().optional(),
+});
+
+/**
+ * A provider's answer, parsed at the boundary as anything from outside core
+ * is: a plugin's code returns it, and nothing about its shape is known until
+ * it is read. Unknown keys are dropped; a value of the wrong kind refuses the
+ * whole answer, which serves the route's own metadata instead.
+ */
+const pageMetadataAnswerSchema = z.object({
+  title: z.string().optional(),
+  description: z.string().optional(),
+  canonical: z.string().optional(),
+  robots: z.object({ index: z.boolean(), follow: z.boolean() }).optional(),
+  social: z
+    .object({
+      title: z.string().optional(),
+      description: z.string().optional(),
+      image: answerImageSchema.optional(),
+      siteName: z.string().optional(),
+      locale: z.string().optional(),
+      type: z.enum(["website", "article"]).optional(),
+    })
+    .optional(),
+  languages: z.record(z.string(), z.string()).optional(),
+});
+
 /**
  * The head of one page: the provider's answer over the route's own metadata,
  * or the route's own metadata unchanged when no provider is started.
@@ -279,21 +312,26 @@ export async function pageMetadataFor(
       code: codeValuesOf(code),
       derived: request.derived ?? {},
     };
-    const answer = await cachedFind(async () => await resolver.resolve(input), {
-      // The provider and its version too, so a replaced or upgraded provider
-      // never reads an answer another one cached for the same page.
-      keyParts: [
-        "nextly-page-metadata",
-        capabilityProviderIdentity(PAGE_METADATA_CAPABILITY) ?? "",
-        answerKey(input),
-      ],
-      // The page's own tags first, so the one every write to its document
-      // expires is never the one Next.js's per-read limit drops.
-      tags: readTags(request.tags, resolver.tags?.(input) ?? []),
-      ...(request.revalidate === undefined
-        ? {}
-        : { revalidate: request.revalidate }),
-    });
+    // Parsed inside the cached read, so an answer that is not one is refused
+    // there and never stored: the next request asks the provider again.
+    const answer = await cachedFind(
+      async () => pageMetadataAnswerSchema.parse(await resolver.resolve(input)),
+      {
+        // The provider and its version too, so a replaced or upgraded provider
+        // never reads an answer another one cached for the same page.
+        keyParts: [
+          "nextly-page-metadata",
+          capabilityProviderIdentity(PAGE_METADATA_CAPABILITY) ?? "",
+          answerKey(input),
+        ],
+        // The page's own tags first, so the one every write to its document
+        // expires is never the one Next.js's per-read limit drops.
+        tags: readTags(request.tags, resolver.tags?.(input) ?? []),
+        ...(request.revalidate === undefined
+          ? {}
+          : { revalidate: request.revalidate }),
+      }
+    );
     return overCode(code, metadataFromAnswer(answer));
   } catch (error) {
     getUnstableRethrow()(error);

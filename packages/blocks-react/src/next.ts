@@ -4476,11 +4476,21 @@ function blocksSingleConfig(
     "single"
   );
 
-  const contextFor = (context: SingleContext) => ({
-    collection: slug,
-    slug,
-    ...(context.locale === undefined ? {} : { locale: context.locale }),
-  });
+  // One page context per Single context, so the head's two callbacks for one
+  // request share the page route's derivation, which is kept by its context's
+  // identity: a fresh object each time would walk the blocks twice.
+  const converted = new WeakMap<SingleContext, RenderContext>();
+  const contextFor = (context: SingleContext): RenderContext => {
+    const known = converted.get(context);
+    if (known !== undefined) return known;
+    const made: RenderContext = {
+      collection: slug,
+      slug,
+      ...(context.locale === undefined ? {} : { locale: context.locale }),
+    };
+    converted.set(context, made);
+    return made;
+  };
 
   return {
     slug,

@@ -31,13 +31,22 @@ import type {
 
 // What the cache was asked to do, observed at the call the route makes.
 const cacheCalls: Array<{ keyParts: string[]; tags?: string[] }> = [];
+/** What each cached read came to: the value a cache would store, or a refusal. */
+const cacheOutcomes: Array<{ stored: unknown } | { refused: true }> = [];
 vi.mock("../../cache/cached-find", () => ({
-  cachedFind: <T>(
+  cachedFind: async <T>(
     reader: () => Promise<T>,
     options: { keyParts: string[]; tags?: string[] }
   ): Promise<T> => {
     cacheCalls.push(options);
-    return reader();
+    try {
+      const value = await reader();
+      cacheOutcomes.push({ stored: value });
+      return value;
+    } catch (error) {
+      cacheOutcomes.push({ refused: true });
+      throw error;
+    }
   },
 }));
 
@@ -75,6 +84,7 @@ const page = {
 
 beforeEach(() => {
   cacheCalls.length = 0;
+  cacheOutcomes.length = 0;
 });
 
 afterEach(() => {
@@ -302,6 +312,21 @@ describe("pageMetadataFor with a provider", () => {
     const keys = cacheCalls.map(call => call.keyParts.join("|"));
     expect(new Set(keys).size).toBe(3);
   });
+
+  it.each([
+    ["nothing", null],
+    ["a title that is not text", { title: 5 }],
+    ["visibility without its values", { robots: { index: "no" } }],
+  ])(
+    "serves the route's own metadata for an answer of %s, and caches none of it",
+    async (_, answer) => {
+      provide({ resolve: () => answer as never });
+      const code: Metadata = { title: "Own" };
+      expect(await pageMetadataFor({ ...page, code, tags: [] })).toEqual(code);
+      // Refused inside the cached read, so the next request asks again.
+      expect(cacheOutcomes).toEqual([{ refused: true }]);
+    }
+  );
 
   it("serves the route's own metadata when the provider fails", async () => {
     provide({

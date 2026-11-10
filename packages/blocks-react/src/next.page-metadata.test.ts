@@ -143,4 +143,29 @@ describe("a Page Builder Single's offer for the head", () => {
       )
     ).toEqual({ title: "Pricing", description: "Plans for every team." });
   });
+
+  it("works the blocks out once when its own metadata asks for them too", async () => {
+    const resolver = createBlockResolver(coreBlocks);
+    const lookups = vi.fn((type: string) => resolver.get(type));
+    createSinglePage({
+      slug: "homepage",
+      field: "content",
+      nextly: reader() as never,
+      blocks: { get: lookups },
+      metadata: (_document, _context, derived) => ({ title: derived.title }),
+    });
+    const config = handedSingles[0];
+    const document = { id: "s1", content: PRICING };
+    // One context, as the Single route hands both callbacks for one request.
+    const context = { slug: "homepage" };
+
+    const own = await config?.buildMetadata?.(document, context);
+    const afterOne = lookups.mock.calls.length;
+    const offered = await config?.derivedMetadata?.(document, context);
+
+    expect(own).toEqual({ title: "Pricing" });
+    expect(offered).toMatchObject({ title: "Pricing" });
+    expect(afterOne).toBeGreaterThan(0);
+    expect(lookups.mock.calls.length).toBe(afterOne);
+  });
 });
