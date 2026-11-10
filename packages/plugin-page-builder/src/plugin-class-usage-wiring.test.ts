@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { UNDETERMINED_CLASS_ID } from "./class-usage-reconcile";
 import { pageBuilder } from "./plugin";
+import { UNDETERMINED_TOKEN_ID } from "./token-usage";
 
 /**
  * The plugin's own database, as far as a save's maintenance reaches it: no
@@ -79,6 +80,9 @@ function initContext(renameMap: Record<string, string> = {}) {
       off: vi.fn(),
       onBeforeOperation: vi.fn(),
       offBeforeOperation: vi.fn(),
+      onInTransaction: vi.fn(),
+      offInTransaction: vi.fn(),
+      onCollectionDelete: vi.fn(),
     },
     services: {
       collections: { getCollection: vi.fn(async () => ({})) },
@@ -140,13 +144,15 @@ describe("installing the page-builder plugin", () => {
     );
 
     expect(tables).toEqual(
-      expect.arrayContaining(["class_usage", "component_usage"])
+      expect.arrayContaining(["class_usage", "component_usage", "token_usage"])
     );
   });
 });
 
-describe("the warning for a blocks field inside a repeater", () => {
+describe("the warning for a blocks field the Page Builder cannot open", () => {
   it("is said through the plugin's logger when it is installed", () => {
+    // A repeater whose rows declare their own `id` gives its rows no saved
+    // id, so a blocks field in one is the case still warned about.
     const { ctx } = initContext();
     Object.assign(ctx.config, {
       collections: [
@@ -156,7 +162,10 @@ describe("the warning for a blocks field inside a repeater", () => {
             {
               name: "rows",
               type: "repeater",
-              fields: [{ name: "layout", type: "blocks" }],
+              fields: [
+                { name: "id", type: "text" },
+                { name: "layout", type: "blocks" },
+              ],
             },
           ],
         },
@@ -240,7 +249,10 @@ describe("what one save derives, and writes to each index", () => {
         kind: entry.values.kind,
         componentId: entry.values.componentId,
       }));
-    return { created, componentRows };
+    const tokenRows = inserted
+      .filter(entry => entry.table === "token_usage")
+      .map(entry => entry.values.tokenId);
+    return { created, componentRows, tokenRows };
   }
 
   it("uses the limits the HOST configured, not the engine defaults", async () => {
@@ -265,6 +277,44 @@ describe("what one save derives, and writes to each index", () => {
     const { created } = await savedUnder({});
 
     expect(created).toEqual(["one", "two"]);
+  });
+
+  describe("the variable index, maintained from the same read", () => {
+    const withVariable = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "core/text",
+          version: 1,
+          props: {},
+          styles: { base: { base: { color: { $token: "color.brand" } } } },
+        },
+        { id: "b", type: "core/text", version: 1, props: {} },
+      ],
+    };
+
+    it("writes a row for a variable the saved page uses", async () => {
+      const { tokenRows } = await savedUnder({}, withVariable);
+
+      expect(tokenRows).toEqual(["color.brand"]);
+    });
+
+    it("writes NO variable row for a page that uses none", async () => {
+      const { tokenRows } = await savedUnder({});
+
+      expect(tokenRows).toEqual([]);
+    });
+
+    it("marks a page it could not read whole, under the host's limits", async () => {
+      const { tokenRows } = await savedUnder(
+        { limits: { maxDepth: 1, maxNodes: 1, maxBytes: 100_000 } },
+        withVariable
+      );
+
+      expect(tokenRows).toEqual([UNDETERMINED_TOKEN_ID]);
+    });
   });
 
   describe("the component index, maintained from the same read", () => {

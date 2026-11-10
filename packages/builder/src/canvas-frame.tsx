@@ -43,6 +43,8 @@
  * @module canvas-frame
  */
 
+import { DARK_MODE_ATTRIBUTE } from "@nextlyhq/blocks-engine";
+import { ENTRY_CONTENT_NOTE_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
 import * as React from "react";
@@ -219,8 +221,14 @@ export interface CanvasFrameProps {
   title: string | undefined;
   /**
    * The site's theme the page is shown in, stated as `data-nx-theme` on the
-   * frame's root element where a site's dark tokens are switched by it. Left
-   * out, the page shows whatever the site applies by default.
+   * frame's root element where a site's dark tokens are switched by it, and
+   * again on the element the canvas is mounted into, so a marker the site's
+   * own layout puts on `<body>` or a wrapper, nearer the canvas than the root,
+   * cannot keep the canvas in its own mode: the nearest marker is the one a
+   * site's tokens follow. When it is `light` or `dark`, it is also the iframe
+   * element's `color-scheme`, which the frame's `prefers-color-scheme`
+   * follows. Left out, the page shows whatever the site applies by default,
+   * and both markers are given back as the page stated them.
    */
   theme?: string;
   /**
@@ -239,6 +247,15 @@ export interface CanvasFrameProps {
   dir?: "ltr" | "rtl" | undefined;
   /** The editor's chrome, drawn over the frame in the editor's document. */
   overlay?: React.ReactNode;
+  /**
+   * Chrome held at the frame's viewport rather than on the page: drawn in
+   * the same layer as `overlay` but outside the box the page's scroll moves,
+   * so it stays at the viewport's edges while a long page scrolls under it.
+   * For what says how the whole canvas is drawn, such as its preview tags.
+   *
+   * @experimental Settles with the canvas's preview tags.
+   */
+  pinned?: React.ReactNode;
   /** The canvas, rendered inside the frame. */
   children?: React.ReactNode;
   /** Where the frame's page comes from. The editor's blank page by default. */
@@ -286,13 +303,15 @@ function FramedCanvas({
   zoom = FIT_ZOOM,
   onScale,
   title,
-  overlay,
   children,
   source = SRCDOC_FRAME_SOURCE,
   onSourceFallback,
   className,
-  ...markers
+  ...rest
 }: CanvasFrameProps): React.JSX.Element {
+  // The chrome drawn over the frame, apart from the markers the page's own
+  // document is given.
+  const { overlay, pinned, ...markers } = rest;
   const stage = React.useRef<HTMLDivElement | null>(null);
   const layer = React.useRef<HTMLDivElement | null>(null);
   const layerContent = React.useRef<HTMLDivElement | null>(null);
@@ -312,7 +331,7 @@ function FramedCanvas({
   const viewport = useFrameViewport(frame, page, width, height);
   useRegistered(frame, scale, viewport);
 
-  usePageMarkers(frame, page, markers);
+  usePageMarkers(frame, page, mountPoint, markers);
   useLayerPlacement(frame, page, mountPoint, layer, layerContent, scale);
 
   return (
@@ -329,28 +348,90 @@ function FramedCanvas({
           className="nx-canvas-frame__page"
           title={canvasFrameTitle(title)}
           {...frameDocumentProps(shown, pending)}
-          // Laid out at the device's size and painted at the zoom.
-          style={{ width, height, transform: `scale(${String(scale)})` }}
+          // Laid out at the device's size and painted at the zoom, in the
+          // colour scheme of the theme the page is shown in, where one is.
+          style={{
+            width,
+            height,
+            transform: `scale(${String(scale)})`,
+            ...frameColorScheme(markers.theme),
+          }}
         />
-        <div
-          ref={layer}
-          className="nx-canvas-layer"
-          {...{ [CANVAS_LAYER_ATTRIBUTE]: "" }}
-        >
-          <SiteChromeCues
-            frame={frame}
-            page={page}
-            elements={siteChrome}
-            scale={scale}
-          />
-          <div ref={layerContent} className="nx-canvas-layer__content">
-            {overlay}
-          </div>
-        </div>
+        <ChromeLayer
+          layer={layer}
+          content={layerContent}
+          cues={
+            <SiteChromeCues
+              frame={frame}
+              page={page}
+              elements={siteChrome}
+              scale={scale}
+            />
+          }
+          overlay={overlay}
+          pinned={pinned}
+        />
       </div>
       <FramePage mountPoint={mountPoint}>{children}</FramePage>
     </div>
   );
+}
+
+/**
+ * The layer the editor's chrome is drawn in over the frame: the site's chrome
+ * cues, the content box the page's scroll moves (`overlay`), and the chrome
+ * held at the viewport (`pinned`). Placed by `useLayerPlacement`.
+ */
+function ChromeLayer({
+  layer,
+  content,
+  cues,
+  overlay,
+  pinned,
+}: {
+  layer: React.RefObject<HTMLDivElement | null>;
+  content: React.RefObject<HTMLDivElement | null>;
+  cues: React.ReactNode;
+  overlay: React.ReactNode;
+  pinned: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <div
+      ref={layer}
+      className="nx-canvas-layer"
+      {...{ [CANVAS_LAYER_ATTRIBUTE]: "" }}
+    >
+      {cues}
+      <div ref={content} className="nx-canvas-layer__content">
+        {overlay}
+      </div>
+      {/* Over the viewport itself: the layer runs CHROME_BLEED past it on
+          every side, so this is inset by as much. Never moved with the page's
+          scroll, unlike the content box above. Empty, and taking no presses,
+          while nothing is pinned. */}
+      <div className="nx-canvas-layer__pinned" style={{ inset: CHROME_BLEED }}>
+        {pinned}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The iframe ELEMENT's own `color-scheme`, for the theme the page is shown in.
+ *
+ * A frame's `prefers-color-scheme` follows the used `color-scheme` of the
+ * element that embeds it, as the CSS Working Group resolved, so stating the
+ * theme here is what can turn a page the site serves, whose own CSS asks
+ * `@media (prefers-color-scheme)`, to that theme too; the `data-nx-theme`
+ * marker reaches only the site's variables. Driven by the same `theme` the
+ * marker is, so the two cannot disagree. Only `light` and `dark` are schemes:
+ * any other theme, or none, states nothing, and the frame's sheet leaves the
+ * scheme to the device, as a visitor's browser does.
+ */
+function frameColorScheme(
+  theme: string | undefined
+): { colorScheme: "light" | "dark" } | Record<string, never> {
+  return theme === "light" || theme === "dark" ? { colorScheme: theme } : {};
 }
 
 /**
@@ -974,7 +1055,8 @@ function useFrameViewport(
 /**
  * The markers on the frame's root element that rules inside the frame key on.
  *
- * - The site's theme, where a site's dark tokens are switched by it.
+ * - The site's theme, where a site's dark tokens are switched by it, stated
+ *   on the canvas's mount point too (see `useMountThemeMarker`).
  * - The editor chrome class, so the one selector that gives an empty
  *   container its placeholder answers the same in the frame as in the
  *   editor's document. Empty containers always show, so nothing else about
@@ -986,9 +1068,11 @@ function useFrameViewport(
 function usePageMarkers(
   frame: HTMLIFrameElement | null,
   page: Document | null,
+  mountPoint: HTMLElement | null,
   { theme, lang, dir }: Pick<CanvasFrameProps, "theme" | "lang" | "dir">
 ): void {
   usePageTokens(frame, page);
+  useMountThemeMarker(mountPoint, theme);
   useIsomorphicLayoutEffect(() => {
     const root = page?.documentElement;
     if (root === undefined) return;
@@ -996,10 +1080,38 @@ function usePageMarkers(
     root.classList.add(BUILDER_CHROME_CLASS);
     // Named, the editor's theme; otherwise whatever the page itself states,
     // which on a page the site serves is the site's own, live mode.
-    stateMarker(root, "data-nx-theme", theme);
+    stateMarker(root, DARK_MODE_ATTRIBUTE, theme);
     stateMarker(root, "lang", lang, editorRoot?.lang);
     stateMarker(root, "dir", dir, editorRoot?.dir);
   }, [frame, page, theme, lang, dir]);
+}
+
+/**
+ * The theme named for the page, stated on the element the canvas is mounted
+ * into as well as on the page's root.
+ *
+ * A site's tokens follow the NEAREST `data-nx-theme` marker, so on a page the
+ * site serves, a marker its layout puts on `<body>` or a wrapper around the
+ * mount point would otherwise outrank the root's and keep the canvas in the
+ * site's mode. The mount point is below every marker of the site's layout and
+ * above the canvas, and lives in the frame's document, so the editor's own
+ * chrome never sees it. A marker a block states inside the canvas is nearer
+ * still and keeps its say.
+ *
+ * Written only while a theme is named. Each run is undone when the theme or
+ * the mount point changes, or the frame goes, so the element gets back what it
+ * stated before (often nothing) and a mount point the site replaced keeps no
+ * editor marker.
+ */
+function useMountThemeMarker(
+  mountPoint: HTMLElement | null,
+  theme: string | undefined
+): void {
+  useIsomorphicLayoutEffect(() => {
+    if (mountPoint === null) return;
+    stateMarker(mountPoint, DARK_MODE_ATTRIBUTE, theme);
+    return () => stateMarker(mountPoint, DARK_MODE_ATTRIBUTE, undefined);
+  }, [mountPoint, theme]);
 }
 
 /**
@@ -1010,8 +1122,9 @@ function usePageMarkers(
 const PAGE_MARKERS = new WeakMap<Element, Map<string, string | undefined>>();
 
 /**
- * State a marker on a page's root: the one named, else the page's own, else
- * the fallback where the page states none.
+ * State a marker on a page's root, or on the canvas's mount point for the
+ * theme: the one named, else the page's own, else the fallback where the page
+ * states none.
  *
  * Only what the editor supplies is written. With nothing to write, the
  * attribute is left alone, so a site that switches its own mode after
@@ -1096,13 +1209,21 @@ const PAGE_CHROME_TOKENS: readonly {
     ],
   },
   {
+    // An Entry content block's note to its author holds the admin's words
+    // alone, so it takes the admin's face.
+    selector: `[${ENTRY_CONTENT_NOTE_ATTRIBUTE}]`,
+    // Its face, and the red hue alone: every other colour of it is the
+    // page's own, so it reads on the page in either admin theme.
+    tokens: ["--nx-builder-danger", "--font-sans", "--radius-sm"],
+  },
+  {
     // A list drawing its empty state holds the site's content, so its tag
     // reads only the editor's own names.
     selector: "[data-nx-list-shows]",
     tokens: ["--nx-builder-select", "--nx-builder-select-text"],
   },
   {
-    selector: ".nx-canvas-region__badge, .nx-canvas-region__tag",
+    selector: ".nx-canvas-region__mark",
     tokens: [
       "--nx-builder-border",
       "--nx-builder-surface-raised",

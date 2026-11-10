@@ -40,6 +40,7 @@ import {
   isFieldGroupField,
   isDataField,
 } from "../../../collections/fields/guards";
+import { declaresOwnId } from "../../../collections/fields/repeater-row-identity";
 import { NextlyError } from "../../../errors";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
@@ -69,6 +70,18 @@ import {
 // ============================================================
 // Types
 // ============================================================
+
+/**
+ * The version a read gives a document, which an update sends back so a save
+ * made since refuses it. Optional: a server that issues none leaves it off.
+ */
+const DOCUMENT_VERSION_MEMBER = "  _rev?: string;";
+
+/**
+ * An update's choice to replace whatever is stored rather than send the
+ * version it read: one of the two an update must say.
+ */
+const OVERWRITE_MEMBER = "_overwrite?: boolean";
 
 /**
  * Result of generating TypeScript types for a single collection.
@@ -549,6 +562,7 @@ export class TypeGenerator {
     // Interface definition
     lines.push(`export interface ${interfaceName} {`);
     lines.push("  id: string;");
+    lines.push(DOCUMENT_VERSION_MEMBER);
 
     // Generate field types
     for (const field of collection.fields) {
@@ -637,6 +651,7 @@ export class TypeGenerator {
     // Interface definition
     lines.push(`export interface ${interfaceName} {`);
     lines.push("  id: string;");
+    lines.push(DOCUMENT_VERSION_MEMBER);
 
     // Generate field types
     for (const field of single.fields) {
@@ -1191,9 +1206,15 @@ export class TypeGenerator {
       allCollections,
       allComponents
     );
+    // Each row is saved with an id, which a write keeps when it is sent
+    // back; optional, as a create may leave it out. Rows that declare an
+    // `id` field of their own hold the author's value there instead.
+    const rowId = declaresOwnId(arrayField.fields)
+      ? ""
+      : "    /** The row's saved id; send it back to keep the row's identity. */\n    id?: string;\n";
 
     return `Array<{
-${properties}
+${rowId}${properties}
   }>`;
   }
 
@@ -1329,7 +1350,8 @@ ${properties}
       lines.push(" */");
     }
 
-    const omitFields = ["id"];
+    // A create is never judged by version, so it carries none.
+    const omitFields = ["id", "_rev"];
     if (collection.timestamps) {
       omitFields.push("createdAt", "updatedAt");
     }
@@ -1362,7 +1384,7 @@ ${properties}
     }
 
     lines.push(
-      `export type ${interfaceName}UpdateInput = Partial<${interfaceName}> & { id: string };`
+      `export type ${interfaceName}UpdateInput = Partial<${interfaceName}> & { id: string; ${OVERWRITE_MEMBER} };`
     );
 
     return lines.join("\n");
@@ -1387,7 +1409,7 @@ ${properties}
     }
 
     lines.push(
-      `export type ${interfaceName}UpdateInput = Partial<Omit<${interfaceName}, "id" | "updatedAt">>;`
+      `export type ${interfaceName}UpdateInput = Partial<Omit<${interfaceName}, "id" | "updatedAt">> & { ${OVERWRITE_MEMBER} };`
     );
 
     return lines.join("\n");

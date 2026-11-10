@@ -293,13 +293,19 @@ describe("layersLockIssues while a breakpoint removal is open", () => {
 
   it("accepts the locked block stripped of exactly the removed breakpoint", async () => {
     expect(
-      await judged(lockedStyled("dark", false), async () => removingMobile)
+      await judged(lockedStyled("dark", false), async () => ({
+        kind: "strip",
+        removal: removingMobile,
+      }))
     ).toEqual([]);
   });
 
   it("refuses the strip with anything else changed on the locked block", async () => {
     expect(
-      await judged(lockedStyled("light", false), async () => removingMobile)
+      await judged(lockedStyled("light", false), async () => ({
+        kind: "strip",
+        removal: removingMobile,
+      }))
     ).toHaveLength(1);
   });
 
@@ -329,8 +335,72 @@ describe("layersLockIssues while a breakpoint removal is open", () => {
     expect(
       await judged(
         lockedStyled("dark", false),
-        async () => removingMobile,
+        async () => ({ kind: "strip", removal: removingMobile }),
         inTransaction
+      )
+    ).toHaveLength(1);
+  });
+  /** What removing Mobile kept of the hero. */
+  const keptOfHero = {
+    nodes: { hero: { styles: { base: { mobile: { color: "#222222" } } } } },
+  };
+  /**
+   * An undo of that removal, open: for the page's `field`, it puts the hero's
+   * Mobile value back into `current`, the value its walk writes.
+   */
+  const undoing =
+    (field: string, current: unknown = lockedStyled("dark", false)) =>
+    (): ReturnType<OpenRemovalReader> =>
+      Promise.resolve({
+        kind: "restore",
+        restoreFor: target =>
+          Promise.resolve(
+            target.slug === "pages" &&
+              target.id === "p1" &&
+              target.field === field
+              ? { current, fragments: [keptOfHero] }
+              : undefined
+          ),
+      });
+  const strippedStored = writeTo(async () => ({
+    kind: "value",
+    value: lockedStyled("dark", false),
+  }));
+
+  it("accepts the locked block with exactly what the undone removal kept put back", async () => {
+    expect(
+      await judged(
+        lockedStyled("dark", true),
+        undoing("content"),
+        strippedStored
+      )
+    ).toEqual([]);
+  });
+
+  it("refuses the restore with anything else changed on the locked block", async () => {
+    expect(
+      await judged(
+        lockedStyled("light", true),
+        undoing("content"),
+        strippedStored
+      )
+    ).toHaveLength(1);
+  });
+
+  it("refuses a restore of what was kept for another field", async () => {
+    expect(
+      await judged(lockedStyled("dark", true), undoing("aside"), strippedStored)
+    ).toHaveLength(1);
+  });
+
+  it("refuses a restore into a stored form the undo's walk does not write", async () => {
+    // The walk writes another form (a draft that differs from this one), so
+    // putting its fragments back into this form is no write it makes.
+    expect(
+      await judged(
+        lockedStyled("dark", true),
+        undoing("content", lockedStyled("other", false)),
+        strippedStored
       )
     ).toHaveLength(1);
   });

@@ -14,7 +14,11 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { lowestFloor, matrixFor } from "../../scripts/node-matrix.js";
+import {
+  lowestFloor,
+  matrixFor,
+  stableMajors,
+} from "../../scripts/node-matrix.js";
 
 const repoRoot = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -60,6 +64,14 @@ describe("deriving the Node legs from a supported range", () => {
   it("picks up a new major without an edit here", () => {
     // The property that makes this worth deriving at all.
     expect(matrixFor(">=24.0.0", [24, 25, 26, 27])).toContain("27.0.0");
+  });
+
+  it("does not count a major that has only a prerelease", () => {
+    // Node's index lists `v27.0.0-alpha.0.0.0` before 27.0.0 ships. Taken as a release it adds a
+    // 27.0.0 leg that `setup-node` cannot install.
+    const majors = stableMajors(["v27.0.0-alpha.0.0.0", "v26.13.0", "v24.1.0"]);
+    expect(majors).toEqual([26, 24]);
+    expect(matrixFor(">=24.0.0", majors)).toEqual(["24.0.0", "26.0.0"]);
   });
 
   it("names no major that has not been released", () => {

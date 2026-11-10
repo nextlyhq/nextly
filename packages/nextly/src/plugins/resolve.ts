@@ -17,8 +17,10 @@ import type { NextlyError } from "../errors/nextly-error";
 import { isReservedEventName } from "../events/event-bus";
 
 import { contributedListFilters } from "./admin-filters";
+import { contributedAdminContributions } from "./admin-place-contributions";
 import { collectAdminPlaces } from "./admin-places-registry";
 import { validateCapabilities, validateRequires } from "./capabilities";
+import { assertDocumentSurfaces } from "./document-surfaces";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
 import { assertLimitRules } from "./limits/limit-rules";
 import {
@@ -146,6 +148,10 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // And the document views: two screens on one address would leave the admin
   // drawing whichever it reached first, and a transformer can add either.
   assertDocumentViews(plugins);
+  // And the overrides of a document's actions and the sections added to its
+  // panel: an action two plugins override would be drawn one of their ways,
+  // silently.
+  assertDocumentSurfaces(plugins);
   // Two plugins sharing an admin slug share an address, and nothing downstream
   // can detect it: every lookup along that address returns a plugin, which is
   // what a correct lookup returns. Registration is where the ambiguity is still
@@ -192,6 +198,9 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // otherwise be offered in the toolbar and fail when chosen. Checked only;
   // the admin meta is built from the same reduction.
   contributedListFilters(plugins);
+  // Each place's contributions: checked whole and ordered, so one that cannot
+  // be ordered stops the app here rather than drawing in no order.
+  contributedAdminContributions(plugins);
 }
 
 /**

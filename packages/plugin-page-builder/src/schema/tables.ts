@@ -33,7 +33,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 10;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -306,6 +306,7 @@ type BreakpointRemovalsColumns = {
   readonly phase: ColumnBuilder<string, false, true>;
   readonly cursor: ColumnBuilder<string, true, false>;
   readonly openKey: ColumnBuilder<string, true, false>;
+  readonly undoes: ColumnBuilder<string, true, false>;
 };
 
 /**
@@ -327,6 +328,9 @@ type BreakpointRemovalsColumns = {
  * - `openKey` is `site` while the run is open and `null` once it is done. Its
  *   unique index lets one removal be open at a time: a second insert meets it
  *   and is refused, and every finished run (all `null`) stays as a record.
+ * - `undoes` is set on a run that puts a removal back rather than making
+ *   one: the id of the removal it undoes. It takes the same one open slot,
+ *   so no removal runs while an undo does.
  */
 export const breakpointRemovals: TableDefinition<
   "breakpoint_removals",
@@ -341,6 +345,7 @@ export const breakpointRemovals: TableDefinition<
     phase: col.varchar(16, { default: "converting" }),
     cursor: col.varchar(1024, { nullable: true }),
     openKey: col.varchar(16, { nullable: true }),
+    undoes: col.char(36, { nullable: true }),
   },
   { indexes: [{ columns: ["openKey"], unique: true }] }
 );
@@ -395,8 +400,15 @@ export const breakpointRemovalFragments: TableDefinition<
     fragment: col.json(),
     ...col.timestamps(),
   },
-  // Read and purged by run; the purge also reads by age.
-  { indexes: [{ columns: ["runId"] }, { columns: ["createdAt"] }] }
+  // Read and purged by run; the purge also reads by age; an undo reads a
+  // run's rows a document at a time, in document order.
+  {
+    indexes: [
+      { columns: ["runId"] },
+      { columns: ["createdAt"] },
+      { columns: ["runId", "documentKey"] },
+    ],
+  }
 );
 
 /** The columns every usage index row has: the document it describes. */
@@ -413,7 +425,7 @@ type UsageSubjectColumns = {
 };
 
 /**
- * The subject columns, declared once for both index tables, so the two cannot
+ * The subject columns, declared once for every index table, so the two cannot
  * come to describe a document differently. Each is a closed vocabulary or an
  * identifier: `scope` is `collection` or `single`, `entity` a slug, `entityKey`
  * a document id (empty for a Single, which has one document), `field` a field
@@ -501,6 +513,135 @@ export const componentUsageRows: TableDefinition<
   }
 );
 
+/**
+ * The widest variable identity the variable index records: the engine's bound
+ * on a token name, with room for the marker row, which is longer than any
+ * identity on purpose (`UNDETERMINED_TOKEN_ID`).
+ */
+const TOKEN_ID_WIDTH = 512;
+
+/** The columns of {@link tokenUsageRows}. */
+type TokenUsageColumns = UsageSubjectColumns & {
+  readonly tokenId: ColumnBuilder<string, false, false>;
+};
+
+/**
+ * The variable usage index: one row per variable a stored document names in a
+ * `$token` reference, in a block's styles or the document's own settings, or
+ * one marker row for a document that could not be read whole. Indexed by
+ * document and by variable, for the reasons the class index is.
+ */
+export const tokenUsageRows: TableDefinition<"token_usage", TokenUsageColumns> =
+  defineTable<"token_usage", TokenUsageColumns>(
+    "token_usage",
+    { ...usageSubjectColumns(), tokenId: col.varchar(TOKEN_ID_WIDTH) },
+    {
+      indexes: [{ columns: ["entity", "entityKey"] }, { columns: ["tokenId"] }],
+    }
+  );
+
+/** The columns of {@link bindingIssues}. */
+type BindingIssuesColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly documentKey: ColumnBuilder<string, false, false>;
+  readonly kind: ColumnBuilder<string, false, false>;
+  readonly slug: ColumnBuilder<string, false, false>;
+  readonly documentId: ColumnBuilder<string, true, false>;
+  readonly place: ColumnBuilder<string, false, false>;
+  readonly issues: ColumnBuilder<unknown, false, false>;
+  readonly dirty: ColumnBuilder<string, true, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * One row per document whose bindings no longer fit what they read: a field
+ * renamed or removed, a Single's field, a type that changed, a prop the block
+ * no longer has. Kept so the report and its count are read, not computed, on
+ * every admin page that shows them.
+ *
+ * - `documentKey` names the document as the usage indexes do (`kind:slug`,
+ *   and `:id` for a collection's entry), unique, so a document's recompute
+ *   replaces its row.
+ * - `place` is where the document lives (pages, components, patterns,
+ *   layouts, another collection's entries, or a Single), for the report's
+ *   filters.
+ * - `issues` is the list of the document's broken bindings, each with what
+ *   the report shows; empty for a document judged and found whole, a row kept
+ *   so a slower check of every document cannot write over a newer save.
+ * - `dirty` is set, to a fresh token, by each write to the document, and
+ *   cleared by the judgement that settles it only while the token is the one
+ *   it read: a write made meanwhile, or a judgement that failed, leaves the
+ *   row to be judged again.
+ * - `updatedAt` is when the document was last judged.
+ */
+export const bindingIssues: TableDefinition<
+  "binding_issues",
+  BindingIssuesColumns
+> = defineTable<"binding_issues", BindingIssuesColumns>(
+  "binding_issues",
+  {
+    id: col.id(),
+    documentKey: col.varchar(512),
+    kind: col.varchar(16),
+    slug: col.varchar(255),
+    documentId: col.varchar(255, { nullable: true }),
+    place: col.varchar(16),
+    issues: col.json(),
+    dirty: col.char(36, { nullable: true }),
+    ...col.timestamps(),
+  },
+  {
+    indexes: [
+      { columns: ["documentKey"], unique: true },
+      { columns: ["dirty"] },
+    ],
+  }
+);
+
+/** The columns of {@link bindingReportRuns}. */
+type BindingReportRunsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly name: ColumnBuilder<string, false, false>;
+  readonly checked: ColumnBuilder<string, true, false>;
+  readonly checking: ColumnBuilder<string, true, false>;
+  readonly cursor: ColumnBuilder<unknown, true, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * Where the check of every document for {@link bindingIssues} stands: one row,
+ * named `full`.
+ *
+ * - `checked` is the schema fingerprint the last complete check was made
+ *   against; a different fingerprint now means the schema changed since, and
+ *   every document is judged again.
+ * - `checking` is the fingerprint a check under way is making, and `cursor`
+ *   the document it resumes after, so a check longer than one jobs pass
+ *   carries on where the last pass stopped.
+ * - `updatedAt` is when the check last moved.
+ */
+export const bindingReportRuns: TableDefinition<
+  "binding_report_runs",
+  BindingReportRunsColumns
+> = defineTable<"binding_report_runs", BindingReportRunsColumns>(
+  "binding_report_runs",
+  {
+    id: col.id(),
+    name: col.varchar(32),
+    checked: col.varchar(64, { nullable: true }),
+    checking: col.varchar(64, { nullable: true }),
+    cursor: col.json({ nullable: true }),
+    ...col.timestamps(),
+  },
+  { indexes: [{ columns: ["name"], unique: true }] }
+);
+
 /** Every table this plugin declares, in creation order. */
 export const PAGE_BUILDER_TABLES: readonly [
   typeof usageRuns,
@@ -513,6 +654,9 @@ export const PAGE_BUILDER_TABLES: readonly [
   typeof breakpointRemovalFragments,
   typeof classUsageRows,
   typeof componentUsageRows,
+  typeof tokenUsageRows,
+  typeof bindingIssues,
+  typeof bindingReportRuns,
 ] = [
   usageRuns,
   usageProgress,
@@ -524,4 +668,7 @@ export const PAGE_BUILDER_TABLES: readonly [
   breakpointRemovalFragments,
   classUsageRows,
   componentUsageRows,
+  tokenUsageRows,
+  bindingIssues,
+  bindingReportRuns,
 ];

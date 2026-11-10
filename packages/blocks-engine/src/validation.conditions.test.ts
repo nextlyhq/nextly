@@ -356,4 +356,16 @@ describe("a block's conditions at save", () => {
       "condition-field-protected warning /nodes/0/visibility/conditions/0/0",
     ]);
   });
+
+  it("holds one current problem per stored one, so a copy added beside it is refused", () => {
+    const held = { field: "internalScore", op: "exists" };
+    const stored = page(box("a", [[held]]));
+    const doubled = page(box("a", [[held, held]]));
+    expect(
+      conditionCodes(validate(doubled, { ...onPost, stored: [stored] }))
+    ).toEqual([
+      "condition-field-protected warning /nodes/0/visibility/conditions/0/0",
+      "condition-field-protected error /nodes/0/visibility/conditions/0/1",
+    ]);
+  });
 });

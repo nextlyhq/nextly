@@ -268,11 +268,14 @@ test("draws the Layout's regions locked on the canvas, with a way to open the La
     `/admin/collections/layouts/${main}`
   );
 
-  // By keyboard: Escape closes the tag; Enter opens it again.
+  // By keyboard: Escape closes the tag and returns to the region's lock, its
+  // one focus stop; Enter opens it again.
   await edit.focus();
   await page.keyboard.press("Escape");
   await expect(tag).toHaveCount(0);
-  await expect(header).toBeFocused();
+  await expect(
+    header.getByRole("button", { name: `Header, from Layout ${MAIN}, locked` })
+  ).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(header.getByRole("status")).toBeVisible();
 

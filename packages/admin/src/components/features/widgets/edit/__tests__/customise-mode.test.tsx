@@ -28,6 +28,8 @@ import type {
 
 import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
+import { oneItemBodyPx, requestedCardHeightPx } from "../../frame/fit";
+import { cardHeightPx } from "../../sizes";
 import { WidgetGrid } from "../../WidgetGrid";
 import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 import {
@@ -530,6 +532,83 @@ describe("the bar", () => {
     renderDashboard();
     await beginEditing();
     expect(bar()).toHaveClass("sticky", "top-0");
+  });
+
+  it("draws fixed rows and every card at its stored rows while customising, and rows as tall as their cards at rest", async () => {
+    // 🔴 Fails with fixed rows at rest, where no cell asks its rows for a height and no card can
+    // be drawn shorter than its stored size; and with content rows while customising, where the
+    // stored sizes are what is being edited.
+    renderDashboard();
+    const resting = await screen.findByTestId("widget-cell-core/a");
+    expect(screen.getByLabelText("Dashboard widgets")).toHaveClass(
+      "auto-rows-auto"
+    );
+    // A body that reports nothing asks for its stored height, and holds its row at it.
+    expect(resting.style.minHeight).toBe(`${cardHeightPx(3)}px`);
+    expect(resting).toHaveClass("contain-size");
+
+    await beginEditing();
+    const grid = screen.getByLabelText("Dashboard widgets");
+    expect(grid).toHaveClass("auto-rows-[72px]");
+    expect(grid).not.toHaveClass("auto-rows-auto");
+    const editing = screen.getByTestId("widget-cell-core/a");
+    expect(editing.style.gridRow).toBe("span 3 / span 3");
+    expect(editing.style.minHeight).toBe("");
+    expect(editing).not.toHaveClass("contain-size");
+  });
+
+  it("draws a loading content-sized card at its one-item answer's height at rest, and at its stored rows while customising", async () => {
+    // 🔴 Fails at rest where the loading state asks for nothing: the cell asks for its stored
+    // height, 336 px. Fails while customising wherever the loading request reaches fixed rows.
+    mockBranding = {
+      widgets: [
+        ...(mockBranding?.widgets ?? []),
+        {
+          id: "core/needs-attention",
+          title: "Needs your attention",
+          archetype: "custom",
+          size: RESIZABLE,
+          component: "core#NotesBody",
+        },
+      ],
+    } as unknown as AdminBranding;
+    layoutResponse = layout({
+      placements: [
+        ...OPENED.map(p => ({ ...p })),
+        {
+          id: "p4",
+          widgetId: "core/needs-attention",
+          w: 8,
+          h: 4,
+          removed: false,
+        },
+      ],
+      widgets: {
+        "core/a": facts(),
+        "core/b": facts(),
+        "core/c": facts(),
+        "core/d": facts(),
+        "core/needs-attention": facts(),
+      },
+    });
+    // The answers never arrive, so the card stays loading in both modes.
+    api.post.mockImplementation(() => new Promise(() => {}));
+    renderDashboard();
+    const resting = await screen.findByTestId(
+      "widget-cell-core/needs-attention"
+    );
+    await within(resting).findByTestId("card-skeleton");
+    expect(resting.style.minHeight).toBe(
+      `${requestedCardHeightPx(4, oneItemBodyPx("default"))}px`
+    );
+
+    await beginEditing();
+    const editing = screen.getByTestId("widget-cell-core/needs-attention");
+    expect(editing.style.gridRow).toBe("span 4 / span 4");
+    expect(editing.style.minHeight).toBe("");
+    expect(screen.getByLabelText("Dashboard widgets")).toHaveClass(
+      "auto-rows-[72px]"
+    );
   });
 
   it("keeps exactly one level-one heading, the page's own", async () => {

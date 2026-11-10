@@ -37,7 +37,13 @@ async function refusal(call: () => Promise<unknown>): Promise<unknown> {
 }
 
 describe("a call with no signed-in caller", () => {
-  const service = compositionService(unreachable, {});
+  const service = compositionService(unreachable, {
+    templates: {
+      guard: () => {
+        throw new Error("the service read the templates guard");
+      },
+    },
+  });
 
   it("is refused before its request is read, by every method", async () => {
     const malformed = { not: "a request" } as never;
@@ -45,6 +51,7 @@ describe("a call with no signed-in caller", () => {
       () => service.manifest(nobody, { locale: "x".repeat(99) }),
       () => service.pageAction(nobody, malformed),
       () => service.definitionAction(nobody, "", malformed),
+      () => service.templateAction(nobody, malformed),
     ]) {
       const error = await refusal(call);
       expect(NextlyError.isForbidden(error), String(error)).toBe(true);

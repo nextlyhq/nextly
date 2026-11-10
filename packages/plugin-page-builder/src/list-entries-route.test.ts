@@ -1,7 +1,8 @@
 /**
- * The canvas's read of a list's entries: refused for a collection the caller
- * may not read, before anything is read, and otherwise the public reader's
- * answer; a body no list could build is refused at the boundary.
+ * The canvas's read of a list's entries: the editor reader's answer, read as
+ * the caller, whose refusals (core's, for a collection the caller may not
+ * read) travel unchanged; a body no list could build is refused at the
+ * boundary.
  */
 import {
   LIST_MAX_SORT_KEYS,
@@ -27,67 +28,48 @@ const ANSWER = {
 };
 
 describe("a canvas list's read", () => {
-  it("reads as the public, for a collection the caller may read", async () => {
-    const publicFind = vi.fn(async () => ANSWER);
+  it("reads as the caller, for a collection the caller may read", async () => {
+    const find = vi.fn(async () => ANSWER);
     const query = {
       collection: "posts",
       filters: [{ field: "title", op: "contains" as const, value: "build" }],
       sort: "-publishedAt",
       limit: 6,
     };
-    const answer = await readListEntries(
-      { query },
-      { mayRead: async slug => slug === "posts", publicFind }
-    );
+    const answer = await readListEntries({ query }, { find });
     expect(answer).toBe(ANSWER);
-    expect(publicFind).toHaveBeenCalledWith(query);
+    expect(find).toHaveBeenCalledWith(query);
   });
 
-  it("refuses a collection the caller may not read, reading nothing", async () => {
-    const publicFind = vi.fn(async () => ANSWER);
-    const refused = readListEntries(
-      { query: { collection: "orders" } },
-      { mayRead: async () => false, publicFind }
-    );
-    await expect(refused).rejects.toSatisfy(error =>
-      NextlyError.isCode(error, "FORBIDDEN")
-    );
-    expect(publicFind).not.toHaveBeenCalled();
+  it("passes the reader's own refusals to the editor unchanged", async () => {
+    // A refused sort travels as it was, so the canvas falls back as the
+    // published page does; so does core's refusal of a collection the caller
+    // may not read, the one door that decides it.
+    for (const failure of [
+      NextlyError.validation({
+        errors: [
+          { path: "sort.x", code: "FIELD_NOT_SORTABLE", message: "No." },
+        ],
+      }),
+      NextlyError.forbidden(),
+    ]) {
+      await expect(
+        readListEntries(
+          { query: { collection: "posts" } },
+          { find: async () => Promise.reject(failure) }
+        )
+      ).rejects.toBe(failure);
+    }
   });
 
-  it("tells the editor visitors are refused, never that its author must sign in", async () => {
-    const refused = await readListEntries(
-      { query: { collection: "posts" } },
-      {
-        mayRead: async () => true,
-        publicFind: async () => {
-          throw NextlyError.authRequired();
-        },
-      }
-    ).catch((error: unknown) => error);
-    expect(NextlyError.isForbidden(refused)).toBe(true);
-    expect((refused as NextlyError).statusCode).toBe(403);
-    expect((refused as NextlyError).publicMessage).toBe(
-      "Visitors can't read posts, so a published list of it shows nothing."
-    );
-    // Any other failure travels as it was, so a refused sort still falls back.
-    const sort = NextlyError.validation({
-      errors: [{ path: "sort.x", code: "FIELD_NOT_SORTABLE", message: "No." }],
-    });
-    await expect(
-      readListEntries(
-        { query: { collection: "posts" } },
-        {
-          mayRead: async () => true,
-          publicFind: async () => Promise.reject(sort),
-        }
-      )
-    ).rejects.toBe(sort);
+  it("is declared authenticated and never stored", () => {
+    const route = listEntriesRoute();
+    expect(route).not.toHaveProperty("public");
+    expect(route.noStore).toBe(true);
   });
 
-  it("refuses a body no list could build, before the caller is asked", async () => {
-    const can = vi.fn(async () => true);
-    const ctx = { caller: { can } } as unknown as PluginRouteContext;
+  it("refuses a body no list could build, before anything is read", async () => {
+    const ctx = { caller: null } as unknown as PluginRouteContext;
     const request = (body: unknown) =>
       new Request(`http://nextly.test/x${LIST_ENTRIES_ROUTE_PATH}`, {
         method: "POST",
@@ -110,24 +92,52 @@ describe("a canvas list's read", () => {
       { query: { collection: "posts", where: { a: 1 } } },
     ]) {
       await expect(
-        listEntriesRoute().handler(request(body), ctx)
+        listEntriesRoute(() => undefined).handler(request(body), ctx)
       ).rejects.toSatisfy(error =>
         NextlyError.isCode(error, "VALIDATION_ERROR")
       );
     }
-    expect(can).not.toHaveBeenCalled();
+  });
+
+  it("refuses a named run whose node id carries a line break or control character", async () => {
+    const ctx = { caller: null } as unknown as PluginRouteContext;
+    const request = (node: string) =>
+      new Request(`http://nextly.test/x${LIST_ENTRIES_ROUTE_PATH}`, {
+        method: "POST",
+        body: JSON.stringify({
+          named: { name: "events.upcoming", limit: 6, offset: 0, node },
+        }),
+      });
+    // The id is written into the server log when the run fails, so a forged
+    // second log line or a terminal escape never reaches it.
+    for (const node of ["list\nforged line", "list\u001b[31m", "list\u2028"]) {
+      await expect(
+        listEntriesRoute(() => undefined).handler(request(node), ctx)
+      ).rejects.toSatisfy(error =>
+        NextlyError.isCode(error, "VALIDATION_ERROR")
+      );
+    }
+    // An ordinary id passes the boundary: whatever happens past it (there is
+    // no runtime here), the body is not what is refused.
+    const ordinary = await listEntriesRoute(() => undefined)
+      .handler(request("list-1"), ctx)
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      );
+    expect(NextlyError.isCode(ordinary, "VALIDATION_ERROR")).toBe(false);
   });
 
   it("takes any sort a list may store, and nothing past its bounds", async () => {
-    const can = vi.fn(async () => false);
-    const ctx = { caller: { can } } as unknown as PluginRouteContext;
+    const ctx = { caller: null } as unknown as PluginRouteContext;
     const request = (sort: unknown) =>
       new Request(`http://nextly.test/x${LIST_ENTRIES_ROUTE_PATH}`, {
         method: "POST",
         body: JSON.stringify({ query: { collection: "posts", sort } }),
       });
     // The longest sort a list stores, every key naming a 63-character
-    // column, reaches the reader, here refused only by the caller check.
+    // column, passes the body's check and reaches the reader, which has no
+    // instance to read in a unit test: any refusal but the body's.
     const keys = Array.from(
       { length: LIST_MAX_SORT_KEYS },
       (_, index) => `-${"f".repeat(61)}${String(index).padStart(2, "0")}`
@@ -135,14 +145,14 @@ describe("a canvas list's read", () => {
     expect(keys.join(",").length).toBeGreaterThan(1000);
     for (const sort of [keys.join(","), keys]) {
       await expect(
-        listEntriesRoute().handler(request(sort), ctx)
-      ).rejects.toSatisfy(error => NextlyError.isCode(error, "FORBIDDEN"));
+        listEntriesRoute(() => undefined).handler(request(sort), ctx)
+      ).rejects.toSatisfy(
+        error => !NextlyError.isCode(error, "VALIDATION_ERROR")
+      );
     }
-    expect(can).toHaveBeenCalledTimes(2);
-    // A sort no list could store is refused before the caller is asked:
-    // one malformed, and ones past the bounds a stored sort is held to,
-    // which are checked before the sort is read at all.
-    can.mockClear();
+    // A sort no list could store is refused by the body's check: one
+    // malformed, and ones past the bounds a stored sort is held to, which
+    // are checked before the sort is read at all.
     const join = vi.spyOn(Array.prototype, "join");
     const pastBounds = [
       [...keys, "title"],
@@ -152,7 +162,7 @@ describe("a canvas list's read", () => {
     ];
     for (const sort of pastBounds) {
       await expect(
-        listEntriesRoute().handler(request(sort), ctx)
+        listEntriesRoute(() => undefined).handler(request(sort), ctx)
       ).rejects.toSatisfy(error =>
         NextlyError.isCode(error, "VALIDATION_ERROR")
       );
@@ -164,12 +174,11 @@ describe("a canvas list's read", () => {
     join.mockRestore();
     for (const sort of ["-a.b", ["title", "x y"]]) {
       await expect(
-        listEntriesRoute().handler(request(sort), ctx)
+        listEntriesRoute(() => undefined).handler(request(sort), ctx)
       ).rejects.toSatisfy(error =>
         NextlyError.isCode(error, "VALIDATION_ERROR")
       );
     }
-    expect(can).not.toHaveBeenCalled();
   });
 
   it("is mounted, authenticated, at the path the client asks", () => {

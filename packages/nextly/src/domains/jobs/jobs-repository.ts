@@ -583,6 +583,62 @@ export class JobsRepository {
   }
 
   /**
+   * Remove a pending job no runner holds, for work that got done another way
+   * before a run reached it. Whether it was removed: a job a runner holds is
+   * left to finish, so its outcome is still recorded, and a job that ran
+   * already is no longer pending.
+   */
+  async withdrawUnclaimed(id: string): Promise<boolean> {
+    const removed = await this.db.delete(JOBS, {
+      and: [
+        { column: "id", op: "=", value: id },
+        { column: "state", op: "=", value: "pending" },
+        { column: "lockedBy", op: "IS NULL", value: null },
+      ],
+    });
+    return removed > 0;
+  }
+
+  /**
+   * {@link withdrawUnclaimed} for the jobs holding any of `keys` as their
+   * dedupe key: work queued under known keys that got done another way. How
+   * many were removed; one a runner holds, or one already finished (which no
+   * longer holds its key), is left.
+   */
+  async withdrawUnclaimedByDedupeKeys(
+    keys: readonly string[]
+  ): Promise<number> {
+    if (keys.length === 0) return 0;
+    return this.db.delete(JOBS, {
+      and: [
+        { column: "dedupeKey", op: "IN", value: [...keys] },
+        { column: "state", op: "=", value: "pending" },
+        { column: "lockedBy", op: "IS NULL", value: null },
+      ],
+    });
+  }
+
+  /**
+   * Whether a job is still pending with no runner holding it: the state
+   * {@link withdrawUnclaimed} removes. One a runner holds or has finished, or
+   * that is gone, is not.
+   */
+  async isUnclaimed(id: string): Promise<boolean> {
+    const rows = await this.db.select<{ id: string }>(JOBS, {
+      columns: ["id"],
+      where: {
+        and: [
+          { column: "id", op: "=", value: id },
+          { column: "state", op: "=", value: "pending" },
+          { column: "lockedBy", op: "IS NULL", value: null },
+        ],
+      },
+      limit: 1,
+    });
+    return rows.length > 0;
+  }
+
+  /**
    * Remove terminal rows older than `before`, at most `limit` of them.
    *
    * A queue without this grows forever: every completed and every permanently

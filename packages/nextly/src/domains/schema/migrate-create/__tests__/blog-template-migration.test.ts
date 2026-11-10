@@ -76,7 +76,7 @@ interface SqlColumn {
 function createdTables(sql: string): Map<string, SqlColumn[]> {
   const tables = new Map<string, SqlColumn[]>();
   const statement =
-    /CREATE TABLE IF NOT EXISTS\s+[`"]([^`"]+)[`"]\s*\(([\s\S]*?)\n\)/g;
+    /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+[`"]([^`"]+)[`"]\s*\(([\s\S]*?)\n\)/g;
   for (const [, table, body] of sql.matchAll(statement)) {
     const columns: SqlColumn[] = [];
     for (const line of body.split("\n")) {
@@ -110,7 +110,7 @@ function uniqueKeys(sql: string): string[] {
     for (const c of columns)
       if (/\bUNIQUE\b/i.test(c.rest)) keys.push(`${table}(${c.name})`);
   const statement =
-    /CREATE TABLE IF NOT EXISTS\s+[`"]([^`"]+)[`"]\s*\(([\s\S]*?)\n\)/g;
+    /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+[`"]([^`"]+)[`"]\s*\(([\s\S]*?)\n\)/g;
   for (const [, table, body] of sql.matchAll(statement))
     for (const line of body.split("\n")) {
       const key = /^\s*UNIQUE\b(?:\s+KEY)?[^(]*\(([^)]*)\)/i.exec(line);
@@ -153,9 +153,10 @@ async function templateExport(file: string, name: string): Promise<unknown> {
 }
 
 async function blogEntities() {
-  const [Posts, Categories, Tags, SiteSettings, Navigation, Homepage] =
+  const [Posts, Authors, Categories, Tags, SiteSettings, Navigation, Homepage] =
     await Promise.all([
       templateExport("src/collections/Posts/index.ts", "Posts"),
+      templateExport("src/collections/Authors.ts", "Authors"),
       templateExport("src/collections/Categories.ts", "Categories"),
       templateExport("src/collections/Tags.ts", "Tags"),
       templateExport("src/singles/SiteSettings/index.ts", "SiteSettings"),
@@ -163,7 +164,7 @@ async function blogEntities() {
       templateExport("src/singles/Homepage/index.ts", "Homepage"),
     ]);
   return {
-    collections: toMinimalEntities([Posts, Categories, Tags], e =>
+    collections: toMinimalEntities([Posts, Authors, Categories, Tags], e =>
       resolveCollectionTableName(e.slug, e.dbName)
     ),
     singles: toMinimalEntities([SiteSettings, Navigation, Homepage], e =>
@@ -216,6 +217,55 @@ describe("the blog template's migration", () => {
         .filter(e => e.status !== true && visual.get(e.tableName) === true)
         .map(e => e.tableName)
     ).not.toEqual([]);
+  });
+
+  // One author profile per account, so the profile a new post is credited to
+  // is never a choice between two: the SQL each dialect runs keys it, and the
+  // snapshot a visual blog registers its fields from says so.
+  it("keeps one author profile per account, in every dialect and the snapshot", () => {
+    for (const [dialect, file] of Object.entries(MIGRATION_FILES)) {
+      const sql = readFileSync(new URL(file, TEMPLATE), "utf8");
+      expect(uniqueKeys(sql), dialect).toContain("dc_authors(account)");
+    }
+    const snapshot = JSON.parse(
+      readFileSync(
+        new URL(
+          "migrations/meta/0001_000000_blog_schema.snapshot.json",
+          TEMPLATE
+        ),
+        "utf8"
+      )
+    ) as {
+      collections: {
+        slug: string;
+        fields: { name: string; unique?: boolean }[];
+      }[];
+    };
+    const authors = snapshot.collections.find(c => c.slug === "authors");
+    expect(authors?.fields.find(f => f.name === "account")?.unique).toBe(true);
+  });
+
+  // A relationship's key, as nextly gives the ones it builds: deleting the
+  // profile, image or account a row names clears the reference rather than
+  // leaving a dangling id. SQLite declares them inside its CREATE TABLE, the
+  // others add them after; each counts the same.
+  it("keys the author relationships, clearing a reference whose row is deleted, in every dialect", () => {
+    const keys: Array<[string, string, string]> = [
+      ["byline", "dc_authors", "id"],
+      ["avatar", "media", "id"],
+      ["account", "users", "id"],
+    ];
+    for (const [dialect, file] of Object.entries(MIGRATION_FILES)) {
+      const sql = readFileSync(new URL(file, TEMPLATE), "utf8");
+      for (const [column, target, targetColumn] of keys) {
+        const q = '[`"]';
+        expect(sql, `${dialect} ${column}`).toMatch(
+          new RegExp(
+            `FOREIGN KEY\\s*\\(${q}${column}${q}\\)\\s*REFERENCES\\s+${q}${target}${q}\\s*\\(${q}${targetColumn}${q}\\)\\s+ON DELETE SET NULL`
+          )
+        );
+      }
+    }
   });
 
   for (const dialect of Object.keys(MIGRATION_FILES) as SupportedDialect[]) {
@@ -355,7 +405,7 @@ describe("the blog template's MySQL migration", () => {
     const reference =
       /FOREIGN KEY\s*\(`([^`]+)`\)\s*REFERENCES\s+`([^`]+)`\s*\(`([^`]+)`\)/;
     for (const [, table, body] of sql.matchAll(
-      /CREATE TABLE IF NOT EXISTS\s+`([^`]+)`\s*\(([\s\S]*?)\n\)/g
+      /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+`([^`]+)`\s*\(([\s\S]*?)\n\)/g
     ))
       for (const [, column, target, targetColumn] of body.matchAll(
         new RegExp(reference.source, "g")
@@ -374,7 +424,10 @@ describe("the blog template's MySQL migration", () => {
     expect(
       keys.map(([t, c, target, tc]) => `${t}.${c} -> ${target}.${tc}`).sort()
     ).toEqual([
+      "dc_authors.account -> users.id",
+      "dc_authors.avatar -> media.id",
       "dc_posts.author -> users.id",
+      "dc_posts.byline -> dc_authors.id",
       "dc_posts.featured_image -> media.id",
       "dc_posts_categories.category_id -> dc_categories.id",
       "dc_posts_categories.post_id -> dc_posts.id",
@@ -400,7 +453,7 @@ describe("the blog template's MySQL migration", () => {
     const columnsOf = (list: string) =>
       list.split(",").map(c => c.trim().replace(/[`"]/g, "").split(/\s+/)[0]);
     const statement =
-      /CREATE TABLE IF NOT EXISTS\s+`([^`]+)`\s*\(([\s\S]*?)\n\)/g;
+      /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+`([^`]+)`\s*\(([\s\S]*?)\n\)/g;
     for (const [, table, body] of sql.matchAll(statement)) {
       for (const line of body.split("\n")) {
         const inline = /^\s*`([^`]+)`\s+.*\b(PRIMARY KEY|UNIQUE)\b/.exec(line);

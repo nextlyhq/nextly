@@ -26,10 +26,11 @@ function labelRule(): string {
 }
 
 describe("a draggable label", () => {
-  it("shows the resize cursor over the admin's pointer for every label", () => {
-    // The admin sets `[data-slot="label"] { cursor: pointer !important }`,
-    // which a plain declaration loses to.
-    expect(labelRule()).toMatch(/cursor:\s*ew-resize\s*!important;/);
+  it("shows the resize cursor, as a plain declaration", () => {
+    // The admin's `[data-slot="label"] { cursor: pointer !important }` does
+    // not reach a draggable label, which carries no `data-slot` (the panel
+    // test holds that), so nothing here needs to outrank it.
+    expect(labelRule()).toMatch(/cursor:\s*ew-resize;/);
   });
 
   it("is not selected by a drag", () => {

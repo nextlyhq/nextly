@@ -542,8 +542,19 @@ describe("reading one removal", () => {
     }
   });
 
-  it("refuses a read naming no run", async () => {
-    await expect(ask("")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  it("answers a read naming no run with the removals alone, as the Site tab reports them", async () => {
+    const answer = (await (await ask("")).json()) as {
+      removals: { runId: string }[];
+      undoable: unknown;
+    };
+    expect(answer.removals.length).toBeGreaterThan(0);
+    expect(answer.undoable).toBeNull();
+  });
+
+  it("refuses a read naming a run that is not one", async () => {
+    await expect(ask("?runId=")).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
   });
 });
 
@@ -575,6 +586,7 @@ function run(
     startedBy: "user:user-1",
     open,
     preparing,
+    undoes: null,
   };
 }
 
@@ -594,6 +606,7 @@ function removals(
       if (runs instanceof Error) throw runs;
       return runs;
     },
+    undoable: async () => null,
   } as unknown as BreakpointRemovalService;
   const removal = {
     stored: async () => ({}),

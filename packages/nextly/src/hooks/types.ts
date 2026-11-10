@@ -29,6 +29,8 @@
  * @since 1.0.0
  */
 
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
 import type { Nextly } from "../direct-api/nextly";
 import type { Principal } from "../plugins/principals/types";
 
@@ -233,6 +235,18 @@ export interface HookContext<T = any> {
    * ```
    */
   originalData?: T;
+
+  /**
+   * The status an update is classified against, where core reads it apart
+   * from `originalData`: on a collection that keeps its status per language,
+   * the status stored in the language the write names (its companion row's,
+   * or the main row's where that language has none), and for a write to every
+   * language, `"published"` when any language is. Absent where the write's
+   * status is the main row's, so `originalData.status` is the one to read.
+   *
+   * @experimental
+   */
+  storedStatus?: string | null;
 
   /**
    * User performing the operation (if authenticated)
@@ -694,3 +708,82 @@ export type BeforeOperationHandler<T = any> = (
   | Promise<void>
   | BeforeOperationArgs<T>
   | Promise<BeforeOperationArgs<T>>;
+
+/**
+ * @experimental One write, as the in-transaction phase describes it to a
+ * handler.
+ *
+ * The phase runs last inside the write's own transaction, after the entry, its
+ * field groups, its version and its outbox event are written and before the
+ * commit. Unlike every other phase it is not one of {@link HOOK_TYPES}: a member
+ * added to that published list would break an exhaustive `switch` over
+ * {@link HookType} downstream, and stored and config hooks have no meaning for
+ * it. It is stored apart, as `beforeOperation` is.
+ *
+ * The transaction may be retried after a version conflict, and each attempt
+ * runs the phase again, so whatever a handler does here must be undone by a
+ * rollback: writes on the transaction it is handed, nothing outside it.
+ */
+export interface InTransactionWrite<T = Record<string, unknown>> {
+  /** The collection written to, or `single:<slug>` for a Single. */
+  collection: string;
+  /** What the write did. A Single is only ever updated. */
+  operation: "create" | "update" | "delete";
+  /** The written entry's id. */
+  id: string;
+  /**
+   * The document as this write leaves it, in the shape a read returns. For a
+   * delete, the document as it was just before it was removed. For an edit
+   * held as a working draft, the pending draft, marked `_isWorkingDraft`.
+   */
+  data: T | undefined;
+  /** For an update, the document before this write. */
+  originalData?: T;
+  /** The staff user the write is made as, when there is one. */
+  user?: HookContext["user"];
+  /**
+   * A detached, deeply frozen copy of the operation's shared hook context, made
+   * afresh for each attempt, so a handler cannot carry state from a discarded
+   * attempt into the one that commits, nor change what later hooks see. Only
+   * plain data is copied (primitives, arrays and plain objects, at any depth);
+   * any other value, such as a class instance, a function, a `Date` or a
+   * `Map`, is left out: its key is absent, and an array slot holding one
+   * reads `undefined`.
+   */
+  context: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * How the registry holds an in-transaction handler: a function of the write's
+ * transaction and the write. A plugin's handler is wrapped into one with its
+ * database bound to that transaction (`ctx.hooks.onInTransaction`).
+ *
+ * @internal
+ */
+export type InTransactionRunner = (
+  tx: TransactionContext,
+  write: InTransactionWrite
+) => Promise<void>;
+
+/**
+ * @experimental One thing deleting a collection takes with it besides its own
+ * entries, as a plugin names it for the delete dialog: what it is called
+ * (`label`) and what sort of thing it is (`kind`, such as `"template"`).
+ */
+export interface CollectionDeleteImpactItem {
+  readonly label: string;
+  readonly kind: string;
+}
+
+/**
+ * How the registry holds one plugin's collection-delete handlers: what
+ * deleting a collection takes with it, and the work that removes it inside
+ * the delete's transaction. A plugin's handlers are wrapped into one with a
+ * transaction token of their own (`ctx.hooks.onCollectionDelete`).
+ *
+ * @internal
+ */
+export interface CollectionDeleteRunner {
+  impact?: (slug: string) => Promise<readonly CollectionDeleteImpactItem[]>;
+  inTransaction?: (slug: string, tx: TransactionContext) => Promise<void>;
+}
