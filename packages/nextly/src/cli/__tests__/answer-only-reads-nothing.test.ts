@@ -86,7 +86,11 @@ async function answer(args: string[], folder: string) {
     NEXTLY_READ_PROBE_OUT: out,
   });
   const touched = JSON.parse(readFileSync(out, "utf8")) as string[];
-  const named = (text: string) => text.split(folder).join("<folder>");
+  // Help prints `--cwd`'s default as a JSON string, so on Windows each `\` of
+  // the folder appears doubled there; both spellings are the folder.
+  const quoted = JSON.stringify(folder).slice(1, -1);
+  const named = (text: string) =>
+    text.split(quoted).join("<folder>").split(folder).join("<folder>");
   return {
     run,
     touched,

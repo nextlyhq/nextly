@@ -8,6 +8,8 @@
  * nothing), and exits 0. Where the real run would refuse, it says so and
  * still exits 0: the refusal is part of what the real run would do.
  */
+import { relative, sep } from "node:path";
+
 import { Option, type Command } from "commander";
 
 import type { Logger } from "./utils/logger";
@@ -40,6 +42,26 @@ export interface DryRunChange {
   action: string;
   /** A path, a command line, a ledger entry or a setting. */
   target: string;
+}
+
+/** How a system spells paths: its `relative` and its separator. */
+interface PathSyntax {
+  relative: typeof relative;
+  sep: string;
+}
+
+/**
+ * A path as a dry run names it: relative to the project, "/"-separated, as
+ * the developer would type it there, so a dry run reads the same on every
+ * system. Windows separates with `\`, which would otherwise reach the line.
+ * `syntax` is the system's own unless given another.
+ */
+export function shownPath(
+  cwd: string,
+  path: string,
+  syntax: PathSyntax = { relative, sep }
+): string {
+  return syntax.relative(cwd, path).split(syntax.sep).join("/");
 }
 
 /** Everything a dry run reports. */

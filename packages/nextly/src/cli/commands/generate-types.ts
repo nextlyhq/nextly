@@ -62,7 +62,7 @@ import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import { carriedUserFieldOptions } from "../../shared/lib/user-field-plugin-options";
 import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
-import { reportDryRun, type DryRunChange } from "../dry-run";
+import { reportDryRun, shownPath, type DryRunChange } from "../dry-run";
 import { configDeclarationError, exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
 import { loadConfigOrExit } from "../utils/command-prerequisites";
@@ -86,7 +86,6 @@ import {
   applyBlockManifestState,
   blockManifestDryRunChanges,
   readBlockManifestState,
-  shownPath,
 } from "./generate-manifest";
 
 // ============================================================================
