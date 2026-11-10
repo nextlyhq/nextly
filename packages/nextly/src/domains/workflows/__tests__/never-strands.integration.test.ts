@@ -624,6 +624,8 @@ describe.each(getConfiguredTestDialects())(
         expect(
           await handler.discardWorkingDraftCounted({
             collectionName: "posts",
+            // A discard names the version it read or says it overwrites; this one read none.
+            version: { _overwrite: true },
             entryId: post,
             locale: "en",
             actor: { type: "user", id: "dave" },
@@ -651,6 +653,8 @@ describe.each(getConfiguredTestDialects())(
 
         await handler.discardWorkingDraftCounted({
           collectionName: "posts",
+          // A discard names the version it read or says it overwrites; this one read none.
+          version: { _overwrite: true },
           entryId: post,
           locale: "es",
         });
@@ -667,6 +671,8 @@ describe.each(getConfiguredTestDialects())(
         expect(
           await handlerOf(app()).discardWorkingDraftCounted({
             collectionName: "pages",
+            // A discard names the version it read or says it overwrites; this one read none.
+            version: { _overwrite: true },
             entryId: page,
           })
         ).toBe(0);

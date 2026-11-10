@@ -315,6 +315,8 @@ describe.each(getConfiguredTestDialects())(
 
       await handlerOf(app()).discardWorkingDraftCounted({
         collectionName: "posts",
+        // A discard names the version it read or says it overwrites; this one read none.
+        version: { _overwrite: true },
         entryId: post,
         locale: "en",
       });
