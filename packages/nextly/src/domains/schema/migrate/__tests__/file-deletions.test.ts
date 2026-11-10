@@ -53,6 +53,11 @@ interface Facts {
    * none when left out. "unreadable": not read for any table.
    */
   charsets?: Record<string, readonly string[]> | "unreadable";
+  /**
+   * Per table in `columns`, the columns that are NOT NULL; every other one is nullable.
+   * "unreadable": not read for any table.
+   */
+  notNull?: Record<string, readonly string[]> | "unreadable";
 }
 
 /** Live facts answering exactly from `facts`, with no case folding. */
@@ -99,6 +104,18 @@ function fake(facts: Facts = {}): DeletionFacts {
         new Map(Object.entries(columns)),
       ])
     ),
+    ...(facts.notNull === "unreadable"
+      ? {}
+      : {
+          liveNotNull: new Map(
+            tables.map(([table]) => {
+              const notNull = facts.notNull as
+                | Record<string, readonly string[]>
+                | undefined;
+              return [table, new Set(notNull?.[table] ?? [])];
+            })
+          ),
+        }),
     ...(facts.charsets === "unreadable"
       ? {}
       : {
@@ -262,6 +279,8 @@ describe("a string column widened", () => {
         a: "varchar(255)",
       },
     },
+    // `slug` is NOT NULL already, so restating it NOT NULL tightens nothing.
+    notNull: { posts: ["slug"] },
   };
 
   it("names nothing for a MySQL widening to TEXT or a longer VARCHAR, nor for TEXT restated", () => {
@@ -320,6 +339,38 @@ describe("a string column widened", () => {
         charsets: "unreadable",
       })
     ).toEqual([column("posts", "title")]);
+  });
+
+  it("still names a MySQL restatement that makes a nullable column NOT NULL, which a non-strict server fills with ''", () => {
+    expect(
+      read(
+        "mysql",
+        [
+          "ALTER TABLE posts MODIFY COLUMN title varchar(255) NOT NULL",
+          "ALTER TABLE posts MODIFY COLUMN a text PRIMARY KEY",
+        ],
+        posts
+      )
+    ).toEqual([column("posts", "title"), column("posts", "a")]);
+    // The same restatement of a column already NOT NULL tightens nothing.
+    expect(
+      read(
+        "mysql",
+        ["ALTER TABLE posts MODIFY COLUMN title varchar(255) NOT NULL"],
+        { ...posts, notNull: { posts: ["title"] } }
+      )
+    ).toEqual([]);
+    // Nullability that could not be read leaves it judged as any type change.
+    expect(
+      read(
+        "mysql",
+        ["ALTER TABLE posts MODIFY COLUMN slug varchar(40) NOT NULL"],
+        {
+          ...posts,
+          notNull: "unreadable",
+        }
+      )
+    ).toEqual([column("posts", "slug")]);
   });
 
   it("judges a second change against the type the first gave, not the live one", () => {
