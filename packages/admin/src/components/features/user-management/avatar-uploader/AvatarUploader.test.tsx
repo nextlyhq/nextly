@@ -12,13 +12,18 @@ vi.mock("@admin/components/features/media-library/MediaPickerDialog", () => ({
     open,
     onSelect,
     onOpenChange,
+    allowCreate = true,
   }: {
     open: boolean;
     onSelect: (media: Array<{ id: string; url: string }>) => void;
     onOpenChange: (open: boolean) => void;
+    allowCreate?: boolean;
   }) =>
     open ? (
-      <div data-testid="mock-media-picker">
+      <div
+        data-testid="mock-media-picker"
+        data-allow-create={String(allowCreate)}
+      >
         <button
           data-testid="mock-picker-confirm"
           onClick={() =>
@@ -139,5 +144,30 @@ describe("AvatarUploader", () => {
     expect(remove).not.toBeDisabled();
     await user.click(remove);
     expect(onChange).toHaveBeenCalledWith("");
+  });
+
+  it("offers uploading in the picker only where it is allowed", async () => {
+    // Uploading and making a folder need the create permission; a reader of
+    // media alone picks from what is there.
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <AvatarUploader
+        value=""
+        onChange={vi.fn()}
+        fullName="Jane"
+        pickerAllowsUpload={false}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: /change avatar/i }));
+    expect(screen.getByTestId("mock-media-picker").dataset.allowCreate).toBe(
+      "false"
+    );
+    unmount();
+
+    render(<AvatarUploader value="" onChange={vi.fn()} fullName="Jane" />);
+    await user.click(screen.getByRole("button", { name: /change avatar/i }));
+    expect(screen.getByTestId("mock-media-picker").dataset.allowCreate).toBe(
+      "true"
+    );
   });
 });

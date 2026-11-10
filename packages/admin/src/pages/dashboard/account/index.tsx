@@ -38,6 +38,9 @@ export default function AccountPage(): ReactElement {
   // still remove the avatar they have.
   const { hasPermission } = useCurrentUserPermissions();
   const mayPickAvatar = hasPermission("read-media");
+  // And uploading a new picture, or making a folder, in that picker needs the
+  // create permission: offered only to someone who holds it.
+  const mayUploadAvatar = hasPermission("create-media");
 
   if (isLoading) {
     return (
@@ -98,6 +101,7 @@ export default function AccountPage(): ReactElement {
                     fullName={profile.name || user.name}
                     disabled={profile.saving}
                     pickerDisabled={!mayPickAvatar}
+                    pickerAllowsUpload={mayUploadAvatar}
                     className="border border-border"
                     // As the user edit page draws it: text-primary on the
                     // primary tint reads in both modes.

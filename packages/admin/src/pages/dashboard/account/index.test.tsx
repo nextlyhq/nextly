@@ -48,6 +48,20 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
     hasPermission: (slug: string) => state.held.includes(slug),
   }),
 }));
+// The picker itself is tested where it is written; here only what the page
+// tells it.
+vi.mock("@admin/components/features/media-library/MediaPickerDialog", () => ({
+  MediaPickerDialog: ({
+    open,
+    allowCreate = true,
+  }: {
+    open: boolean;
+    allowCreate?: boolean;
+  }) =>
+    open ? (
+      <div data-testid="media-picker" data-allow-create={String(allowCreate)} />
+    ) : null,
+}));
 vi.mock("@admin/components/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/components/ui")>()),
   toast: { success: vi.fn(), error: vi.fn() },
@@ -206,5 +220,25 @@ describe("the account page", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(state.written).toHaveLength(1));
     expect((state.written[0]?.[1] as { name: string }).name).toHaveLength(255);
+  });
+
+  it("offers uploading in the avatar picker only to someone who may create media", async () => {
+    const user = userEvent.setup();
+    state.held = ["read-media"];
+    const { unmount } = render(<AccountPage />);
+    await user.click(
+      await screen.findByRole("button", { name: "Change avatar" })
+    );
+    expect(screen.getByTestId("media-picker").dataset.allowCreate).toBe(
+      "false"
+    );
+    unmount();
+
+    state.held = ["read-media", "create-media"];
+    render(<AccountPage />);
+    await user.click(
+      await screen.findByRole("button", { name: "Change avatar" })
+    );
+    expect(screen.getByTestId("media-picker").dataset.allowCreate).toBe("true");
   });
 });

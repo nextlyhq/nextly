@@ -22,6 +22,12 @@ export interface AvatarUploaderProps {
    * nothing from the library.
    */
   pickerDisabled?: boolean;
+  /**
+   * Whether the picker offers uploading a new file and making a folder, which
+   * need the create permission; picking from what is there needs only
+   * reading. Offered when not said.
+   */
+  pickerAllowsUpload?: boolean;
   /** Optional className applied to the underlying <Avatar>. */
   className?: string;
   /** Optional className overriding the default <AvatarFallback> styling. */
@@ -37,6 +43,7 @@ export function AvatarUploader({
   fullName,
   disabled = false,
   pickerDisabled = false,
+  pickerAllowsUpload = true,
   className,
   fallbackClassName,
 }: AvatarUploaderProps): ReactElement {
@@ -101,6 +108,7 @@ export function AvatarUploader({
           open={pickerOpen}
           onOpenChange={setPickerOpen}
           accept="image/*"
+          allowCreate={pickerAllowsUpload}
           title="Select Avatar"
           onSelect={media => {
             const url = media[0]?.url;
