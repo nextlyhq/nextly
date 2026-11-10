@@ -55,7 +55,7 @@ import type {
 } from "@admin/types/releases";
 
 import { documentKey } from "./add-documents";
-import { AddDocumentsDialog } from "./AddDocumentsDialog";
+import { LazyAddDocumentsDialog } from "./LazyAddDocumentsDialog";
 import {
   documentLabel,
   documentStatusLine,
@@ -179,7 +179,7 @@ export function ReleaseDocuments(props: ReleaseDocumentsProps): JSX.Element {
         onAdd={mayAdd ? () => setAdding(true) : undefined}
       />
       {mayAdd ? (
-        <AddDocumentsDialog
+        <LazyAddDocumentsDialog
           open={adding}
           onOpenChange={setAdding}
           release={release}

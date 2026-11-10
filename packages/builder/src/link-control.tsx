@@ -74,6 +74,7 @@ import {
   type LinkPick,
   type LinkValue,
 } from "./link-group";
+import type { BindableOptions, BindableWrapper } from "./prop-groups";
 
 /** How long typing pauses before the host is asked again. */
 const SEARCH_PAUSE_MS = 150;
@@ -994,6 +995,9 @@ function RelFlag({
   );
 }
 
+/** A field drawn as it is, where the inspector offers no binding controls. */
+const asDrawn: BindableWrapper = (_name, field) => field;
+
 export interface LinkGroupFieldProps {
   readonly group: LinkGroup;
   /** The block's props, as the inspector reads them. */
@@ -1005,11 +1009,77 @@ export interface LinkGroupFieldProps {
   readonly services: ContentServices | undefined;
   /** Write several props as one edit. */
   readonly onCommitMany: (changes: LinkChanges) => BlockDocument | null | void;
+  /** The link's binding controls, from the inspector; absent, none are drawn. */
+  readonly bindable?: BindableWrapper | undefined;
+  /** The document the block is in, whose bindings say whether the link is bound. */
+  readonly document?: BlockDocument | undefined;
+  /** The block's id. */
+  readonly nodeId?: string | undefined;
+}
+
+/**
+ * Whether the link is bound: its address, or its entry. A bound link goes
+ * where its field says, so it is a link to qualify even with no address of
+ * its own stored.
+ */
+function isLinkBound(
+  group: LinkGroup,
+  bound: Readonly<Record<string, unknown>> | undefined
+): boolean {
+  if (bound?.[group.link] !== undefined) return true;
+  return group.entry !== undefined && bound?.[group.entry.id] !== undefined;
+}
+
+/** The block's bindings, where the group knows its document and block. */
+function bindingsOfBlock(
+  document: BlockDocument | undefined,
+  nodeId: string | undefined
+): Readonly<Record<string, unknown>> | undefined {
+  return document === undefined || nodeId === undefined
+    ? undefined
+    : findNode(document.nodes, nodeId)?.bindings;
+}
+
+/**
+ * What binding the link's address says: a button follows a complete entry
+ * reference before its address, so binding the address empties the
+ * reference in the same edit, or the button would keep going to the entry;
+ * and where the block has an entry reference, the picker also offers the
+ * entries a relation names, whose pick binds the reference.
+ */
+function bindOptions(
+  group: LinkGroup,
+  destination: readonly string[],
+  writable: (name: string) => boolean,
+  bound: Readonly<Record<string, unknown>> | undefined
+): BindableOptions {
+  const entry = group.entry;
+  // A related entry's pick removes the address's binding, so where that
+  // binding is held it is not offered either.
+  const addressHeld =
+    bound?.[group.link] !== undefined && !writable(group.link);
+  return {
+    clearsOnBind: destination.filter(name => name !== group.link),
+    ...(entry === undefined
+      ? {}
+      : {
+          entryLink: {
+            link: group.link,
+            ...entry,
+            // A related entry's pick writes both halves, so where either is
+            // held (an area that keeps the block's design) none is offered.
+            writable:
+              writable(entry.collection) && writable(entry.id) && !addressHeld,
+          },
+        }),
+  };
 }
 
 /**
  * A block's link group, drawn where its link prop sits: the link, and under
- * a set link its new-tab switch and its Link options.
+ * a set link its new-tab switch and its Link options. The link's address
+ * offers binding through the inspector's wrapper; a bound link counts as set,
+ * so how it opens is still offered under its chip.
  */
 export function LinkGroupField({
   group,
@@ -1018,6 +1088,9 @@ export function LinkGroupField({
   reasonId,
   services,
   onCommitMany,
+  bindable,
+  document,
+  nodeId,
 }: LinkGroupFieldProps): React.JSX.Element {
   const id = React.useId();
   const tabId = React.useId();
@@ -1031,6 +1104,9 @@ export function LinkGroupField({
   const label =
     linkProp === undefined ? "Link" : propLabel(linkProp.name, linkProp.schema);
   const value = linkValueOf(group, values);
+  const bound = bindingsOfBlock(document, nodeId);
+  const linkBound = isLinkBound(group, bound);
+  const linked = value.kind !== "none" || linkBound;
   const held = (name: string | undefined): string | undefined =>
     name === undefined || writable(name) ? undefined : reasonId;
   // The destination is the link and, on a button, the entry reference that
@@ -1050,41 +1126,47 @@ export function LinkGroupField({
   );
   return (
     <div className="nx-link-group" data-link-group={group.link}>
-      <HeldByLock reasonId={destinationWritable ? undefined : reasonId}>
-        <div className="nx-inspector__field" data-content-control="link">
-          <Label htmlFor={id}>{label}</Label>
-          <LinkControl
-            id={id}
-            label={label}
-            value={value}
-            entryLinks={group.entry !== undefined}
-            disabled={!destinationWritable}
-            find={services?.findLinkTargets}
-            clearable={clearable}
-            onPick={pick => {
-              const changes = pickChanges(group, pick);
-              if (changes !== undefined && destinationWritable) {
-                onCommitMany(changes);
-              }
-            }}
-            // Clears the target and the rel with the link: see `clearChanges`.
-            // Where an area holds the target or the rel, the link still
-            // clears and they stay as the area keeps them; the destination
-            // itself is never cleared in part.
-            onClear={() => {
-              if (!destinationWritable) return;
-              onCommitMany(
-                Object.fromEntries(
-                  Object.entries(clearChanges(group)).filter(
-                    ([name]) => destination.includes(name) || writable(name)
+      {/* The address's bind button sits on its row; bound, the chip stands
+          for the address and the entry pick alike. */}
+      {(bindable ?? asDrawn)(
+        group.link,
+        <HeldByLock reasonId={destinationWritable ? undefined : reasonId}>
+          <div className="nx-inspector__field" data-content-control="link">
+            <Label htmlFor={id}>{label}</Label>
+            <LinkControl
+              id={id}
+              label={label}
+              value={value}
+              entryLinks={group.entry !== undefined}
+              disabled={!destinationWritable}
+              find={services?.findLinkTargets}
+              clearable={clearable}
+              onPick={pick => {
+                const changes = pickChanges(group, pick);
+                if (changes !== undefined && destinationWritable) {
+                  onCommitMany(changes);
+                }
+              }}
+              // Clears the target and the rel with the link: see `clearChanges`.
+              // Where an area holds the target or the rel, the link still
+              // clears and they stay as the area keeps them; the destination
+              // itself is never cleared in part.
+              onClear={() => {
+                if (!destinationWritable) return;
+                onCommitMany(
+                  Object.fromEntries(
+                    Object.entries(clearChanges(group)).filter(
+                      ([name]) => destination.includes(name) || writable(name)
+                    )
                   )
-                )
-              );
-            }}
-          />
-        </div>
-      </HeldByLock>
-      {value.kind === "none" || group.target === undefined ? null : (
+                );
+              }}
+            />
+          </div>
+        </HeldByLock>,
+        bindOptions(group, destination, writable, bound)
+      )}
+      {!linked || group.target === undefined ? null : (
         <HeldByLock reasonId={held(group.target)}>
           <div className="nx-inspector__field" data-content-control="checkbox">
             <Label htmlFor={tabId}>Open in new tab</Label>
@@ -1109,7 +1191,7 @@ export function LinkGroupField({
           </div>
         </HeldByLock>
       )}
-      {value.kind === "none" || group.rel === undefined ? null : (
+      {!linked || group.rel === undefined ? null : (
         <HeldByLock reasonId={held(group.rel)}>
           <LinkOptions
             rel={values[group.rel]}

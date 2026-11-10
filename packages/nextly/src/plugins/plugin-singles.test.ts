@@ -39,6 +39,8 @@ function hookRegistryDouble(): Parameters<typeof createPluginContext>[1] {
     unregister: vi.fn(),
     registerBeforeOperation: vi.fn(),
     unregisterBeforeOperation: vi.fn(),
+    registerInTransaction: vi.fn(),
+    unregisterInTransaction: vi.fn(),
   } as unknown as Parameters<typeof createPluginContext>[1];
 }
 
@@ -169,6 +171,9 @@ describe("the context's service names and the resolver that answers them", () =>
       "emailService",
       "versionsService",
       "singleRegistryService",
+      "singleEntryService",
+      "collectionRegistryService",
+      "fieldGroupRegistryService",
       "db",
       "relations",
       "dialect",

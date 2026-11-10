@@ -198,12 +198,14 @@ function allLocalesLifecycle(
   successMessage: string
 ): MethodHandler<CollectionsHandlerType> {
   return {
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       // `requireParam` rather than an inline throw: a missing route parameter is
       // caller-fixable, and a bare `Error` here would surface it as a 500.
       const collectionName = requireParam(p, "collectionName");
       const entryId = requireParam(p, "entryId");
       const result = await svc[method]({
+        // The request this transition's hooks are told about.
+        request,
         collectionName,
         entryId,
         actor: readAuthenticatedActor(),
@@ -627,6 +629,31 @@ const COLLECTIONS_METHODS: Record<
         result.message ?? "Collection deleted.",
         collection
       );
+    },
+  },
+  // What deleting a collection takes with it besides its own entries, by the
+  // plugin that holds it (`ctx.hooks.onCollectionDelete`), for the delete
+  // dialog to list before the confirm. `?together=a,b` names the collections
+  // a bulk delete removes with this one, as on the delete. Reads only.
+  previewCollectionDelete: {
+    execute: async (_svc, p) => {
+      const collectionName = requireParam(p, "collectionName");
+      const slugs = [
+        ...new Set([collectionName, ...parseTogetherParam(p.together)]),
+      ];
+      const [{ collectionDeleteImpact }, { getActiveHookRegistry }] =
+        await Promise.all([
+          import(
+            "../../domains/collections/services/collection-delete-plugins"
+          ),
+          import("../../hooks/hook-registry"),
+        ]);
+      const impact = await collectionDeleteImpact(
+        getActiveHookRegistry(),
+        slugs
+      );
+      // Read for this caller's dialog only; no shared cache keeps it.
+      return withSessionCacheHeaders(respondData({ impact }));
     },
   },
   // Preview schema changes (dry-run diff with row-count impact)

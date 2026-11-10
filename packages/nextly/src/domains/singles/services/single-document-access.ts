@@ -40,6 +40,15 @@ import {
 } from "../../../database/with-db-errors";
 import { getService } from "../../../di";
 import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
+import { resolvePublishTransition } from "../../../lib/status-transition";
+import { readCompanionLocaleStatus } from "../../i18n/companion-join";
+import { appLocalization } from "../../i18n/configured-locales";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
+import { buildCompanionSchema } from "../../i18n/runtime/companion-io";
+import { cachedCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 import type { UserContext } from "../types";
 
 import { checkSingleAccess } from "./single-query-service";
@@ -182,6 +191,91 @@ export async function singleDocumentEditable(
  * A Single with no row is not readable here, as it is not editable, since
  * there is no document to judge.
  */
+/**
+ * Whether the caller may make a write naming `nextStatus` of the Single's
+ * document, asked WITHOUT writing: nothing is created and no hook runs. The
+ * lifecycle gate a Single's update asks (`checkSingleAccess` for `publish` or
+ * `unpublish`), and only where it asks it: for a write that moves the stored
+ * row into or out of published, as {@link resolvePublishTransition}
+ * classifies it. A write that keeps the status asks nothing more. A Single
+ * with no row is refused here, as it is not editable.
+ *
+ * @experimental
+ */
+export async function singleDocumentStatusMoveAllowed(
+  slug: string,
+  nextStatus: string,
+  subject: SingleAccessSubject
+): Promise<boolean> {
+  const registry = getService("singleRegistryService");
+  const record = await registry.getSingleBySlug(slug);
+  if (!record?.tableName) return false;
+  const document = await storedRow(slug, record.tableName);
+  if (!document) return false;
+  const moves = new Set<"publish" | "unpublish">();
+  for (const prior of await statusesMovedFrom(
+    record,
+    document,
+    subject.locale
+  )) {
+    const move = resolvePublishTransition(prior, nextStatus);
+    if (move !== null) moves.add(move);
+  }
+  for (const move of moves) {
+    if (!(await storedSingleDocumentAllows(slug, move, subject))) return false;
+  }
+  return true;
+}
+
+/**
+ * The statuses a write in `locale` is judged moving from, as the Single's own
+ * update judges them: where the Single keeps its status per language, a
+ * write in another language than the default moves only that language's
+ * companion `_status` (none stored reads as no status), and one in the
+ * default language moves both the main row's and its companion `_status`; a
+ * Single without per-language status, or a write naming no language, moves
+ * the main row's alone.
+ */
+async function statusesMovedFrom(
+  record: {
+    readonly slug: string;
+    readonly tableName: string;
+    readonly fields?: unknown;
+    readonly localized?: unknown;
+    readonly status?: unknown;
+  },
+  document: Record<string, unknown>,
+  locale: string | undefined
+): Promise<(string | null)[]> {
+  const main = typeof document.status === "string" ? document.status : null;
+  const localization = appLocalization();
+  if (
+    locale === undefined ||
+    !localization ||
+    !storesPerLanguage(record) ||
+    !publishesPerLanguage(record)
+  ) {
+    return [main];
+  }
+  const adapter = getService("adapter");
+  const companion = buildCompanionSchema({
+    slug: record.slug,
+    tableName: record.tableName,
+    fields: (record.fields ?? []) as { name: string; type: string }[],
+    dialect: adapter.dialect,
+    status: true,
+  });
+  if (companion?.hasStatus !== true) return [main];
+  const inLocale = await readCompanionLocaleStatus(
+    adapter.getDrizzle<Parameters<typeof readCompanionLocaleStatus>[0]>(),
+    companion.table,
+    String(document.id),
+    locale,
+    cachedCompanionReadiness(adapter, companion.companionTableName)
+  );
+  return locale === localization.defaultLocale ? [main, inLocale] : [inLocale];
+}
+
 export async function singleStoredDocumentReadable(
   slug: string,
   subject: SingleAccessSubject
@@ -198,7 +292,7 @@ export async function singleStoredDocumentReadable(
  */
 async function storedSingleDocumentAllows(
   slug: string,
-  operation: "read" | "update",
+  operation: "read" | "update" | "publish" | "unpublish",
   { user, actor, routeAuthorized, locale }: SingleAccessSubject
 ): Promise<boolean> {
   const registry = getService("singleRegistryService");
@@ -231,6 +325,11 @@ async function storedSingleDocumentAllows(
             : registeredWriteAsNamedLanguagesFor(locale),
           ask
         );
+  // A rule that could not run never answered: the request ends with that,
+  // not with the Single read as one the caller may not touch.
+  if (denied?.code === "RULE_COULD_NOT_RUN") {
+    throw errorFromServiceEnvelope(denied);
+  }
   return denied === null;
 }
 

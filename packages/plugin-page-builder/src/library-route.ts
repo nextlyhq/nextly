@@ -379,9 +379,7 @@ export const DEFAULT_COMPONENT_STORE: ComponentStore = {
  * A public route has no caller; the routes using this are gated, so the
  * anonymous branch is the honest answer for a context nothing authenticated.
  */
-export async function readingAsUser(
-  ctx: Pick<PluginRouteContext, "caller">
-): Promise<{
+export async function readingAsUser(ctx: IdentifiedCaller): Promise<{
   overrideAccess: false;
   user: PluginRouteIdentity["user"] | undefined;
   actor?: NonNullable<PluginRouteIdentity["authenticatedScope"]>;
@@ -394,6 +392,17 @@ export async function readingAsUser(
       ? {}
       : { actor: identity.authenticatedScope }),
   };
+}
+
+/**
+ * Who a read is made as: a route's caller, or anyone whose identity is known
+ * the same way, such as the person a dashboard card is loaded for. Only the
+ * identity is read, so every such read is judged by one gate.
+ */
+export interface IdentifiedCaller {
+  readonly caller: {
+    identity(): Promise<PluginRouteIdentity>;
+  } | null;
 }
 
 /**

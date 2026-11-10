@@ -209,23 +209,30 @@ created.item.id;
 Update by ID, or update the first match of a `where` clause. Either `id` or `where` is required.
 
 ```typescript
-// By ID
+// By ID, with the version your read returned
+const post = await nextly.findByID({ collection: "posts", id: "abc-123" });
+if (!post) throw new Error("No such post");
+
 const updated = await nextly.update({
   collection: "posts",
   id: "abc-123",
-  data: { status: "published", publishedAt: new Date() },
+  data: { status: "published", publishedAt: new Date(), _rev: post._rev },
 });
 
 updated.item; // the updated Post
 updated.message; // "Posts updated."
 
-// By where (single match path — use bulk endpoints for true bulk semantics)
+// By where (single match path — use bulk endpoints for true bulk semantics).
+// A query carries no version, so it says it overwrites.
 const archived = await nextly.update({
   collection: "posts",
   where: { status: { equals: "draft" } },
-  data: { status: "archived" },
+  data: { status: "archived", _overwrite: true },
 });
 ```
+
+An update must send the `_rev` from your last read, or `_overwrite: true`; one that sends neither
+is refused with `VERSION_REQUIRED` (428). See [Versions and conflicts](#versions-and-conflicts).
 
 | Argument         | Type                      | Default  | Description                                                                                                   |
 | ---------------- | ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
@@ -238,6 +245,11 @@ const archived = await nextly.update({
 | `user`           | `{ id, role? }`           | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 
 **Returns:** `MutationResult<T>` (`{ message, item }`). Throws `NextlyError` (`NOT_FOUND`) when the where clause matches nothing.
+
+To have the update judged by the version you read, put that `_rev` in `data` and update by `id`
+(see [Versions and conflicts](#versions-and-conflicts)). An update by `where` refuses a `_rev`,
+since one version can't speak for every document the clause could match, so it needs
+`_overwrite: true`.
 
 ### delete
 
@@ -482,11 +494,14 @@ the collection mutations return, so every mutation reports its outcome the same
 way.
 
 ```typescript
+const current = await nextly.findSingle({ slug: "site-settings" });
+
 const { item, warnings } = await nextly.updateSingle({
   slug: "site-settings",
   data: {
     siteName: "My Awesome Site",
     maintenanceMode: false,
+    _rev: current._rev,
   },
 });
 
@@ -818,6 +833,8 @@ An `update` by `where` is the exception: it does not pass `locale` on, so it wri
 default language whatever `locale` says. To write another language, update by `id`.
 
 ```ts
+declare const id: string;
+
 // Spanish, falling back as the site configures it.
 const { items } = await nextly.find({ collection: "posts", locale: "es" });
 
@@ -934,6 +951,59 @@ const c = await nextly.find({ collection: "posts", richTextFormat: "both" });
 c.items[0].content; // { json: {...}, html: "<p>Hello world</p>" }
 ```
 
+## Versions and conflicts
+
+Every entry and Single carries a version, `_rev`, on every result that returns it: `find`,
+`findByID`, `findSingle`, and the `item` of `create`, `update` and `updateSingle`. Pass it back in
+`data`, and the update is applied only if nobody has saved the document since you read it:
+
+```typescript
+const post = await nextly.findByID({ collection: "posts", id: "abc-123" });
+if (!post) throw new Error("No such post");
+
+const { item } = await nextly.update({
+  collection: "posts",
+  id: "abc-123",
+  data: { title: "Hello again", _rev: post._rev },
+});
+
+item._rev; // the new version, for the next save
+```
+
+The version is judged the same way as over REST, including with `overrideAccess: true`: a trusted
+call skips access checks, never the version. See the REST API's
+[Versions and conflicts](/docs/api-reference/rest-api#versions-and-conflicts) for what `_rev`
+covers, which writes are judged, and how each language is judged.
+
+An out-of-date save throws a `NextlyError` with the code `STALE_VERSION` (409), and nothing is
+written. Its `publicData` carries `currentVersion`, and, where the caller may read the document,
+`changedBy` and `changedAt` (a trusted call may):
+
+```typescript
+import { NextlyError } from "nextly";
+
+try {
+  await nextly.update({
+    collection: "posts",
+    id: "abc-123",
+    data: { title: "Hello again", _rev: post._rev },
+  });
+} catch (err) {
+  if (NextlyError.isCode(err, "STALE_VERSION")) {
+    // Someone saved first. Read the post again and reapply the change,
+    // or save over theirs with `_overwrite: true`.
+    console.log(err.publicData); // { currentVersion, changedBy?, changedAt?, historyVersion? }
+  }
+  throw err;
+}
+```
+
+To save whatever the current version, add `_overwrite: true` to `data`. The update is applied,
+and the document's history records the overwrite. An update that sends neither `_rev` nor
+`_overwrite: true` throws `VERSION_REQUIRED` (428) and writes nothing: check it with
+`NextlyError.isCode(err, "VERSION_REQUIRED")`. Generated entry and Single types and Zod
+schemas carry `_rev?: string`, and their update inputs take `_overwrite?: boolean`.
+
 ## Errors
 
 Every Direct API failure throws a single `NextlyError` class. The error carries a public payload (safe to surface) and a log payload (for the server logger). Type guards let you narrow without `instanceof` (which can fail at package boundaries):
@@ -966,9 +1036,9 @@ async function getPost() {
 }
 ```
 
-Available type guards: `NextlyError.is`, `NextlyError.isCode`, `NextlyError.isNotFound`, `NextlyError.isValidation`, `NextlyError.isAuthRequired`, `NextlyError.isForbidden`, `NextlyError.isConflict`, `NextlyError.isRateLimited`.
+Available type guards: `NextlyError.is`, `NextlyError.isCode`, `NextlyError.isNotFound`, `NextlyError.isValidation`, `NextlyError.isAuthRequired`, `NextlyError.isForbidden`, `NextlyError.isConflict`, `NextlyError.isRateLimited`. `isConflict` matches `CONFLICT` only; check an out-of-date save with `NextlyError.isCode(err, "STALE_VERSION")`.
 
-Common `code` values you will see: `VALIDATION_ERROR` (400), `INVALID_INPUT` (422), `AUTH_REQUIRED` (401), `AUTH_INVALID_CREDENTIALS` (401), `EMAIL_NOT_VERIFIED` (403), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `DUPLICATE` (409), `PAYLOAD_TOO_LARGE` (413), `RATE_LIMITED` (429), `DATABASE_ERROR` (500), `INTERNAL_ERROR` (500), `SERVICE_UNAVAILABLE` (503).
+Common `code` values you will see: `VALIDATION_ERROR` (400), `INVALID_INPUT` (422), `AUTH_REQUIRED` (401), `AUTH_INVALID_CREDENTIALS` (401), `EMAIL_NOT_VERIFIED` (403), `FORBIDDEN` (403), `NOT_FOUND` (404), `STALE_VERSION` (409), `CONFLICT` (409), `DUPLICATE` (409), `VERSION_REQUIRED` (428), `PAYLOAD_TOO_LARGE` (413), `RATE_LIMITED` (429), `DATABASE_ERROR` (500), `INTERNAL_ERROR` (500), `SERVICE_UNAVAILABLE` (503).
 
 The same `NextlyError` is what the route handler serialises into the HTTP error envelope (`{ error: { code, message, requestId, ... } }`) — see the [REST API error response section](/docs/api-reference/rest-api#errors) for the wire format.
 

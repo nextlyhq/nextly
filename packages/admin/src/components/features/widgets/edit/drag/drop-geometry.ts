@@ -90,7 +90,7 @@ export function finalPositionAt(
 }
 
 /** Where a card is placed on the grid: its first column and row, in grid units. */
-interface GridCell {
+export interface GridCell {
   column: number;
   row: number;
 }
@@ -101,8 +101,13 @@ interface GridCell {
  * one's where its span and rows are free. Rows as well as columns: after a tall half and a short
  * half, the next half fits beside the tall one, under the short one, which a count of columns
  * alone would start on a row of its own.
+ *
+ * Reads only each card's span and rows, so the grid's other questions about where its cards
+ * land (which cards share rows, `row-bands`) are answered by this same walk.
  */
-function placements(order: readonly DrawnCard[]): GridCell[] {
+export function gridPlacements(
+  order: readonly Pick<DrawnCard, "span" | "rows">[]
+): GridCell[] {
   const taken = new Set<string>();
   const free = (column: number, row: number, span: number, rows: number) => {
     for (let r = row; r < row + rows; r++) {
@@ -155,7 +160,7 @@ export function dropLineFor(
   if (moved === undefined || final === from) return undefined;
   const order = cards.filter((_, index) => index !== from);
   order.splice(final, 0, moved);
-  const cell = placements(order)[final];
+  const cell = gridPlacements(order)[final];
   if (cell === undefined) return undefined;
   // The place the card will take, in pixels, by the grid's own measures: twelve columns with
   // the gap across that this width draws (`columnGapPx`), and rows of `ROW_HEIGHT_PX` with

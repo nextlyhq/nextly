@@ -12,8 +12,12 @@
 import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import type { BlocksPageConfig } from "@nextlyhq/blocks-react/next";
-import { pageBuilderLayouts } from "@nextlyhq/plugin-page-builder";
+import {
+  namedQueriesOf,
+  pageBuilderLayouts,
+} from "@nextlyhq/plugin-page-builder";
 
+import { pageBuilderPlugin } from "../../nextly.config";
 import { siteReader, SITE_STYLE_CONTEXT, SITE_STYLES } from "./site-content";
 
 export const pagesRoute: BlocksPageConfig = {
@@ -37,6 +41,9 @@ export const pagesRoute: BlocksPageConfig = {
   // — so a public route depending on it renders the unknown-block placeholder
   // whenever this request arrived before the admin did.
   blocks: createBlockResolver(coreBlocks),
+  // This site's named queries, a list's custom sources: the page builder's
+  // own, so a list here never resolves another site's served alongside.
+  namedQueries: namedQueriesOf(pageBuilderPlugin),
   // No `data`: a `core/collection-loop` reads through the route's public
   // reader, published entries and public fields only, as any visitor would.
   styleContext: SITE_STYLE_CONTEXT,

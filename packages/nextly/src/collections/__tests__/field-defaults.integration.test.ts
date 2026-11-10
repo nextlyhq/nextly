@@ -139,10 +139,11 @@ describe("field defaults on a collection create (integration)", () => {
       links: [{ href: "/a" }, { href: "/b", rel: "given" }],
     });
     expect(data.audit).toEqual({ note: "fn-nested" });
-    // Resolved against its own row, and never over a supplied value.
+    // Resolved against its own row, and never over a supplied value. Every
+    // write gives a repeater row a saved id.
     expect(data.links).toEqual([
-      { href: "/a", rel: "rel:/a" },
-      { href: "/b", rel: "given" },
+      { id: expect.any(String), href: "/a", rel: "rel:/a" },
+      { id: expect.any(String), href: "/b", rel: "given" },
     ]);
   });
 
@@ -160,7 +161,11 @@ describe("field defaults on a collection create (integration)", () => {
       title: "Home",
       items: [{ label: "given" }, {}],
     });
-    expect(data.items).toEqual([{ label: "given" }, { label: "dl" }]);
+    // Every write gives a repeater row a saved id.
+    expect(data.items).toEqual([
+      { id: expect.any(String), label: "given" },
+      { id: expect.any(String), label: "dl" },
+    ]);
   });
 
   it("never overwrites a value the caller supplied", async () => {

@@ -48,6 +48,7 @@ import {
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
+import { gatedAsStored } from "./condition-gate";
 import { blockLabel, type SavedComponent } from "./inserter";
 import { storedComponentId } from "./placement-props";
 
@@ -216,11 +217,14 @@ function hiddenAtSomeBreakpoint(node: BlockNode): boolean {
   return Object.values(devices).some(visible => visible === false);
 }
 
-/** Whether the node carries any condition at all. */
+/**
+ * Whether the node's conditions decide who sees it, asked of the engine's
+ * own gate, so Layers marks exactly the blocks the page judges: conditions it
+ * can't read included, a group with no conditions (which lets everyone
+ * through) not.
+ */
 function hasConditions(node: BlockNode): boolean {
-  const groups = node.visibility?.conditions;
-  if (!Array.isArray(groups)) return false;
-  return groups.some(group => Array.isArray(group) && group.length > 0);
+  return gatedAsStored(node);
 }
 
 /**

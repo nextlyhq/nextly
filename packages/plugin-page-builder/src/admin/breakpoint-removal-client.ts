@@ -4,9 +4,9 @@
  * the read of where a removal stands.
  *
  * Outside the site style's write (`useSaveSiteStyle`) on purpose: a confirmed
- * removal is not a step of the editor's undo history. Undoing it would only
- * define the breakpoint again, empty, which is not what an author pressing
- * undo expects, and the removal says it cannot be undone.
+ * removal is not a step of the editor's undo history. Undoing it there would
+ * only define the breakpoint again, empty; it is undone from Settings, which
+ * puts its styles back too (`undoBreakpointRemoval`).
  *
  * @module admin/breakpoint-removal-client
  * @experimental
@@ -17,17 +17,17 @@ import { readPluginRoute, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_BREAKPOINT_REMOVAL_ROUTE_PATH,
+  SITE_BREAKPOINT_UNDO_ROUTE_PATH,
   SITE_BREAKPOINTS_ROUTE_PATH,
-  SITE_SETTINGS_ROUTE_PATH,
   siteBreakpointRemovalStatusPath,
   type SiteBreakpointRemoval,
   type SiteBreakpointRemovalRead,
   type SiteBreakpointRemovalRequest,
   type SiteBreakpointRemovalStatus,
+  type SiteBreakpointRemovalsRead,
   type SiteBreakpointsDryRun,
   type SiteBreakpointsRequest,
   type SiteBreakpointsSaved,
-  type SiteSettingsRead,
 } from "../library-contract";
 
 /** A mutation route's answer: its message and the item it carries. */
@@ -113,16 +113,32 @@ export async function readBreakpointRemoval(
 }
 
 /**
- * The removals the Site tab's read reports now, read alone: an open Settings
- * asks this to learn of a removal another tab started. `undefined` where the
- * read reports none, or answered nothing.
+ * Undo removal `runId`: its breakpoints defined again and their styles put
+ * back, as far as one call walks; the rest is carried on through the removal
+ * route.
  */
-export async function readSiteRemovals(): Promise<
-  readonly SiteBreakpointRemovalStatus[] | undefined
+export async function undoBreakpointRemoval(
+  runId: string
+): Promise<SiteBreakpointsSaved> {
+  return itemOf(
+    await writePluginRoute<Envelope<SiteBreakpointsSaved>>({
+      plugin: PAGE_BUILDER_PLUGIN_NAME,
+      path: SITE_BREAKPOINT_UNDO_ROUTE_PATH,
+      body: { runId } satisfies SiteBreakpointRemovalRequest,
+    })
+  );
+}
+
+/**
+ * The removals, and the one that can be undone, read alone: an open Settings
+ * asks this to learn of a removal or an undo another tab started, without
+ * reading the rest of Settings. `undefined` where it answered nothing.
+ */
+export async function readRemovals(): Promise<
+  SiteBreakpointRemovalsRead | undefined
 > {
-  const read = await readPluginRoute<SiteSettingsRead>({
+  return readPluginRoute<SiteBreakpointRemovalsRead>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: SITE_SETTINGS_ROUTE_PATH,
+    path: SITE_BREAKPOINT_REMOVAL_ROUTE_PATH,
   });
-  return read?.removals;
 }

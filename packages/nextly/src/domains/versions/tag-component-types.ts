@@ -408,6 +408,70 @@ export async function containedComponentResolver(
 }
 
 /**
+ * Every field declared in `list` and in the `fields` of every field under it,
+ * at any depth, in declaration order: the fields a document's own schema
+ * holds, as far as it holds them inline. A component a field names is not
+ * followed; {@link resolveComponentFieldMap} resolves those.
+ *
+ * Iterative, with a visited set, for the same two reasons the addressable-
+ * fields walk is: a config whose group contains itself overflowed the call
+ * stack here, and a list wider than the engine's argument limit threw out of
+ * `push(...children)`. This runs BEFORE the tagging walk on the save path, so
+ * hardening only that one left both failures reachable one function earlier —
+ * a throw here reports a failed save for one that succeeded, since it happens
+ * after the row is written.
+ */
+function declaredFieldsIn(list: readonly unknown[]): object[] {
+  const found: object[] = [];
+  const pending: unknown[] = [];
+  for (let i = list.length - 1; i >= 0; i--) pending.push(list[i]);
+  const walked = new WeakSet<object>();
+
+  while (pending.length > 0) {
+    const field = pending.pop();
+    if (typeof field !== "object" || field === null) continue;
+    if (walked.has(field)) continue;
+    walked.add(field);
+    found.push(field);
+
+    const children = (field as { fields?: unknown }).fields;
+    if (!Array.isArray(children)) continue;
+    for (let i = children.length - 1; i >= 0; i--) pending.push(children[i]);
+  }
+  return found;
+}
+
+/**
+ * Whether `fields` declare a field of one of `fieldTypes` at any depth:
+ * inline, inside groups and repeaters and any other field carrying `fields`,
+ * or inside a component they name, and one that component names in turn.
+ *
+ * Read from the same two walks a version capture resolves a document's
+ * components with ({@link declaredFieldsIn}, {@link resolveComponentFieldMap}),
+ * so "the fields this document holds" means one thing. Components are looked
+ * up only when the inline fields hold none of the types, and an unknown
+ * component holds nothing.
+ */
+export async function holdsFieldOfType(
+  fields: readonly unknown[],
+  fieldTypes: readonly string[],
+  getComponentFields: (slug: string) => Promise<FieldConfig[] | null>
+): Promise<boolean> {
+  if (fieldTypes.length === 0) return false;
+  const holds = (list: readonly unknown[]): boolean =>
+    declaredFieldsIn(list).some(field => {
+      const type = (field as { type?: unknown }).type;
+      return typeof type === "string" && fieldTypes.includes(type);
+    });
+  if (holds(fields)) return true;
+  const components = await resolveComponentFieldMap(
+    [...fields] as FieldConfig[],
+    getComponentFields
+  );
+  return [...components.values()].some(holds);
+}
+
+/**
  * Every component schema the fields reach, keyed by slug.
  *
  * Resolved to a fixed point so a component embedded in another component is
@@ -428,33 +492,8 @@ export async function resolveComponentFieldMap(
 ): Promise<Map<string, FieldConfig[]>> {
   const resolved = new Map<string, FieldConfig[]>();
 
-  // Iterative, with a visited set, for the same two reasons the addressable-
-  // fields walk is: a config whose group contains itself overflowed the call
-  // stack here, and a list wider than the engine's argument limit threw out of
-  // `push(...slugsIn(children))`. This runs BEFORE the tagging walk on the
-  // save path, so hardening only that one left both failures reachable one
-  // function earlier — a throw here reports a failed save for one that
-  // succeeded, since it happens after the row is written.
-  const slugsIn = (list: readonly unknown[]): string[] => {
-    const found: string[] = [];
-    const pending: unknown[] = [];
-    for (let i = list.length - 1; i >= 0; i--) pending.push(list[i]);
-    const walked = new WeakSet<object>();
-
-    while (pending.length > 0) {
-      const field = pending.pop();
-      if (typeof field !== "object" || field === null) continue;
-      if (walked.has(field)) continue;
-      walked.add(field);
-
-      for (const slug of componentSlugsOn(field)) found.push(slug);
-
-      const children = (field as { fields?: unknown }).fields;
-      if (!Array.isArray(children)) continue;
-      for (let i = children.length - 1; i >= 0; i--) pending.push(children[i]);
-    }
-    return found;
-  };
+  const slugsIn = (list: readonly unknown[]): string[] =>
+    declaredFieldsIn(list).flatMap(componentSlugsOn);
 
   let pending = slugsIn(fields);
   while (pending.length > 0) {

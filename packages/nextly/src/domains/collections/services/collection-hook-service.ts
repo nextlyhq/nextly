@@ -230,6 +230,8 @@ export class CollectionHookService {
      * builds is the only place it can come from.
      */
     originalData?: Record<string, unknown>;
+    /** `HookContext.storedStatus`, given to the code hooks. */
+    storedStatus?: string | null;
     executor?: unknown;
   }): Promise<void> {
     const { collection, operation, data, storedHooks } = options;
@@ -242,6 +244,9 @@ export class CollectionHookService {
         operation,
         data,
         originalData: options.originalData,
+        ...(options.storedStatus === undefined
+          ? {}
+          : { storedStatus: options.storedStatus }),
         user: options.user,
         context: sharedContext,
         req: options.req,

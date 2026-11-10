@@ -235,7 +235,24 @@ describe.each(getConfiguredTestDialects())(
       "never loses a write made between the final copy and the drop",
       async () => {
         await seed({ e1: { en: "Hello", es: "Hola" } });
-        const late: { write?: Promise<unknown> } = {};
+        // The late write is another request's: started here, in this test's own flow and outside
+        // the reload's transaction, on another connection. It waits for the final copy, and the
+        // reload's transaction only says when that is; a write it started itself would be the
+        // transaction's own flow writing past it.
+        const late: { signalled?: boolean } = {};
+        let copied: () => void = () => {};
+        const write = new Promise<void>(resolve => {
+          copied = resolve;
+        })
+          .then(() =>
+            handle.adapter.executeQuery(
+              `UPDATE ${q(COMPANION)} SET ${q("body")} = 'Late' WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
+            )
+          )
+          .then(
+            () => "taken",
+            () => "refused"
+          );
         const textOf = (query: unknown) =>
           JSON.stringify(
             (query as { queryChunks?: unknown }).queryChunks ?? ""
@@ -262,18 +279,12 @@ describe.each(getConfiguredTestDialects())(
                           const text = textOf(query);
                           // Right after the final copy onto main, from another connection.
                           if (
-                            late.write === undefined &&
+                            late.signalled !== true &&
                             text.includes(`UPDATE \\"${TABLE}\\"`) &&
                             text.includes(COMPANION)
                           ) {
-                            late.write = handle.adapter
-                              .executeQuery(
-                                `UPDATE ${q(COMPANION)} SET ${q("body")} = 'Late' WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
-                              )
-                              .then(
-                                () => "taken",
-                                () => "refused"
-                              );
+                            late.signalled = true;
+                            copied();
                             await new Promise(resolve =>
                               setTimeout(resolve, 300)
                             );
@@ -291,8 +302,8 @@ describe.each(getConfiguredTestDialects())(
         loaded.config = configWith({ localized: false });
         await reloadNextlyConfig();
 
-        expect(late.write).toBeDefined();
-        const outcome = await late.write;
+        expect(late.signalled).toBe(true);
+        const outcome = await write;
         expect(await columnsOf(COMPANION)).not.toContain("body");
         expect(await mainBodies()).toEqual({
           e1: outcome === "taken" ? "Late" : "Hello",

@@ -143,6 +143,36 @@ describe("listLoopCollections", () => {
     ]);
   });
 
+  it("keeps what the engine reads of each readable field: a time of day and a plugin type's primitive", async () => {
+    readPluginRoute.mockResolvedValue({
+      items: [
+        {
+          slug: "events",
+          label: "Events",
+          fields: [],
+          readable: [
+            {
+              name: "opensAt",
+              label: "Opens at",
+              type: "date",
+              timeOnly: true,
+            },
+            { name: "colour", type: "colour", storage: "text" },
+            // Neither key, as sent, is one the engine knows.
+            { name: "odd", type: "colour", storage: "pigment", timeOnly: 1 },
+          ],
+        },
+      ],
+      meta: {},
+    });
+    const [events] = await listLoopCollections();
+    expect(events?.readable).toEqual([
+      { name: "opensAt", label: "Opens at", type: "date", timeOnly: true },
+      { name: "colour", type: "colour", storage: "text" },
+      { name: "odd", type: "colour" },
+    ]);
+  });
+
   it("rejects an answer that is not a list, rather than reading it as none", async () => {
     readPluginRoute.mockResolvedValue({ message: "nope" });
     await expect(listLoopCollections()).rejects.toThrow(

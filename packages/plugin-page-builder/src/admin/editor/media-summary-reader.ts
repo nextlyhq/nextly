@@ -1,11 +1,13 @@
 /**
  * How the inspector's image fields read a stored media id: through the
  * admin's media read, the same one the canvas draws images with, so a file is
- * read once and both see it alike.
+ * read once and both see it alike. And how an image binding's Fallback
+ * searches the library: through the admin's list read, each image summed up
+ * as a stored one is, so a file reads the same in the picker and once chosen.
  *
  * @module media-summary-reader
  */
-import { useMediaResolver } from "@nextlyhq/plugin-sdk/admin";
+import { useMediaResolver, useMediaSearcher } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback } from "react";
 
 /** What an image field shows of a media item. */
@@ -19,6 +21,17 @@ export interface MediaSummary {
 export type ReadMediaSummary = (
   mediaId: string
 ) => Promise<MediaSummary | null>;
+
+/** One image a library search found: its id, and its summary. */
+export interface FoundMediaSummary extends MediaSummary {
+  readonly id: string;
+}
+
+/** Search the library's images by name; the newest for an empty search. */
+export type SearchMediaSummaries = (
+  search: string,
+  signal?: AbortSignal
+) => Promise<readonly FoundMediaSummary[]>;
 
 /** The parts of an admin media item a summary is made from. */
 interface MediaItem {
@@ -57,5 +70,24 @@ export function useMediaSummaryReader(): ReadMediaSummary {
   return useCallback(
     async (mediaId: string) => summaryOf(await readMedia(mediaId)),
     [readMedia]
+  );
+}
+
+/**
+ * The Fallback picker's library search, stable for the editor's life: each
+ * image found summed up by the same `summaryOf` as a stored one, with its id,
+ * which is what a pick stores. A search the library refuses rejects, so the
+ * picker says it could not read the library.
+ */
+export function useMediaSearchReader(): SearchMediaSummaries {
+  const searchMedia = useMediaSearcher();
+  return useCallback(
+    async (search: string, signal?: AbortSignal) =>
+      (await searchMedia(search, signal)).map(item => ({
+        // Never null for an item in hand; a null would spread as nothing.
+        ...summaryOf(item),
+        id: item.id,
+      })),
+    [searchMedia]
   );
 }

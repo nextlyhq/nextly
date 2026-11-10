@@ -36,7 +36,10 @@
  * @module class-usage-blocks-fields
  */
 import { isFieldLocalized } from "nextly/config";
-import { isFieldGroupFieldType } from "nextly/field-group-type";
+import {
+  extractFieldGroupReferences,
+  isFieldGroupFieldType,
+} from "nextly/field-group-type";
 
 import type { BlocksFieldDescriptor } from "./class-usage-subjects";
 import { isBlocksField } from "./fields/blocksHelper";
@@ -179,9 +182,11 @@ export interface BlocksFieldSurvey {
  * computed beside it.
  */
 export function blocksFieldSurvey(
-  collection: BlocksFieldsCollection | null | undefined
+  collection: BlocksFieldsCollection | null | undefined,
+  /** The field groups the site declares, so a reference to one can be read. */
+  fieldGroups?: FieldGroupDefinitions
 ): BlocksFieldSurvey {
-  const reach = blocksFieldReach(collection);
+  const reach = blocksFieldReach(collection, undefined, fieldGroups);
   return {
     addressable: reach.fields
       .filter(field => field.path.length === 1)
@@ -227,16 +232,32 @@ export interface BlocksFieldReach {
 export function blocksFieldReach(
   collection: BlocksFieldsCollection | null | undefined,
   /** How many containers the walk may expand; see {@link MAX_EXPANSIONS}. */
-  maxExpansions: number = MAX_EXPANSIONS
+  maxExpansions: number = MAX_EXPANSIONS,
+  /**
+   * The field groups whose definitions the site declares, by slug. Given, a
+   * field group a declaration references is read through its definition;
+   * absent, or for a group it does not declare, the reference is unresolved.
+   */
+  fieldGroups?: FieldGroupDefinitions
 ): BlocksFieldReach {
   const fields = collection?.fields;
   if (!Array.isArray(fields)) return { fields: [], unreachable: false };
   return walkDeclarations(
     fields,
     collection?.localized === true,
-    maxExpansions
+    maxExpansions,
+    fieldGroups
   );
 }
+
+/**
+ * A field group's definition by its slug, as the site's code declares it, or
+ * `undefined` for one it does not (made in the admin, which no plugin surface
+ * lists).
+ */
+export type FieldGroupDefinitions = (
+  slug: string
+) => { readonly fields?: unknown } | undefined;
 
 /**
  * How deep a chain of named groups the walk follows. A group that lists itself
@@ -276,7 +297,8 @@ interface WalkFrame {
 function walkDeclarations(
   fields: readonly unknown[],
   collectionLocalized: boolean,
-  maxExpansions: number
+  maxExpansions: number,
+  fieldGroups: FieldGroupDefinitions | undefined
 ): BlocksFieldReach {
   let unreachable = false;
   const found: ReachedBlocksField[] = [];
@@ -323,7 +345,7 @@ function walkDeclarations(
     const field = frame.fields[frame.index];
     frame.index += 1;
 
-    const step = stepFor(field, frame, collectionLocalized);
+    const step = stepFor(field, frame, collectionLocalized, fieldGroups);
     const state = { stack, expanded, seen, found, budget };
     if (!takeStep(step, field, frame, state)) {
       unreachable = true;
@@ -355,6 +377,23 @@ function takeStep(
 ): boolean {
   if (step.kind === "skip") return true;
   if (step.kind === "unresolved") return false;
+  if (step.kind === "groups") {
+    // Each referenced definition's fields, walked where no fixed path
+    // reaches them: a field group's values are stored apart from the row, so
+    // a blocks field inside one is noticed, as unreachable, never reached.
+    for (const definition of step.definitions) {
+      if (frame.path.length >= MAX_GROUP_DEPTH) return false;
+      if (state.budget.left <= 0) return false;
+      state.budget.left -= 1;
+      descend(
+        state.stack,
+        definition,
+        { mode: "hidden", path: [...frame.path, "\u0000group"] },
+        state.expanded
+      );
+    }
+    return true;
+  }
   if (step.kind === "descend") {
     // Each container expanded once per place it is reached from, and a chain
     // of named groups followed only so deep — together the only things making
@@ -427,6 +466,8 @@ type FieldStep =
   | { kind: "field"; descriptor: BlocksFieldDescriptor }
   /** A reference whose definition this cannot read, so it may hide a blocks field. */
   | { kind: "unresolved" }
+  /** A reference to field groups the site declares: their definitions. */
+  | { kind: "groups"; definitions: readonly object[] }
   | { kind: "skip" };
 
 /**
@@ -442,7 +483,8 @@ type FieldStep =
 function stepFor(
   field: unknown,
   frame: Pick<WalkFrame, "mode" | "path">,
-  collectionLocalized: boolean
+  collectionLocalized: boolean,
+  fieldGroups: FieldGroupDefinitions | undefined
 ): FieldStep {
   if (presentationalChildren(field) !== null) {
     return { kind: "descend", frame: { mode: frame.mode, path: frame.path } };
@@ -479,8 +521,19 @@ function stepFor(
   // that distinguishes a reference from an ordinary scalar field without knowing
   // the vocabulary, and treating every unrecognised type as unresolvable would
   // mark a text field unreachable.
+  //
+  // Where the site's own declarations are handed in, a reference to a group
+  // the site declares in code is read through that definition: a group
+  // holding no blocks field holds no copy, and one holding a blocks field is
+  // still reported unreachable, since its values are stored apart from the
+  // row. A group the site does not declare (made in the admin) stays
+  // unresolved.
   if (isFieldGroupFieldType((field as { type?: unknown } | null)?.type)) {
-    return { kind: "unresolved" };
+    const definitions =
+      fieldGroups === undefined ? undefined : definitionsOf(field, fieldGroups);
+    return definitions === undefined
+      ? { kind: "unresolved" }
+      : { kind: "groups", definitions };
   }
 
   const descriptor = readBlocksField(field, collectionLocalized);
@@ -552,4 +605,27 @@ function everyFieldLocalized(fields: unknown, depth: number): unknown {
         : {}),
     };
   });
+}
+
+/**
+ * The definitions of every field group `field` references, each read from the
+ * site's declarations; `undefined` when it names none, or one the site does
+ * not declare as a list of fields, so the reference stays unresolved.
+ */
+function definitionsOf(
+  field: unknown,
+  fieldGroups: FieldGroupDefinitions
+): object[] | undefined {
+  const { single, many } = extractFieldGroupReferences(field);
+  const slugs = [...(single === undefined ? [] : [single]), ...(many ?? [])];
+  if (slugs.length === 0) return undefined;
+  const definitions: object[] = [];
+  for (const slug of slugs) {
+    const definition = fieldGroups(slug);
+    if (definition === undefined || !Array.isArray(definition.fields)) {
+      return undefined;
+    }
+    definitions.push(definition);
+  }
+  return definitions;
 }

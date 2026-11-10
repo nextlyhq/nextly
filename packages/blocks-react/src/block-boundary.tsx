@@ -2,8 +2,7 @@ import {
   blockPartClassName,
   blockTypeClassName,
   renderedDomId,
-  resolveNodeBindings,
-  type BindingIssue,
+  type BindingFieldShape,
   type BindingRun,
   type BlockNode,
   type BoundValues,
@@ -12,6 +11,7 @@ import {
   type SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import {
+  Fragment,
   Suspense,
   cloneElement,
   isValidElement,
@@ -19,7 +19,8 @@ import {
   type ReactNode,
 } from "react";
 
-import type { BlockHostPolicy, PageContext } from "./context";
+import { fillItemBindings } from "./blocks/list-batch";
+import type { BlockHostPolicy, PageContext, PageIssue } from "./context";
 import {
   editorMarkers,
   EDITOR_NAMESPACE,
@@ -38,7 +39,8 @@ import {
   normalizeRenderable,
 } from "./renderable";
 import type { BlockResolver } from "./resolver";
-import { isUnconditional } from "./visibility";
+import { styleTextForInjection } from "./styles";
+import { conditionAllows, itemFields } from "./visibility";
 // Imported as well as re-exported below: this module both PUBLISHES the names,
 // which consumers outside the package address elements by, and uses them.
 
@@ -94,8 +96,126 @@ export interface BoundaryBindings {
   readonly run: BindingRun;
   /** What the page's pass filled, by node id. */
   readonly bound: ReadonlyMap<string, BoundValues>;
-  /** Where a list item's binding problems go, once each. */
-  readonly report: (issues: readonly BindingIssue[]) => void;
+  /** Where a list item's binding and condition problems go, once each. */
+  readonly report: (issues: readonly PageIssue[]) => void;
+}
+
+/**
+ * What a render decided about its conditioned blocks, threaded to every
+ * boundary whether or not the page has bindings to fill: a page drawn with
+ * list data and no bindings still decides its items' conditions, and still
+ * serves the rules of the blocks they show.
+ */
+export interface BoundaryConditions {
+  /**
+   * The blocks whose visibility conditions held for the page's entry, by id,
+   * as the route decided them once it read the entry. Carried here, beside
+   * the context rather than on it, as everything a render threads down is.
+   */
+  readonly held?: ReadonlySet<string>;
+  /** Where a list item's condition problems go, once each. */
+  readonly report?: (issues: readonly PageIssue[]) => void;
+  /**
+   * The rules of each block a list's item decides, with those of every block
+   * inside it, by the decided block's id, held out of the page's sheet: a
+   * list serves them beside the first instance it draws, so a block no item
+   * shows publishes none of them.
+   */
+  readonly itemRules?: ReadonlyMap<string, string>;
+  /** The decided blocks whose rules this render already served, by id. */
+  readonly itemRulesServed?: Set<string>;
+  /** What an editor draws in place of a block a list's item hides. */
+  readonly hiddenAs?: ItemHiddenAs;
+}
+
+/**
+ * What an editor draws in place of a block a list's item hides: the node to
+ * draw there, or nothing to draw nothing. Told the item, so what it draws can
+ * say why that item hides the block.
+ *
+ * @experimental
+ */
+export type ItemHiddenAs = (
+  node: BlockNode,
+  item: HidingItem
+) => BlockNode | undefined;
+
+/**
+ * The list item that hides a block: its values, the collection its entries
+ * come from (absent for a named query's row), and the fields its conditions
+ * were judged by, as the public reads them (absent where none are known, so
+ * they failed closed).
+ *
+ * @experimental
+ */
+export interface HidingItem {
+  readonly values: Readonly<Record<string, unknown>>;
+  readonly collection: string | undefined;
+  readonly fields: readonly BindingFieldShape[] | undefined;
+}
+
+interface DrawnNode {
+  readonly node: BlockNode;
+  /** False for what an editor draws in place of a hidden block. */
+  readonly shown: boolean;
+}
+
+/**
+ * The nodes a list draws, each as its conditions allow: shown, or, where an
+ * item hides it and the render was told what to draw instead, that in its
+ * place. Without that, a hidden block is simply left out.
+ */
+function drawnNodes(
+  nodes: readonly BlockNode[],
+  context: PageContext,
+  conditions: BoundaryConditions | undefined
+): DrawnNode[] {
+  const decided = {
+    ...(conditions?.held === undefined ? {} : { held: conditions.held }),
+    ...(conditions?.report === undefined ? {} : { report: conditions.report }),
+  };
+  const { item } = context;
+  const hiddenAs = item === undefined ? undefined : conditions?.hiddenAs;
+  const hiding: HidingItem | undefined =
+    item === undefined
+      ? undefined
+      : {
+          values: item,
+          collection:
+            context.itemSource === "" ? undefined : context.itemSource,
+          // The very fields the item's conditions were just judged by, a
+          // named query's own row schema among them, so what is drawn in
+          // the block's place says what that judgement found.
+          fields: itemFields(context),
+        };
+  return nodes.flatMap((node): DrawnNode[] => {
+    if (conditionAllows(node, context, decided)) return [{ node, shown: true }];
+    const instead = hiding === undefined ? undefined : hiddenAs?.(node, hiding);
+    return instead === undefined ? [] : [{ node: instead, shown: false }];
+  });
+}
+
+/**
+ * The rules of a block a list's item decides, once per render, beside the
+ * first instance drawn. Inline, after the page's own sheet, so the cascade
+ * reads them in the order a stored sheet would have held them.
+ */
+function itemRulesFor(
+  id: string,
+  conditions: BoundaryConditions | undefined
+): ReactNode {
+  const rules = conditions?.itemRules?.get(id);
+  const served = conditions?.itemRulesServed;
+  if (rules === undefined || served === undefined || served.has(id)) {
+    return null;
+  }
+  served.add(id);
+  return (
+    <style
+      data-nx-item-rules={id}
+      dangerouslySetInnerHTML={{ __html: styleTextForInjection(rules) }}
+    />
+  );
 }
 
 /**
@@ -113,19 +233,14 @@ function withItemBindings(
 ): { node: ResolvedBlockNode; bound: BoundValues | undefined } {
   if (bindings === undefined) return { node, bound: undefined };
   const fromPage = bindings.bound.get(node.id);
-  const itemSource = context.itemSource;
-  const result = resolveNodeBindings(node, bindings.run, {
-    phase: "item",
-    ...(context.item === undefined ? {} : { item: context.item }),
-    ...(typeof itemSource === "string" && itemSource !== ""
-      ? { itemRef: { collection: itemSource } }
-      : {}),
-  });
-  if (result.issues.length > 0) bindings.report(result.issues);
-  if (result.bound === undefined) return { node, bound: fromPage };
+  // The one fill a list's read-ahead also asks, so it reads ahead for the
+  // props each entry draws with.
+  const filled = fillItemBindings(node, context, bindings.run);
+  if (filled.issues.length > 0) bindings.report(filled.issues);
+  if (filled.bound === undefined) return { node, bound: fromPage };
   return {
-    node: { ...node, props: result.props },
-    bound: { ...fromPage, ...result.bound },
+    node: { ...node, props: filled.props },
+    bound: { ...fromPage, ...filled.bound },
   };
 }
 
@@ -201,6 +316,8 @@ export interface BlockBoundaryProps {
   nodeAttribute?: boolean;
   /** The page's bindings, when the page has any to fill. */
   bindings?: BoundaryBindings;
+  /** What the render decided about its conditioned blocks. */
+  conditions?: BoundaryConditions;
 }
 
 /**
@@ -316,8 +433,11 @@ export function isAllowedAttribute(name: string): boolean {
  */
 export {
   EDITOR_NAMESPACE,
+  ENTRY_CONTENT_DRAWN_ATTRIBUTE,
+  ENTRY_CONTENT_NOTE_ATTRIBUTE,
   INSTANCE_ATTRIBUTE,
   LIST_ACTION_ATTRIBUTE,
+  LIST_REF_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PROP_ATTRIBUTE,
   SLOTS_ATTRIBUTE,
@@ -1389,6 +1509,7 @@ export function BlockBoundary({
   spacingMode,
   nodeAttribute,
   bindings,
+  conditions,
 }: BlockBoundaryProps): ReactNode {
   /*
    * FIRST, before anything on this path can run author code.
@@ -1559,6 +1680,7 @@ export function BlockBoundary({
             {...(spacingMode === undefined ? {} : { spacingMode })}
             {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
             bindings={bindings}
+            {...(conditions === undefined ? {} : { conditions })}
           />
         ),
       })
@@ -1637,6 +1759,8 @@ export interface BlockListProps {
   nodeAttribute?: boolean;
   /** The page's bindings, when the page has any to fill. */
   bindings?: BoundaryBindings;
+  /** What the render decided about its conditioned blocks. */
+  conditions?: BoundaryConditions;
 }
 
 /**
@@ -1656,12 +1780,14 @@ export function BlockList({
   spacingMode,
   nodeAttribute,
   bindings,
+  conditions,
 }: BlockListProps): ReactNode {
-  return nodes
-    .filter(isUnconditional)
-    .map(node => (
+  // A conditioned block is drawn where its conditions allow it: held for the
+  // page's entry, or holding for the list item being drawn.
+  return drawnNodes(nodes, context, conditions).map(({ node, shown }) => (
+    <Fragment key={node.id}>
+      {shown ? itemRulesFor(node.id, conditions) : null}
       <BlockBoundary
-        key={node.id}
         node={node}
         context={context}
         blocks={blocks}
@@ -1671,6 +1797,8 @@ export function BlockList({
         {...(spacingMode === undefined ? {} : { spacingMode })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
         {...(bindings === undefined ? {} : { bindings })}
+        {...(conditions === undefined ? {} : { conditions })}
       />
-    ));
+    </Fragment>
+  ));
 }

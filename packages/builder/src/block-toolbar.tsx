@@ -76,6 +76,7 @@ import {
 import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
 import { useCanvasFrame, type CanvasFrame } from "./canvas-frame-context";
 import { watchScreenBand } from "./canvas-geometry-watch";
+import { useTabPost } from "./canvas-tab-places";
 import { isHTMLElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
@@ -271,6 +272,11 @@ export function BlockToolbar({
   const [placement, setPlacement] = React.useState<ToolbarPlacement | null>(
     null
   );
+  // Where the bar is drawn, posted to the board the canvas's tabs are placed
+  // by (`canvas-tab-places.ts`): a tab or badge on the selected block's top
+  // edge, or a neighbour's, takes its next place rather than sit under the
+  // bar. The bar keeps its place; the tabs move.
+  const postBox = useTabPost("toolbar");
 
   // Still read directly: the bar MEASURES against these and re-measures when
   // the document changes, which is a different use from deciding which verbs to
@@ -336,6 +342,7 @@ export function BlockToolbar({
   const measure = React.useCallback(() => {
     const element = bar.current;
     if (element === null || selectedId === null) {
+      postBox(null);
       setPlacement(null);
       return;
     }
@@ -347,6 +354,7 @@ export function BlockToolbar({
      */
     const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
     if (space === null) {
+      postBox(null);
       setPlacement(null);
       return;
     }
@@ -363,6 +371,7 @@ export function BlockToolbar({
     );
     const block = unionRect(rects);
     if (block === undefined) {
+      postBox(null);
       setPlacement(null);
       return;
     }
@@ -372,25 +381,28 @@ export function BlockToolbar({
     // to prevent, and a bar measured one way against a block measured another
     // is a disagreement that only shows up at a scroll offset.
     const size = space.sizeOf(element);
-    setPlacement(
-      toolbarPlacement(
-        block,
-        size,
-        // The root's own box rather than its scroll extent. `scrollWidth` and
-        // `scrollHeight` are the CONTENT's size, so a long page would report a
-        // height of several thousand and the clamp would let the bar sit far
-        // outside what the author can see.
-        space.place(canvasContentRect(root, root)),
-        TOOLBAR_GAP_PX,
-        // Kept to what is on screen: room above is room above on screen, and
-        // a tall block scrolled past its top keeps its bar in view.
-        screenBand(onScreenOf(space)),
-        // Each selected block, so the bar is kept to the screen sideways only
-        // where one of them is on it.
-        rects
-      )
+    const placed = toolbarPlacement(
+      block,
+      size,
+      // The root's own box rather than its scroll extent. `scrollWidth` and
+      // `scrollHeight` are the CONTENT's size, so a long page would report a
+      // height of several thousand and the clamp would let the bar sit far
+      // outside what the author can see.
+      space.place(canvasContentRect(root, root)),
+      TOOLBAR_GAP_PX,
+      // Kept to what is on screen: room above is room above on screen, and
+      // a tall block scrolled past its top keeps its bar in view.
+      screenBand(onScreenOf(space)),
+      // Each selected block, so the bar is kept to the screen sideways only
+      // where one of them is on it.
+      rects
     );
-  }, [selectedId, selectedIds]);
+    postBox(root, {
+      tabs: [],
+      taken: [{ x: placed.x, y: placed.y, ...size }],
+    });
+    setPlacement(placed);
+  }, [selectedId, selectedIds, postBox]);
 
   /*
    * The frame's reading as well — its scale, page and viewport: a zoom moves
@@ -400,9 +412,13 @@ export function BlockToolbar({
    */
   const canvasFrame = useCanvasFrame();
   React.useLayoutEffect(() => {
-    if (hidden) return;
+    // Hidden, the bar is not drawn, so no tab keeps clear of it.
+    if (hidden) {
+      postBox(null);
+      return;
+    }
     measure();
-  }, [measure, hidden, document, actions, canvasFrame]);
+  }, [measure, hidden, document, actions, canvasFrame, postBox]);
 
   /*
    * Re-measure when the block changes size for a reason no render reports — an
