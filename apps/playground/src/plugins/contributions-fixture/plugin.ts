@@ -88,6 +88,24 @@ export const contributionsFixturePlugin = definePlugin({
           label: "Fixture: inspect selected",
           action: { open: FIXTURE_COMPONENT },
         },
+        // The entry list's own drawing, for its screenshots: a block above
+        // Posts' list, and a column whose cell the plugin draws.
+        {
+          id: "contributions-fixture.list-block",
+          kind: "block",
+          place: "collection.list",
+          collections: ["posts"],
+          component: FIXTURE_COMPONENT,
+          before: "table",
+        },
+        {
+          id: "contributions-fixture.cell",
+          kind: "column",
+          place: "collection.list",
+          collections: ["posts"],
+          label: "Fixture: cell",
+          component: FIXTURE_COMPONENT,
+        },
         {
           id: "contributions-fixture.tab",
           kind: "tab",
