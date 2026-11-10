@@ -3,7 +3,9 @@
  * server processes add fonts at once.
  *
  * The media library cannot say "one folder of this name": its folder create
- * looks, then inserts, and no index holds names apart. So the folder is
+ * looks, then inserts, and no index holds names apart. Two calls that both
+ * find no folder may both make one, or one's create may be refused because
+ * the other's folder appeared between its look and its insert. So the folder is
  * claimed in the plugin's own `page_builder__site_options` table, whose
  * `name` is unique, as the spacing model is (`spacing-mode-store`). The row
  * `fonts-folder` names the folder's id, and only one insert of it can win.
@@ -101,8 +103,12 @@ export interface RootFolder {
 export interface FontsFolderSource {
   /** The root folders as they are now. */
   list(): Promise<readonly RootFolder[]>;
-  /** Make a root "Fonts" folder. */
-  create(): Promise<{ id: string }>;
+  /**
+   * Make a root "Fonts" folder; `null` when the library refused it because a
+   * root "Fonts" folder is there already, which another call made since this
+   * one listed the folders.
+   */
+  create(): Promise<{ id: string } | null>;
   /** Delete a folder this call made, still empty. */
   remove(id: string): Promise<void>;
 }
@@ -142,6 +148,9 @@ async function claimFolder(
 ): Promise<string | undefined> {
   const existing = oldestFontsFolder(folders);
   const made = existing === undefined ? await source.create() : undefined;
+  // A create refused because another call's folder appeared meanwhile: the
+  // next try lists that folder and takes it, or the claim made on it.
+  if (made === null) return undefined;
   const id = existing?.id ?? made?.id;
   if (id === undefined) return undefined;
   const won =

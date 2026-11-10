@@ -44,6 +44,10 @@ const FIELD_SHAPE_KEYS: ReadonlyArray<keyof BuilderField> = [
   "component",
   "components",
   "repeatable",
+  // A blocks field's policy and a plugin type's own options are settings the
+  // settings panel writes like any other, so a change to either is a change.
+  "blocks",
+  "pluginOptions",
 ];
 
 /**

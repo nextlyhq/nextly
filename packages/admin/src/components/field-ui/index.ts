@@ -25,6 +25,23 @@ export type {
   FieldPickerProps,
 } from "./FieldPicker";
 
+// The one settings panel every surface uses to add and edit a field: five
+// tabs, the type's defining settings first, every change reported at once with
+// no Apply. A surface configures it (its plugin types, how a label becomes a
+// name, what it fixes and why, its own settings, its conditions) and stores
+// each change itself; the panel writes nothing.
+export { FieldSettingsPanel } from "./settings-panel";
+export type {
+  FieldSettingsControlProps,
+  FieldSettingsField,
+  FieldSettingsPanelProps,
+  FieldSettingsSurface,
+  FieldSettingsSurfaceControlProps,
+  FieldSettingsTab,
+  FieldTypeSettings,
+  FixedFieldSetting,
+} from "./settings-panel";
+
 export { FieldDefaultValueInput } from "./FieldDefaultValueInput";
 export type {
   FieldDefaultOption,

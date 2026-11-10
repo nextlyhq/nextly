@@ -83,20 +83,20 @@ async function bootSite(dialect: TestDialect) {
     ],
   });
   current = t;
-  const author = (await t.nextly.create({
+  // A create answers `{ message, item }`, the created entry its item.
+  const author = await t.nextly.create({
     collection: "authors",
     data: { name: "Ada", bio: "Writes about engines" },
-  })) as { id?: string; item?: { id: string } };
-  const authorId = author.item?.id ?? author.id ?? "";
-  const article = (await t.nextly.create({
+  });
+  const article = await t.nextly.create({
     collection: "articles",
     data: {
       headline: "On engines",
-      author: authorId,
+      author: String(author.item.id),
       card: { heading: "Engines", blurb: "A short history" },
     },
-  })) as { id?: string; item?: { id: string } };
-  return { t, articleId: article.item?.id ?? article.id ?? "" };
+  });
+  return { t, articleId: String(article.item.id) };
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -127,9 +127,7 @@ describe.each(getConfiguredTestDialects())(
         /dc_articles_locales/i.test(sql)
       );
       expect(translationReads).toHaveLength(1);
-      const listed = (await list()) as {
-        items: { id: string; _rev?: string }[];
-      };
+      const listed = await list();
       const detail = (await t.nextly.findByID({
         collection: "articles",
         id: articleId,

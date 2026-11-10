@@ -102,6 +102,15 @@ function publicRouteWith(
 
 const params = { params: { slug: ["a"] } };
 
+/**
+ * Lets the head's not-found answer through, and nothing else: these cases
+ * read an address with no entry only to watch the decisions asked on the way,
+ * and the head of an address with no entry answers not found.
+ */
+function notFoundOnly(error: unknown): void {
+  if (!/NEXT_HTTP_ERROR_FALLBACK;404/.test(String(error))) throw error;
+}
+
 describe("the content route's draft decision", () => {
   afterEach(() => {
     // The route reads the site's default locale from the container, so a config
@@ -192,7 +201,9 @@ describe("the content route's draft decision", () => {
       draft: true,
       render: (entry: ContentEntry) => entry,
       buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
-    }).generateMetadata(params);
+    })
+      .generateMetadata(params)
+      .catch(notFoundOnly);
 
     expect(calls[0].status).toBe("published");
   });
@@ -239,7 +250,9 @@ describe("the content route's draft decision", () => {
         seen.push(context);
         return false;
       },
-    }).generateMetadata(params);
+    })
+      .generateMetadata(params)
+      .catch(notFoundOnly);
 
     expect(seen).toEqual([
       { collection: "pages", slug: "a" },
@@ -268,7 +281,9 @@ describe("the content route's draft decision", () => {
         seen.push(context);
         return false;
       },
-    }).generateMetadata(params);
+    })
+      .generateMetadata(params)
+      .catch(notFoundOnly);
 
     expect(seen).toEqual([{ collection: "pages", slug: "a" }]);
   });
@@ -292,7 +307,9 @@ describe("the content route's draft decision", () => {
         seen.push(context);
         return false;
       },
-    }).generateMetadata(params);
+    })
+      .generateMetadata(params)
+      .catch(notFoundOnly);
 
     expect(seen).toEqual([{ collection: "pages", slug: "a", locale: "fr" }]);
   });

@@ -18,13 +18,19 @@ import {
   type Running,
 } from "./instances";
 
-/** The note as `instance` serves it. */
+/** The route serving the note under the `notes` tags. */
+export const NOTE_ROUTE = "/api/note";
+/** The route serving the note under the fixture plugin's tag alone. */
+export const PLUGIN_NOTE_ROUTE = "/api/plugin-note";
+
+/** The note as `instance` serves it from `route`. */
 export async function noteOn(
   request: APIRequestContext,
-  instance: Instance
+  instance: Instance,
+  route = NOTE_ROUTE
 ): Promise<string | null> {
-  const res = await request.get(`${instance.url}/api/note`);
-  expect(res.status(), `GET /api/note on instance ${instance.name}`).toBe(200);
+  const res = await request.get(`${instance.url}${route}`);
+  expect(res.status(), `GET ${route} on instance ${instance.name}`).toBe(200);
   return ((await res.json()) as { value: string | null }).value;
 }
 
@@ -40,7 +46,8 @@ export async function servedWithin(
   value: string,
   since: number,
   boundMs: number,
-  intervalMs = 250
+  intervalMs = 250,
+  route = NOTE_ROUTE
 ): Promise<number> {
   const left = since + boundMs - Date.now();
   expect(
@@ -48,7 +55,7 @@ export async function servedWithin(
     `time left of the ${String(boundMs)} ms bound for instance ${instance.name}`
   ).toBeGreaterThan(0);
   await expect
-    .poll(() => noteOn(request, instance), {
+    .poll(() => noteOn(request, instance, route), {
       message: `instance ${instance.name} serves ${value}`,
       timeout: left,
       intervals: [intervalMs],

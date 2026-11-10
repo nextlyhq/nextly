@@ -22,6 +22,7 @@ import {
   resolveFieldGroupRegistryName,
   type FieldGroupRegistryName,
 } from "../domains/field-groups/storage/resolve-storage-names";
+import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import { isCodeOwned } from "../domains/schema/pipeline/registered-collections";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
@@ -135,7 +136,9 @@ async function ownedTablesExist(
     // Read only to seed existing rows; deciding whether a table exists reads
     // neither this nor the builder, which shape its columns.
     defaultLocale: "en",
-    collectionLocalized: localized,
+    // It owns a companion where its translatable values are kept per language: translated, or
+    // any entity under `experimental.perLanguageStorage`.
+    collectionLocalized: storesPerLanguage({ localized }),
     builtBy: "codeFirst",
   });
   if (companion === null) return true;
@@ -356,6 +359,11 @@ export interface LoadedBuilderEntity {
   /** Draft/Published flag (collections/singles; always false for components). */
   status: boolean;
   /**
+   * Whether the entity is marked translatable. Read so a column added to it at boot lands where
+   * its values live (`storesPerLanguage`); false where the registry is too old to record it.
+   */
+  localized: boolean;
+  /**
    * Who made the row: `ui` for the Schema Builder, `code`, or
    * `plugin:<name>`. A plugin scope reaches only the Builder's rows, and a
    * row an uninstalled plugin left behind still names that plugin.
@@ -387,21 +395,29 @@ export async function loadBuilderEntities(
     const columns = hasStatusColumn
       ? "slug, table_name, fields, status"
       : "slug, table_name, fields";
-    // `source` as well where the registry has it; one from before that column
-    // is read without it, rather than read as empty.
-    const selectRows = async (): Promise<DynamicTableRow[]> => {
-      try {
-        return await adapter.executeQuery<DynamicTableRow>(
-          `SELECT ${columns}, source FROM ${table}`
-        );
-      } catch {
-        return adapter.executeQuery<DynamicTableRow>(
-          `SELECT ${columns} FROM ${table}`
-        );
+    // `localized` and `source` are asked for, and each dropped only when the
+    // registry has no such column, so an older registry still yields its
+    // entities rather than none. Any other failure is not a missing column.
+    const readRows = async (): Promise<DynamicTableRow[]> => {
+      const tries = [", localized, source", ", localized", ", source", ""];
+      for (const [at, extra] of tries.entries()) {
+        try {
+          return await adapter.executeQuery<DynamicTableRow>(
+            `SELECT ${columns}${extra} FROM ${table}`
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const missingColumn =
+            /localized|source|no such column|does not exist|unknown column/i.test(
+              msg
+            );
+          if (!missingColumn || at === tries.length - 1) throw err;
+        }
       }
+      return [];
     };
     try {
-      const rows = await selectRows();
+      const rows = await readRows();
       const out: LoadedBuilderEntity[] = [];
       for (const row of rows) {
         try {
@@ -416,6 +432,7 @@ export async function loadBuilderEntities(
             fields,
             // Same dialect-boolean coercion as loadDynamicTables.
             status: row.status === 1 || row.status === true,
+            localized: row.localized === 1 || row.localized === true,
             ...(typeof row.source === "string" ? { source: row.source } : {}),
           });
         } catch {

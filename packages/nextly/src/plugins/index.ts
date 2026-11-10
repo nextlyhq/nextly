@@ -51,6 +51,9 @@ export {
   type InTransactionHandler,
   type PluginSettingsApi,
 } from "./plugin-context";
+// `ctx.cache`, and the tag spelling its reads and expiries share.
+export type { PluginCacheApi } from "./plugin-cache";
+export { pluginCacheTag } from "../revalidation/compute-tags";
 export type {
   PluginPinOptions,
   PluginPinTransaction,

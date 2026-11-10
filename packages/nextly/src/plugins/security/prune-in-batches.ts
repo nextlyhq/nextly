@@ -49,6 +49,11 @@ export interface PruneTarget {
   cutoff: Date;
   /** Read the oldest first, so every old row goes in turn. */
   oldestFirst?: boolean;
+  /**
+   * Tables whose rows belong to a removed row, by a column holding its key:
+   * removed with it in the same transaction, first, so none outlives it.
+   */
+  dependents?: readonly { table: string; key: string }[];
 }
 
 /**
@@ -91,9 +96,49 @@ export async function pruneInBatches(
     // In a transaction, never as a lone statement: on SQLite a lone statement
     // joins whatever transaction another flow has open and rolls back with it.
     removed += adapter.transaction
-      ? await adapter.transaction(tx => tx.delete(target.table, where))
-      : await adapter.delete(target.table, where);
+      ? await adapter.transaction(tx => removeBatch(tx, target, where))
+      : await removeBatch(adapter, target, where);
     if (rows.length < BATCH) break;
   }
   return { removed, started };
+}
+
+type BatchWhere = {
+  and: {
+    column: string;
+    op: "IN" | "<";
+    value: string[] | Date;
+  }[];
+};
+
+/**
+ * Delete one batch's rows still matching `where`, after their dependents'.
+ * With dependents, the rows still past the cutoff are read again first, so a
+ * row renewed since the batch was read keeps its dependents as well.
+ */
+async function removeBatch(
+  db: Pick<DrizzleAdapter, "select" | "delete">,
+  target: PruneTarget,
+  where: BatchWhere
+): Promise<number> {
+  if (target.dependents && target.dependents.length > 0) {
+    const still = await db.select<Record<string, string>>(target.table, {
+      columns: [target.key],
+      where,
+    });
+    if (still.length === 0) return 0;
+    const keys = still.map(row => row[target.key]);
+    for (const dependent of target.dependents) {
+      await db.delete(dependent.table, {
+        and: [{ column: dependent.key, op: "IN", value: keys }],
+      });
+    }
+    return db.delete(target.table, {
+      and: [
+        { column: target.key, op: "IN", value: keys },
+        ...where.and.slice(1),
+      ],
+    });
+  }
+  return db.delete(target.table, where);
 }

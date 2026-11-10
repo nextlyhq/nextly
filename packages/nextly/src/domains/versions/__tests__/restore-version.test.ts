@@ -77,6 +77,10 @@ import {
   applyFieldWriteAccess,
 } from "../../../shared/lib/field-level-registry";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../i18n/per-language-storage";
 import { resolveComponentSchemas, restoreVersion } from "../restore-version";
 
 const user = { id: "u1" };
@@ -767,6 +771,22 @@ describe("resolveComponentSchemas", () => {
     await expect(
       resolveComponentSchemas(fieldsWithComponent)
     ).rejects.toThrow();
+  });
+
+  // Under `experimental.perLanguageStorage` a component not marked translatable keeps its
+  // translatable values per language all the same, so its subtree differs by language.
+  it("describes a component kept per language under the setting as localized", async () => {
+    componentSpy.mockResolvedValue({
+      fields: [{ name: "heading", type: "text" }],
+      localized: false,
+    });
+    setPerLanguageStorage(true);
+    try {
+      const schemas = await resolveComponentSchemas(fieldsWithComponent);
+      expect(schemas.get("heroBlock")?.localized).toBe(true);
+    } finally {
+      _resetPerLanguageStorage();
+    }
   });
 
   it("marks a genuinely missing component unresolved without throwing", async () => {

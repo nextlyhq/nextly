@@ -351,9 +351,11 @@ describe("the site's code in Settings", () => {
       body: "",
       version: "rev-1",
     });
-    // Saved, the summary is read again and the section is closed.
+    // Saved, the summary is read again and the section is closed. The tab
+    // hears of the close from an effect, which React runs in a task of its
+    // own after the summary is drawn, so it is waited for, not assumed.
     expect(refetch).toHaveBeenCalled();
-    expect(told.open).toHaveBeenLastCalledWith(false);
+    await waitFor(() => expect(told.open).toHaveBeenLastCalledWith(false));
     expect(
       screen.getByText(/1 element in the head, 0 at the end of the body\.$/)
     ).toBeTruthy();

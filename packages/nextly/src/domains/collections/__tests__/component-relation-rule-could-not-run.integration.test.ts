@@ -83,7 +83,7 @@ async function boot(
     ],
   });
   await userWhoMay(current, READER, "read", [PAGES, CARDS]);
-  const handler = current.getService<CollectionsHandler>("collectionsHandler");
+  const handler = current.getService("collectionsHandler");
   const page = await handler.createEntry(
     { collectionName: PAGES, overrideAccess: true },
     { title: "Carded page" }

@@ -5,18 +5,27 @@
  * @module domains/plugin-events/dispatch-job
  * @experimental
  */
+import type { Logger } from "../../shared/types";
 import { defineJob, type JobDefinition } from "../jobs/job-registry";
 
 import { dispatchDurableEvents, type DispatchAdapter } from "./dispatch";
+import { createStuckWarnings } from "./report";
 import type { DurableSubscribers } from "./subscribers";
 
 export const DURABLE_EVENTS_DISPATCH_JOB = "events:dispatch";
 
-/** The job, reading the adapter and the subscribers each run. */
+/**
+ * The job, reading the adapter and the subscribers each run, and warning in
+ * `logger` about subscribers whose deliveries are stuck.
+ */
 export function createDurableEventsDispatchJob(deps: {
   adapter: () => DispatchAdapter;
   subscribers: () => DurableSubscribers;
+  logger: Pick<Logger, "warn">;
 }): JobDefinition {
+  // One for the process, so a subscriber stuck across runs is warned about
+  // once an hour, not on every run.
+  const warnings = createStuckWarnings(deps.logger);
   return defineJob({
     slug: DURABLE_EVENTS_DISPATCH_JOB,
     // A sweep: an event is recorded by a write that has finished long before
@@ -31,6 +40,7 @@ export function createDurableEventsDispatchJob(deps: {
         // Within the jobs run's own time: it cannot interrupt a handler once
         // started, so the pass stops starting work at the run's deadline.
         deadline: context.deadline.getTime(),
+        warnings,
       });
     },
   });

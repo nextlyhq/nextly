@@ -130,6 +130,7 @@ describe("holding the root scripts to the same bound as the hook", () => {
     "verify:pr":
       "TURBO_CONCURRENCY=2 turbo run build && TURBO_CONCURRENCY=2 turbo run test -- --maxWorkers=2",
     "verify:full": "pnpm verify:pr && pnpm test:integration:sqlite",
+    "check:quick": "node scripts/verify.mjs quick",
   };
 
   it("is silent when both carry it", () => {
@@ -162,7 +163,7 @@ describe("holding the root scripts to the same bound as the hook", () => {
    * absence is the defect this check exists to stop.
    */
   it("names a bounded entry point that has gone missing", () => {
-    expect(scriptProblems({ "verify:pr": bounded["verify:pr"] })).toEqual([
+    expect(scriptProblems({ "verify:pr": bounded["verify:pr"], "check:quick": bounded["check:quick"] })).toEqual([
       expect.stringContaining("'verify:full' is missing"),
     ]);
   });

@@ -1,49 +1,57 @@
 /**
- * Availability of the visual schema builder.
+ * Availability of the visual schema builder in the admin and through the admin API.
  *
- * The builder issues DDL (create/alter/drop) against the live database from a
- * browser, with no migration to review and no rollback. That is fine while
- * developing and dangerous against a deployed site, so it is off by default in
- * production and the schema-mutation endpoints refuse there — hiding the
- * navigation alone would leave the endpoints reachable by URL.
+ * The builder issues DDL (create/alter/drop) against the live database from a browser. It is off
+ * in production whatever the configuration says (`builder-refusal.ts` owns that rule and the
+ * refusal), and outside production `admin.branding.showBuilder: false` turns it off. The
+ * schema-mutation endpoints refuse wherever it is off — hiding the navigation alone would leave
+ * them reachable by URL — and the admin is told the same answer.
  *
- * Reading entities stays open in every environment: production still lists
- * collections and singles to manage their entries.
+ * Reading entities stays open in every environment: production still lists collections and
+ * singles to manage their entries, and entry writes are never refused here.
+ *
+ * Kept apart from `builder-refusal.ts` because this one reads the stored configuration through
+ * the route handler, and the code-side schema saves (the Direct API, a plugin's services, the
+ * start) must not import the route handler.
  */
 
-import { NextlyError } from "../errors/nextly-error";
+import type { NextlyError } from "../errors/nextly-error";
 import { getHandlerConfig } from "../route-handler/auth-handler";
+
+import {
+  builderDisabledError,
+  type BuilderOffReason,
+  isProductionRuntime,
+} from "./builder-refusal";
+
+/** Why the builder is off where this runs, or `null` while it is on. */
+function builderOffReason(): BuilderOffReason | null {
+  if (isProductionRuntime()) return "production";
+  // Only an explicit `false` turns it off outside production; anything else leaves it on.
+  return getHandlerConfig()?.admin?.branding?.showBuilder === false
+    ? "turned-off"
+    : null;
+}
 
 /**
  * Whether the schema builder (and its mutation endpoints) is available.
  *
- * Precedence:
- * 1. `admin.branding.showBuilder`, when the host sets it explicitly.
- * 2. `NODE_ENV`: enabled everywhere except production.
+ * Off in production, whatever `admin.branding.showBuilder` says. Elsewhere on, unless
+ * `showBuilder` is `false`.
  */
 export function isBuilderEnabled(): boolean {
-  const showBuilder = getHandlerConfig()?.admin?.branding?.showBuilder;
-  return typeof showBuilder === "boolean"
-    ? showBuilder
-    : process.env.NODE_ENV !== "production";
+  return builderOffReason() === null;
 }
 
 /**
- * The refusal for a builder-only operation while the builder is disabled.
+ * The refusal owed for a builder operation here, or `null` while the builder is on.
  *
- * Distinct from a permission failure: the caller may well be a super-admin.
- * The environment, not the user, is what forbids this — so it carries its own
- * code and says which switch turns it back on.
- *
- * @param operation - Operation name for the log, e.g. "create-collection".
+ * For callers that answer with a response rather than a throw (the REST gate runs outside the
+ * dispatcher's NextlyError-to-response mapping).
  */
-export function builderDisabledError(operation: string): NextlyError {
-  return new NextlyError({
-    code: "BUILDER_DISABLED",
-    publicMessage:
-      "The schema builder is disabled in this environment. Define schema in code, or set admin.branding.showBuilder to true to enable it here.",
-    logContext: { operation, nodeEnv: process.env.NODE_ENV },
-  });
+export function builderRefusal(operation: string): NextlyError | null {
+  const reason = builderOffReason();
+  return reason === null ? null : builderDisabledError(operation, reason);
 }
 
 /**
@@ -51,12 +59,12 @@ export function builderDisabledError(operation: string): NextlyError {
  *
  * For handlers wrapped in `withErrorHandler`, which turns a NextlyError into
  * the canonical response. Callers outside that wrapper must not use this —
- * a throw there escapes as a 500 — and should return a response built from
- * {@link builderDisabledError} instead.
+ * a throw there escapes as a 500 — and should return the response built from
+ * {@link builderRefusal} instead.
  */
 export function requireBuilderEnabled(operation: string): void {
-  if (isBuilderEnabled()) return;
-  throw builderDisabledError(operation);
+  const refusal = builderRefusal(operation);
+  if (refusal) throw refusal;
 }
 
 /**

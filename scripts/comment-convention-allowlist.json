@@ -893,13 +893,8 @@
     "digests": ["6dc3c9fa99a95657"]
   },
   "packages/nextly/src/init.ts": {
-    "count": 4,
-    "digests": [
-      "05b49cb181d380dd",
-      "48dcc79a1634abd7",
-      "581f713057345e77",
-      "f44def8bb8099406"
-    ]
+    "count": 3,
+    "digests": ["05b49cb181d380dd", "48dcc79a1634abd7", "f44def8bb8099406"]
   },
   "packages/nextly/src/init/__tests__/drift-check.test.ts": {
     "count": 1,
