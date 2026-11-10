@@ -33,7 +33,6 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { ServiceContainer } from "../../../services/index";
-import type { VersionsService } from "../versions-service";
 
 const ORIGIN = "http://localhost";
 /** Translated, kept with drafts: `title` and `body` per language, `views` shared. */
@@ -142,7 +141,7 @@ async function newestVersion(
   scopeSlug: string,
   entryId: string
 ): Promise<number> {
-  const versions = handle!.getService<VersionsService>("versionsService");
+  const versions = handle!.getService("versionsService");
   const parts = await versions.listPartVersions({
     scopeKind,
     scopeSlug,
@@ -229,13 +228,11 @@ describe.each(getConfiguredTestDialects())(
       });
       // The English version holding "en one" and views 10.
       const englishFirst = (
-        await handle!
-          .getService<VersionsService>("versionsService")
-          .listPartVersions({
-            scopeKind: "collection",
-            scopeSlug: TRANSLATED,
-            entryId: id,
-          })
+        await handle!.getService("versionsService").listPartVersions({
+          scopeKind: "collection",
+          scopeSlug: TRANSLATED,
+          entryId: id,
+        })
       )
         .filter(part => part.locale === "en" && part.versionNo < first)
         .sort((a, b) => b.versionNo - a.versionNo)[0]?.versionNo;
@@ -346,8 +343,9 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses a restore where a collection keeps no drafts, and changes nothing", async () => {
       await boot(dialect);
-      const handler =
-        handle!.getService<CollectionsHandler>("collectionsHandler");
+      const handler = handle!.getService(
+        "collectionsHandler"
+      ) as CollectionsHandler;
       const created = await handler.createEntry(
         { collectionName: HISTORY_ONLY, overrideAccess: true },
         { title: "First" }

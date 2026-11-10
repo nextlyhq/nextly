@@ -924,6 +924,11 @@ export class CollectionEntryService extends BaseService {
        */
       restoredFrom?: FieldSources;
       /**
+       * Set when this write restores a version: held as the working draft, and
+       * refused where the document cannot hold one rather than written live.
+       */
+      requireHeldDraft?: boolean;
+      /**
        * The caller's authenticated scope. For a scoped API-key REST write the
        * publish/unpublish transition gate judges the key's OWN grants.
        */

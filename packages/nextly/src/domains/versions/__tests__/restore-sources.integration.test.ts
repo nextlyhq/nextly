@@ -31,7 +31,6 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { ServiceContainer } from "../../../services/index";
-import type { VersionsService } from "../versions-service";
 
 const ORIGIN = "http://localhost";
 /** Kept with drafts, and at most three versions beyond the protected ones. */
@@ -83,7 +82,7 @@ async function boot(dialect: TestDialect): Promise<CollectionEntryService> {
   ).getEntryService() as CollectionEntryService;
 }
 
-const versions = () => handle!.getService<VersionsService>("versionsService");
+const versions = () => handle!.getService("versionsService");
 const ref = (entryId: string) => ({
   scopeKind: "collection" as const,
   scopeSlug: POSTS,

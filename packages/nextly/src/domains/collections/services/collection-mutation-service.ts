@@ -13465,16 +13465,20 @@ export class CollectionMutationService extends BaseService {
   private restoredFromOf(
     params: { restoredFrom?: FieldSources },
     body: Record<string, unknown>
-  ): FieldSources | CollectionServiceResult | undefined {
-    if (params.restoredFrom) return params.restoredFrom;
+  ):
+    | { sources: FieldSources | undefined }
+    | { refused: CollectionServiceResult } {
+    if (params.restoredFrom) return { sources: params.restoredFrom };
     try {
-      return restoredFromOf(body);
+      return { sources: restoredFromOf(body) };
     } catch (error) {
-      return errorToServiceResult(
-        error,
-        { defaultMessage: "Failed to update entry" },
-        this.dialect
-      );
+      return {
+        refused: errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        ),
+      };
     }
   }
 
@@ -13707,8 +13711,9 @@ export class CollectionMutationService extends BaseService {
     // The fields the save names as restored, read before the key is dropped
     // with the version below; a value that is not a map of field to version
     // is refused, as a malformed version is.
-    const restoredFrom = this.restoredFromOf(rawParams, body);
-    if (restoredFrom && "success" in restoredFrom) return restoredFrom;
+    const restored = this.restoredFromOf(rawParams, body);
+    if ("refused" in restored) return restored.refused;
+    const restoredFrom = restored.sources;
     // The version a client sends back with what it read is the server's to
     // decide, so it is dropped before any hook or gate reads the body.
     body = withoutDocumentVersionKeys({ ...body });
