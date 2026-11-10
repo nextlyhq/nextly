@@ -92,6 +92,7 @@ import {
   type MigrationUnit,
 } from "../../domains/schema/migrate/migration-transaction";
 import {
+  markedFileChange,
   readOldBuilderLedger,
   type ChangedOldBuilderFile,
   type OldBuilderLedger,
@@ -1154,7 +1155,7 @@ async function previewChangedFiles(
   );
   for (const c of oldBuilder.changed) {
     logger.info(
-      `  ✖ a real run would refuse before applying anything: \`${c.file}\` ${c.change === "content" ? "has changed (exit code 2)" : "has a snapshot beside it"} since it was recognised as a file an earlier Schema Builder wrote.`
+      `  ✖ a real run would refuse before applying anything: \`${c.file}\` ${markedFileChange(c)}${c.change === "content" ? " (exit code 2)" : ""} since it was recognised as a file an earlier Schema Builder wrote.`
     );
   }
 }
@@ -2752,35 +2753,52 @@ export async function assertAppliedFilesUnchanged(
 
 /**
  * The refusal for marked old Builder files that changed since they were
- * recognised: `MIGRATION_TAMPERED` (exit 2) where any file's content changed,
- * as for an edited applied file, else `OLD_BUILDER_FILE_SNAPSHOT_ADDED`, naming
- * each snapshot that now stands beside one.
+ * recognised (`markedFileChange`): `MIGRATION_TAMPERED` (exit 2) where any
+ * file's content changed, as for an edited applied file; else
+ * `OLD_BUILDER_FILE_VARIANT_ADDED` where a dialect variant took a marked
+ * name; else `OLD_BUILDER_FILE_SNAPSHOT_ADDED`. The strictest change names
+ * the code, and every file is named.
  */
-function oldBuilderFilesChanged(
+export function oldBuilderFilesChanged(
   command: string,
   changed: readonly ChangedOldBuilderFile[]
 ): CliError {
-  const content = changed.filter(c => c.change === "content");
   const named = changed
-    .map(c =>
-      c.change === "content"
-        ? `\`${c.file}\` has changed`
-        : `\`${c.file}\` has a snapshot beside it (\`meta/${c.file.replace(/\.sql$/, "")}.snapshot.json\`)`
-    )
+    .map(c => `\`${c.file}\` ${markedFileChange(c)}`)
     .join("; ");
   const what = `${named} since it was recognised as a file an earlier Schema Builder wrote, so \`${command}\` ran nothing.`;
-  const settle =
-    "Put the file back as it was, or remove the snapshot, and it is ignored again; delete it, and its ledger rows stay ignored; or accept it as it now stands with `nextly migrate:resolve --applied <file>`, after which it is checked as any migration.";
-  const parts = {
+  const why =
+    "A ledger row marks the file as an old Schema Builder file, which every command ignores, and it no longer carries the whole signature that recognised it, so it would be read as a migration.";
+  const context = { files: changed.map(c => c.file) };
+  if (changed.some(c => c.change === "content")) {
+    return new CliError("MIGRATION_TAMPERED", {
+      what,
+      why,
+      next: SETTLE_MARKED_FILE,
+      context,
+    });
+  }
+  if (changed.some(c => c.change === "variant")) {
+    // Accepting the file would leave the variant's rows and the Builder's
+    // under one name, so the only way on is to part them.
+    return new CliError("OLD_BUILDER_FILE_VARIANT_ADDED", {
+      what,
+      why: "A ledger row marks the name as an old Schema Builder file's, which every command ignores, and a dialect variant now shares that name, so its rows and the Builder's cannot be told apart.",
+      next: "Remove the dialect variant, and put its change in a migration of its own with `nextly migrate:create`; the marked file is then ignored again.",
+      context,
+    });
+  }
+  return new CliError("OLD_BUILDER_FILE_SNAPSHOT_ADDED", {
     what,
-    why: "A ledger row marks the file as an old Schema Builder file, which every command ignores, and it no longer carries the whole signature that recognised it, so it would be read as a migration.",
-    next: settle,
-    context: { files: changed.map(c => c.file) },
-  };
-  return content.length > 0
-    ? new CliError("MIGRATION_TAMPERED", parts)
-    : new CliError("OLD_BUILDER_FILE_SNAPSHOT_ADDED", parts);
+    why,
+    next: SETTLE_MARKED_FILE,
+    context,
+  });
 }
+
+/** How a marked file whose content or snapshot changed is settled. */
+const SETTLE_MARKED_FILE =
+  "Put the file back as it was, or remove the snapshot, and it is ignored again; delete it, and its ledger rows stay ignored; or accept it as it now stands with `nextly migrate:resolve --applied <file>`, after which it is checked as any migration.";
 
 /** The refusal for applied files edited since they ran (`MIGRATION_TAMPERED`). */
 function appliedFilesChanged(
@@ -2804,8 +2822,10 @@ function appliedFilesChanged(
 const HISTORY_REFUSAL_CODES: ReadonlySet<string> = new Set([
   "MIGRATION_MISSING",
   "MIGRATION_TAMPERED",
-  // A marked old Builder file that gained a snapshot, refused by the same check.
+  // A marked old Builder file that gained a snapshot or a dialect variant,
+  // refused by the same check.
   "OLD_BUILDER_FILE_SNAPSHOT_ADDED",
+  "OLD_BUILDER_FILE_VARIANT_ADDED",
   "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
 ]);
 

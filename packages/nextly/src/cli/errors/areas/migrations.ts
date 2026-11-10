@@ -640,6 +640,10 @@ export const MIGRATION_CODES = defineCodes({
     cause:
       "A migration file recognised as an old Schema Builder file now has a snapshot beside it, so it would be read as a migration.",
   },
+  OLD_BUILDER_FILE_VARIANT_ADDED: {
+    cause:
+      "A dialect variant now shares the name of a migration file recognised as an old Schema Builder file, so its ledger rows and the Builder's cannot be told apart.",
+  },
   BASELINE_LOCK_RELEASED: {
     cause:
       "The schema lock was released before `nextly migrate:baseline` adopted the database, so nothing was written.",

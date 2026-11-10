@@ -15,6 +15,9 @@
  *   app migration's either;
  * - a file a current mark names, in the folder without the whole signature:
  *   it changed since it was recognised, and every history check refuses it;
+ * - a name a current mark gives that a migration of the folder now claims
+ *   (a dialect variant, whose rows carry its base's name): the variant's
+ *   rows and the Builder's cannot be told apart, and it is refused the same;
  * - a row with no mark, or a withdrawn one, whose file is gone: a missing
  *   app migration, as any.
  *
@@ -51,17 +54,41 @@ export interface OldBuilderLedgerInput {
   namedByRows: ReadonlySet<string>;
   /** The newest mark of each file (`currentOldBuilderMarks`). */
   marks: ReadonlyMap<string, Pick<SchemaEventRow, "status" | "sha256">>;
+  /**
+   * The ledger name (`<base name>.sql`) of each migration the folder keeps.
+   * A row is named for its migration, not its file: a dialect variant's rows
+   * carry its base's name, so a name a kept migration claims is that
+   * migration's, whatever file once had it.
+   */
+  migrations: ReadonlySet<string>;
 }
 
 /**
  * A marked file that no longer carries the whole signature: its content
  * changed (the mark's checksum is then its recorded checksum), or, with the
- * content as marked, a snapshot now stands beside it.
+ * content as marked, a snapshot or a dialect variant now stands beside it.
+ * A variant claims the marked name even once the file itself is gone.
  */
 export interface ChangedOldBuilderFile {
   file: string;
-  change: "content" | "snapshot";
+  change: "content" | "snapshot" | "variant";
   lacks: readonly OldBuilderSignaturePart[];
+}
+
+/**
+ * What changed about a marked file, as a clause after its name: the one
+ * wording every command that names one uses.
+ */
+export function markedFileChange(file: ChangedOldBuilderFile): string {
+  switch (file.change) {
+    case "content":
+      return "has changed";
+    case "snapshot":
+      return `has a snapshot beside it (\`meta/${file.file.replace(/\.sql$/, "")}.snapshot.json\`)`;
+    case "variant":
+      // Said of a file still there or gone: the variant takes its name either way.
+      return "has a dialect variant sharing its ledger name";
+  }
 }
 
 export interface OldBuilderLedger {
@@ -89,16 +116,31 @@ export function judgeOldBuilderLedger(
     ...input.oldBuilderFiles.map(f => f.file),
     ...input.partialBuilderFiles.map(f => f.file),
   ]);
-  const ignoredRows = new Set(input.oldBuilderFiles.map(f => f.file));
+  // A name a kept migration claims is never ignored: its rows are that
+  // migration's. An old Builder file is never in a group, so this keeps
+  // nothing out today; it holds if that changes.
+  const ignoredRows = new Set(
+    input.oldBuilderFiles
+      .map(f => f.file)
+      .filter(file => !input.migrations.has(file))
+  );
+  const changed = input.partialBuilderFiles.flatMap(f =>
+    changedSinceMarked(input, f)
+  );
   for (const [file, mark] of input.marks) {
-    if (!inFolder.has(file) && isMarkCurrent(mark)) ignoredRows.add(file);
+    if (inFolder.has(file) || !isMarkCurrent(mark)) continue;
+    // Gone, its name taken by a variant left behind: the variant's rows and
+    // the Builder's share the name, so neither can be told apart; refused.
+    if (input.migrations.has(file)) {
+      changed.push({ file, change: "variant", lacks: ["variant"] });
+    } else {
+      ignoredRows.add(file);
+    }
   }
   return {
     ignoredRows,
     toMark: input.oldBuilderFiles.filter(f => owesMark(input, f)),
-    changed: input.partialBuilderFiles.flatMap(f =>
-      changedSinceMarked(input, f)
-    ),
+    changed,
   };
 }
 
@@ -118,9 +160,9 @@ function owesMark(
 
 /**
  * A partial file a current mark names, as the change since it was marked;
- * none where no mark stands. With the content as marked only the snapshot
- * can have changed the reading; any other difference is read as a change of
- * content, the stricter of the two.
+ * none where no mark stands. With the content as marked, a snapshot or a
+ * dialect variant beside it is what changed the reading; any other
+ * difference is read as a change of content, the stricter of the two.
  */
 function changedSinceMarked(
   input: Pick<OldBuilderLedgerInput, "marks">,
@@ -128,12 +170,15 @@ function changedSinceMarked(
 ): ChangedOldBuilderFile[] {
   const mark = input.marks.get(file.file);
   if (!isMarkCurrent(mark)) return [];
-  const asMarked =
-    mark?.sha256 === file.checksum && file.lacks.includes("snapshot");
+  const beside = file.lacks.find(
+    (part): part is "snapshot" | "variant" =>
+      part === "snapshot" || part === "variant"
+  );
+  const asMarked = mark?.sha256 === file.checksum && beside !== undefined;
   return [
     {
       file: file.file,
-      change: asMarked ? "snapshot" : "content",
+      change: asMarked ? beside : "content",
       lacks: file.lacks,
     },
   ];
@@ -170,5 +215,6 @@ export async function readOldBuilderLedger(
       )
     ),
     marks: await repo.currentOldBuilderMarks(),
+    migrations: new Set([...folder.groups.keys()].map(name => `${name}.sql`)),
   });
 }

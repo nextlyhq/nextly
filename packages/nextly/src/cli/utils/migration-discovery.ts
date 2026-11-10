@@ -15,6 +15,7 @@ import { basename, resolve } from "node:path";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
+import { dialectVariantOf } from "../../domains/schema/migrate/dialect-variant";
 import {
   classifyMigrationFile,
   hasOldBuilderName,
@@ -118,6 +119,13 @@ export async function readMigrationFolder(
     throw error;
   }
   const kept: string[] = [];
+  // The base files a dialect variant stands beside, by their file name.
+  const varied = new Set(
+    files.flatMap(file => {
+      const variant = dialectVariantOf(file);
+      return variant === undefined ? [] : [`${variant.baseName}.sql`];
+    })
+  );
   for (const file of files.filter(f => f.endsWith(".sql"))) {
     if (!hasOldBuilderName(file)) {
       kept.push(file);
@@ -133,6 +141,7 @@ export async function readMigrationFolder(
       name: file,
       content,
       hasSnapshot: await exists(snapshot),
+      hasDialectVariant: varied.has(file),
       dialect,
       ...(declared?.junctions === undefined
         ? {}
@@ -167,6 +176,7 @@ export function oldBuilderFileLine(file: OldBuilderFile): string {
 /** What each part of the signature a file lacks says about it. */
 const LACKS: Record<OldBuilderSignaturePart, string> = {
   snapshot: "has a snapshot beside it",
+  variant: "has a dialect variant beside it",
   header: "holds a line `migrate:create` writes",
   scope:
     "has a statement on a table that is not its own entity's, or one that cannot be read",
@@ -302,21 +312,11 @@ function groupMigrationFiles(
   const migrationGroups = new Map<string, MigrationGroup>();
 
   for (const file of sqlFiles) {
-    // Check if file has a dialect suffix (e.g., .mysql.sql, .sqlite.sql)
-    const dialectMatch = file.match(/(.*)\.(mysql|sqlite|postgresql)\.sql$/);
-
-    let baseName: string;
-    let dialect: SupportedDialect | undefined;
-
-    if (dialectMatch) {
-      // This is a dialect-specific file
-      baseName = dialectMatch[1];
-      dialect = dialectMatch[2] as SupportedDialect;
-    } else {
-      // This is a base file (no dialect suffix)
-      baseName = basename(file, ".sql");
-      dialect = undefined;
-    }
+    // A dialect suffix (`.mysql.sql`) names a variant of its base's group;
+    // read once, as the old-Builder reading reads it.
+    const variant = dialectVariantOf(file);
+    const baseName = variant?.baseName ?? basename(file, ".sql");
+    const dialect = variant?.dialect;
 
     // Get or create the group for this base name
     let group = migrationGroups.get(baseName);

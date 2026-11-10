@@ -23,7 +23,10 @@ import { parseSnapshotFile } from "../../../domains/schema/migrate-create/snapsh
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
 import { describeHolder } from "../../../domains/schema/pipeline/schema-lock";
 import { NextlyError } from "../../../errors/nextly-error";
-import { appliedFilesMissing } from "../../commands/migrate";
+import {
+  appliedFilesMissing,
+  oldBuilderFilesChanged,
+} from "../../commands/migrate";
 import { refusalOf } from "../../commands/migrate-down";
 import { CliError, dataLossRefusal, type CliErrorCode } from "../../errors";
 import {
@@ -221,11 +224,22 @@ export const MIGRATION_CASES = {
     ),
   // As `oldBuilderFilesChanged` in `cli/commands/migrate.ts` raises it.
   OLD_BUILDER_FILE_SNAPSHOT_ADDED: () =>
-    new CliError("OLD_BUILDER_FILE_SNAPSHOT_ADDED", {
-      what: "`1761732000000_create_posts.sql` has a snapshot beside it (`meta/1761732000000_create_posts.snapshot.json`) since it was recognised as a file an earlier Schema Builder wrote, so `nextly migrate` ran nothing.",
-      why: "A ledger row marks the file as an old Schema Builder file, which every command ignores, and it no longer carries the whole signature that recognised it, so it would be read as a migration.",
-      next: "Put the file back as it was, or remove the snapshot, and it is ignored again; delete it, and its ledger rows stay ignored; or accept it as it now stands with `nextly migrate:resolve --applied <file>`, after which it is checked as any migration.",
-    }),
+    oldBuilderFilesChanged("nextly migrate", [
+      {
+        file: "1761732000000_create_posts.sql",
+        change: "snapshot",
+        lacks: ["snapshot"],
+      },
+    ]),
+  // As `oldBuilderFilesChanged` in `cli/commands/migrate.ts` raises it.
+  OLD_BUILDER_FILE_VARIANT_ADDED: () =>
+    oldBuilderFilesChanged("nextly migrate", [
+      {
+        file: "1761732000000_create_posts.sql",
+        change: "variant",
+        lacks: ["variant"],
+      },
+    ]),
   // As `baselineCore` in `cli/commands/migrate-baseline.ts` throws it.
   BASELINE_LOCK_RELEASED: () =>
     new NextlyError({

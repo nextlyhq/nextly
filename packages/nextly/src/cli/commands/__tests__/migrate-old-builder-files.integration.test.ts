@@ -304,13 +304,15 @@ describe.each(getConfiguredTestDialects())(
         `-- Migration: keep\n\n-- UP\nCREATE TABLE ${q}dc_keep${q} (${q}id${q} varchar(36) PRIMARY KEY);\n\n-- DOWN\nDROP TABLE ${q}dc_keep${q};\n`
       );
       expect((await migrate()).code).toBeUndefined();
+      // Named as the Builder names a delete of `keep` and `other`: the count,
+      // then the first 12 hex digits of the SHA-256 of "keep,other".
       writeFileSync(
         join(
           dir,
           "migrations",
-          "1761732000000_drop_1_collections_0123456789ab.sql"
+          "1761732000000_drop_2_collections_b7078bfa1774.sql"
         ),
-        `DROP TABLE IF EXISTS ${q}dc_keep${q};`
+        `-- Drop dynamic collections: keep, other\nDROP TABLE IF EXISTS ${q}dc_keep${q};`
       );
 
       const { code, said } = await migrate();

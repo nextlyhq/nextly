@@ -5,8 +5,11 @@
  * (a) its name is a 13-digit millisecond timestamp, `_`, `create`, `update`,
  *     `i18n`, `status` or `drop`, `_`, the entity's name and `.sql`
  *     (`drop_comp_<slug>` for a field group, `drop_<N>_collections_<hash>`
- *     for a bulk delete, `drop_user_ext` for the user-field table);
- * (b) no snapshot stands beside it;
+ *     for a bulk delete, whose first line lists the collections the count
+ *     and hash are derived from, `drop_user_ext` for the user-field table);
+ * (b) no snapshot stands beside it, and no dialect variant of it
+ *     (`<name>.mysql.sql`), which the Builder never wrote: a variant is
+ *     never one of its files, and shares its base's ledger name;
  * (c) it holds none of the lines `migrate:create` writes: the UP and DOWN
  *     section markers and the entity headers;
  * (d) every statement changes only that entity's own tables: its table, its
@@ -25,6 +28,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { getTableName } from "../../collections/services/collection-utils";
+import {
+  dropFileHeader,
+  dropFileLabel,
+} from "../../dynamic-collections/services/drop-file-name";
 import { parseEntityHeaders } from "../migrate-create/entity-headers";
 import { MANAGED_TABLE_PREFIXES } from "../pipeline/managed-tables";
 import {
@@ -33,6 +40,7 @@ import {
   uniqueIndexNameForColumn,
 } from "../services/index-name";
 
+import { dialectVariantOf } from "./dialect-variant";
 import { hasExecutableText, splitSqlStatements } from "./split-sql";
 import { isDownMarker, isUpMarker } from "./sql-sections";
 import {
@@ -45,7 +53,11 @@ import {
 } from "./statement-targets";
 
 /** A part of the signature a Builder-named file can lack. */
-export type OldBuilderSignaturePart = "snapshot" | "header" | "scope";
+export type OldBuilderSignaturePart =
+  | "snapshot"
+  | "variant"
+  | "header"
+  | "scope";
 
 export type MigrationFileKind =
   | { kind: "old-builder"; entity: string }
@@ -59,6 +71,12 @@ export interface MigrationFileFacts {
   content: string;
   /** Whether `meta/<base name>.snapshot.json` stands beside it. */
   hasSnapshot: boolean;
+  /**
+   * Whether a dialect variant of it (`<base name>.mysql.sql`) stands beside
+   * it. The Builder never wrote one, and the variant shares the migration's
+   * ledger name, so such a file is the variant's migration too.
+   */
+  hasDialectVariant: boolean;
   dialect: SupportedDialect;
   /**
    * The junction tables the configuration and the Builder's manifest name
@@ -83,6 +101,9 @@ const BUILDER_FILE_NAME = /^\d{13}_(create|update|i18n|status|drop)_(.+)\.sql$/;
 /** A bulk delete's name: how many collections, then a hash of their names. */
 const BULK_DROP_NAME = /^\d+_collections_[0-9a-f]{12}$/;
 
+/** A bulk delete's first line, listing the collections it deletes. */
+const BULK_DROP_HEADER = /^-- Drop dynamic collections: (.+)$/;
+
 /** The shared table an earlier Builder kept a translation's values in. */
 const ARCHIVE_TABLE = "nextly_i18n_archive";
 
@@ -102,7 +123,7 @@ interface NamedEntity {
   registry?: string;
   /**
    * The tables whose drop marks a drop file as this entity's delete: its own
-   * main table, or for a bulk delete any collection's. A table dropped with
+   * main table, or for a bulk delete each named collection's. A table dropped with
    * one of them is the entity's when it can be no one else's
    * (`dropsKeepToEntity`).
    */
@@ -116,15 +137,14 @@ interface NamedEntity {
  * reading is tried, and the file is the entity's whose tables it keeps to
  * (`classifyMigrationFile`); the special reading comes first.
  */
-function entitiesOf(verb: string, rest: string): NamedEntity[] {
+function entitiesOf(
+  verb: string,
+  rest: string,
+  content: string
+): NamedEntity[] {
   const collection = collectionEntity(rest);
   if (verb !== "drop") return [collection];
-  // A bulk delete names no one collection: every table it drops must be
-  // some Builder collection's, and only collections' tables carry `dc_`.
-  if (BULK_DROP_NAME.test(rest)) {
-    const collection = (table: string) => table.startsWith("dc_");
-    return [{ slug: rest, owns: collection, anchors: collection }];
-  }
+  if (BULK_DROP_NAME.test(rest)) return bulkDropEntity(rest, content);
   if (rest === USER_EXT_TABLE) {
     return [
       {
@@ -147,6 +167,36 @@ function entitiesOf(verb: string, rest: string): NamedEntity[] {
     ];
   }
   return [collection];
+}
+
+/**
+ * A bulk delete as the Builder wrote it: its first line names the collections
+ * (`dropFileHeader`), and its name is the count and digest derived from that
+ * list (`dropFileLabel`). Only then does it name those collections, and it may
+ * drop their own tables and what can be no one else's beside them. A file
+ * whose name and first line disagree, or with no such line, names none, so
+ * every statement leaves the entity and the file is partial: nothing ties
+ * such a name to any one set of tables.
+ */
+function bulkDropEntity(rest: string, content: string): NamedEntity[] {
+  const header = BULK_DROP_HEADER.exec(content.split("\n", 1)[0] ?? "");
+  const names = header?.[1].split(", ") ?? [];
+  if (
+    names.length < 2 ||
+    new Set(names).size !== names.length ||
+    dropFileHeader(names) !== header?.[0] ||
+    dropFileLabel(names) !== rest
+  ) {
+    return [];
+  }
+  const mains = names.map(name => getTableName(name));
+  return [
+    {
+      slug: rest,
+      owns: table => mains.some(own => isOwnTable(own, table)),
+      anchors: table => mains.includes(table),
+    },
+  ];
 }
 
 /**
@@ -397,23 +447,27 @@ function mayBeEntityCompanion(table: string): boolean {
  * signature: the files worth reading to classify.
  */
 export function hasOldBuilderName(name: string): boolean {
-  return BUILDER_FILE_NAME.test(name);
+  // A dialect variant is never one: the Builder wrote one file per change.
+  return BUILDER_FILE_NAME.test(name) && dialectVariantOf(name) === undefined;
 }
 
 /** Classify one file of the migrations folder by the Builder's signature. */
 export function classifyMigrationFile(
   file: MigrationFileFacts
 ): MigrationFileKind {
-  const named = BUILDER_FILE_NAME.exec(file.name);
+  const named = hasOldBuilderName(file.name)
+    ? BUILDER_FILE_NAME.exec(file.name)
+    : null;
   if (!named) return { kind: "ordinary" };
   const [, verb, rest] = named;
   // The one reading of the name whose tables every statement keeps to.
-  const entity = entitiesOf(verb, rest).find(candidate =>
+  const entity = entitiesOf(verb, rest, file.content).find(candidate =>
     staysInEntity(candidate, verb, file)
   );
 
   const lacks: OldBuilderSignaturePart[] = [];
   if (file.hasSnapshot) lacks.push("snapshot");
+  if (file.hasDialectVariant) lacks.push("variant");
   if (hasCreateHeader(file.content)) lacks.push("header");
   if (entity === undefined) lacks.push("scope");
 

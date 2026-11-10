@@ -1076,6 +1076,13 @@ exports[`each code, as a command ends with it > OLD_BUILDER_FILE_SNAPSHOT_ADDED 
   Docs: https://nextlyhq.com/docs/cli/errors/old-builder-file-snapshot-added  (OLD_BUILDER_FILE_SNAPSHOT_ADDED)"
 `;
 
+exports[`each code, as a command ends with it > OLD_BUILDER_FILE_VARIANT_ADDED 1`] = `
+"✗ \`1761732000000_create_posts.sql\` has a dialect variant sharing its ledger name since it was recognised as a file an earlier Schema Builder wrote, so \`nextly migrate\` ran nothing.
+  Why:  A ledger row marks the name as an old Schema Builder file's, which every command ignores, and a dialect variant now shares that name, so its rows and the Builder's cannot be told apart.
+  Next: Remove the dialect variant, and put its change in a migration of its own with \`nextly migrate:create\`; the marked file is then ignored again.
+  Docs: https://nextlyhq.com/docs/cli/errors/old-builder-file-variant-added  (OLD_BUILDER_FILE_VARIANT_ADDED)"
+`;
+
 exports[`each code, as a command ends with it > OWNERSHIP_TAKEOVER_REFUSED 1`] = `
 "✗ The table "seo_redirects" is recorded as belonging to "@acme/seo", so "@acme/redirects" cannot take it over.
   Why:  Each table and element has one owner, recorded in \`nextly_schema_owners\`, so no plugin or app takes over another's.

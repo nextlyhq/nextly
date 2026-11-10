@@ -49,6 +49,7 @@ import {
   isRecordedChecksum,
 } from "../../domains/schema/migrate/applied-checksums";
 import {
+  markedFileChange,
   readOldBuilderLedger,
   type ChangedOldBuilderFile,
 } from "../../domains/schema/migrate/old-builder-ledger";
@@ -485,9 +486,7 @@ async function nameOldBuilderFiles(args: {
  * signature, and the part it lacks: every history check refuses it.
  */
 function changedOldBuilderFileLine(file: ChangedOldBuilderFile): string {
-  const change =
-    file.change === "content" ? "has changed" : "has a snapshot beside it";
-  return `${file.file} ${change} since it was recognised as a file an earlier Schema Builder wrote, and lacks: ${file.lacks.join(", ")}. \`nextly migrate\` refuses it until it is restored, deleted or accepted with \`nextly migrate:resolve --applied ${file.file}\`.`;
+  return `${file.file} ${markedFileChange(file)} since it was recognised as a file an earlier Schema Builder wrote, and lacks: ${file.lacks.join(", ")}. \`nextly migrate\` refuses it until it is restored, deleted or accepted with \`nextly migrate:resolve --applied ${file.file}\`.`;
 }
 
 export async function migrationEntries(args: {
