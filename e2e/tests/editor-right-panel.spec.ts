@@ -66,12 +66,14 @@ test("docks the panel beside the fields at 1440px, sharing the right side with t
 
   await expect(panel(page)).toHaveAttribute("data-document-panel", "docked");
   const sections = panel(page).locator("[data-panel-section]");
-  await expect(sections).toHaveCount(3);
+  // A block page's entry carries the page builder's Design section first; the core panel's own
+  // sections follow it.
+  await expect(sections).toHaveCount(4);
   expect(
     await sections.evaluateAll(all =>
       all.map(el => el.getAttribute("data-panel-section"))
     )
-  ).toEqual(["Status", "Publishing", "Details"]);
+  ).toEqual(["Design", "Status", "Publishing", "Details"]);
 
   // Beside the fields, not over them.
   const title = page.getByRole("textbox", { name: "Title", exact: true });

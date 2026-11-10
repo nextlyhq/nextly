@@ -9,7 +9,9 @@
  * that a run interrupted mid-way resumes without skipping a document; that a
  * progress row nobody's walk wrote skips nothing; and that a published page
  * with a pending draft is converted where it can be and reported where it
- * cannot.
+ * cannot, and a draft discarded mid-read is never saved again; and that a
+ * starter who may update a document has its rewrite made, whatever they may
+ * read of it, while one who may not update it is refused.
  *
  * @module __tests__/component-delete-rewrite.integration.test
  */
@@ -23,7 +25,11 @@ import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
-import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  readStoredFields,
+  type PluginDefinition,
+} from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -33,7 +39,7 @@ import {
 import { ServiceContainer } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
 import { asDocument } from "../component-store-source";
@@ -45,6 +51,33 @@ import {
   type ComponentDeleteRewriteService,
 } from "../host-rewrite/service";
 import { pageBuilder } from "../plugin";
+
+/**
+ * Run after each stored read the plugin makes, with what was asked and what
+ * was read, while a test sets it: the one place between the rewrite's live
+ * read of a host and its draft read, which no hook of the site reaches.
+ */
+const storedReads = vi.hoisted(() => ({
+  after: undefined as
+    | ((request: unknown, read: unknown) => Promise<void>)
+    | undefined,
+}));
+
+// The SDK as it is, with the stored read passed through to core's and the
+// seam above run after it.
+vi.mock("@nextlyhq/plugin-sdk", async importOriginal => {
+  const sdk = await importOriginal<typeof import("@nextlyhq/plugin-sdk")>();
+  return {
+    ...sdk,
+    readStoredFields: async (
+      ...args: Parameters<typeof sdk.readStoredFields>
+    ) => {
+      const read = await sdk.readStoredFields(...args);
+      await storedReads.after?.(args[1], read);
+      return read;
+    },
+  };
+});
 
 const ORIGIN = "http://localhost";
 const CSRF = "c".repeat(64);
@@ -59,6 +92,10 @@ const BOARDS = "boards";
 const PANELS = "panels";
 /** A translated collection whose blocks field sits in a group kept per language. */
 const ARTICLES = "articles";
+/** A collection whose blocks field a field read rule closes to every reader. */
+const SEALED = "sealed";
+/** A collection whose blocks field a field update rule closes to every writer. */
+const LOCKED = "locked";
 
 type Node = Record<string, unknown>;
 
@@ -263,6 +300,7 @@ describe.each(getConfiguredTestDialects())(
     let current: TestNextly | undefined;
 
     afterEach(async () => {
+      storedReads.after = undefined;
       await current?.destroy();
       current = undefined;
     });
@@ -288,6 +326,10 @@ describe.each(getConfiguredTestDialects())(
         panels?: boolean;
         /** Whether the site also has articles (it must then be translated). */
         articles?: boolean;
+        /** Whether the site also has sealed notes. */
+        sealed?: boolean;
+        /** Whether the site also has locked notes. */
+        locked?: boolean;
       } = {}
     ) {
       const plugin = pageBuilder();
@@ -359,6 +401,36 @@ describe.each(getConfiguredTestDialects())(
                 } as never,
               ]
             : []),
+          ...(site.sealed === true
+            ? [
+                {
+                  slug: SEALED,
+                  fields: [
+                    { name: "title", type: "text" },
+                    {
+                      name: "content",
+                      type: BLOCKS_TYPE,
+                      access: { read: () => false },
+                    },
+                  ],
+                } as never,
+              ]
+            : []),
+          ...(site.locked === true
+            ? [
+                {
+                  slug: LOCKED,
+                  fields: [
+                    { name: "title", type: "text" },
+                    {
+                      name: "content",
+                      type: BLOCKS_TYPE,
+                      access: { update: () => false },
+                    },
+                  ],
+                } as never,
+              ]
+            : []),
         ],
         ...(site.singles === undefined
           ? {}
@@ -378,10 +450,16 @@ describe.each(getConfiguredTestDialects())(
         ...(site.articles === true
           ? [`read-${ARTICLES}`, `update-${ARTICLES}`]
           : []),
+        ...(site.sealed === true ? [`read-${SEALED}`, `update-${SEALED}`] : []),
+        ...(site.locked === true ? [`read-${LOCKED}`, `update-${LOCKED}`] : []),
       ];
-      const anAuthor = async (name: string) => {
+      /** An author, with every author's grants or only the ones given. */
+      const anAuthor = async (
+        name: string,
+        grants: string[] = [...AUTHOR_GRANTS, ...extra]
+      ) => {
         const id = await person(t, name);
-        await grant(t, id, [...AUTHOR_GRANTS, ...extra], singleSlugs);
+        await grant(t, id, grants, singleSlugs);
         return { id, cookie: await sessionOf(t, id) };
       };
       const author = await anAuthor("author");
@@ -475,6 +553,32 @@ describe.each(getConfiguredTestDialects())(
       const answered = await post(cookie, "open", { componentId, purpose });
       expect(answered.status, JSON.stringify(answered.body)).toBe(200);
       return answered.body as { opened: boolean; run: DeletionRun };
+    }
+
+    /** Discard a page's working draft, as its author does, through core's route. */
+    async function discardDraft(cookie: string, id: string): Promise<number> {
+      const path = [
+        "collections",
+        "pages",
+        "entries",
+        id,
+        "versions",
+        "working-draft",
+      ];
+      // The author discards whatever the draft holds now.
+      const response = await createDynamicHandlers().DELETE(
+        new Request(`${ORIGIN}/api/${path.join("/")}?_overwrite=true`, {
+          method: "DELETE",
+          headers: {
+            cookie: `${cookie}; nextly_csrf=${CSRF}`,
+            "x-csrf-token": CSRF,
+            origin: ORIGIN,
+          },
+        }),
+        { params: Promise.resolve({ params: path }) }
+      );
+      await response.text();
+      return response.status;
     }
 
     /** One POST to a harness route. */
@@ -1263,6 +1367,7 @@ describe.each(getConfiguredTestDialects())(
           hero: {
             body: pageDoc([heading("de", "Deutsch"), copyOf("i2", cardId)]),
           },
+          _overwrite: true,
         },
         locale: "de",
         overrideAccess: true,
@@ -1317,7 +1422,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: ARTICLES,
         id: articleId,
-        data: { hero: { body: pageDoc([heading("en", "English")]) } },
+        data: {
+          hero: { body: pageDoc([heading("en", "English")]) },
+          _overwrite: true,
+        },
         locale: "en",
         overrideAccess: true,
       } as never);
@@ -1347,6 +1455,137 @@ describe.each(getConfiguredTestDialects())(
       expect(reports.at(-1)?.left ?? []).toEqual([]);
       expect(leaves(reports, NOTES, emptyId)).toBe(false);
       expect(copies(await nodesOf(t, NOTES, id), cardId)).toBe(0);
+    });
+
+    it("does not save as a draft the live row of a page whose draft its author discarded between the rewrite's reads", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      const created = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Live",
+          slug: `live-${String(Math.random()).slice(2, 10)}`,
+          status: "published",
+          content: pageDoc([copyOf("i1", cardId)]),
+        },
+        overrideAccess: true,
+      });
+      const pageId = String(created.item.id);
+      await t.nextly.update({
+        collection: "pages",
+        id: pageId,
+        data: {
+          content: pageDoc([copyOf("i1", cardId), heading("d", "Draft edit")]),
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      });
+      await open(cookie, cardId);
+      // Once the rewrite's live read has found the draft pending, and before
+      // its draft read, the author discards the draft.
+      const discards: number[] = [];
+      storedReads.after = async (request, read) => {
+        const asked = request as { id?: string; form?: string };
+        const answer = read as { live?: { workingDraft?: boolean } };
+        if (discards.length > 0 || asked.id !== pageId) return;
+        if (asked.form !== "published" || answer.live?.workingDraft !== true) {
+          return;
+        }
+        discards.push(await discardDraft(cookie, pageId));
+      };
+
+      const reports = await rewriteToTheEnd(cookie, cardId);
+      storedReads.after = undefined;
+
+      expect(discards).toEqual([200]);
+      // No working draft was made again: the live row is all there is, and
+      // it was converted and published in its place.
+      const now = await readStoredFields(
+        { overrideAccess: true },
+        { collection: "pages", id: pageId, fields: ["content"], form: "draft" }
+      );
+      expect(now).toMatchObject({ live: { workingDraft: false } });
+      expect(texts(await nodesOf(t, "pages", pageId))).toEqual(["Card title"]);
+      expect(texts(await nodesOf(t, "pages", pageId, true))).toEqual([
+        "Card title",
+      ]);
+      expect(leaves(reports, "pages", pageId)).toBe(false);
+    });
+
+    it("completes the rewrite of a starter who may update the documents but not read them", async () => {
+      const { t, anAuthor } = await boot();
+      const cardId = await card(t);
+      const id = await note(t, "Note", [copyOf("i1", cardId)]);
+      const updater = await anAuthor(
+        "updater",
+        AUTHOR_GRANTS.filter(slug => slug !== "read-notes")
+      );
+      await open(updater.cookie, cardId);
+
+      const reports = await rewriteToTheEnd(updater.cookie, cardId);
+
+      expect(leaves(reports, NOTES, id)).toBe(false);
+      expect(texts(await nodesOf(t, NOTES, id))).toEqual(["Card title"]);
+    });
+
+    it("completes the rewrite of a blocks field a field read rule closes to its starter", async () => {
+      const { t, cookie } = await boot({}, { sealed: true });
+      const cardId = await card(t);
+      const created = await t.nextly.create({
+        collection: SEALED,
+        data: { title: "Sealed", content: pageDoc([copyOf("i1", cardId)]) },
+        overrideAccess: true,
+      });
+      const id = String(created.item.id);
+      await open(cookie, cardId);
+
+      const reports = await rewriteToTheEnd(cookie, cardId);
+
+      expect(leaves(reports, SEALED, id)).toBe(false);
+      expect(texts(await nodesOf(t, SEALED, id))).toEqual(["Card title"]);
+    });
+
+    it("leaves a document its starter may not update, as not permitted, and unchanged", async () => {
+      const { t, anAuthor } = await boot();
+      const cardId = await card(t);
+      const id = await note(t, "Note", [copyOf("i1", cardId)]);
+      const reader = await anAuthor(
+        "reader",
+        AUTHOR_GRANTS.filter(slug => slug !== "update-notes")
+      );
+      await open(reader.cookie, cardId);
+
+      const reports = await rewriteToTheEnd(reader.cookie, cardId);
+
+      expect(reports.at(-1)?.left).toContainEqual(
+        expect.objectContaining({
+          host: expect.objectContaining({ slug: NOTES, id }),
+          reason: "not-permitted",
+        })
+      );
+      expect(copies(await nodesOf(t, NOTES, id), cardId)).toBe(1);
+    });
+
+    it("leaves a document whose blocks field a field update rule closes to its starter, as not permitted, and unchanged", async () => {
+      const { t, cookie } = await boot({}, { locked: true });
+      const cardId = await card(t);
+      const created = await t.nextly.create({
+        collection: LOCKED,
+        data: { title: "Locked", content: pageDoc([copyOf("i1", cardId)]) },
+        overrideAccess: true,
+      });
+      const id = String(created.item.id);
+      await open(cookie, cardId);
+
+      const reports = await rewriteToTheEnd(cookie, cardId);
+
+      expect(reports.at(-1)?.left).toContainEqual(
+        expect.objectContaining({
+          host: expect.objectContaining({ slug: LOCKED, id }),
+          reason: "not-permitted",
+        })
+      );
+      expect(copies(await nodesOf(t, LOCKED, id), cardId)).toBe(1);
     });
   }
 );

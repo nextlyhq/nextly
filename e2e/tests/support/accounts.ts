@@ -115,6 +115,27 @@ export async function createSignedInUser(
 }
 
 /**
+ * A new session for an account `createSignedInUser` made, signing in with the
+ * password it set: the sessions already handed out stay as they are.
+ */
+export function signInAgain(
+  baseURL: string,
+  email: string
+): Promise<StorageState> {
+  return withFreshSession(
+    baseURL,
+    async (api, csrfToken) => {
+      const login = await api.post("/admin/api/auth/login", {
+        headers: { Origin: baseURL },
+        data: { email, password: OWN_PASSWORD, csrfToken: await csrfToken() },
+      });
+      expect(login.status(), await login.text()).toBe(200);
+    },
+    email
+  );
+}
+
+/**
  * Runs `signIn` in a request context with an empty jar, so nothing of any
  * other session comes along, then checks the session it left is `email`'s and
  * hands it back.

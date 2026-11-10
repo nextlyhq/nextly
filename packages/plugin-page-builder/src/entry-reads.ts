@@ -12,11 +12,15 @@
 import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import type { PaginationMeta, WhereFilter } from "nextly";
 import { readableTitleText } from "nextly/config";
-import { requireNextly } from "nextly/runtime";
+import {
+  requireNextly,
+  type EditorSourceReader,
+  type PublicSourceReader,
+} from "nextly/runtime";
 
 import { readOrNull } from "./composition-route-kit";
 import { ENTRIES_UNTITLED, type EntryItem } from "./entries-contract";
-import { readingAsUser } from "./library-route";
+import { readingAsUser, type IdentifiedCaller } from "./library-route";
 
 /** One as-caller list read, as a route asks the Direct API for it. */
 export interface AsCallerFindArgs {
@@ -57,7 +61,7 @@ export interface AsCallerPage {
  * reads.
  */
 export async function findAsCaller(
-  ctx: Pick<PluginRouteContext, "caller">,
+  ctx: IdentifiedCaller,
   args: AsCallerFindArgs
 ): Promise<AsCallerPage> {
   const result = await requireNextly().find({
@@ -79,6 +83,130 @@ export async function findAsCaller(
       : { unknownSort: args.unknownSort }),
   });
   return { items: result.items, meta: result.meta };
+}
+
+/**
+ * The public reader, as the published page reads with it: published entries
+ * and the fields the public may read, the same for everyone. Shared by every
+ * read made as a visitor (an unbind keeping what visitors see, a template's
+ * preview of its published entry), so each reads by the same statement.
+ */
+export async function publicSourceReader(
+  locale: string | undefined
+): Promise<PublicSourceReader> {
+  const { createPublicReader } = await import("nextly/runtime");
+  const nextly = requireNextly();
+  return createPublicReader(
+    {
+      find: async args => await nextly.find(args),
+      findSingle: async args => await nextly.findSingle(args),
+    },
+    locale === undefined ? {} : { locale }
+  );
+}
+
+/**
+ * The editor reader AS THE CALLER, in `locale`: the public reader's queries,
+ * read as the signed-in person (their user, and an API key's own scope when
+ * the request carried one) with drafts included, a Single's, and one entry by
+ * its id with its pending working draft. Shared by the canvas's list and
+ * binding reads and the template preview, so each reads as the same person
+ * by the same statement.
+ */
+export async function editorReaderAsCaller(
+  ctx: Pick<PluginRouteContext, "caller">,
+  locale: string | undefined
+): Promise<EditorSourceReader> {
+  // Imported at call time, so a route module loading this one costs none of
+  // the reader until it reads.
+  const { createEditorReader } = await import("nextly/runtime");
+  const nextly = requireNextly();
+  const { user, actor } = await readingAsUser(ctx);
+  return createEditorReader(
+    {
+      find: async args => await nextly.find(args),
+      findSingle: async args => await nextly.findSingle(args),
+      // The by-id read, which alone returns a pending working draft.
+      findByID: async args => await nextly.findByID(args),
+    },
+    { user, ...(actor === undefined ? {} : { actor }) },
+    locale === undefined ? {} : { locale }
+  );
+}
+
+/**
+ * The media library as the caller reads it, for a binding that follows a
+ * relation into it (an image's alt text from the entry's featured image).
+ *
+ * `media` is no collection the editor reader finds, so a relation into it is
+ * read here by id, through core's media read checked as the caller: the
+ * check the admin's own media read makes (`read-media`), so the canvas shows
+ * what the person may already open in the library and nothing more. A file
+ * they may not read throws, which the binding read takes as nothing read, so
+ * its binding shows its fallback.
+ */
+export async function mediaReaderAsCaller(
+  ctx: Pick<PluginRouteContext, "caller">
+): Promise<{
+  findByID(args: {
+    id: string;
+    disableErrors?: boolean;
+  }): Promise<Record<string, unknown> | null>;
+}> {
+  const nextly = requireNextly();
+  const caller = await readingAsUser(ctx);
+  return {
+    findByID: async args => {
+      const file = await nextly.media.findByID({ ...args, ...caller });
+      return file === null ? null : { ...file };
+    },
+  };
+}
+
+/**
+ * The ids, with one of core's reserved workflow keys at the filter's top
+ * level, where core reads them.
+ *
+ * Asserted rather than typed: the keys take `true` itself, a form the
+ * `WhereFilter` type, spelled for field conditions, does not describe. The
+ * spelling is core's (`nextly/reserved-filter-keys`), so it is not restated.
+ */
+function workflowWhere(key: string, ids: readonly string[]): WhereFilter {
+  const where: Record<string, unknown> = { id: { in: [...ids] }, [key]: true };
+  return where as WhereFilter;
+}
+
+/**
+ * Which of `ids` core's workflow filter `key` keeps (`_pendingChange`,
+ * `_inRelease`), read through `find`, a read AS THE CALLER.
+ *
+ * Core's own reading, not one here: `_pendingChange` keeps an entry whose
+ * working draft holds changes not yet published, by the versions domain's one
+ * statement of what a working draft is (the fact behind the admin's
+ * `hasWorkingDraft`). Only ids are selected, and the ids already bound the
+ * read. A failure is the caller's to judge, so it is thrown as it came:
+ * shared by the pages search and the template preview's list, which each
+ * decide what a failed read leaves out.
+ */
+export async function idsKeptByWorkflowKey(
+  find: (args: AsCallerFindArgs) => Promise<AsCallerPage>,
+  collection: string,
+  ids: readonly string[],
+  key: string
+): Promise<ReadonlySet<string>> {
+  if (ids.length === 0) return new Set();
+  const page = await find({
+    collection,
+    where: workflowWhere(key, ids),
+    select: { id: true },
+    limit: ids.length,
+  });
+  return new Set(
+    page.items.flatMap(row => {
+      const entry = entryOf(row, undefined);
+      return entry === undefined ? [] : [entry.id];
+    })
+  );
 }
 
 /**

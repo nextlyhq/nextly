@@ -159,6 +159,7 @@ describe("which derivation a recorded scope belongs to", () => {
   const INDEXES = {
     classIndex: "nx_pb_class_usage",
     componentIndex: "nx_pb_component_usage",
+    tokenIndex: "nx_pb_token_usage",
   } as const;
   const LIMITS = { maxDepth: 10, maxNodes: 500, maxBytes: 1000 };
   const base = { limits: LIMITS, ...INDEXES };
@@ -192,6 +193,9 @@ describe("which derivation a recorded scope belongs to", () => {
     ).not.toBe(backfillGeneration(base));
     expect(
       backfillGeneration({ ...base, componentIndex: "site_component_usage" })
+    ).not.toBe(backfillGeneration(base));
+    expect(
+      backfillGeneration({ ...base, tokenIndex: "site_token_usage" })
     ).not.toBe(backfillGeneration(base));
   });
 

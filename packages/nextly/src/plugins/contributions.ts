@@ -864,8 +864,15 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
   emailTemplates?: PluginEmailTemplate[];
   /** @experimental Custom field types — registry seam mapping to a storage primitive + admin component. */
   fieldTypes?: PluginFieldType[];
-  /** @experimental Custom event names this plugin may emit. No first-party plugin declares custom events yet. */
-  events?: Array<{ name: string }>;
+  /**
+   * @experimental Custom event names this plugin may emit. No first-party
+   * plugin declares custom events yet.
+   *
+   * `durable: true` makes an event one the plugin records with the work that
+   * emits it, for core to deliver to each durable subscriber until it
+   * succeeds. Only an event declared so may be emitted durably.
+   */
+  events?: Array<{ name: string; durable?: boolean }>;
   /**
    * @experimental The admin's strings this plugin's components show, by
    * interface language and then by key: `{ en: { "acme-shop.cart.title": "Cart" } }`.

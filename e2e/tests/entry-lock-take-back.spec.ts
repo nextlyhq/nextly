@@ -169,7 +169,7 @@ test.describe(
       try {
         const theirs = `Written while A was away ${uniqueTag()}`;
         const written = await other.page.request.patch(`${ENTRIES}/${id}`, {
-          data: { excerpt: theirs },
+          data: { excerpt: theirs, _overwrite: true },
         });
         expect(written.ok(), await written.text()).toBe(true);
 

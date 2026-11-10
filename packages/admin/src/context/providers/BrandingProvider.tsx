@@ -73,7 +73,17 @@ interface BrandingState {
    * as the server stays unreachable.
    */
   isUnavailable: boolean;
+  /**
+   * Asks admin-meta's workspace half again, the half `isUnavailable` reports,
+   * for a reader that offers a way out of its never having answered. While
+   * the request is on its way the half reads as pending again, as on first
+   * load, so a reader that said it failed says it is loading.
+   */
+  retry: () => void;
 }
+
+/** What a reader outside the provider is given to retry: nothing to ask. */
+const NO_RETRY = (): void => {};
 
 const BrandingContext = createContext<BrandingState | undefined>(undefined);
 
@@ -115,6 +125,7 @@ export function useBrandingStatus(): Omit<BrandingState, "branding"> {
   return {
     isPending: state?.isPending ?? false,
     isUnavailable: state?.isUnavailable ?? false,
+    retry: state?.retry ?? NO_RETRY,
     isBrandingUnavailable: state?.isBrandingUnavailable ?? false,
   };
 }
@@ -315,6 +326,30 @@ interface BrandingProviderProps {
   children: React.ReactNode;
 }
 
+/**
+ * Each half carries its own places' contributions: the public half the login
+ * page's, the signed-in half every other place's. Merged place by place, so a
+ * plain merge of the halves does not let signing in take the login page's
+ * away. Nothing when neither half has any.
+ */
+function placesOfBothHalves(
+  publicHalf: AdminBranding | undefined,
+  workspaceHalf: AdminBranding | undefined
+): Pick<AdminBranding, "contributions"> {
+  if (
+    publicHalf?.contributions === undefined &&
+    workspaceHalf?.contributions === undefined
+  ) {
+    return {};
+  }
+  return {
+    contributions: {
+      ...publicHalf?.contributions,
+      ...workspaceHalf?.contributions,
+    },
+  };
+}
+
 export function BrandingProvider({
   children,
 }: BrandingProviderProps): React.JSX.Element {
@@ -367,6 +402,7 @@ export function BrandingProvider({
     data: workspaceData,
     isPending: workspacePending,
     isLoadingError: workspaceUnavailable,
+    refetch: refetchWorkspace,
   } = useQuery<AdminBranding>({
     queryKey: [...ADMIN_WORKSPACE_KEY, signedIn],
     queryFn: () => protectedApi.get<AdminBranding>("/admin-meta/workspace"),
@@ -406,7 +442,11 @@ export function BrandingProvider({
     const merged =
       brandingData === undefined && workspaceData === undefined
         ? undefined
-        : { ...brandingData, ...workspaceData };
+        : {
+            ...brandingData,
+            ...workspaceData,
+            ...placesOfBothHalves(brandingData, workspaceData),
+          };
     return {
       branding: merged,
       // The WORKSPACE query, matching `isUnavailable`. Both answer one
@@ -425,6 +465,9 @@ export function BrandingProvider({
       // nothing about whether that conclusion is safe to draw.
       isUnavailable: workspaceUnavailable,
       isBrandingUnavailable: brandingUnavailable,
+      retry: () => {
+        void refetchWorkspace();
+      },
     };
   }, [
     brandingData,
@@ -432,6 +475,7 @@ export function BrandingProvider({
     sessionPending,
     workspacePending,
     workspaceUnavailable,
+    refetchWorkspace,
     brandingUnavailable,
   ]);
 

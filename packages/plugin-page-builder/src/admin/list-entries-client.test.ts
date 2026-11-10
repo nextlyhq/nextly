@@ -138,8 +138,8 @@ describe("the editor's count of a list", () => {
   });
 
   it("reads in the language being edited, as the canvas does", async () => {
-    const reads = canvasListReadsIn("fr");
-    expect(canvasListReadsIn("fr")).toBe(reads);
+    const reads = canvasListReadsIn("fr", "u1");
+    expect(canvasListReadsIn("fr", "u1")).toBe(reads);
     const { writePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
     vi.mocked(writePluginRoute).mockReset();
     vi.mocked(writePluginRoute).mockResolvedValue(counted(4));
@@ -149,6 +149,64 @@ describe("the editor's count of a list", () => {
     expect(vi.mocked(writePluginRoute).mock.calls[0]?.[0]).toMatchObject({
       body: { query: { collection: "posts", locale: "fr" } },
     });
+  });
+
+  it("never hands one person's kept rows to another", async () => {
+    const { writePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
+    vi.mocked(writePluginRoute).mockReset();
+    vi.mocked(writePluginRoute).mockResolvedValue(counted(3));
+    const first = canvasListReadsIn("en", "author-a");
+    await first.count({ collection: "posts", limit: 2 });
+    expect(vi.mocked(writePluginRoute)).toHaveBeenCalledTimes(1);
+    // Another person signs in in the same tab: their reads are their own,
+    // and asking again reads again rather than answering from A's.
+    const second = canvasListReadsIn("en", "author-b");
+    expect(second).not.toBe(first);
+    await second.count({ collection: "posts", limit: 2 });
+    expect(vi.mocked(writePluginRoute)).toHaveBeenCalledTimes(2);
+    // And A's are gone: coming back reads afresh too.
+    expect(canvasListReadsIn("en", "author-a")).not.toBe(first);
+  });
+
+  it("keeps nothing while the signed-in person is not known", async () => {
+    const { writePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
+    vi.mocked(writePluginRoute).mockReset();
+    vi.mocked(writePluginRoute).mockResolvedValue(counted(3));
+    // Before the person is known, the session may already be another
+    // account's: what one ask read must not answer the next.
+    const first = canvasListReadsIn("en", null);
+    await first.count({ collection: "posts", limit: 2 });
+    const second = canvasListReadsIn("en", null);
+    expect(second).not.toBe(first);
+    await second.count({ collection: "posts", limit: 2 });
+    expect(vi.mocked(writePluginRoute)).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads as a visitor of the document named, apart from the person's own reads", async () => {
+    const { writePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
+    vi.mocked(writePluginRoute).mockReset();
+    vi.mocked(writePluginRoute).mockResolvedValue(counted(3));
+    const visitor = { collection: "pages", id: "p1" };
+    const own = canvasListReadsIn("en", "author-v");
+    const asVisitor = canvasListReadsIn("en", "author-v", visitor);
+    // Kept apart, so a visitor's rows never answer the person's own read,
+    // nor theirs a visitor's; the same document's reads are one set.
+    expect(asVisitor).not.toBe(own);
+    expect(canvasListReadsIn("en", "author-v", { ...visitor })).toBe(asVisitor);
+    expect(
+      canvasListReadsIn("en", "author-v", { collection: "pages", id: "p2" })
+    ).not.toBe(asVisitor);
+    await asVisitor.count({ collection: "posts", limit: 2 });
+    await own.count({ collection: "posts", limit: 2 });
+    const bodies = vi
+      .mocked(writePluginRoute)
+      .mock.calls.map(([request]) => request.body as Record<string, unknown>);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toMatchObject({
+      visitor,
+      query: { collection: "posts" },
+    });
+    expect(bodies[1]).not.toHaveProperty("visitor");
   });
 
   it("reads nothing for a list one read cannot count", async () => {

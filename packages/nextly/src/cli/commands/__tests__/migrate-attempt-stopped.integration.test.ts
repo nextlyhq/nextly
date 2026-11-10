@@ -37,6 +37,10 @@ import {
 } from "../../../domains/schema/events/schema-events-repository";
 import { ensureSchemaEventsTable } from "../../../domains/schema/events/schema-events-ddl";
 import { checksumOf } from "../../../domains/schema/migrate/applied-checksums";
+import {
+  resolveDataLossConsent,
+  type DataLossConsent,
+} from "../../../domains/schema/migrate/data-loss-consent";
 import { resolveMigration } from "../../../domains/schema/migrate/resolve";
 import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import { marksNoTransaction } from "../../../domains/schema/migrate/split-sql";
@@ -50,7 +54,7 @@ import {
 } from "../../../domains/schema/pipeline/__tests__/helpers/schema-lock-world";
 import { NextlyError } from "../../../errors/nextly-error";
 import { createLogger } from "../../utils/logger";
-import { migrateCore, refuseUnresolvedAppAttempts } from "../migrate";
+import { assertAppHistoryHolds, migrateCore } from "../migrate";
 import { downDatabaseDeps, migrateDownCore } from "../migrate-down";
 
 const CHILD = join(__dirname, "helpers", "migration-run-child.ts");
@@ -102,8 +106,9 @@ describe.each(LOCK_DIALECTS)(
     }, 60_000);
 
     /** `nextly migrate`'s core in this process, waiting out a lapsing lock. */
-    function migrate() {
+    function migrate(consent?: DataLossConsent) {
       return migrateCore({
+        ...(consent === undefined ? {} : { consent }),
         extensionSchema: undefined,
         dialect,
         db: adapter.getDrizzle(),
@@ -131,14 +136,15 @@ describe.each(LOCK_DIALECTS)(
             transaction: !marksNoTransaction(content),
           });
         },
-        refuseUnresolvedAttempts: () =>
-          refuseUnresolvedAppAttempts({
+        checkAppHistory: ({ recordChecksums }) =>
+          assertAppHistoryHolds({
             adapter: adapter as never,
             db: adapter.getDrizzle(),
             dialect,
             migrationsDir,
             logger,
             command: "nextly migrate:down",
+            recordChecksums,
           }),
         withLock: withMigrateLock,
       });
@@ -361,7 +367,9 @@ describe.each(LOCK_DIALECTS)(
           [`DROP TABLE ${one}`],
           marked
         );
-        return migrate().then(
+        // Its INSERT reaches a table the database lacks, whose code cannot
+        // be read, so the run takes the consent without targets.
+        return migrate(resolveDataLossConsent({ flag: true, env: {} })).then(
           () => undefined,
           (error: unknown) => error
         );
@@ -519,12 +527,20 @@ describe.each(LOCK_DIALECTS)(
         rmSync(join(migrationsDir, FILE));
         const settled = await databaseState();
 
-        // The lock lapses; both commands refuse, naming the file, with nothing
-        // of it to judge, and change nothing.
-        expect(await refusedWith(migrate())).toEqual([]);
-        expect(await databaseState()).toEqual(settled);
-        expect(await refusedWith(migrateDown())).toEqual([]);
-        expect(await databaseState()).toEqual(settled);
+        // The lock lapses; both commands refuse as for a migration the folder
+        // lacks (exit 3), naming the file a newer build tried, and change
+        // nothing.
+        for (const command of [migrate(), migrateDown()]) {
+          const refusal = await command.then(
+            () => undefined,
+            (thrown: unknown) => thrown
+          );
+          expect(refusal).toMatchObject({
+            code: "MIGRATION_MISSING",
+            logContext: { unresolved: [FILE] },
+          });
+          expect(await databaseState()).toEqual(settled);
+        }
 
         // The operator reverses what ran and clears the attempt, which needs
         // no file: the run goes on, with nothing of the file left to apply.

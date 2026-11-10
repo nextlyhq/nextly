@@ -37,15 +37,18 @@
  * @since 1.0.0
  */
 
-import type { FieldConfig } from "nextly/config";
+import type { FieldConfig, OverridableDocumentAction } from "nextly/config";
 import type { ComponentType } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { DocumentLockGates } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
+import type { PlaceContributionProps } from "@admin/components/shared/target-slot";
 
 import {
   componentRegistry,
   CORE_COMPONENT_PREFIX,
+  markModulesSettled,
+  resetSettledModules,
   writeComponent,
 } from "./component-registry-internal";
 
@@ -145,7 +148,129 @@ export interface DocumentViewProps {
    * @experimental
    */
   fieldPath?: string;
+  /**
+   * For a view offered on a field type: the field's address from the
+   * document's root, which the view's own address carries (`?field=`). The
+   * same as `fieldPath` except inside a repeater's row, which the address
+   * names by its saved id (`sections.<rowId>.body`) and the form by its
+   * position (`sections.1.body`). It names the same field however the rows are
+   * reordered, so key anything that must stay with the field by this.
+   *
+   * @experimental
+   */
+  fieldAddress?: string;
+  /**
+   * For a field below the top level: where it sits, in words an author reads,
+   * each container's label and each row's title as the form's row header
+   * shows it, then the field's label (`Sections · Hero banner · Body`).
+   * Absent for a top-level field.
+   *
+   * @experimental
+   */
+  fieldLocation?: string;
+  /**
+   * For a field inside a repeater's row: where its address names it in a copy
+   * of the document's values — the values as stored, a recovery point, or,
+   * given none, the form's own values at the moment of asking — finding the
+   * row by its id wherever it now stands, or `undefined` where that row is
+   * not there. Ask it at the moment of writing and write only where it
+   * answers, never through a path read earlier: a row that moved since would
+   * put the value in another row. Absent where the field sits in no row, and
+   * `fieldPath` names it in every copy.
+   *
+   * @experimental
+   */
+  fieldPathIn?: (values?: Record<string, unknown>) => string | undefined;
 }
+
+/**
+ * @experimental What a plugin tells the editor its document came to, after a
+ * replaced action or a panel section acted on it: `"deleted"` leaves for the
+ * collection's list, as the built-in Delete does; `"changed"` reads the
+ * document again, so the editor shows what the plugin wrote.
+ */
+export type DocumentChangeResult = "deleted" | "changed";
+
+/**
+ * @experimental Props passed to the component a plugin opens in place of a
+ * built-in document action (`views[slug].documentActions`).
+ *
+ * Mounted when the author chooses the action and unmounted when it calls
+ * `close`, so a dialog renders open from the start.
+ */
+export interface DocumentActionReplacementProps {
+  /** Which action the author chose. */
+  action: OverridableDocumentAction;
+  /** The collection's slug. */
+  collectionSlug: string;
+  /** The entry's id. */
+  entryId: string;
+  /**
+   * What holds the document right now, kept current while the component is
+   * open. `readOnly` covers its fields: a colleague's claim, a past version
+   * on screen, a reader's page, the editor readying the document.
+   * `actionsDisabled` covers a plugin's own writes, as it does the built-in
+   * Delete: a colleague's claim, a past version, a collection removed from
+   * code, the editor readying it. A reader's page alone does not hold them;
+   * the plugin's route judges its own permission.
+   */
+  documentLock: DocumentLockGates;
+  /**
+   * Whether the document may be written at this instant. Ask it immediately
+   * before the write, after anything awaited: the document can change hands
+   * while a dialog is open, and the editor's own Delete asks the same.
+   */
+  mayWrite: () => boolean;
+  /**
+   * Close it, with what it came to: `"deleted"` or `"changed"` (see
+   * `DocumentChangeResult`), or nothing when the author backed out.
+   */
+  close: (result?: DocumentChangeResult) => void;
+}
+
+/**
+ * @experimental Props passed to a section a plugin adds to the document panel
+ * (`views[slug].panelSections`). The admin draws the section's heading and
+ * frame; this draws what is under them.
+ */
+export interface DocumentPanelSectionProps {
+  /** The collection's slug. */
+  collectionSlug: string;
+  /** The entry's id. */
+  entryId: string;
+  /**
+   * What holds the document right now, the pair a custom edit view is given:
+   * `readOnly` as the fields are held (a colleague's claim, a past version, a
+   * reader's page, the editor readying the document), and `actionsDisabled`
+   * as the built-in Delete is (a colleague's claim, a past version, a
+   * collection removed from code, the editor readying it). A section that
+   * writes holds its writes while `actionsDisabled`.
+   */
+  documentLock: DocumentLockGates;
+  /**
+   * Whether the document may be written at this instant: ask it immediately
+   * before a write, after anything awaited.
+   */
+  mayWrite: () => boolean;
+  /**
+   * Tell the editor the section changed the document: `"deleted"` leaves for
+   * the collection's list, `"changed"` reads the document again.
+   */
+  documentChanged: (result: DocumentChangeResult) => void;
+}
+
+/**
+ * @experimental Props passed to a side panel section a plugin declares at an
+ * edit page's place (`kind: "sidebarSection"`): the place's `context` and
+ * `entry`, as every contributed component receives them, and on a collection
+ * entry's page also the document's own handles that a section added through
+ * `views[slug].panelSections` is given. One component written against the
+ * place's props works on both edit pages; on a collection entry's page it may
+ * also act on the document.
+ */
+export type SidebarSectionProps =
+  | (PlaceContributionProps<"collection.edit"> & DocumentPanelSectionProps)
+  | PlaceContributionProps<"single.edit">;
 
 /**
  * Props passed to injection point components (BeforeListTable, etc.).
@@ -504,7 +629,11 @@ export async function autoRegisterPluginComponents(
     }
   }
 
-  await Promise.all(registrationPromises);
+  // Every attempt ends here, either way, so a surface waiting on one of these
+  // modules learns whether its component arrived or never will.
+  await Promise.all(registrationPromises).finally(() => {
+    markModulesSettled(modulePaths);
+  });
 }
 
 /**
@@ -516,4 +645,5 @@ export async function autoRegisterPluginComponents(
  */
 export function resetAutoRegistration(): void {
   attemptedModules.clear();
+  resetSettledModules();
 }

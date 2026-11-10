@@ -105,7 +105,42 @@ const globalForInit = globalThis as unknown as {
   __nextly_cachedInstance?: Nextly | null;
   __nextly_drizzleVersionChecked?: boolean;
   __nextly_initPromise?: Promise<Nextly> | null;
+  /** The work the newest start left running after it resolved. */
+  __nextly_postInitTasks?: Promise<void> | null;
+  /**
+   * The complete options of a start that failed, until a start succeeds, so
+   * `getCachedNextly` can start Nextly again with them (the database down,
+   * say): without them a worker whose only start failed stays unusable until
+   * it restarts, refusing every read as "called before initialization". The
+   * whole options, not the config alone, so a retry keeps a custom adapter,
+   * logger, image processor or service overrides the first start was given.
+   */
+  __nextly_failedStartOptions?: GetNextlyOptions;
+  /**
+   * How the app starts Nextly, registered by its `cached-read.ts` through
+   * `registerNextlyStart`. Run by `getCachedNextly` only when a read finds
+   * nothing started, nothing starting and no failed start to retry. It is how
+   * the app starts, not state, so `shutdownNextly` leaves it registered.
+   */
+  __nextly_start?: () => Promise<Nextly>;
+  /**
+   * Whether `shutdownNextly` stopped Nextly and no explicit `getNextly` has
+   * started it since. While stopped, a read never runs the registered start:
+   * a late read during teardown (a request or task still in flight) would
+   * otherwise reopen the database and plugins just shut down.
+   */
+  __nextly_stopped?: boolean;
 };
+
+/**
+ * Settles once the work the newest `getNextly()` start left running after it
+ * resolved has finished: the post-initialisation tasks it does not wait for.
+ * Never rejects, since each task catches its own errors. Internal, for tests
+ * that judge everything a start does; not part of the package's exports.
+ */
+export async function startSettled(): Promise<void> {
+  await globalForInit.__nextly_postInitTasks;
+}
 
 // ============================================================
 // Instance Construction
@@ -139,6 +174,7 @@ function buildNextlyInstance(
     findSingle: directAPI.findSingle.bind(directAPI),
     updateSingle: directAPI.updateSingle.bind(directAPI),
     findSingles: directAPI.findSingles.bind(directAPI),
+    publicSiteSettings: directAPI.publicSiteSettings.bind(directAPI),
 
     // Authentication methods
     login: directAPI.login.bind(directAPI),
@@ -280,6 +316,10 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   // with no pointer back to the cause. Warn loudly ONCE with the fix
   // command instead. (Warn, not throw: the mismatch only bites when the
   // app's own copy is actually imported.)
+  // An explicit start ends a shutdown: reads may run the registered start
+  // again once this one is made.
+  globalForInit.__nextly_stopped = false;
+
   if (!globalForInit.__nextly_drizzleVersionChecked) {
     globalForInit.__nextly_drizzleVersionChecked = true;
     const mismatch = checkConsumerDrizzleVersion(process.cwd());
@@ -378,28 +418,33 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         );
         consoleLogger.info(`  - Full-text search: ${capabilities.supportsFts}`);
 
-        // F8 PR 6: drift check. First-run static-table setup already
-        // ran inside registerServices (see first-run.ts). This path
-        // only logs a single warning when config has drifted from
-        // the live schema — it does NOT auto-apply (real apply goes
-        // through HMR or `nextly db:sync` which both have a TTY).
+        // F8 PR 6: drift check, in a development start only. First-run
+        // static-table setup already ran inside registerServices (see
+        // first-run.ts). This path only logs a single warning when config
+        // has drifted from the live schema — it does NOT auto-apply (real
+        // apply goes through HMR or `nextly db:sync` which both have a TTY).
+        // A production start compares nothing with the live schema: it reads
+        // every collection's table to do so, and the deploy step that runs
+        // `nextly migrate` is what brings the two together there.
         // The drift check itself is failure-safe; we don't wrap a
         // try/catch around getService("config") so a real DI bug
         // crashes loudly instead of being masked.
-        const config = getService("config");
-        const driftLogger = {
-          debug: (msg: string) => consoleLogger.debug(msg),
-          info: (msg: string) => consoleLogger.info(msg),
-          warn: (msg: string) => consoleLogger.warn(msg),
-          error: (msg: string) => consoleLogger.error(msg),
-        };
-        // Reduced by the drift check's own helper, which carries every
-        // attribute that changes a table (status, declared indexes).
-        await runDriftCheck({
-          adapter,
-          collections: driftCheckCollections(config.collections ?? []),
-          logger: driftLogger,
-        });
+        if (process.env.NODE_ENV === "development") {
+          const config = getService("config");
+          const driftLogger = {
+            debug: (msg: string) => consoleLogger.debug(msg),
+            info: (msg: string) => consoleLogger.info(msg),
+            warn: (msg: string) => consoleLogger.warn(msg),
+            error: (msg: string) => consoleLogger.error(msg),
+          };
+          // Reduced by the drift check's own helper, which carries every
+          // attribute that changes a table (status, declared indexes).
+          await runDriftCheck({
+            adapter,
+            collections: driftCheckCollections(config.collections ?? []),
+            logger: driftLogger,
+          });
+        }
 
         // Boot-time auto-apply for code-first schema changes (dev only).
         // Shared with `route-handler/auth-handler.ts:ensureServicesInitialized`
@@ -433,7 +478,8 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // and the like) run in the background so that getNextly() returns as
         // soon as the database is ready. Each is idempotent and catches its own
         // errors.
-        void runPostInitTasks();
+        // Kept, so `startSettled` can tell when this work has finished.
+        globalForInit.__nextly_postInitTasks = runPostInitTasks();
       } else {
         // Registered by the request-path boot, which may still be seeding: wait
         // for it, so this boot does not serve before the roles are written.
@@ -465,8 +511,40 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   // calls that arrive while we are still in registerServices() will join
   // this Promise rather than starting a new one.
   globalForInit.__nextly_initPromise = initPromise;
+  // A failed start leaves its complete options for `getCachedNextly` to
+  // start again with; a start that succeeds clears them. Observed on a branch
+  // of its own, so the rejection still reaches every caller awaiting
+  // `initPromise`.
+  initPromise.then(
+    () => {
+      globalForInit.__nextly_failedStartOptions = undefined;
+      globalForInit.__nextly_stopped = true;
+    },
+    () => {
+      globalForInit.__nextly_failedStartOptions = options;
+    }
+  );
 
   return initPromise;
+}
+
+/**
+ * Registers how the app starts Nextly, for a read that finds it not started.
+ *
+ * `getCachedNextly` runs `start` only when nothing has started, nothing is
+ * starting and no failed start is left to retry, so nothing starts eagerly:
+ * an app page that calls `getNextly` with its own options first is the start
+ * that counts. It exists for a read made before anything started Nextly,
+ * such as a root layout's `<SiteCode>` on `/_not-found` while `next build`
+ * prerenders, where `instrumentation.ts` does not run. An app's
+ * `src/nextly/cached-read.ts` registers `() => getNextly({ config })`; an app
+ * that passes `getNextly` more than its config passes the same options here.
+ * A later registration replaces an earlier one.
+ *
+ * @public
+ */
+export function registerNextlyStart(start: () => Promise<Nextly>): void {
+  globalForInit.__nextly_start = start;
 }
 
 /**
@@ -541,6 +619,28 @@ export async function getCachedNextly(): Promise<Nextly> {
     const instance = buildNextlyInstance(getDirectAPI());
     globalForInit.__nextly_cachedInstance = instance;
     return instance;
+  }
+
+  // A start was made and failed, leaving nothing to read and nothing in
+  // flight: start again with the same complete options, so a worker recovers
+  // once what failed it (the database, say) is back, rather than refusing
+  // every read until it restarts. A start that fails again rejects with its
+  // own error, which says what is wrong.
+  const failedStart = globalForInit.__nextly_failedStartOptions;
+  if (failedStart !== undefined) {
+    return getNextly(failedStart);
+  }
+
+  // Nothing has started: start Nextly the way the app registered, so a read
+  // made before any page started it (the root layout's `<SiteCode>` on
+  // `/_not-found` while `next build` prerenders, where instrumentation does
+  // not run) finds it starting. Only here, after every other path, so an app
+  // page that calls `getNextly` with its own options first is the start that
+  // counts.
+  // Not after a shutdown, until the app starts Nextly again itself.
+  const start = globalForInit.__nextly_start;
+  if (start !== undefined && globalForInit.__nextly_stopped !== true) {
+    return start();
   }
 
   throw NextlyError.configuration({
@@ -656,6 +756,9 @@ export function createRegister(
  * ```
  */
 export async function shutdownNextly(): Promise<void> {
+  // A shut-down process is not one to start again on its next read. The
+  // registered start stays: it says how the app starts, not that it did.
+  globalForInit.__nextly_failedStartOptions = undefined;
   if (globalForInit.__nextly_cachedInstance) {
     await globalForInit.__nextly_cachedInstance.shutdown();
   }

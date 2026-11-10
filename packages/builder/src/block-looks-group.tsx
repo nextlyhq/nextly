@@ -28,6 +28,7 @@ import { blockLabel } from "./inserter";
 import { LookSpecimen } from "./look-tiles-view";
 import {
   sharedStyleReachSentence,
+  type BlocksOnThisPage,
   type SharedStyleReach,
 } from "./shared-style-library";
 
@@ -42,6 +43,11 @@ export interface BlockLooksGroupProps {
   readonly onEdit?: (look: LookKey) => void;
   /** A worn look's reach, as the tab's usage read has it, or `undefined`. */
   readonly reachOf: (row: BlockLookRow) => SharedStyleReach | undefined;
+  /**
+   * The open page's blocks wearing a worn look, as the shared styles count
+   * theirs: the page's unsaved blocks are not in the site's index yet.
+   */
+  readonly blocksOf: (row: BlockLookRow) => BlocksOnThisPage | undefined;
   /** A reach drawn as the shared styles' counts are. */
   readonly chip: (reach: SharedStyleReach) => React.ReactNode;
 }
@@ -59,6 +65,7 @@ export function BlockLooksGroup({
   editing,
   onEdit,
   reachOf,
+  blocksOf,
   chip,
 }: BlockLooksGroupProps): React.JSX.Element | null {
   const headingId = React.useId();
@@ -104,6 +111,7 @@ export function BlockLooksGroup({
                       />
                     }
                     reach={row.own ? undefined : reachOf(row)}
+                    blocks={row.own ? undefined : blocksOf(row)}
                     chip={chip}
                   />
                 </li>
@@ -123,6 +131,7 @@ function LookRow({
   onEdit,
   specimen,
   reach,
+  blocks,
   chip,
 }: {
   readonly row: BlockLookRow;
@@ -131,18 +140,16 @@ function LookRow({
   readonly onEdit: ((look: LookKey) => void) | undefined;
   readonly specimen: React.ReactNode;
   readonly reach: SharedStyleReach | undefined;
+  readonly blocks: BlocksOnThisPage | undefined;
   readonly chip: (reach: SharedStyleReach) => React.ReactNode;
 }): React.JSX.Element {
   const description = row.own ? ownLookDescription(title) : undefined;
+  // The look's reach in words, the open page's blocks with the site's
+  // documents, as a shared style's row says its own.
+  const sentence = sharedStyleReachSentence(blocks, reach);
   // The row's name says what the eye reads, the chips included, since the
   // count chip is hidden from assistive technology as a shared style's is.
-  const label = [
-    row.name,
-    row.own ? "own look" : row.className,
-    ...(reach === undefined
-      ? []
-      : [sharedStyleReachSentence(undefined, reach)]),
-  ]
+  const label = [row.name, row.own ? "own look" : row.className, sentence]
     .filter(part => part !== "")
     .join(", ");
   const content = (
@@ -171,8 +178,13 @@ function LookRow({
       )}
     </>
   );
+  const hint = sentence === "" ? undefined : sentence;
   if (onEdit === undefined) {
-    return <div className="nx-vars__row nx-block-looks__row">{content}</div>;
+    return (
+      <div className="nx-vars__row nx-block-looks__row" title={hint}>
+        {content}
+      </div>
+    );
   }
   return (
     <button
@@ -180,6 +192,7 @@ function LookRow({
       className="nx-vars__row nx-block-looks__row"
       aria-pressed={chosen}
       aria-label={label}
+      title={hint}
       aria-description={description}
       data-block-look={row.id}
       onClick={() => onEdit({ id: row.id, blockType: row.blockType })}

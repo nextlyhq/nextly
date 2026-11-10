@@ -12,6 +12,7 @@
 import {
   DEFINITION_ACTION_KINDS,
   PAGE_ACTION_KINDS,
+  TEMPLATE_ACTION_KINDS,
 } from "@nextlyhq/builder/ops";
 import { describe, expect, it } from "vitest";
 
@@ -19,6 +20,7 @@ import {
   componentFacts,
   compositionManifestSchema,
   manifestActions,
+  manifestNamedQuery,
   MANIFEST_FORMAT_VERSION,
   type CompositionManifest,
 } from "./composition-manifest";
@@ -36,11 +38,13 @@ function manifestWith(
       components: "components",
       componentField: "content",
       layouts: "layouts",
+      templates: "templates",
     },
     patterns: tier,
     components: { ...tier, items: [component] },
     layouts: { ...tier, defaultLayout: null },
     actions: manifestActions(),
+    namedQueries: [],
   } satisfies Record<keyof CompositionManifest, unknown>;
 }
 
@@ -109,6 +113,31 @@ describe("the manifest schema", () => {
     ).toBe(true);
   });
 
+  it("parses a manifest from a server that names no templates collection", () => {
+    // A server from before the key existed sends none; the format version is
+    // the same, so a client must still read the rest of the manifest.
+    const manifest = manifestWith(card);
+    const { templates: _templates, ...withoutTemplates } =
+      manifest.collections as Record<string, unknown>;
+    const parsed = compositionManifestSchema.safeParse({
+      ...manifest,
+      collections: withoutTemplates,
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.collections.templates).toBeUndefined();
+  });
+
+  it("refuses a templates collection that is present but not a slug", () => {
+    // Control: optional, not unchecked.
+    const manifest = manifestWith(card);
+    expect(
+      compositionManifestSchema.safeParse({
+        ...manifest,
+        collections: { ...manifest.collections, templates: 7 },
+      }).success
+    ).toBe(false);
+  });
+
   it("requires each component's variants, even when it has none", () => {
     const { variants: _variants, ...withoutVariants } = card;
     expect(
@@ -123,11 +152,116 @@ describe("the manifest schema", () => {
   });
 });
 
+describe("the manifest's named queries", () => {
+  const query = {
+    name: "events.upcoming",
+    label: "Upcoming events",
+    params: { type: "object", properties: {} },
+    rows: { key: "id", fields: [{ name: "id", type: "text" }] },
+    total: false,
+  };
+  const card = { id: "c", title: "Card", fields: [], slots: [], variants: [] };
+
+  it("accepts a query listed by its declaration", () => {
+    expect(
+      compositionManifestSchema.safeParse({
+        ...manifestWith(card),
+        namedQueries: [
+          query,
+          { ...query, name: "b", rows: { collection: "posts" } },
+        ],
+      }).success
+    ).toBe(true);
+  });
+
+  it("lists a group's own row fields, however deep, and accepts them", () => {
+    const listed = manifestNamedQuery({
+      name: "pages.seo",
+      label: "Pages with SEO",
+      reads: { collections: ["pages"] },
+      rows: {
+        key: "id",
+        fields: [
+          { name: "id", type: "text" },
+          {
+            name: "seo",
+            type: "group",
+            fields: [
+              {
+                name: "image",
+                type: "group",
+                fields: [{ name: "alt", type: "text" }],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(listed.rows).toEqual({
+      key: "id",
+      fields: [
+        { name: "id", type: "text" },
+        {
+          name: "seo",
+          type: "group",
+          fields: [
+            {
+              name: "image",
+              type: "group",
+              fields: [{ name: "alt", type: "text" }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(
+      compositionManifestSchema.safeParse({
+        ...manifestWith(card),
+        namedQueries: [listed],
+      }).success
+    ).toBe(true);
+    // A nested field is held to the same shape as a top-level one.
+    expect(
+      compositionManifestSchema.safeParse({
+        ...manifestWith(card),
+        namedQueries: [
+          {
+            ...query,
+            rows: {
+              key: "id",
+              fields: [{ name: "seo", type: "group", fields: [{ name: "" }] }],
+            },
+          },
+        ],
+      }).success
+    ).toBe(false);
+  });
+
+  it("refuses a query carrying anything but its declaration, such as its run function", () => {
+    expect(
+      compositionManifestSchema.safeParse({
+        ...manifestWith(card),
+        namedQueries: [{ ...query, run: "() => {}" }],
+      }).success
+    ).toBe(false);
+  });
+});
+
 describe("the manifest's actions", () => {
   it("lists every kind each action takes, with a request schema naming its fields", () => {
-    const [page, definition] = manifestActions();
+    const [page, definition, template] = manifestActions();
     expect(page?.kinds).toEqual(PAGE_ACTION_KINDS);
     expect(definition?.kinds).toEqual(DEFINITION_ACTION_KINDS);
+    expect(template?.kinds).toEqual(TEMPLATE_ACTION_KINDS);
+    expect(template?.path).toBe("/templates/actions");
+    const templateRequest = template?.request as {
+      properties: Record<string, { oneOf?: unknown[] }>;
+      required: string[];
+    };
+    expect(templateRequest.required).toEqual(["action"]);
+    expect(templateRequest.properties.action?.oneOf).toHaveLength(
+      TEMPLATE_ACTION_KINDS.length
+    );
 
     const pageRequest = page?.request as {
       properties: Record<string, { oneOf?: unknown[] }>;
@@ -162,6 +296,76 @@ describe("the manifest's actions", () => {
     expect(definitionRequest.required).toEqual(["action"]);
     expect(definitionRequest.properties.action?.oneOf).toHaveLength(
       DEFINITION_ACTION_KINDS.length
+    );
+  });
+});
+
+/**
+ * The operations Dynamic Data is built from, written out by hand rather than
+ * read off the builder's kind lists: the manifest is built from those lists,
+ * so a check derived from them agrees with the manifest whatever either
+ * holds, and a kind dropped from both passes it. Removing or renaming one of
+ * these kinds is a change a client sees, and it fails here.
+ */
+const DYNAMIC_DATA_OPS = {
+  pageAction: [
+    "set-list-query",
+    "set-conditions",
+    "bind-prop",
+    "unbind-prop",
+    "place-entry-content",
+    "set-entry-content-field",
+  ],
+  templateAction: [
+    "create-template",
+    "publish-template",
+    "give-entry-design",
+    "remove-entry-design",
+    "delete-template",
+    "set-template-address",
+  ],
+} as const;
+
+/** The `kind` each branch of an advertised request's `action` accepts. */
+function advertisedKinds(
+  request: Readonly<Record<string, unknown>>
+): unknown[] {
+  const action = (
+    request as { properties?: { action?: { oneOf?: unknown[] } } }
+  ).properties?.action;
+  return (action?.oneOf ?? []).map(
+    branch =>
+      (branch as { properties?: { kind?: { const?: unknown } } }).properties
+        ?.kind?.const
+  );
+}
+
+describe("the manifest lists every Dynamic Data operation", () => {
+  it.each(
+    Object.entries(DYNAMIC_DATA_OPS).flatMap(([name, kinds]) =>
+      kinds.map(kind => [name, kind] as const)
+    )
+  )(
+    "%s %s: listed in its kinds and accepted by its request schema",
+    (name, kind) => {
+      const action = manifestActions().find(listed => listed.name === name);
+      expect(action, `no ${name} in the manifest`).toBeDefined();
+      expect(action?.kinds).toContain(kind);
+      // A branch whose `kind` is this kind's constant: a client validating
+      // against the advertised schema would refuse the op without one.
+      expect(advertisedKinds(action?.request ?? {})).toContain(kind);
+    }
+  );
+
+  it("reads each advertised branch's kind, so a missing one is seen", () => {
+    // The control for the helper above: it finds every branch's kind, so an
+    // empty answer cannot pass for a schema that lists the op.
+    const page = manifestActions().find(listed => listed.name === "pageAction");
+    const kinds = advertisedKinds(page?.request ?? {});
+    expect(kinds).toHaveLength(page?.kinds.length ?? -1);
+    expect(kinds).toEqual(page?.kinds);
+    expect(advertisedKinds({ properties: { action: { oneOf: [] } } })).toEqual(
+      []
     );
   });
 });

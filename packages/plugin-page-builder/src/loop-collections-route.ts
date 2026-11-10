@@ -237,7 +237,7 @@ export interface LoopCollectionsReads {
 }
 
 /** The meta of an answer that is the whole list on one page. */
-function onePage(total: number): PaginationMeta {
+export function onePage(total: number): PaginationMeta {
   return {
     total,
     page: 1,
@@ -288,13 +288,20 @@ async function collectionItem(
         : [];
     }),
     declared: [...(fields?.declared ?? [])],
+    // Every key the engine reads to judge a list, so the inspector's
+    // judgement of a time of day or a plugin's type is the save's.
     readable: (fields?.readable ?? []).map(shape => ({
       name: shape.name,
+      // Named as the offered fields are, so a condition on a field no list
+      // filters by reads as the admin calls it.
+      label: fieldWordsOf(shape.name, declared.get(shape.name)),
       type: shape.type,
       ...(shape.hasMany === true ? { hasMany: true as const } : {}),
       ...(shape.relationTo === undefined
         ? {}
         : { relationTo: shape.relationTo }),
+      ...(shape.timeOnly === true ? { timeOnly: true as const } : {}),
+      ...(shape.storage === undefined ? {} : { storage: shape.storage }),
     })),
   };
 }

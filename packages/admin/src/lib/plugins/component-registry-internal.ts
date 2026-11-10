@@ -53,6 +53,68 @@ export function writeComponent(
   component: ComponentType<never>
 ): void {
   componentRegistry.set(path, component as ComponentType);
+  // A surface drawn before this component arrived draws it now.
+  registryChanged();
+}
+
+/**
+ * The plugin admin modules whose loading has ended, either way: what was
+ * going to register from them has, so a component of theirs still missing
+ * is missing rather than on its way.
+ */
+const settledModules = new Set<string>();
+
+/** Who to tell when a component arrives or a module's loading ends. */
+const registryListeners = new Set<() => void>();
+
+/** Bumped on every such change, as the snapshot a React reader compares. */
+let registryVersion = 0;
+
+function registryChanged(): void {
+  registryVersion += 1;
+  for (const listener of registryListeners) listener();
+}
+
+/** Records that loading these plugin admin modules has ended. */
+export function markModulesSettled(modules: Iterable<string>): void {
+  for (const module of modules) settledModules.add(module);
+  registryChanged();
+}
+
+/** The module a component path loads from: what precedes its `#`. */
+function moduleOf(path: ComponentPath): string | undefined {
+  const hash = path.indexOf("#");
+  return hash === -1 ? undefined : path.slice(0, hash);
+}
+
+/**
+ * Whether a component path is settled: registered, or its module's loading
+ * has ended, so a surface can tell "still loading" from "not there". A path
+ * naming no module is settled, as nothing would load it.
+ */
+export function componentSettled(path: ComponentPath): boolean {
+  if (componentRegistry.has(path)) return true;
+  const module = moduleOf(path);
+  return module === undefined || settledModules.has(module);
+}
+
+/** Subscribes to registry changes, for `useSyncExternalStore`. */
+export function subscribeToRegistry(listener: () => void): () => void {
+  registryListeners.add(listener);
+  return () => {
+    registryListeners.delete(listener);
+  };
+}
+
+/** The registry's current version, for `useSyncExternalStore`. */
+export function registryVersionNow(): number {
+  return registryVersion;
+}
+
+/** Forgets which modules have settled, with the registry, for tests. */
+export function resetSettledModules(): void {
+  settledModules.clear();
+  registryChanged();
 }
 
 /**

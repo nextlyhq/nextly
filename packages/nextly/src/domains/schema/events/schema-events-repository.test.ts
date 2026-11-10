@@ -18,6 +18,27 @@ describe("SchemaEventsRepository — C3 additions", () => {
     repo = new SchemaEventsRepository(testDb.db, "sqlite");
   });
 
+  it("records an app migration's removal, read back apart from its outcomes", async () => {
+    await repo.insertEvent({
+      eventType: "file_apply",
+      status: "applied",
+      source: "cli-migrate",
+      filename: "001_x.sql",
+      sha256: "a".repeat(64),
+      startedAt: new Date(1),
+    });
+    await repo.recordRemoval({ filename: "001_x.sql", sha256: "a".repeat(64) });
+
+    const removals = await repo.listFileRemovals();
+    expect(
+      removals.map(r => [r.eventType, r.status, r.filename, r.sha256])
+    ).toEqual([["file_removed", "recorded", "001_x.sql", "a".repeat(64)]]);
+    // The removal is no outcome: the file's outcomes are its applied row alone.
+    expect(
+      (await repo.listFileApplies()).map(r => [r.filename, r.status])
+    ).toEqual([["001_x.sql", "applied"]]);
+  });
+
   it("findFileApplies returns all file_apply rows for a filename", async () => {
     await repo.insertEvent({
       eventType: "file_apply",

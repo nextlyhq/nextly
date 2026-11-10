@@ -88,7 +88,9 @@ function filterProblem(declared: unknown): string | undefined {
  * never have made is refused: a collection may already exist under an address
  * the rule now refuses for new ones, and a filter may name it.
  */
-function collectionsScopeProblem(collections: unknown): string | undefined {
+export function collectionsScopeProblem(
+  collections: unknown
+): string | undefined {
   if (collections === undefined) return undefined;
   if (!Array.isArray(collections)) {
     return "its `collections` is not a list of collection slugs";

@@ -60,15 +60,16 @@ import {
   isPlainRecord,
   migrateDocument,
   resolveComponentInstances,
+  SITE_SETTING_FIELD_SHAPES,
 } from "@nextlyhq/blocks-engine";
 import type {
-  BindingFieldShape,
   BindingIssue,
   BindingRun,
   BindingSchemaSource,
   BlockDocument,
   BoundValues,
   ComponentLookup,
+  ConditionIssue,
   DefinitionsById,
   DocumentLimits,
   MigratedNode,
@@ -78,11 +79,19 @@ import type {
   UnresolvedInstance,
 } from "@nextlyhq/blocks-engine";
 
-import type { BlocksSiteSettings, PageBindings } from "./context";
+import { queryRowFields } from "./blocks/named-read";
+import type { NamedQueryHost, PageBindings } from "./context";
 import type { BlockResolver } from "./resolver";
 import { migrationSourceFor } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
-import { pruneHiddenNodes } from "./visibility";
+import {
+  entryConditionedIn,
+  gateByConditions,
+  markByConditions,
+  pruneHiddenNodes,
+  type ConditionGate,
+  type EntryJudgement,
+} from "./visibility";
 
 export interface PrepareDocumentArgs {
   /** Where block definitions come from. */
@@ -110,23 +119,22 @@ export interface PrepareDocumentArgs {
    * the bound stage is the stage before it.
    */
   bindings?: BindingRun;
+  /**
+   * Keep the blocks a list's item decides, for each list to judge against
+   * the items it draws, holding back every other conditioned block, as an
+   * editor drawing a page with its conditions applied does. Absent, every
+   * conditioned block is held back until a route decides them.
+   */
+  itemsDecided?: boolean;
+  /**
+   * Judge the page's conditions for an entry as an editor shows it to a
+   * visitor reading that entry: each block judged as the route's gate judges
+   * it, one whose conditions hold drawn with them lifted, one they hide
+   * replaced by the judgement's own node, and one a list's item decides kept
+   * for the list. Wins over {@link itemsDecided}, which it includes.
+   */
+  entryJudged?: EntryJudgement;
 }
-
-/**
- * The type of each site setting a page may bind, keyed by the setting, so a
- * setting added to the allowlist cannot be left without a shape.
- */
-const SITE_FIELD_TYPES: { readonly [K in keyof BlocksSiteSettings]: string } = {
-  applicationName: "text",
-  siteUrl: "url",
-  logoUrl: "url",
-  timezone: "text",
-};
-
-/** The site settings' field shapes, derived from the table above. */
-const SITE_FIELD_SHAPES: readonly BindingFieldShape[] = Object.entries(
-  SITE_FIELD_TYPES
-).map(([name, type]) => ({ name, type }));
 
 /**
  * One render's binding pass over a page's bindings, in the page's language.
@@ -137,12 +145,27 @@ const SITE_FIELD_SHAPES: readonly BindingFieldShape[] = Object.entries(
 export function pageBindingRun(
   bindings: PageBindings,
   locale: string | undefined,
-  resolver: BlockResolver
+  resolver: BlockResolver,
+  /**
+   * The render's named queries, whose declared rows a list item's bindings
+   * are checked against: the same lookup the list runs its query through.
+   */
+  namedQueries?: Pick<NamedQueryHost, "definitionOf">
 ): BindingRun {
   const shapes = bindings.fieldShapes;
   const schema: BindingSchemaSource = {
-    fieldsOf: ref =>
-      "site" in ref ? SITE_FIELD_SHAPES : shapes?.fieldsOf(ref),
+    fieldsOf: ref => {
+      // The settings a page is handed, typed by the engine's one table.
+      if ("site" in ref) return SITE_SETTING_FIELD_SHAPES;
+      // A named query's rows with their own field schema: the fields it
+      // declares, as the process registry holds it.
+      if ("query" in ref) {
+        return queryRowFields(namedQueries, ref.query, slug =>
+          shapes?.fieldsOf({ collection: slug })
+        );
+      }
+      return shapes?.fieldsOf(ref);
+    },
   };
   return createBindingRun({
     sources: {
@@ -157,6 +180,9 @@ export function pageBindingRun(
     schema,
     ...(locale === undefined ? {} : { locale }),
     ...(bindings.timeZone === undefined ? {} : { timeZone: bindings.timeZone }),
+    ...(bindings.mediaCollection === undefined
+      ? {}
+      : { mediaCollection: bindings.mediaCollection }),
     props: resolver,
   });
 }
@@ -379,8 +405,28 @@ export function prepareDocumentReadStages(
   document: BlockDocument,
   args: PrepareDocumentArgs
 ): DocumentReadStages | null {
-  const before = stagesBeforeBindings(document, args);
+  const before = stagesBeforeBindings(document, args, decideFor(args));
   return before === null ? null : withBindings(before, args);
+}
+
+/** The gating a reading asks for, where it asks for one of its own. */
+function decideFor(
+  args: PrepareDocumentArgs
+): ((migrated: BlockDocument) => BlockDocument) | undefined {
+  const judgement = args.entryJudged;
+  if (judgement !== undefined) {
+    return migrated => markByConditions(migrated, judgement).document;
+  }
+  return args.itemsDecided === true ? itemsKept : undefined;
+}
+
+/**
+ * The gating an editor applies while a list's items are judged: no entry is
+ * known, so a block reading it is held back, and one a list's item decides is
+ * kept for the list.
+ */
+function itemsKept(migrated: BlockDocument): BlockDocument {
+  return gateByConditions(migrated, {}).document;
 }
 
 /** The stages up to and including address repair: none depends on bindings. */
@@ -397,7 +443,14 @@ function limitsOf(args: PrepareDocumentArgs): DocumentLimits {
 /** Passes 1 to 6: the envelope guard, repair, composition, migration, gating and address repair. */
 function stagesBeforeBindings(
   document: BlockDocument,
-  args: PrepareDocumentArgs
+  args: PrepareDocumentArgs,
+  /**
+   * The gating pass, once a route knows the entry; absent, every conditioned
+   * block is held back. Given one, a conditioned component instance is
+   * expanded too, carrying its conditions onto what replaces it, so it shows
+   * where its conditions hold.
+   */
+  decide?: (migrated: BlockDocument) => BlockDocument
 ): StagesBeforeBindings | null {
   if (
     typeof document !== "object" ||
@@ -415,7 +468,7 @@ function stagesBeforeBindings(
     args.definitions === undefined || args.definitions.size === 0
       ? EMPTY_DEFINITIONS
       : repairingLookup(args.definitions, limits),
-    { limits }
+    decide === undefined ? { limits } : { limits, conditioned: "carry" }
   );
   const { doc, rewritten } = migrateDocument(
     composed.document,
@@ -429,7 +482,7 @@ function stagesBeforeBindings(
   // would describe different pages.
   // Held rather than inlined: the caller compares stages by REFERENCE, and
   // running the pass twice would hand it a different object for the same state.
-  const gated = pruneHiddenNodes(doc);
+  const gated = decide === undefined ? pruneHiddenNodes(doc) : decide(doc);
   const visible = dedupeNodeIds(gated, node =>
     rendersOwnMarkup(node, args.resolver)
   );
@@ -509,6 +562,11 @@ interface PreparedRecord {
   readonly definitions: DefinitionsById | undefined;
   readonly limits: DocumentLimits;
   readonly stages: StagesBeforeBindings;
+  /**
+   * The entry-scoped blocks kept because their conditions held for the page's
+   * entry, by id; empty for a document gated without an entry.
+   */
+  readonly held: ReadonlySet<string>;
 }
 
 /** Every prepared document this module made, and nothing else. */
@@ -544,8 +602,91 @@ export function prepareDocument(
     definitions: definitionsKey(args.definitions),
     limits: limitsOf(args),
     stages,
+    held: NOTHING_HELD,
   });
   return prepared;
+}
+
+/** Shared so a document gated without an entry allocates no set. */
+const NOTHING_HELD: ReadonlySet<string> = new Set();
+
+/**
+ * A prepared document gated again by its blocks' visibility conditions, and
+ * what could not be checked.
+ *
+ * @internal Shared by this package's route and renderer.
+ * @experimental
+ */
+export interface RegatedDocument {
+  readonly prepared: PreparedDocument;
+  readonly issues: readonly ConditionIssue[];
+}
+
+/**
+ * Gate a prepared document again, now that the entry its page shows is known.
+ *
+ * {@link prepareDocument} holds every conditioned block back, since nothing
+ * is known yet to decide them. A route that has read the entry calls this to
+ * decide them: from the migrated tree the preparation already holds, so the
+ * page is composed and migrated once, through the same gating, address repair
+ * and placeholder passes, in the same order. `"keep-all"` keeps every
+ * conditioned block, for the reads a route makes before it knows the entry;
+ * such a preparation is for reading, not for drawing, and names none held.
+ *
+ * `null` for a preparation this module did not make.
+ *
+ * @internal Shared by this package's route and renderer.
+ */
+export function regateDocument(
+  prepared: PreparedDocument,
+  gate: ConditionGate | "keep-all"
+): RegatedDocument | null {
+  const record = PREPARED.get(prepared);
+  if (record === undefined) return null;
+  const args: PrepareDocumentArgs = {
+    resolver: record.resolver,
+    limits: record.limits,
+    ...(record.definitions === undefined
+      ? {}
+      : { definitions: record.definitions }),
+  };
+  // From the stored document again, so a conditioned component instance is
+  // composed now that something can decide it, through every pass in the
+  // same order; the decision itself is the gating pass's.
+  let issues: readonly ConditionIssue[] = [];
+  const stages = stagesBeforeBindings(record.document, args, migrated => {
+    const decided = gateByConditions(migrated, gate);
+    issues = decided.issues;
+    return decided.document;
+  });
+  if (stages === null) return null;
+  const visible = stages.deduped;
+  const regated: PreparedDocument = Object.freeze({
+    presented: pruneKnownPlaceholders(visible, record.resolver),
+  });
+  // Read off the tree that is drawn, after address repair: a passing block
+  // that repair dropped as a duplicate must not lend its id to the block
+  // that kept it, which may be one a list's item decides.
+  const held = gate === "keep-all" ? NOTHING_HELD : entryConditionedIn(visible);
+  PREPARED.set(regated, { ...record, stages, held });
+  return { prepared: regated, issues };
+}
+
+/**
+ * The blocks a preparation kept because their conditions held for the
+ * page's entry, by id. The renderer draws these where it would otherwise
+ * hold a conditioned block back; every other conditioned block that reaches
+ * it is one a list's item decides.
+ *
+ * @internal Shared by this package's route and renderer.
+ */
+export function heldConditionsOf(
+  prepared: PreparedDocument | undefined
+): ReadonlySet<string> {
+  return (
+    (prepared === undefined ? undefined : PREPARED.get(prepared))?.held ??
+    NOTHING_HELD
+  );
 }
 
 /**
@@ -561,8 +702,12 @@ export function readStagesFor(
   prepared: PreparedDocument | undefined
 ): DocumentReadStages | null {
   const record = prepared === undefined ? undefined : PREPARED.get(prepared);
+  // A route's preparation gates as the route does; a reading that judges
+  // the page itself, an editor's, never reuses one.
   const reusable =
     record !== undefined &&
+    args.entryJudged === undefined &&
+    args.itemsDecided !== true &&
     record.document === document &&
     record.resolver === args.resolver &&
     record.definitions === definitionsKey(args.definitions) &&
@@ -778,4 +923,18 @@ export function prepareDocumentAsDrawn(
   args: PrepareDocumentArgs
 ): BlockDocument | null {
   return prepareDocumentReadStages(document, args)?.bound ?? null;
+}
+
+/**
+ * Whether a preparation held a conditioned block back, so a route has
+ * conditions to decide once it reads the entry. Read off the gating pass:
+ * it returns its input unchanged when it removed nothing.
+ *
+ * @internal Shared by this package's route and renderer.
+ */
+export function holdsBackConditions(
+  prepared: PreparedDocument | null
+): boolean {
+  const record = prepared === null ? undefined : PREPARED.get(prepared);
+  return record !== undefined && record.stages.gated !== record.stages.migrated;
 }

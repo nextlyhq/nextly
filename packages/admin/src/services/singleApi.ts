@@ -22,7 +22,10 @@ import type {
   ActionResponse,
   MutationResponse,
 } from "../lib/api/response-types";
-import { DOCUMENT_VERSION_KEY } from "../lib/document-version";
+import {
+  everyLanguageBody,
+  type EveryLanguageVersion,
+} from "../lib/document-version";
 
 import type {
   PublishAllLanguageOutcome,
@@ -131,7 +134,7 @@ type SingleApiType = {
   ) => Promise<SingleDocument>;
   readonly publishAllLocales: (
     slug: string,
-    version?: string
+    version?: EveryLanguageVersion
   ) => Promise<{
     id: string;
     status?: string;
@@ -364,8 +367,9 @@ export const singleApi: SingleApiType = {
     /**
      * The version of every language, as a read of every language gives it: a
      * publish of every language is refused when any of them changed since.
+     * Or the overwrite choice, from a caller refused that read.
      */
-    version?: string
+    version?: EveryLanguageVersion
   ): Promise<{
     id: string;
     status?: string;
@@ -381,10 +385,7 @@ export const singleApi: SingleApiType = {
       id: string;
       status?: string;
       languages?: PublishAllLanguageOutcome[];
-    }>(
-      `/singles/${slug}/publish-all`,
-      version ? { [DOCUMENT_VERSION_KEY]: version } : {}
-    );
+    }>(`/singles/${slug}/publish-all`, everyLanguageBody(version));
   },
 
   /**
