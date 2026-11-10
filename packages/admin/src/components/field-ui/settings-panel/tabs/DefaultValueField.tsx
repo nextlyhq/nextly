@@ -15,7 +15,7 @@ import {
 import type { JSX } from "react";
 import { useId, useMemo, useState } from "react";
 
-import type { BuilderField } from "../types";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
 const TEXT_INPUT_TYPES = new Set([
   "text",
