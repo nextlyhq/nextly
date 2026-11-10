@@ -10,11 +10,16 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 import { parseRestRoute } from "../../route-handler/route-parser";
 import {
-  builderDisabledError,
   isBuilderEnabled,
   isBuilderRoute,
   requireBuilderEnabled,
 } from "../builder-access";
+import {
+  builderDisabledError,
+  isProductionRuntime,
+  refuseSchemaChangeInProduction,
+  showBuilderProductionNotice,
+} from "../builder-refusal";
 
 const mockGetHandlerConfig = vi.fn();
 vi.mock("../../route-handler/auth-handler", () => ({
@@ -57,9 +62,21 @@ describe("isBuilderEnabled", () => {
     expect(isBuilderEnabled()).toBe(true);
   });
 
-  it("honours an explicit opt-in over the production default", () => {
+  // Schema reaches production only through migrations, so no setting turns the builder on there.
+  it("stays off in production when the host turns it on", () => {
     process.env.NODE_ENV = "production";
     mockGetHandlerConfig.mockReturnValue(configWithShowBuilder(true));
+    expect(isBuilderEnabled()).toBe(false);
+  });
+
+  it("honours an explicit opt-in outside production", () => {
+    process.env.NODE_ENV = "development";
+    mockGetHandlerConfig.mockReturnValue(configWithShowBuilder(true));
+    expect(isBuilderEnabled()).toBe(true);
+  });
+
+  it("is on in the test environment when the host says nothing", () => {
+    process.env.NODE_ENV = "test";
     expect(isBuilderEnabled()).toBe(true);
   });
 
@@ -154,22 +171,54 @@ describe("isBuilderRoute", () => {
   });
 });
 
-describe("builderDisabledError", () => {
-  it("carries its own code and a 403", () => {
-    const err = builderDisabledError("create-collection");
-    expect(err.code).toBe("BUILDER_DISABLED");
-    expect(err.statusCode).toBe(403);
+describe("isProductionRuntime", () => {
+  it("answers from NODE_ENV as it is at the call, not as it was first read", () => {
+    process.env.NODE_ENV = "production";
+    expect(isProductionRuntime()).toBe(true);
+    process.env.NODE_ENV = "development";
+    expect(isProductionRuntime()).toBe(false);
+    process.env.NODE_ENV = "production";
+    expect(isProductionRuntime()).toBe(true);
   });
 
-  it("names the switch that turns the builder back on", () => {
-    expect(builderDisabledError("create-collection").publicMessage).toContain(
-      "showBuilder"
-    );
+  it.each(["development", "test", ""])("is false under NODE_ENV=%j", value => {
+    process.env.NODE_ENV = value;
+    expect(isProductionRuntime()).toBe(false);
+  });
+});
+
+describe("builderDisabledError", () => {
+  it.each(["production", "turned-off"] as const)(
+    "carries its own code and a 403 (%s)",
+    reason => {
+      const err = builderDisabledError("create-collection", reason);
+      expect(err.code).toBe("BUILDER_DISABLED");
+      expect(err.statusCode).toBe(403);
+    }
+  );
+
+  // In production no switch turns the builder back on, so naming one would send the reader to a
+  // setting that does nothing there.
+  it("in production, names migrations and no switch", () => {
+    const message = builderDisabledError(
+      "create-collection",
+      "production"
+    ).publicMessage;
+    expect(message).toContain("migration");
+    expect(message).not.toContain("showBuilder");
+  });
+
+  it("where showBuilder turned it off, names the switch", () => {
+    expect(
+      builderDisabledError("create-collection", "turned-off").publicMessage
+    ).toContain("showBuilder");
   });
 
   it("keeps the operation out of the response body", () => {
-    const json =
-      builderDisabledError("create-collection").toResponseJSON("req-1");
+    const json = builderDisabledError(
+      "create-collection",
+      "turned-off"
+    ).toResponseJSON("req-1");
     expect(json).toEqual({
       code: "BUILDER_DISABLED",
       message: expect.stringContaining("showBuilder"),
@@ -186,9 +235,91 @@ describe("requireBuilderEnabled", () => {
     );
   });
 
+  it("throws the production refusal in production, even when the host turns the builder on", () => {
+    process.env.NODE_ENV = "production";
+    mockGetHandlerConfig.mockReturnValue(configWithShowBuilder(true));
+    expect(() => requireBuilderEnabled("create-collection")).toThrowError(
+      expect.objectContaining({
+        code: "BUILDER_DISABLED",
+        publicMessage: builderDisabledError("x", "production").publicMessage,
+      })
+    );
+  });
+
+  it("throws the switch's refusal where showBuilder turned it off", () => {
+    process.env.NODE_ENV = "development";
+    mockGetHandlerConfig.mockReturnValue(configWithShowBuilder(false));
+    expect(() => requireBuilderEnabled("create-collection")).toThrowError(
+      expect.objectContaining({
+        code: "BUILDER_DISABLED",
+        publicMessage: builderDisabledError("x", "turned-off").publicMessage,
+      })
+    );
+  });
+
   it("passes where the builder is enabled", () => {
     process.env.NODE_ENV = "development";
     expect(() => requireBuilderEnabled("create-collection")).not.toThrow();
+  });
+});
+
+/**
+ * The refusal for schema saves made in code (the Direct API, a plugin's service): production
+ * alone decides it. `showBuilder` is an admin setting, so it does not reach a save made in code.
+ */
+describe("refuseSchemaChangeInProduction", () => {
+  it.each([true, false, undefined])(
+    "refuses in production whatever showBuilder says (%s)",
+    showBuilder => {
+      process.env.NODE_ENV = "production";
+      mockGetHandlerConfig.mockReturnValue(configWithShowBuilder(showBuilder));
+      expect(() =>
+        refuseSchemaChangeInProduction("fieldGroups.create")
+      ).toThrowError(
+        expect.objectContaining({
+          code: "BUILDER_DISABLED",
+          publicMessage: builderDisabledError("x", "production").publicMessage,
+        })
+      );
+    }
+  );
+
+  it("passes in development even where showBuilder turned the builder off", () => {
+    process.env.NODE_ENV = "development";
+    mockGetHandlerConfig.mockReturnValue(configWithShowBuilder(false));
+    expect(() =>
+      refuseSchemaChangeInProduction("fieldGroups.create")
+    ).not.toThrow();
+  });
+});
+
+describe("showBuilderProductionNotice", () => {
+  it("is owed by a production start that finds showBuilder: true", () => {
+    const notice = showBuilderProductionNotice(
+      configWithShowBuilder(true),
+      true
+    );
+    expect(notice).toContain("showBuilder");
+    expect(notice).toContain("no effect in production");
+    expect(notice).toContain("migrations");
+  });
+
+  it.each([
+    ["a production start with showBuilder false", false, true],
+    ["a production start with showBuilder unset", undefined, true],
+    ["a development start with showBuilder true", true, false],
+  ] as const)("is not owed by %s", (_label, showBuilder, production) => {
+    expect(
+      showBuilderProductionNotice(
+        configWithShowBuilder(showBuilder),
+        production
+      )
+    ).toBeNull();
+  });
+
+  it("is not owed for a config with no admin block", () => {
+    expect(showBuilderProductionNotice({}, true)).toBeNull();
+    expect(showBuilderProductionNotice(null, true)).toBeNull();
   });
 });
 

@@ -974,10 +974,16 @@ export class CollectionMetadataService extends BaseService {
                     (existingCollection.fields as FieldDefinition[]),
                   {
                     hasStatus,
-                    // i18n: re-register the main table with the new localized shape and
-                    // (re)register/drop the companion after the update, so the current process
-                    // resolves them correctly without a restart.
-                    localized: isLocalizedNow,
+                    // i18n: re-register the main table with where its translatable values now
+                    // live and (re)register/drop the companion after the update, so the current
+                    // process resolves them correctly without a restart. Under
+                    // `experimental.perLanguageStorage` they stay per language whatever the toggle
+                    // says, and only each language's own `_status` follows it.
+                    localized: storesPerLanguage({ localized: isLocalizedNow }),
+                    companionStatus: publishesPerLanguage({
+                      localized: isLocalizedNow,
+                      status: hasStatus,
+                    }),
                   }
                 );
               }

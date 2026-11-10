@@ -587,6 +587,10 @@ export async function readCompanionLocaleStatusAllOf(
   const table = companionTable as CompanionTable;
   const byParent = new Map<string, Map<string, string | null>>();
   if (readiness !== "ready" || parentIds.length === 0) return byParent;
+  // A companion built without per-language status has no `_status` column, as an untranslated
+  // entity's under `experimental.perLanguageStorage`, which publishes as a document: no state of
+  // its own per language to read, as `readCompanionLocaleStatus` answers too.
+  if (table._status === undefined) return byParent;
   // Project ONLY the columns this scan needs. A bare `.select()` requests
   // every column of the configured Drizzle table object, which throws a
   // missing-column error when the companion table is behind its metadata (a
