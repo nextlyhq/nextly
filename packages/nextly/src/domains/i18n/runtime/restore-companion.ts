@@ -31,8 +31,12 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { eq } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { heldBackForRestore } from "../../schema/pipeline/kept-scope-fields";
 import { columnsDeclaredBy } from "../../schema/services/field-column-descriptor";
-import { resolveLocalizedFieldNames } from "../classify-fields";
+import {
+  isFieldLocalized,
+  resolveLocalizedFieldNames,
+} from "../classify-fields";
 import type {
   EnablingTransition,
   I18nTransitionKind,
@@ -72,6 +76,8 @@ export interface RestoreCompanionArgs {
    * Fields a plugin's scope holds back from the entity, whose values are
    * restored beside its own. Judged apart from `fields`, each by its own
    * flag, so they never change which of the entity's own fields are restored.
+   * Absent, those the latest configuration fold held back
+   * (`heldBackForRestore`), so every caller restores them alike.
    */
   heldBack?: RestorableField[];
   dialect: SupportedDialect;
@@ -104,9 +110,22 @@ export interface RestoreCompanionArgs {
  */
 export async function restoreDisabledCompanion(
   adapter: CompanionIntrospectAdapter,
-  args: RestoreCompanionArgs,
+  requested: RestoreCompanionArgs,
   onError?: (error: unknown) => void
 ): Promise<boolean> {
+  // A plugin's held-back fields' values go back to the main table too, where
+  // the schema apply kept their columns: left in the companion, switching the
+  // field on again would find an empty column, and the `restored` record
+  // keeps any later pass from copying them.
+  const args: RestoreCompanionArgs = {
+    ...requested,
+    heldBack:
+      requested.heldBack ??
+      heldBackForRestore(requested.kind, {
+        slug: requested.slug,
+        fields: requested.fields,
+      }),
+  };
   const recorded = await readI18nTransitionState(
     args.store,
     args.kind,
@@ -387,13 +406,16 @@ export function fieldsToRestore(
   // fallback for an entity whose own flags were cleared with its translation
   // says nothing about a field the entity no longer declares, and a shared
   // one's companion column is abandoned, its current value on main.
-  const translated = new Set(resolveLocalizedFieldNames(heldBack, true));
+
   // One to a physical column, as the schema keeps them: never one the
   // entity's own fields restore, and of several declarations of a name, in
   // any case, the first translated one, whose values the companion holds.
   const taken = new Set(own.flatMap(field => [...columnsDeclaredBy([field])]));
   const held = heldBack.filter(field => {
-    if (field.localized === false || !translated.has(field.name)) return false;
+    // Each declaration judged on its own, as the companion's own columns are
+    // (`isFieldLocalized`): of two of a name, a password never takes the
+    // column a translated declaration holds.
+    if (!isFieldLocalized(field, true)) return false;
     const columns = [...columnsDeclaredBy([field])];
     if (columns.some(column => taken.has(column))) return false;
     for (const column of columns) taken.add(column);

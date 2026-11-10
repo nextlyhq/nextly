@@ -37,4 +37,20 @@ describe("fieldsToRestore", () => {
       )
     ).toEqual(["title", "seo"]);
   });
+
+  it("judges each held-back declaration of a name on its own", () => {
+    // A password is never translated, even when a translated declaration of
+    // its name follows it.
+    const restored = fieldsToRestore({
+      fields: [{ name: "title", type: "text", localized: true }],
+      heldBack: [
+        { name: "seo", type: "password" },
+        { name: "seo", type: "text", localized: true },
+      ],
+    });
+    expect(restored.map(field => [field.name, field.type])).toEqual([
+      ["title", "text"],
+      ["seo", "text"],
+    ]);
+  });
 });

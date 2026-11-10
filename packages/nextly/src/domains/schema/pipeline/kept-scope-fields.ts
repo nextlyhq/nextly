@@ -111,7 +111,7 @@ export function keptScopeFields(
  * field, spelled otherwise, is stored in the same column. Every declaration
  * of a name, in the order the fold prefers them.
  */
-export function unclaimedHeldBack(
+function unclaimedHeldBack(
   kind: ScopedKind,
   type: Pick<TypeShape, "slug" | "fields">
 ): NamedField[] {
@@ -131,6 +131,30 @@ export function unclaimedHeldBack(
     if (declared.has(field.name.toLowerCase())) return false;
     return ![...columnsDeclaredBy([field])].some(column => claimed.has(column));
   });
+}
+
+/**
+ * The fields a plugin's scope holds back from `entity`, as the localization
+ * restore reads them: not the entity's own by name or by column
+ * (`unclaimedHeldBack`), every declaration of a name, the fold's preferred
+ * first. The restore copies their values back from the translations table
+ * too, where only a translated declaration's can be (`fieldsToRestore`):
+ * their values would otherwise stay behind there, and switching the field on
+ * again would find an empty column.
+ */
+export function heldBackForRestore(
+  kind: ScopedKind | "fieldGroup",
+  entity: { slug?: string; fields?: { name: string; type: string }[] }
+): { name: string; type: string; localized?: boolean }[] {
+  if (kind === "fieldGroup" || entity.slug === undefined) return [];
+  return unclaimedHeldBack(kind, {
+    slug: entity.slug,
+    fields: entity.fields ?? [],
+  }).map(field => ({
+    name: field.name,
+    type: field.type,
+    localized: (field as { localized?: boolean }).localized,
+  }));
 }
 
 /**

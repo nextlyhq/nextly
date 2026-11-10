@@ -79,7 +79,6 @@ import {
   heldBackChanges,
   noteHeldBackServed,
   keptScopeFields,
-  unclaimedHeldBack,
 } from "../domains/schema/pipeline/kept-scope-fields";
 import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor";
 import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
@@ -1053,30 +1052,6 @@ async function unlessLeavingRefused(
 }
 
 /**
- * The fields a plugin's scope holds back from `entity`, as the localization
- * restore reads them: not the entity's own by name or by column
- * (`unclaimedHeldBack`), every declaration of a name, the fold's preferred
- * first. The restore copies their values back from the translations table
- * too, where only a translated declaration's can be (`fieldsToRestore`):
- * their values would otherwise stay behind there, and switching the field on
- * again would find an empty column.
- */
-function heldBackForRestore(
-  kind: I18nTransitionKind,
-  entity: { slug?: string; fields?: { name: string; type: string }[] }
-): { name: string; type: string; localized?: boolean }[] {
-  if (kind === "fieldGroup" || entity.slug === undefined) return [];
-  return unclaimedHeldBack(kind, {
-    slug: entity.slug,
-    fields: entity.fields ?? [],
-  }).map(field => ({
-    name: field.name,
-    type: field.type,
-    localized: (field as { localized?: boolean }).localized,
-  }));
-}
-
-/**
  * Create, and bring into step, the `_locales` companion of every localized collection, single
  * and field group in the reloaded config.
  *
@@ -1266,9 +1241,6 @@ async function ensureLocalizedCompanionsForReload(
               slug: entity.slug,
               tableName: resolveTableName(entity),
               fields: entity.fields ?? [],
-              // Its held-back fields' values go back to the main table too,
-              // where the apply kept their columns.
-              heldBack: heldBackForRestore(kind, entity),
               dialect: adapter.dialect,
               defaultLocale: transitions?.defaultLocale,
               store: transitionStore,
