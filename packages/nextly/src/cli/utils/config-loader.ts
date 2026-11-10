@@ -40,6 +40,7 @@ import {
   snapshotFieldTypes,
   withoutDisabledBehavior,
 } from "../../domains/schema/field-types/field-type-registry";
+import { publishWithheldScopeFields } from "../../domains/schema/pipeline/withheld-scope-fields";
 import {
   resolvePostgresSchema,
   setActivePostgresSchema,
@@ -796,6 +797,11 @@ async function loadConfigInternal(
         options,
         `Applied config transformers from ${plugins.length} plugin(s)`
       );
+    } else {
+      // No plugin, so no fold runs to publish what scopes hold back: a config
+      // whose last plugin was removed holds nothing back, and its fields stop
+      // being kept by the schema changes that read this (`kept-scope-fields`).
+      publishWithheldScopeFields(new Map());
     }
 
     // Field groups placed in a cycle are judged over code and the Builder's field groups whether
