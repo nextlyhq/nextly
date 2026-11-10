@@ -217,9 +217,15 @@ function expectCountersBeforeContent(
  * One read of `table`, taking each translation's counter in the same
  * statement as its translated content. One statement sees one snapshot, so
  * no counter it returns can be newer than the content beside it. A counter
- * read of its own, or a content read without the counter, fails this.
+ * read of its own, a content read without the counter, or a read of keys and
+ * counters alone (in any column order) fails this: the one statement must
+ * name `contentColumn` beside the counter.
  */
-function expectCountersWithContent(statements: string[], table: string): void {
+function expectCountersWithContent(
+  statements: string[],
+  table: string,
+  contentColumn: string
+): void {
   const reads = statements.filter(
     statement =>
       statement.includes(table) &&
@@ -228,7 +234,8 @@ function expectCountersWithContent(statements: string[], table: string): void {
   );
   expect(reads.filter(statement => COUNTER_READ.test(statement))).toEqual([]);
   expect(reads).toHaveLength(1);
-  expect(reads[0]).toContain("_revision");
+  expect(reads[0]).toMatch(/[`"]_revision[`"]/);
+  expect(reads[0]).toMatch(new RegExp(`[\`"]${contentColumn}[\`"]`));
 }
 
 /** A stored time as milliseconds, whatever the driver hands back. */
@@ -526,15 +533,22 @@ describe.each(getConfiguredTestDialects())(
           { title: "hello", note: "n" }
         )
       );
-      const statements = await statementsOf(dialect, () =>
-        t.nextly.find({
+      let listed: unknown;
+      const statements = await statementsOf(dialect, async () => {
+        listed = await t.nextly.find({
           collection: DOCS as never,
           locale: "en",
           overrideAccess: true,
           status: "all",
-        } as never)
-      );
-      expectCountersWithContent(statements, `dc_${DOCS}_locales`);
+        } as never);
+      });
+      expectCountersWithContent(statements, `dc_${DOCS}_locales`, "title");
+      // The list itself carries the translated value and the version built
+      // from that same statement's counters.
+      const { items } = listed as { items: Array<Record<string, unknown>> };
+      expect(items).toHaveLength(1);
+      expect(items[0].title).toBe("hello");
+      expect(items[0]._rev).toBe("1.en:1");
       expect(await readRev(t, DOCS, id, "en")).toBe("1.en:1");
     });
 
