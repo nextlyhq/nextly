@@ -107,8 +107,9 @@ describe("the dashboard's place", () => {
       "widgets",
       "below-block",
     ]);
-    // In the page's own column, beside the header and the grid.
-    expect(screen.getByTestId("above-block").parentElement).toBe(
+    // In the page's own column, beside the header and the grid, in the
+    // isolating wrapper every contribution stands in.
+    expect(screen.getByTestId("above-block").parentElement?.parentElement).toBe(
       screen.getByTestId("widgets").parentElement
     );
   });
