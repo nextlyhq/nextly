@@ -268,9 +268,15 @@ const CAPABILITIES: Capability[] = [
         })
       );
       // The hook saw core and entity tables — what makes a reference to
-      // `users` checkable — beside its own declaration.
+      // `users` checkable — beside its own declaration's table, which the
+      // draft already holds when the plugin's hooks run.
       expect(seen).toEqual(
-        expect.arrayContaining(["users", "media", POSTS_TABLE])
+        expect.arrayContaining([
+          "users",
+          "media",
+          POSTS_TABLE,
+          `fx__${PREFIX}_seeded`,
+        ])
       );
       // What the hook ADDED reaches the compiled schema, and the database
       // through the same apply every other row takes.
@@ -709,6 +715,20 @@ const CAPABILITIES: Capability[] = [
           afterDrizzle: [widen],
         })
       );
+      // A hook-only edit is dev-push-visible: the same declaration without
+      // the hook fingerprints differently, so the push cache re-pushes on
+      // what the hook changed and nothing else.
+      const unhooked = await buildExtensionSchema(
+        schemaInput(ctx.dialect, {
+          app: {
+            owner: { kind: "app" },
+            tables: [
+              defineTable(name, { id: col.id(), title: col.shortText() }),
+            ],
+          },
+        })
+      );
+      expect(built.fingerprint).not.toBe(unhooked.fingerprint);
       const spec = built.specs[0]!;
       const widened = spec.columns.find(c => c.name === "title")!;
       // The converter's spelling of the widened type per dialect — NOT the
@@ -1325,16 +1345,20 @@ const CAPABILITIES: Capability[] = [
       // and ids from either generator are stored and read back unchanged.
       await ctx.apply([toTableSpec(keyed, ctx.dialect)]);
       const q = ctx.q;
+      const v4 = generateEntryId({});
       await ctx.execute(
-        `INSERT INTO ${q(keyed.name)} (${q("id")}, ${q("label")}) VALUES ('${generateEntryId({ idType: "uuidv7" })}', 'v7')`
+        `INSERT INTO ${q(keyed.name)} (${q("id")}, ${q("label")}) VALUES ('${v7}', 'v7')`
       );
       await ctx.execute(
-        `INSERT INTO ${q(keyed.name)} (${q("id")}, ${q("label")}) VALUES ('${generateEntryId({})}', 'v4')`
+        `INSERT INTO ${q(keyed.name)} (${q("id")}, ${q("label")}) VALUES ('${v4}', 'v4')`
       );
       const rows = (await ctx.execute(
-        `SELECT ${q("label")} FROM ${q(keyed.name)} ORDER BY ${q("label")}`
+        `SELECT ${q("id")}, ${q("label")} FROM ${q(keyed.name)} ORDER BY ${q("label")}`
       )) as Array<Record<string, unknown>>;
       expect(rows.map(r => r["label"])).toEqual(["v4", "v7"]);
+      // The exact strings the generators made are the ones the table holds
+      // and returns — neither generator's output is reshaped on the way in.
+      expect(rows.map(r => r["id"])).toEqual([v4, v7]);
     },
   },
   {
@@ -1516,6 +1540,13 @@ const CAPABILITIES: Capability[] = [
         extensionTable(base, { kind: "app" }),
         ctx.dialect
       );
+      // The column the database holds is the one the merged config seeded —
+      // same kind, same nullability — so a contribution the merge or the
+      // seed mistyped never reaches the table unobserved.
+      const seededPriority = seeded.find(c => c.name === "priority");
+      const appliedPriority = spec.columns.find(c => c.name === "priority");
+      expect(seededPriority?.kind).toBe(appliedPriority?.type);
+      expect(seededPriority?.nullable).toBe(appliedPriority?.nullable);
       await ctx.apply([spec]);
       const live = (await ctx.live([spec.name]))[0]!;
       expect(live.columns.map(c => c.name)).toContain("priority");
