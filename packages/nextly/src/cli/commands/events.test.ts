@@ -128,7 +128,7 @@ describe("nextly events abandon", () => {
     await runEventsAbandonCommand("d-missing", {}, context);
 
     expect(lines).toEqual([
-      "No open delivery matched; nothing was abandoned. `nextly events report` lists the deliveries that can be.",
+      "No open delivery matched that is not being run right now; nothing was abandoned. `nextly events report` lists the deliveries that need an operator.",
     ]);
   });
 });

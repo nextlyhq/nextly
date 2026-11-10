@@ -368,6 +368,16 @@ describe.each(getConfiguredTestDialects())(
         },
       ]);
 
+      // A subscriber named in other letters, which MySQL's default collation
+      // would match, abandons nothing on any dialect.
+      expect(
+        await abandonDurableDeliveries(
+          first,
+          { subscriber: "@TEST/Loyalty:Award" },
+          { now }
+        )
+      ).toEqual([]);
+
       // Abandoned: kept with its record, never looked at again, its event
       // finished.
       const abandonedAt = clock;
@@ -446,6 +456,109 @@ describe.each(getConfiguredTestDialects())(
       expect(msOf((await eventRows())[0]?.finishedAt)).toBe(clock.getTime());
     });
 
+    it("a delivery being run under its lease is not abandoned until the lease ends", async () => {
+      const { first, events, dispatch, deliveries } = await boot();
+      const subscribers = createDurableSubscribers();
+      subscribers.register("@test/email", PAID, "receipt", () => {
+        throw new Error("the address is refused");
+      });
+      await events.record(PAID, { order: "o-15" });
+      await dispatch(subscribers);
+      const [row] = await deliveries();
+      // Another dispatcher holds it now, running its handler.
+      const leaseEnds = new Date(clock.getTime() + 60 * SECOND);
+      await first.transaction(tx =>
+        tx.updateCount(
+          "nextly_plugin_event_deliveries",
+          { lockedBy: "another-dispatcher", lockedUntil: leaseEnds },
+          { and: [{ column: "id", op: "=", value: row?.id }] }
+        )
+      );
+      expect(
+        await abandonDurableDeliveries(
+          first,
+          { subscriber: "@test/email:receipt" },
+          { now }
+        )
+      ).toEqual([]);
+      expect(
+        await abandonDurableDeliveries(first, { deliveryId: row?.id }, { now })
+      ).toEqual([]);
+      // A dry run says the same.
+      expect(
+        await abandonDurableDeliveries(
+          first,
+          { deliveryId: row?.id },
+          { now, dryRun: true }
+        )
+      ).toEqual([]);
+      expect((await deliveries())[0]).toMatchObject({ status: "pending" });
+
+      // Once the lease has ended, it can be.
+      clock = new Date(leaseEnds.getTime() + SECOND);
+      expect(
+        await abandonDurableDeliveries(first, { deliveryId: row?.id }, { now })
+      ).toMatchObject([{ id: row?.id }]);
+    });
+
+    it("the report lists every stuck delivery, past one page", async () => {
+      const { first, events, dispatch } = await boot();
+      const subscribers = createDurableSubscribers();
+      subscribers.register("@test/email", PAID, "receipt", () => {
+        throw new Error("the address is refused");
+      });
+      for (let i = 0; i < 5; i++) {
+        await events.record(PAID, { order: `o-page-${i}` });
+      }
+      await dispatch(subscribers, { maxAttempts: 1 });
+      const all = await reportStuckDeliveries(first, { pageSize: 2 });
+      expect(all).toHaveLength(5);
+      expect(new Set(all.map(row => row.id)).size).toBe(5);
+    });
+
+    it("a pass out of time still warns, and a logger that throws fails nothing and is tried again", async () => {
+      const { first, events, dispatch } = await boot();
+      const subscribers = createDurableSubscribers();
+      subscribers.register("@test/email", PAID, "receipt", () => {
+        throw new Error("the address is refused");
+      });
+      await events.record(PAID, { order: "o-16" });
+      await dispatch(subscribers, { maxAttempts: 1 });
+
+      let throwing = true;
+      const warned: string[] = [];
+      const warnings = createStuckWarnings({
+        warn: message => {
+          if (throwing) throw new Error("the log is full");
+          warned.push(message);
+        },
+      });
+      // A pass whose deadline has passed before it starts still warns.
+      clock = new Date(T0.getTime() + 60 * SECOND);
+      await expect(
+        dispatchDurableEvents({
+          adapter: first,
+          subscribers,
+          now,
+          deadline: Date.now() - 1,
+          warnings,
+        })
+      ).resolves.toMatchObject({ failed: 0 });
+      // The logger threw: nothing is counted as warned, so the next pass
+      // warns, an hour sooner than it otherwise would.
+      throwing = false;
+      clock = new Date(T0.getTime() + 120 * SECOND);
+      await dispatchDurableEvents({
+        adapter: first,
+        subscribers,
+        now,
+        deadline: Date.now() - 1,
+        warnings,
+      });
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toContain("1 out of attempts");
+    });
+
     it("a stuck subscriber is warned about once, not on the next pass, and again an hour later", async () => {
       const { events, dispatch } = await boot();
       const warned: string[] = [];
@@ -459,6 +572,11 @@ describe.each(getConfiguredTestDialects())(
         throw new Error("the address is refused");
       });
       await events.record(PAID, { order: "o-11" });
+      // The warnings are read at the start of a pass: the pass that runs out
+      // the delivery's attempts finds nothing stuck yet, and the next does.
+      await dispatch(subscribers, { maxAttempts: 1, warnings });
+      expect(warned).toEqual([]);
+      clock = new Date(T0.getTime() + SECOND);
       await dispatch(subscribers, { maxAttempts: 1, warnings });
       expect(warned).toHaveLength(1);
       expect(warned[0]).toContain('"@test/email:receipt"');
@@ -472,7 +590,7 @@ describe.each(getConfiguredTestDialects())(
       clock = new Date(T0.getTime() + 60 * SECOND);
       await dispatch(subscribers, { maxAttempts: 1, warnings });
       expect(warned).toHaveLength(1);
-      clock = new Date(T0.getTime() + 3600 * SECOND);
+      clock = new Date(T0.getTime() + SECOND + 3600 * SECOND);
       await dispatch(subscribers, { maxAttempts: 1, warnings });
       expect(warned).toHaveLength(2);
     });

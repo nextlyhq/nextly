@@ -64,7 +64,8 @@ const HOLD_MS = 15 * 60 * 1000;
 /** What dispatching needs from the database adapter. */
 export type DispatchAdapter = Pick<
   DrizzleAdapter,
-  "transaction" | "select" | "dialect"
+  // `count` for the stuck-subscriber warnings' exact counts.
+  "transaction" | "select" | "count" | "dialect"
 >;
 
 /** One pass's inputs. */
@@ -191,6 +192,11 @@ export async function dispatchDurableEvents(
     held: 0,
   };
 
+  // The stuck-subscriber warnings first, before any bounded work: a pass that
+  // runs out of time below returns early, and under a lasting backlog every
+  // pass would.
+  await options.warnings?.check(adapter, now());
+
   // Fan out the events not yet dispatched, oldest first.
   const undispatched = await adapter.select<{ id: string }>(
     PLUGIN_EVENTS_TABLE,
@@ -271,7 +277,6 @@ export async function dispatchDurableEvents(
     });
     if (outcome !== "skipped") result[outcome] += 1;
   }
-  await options.warnings?.check(adapter, now());
   return result;
 }
 
@@ -279,7 +284,7 @@ export async function dispatchDurableEvents(
  * The SHA-256 hex a delivery is keyed by, for its subscriber: compared
  * exactly on every dialect, whatever its collation.
  */
-function subscriberKeyOf(subscriber: string): string {
+export function subscriberKeyOf(subscriber: string): string {
   return createHash("sha256").update(subscriber, "utf8").digest("hex");
 }
 

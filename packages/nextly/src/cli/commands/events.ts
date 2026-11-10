@@ -118,7 +118,7 @@ export async function runEventsAbandonCommand(
     // Said plainly, so a mistyped id or subscriber does not read as done.
     if (named.length === 0) {
       logger.warn(
-        "No open delivery matched; nothing was abandoned. `nextly events report` lists the deliveries that can be."
+        "No open delivery matched that is not being run right now; nothing was abandoned. `nextly events report` lists the deliveries that need an operator."
       );
       return;
     }
