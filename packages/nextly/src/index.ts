@@ -195,7 +195,7 @@ export type {
   FallbackLocaleOption,
   Locale,
   LocaleOption,
-} from "./direct-api/types";
+} from "./direct-api/types/locales";
 
 // Direct API types - the `nextly.fieldGroups.*` namespace. Exported from the
 // root because they are the argument and result types of a public namespace:
