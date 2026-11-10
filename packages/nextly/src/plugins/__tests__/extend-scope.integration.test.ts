@@ -35,7 +35,8 @@ import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/intro
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
   liveKeptColumns,
-  registeredTypes,
+  configuredTypes,
+  currentTypes,
 } from "../../cli/commands/prune-kept-columns";
 import { pruneUnderSchemaLock, runPrune } from "../../cli/commands/prune";
 import type { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
@@ -643,13 +644,16 @@ describe.each(getConfiguredTestDialects())(
             liveKeptColumns(
               t.adapter.getDrizzle(),
               t.adapter.dialect as Parameters<typeof liveKeptColumns>[1],
-              await registeredTypes({
-                collections: t.getService(
-                  "collectionRegistryService"
-                ) as CollectionRegistryService,
-                singles: t.getService(
-                  "singleRegistryService"
-                ) as SingleRegistryService,
+              await currentTypes({
+                configured: configuredTypes({ collections: [posts, pages] }),
+                registries: {
+                  collections: t.getService(
+                    "collectionRegistryService"
+                  ) as CollectionRegistryService,
+                  singles: t.getService(
+                    "singleRegistryService"
+                  ) as SingleRegistryService,
+                },
               })
             ),
         });

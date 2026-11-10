@@ -27,7 +27,13 @@ import {
   keptScopeFields,
   type ExistingColumns,
 } from "../../domains/schema/pipeline/kept-scope-fields";
+import {
+  scopedTypeKey,
+  withheldScopeFieldsOf,
+} from "../../domains/schema/pipeline/withheld-scope-fields";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
+import { resolveCollectionTableName } from "../../domains/schema/utils/resolve-table-name";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 
 /** A kept column, on a type's own table or its translations table. */
 export interface KeptColumn {
@@ -78,33 +84,100 @@ export async function liveKeptColumns(
   return keptColumnsOf(types, columnsByTable(live, dialect));
 }
 
-/** Every collection and Single the registry records, as `keptColumnsOf` reads them. */
-export async function registeredTypes(registries: {
-  collections: {
-    getAllCollections(): Promise<
-      readonly { slug: string; tableName: string; fields?: unknown }[]
-    >;
-  };
-  singles: {
-    getAllSingles(): Promise<
-      readonly { slug: string; tableName: string; fields?: unknown }[]
-    >;
+/** A registry row, as the registries list them. */
+interface RegistryRow {
+  slug: string;
+  tableName: string;
+  fields?: unknown;
+  source?: string;
+}
+
+/** The configuration's collections and Singles, with the fields they declare now. */
+export function configuredTypes(config: {
+  collections?: readonly { slug: string; dbName?: string; fields?: unknown }[];
+  singles?: readonly { slug: string; dbName?: string; fields?: unknown }[];
+}): RegisteredType[] {
+  const fieldsOf = (entity: { fields?: unknown }) =>
+    Array.isArray(entity.fields) ? entity.fields : [];
+  return [
+    ...(config.collections ?? []).map(entity => ({
+      kind: "collection" as const,
+      slug: entity.slug,
+      tableName: resolveCollectionTableName(entity.slug, entity.dbName),
+      fields: fieldsOf(entity),
+    })),
+    ...(config.singles ?? []).map(entity => ({
+      kind: "single" as const,
+      slug: entity.slug,
+      tableName: resolveSingleTableName({
+        slug: entity.slug,
+        dbName: entity.dbName,
+      }),
+      fields: fieldsOf(entity),
+    })),
+  ];
+}
+
+/**
+ * Every type with the fields it declares now: the configuration's as it reads
+ * now, and the Schema Builder's from their registry rows. A row still lists a
+ * plugin's field until the site next starts, so a plugin field its scope now
+ * holds back from the type is not counted as declared: read as declared, it
+ * would hide the very column a prune is there to drop.
+ */
+export async function currentTypes(args: {
+  configured: readonly RegisteredType[];
+  registries: {
+    collections: { getAllCollections(): Promise<readonly RegistryRow[]> };
+    singles: { getAllSingles(): Promise<readonly RegistryRow[]> };
   };
 }): Promise<RegisteredType[]> {
-  const of = (
+  const configured = new Set(
+    args.configured.map(type => scopedTypeKey(type.kind, type.slug))
+  );
+  const builder = (
     kind: RegisteredType["kind"],
-    rows: readonly { slug: string; tableName: string; fields?: unknown }[]
+    rows: readonly RegistryRow[]
   ): RegisteredType[] =>
-    rows.map(row => ({
-      kind,
-      slug: row.slug,
-      tableName: row.tableName,
-      fields: Array.isArray(row.fields) ? row.fields : [],
-    }));
+    rows
+      .filter(
+        row =>
+          row.source === "ui" && !configured.has(scopedTypeKey(kind, row.slug))
+      )
+      .map(row => ({
+        kind,
+        slug: row.slug,
+        tableName: row.tableName,
+        fields: declaredNow(kind, row),
+      }));
   return [
-    ...of("collection", await registries.collections.getAllCollections()),
-    ...of("single", await registries.singles.getAllSingles()),
+    ...args.configured,
+    ...builder(
+      "collection",
+      await args.registries.collections.getAllCollections()
+    ),
+    ...builder("single", await args.registries.singles.getAllSingles()),
   ];
+}
+
+/** A Builder row's fields, less the plugin fields a scope now holds back from it. */
+function declaredNow(
+  kind: RegisteredType["kind"],
+  row: RegistryRow
+): unknown[] {
+  const nameOf = (field: unknown) => {
+    const name = (field as { name?: unknown }).name;
+    return typeof name === "string" ? name.toLowerCase() : undefined;
+  };
+  const held = new Set(withheldScopeFieldsOf(kind, row.slug).map(nameOf));
+  const fields = Array.isArray(row.fields) ? row.fields : [];
+  return fields.filter(
+    field =>
+      !(
+        (field as { source?: unknown }).source === "plugin" &&
+        held.has(nameOf(field))
+      )
+  );
 }
 
 /** Where `nextly prune` finds the kept columns, by how the site applies its schema. */
@@ -129,9 +202,10 @@ export async function keptColumnsFor(args: {
   migrationsDir: string;
   adapter: Pick<DrizzleAdapter, "getDrizzle">;
   dialect: SupportedDialect;
-  registries: Parameters<typeof registeredTypes>[0];
+  /** The site's types with the fields they declare now (`currentTypes`). */
+  types: readonly RegisteredType[];
 }): Promise<KeptColumnsByMode> {
-  const types = await registeredTypes(args.registries);
+  const { types } = args;
   const latest = await loadLatestSnapshot(
     resolve(args.cwd ?? process.cwd(), args.migrationsDir, "meta")
   );
