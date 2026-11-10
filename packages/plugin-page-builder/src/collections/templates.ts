@@ -1,6 +1,6 @@
 /**
  * The plugin-owned `templates` collection: the designs a collection's entries
- * are drawn with.
+ * are drawn with, and the own designs single entries are drawn with instead.
  *
  * A template is a builder document of kind `template`, stored as an entry like
  * a page, so it has drafts, publishing, history, the soft lock and recovery
@@ -9,24 +9,79 @@
  * Builder reaches one the same way a collection declared in code does, which
  * a template declared in a collection's code configuration could not.
  *
+ * A collection created at runtime is served at the address its template
+ * stores (`address`), set in the admin by someone allowed to change routing;
+ * see `templates/template-routing`.
+ *
  * @module collections/templates
  */
 import { defineCollection, text, type CollectionConfig } from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
+import {
+  TEMPLATE_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_FIELD,
+  TEMPLATE_ENTRY_ID_FIELD,
+  TEMPLATE_FORKED_FROM_FIELD,
+} from "../templates/template-preview-contract";
+import {
+  mayManageTemplateRouting,
+  TEMPLATE_ADDRESS_FIELD,
+} from "../templates/template-routing";
 
 /** The slug templates are stored under, before any rename a host applies. */
 export const TEMPLATES_SLUG = "templates";
 
 /**
- * The field naming the collection a template renders. Unique, so a
- * collection has one template: read by the guard that names the template
- * already there, and by everything that finds a collection's template.
+ * The field naming the collection a template renders, declared in the
+ * preview contract so the editor's bundle reads the same name without this
+ * module's runtime imports, and re-exported here beside the collection.
  */
-export const TEMPLATE_COLLECTION_FIELD = "collection";
+export { TEMPLATE_COLLECTION_FIELD };
 
 /** The blocks field holding the template's design. */
 export const TEMPLATE_CONTENT_FIELD = "content";
+
+/**
+ * The fields of an entry's own design: a template that serves one entry
+ * rather than its collection, forked from the collection's template. Its
+ * `collection` is empty, so everything that finds a collection's template
+ * by that field finds the base template and never an own design.
+ *
+ * `entry` is the key of the entry it serves (see {@link entryDesignKey}),
+ * unique, so an entry has one own design whatever writes race for it.
+ * `entryCollection` and `entryId` name the entry plainly, the first indexed
+ * so a collection's own designs are one query. `forkedFrom` is the base
+ * template it was copied from, emptied when that template is deleted.
+ */
+export { TEMPLATE_ENTRY_FIELD };
+export { TEMPLATE_ENTRY_COLLECTION_FIELD };
+export { TEMPLATE_ENTRY_ID_FIELD };
+export { TEMPLATE_FORKED_FROM_FIELD };
+
+/**
+ * The key an entry's own design is held under: its collection and id, each
+ * encoded, so no collection and id pair spells another's.
+ */
+export function entryDesignKey(collection: string, id: string): string {
+  return `${encodeURIComponent(collection)}/${encodeURIComponent(id)}`;
+}
+
+/**
+ * The control the template form draws the address with: editable by someone
+ * allowed to change routing, read-only to anyone else.
+ */
+export const TEMPLATE_ADDRESS_FIELD_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#TemplateAddressField";
+
+/**
+ * The control the template form draws its collection with: the collection's
+ * name, read-only once the template exists, and a choice of collections by
+ * name while it is being made.
+ */
+export const TEMPLATE_COLLECTION_FIELD_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#TemplateCollectionField";
 
 export function templatesCollection(): CollectionConfig {
   return defineCollection({
@@ -39,14 +94,84 @@ export function templatesCollection(): CollectionConfig {
       text({
         name: TEMPLATE_COLLECTION_FIELD,
         label: "Collection",
-        required: true,
+        // Not required of the field, since an entry's own design leaves it
+        // empty (stored as no value, which the unique index lets many rows
+        // share); the guard requires it of every base template.
         // The guard that holds under concurrent writes, on every dialect,
         // whichever path the write takes and whatever a hook does after the
         // plugin's: the database refuses a second template for a collection.
         unique: true,
         admin: {
+          // Drawn by its name ("Posts") rather than its slug.
+          component: TEMPLATE_COLLECTION_FIELD_COMPONENT,
+          // A collection's template only: an entry's own design names no
+          // collection, and its panel says whose entry it serves.
+          condition: { field: TEMPLATE_ENTRY_FIELD, equals: "" },
           description:
             "The collection whose entries this template draws. A collection has one template, and it cannot be changed once the template exists.",
+        },
+      }),
+      // The four fields below are the plugin's own bookkeeping, written as the
+      // system when an own design is made and when its template is deleted,
+      // and never by an author. So the form does not draw them: `hidden` is
+      // the form's alone, and every write path, the guard and the reads keep
+      // them as before. An own design's panel shows them, read-only, under
+      // "Own design".
+      text({
+        name: TEMPLATE_ENTRY_FIELD,
+        label: "Entry",
+        // One own design per entry, held by the database on every dialect,
+        // whichever path the write takes.
+        unique: true,
+        admin: {
+          hidden: true,
+          description:
+            "The entry this design serves, when it is an entry's own design rather than its collection's template. Set when it is made, and never changed.",
+        },
+      }),
+      text({
+        name: TEMPLATE_ENTRY_COLLECTION_FIELD,
+        label: "Entry's collection",
+        index: true,
+        admin: { hidden: true },
+      }),
+      text({
+        name: TEMPLATE_ENTRY_ID_FIELD,
+        label: "Entry id",
+        admin: { hidden: true },
+      }),
+      // Indexed: deleting a template finds the designs copied from it by it.
+      text({
+        name: TEMPLATE_FORKED_FROM_FIELD,
+        label: "Copied from",
+        index: true,
+        admin: { hidden: true },
+      }),
+      text({
+        name: TEMPLATE_ADDRESS_FIELD,
+        label: "Address",
+        // One collection per address on every dialect and under concurrent
+        // writes; the guard names the collection holding one before the
+        // database is asked. Many templates store none (null).
+        unique: true,
+        // Bounded on every write path, as the title is, to what the column
+        // holds on every dialect.
+        maxLength: 255,
+        // Setting or changing it moves every entry's live address, so it is
+        // its own permission, apart from updating templates: anyone else's
+        // value is taken out of the write and the stored one kept.
+        access: {
+          create: mayManageTemplateRouting,
+          update: mayManageTemplateRouting,
+        },
+        admin: {
+          component: TEMPLATE_ADDRESS_FIELD_COMPONENT,
+          // A collection's template only: an entry's own design is drawn at
+          // its entry's address and has none of its own.
+          condition: { field: TEMPLATE_ENTRY_FIELD, equals: "" },
+          placeholder: "/blog",
+          description:
+            "Where this collection's entries are served: with /blog, the entry hello is served at /blog/hello once the template is published. Changing it moves every entry to the new address and frees the old ones.",
         },
       }),
       blocks({
@@ -67,9 +192,17 @@ export function templatesCollection(): CollectionConfig {
     versions: { drafts: true },
     admin: {
       useAsTitle: "title",
-      // Not offered in the admin's navigation until it has screens of its
-      // own; the builder and the API reach it meanwhile.
+      // Kept out of the Collections listing and offered from the page
+      // builder's own menu instead, beside Patterns, Components and Layouts.
       hidden: true,
+      // Which collection each template draws, and where its entries are
+      // served.
+      defaultColumns: [
+        "title",
+        TEMPLATE_COLLECTION_FIELD,
+        TEMPLATE_ADDRESS_FIELD,
+        "status",
+      ],
     },
   });
 }

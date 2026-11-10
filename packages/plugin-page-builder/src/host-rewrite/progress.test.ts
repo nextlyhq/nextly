@@ -1,8 +1,8 @@
 /**
- * Re-queueing a document written while its component is fenced: the pending
- * row and the run's return to its converting walk land together or not at
- * all, so a run never sits done (or in its final walk) holding a pending
- * document nobody will visit.
+ * Reopening a finished run's left documents, and recording a document's
+ * state: the pending rows and the run's return to its converting walk land
+ * together or not at all, so a run never sits done holding a pending document
+ * nobody will visit.
  */
 import { describe, expect, it } from "vitest";
 
@@ -63,32 +63,6 @@ function database(failPhaseUpdate: boolean, held?: string) {
     },
   };
 }
-
-describe("re-queueing a document written while fenced", () => {
-  it("records nothing when the run cannot be sent back to converting", async () => {
-    const { db, committed } = database(true);
-
-    await expect(
-      progressStore(db as never, "sqlite").requeue(["card"], "doc")
-    ).rejects.toThrow("the connection dropped");
-
-    expect(committed).toEqual([]);
-  });
-
-  it("CONTROL: records the pending row when the run moves too", async () => {
-    const { db, committed } = database(false);
-
-    await progressStore(db as never, "sqlite").requeue(["card"], "doc");
-
-    expect(committed).toEqual([
-      expect.objectContaining({
-        deletionId: "run-1",
-        hostKey: "doc",
-        state: "pending",
-      }),
-    ]);
-  });
-});
 
 describe("reopening a finished run's left documents", () => {
   it("marks nothing pending when the run cannot leave done", async () => {

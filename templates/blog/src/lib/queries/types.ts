@@ -23,16 +23,12 @@ export interface Media {
 /**
  * Author: the public-facing identity a post is attributed to.
  *
- * Backed by the `users` collection under the hood (users-as-authors
- * pattern). Fields here are the subset of User we surface on the
- * frontend. Auth fields (email, password, roles) are intentionally
- * omitted: they are admin-only and must not leak through the Direct API.
+ * A profile in the `authors` collection, which a post credits as its
+ * `byline`. It is public by design: the `users` account that owns a post is
+ * private, and none of its fields reach the frontend.
  *
- * The `avatarUrl` is a plain text URL (user-extension fields support
- * only scalar types in the current Nextly core). If you want to upgrade
- * to an upload-backed avatar, either add a top-level `avatar` upload
- * field on the users collection in core, or swap this type for `Media`
- * and update the admin flow.
+ * `avatarUrl` is the address of the profile's avatar in the media library, or
+ * null when it has none or its address is not one an image can be drawn from.
  */
 export interface Author {
   id: string;

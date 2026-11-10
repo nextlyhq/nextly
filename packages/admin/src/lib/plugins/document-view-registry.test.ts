@@ -105,7 +105,7 @@ describe("a view scoped to a field type", () => {
     expect(matchDocumentView("collection", "pages", "other")).toBeUndefined();
   });
 
-  it("applies to a document with a field of its type at the top or inside groups", () => {
+  it("applies to a document with a field of its type at the top, inside groups or in a repeater's rows", () => {
     expect(
       documentViewApplies(blocksBuilder, [{ type: "text" }, { type: "blocks" }])
     ).toBe(true);
@@ -125,14 +125,27 @@ describe("a view scoped to a field type", () => {
         },
       ])
     ).toBe(true);
-    // Inside a repeater it is not: a row has no address that survives a
-    // reorder yet, and an index path would open the wrong row after one.
+    // Inside a repeater's rows too: each row is addressed by its saved id.
     expect(
       documentViewApplies(blocksBuilder, [
         {
           name: "rows",
           type: "repeater",
           fields: [{ name: "b", type: "blocks" }],
+        },
+      ])
+    ).toBe(true);
+    // But not where the rows declare their own `id`: they get no saved id,
+    // so no row of them has an address.
+    expect(
+      documentViewApplies(blocksBuilder, [
+        {
+          name: "rows",
+          type: "repeater",
+          fields: [
+            { name: "id", type: "text" },
+            { name: "b", type: "blocks" },
+          ],
         },
       ])
     ).toBe(false);
@@ -358,7 +371,10 @@ describe("which field a field-type view edits", () => {
     expect(resolved.bases).toEqual(["", "hero", "hero"]);
   });
 
-  it("does not reach a field inside a repeater, at any depth", () => {
+  it("does not reach a field inside a repeater by a path naming no row", () => {
+    // A row is reached only by an address naming its saved id
+    // (`rows.<rowId>.g.b`); the declared path names no row, and with no rows
+    // in hand there is none to offer.
     const fields = [
       {
         name: "rows",

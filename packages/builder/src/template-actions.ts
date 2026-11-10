@@ -1,6 +1,7 @@
 /**
  * The collection template actions as data: what an API client, a script or an
- * agent sends to give a collection its template and to publish it, with the
+ * agent sends to give a collection its template, to publish it and to delete
+ * it, and to give one entry a design of its own or take it away, with the
  * schema that judges it.
  *
  * Published from the `ops` subpath beside the composition actions, for the
@@ -38,6 +39,55 @@ export type TemplateAction =
   | {
       readonly kind: "publish-template";
       readonly id: string;
+    }
+  /**
+   * Give an entry its own design: a copy of its collection's published
+   * template, saved as a draft, so the entry keeps being drawn with the
+   * template until the copy is published. Refused when the collection has no
+   * published template, or the entry already has its own design.
+   */
+  | {
+      readonly kind: "give-entry-design";
+      /** The entry's collection, by slug. */
+      readonly collection: string;
+      /** The entry's id. */
+      readonly entry: string;
+      /** The own design's name in the admin; the entry's title by default. */
+      readonly title?: string;
+    }
+  /**
+   * Remove an entry's own design, so the entry is drawn with its
+   * collection's template again.
+   */
+  | {
+      readonly kind: "remove-entry-design";
+      readonly collection: string;
+      readonly entry: string;
+    }
+  /**
+   * Delete a template by id: a collection's template, after which the
+   * collection's entries without their own design are not shown as pages until
+   * it has a published template again, or an entry's own design, after which
+   * the entry is drawn with its collection's template. A dry run answers the
+   * template it would delete, so a client can say what that means first.
+   */
+  | {
+      readonly kind: "delete-template";
+      readonly id: string;
+    }
+  /**
+   * Set, change or (with `null`) remove the address a collection's entries
+   * are served at, stored on its template: for a collection created at
+   * runtime, whose address is not declared in code. Needs the routing
+   * permission (`manage-template-routing`) beside updating templates. A
+   * published template's entries move at once: their old addresses are
+   * freed, and each waits where its new one is held.
+   */
+  | {
+      readonly kind: "set-template-address";
+      readonly id: string;
+      /** A path such as `/blog`, in its one spelling, or `null` for none. */
+      readonly address: string | null;
     };
 
 const id = z.string().min(1).max(512);
@@ -56,6 +106,28 @@ const templateActionOptions = [
   z.strictObject({
     kind: z.literal("publish-template"),
     id,
+  }),
+  z.strictObject({
+    kind: z.literal("give-entry-design"),
+    collection: id,
+    entry: id,
+    title: z.string().trim().min(1).max(255).optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("remove-entry-design"),
+    collection: id,
+    entry: id,
+  }),
+  z.strictObject({
+    kind: z.literal("delete-template"),
+    id,
+  }),
+  z.strictObject({
+    kind: z.literal("set-template-address"),
+    id,
+    // The address's form is the server's to judge, in its own words; the
+    // schema bounds its length only.
+    address: z.string().max(255).nullable(),
   }),
 ] as const;
 

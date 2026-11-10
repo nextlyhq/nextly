@@ -36,19 +36,28 @@
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { runDetachedFromRequest } from "../../auth/caller-scope";
 import { runAsPrincipal } from "../../auth/principal-scope";
-import type { FindArgs } from "../../direct-api/types/collections";
+import type { Nextly } from "../../direct-api/nextly";
+import type {
+  FindArgs,
+  FindByIDArgs,
+} from "../../direct-api/types/collections";
 import type { UserContext } from "../../direct-api/types/shared";
 
+import { isMissOrDenied } from "./miss-or-denied";
 import {
   assertCountKeys,
   assertNotHidden,
   createPublicReader,
   hiddenOf,
   refuse,
+  selectedFrom,
   sortKeys,
   toPublicFind,
+  toPublicFindSingle,
   type PublicCountQuery,
-  type PublicReader,
+  type PublicSingleQuery,
+  type PublicSingleResult,
+  type PublicSourceReader,
   type PublicReaderBinding,
   type PublicReaderSource,
   type PublicReadQuery,
@@ -173,6 +182,106 @@ async function assertListFieldsPublic(
 }
 
 /**
+ * The read a public Single query becomes when the person editing makes it:
+ * the public read's arguments, read as the person, with the working draft in
+ * place of the live document where one is pending and they may edit it (a
+ * person who may only read it gets the published values, as core decides).
+ *
+ * @experimental
+ */
+export function toEditorFindSingle(
+  query: PublicSingleQuery,
+  person: EditorReaderPerson,
+  binding: PublicReaderBinding = {}
+): ReturnType<typeof toPublicFindSingle> {
+  return {
+    ...toPublicFindSingle(query, binding),
+    status: "all",
+    draft: true,
+    overrideAccess: false,
+    user: person.user,
+    actor: person.actor,
+  };
+}
+
+/**
+ * One entry read by its id, as the editor's canvas reads the page's own entry
+ * and each entry a binding follows a relation to.
+ *
+ * @experimental
+ */
+export interface EditorByIdQuery {
+  collection: string;
+  id: string | number;
+  locale?: string;
+  /** The fields to keep, beside the id. Absent, the whole entry. */
+  select?: readonly string[];
+}
+
+/**
+ * What an editor reader reads through: the public reader's source, and core's
+ * by-id read where the host has one, which alone returns an entry's pending
+ * working draft.
+ *
+ * @experimental
+ */
+export type EditorReaderSource = PublicReaderSource &
+  Partial<Pick<Nextly, "findByID">>;
+
+/**
+ * An editor reader: the public reader's reads, made as the person editing,
+ * and one entry by its id with its working draft.
+ *
+ * @experimental
+ */
+export interface EditorSourceReader extends PublicSourceReader {
+  findById(query: EditorByIdQuery): Promise<PublicSingleResult>;
+}
+
+/**
+ * Core's by-id arguments for an editor's read of one entry: as the person,
+ * every state, and the working draft in place of the live row where one is
+ * pending and they may edit it (core decides that, so a person who may only
+ * read the entry gets its published values).
+ *
+ * @experimental
+ */
+export function toEditorFindById(
+  query: EditorByIdQuery,
+  person: EditorReaderPerson,
+  binding: PublicReaderBinding = {}
+): FindByIDArgs {
+  if (typeof query.collection !== "string" || query.collection === "") {
+    refuse("collection-missing", "A by-id read must name a collection.");
+  }
+  if (typeof query.id !== "string" && typeof query.id !== "number") {
+    refuse("query-invalid", "A by-id read must name an id.");
+  }
+  const locale = binding.locale ?? query.locale;
+  return {
+    collection: query.collection,
+    id: String(query.id),
+    ...(locale === undefined ? {} : { locale }),
+    // Only the fields asked for, with the id, so a large field nothing binds
+    // is not loaded; the answer is narrowed again to the same fields.
+    ...(query.select === undefined || query.select.length === 0
+      ? {}
+      : {
+          select: Object.fromEntries(
+            ["id", ...query.select].map(field => [field, true])
+          ),
+        }),
+    // Relationships come back as ids: nothing related is read here.
+    depth: 0,
+    status: "all",
+    draft: true,
+    overrideAccess: false,
+    user: person.user,
+    actor: person.actor,
+  };
+}
+
+/**
  * A reader over a Direct API's `find`, reading as `person`. A person with no
  * user is no one: their reads are refused by core as an anonymous read of a
  * draft would be, never widened.
@@ -180,16 +289,16 @@ async function assertListFieldsPublic(
  * @experimental
  */
 export function createEditorReader(
-  nextly: PublicReaderSource,
+  nextly: EditorReaderSource,
   person: EditorReaderPerson,
   binding: PublicReaderBinding = {}
-): PublicReader {
+): EditorSourceReader {
   const read = (args: FindArgs) =>
     // `null` is a frame of its own, so it clears a person an enclosing
     // operation was made as rather than inheriting it; the person named in
     // the arguments is the only one who judges the read.
     runDetachedFromRequest(() => runAsPrincipal(null, () => nextly.find(args)));
-  return Object.freeze({
+  const reader: EditorSourceReader = Object.freeze({
     async find(query: PublicReadQuery): Promise<PublicReadResult> {
       // The query's own shape first (the public reader's refusals, before
       // anything is asked of its fields), then the published page's refusals
@@ -211,5 +320,59 @@ export function createEditorReader(
       const result = await read(args);
       return result.meta.total;
     },
+    async findSingle(query: PublicSingleQuery): Promise<PublicSingleResult> {
+      const args = toEditorFindSingle(query, person, binding);
+      const findSingle = nextly.findSingle;
+      if (findSingle === undefined) {
+        // As the public reader answers a reader made without a Single's read.
+        return refuse(
+          "single-unsupported",
+          "This reader was made over a reader with no findSingle, so it cannot read a Single."
+        );
+      }
+      // Missing, never published and refused all read as nothing, as the
+      // public reader's Single does, so the answer does not tell them apart.
+      const document = await (async () => {
+        try {
+          return await runDetachedFromRequest(() =>
+            runAsPrincipal(null, () => findSingle.call(nextly, args))
+          );
+        } catch (error) {
+          if (isMissOrDenied(error)) return null;
+          throw error;
+        }
+      })();
+      if (document === null) return null;
+      return selectedFrom(document, query.select);
+    },
+    async findById(query: EditorByIdQuery): Promise<PublicSingleResult> {
+      const findByID = nextly.findByID;
+      if (findByID === undefined) {
+        // No by-id read: the entry's live row, as a list read finds it.
+        const { items } = await reader.find({
+          collection: query.collection,
+          filters: [{ field: "id", op: "equals", value: query.id }],
+          limit: 1,
+          ...(query.locale === undefined ? {} : { locale: query.locale }),
+          ...(query.select === undefined ? {} : { select: query.select }),
+        });
+        return items[0] ?? null;
+      }
+      const args = toEditorFindById(query, person, binding);
+      // Missing and refused read as nothing, as a Single's read does, so the
+      // answer does not tell them apart.
+      try {
+        const document = await runDetachedFromRequest(() =>
+          runAsPrincipal(null, () => findByID.call(nextly, args))
+        );
+        return document === null || document === undefined
+          ? null
+          : selectedFrom(document, query.select);
+      } catch (error) {
+        if (isMissOrDenied(error)) return null;
+        throw error;
+      }
+    },
   });
+  return reader;
 }

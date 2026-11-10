@@ -238,6 +238,16 @@ export interface EditorState {
   /** Draw one list's empty state on the canvas, or its entries again. */
   showListEmpty?: (id: string, empty: boolean) => void;
   /**
+   * The collection lists whose author picked a new source that waits for an
+   * input, by id, with the tag the canvas shows over each ("Still showing
+   * Events"): the list still draws what it stores. Editor state only, never
+   * stored, and not a step of the history.
+   * @experimental
+   */
+  listsStillShowing?: ReadonlyMap<string, string>;
+  /** Tag one list as still showing what it stores, or `undefined` to clear it. */
+  tagListStillShowing?: (id: string, words: string | undefined) => void;
+  /**
    * The list whose sort the author last asked to fix, from its canvas note's
    * "Choose a field", with a count that grows on each ask, so the inspector
    * takes the author to the list's first sort row once per press. Editor
@@ -1123,6 +1133,32 @@ function useListsShowingEmpty(): {
   return { listsShowingEmpty, showListEmpty };
 }
 
+/**
+ * Which lists the canvas tags as still showing what they store, and the way
+ * to change it: a new map only when one changes, as for the empty state.
+ */
+function useListsStillShowing(): {
+  listsStillShowing: ReadonlyMap<string, string>;
+  tagListStillShowing: (id: string, words: string | undefined) => void;
+} {
+  const [listsStillShowing, setListsStillShowing] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
+  const tagListStillShowing = useCallback(
+    (id: string, words: string | undefined) => {
+      setListsStillShowing(current => {
+        if (current.get(id) === words) return current;
+        const next = new Map(current);
+        if (words === undefined) next.delete(id);
+        else next.set(id, words);
+        return next;
+      });
+    },
+    []
+  );
+  return { listsStillShowing, tagListStillShowing };
+}
+
 /** `current` with `id` in it or not, the same set when nothing changes. */
 function toggled(
   current: ReadonlySet<string>,
@@ -1144,6 +1180,7 @@ function toggled(
 export function useEditorState(args: UseEditorStateArgs): EditorState {
   const state = useDocumentState(args);
   const { listsShowingEmpty, showListEmpty } = useListsShowingEmpty();
+  const { listsStillShowing, tagListStillShowing } = useListsStillShowing();
   const [sortFieldAsked, setSortFieldAsked] =
     useState<EditorState["sortFieldAsked"]>(undefined);
   const { select } = state;
@@ -1160,10 +1197,20 @@ export function useEditorState(args: UseEditorStateArgs): EditorState {
       ...state,
       listsShowingEmpty,
       showListEmpty,
+      listsStillShowing,
+      tagListStillShowing,
       ...(sortFieldAsked === undefined ? {} : { sortFieldAsked }),
       askSortField,
     }),
-    [state, listsShowingEmpty, showListEmpty, sortFieldAsked, askSortField]
+    [
+      state,
+      listsShowingEmpty,
+      showListEmpty,
+      listsStillShowing,
+      tagListStillShowing,
+      sortFieldAsked,
+      askSortField,
+    ]
   );
 }
 

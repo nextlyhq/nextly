@@ -260,7 +260,14 @@ function toSerializedField(
   return serialized;
 }
 
-function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {
+/**
+ * One registry row as this listing describes it. Exported for a reader that
+ * takes the rows from the registry itself, so a Single it names is described
+ * exactly as the listing describes it.
+ */
+export function toPluginSingleRecord(
+  record: DynamicSingleRecord
+): PluginSingleRecord {
   return {
     id: record.id,
     slug: record.slug,
@@ -280,7 +287,10 @@ export function wrapSinglesForPlugin(
   return {
     list: async options => {
       const result = await registry.listSingles(options);
-      return { data: result.data.map(toPluginRecord), total: result.total };
+      return {
+        data: result.data.map(toPluginSingleRecord),
+        total: result.total,
+      };
     },
   };
 }

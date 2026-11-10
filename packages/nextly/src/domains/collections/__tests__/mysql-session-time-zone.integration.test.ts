@@ -285,13 +285,12 @@ describeOrSkip("a MySQL session the adapter opens, on a non-UTC server", () => {
   });
 
   it("rows written before the pin read as the instants they were stored as", async () => {
-    // A row written BEFORE this change, the way the unpinned adapter wrote
-    // it: a UTC wall-clock string handed to a session the server started at
-    // +05:30. Stored as 06:30Z — the instant the write stored it as — and a
-    // pinned session must read exactly that. The unpinned adapter read it
-    // back as 12:00Z instead, the caller's instant reconstituted by a session
-    // shift cancelling a driver parse; the measured before-and-after of that
-    // cancel is what the pull request documents.
+    // A row written before the session was pinned, the way the unpinned
+    // adapter wrote it: a UTC wall-clock string handed to a session the
+    // server started at +05:30. Stored as 06:30Z — the instant the write
+    // stored it as — and a pinned session must read exactly that. The
+    // unpinned adapter read it back as 12:00Z instead, the caller's instant
+    // reconstituted by a session shift cancelling a driver parse.
     await t!.nextly.create({
       collection: SLUG,
       data: { label: "pre-pin", day: WRITTEN_INSTANT },
@@ -316,9 +315,9 @@ describeOrSkip("a MySQL session the adapter opens, on a non-UTC server", () => {
   });
 
   it("keeps a caller's non-UTC driver zone agreeing with the pinned session", async () => {
-    // R-1's agreement rule: a caller configured mysql2's driver-level
+    // The agreement rule: a caller configured mysql2's driver-level
     // `timezone` to a zone that is not UTC, and the configuration is ALIGNED
-    // to the pinned session (the pull request states which). The evidence is
+    // to the pinned session. The evidence is
     // behaviour, not config: a Date written through this adapter round-trips
     // exactly, and a session-zone computation over it agrees with the UTC
     // wall clock the write stored.

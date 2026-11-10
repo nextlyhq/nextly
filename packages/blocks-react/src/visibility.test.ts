@@ -16,7 +16,11 @@ import type {
 import { describe, expect, it } from "vitest";
 
 import type { BlocksFieldShapes } from "./context";
-import { conditionAllows, gateByConditions } from "./visibility";
+import {
+  conditionAllows,
+  entrySubjectOf,
+  gateByConditions,
+} from "./visibility";
 
 const box = (
   id: string,
@@ -153,5 +157,29 @@ describe("a conditioned block where it is drawn", () => {
     expect(
       conditionAllows(box("a", titled), { item: { title: "A guide" } })
     ).toBe(false);
+  });
+});
+
+describe("the entry a page's conditions read", () => {
+  const shapes = {
+    fieldsOf: () => [{ name: "title", type: "text" }] as const,
+  };
+
+  it("is the public's read of a collection entry", () => {
+    const subject = entrySubjectOf({
+      entry: { title: "Hello" },
+      entryRef: { collection: "posts" },
+      fieldShapes: shapes,
+    });
+    expect(subject.entry?.values).toEqual({ title: "Hello" });
+  });
+
+  it("is nothing when the public's fields of the entry aren't known", () => {
+    expect(
+      entrySubjectOf({
+        entry: { title: "Hello" },
+        entryRef: { collection: "posts" },
+      })
+    ).toEqual({});
   });
 });

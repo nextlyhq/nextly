@@ -1191,9 +1191,11 @@ async function ensureLocalizedCompanionsForReload(
   );
   const transitionStore = await resolveTransitionStore(adapter);
   // The same store, plus the locale a newly created companion gets recorded with.
+  // `AdapterLike` is a narrow view of the registered adapter, which is a
+  // `DrizzleAdapter` at runtime.
   const transitions = bindTransitionRecorder(
     transitionStore,
-    await transitionDefaultLocale(adapter, config)
+    await transitionDefaultLocale(adapter as unknown as DrizzleAdapter, config)
   );
 
   for (const [kind, entities, resolveTableName] of groups) {

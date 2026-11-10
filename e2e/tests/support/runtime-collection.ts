@@ -22,6 +22,21 @@ const MIGRATIONS_DIR = join(
 );
 
 /**
+ * Delete a collection a test made at runtime, unless it never got that far.
+ * A collection left standing outlives its test: one whose blocks field sits in
+ * a repeater or a group, which the usage index cannot count, keeps every later
+ * spec from seeing the site counted in full.
+ */
+export async function removeRuntimeCollection(
+  api: APIRequestContext,
+  slug: string
+): Promise<void> {
+  const removed = await api.delete(`/admin/api/collections/${slug}`);
+  if (removed.status() === 404) return;
+  await expectOk(removed, "removing the collection");
+}
+
+/**
  * Remove the migrations this run caused. Making a collection at runtime writes
  * its SQL into the playground's migrations folder, which the suite's fresh
  * database never needs again; left there, they would pile up with every run and

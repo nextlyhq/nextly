@@ -14,8 +14,14 @@ import type { BindingFieldShape } from "./binding-rules";
 import type { BlockNode } from "./document";
 import type { ListFields } from "./list-query";
 import {
+  defineNamedQuery,
+  namedQueryDeclaration,
+  type NamedQuerySource,
+} from "./named-query";
+import {
   canonicalConditions,
   conditionDemand,
+  conditionIssues,
   conditionScopeIn,
   CONDITION_ISSUE_CODES,
   CONDITION_KIND_OPS,
@@ -28,6 +34,7 @@ import {
   evaluateConditions,
   type ConditionRegistry,
   type ConditionSubject,
+  withConditions,
 } from "./visibility-conditions";
 
 const READABLE: readonly BindingFieldShape[] = [
@@ -630,6 +637,58 @@ describe("conditions stored before they were evaluated", () => {
   });
 });
 
+describe("setting a block's conditions", () => {
+  const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+
+  it("replaces the conditions and keeps the devices", () => {
+    expect(
+      withConditions(
+        {
+          conditions: [[{ field: "old", op: "exists" }]],
+          devices: { mobile: false },
+        },
+        vip
+      )
+    ).toEqual({ conditions: vip, devices: { mobile: false } });
+  });
+
+  it("stores nothing for a block shown everywhere to everyone", () => {
+    expect(withConditions({ conditions: vip }, undefined)).toBeUndefined();
+    expect(withConditions({ conditions: vip }, [])).toBeUndefined();
+    expect(withConditions(undefined, [])).toBeUndefined();
+    expect(
+      withConditions({ conditions: vip, devices: { mobile: false } }, [])
+    ).toEqual({
+      devices: { mobile: false },
+    });
+  });
+
+  it("stores nothing for groups that let everyone through, an empty group among them", () => {
+    // An AND of nothing always holds, so a group with no conditions lets
+    // everyone through whatever the other groups say.
+    expect(withConditions({ conditions: vip }, [[]])).toBeUndefined();
+    expect(withConditions(undefined, [[], ...vip])).toBeUndefined();
+    expect(withConditions({ devices: { mobile: false } }, [[]])).toEqual({
+      devices: { mobile: false },
+    });
+  });
+
+  it("replaces a visibility nothing can read, keeping none of it", () => {
+    const unreadable = "hidden" as unknown as Parameters<
+      typeof withConditions
+    >[0];
+    expect(withConditions(unreadable, undefined)).toBeUndefined();
+    expect(withConditions(unreadable, vip)).toEqual({ conditions: vip });
+  });
+
+  it("copies what it stores, so a later edit to the input changes nothing", () => {
+    const groups = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const stored = withConditions(undefined, groups);
+    groups[0]![0]!.value = "free";
+    expect(stored).toEqual({ conditions: vip });
+  });
+});
+
 describe("what a page's conditions read of its entry", () => {
   const gated = (id: string, conditions: unknown, slots?: unknown) => ({
     id,
@@ -682,6 +741,22 @@ describe("what a page's conditions read of its entry", () => {
     ).toBe(true);
   });
 
+  it("names the fields its conditions order by, so a reader knowing their shapes can tell a day", () => {
+    const demand = conditionDemand([
+      gated("a", [
+        [
+          { field: "publishedAt", op: "less_than", value: "2026-01-01" },
+          { field: "rating", op: "gt", value: 3 },
+          { field: "tier", op: "exists" },
+        ],
+      ]),
+    ]);
+    expect([...(demand.orderedFields ?? [])].sort()).toEqual([
+      "publishedAt",
+      "rating",
+    ]);
+  });
+
   it("asks nothing of a page with no conditions, or ones that restrict nobody", () => {
     expect(
       conditionDemand([
@@ -692,6 +767,7 @@ describe("what a page's conditions read of its entry", () => {
       any: false,
       entryFields: new Set(),
       ordersValues: false,
+      orderedFields: new Set(),
     });
   });
 
@@ -707,6 +783,79 @@ describe("what a page's conditions read of its entry", () => {
     });
     expect(conditionScopeIn(list, "empty", page)).toBe(page);
     expect(conditionScopeIn({ type: "core/box" }, "children", page)).toBe(page);
+  });
+
+  it("says a custom source's children read its query's row", () => {
+    const list = {
+      type: "core/collection-loop",
+      props: { namedQuery: { name: "events.mine", params: {} } },
+    };
+    const page = { source: "entry" as const, collection: "pages" };
+    expect(conditionScopeIn(list, "children", page)).toEqual({
+      source: "item",
+      collection: undefined,
+      query: "events.mine",
+    });
+  });
+});
+
+describe("a condition on a custom source's row, at save", () => {
+  /** A query whose rows are a schema of its own: an id and a title. */
+  const mine = defineNamedQuery({
+    name: "events.mine",
+    label: "My events",
+    reads: { collections: ["events"] },
+    rows: {
+      key: "id",
+      fields: [
+        { name: "id", type: "text" },
+        { name: "title", type: "text" },
+      ],
+    },
+    run: () => Promise.resolve({ rows: [] }),
+  });
+  const queries: NamedQuerySource = {
+    declarationOf: name =>
+      name === mine.name ? namedQueryDeclaration(mine) : undefined,
+  };
+  const forest = (field: string) => [
+    {
+      id: "list",
+      type: "core/collection-loop",
+      version: 1,
+      props: { namedQuery: { name: mine.name, params: {} } },
+      slots: {
+        children: [
+          {
+            id: "box",
+            type: "core/box",
+            version: 1,
+            props: {},
+            visibility: {
+              conditions: [[{ field, op: "equals", value: "Launch" }]],
+            },
+          },
+        ],
+      },
+    },
+  ];
+  const codesOf = (field: string, namedQueries?: NamedQuerySource) =>
+    conditionIssues(
+      forest(field),
+      namedQueries === undefined ? {} : { namedQueries }
+    ).map(issue => issue.code);
+
+  it("refuses a field the query's rows do not declare", () => {
+    expect(codesOf("venue", queries)).toEqual(["condition-field-unknown"]);
+  });
+
+  it("takes a field the query's rows declare", () => {
+    expect(codesOf("title", queries)).toEqual([]);
+  });
+
+  it("judges it by its operator alone without the site's queries", () => {
+    // The control: the refusal above comes from the query's declaration.
+    expect(codesOf("venue")).toEqual([]);
   });
 });
 

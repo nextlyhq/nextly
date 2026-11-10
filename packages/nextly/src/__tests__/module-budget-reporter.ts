@@ -96,6 +96,12 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * reach, which brings the heavy files back to the pinned list at 69, and the
  * tail measured 1,257 with the same heavy files and chains; 1,291 holds
  * whether CI measures one fewer.
+ * Both rose again, to 85 and 1,383, when the graph every registry and dialect
+ * bundle reaches grew by about ninety modules across a week of features: 82
+ * and 1,348 measured, CI's run the same. Twenty-two files joined the list
+ * and no product import on their chains is newer than the previous pin: most
+ * sat just under the line on chains they already held, and the imports that
+ * are newer are test files importing what they test.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -103,7 +109,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 63, tailMeanModules: 1_291 };
+export const BUDGET = { heavyFiles: 85, tailMeanModules: 1_383 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",

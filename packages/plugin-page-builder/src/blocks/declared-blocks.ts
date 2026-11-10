@@ -17,6 +17,7 @@
 
 import type {
   AnyBlockDefinition,
+  NamedQueryDefinition,
   SupportDefinition,
 } from "@nextlyhq/blocks-engine";
 import type { PluginDeclaration } from "@nextlyhq/plugin-sdk";
@@ -64,6 +65,14 @@ export interface PageBuilderDeclaration {
    * does not offer.
    */
   editorEntry?: string;
+  /**
+   * Named queries: custom sources a collection list may take, made with
+   * `defineNamedQuery`. Registered at boot beside the site's own, all or
+   * nothing; their run functions stay on the server.
+   *
+   * @experimental
+   */
+  namedQueries?: NamedQueryDefinition[];
 }
 
 /**

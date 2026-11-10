@@ -1216,6 +1216,18 @@ export interface ResolveStyleOptions {
    */
   storedDocument?: BlockDocument;
   /**
+   * Whether `document` is the tree being DRAWN, every conditioned block left in
+   * it kept because its conditions held.
+   *
+   * A compile holds each conditioned block's rules apart, in `gated`. A render
+   * wants the rules of the blocks it kept back in `css`. A caller compiling a
+   * whole stored document to save its sheet does not: a reader appends those
+   * rules per surviving block, so a saved `css` carrying them would publish a
+   * hidden block's colours and URLs to every visitor. So they go back only
+   * when this says the tree is the one drawn.
+   */
+  drawn?: boolean;
+  /**
    * Ask for the cascade that produced the sheet, alongside the sheet.
    *
    * The editor needs it and nothing else does. A control showing where its
@@ -1578,10 +1590,13 @@ function compileToStyles(
     options.fetchPolicyId,
     sharedInputsId
   );
-  // The compiler holds every conditioned block's rules apart; the blocks of
-  // this tree are the ones served, so theirs go back in, as a stored sheet's
-  // do, by the same rule.
-  const styles = withGatedRules(packaged, document, drawsNothing);
+  // The compiler holds every conditioned block's rules apart; in a tree being
+  // drawn the blocks are the ones served, so theirs go back in, as a stored
+  // sheet's do, by the same rule. A compile for saving keeps them apart.
+  const styles =
+    options.drawn === true
+      ? withGatedRules(packaged, document, drawsNothing)
+      : packaged;
   return compiled.trace === undefined
     ? { styles }
     : { styles, trace: compiled.trace };

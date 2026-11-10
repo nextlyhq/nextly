@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * A schema-builder address opened directly on a PRODUCTION build, where the
@@ -17,8 +18,6 @@ import { test } from "../support/visible";
  *
  * @module tests/production/builder-guard
  */
-
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 /**
  * The builder's collections list. Its page is imported with the route table,
@@ -39,14 +38,7 @@ test.describe("a builder address where the builder is off", () => {
   test("ends on the dashboard without the builder having been drawn", async ({
     page,
   }) => {
-    await page.goto("/admin");
-    await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-    // By role, since a label match also finds the "Show password" toggle.
-    await page
-      .getByRole("textbox", { name: /password/i })
-      .fill(DEV_USER.password);
-    await page.getByRole("button", { name: /sign in|log in/i }).click();
-    await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+    await signIn(page);
 
     // Reported to this process rather than kept on `window`: the redirect may
     // load a new document, and a flag on the old one would go with it.

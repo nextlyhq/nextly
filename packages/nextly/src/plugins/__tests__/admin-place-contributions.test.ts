@@ -142,6 +142,15 @@ describe("contributedAdminContributions", () => {
     expect(contributions).toEqual([]);
   });
 
+  it("accepts a side panel section drawn above the form on a narrow editor", () => {
+    const { contributions } = contributedAdminContributions([
+      plugin("@acme/support", [{ ...SECTION, narrow: "above-form" }]),
+    ]);
+    expect(contributions).toMatchObject([
+      { id: "acme-support.sla", narrow: "above-form" },
+    ]);
+  });
+
   it.each<[string, unknown]>([
     ["a declaration that is not an object", "acme-support.sla"],
     ["an id that is not a name", { ...SECTION, id: "acme-support.SLA" }],
@@ -154,6 +163,21 @@ describe("contributedAdminContributions", () => {
     ["no place", { ...SECTION, place: undefined }],
     ["no label", { ...SECTION, label: " " }],
     ["no component", { ...SECTION, component: "" }],
+    [
+      "a side panel section placed narrow somewhere the admin does not draw",
+      { ...SECTION, narrow: "below-form" },
+    ],
+    [
+      "a narrow placement on a kind that does not take one",
+      {
+        id: "acme-support.history",
+        kind: "tab",
+        place: "collection.edit",
+        label: "History",
+        component: "@acme/support/admin#History",
+        narrow: "above-form",
+      },
+    ],
     [
       "a column with neither a field nor a component",
       {
