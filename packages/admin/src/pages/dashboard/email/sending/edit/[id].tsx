@@ -18,11 +18,11 @@ import {
   emailCatalogState,
   isUnregisteredProviderType,
 } from "@admin/components/features/settings/EmailProviderForm/email-provider-catalog";
-import type { EmailProviderPayload } from "@admin/components/features/settings/EmailProviderForm/schemas/emailProviderSchema";
 import {
   LazyEmailProviderForm,
   preloadEmailProviderForm,
 } from "@admin/components/features/settings/EmailProviderForm/LazyEmailProviderForm";
+import type { EmailProviderPayload } from "@admin/components/features/settings/EmailProviderForm/schemas/emailProviderSchema";
 import { AlertTriangle, Loader2, Send } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";

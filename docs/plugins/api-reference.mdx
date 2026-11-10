@@ -954,7 +954,11 @@ what was addressed to you with `collectDeclarations` from
 configured plugin (name, version, enabled, capabilities, declarations):
 
 ```ts
-// `ctx` is the plugin context, in init or a route handler.
+import { collectDeclarations, type PluginContext } from "@nextlyhq/plugin-sdk";
+
+// The plugin context, in init or a route handler.
+declare const ctx: PluginContext;
+
 const declared = collectDeclarations(
   ctx.config.plugins ?? [],
   "@acme/nextly-plugin-blocks"
