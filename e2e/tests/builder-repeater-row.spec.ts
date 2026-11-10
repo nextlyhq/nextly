@@ -144,15 +144,16 @@ test("opens a repeater row's blocks field by the row's id, and stays on that row
     // Each key waits for the announcement of the one before: the keyboard
     // sensor listens for a move only once the pick-up has been handled, and a
     // key pressed sooner is lost.
-    const announced = page.locator('[id^="DndLiveRegion-"]');
+    const announced = (words: string) =>
+      page.getByRole("status").filter({ hasText: words });
     await page.keyboard.press("Space");
-    await expect(announced).toContainText("Picked up");
+    await expect(announced("Picked up")).toHaveCount(1);
     await page.waitForTimeout(250);
     await page.keyboard.press("ArrowUp");
-    await expect(announced).toContainText("is over");
+    await expect(announced("is over")).toHaveCount(1);
     await page.waitForTimeout(250);
     await page.keyboard.press("Space");
-    await expect(announced).toContainText("moved to position 1");
+    await expect(announced("moved to position 1")).toHaveCount(1);
     // Its way in now comes first, still naming the same row's id.
     await expect(
       page.getByRole("link", { name: OPEN_BUILDER_ACTION }).first()
