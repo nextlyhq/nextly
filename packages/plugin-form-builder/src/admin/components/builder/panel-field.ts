@@ -216,7 +216,18 @@ function formDefaultValue(
   formDefault: unknown
 ): unknown {
   const picked = field.defaultValue;
-  if (picked === undefined || picked === null) return formDefault;
+  if (picked === undefined || picked === null) {
+    // A list kept for a dropdown that now takes one choice: its one value, or
+    // none, since the form checks a one-choice answer as a single value.
+    if (
+      field.type === "select" &&
+      field.hasMany !== true &&
+      Array.isArray(formDefault)
+    ) {
+      return formDefault.length === 1 ? formDefault[0] : undefined;
+    }
+    return formDefault;
+  }
   return field.hasMany === true && typeof picked === "string"
     ? [picked]
     : picked;

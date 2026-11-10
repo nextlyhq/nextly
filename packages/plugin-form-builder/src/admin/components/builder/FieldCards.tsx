@@ -68,7 +68,7 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import type { AnyFormField } from "../../../types";
+import type { AnyFormField, FormFieldTypeId } from "../../../types";
 import { buildFieldReferenceMap } from "../../../utils/field-references";
 import {
   generateFieldName,
@@ -340,8 +340,13 @@ export interface FieldCardsProps {
    * contributed types.
    */
   disabledFieldTypes?: ReadonlySet<string>;
-  /** Creates and selects a field from what the person chose in the picker. */
-  onAddField: (choice: FieldPickerChoice) => void;
+  /**
+   * Creates and selects a field of the chosen type. The picker's whole choice
+   * comes second (the label the person typed and the name it gives), so a host
+   * written for the type alone keeps working and one that wants the label
+   * reads it there.
+   */
+  onAddField: (type: FormFieldTypeId, choice?: FieldPickerChoice) => void;
   /** Shows every setting without letting any change. */
   readOnly?: boolean;
 }
@@ -597,7 +602,7 @@ export function FieldCards({
           config={pickerConfig}
           onCancel={() => setIsAddOpen(false)}
           onAdd={(choice, how) => {
-            onAddField(choice);
+            onAddField(choice.type, choice);
             if (!how.addAnother) setIsAddOpen(false);
           }}
         />

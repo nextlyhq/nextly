@@ -38,7 +38,7 @@ import type { FormFieldCatalogType } from "nextly/field-catalog";
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 import { type JSX, useCallback, useEffect, useRef, useState } from "react";
 
-import type { AnyFormField, FormField } from "../types";
+import type { AnyFormField, FormField, FormFieldTypeId } from "../types";
 
 import { FieldCards } from "./components/builder/FieldCards";
 import {
@@ -116,7 +116,12 @@ export interface FormBuilderViewProps {
      */
     _rev?: string;
   };
-  onSave?: (data: unknown) => void;
+  /**
+   * Saves the form in the host's own way, in place of the builder's request.
+   * The builder counts the form saved once this returns, or once the promise
+   * it may return settles without failing.
+   */
+  onSave?: (data: unknown) => void | Promise<void>;
   onSuccess?: (entry?: Record<string, unknown>) => void;
   onCancel?: () => void;
   /**
@@ -306,13 +311,13 @@ function FormBuilderViewInner({
   // and the name it gives, made unique on this form (a second "Email" becomes
   // `email_2`). A label that gives no name falls back to one from the type.
   const handleAddField = useCallback(
-    (choice: FieldPickerChoice) => {
+    (type: FormFieldTypeId, choice?: FieldPickerChoice) => {
       const names = fields.map(f => f.name);
-      const fromType = createFieldFromType(choice.type, names);
+      const fromType = createFieldFromType(type, names);
       const newField: AnyFormField = {
         ...fromType,
-        label: choice.label.trim() || fromType.label,
-        name: choice.name
+        label: choice?.label.trim() || fromType.label,
+        name: choice?.name
           ? generateFieldName(choice.name, names)
           : fromType.name,
       };
@@ -360,7 +365,18 @@ function FormBuilderViewInner({
     };
 
     if (onSave) {
-      onSave(saveData);
+      // The host's save: what it stored is what the stored form now holds, so
+      // a field it saved has its type fixed like one the builder saved itself.
+      try {
+        await onSave(saveData);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to save form";
+        setSaveError(message);
+        toast.error(message);
+        return;
+      }
+      markAsSaved();
       return;
     }
 

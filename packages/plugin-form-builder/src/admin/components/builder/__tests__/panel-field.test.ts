@@ -266,4 +266,21 @@ describe("the panel's spelling of a form's settings", () => {
       fromPanelField({ ...select, hasMany: false, defaultValue: "two" })
     ).toMatchObject({ defaultValue: "two" });
   });
+
+  it("gives a dropdown that now takes one choice a one-value default", () => {
+    const select = toPanelField(
+      { ...EVERY_TYPE[6]!, defaultValue: ["one"] } as AnyFormField,
+      "f-6"
+    );
+    // "Allow several choices" turned off: the kept list becomes its one value.
+    expect(fromPanelField({ ...select, hasMany: false })).toMatchObject({
+      allowMultiple: false,
+      defaultValue: "one",
+    });
+    // A list of several has no one value to keep, so no default is kept.
+    const several = toPanelField(EVERY_TYPE[6]!, "f-6");
+    expect(fromPanelField({ ...several, hasMany: false })).not.toHaveProperty(
+      "defaultValue"
+    );
+  });
 });

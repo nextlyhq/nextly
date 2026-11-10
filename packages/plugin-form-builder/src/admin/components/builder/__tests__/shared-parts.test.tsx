@@ -22,7 +22,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { AnyFormField, FormNotification } from "../../../../types";
+import { FormBuilderProvider } from "../../../context/FormBuilderContext";
 import { FormBuilderView } from "../../../FormBuilderView";
+import { FieldCards } from "../FieldCards";
 import { SAVED_TYPE_REASON } from "../forms-field-surface";
 
 beforeAll(() => {
@@ -344,6 +346,60 @@ describe("the Form Builder on the shared picker and panel", () => {
     await save(user);
     const names = saved().map(field => field.name);
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  it("fixes the type of a field once a host's own save has stored it", async () => {
+    const { user } = view();
+    await user.click(await screen.findByRole("button", { name: "Add field" }));
+    const picker = screen.getByRole("dialog");
+    await user.type(
+      within(picker).getByRole("combobox", { name: "Search field types" }),
+      "phone{Enter}"
+    );
+    await user.type(
+      within(picker).getByRole("textbox", { name: "Label" }),
+      "Mobile"
+    );
+    await user.click(within(picker).getByRole("button", { name: "Add field" }));
+    expect(screen.queryByText(SAVED_TYPE_REASON)).toBeNull();
+
+    // Saved through the host's callback: the field is now a stored one.
+    await save(user);
+    expect(await screen.findByText(SAVED_TYPE_REASON)).toBeInTheDocument();
+  });
+
+  it("hands a host's add callback the type first, then the picker's choice", async () => {
+    const onAddField = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <FormBuilderProvider initialData={{ fields: [EMAIL] }}>
+            <FieldCards enabledTypes={["phone"]} onAddField={onAddField} />
+          </FormBuilderProvider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    );
+    await user.click(screen.getByRole("button", { name: "Add field" }));
+    const picker = screen.getByRole("dialog");
+    await user.type(
+      within(picker).getByRole("combobox", { name: "Search field types" }),
+      "phone{Enter}"
+    );
+    await user.type(
+      within(picker).getByRole("textbox", { name: "Label" }),
+      "Mobile"
+    );
+    await user.click(within(picker).getByRole("button", { name: "Add field" }));
+    // A host written for the type alone still gets it as the first argument.
+    expect(onAddField).toHaveBeenCalledWith(
+      "phone",
+      expect.objectContaining({
+        type: "phone",
+        label: "Mobile",
+        name: "mobile",
+      })
+    );
   });
 
   it("refuses to delete a field another field's condition refers to", async () => {
