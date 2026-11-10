@@ -299,66 +299,9 @@ function sanitizeFieldGroupValue(
 }
 
 /**
- * How deep the enrichment walk follows field-group-to-field-group edges.
- * Matches the editor's nesting limit. Inline containers cost nothing: the
- * declared schema is finite, so a deep group/repeater hierarchy is walked
- * without spending this budget, and a self-referencing container is
- * terminated by the path-scoped open set in the walk below.
- */
-const MAX_FIELD_GROUP_RESOLVE_DEPTH = 3;
-
-/**
- * Attach one field-group field's referenced children, single reference or zone.
- *
- * Each resolved child schema recurses through the same attachment at the next
- * field-group depth, so a field group whose registered fields reference
- * another field group is enriched at every depth the editor allows — the
- * descent reaches B's text only when B's own children were attached.
- */
-async function attachFieldGroupReferences(
-  field: FieldDefinition,
-  resolveChildren: (slug: string) => Promise<FieldDefinition[] | undefined>,
-  depth: number,
-  openContainers: WeakSet<object>
-): Promise<void> {
-  const { single, many } = extractFieldGroupReferences(field);
-  if (single !== undefined) {
-    const children = await resolveChildren(single);
-    if (children !== undefined) {
-      await attachFieldGroupChildren(
-        children,
-        resolveChildren,
-        depth + 1,
-        openContainers
-      );
-      (field as { componentFields?: FieldDefinition[] }).componentFields =
-        children;
-    }
-    return;
-  }
-  if (many === undefined) return;
-  const schemas: FieldGroupSchemaMap = {};
-  for (const slug of many) {
-    const children = await resolveChildren(slug);
-    if (children !== undefined) {
-      await attachFieldGroupChildren(
-        children,
-        resolveChildren,
-        depth + 1,
-        openContainers
-      );
-      schemas[slug] = { fields: children };
-    }
-  }
-  if (Object.keys(schemas).length > 0) {
-    (field as { componentSchemas?: FieldGroupSchemaMap }).componentSchemas =
-      schemas;
-  }
-}
-
-/**
  * Attach every field-group field's referenced child definitions, so
- * {@link sanitizeEntryData}'s descent can reach the group's nested values.
+ * {@link sanitizeEntryData}'s descent can reach the group's nested values at
+ * any depth.
  *
  * The lookup is injected because the caller owns the executor: the sanitization
  * hook runs inside entry-write transactions and must resolve on that same
@@ -367,47 +310,91 @@ async function attachFieldGroupReferences(
  * on `componentSchemas` — the same shapes the read path's enrichment produces,
  * so the descent reads one vocabulary.
  *
- * Resolved children recurse through the same walk — containers (repeater/group)
- * so their nested field-group references resolve, and resolved field-group
- * schemas so a group nested inside a group enriches too. Only field-group
- * edges spend the depth budget: an inline container hierarchy is as deep as
- * its schema declares and is walked at the same depth, with `openContainers`
- * — scoped to the current path and released on the way out — terminating a
- * self-referencing container instead.
+ * The result is a COPY: the fields given, and the definitions `resolveChildren`
+ * returns, are never changed, since a resolver may hand back definitions other
+ * readers share. Each field group's children are enriched once per call and
+ * every reference to it attaches that one copy, so field groups nest to any
+ * depth, and a definition that places a field group inside itself (one saved
+ * before such a cycle was refused) yields a schema that refers back to itself
+ * rather than a walk that never ends. The descent stays finite either way,
+ * because it follows the VALUES, and a value holds only so many levels. Every
+ * level a value holds is therefore reached, and its text sanitized. A container
+ * is copied once too, so one that holds itself is copied as a loop.
  */
 export async function attachFieldGroupChildren(
   fields: FieldDefinition[],
-  resolveChildren: (slug: string) => Promise<FieldDefinition[] | undefined>,
-  depth = 0,
-  openContainers: WeakSet<object> = new WeakSet<object>()
+  resolveChildren: (slug: string) => Promise<FieldDefinition[] | undefined>
 ): Promise<FieldDefinition[]> {
-  if (depth > MAX_FIELD_GROUP_RESOLVE_DEPTH) return fields;
+  const fieldGroups = new Map<string, FieldDefinition[] | undefined>();
+  const containers = new Map<object, FieldDefinition>();
 
-  for (const field of fields) {
+  const childrenOf = async (
+    slug: string
+  ): Promise<FieldDefinition[] | undefined> => {
+    if (fieldGroups.has(slug)) return fieldGroups.get(slug);
+    const raw = await resolveChildren(slug);
+    if (raw === undefined) {
+      fieldGroups.set(slug, undefined);
+      return undefined;
+    }
+    // Registered before it is filled, so a reference back to this field group
+    // from inside its own children attaches this same list.
+    const copy: FieldDefinition[] = [];
+    fieldGroups.set(slug, copy);
+    for (const child of await copyList(raw)) copy.push(child);
+    return copy;
+  };
+
+  const copyField = async (
+    field: FieldDefinition
+  ): Promise<FieldDefinition> => {
     if (isFieldGroupFieldType(field.type)) {
-      await attachFieldGroupReferences(
-        field,
-        resolveChildren,
-        depth,
-        openContainers
-      );
-      continue;
+      const copy: FieldDefinition = { ...field };
+      const { single, many } = extractFieldGroupReferences(field);
+      if (single !== undefined) {
+        const children = await childrenOf(single);
+        if (children !== undefined) {
+          (copy as { componentFields?: FieldDefinition[] }).componentFields =
+            children;
+        }
+        return copy;
+      }
+      if (many === undefined) return copy;
+      const schemas: FieldGroupSchemaMap = {};
+      for (const slug of many) {
+        const children = await childrenOf(slug);
+        if (children !== undefined) schemas[slug] = { fields: children };
+      }
+      if (Object.keys(schemas).length > 0) {
+        (copy as { componentSchemas?: FieldGroupSchemaMap }).componentSchemas =
+          schemas;
+      }
+      return copy;
     }
     if (
       typeHasNestedFields(field.type) &&
       Array.isArray(field.fields) &&
       field.fields.length > 0
     ) {
-      if (openContainers.has(field)) continue;
-      openContainers.add(field);
-      await attachFieldGroupChildren(
-        field.fields,
-        resolveChildren,
-        depth,
-        openContainers
-      );
-      openContainers.delete(field);
+      const seen = containers.get(field);
+      if (seen !== undefined) return seen;
+      const copy: FieldDefinition = { ...field, fields: [] };
+      containers.set(field, copy);
+      for (const child of await copyList(field.fields)) {
+        (copy.fields as FieldDefinition[]).push(child);
+      }
+      return copy;
     }
-  }
-  return fields;
+    return field;
+  };
+
+  const copyList = async (
+    list: readonly FieldDefinition[]
+  ): Promise<FieldDefinition[]> => {
+    const out: FieldDefinition[] = [];
+    for (const field of list) out.push(await copyField(field));
+    return out;
+  };
+
+  return copyList(fields);
 }

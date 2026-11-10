@@ -246,6 +246,80 @@ describe("attachFieldGroupChildren", () => {
     expect(childrenOf(deepest)).toHaveLength(1);
   });
 
+  it("sanitizes text in field groups nested five deep", async () => {
+    // l1 holds l2 holds ... l5, each directly; every level has its own text.
+    const definitions: Record<string, FieldDefinition[]> = {};
+    for (let level = 1; level <= 5; level++) {
+      definitions[`l${level}`] = [
+        field({ name: "title", type: "text" }),
+        ...(level < 5
+          ? [
+              field({
+                name: "next",
+                type: "component",
+                component: `l${level + 1}`,
+              }),
+            ]
+          : []),
+      ];
+    }
+    const fields = await attachFieldGroupChildren(
+      [field({ name: "top", type: "component", component: "l1" })],
+      async slug => definitions[slug]
+    );
+    type Level = { title: string; next?: Level };
+    const data: { top: Level } = { top: { title: "<b>1</b>" } };
+    let at = data.top;
+    for (let level = 2; level <= 5; level++) {
+      at.next = { title: `<b>${level}</b>` };
+      at = at.next;
+    }
+    sanitizeEntryData(data as unknown as Record<string, unknown>, fields);
+    expect(at.title).toBe("5");
+  });
+
+  it("sanitizes every level a value holds under a field group placed inside itself", async () => {
+    // Saved before such a cycle was refused: `node` holds a repeater of `node`.
+    const node = [
+      field({ name: "title", type: "text" }),
+      field({
+        name: "children",
+        type: "repeater",
+        fields: [
+          field({ name: "child", type: "component", component: "node" }),
+        ],
+      }),
+    ];
+    // A fresh copy per lookup, as a resolver without a cache gives: a walk that only reached
+    // deeper levels by changing a definition it was handed would stop short here.
+    const fields = await attachFieldGroupChildren(
+      [field({ name: "tree", type: "component", component: "node" })],
+      async slug => (slug === "node" ? structuredClone(node) : undefined)
+    );
+    type Tree = { title: string; children?: { child: Tree }[] };
+    const data: { tree: Tree } = { tree: { title: "<b>0</b>" } };
+    let at = data.tree;
+    for (let level = 1; level <= 8; level++) {
+      const next: Tree = { title: `<b>${level}</b>` };
+      at.children = [{ child: next }];
+      at = next;
+    }
+    sanitizeEntryData(data as unknown as Record<string, unknown>, fields);
+    expect(at.title).toBe("8");
+  });
+
+  it("leaves the definitions it is given and resolves unchanged", async () => {
+    const given = field({ name: "seo", type: "component", component: "seo" });
+    const resolved = [field({ name: "title", type: "text" })];
+    const fields = await attachFieldGroupChildren(
+      [given],
+      async () => resolved
+    );
+    expect(childrenOf(fields[0])).toHaveLength(1);
+    expect(childrenOf(given)).toBeUndefined();
+    expect(resolved).toEqual([field({ name: "title", type: "text" })]);
+  });
+
   it("leaves a field untouched when its reference resolves to nothing", async () => {
     const raw = field({ name: "seo", type: "component", component: "gone" });
     const fields = await attachFieldGroupChildren([raw], resolver);

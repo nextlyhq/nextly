@@ -4,7 +4,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import type { FieldGroupAdminOptions } from "../../../field-groups/config/types";
-import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../../field-groups/config/validate-field-group";
 // Throws NextlyError so public messages stay generic and never echo a slug,
 // while identifiers (slug, source, refs) travel in `logContext` and operators
 // keep full diagnostic context.
@@ -189,6 +188,14 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     options?: ListComponentsOptions
   ): Promise<DynamicFieldGroupRecord[]> {
     return this.getAllRecords(options);
+  }
+
+  /**
+   * Every stored field group with only its slug and fields read, as stored rather than cached:
+   * what a save's cycle check judges the saved definition against.
+   */
+  async getAllFieldLists(): Promise<DynamicFieldGroupRecord[]> {
+    return this.getAllRecordsWithColumns(["fields"]);
   }
 
   async listComponents(
@@ -1022,8 +1029,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * Enrich field configurations with inline component schemas.
    */
   async enrichFieldsWithComponentSchemas(
-    fields: Record<string, unknown>[],
-    currentDepth = 0
+    fields: Record<string, unknown>[]
   ): Promise<EnrichedFieldConfig[]> {
     const slugs = this.collectComponentSlugs(fields);
 
@@ -1033,7 +1039,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     const componentMap = await this.fetchComponentsBySlugsBatch([...slugs]);
 
-    return this.enrichFieldsRecursive(fields, componentMap, currentDepth);
+    return this.enrichFieldsRecursive(fields, componentMap, new Set());
   }
 
   private collectComponentSlugs(
@@ -1112,7 +1118,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   private async enrichFieldsRecursive(
     fields: Record<string, unknown>[],
     componentMap: Map<string, DynamicFieldGroupRecord>,
-    currentDepth: number,
+    /** The field groups being drawn on the way down to these fields; see `drawnComponentFields`. */
+    drawing: ReadonlySet<string>,
     /** Inside a group or a repeater, whose value is stored as JSON; see `drawnComponentFields`. */
     inContainer = false
   ): Promise<EnrichedFieldConfig[]> {
@@ -1131,7 +1138,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
             enrichedField.componentFields = await this.drawnComponentFields(
               component,
               componentMap,
-              currentDepth,
+              drawing,
               inContainer
             );
           }
@@ -1148,7 +1155,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
                 fields: await this.drawnComponentFields(
                   component,
                   componentMap,
-                  currentDepth,
+                  drawing,
                   inContainer
                 ),
                 admin: component.admin,
@@ -1169,7 +1176,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         enrichedField.fields = await this.enrichFieldsRecursive(
           nestedFields,
           componentMap,
-          currentDepth,
+          drawing,
           // A named group or a repeater stores its children in its own JSON value; a container
           // with no name only arranges the form and keeps them where it sits.
           inContainer || storesItsChildren(field)
@@ -1195,7 +1202,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   private async drawnComponentFields(
     component: DynamicFieldGroupRecord,
     componentMap: Map<string, DynamicFieldGroupRecord>,
-    currentDepth: number,
+    drawing: ReadonlySet<string>,
     inContainer: boolean
   ): Promise<Record<string, unknown>[]> {
     const own = component.fields as unknown as Record<string, unknown>[];
@@ -1206,7 +1213,10 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           string,
           unknown
         >[]);
-    if (currentDepth >= MAX_FIELD_GROUP_NESTING_DEPTH) return fields;
+    // Field groups nest to any depth, so the form is drawn as deep as they reach. Only a field
+    // group already being drawn on the way down stops it: a definition placing one inside itself,
+    // saved before such a cycle was refused, would otherwise be drawn forever.
+    if (drawing.has(component.slug)) return fields;
     const nestedSlugs = this.collectComponentSlugs(fields);
     if (nestedSlugs.size === 0) return fields;
     const missing = [...nestedSlugs].filter(slug => !componentMap.has(slug));
@@ -1220,7 +1230,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     return this.enrichFieldsRecursive(
       fields,
       componentMap,
-      currentDepth + 1,
+      new Set([...drawing, component.slug]),
       inContainer
     );
   }

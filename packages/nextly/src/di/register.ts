@@ -69,6 +69,7 @@ import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
+import { judgeFieldGroupCyclesAtStart } from "../domains/field-groups/field-group-cycles";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import {
   resolveFieldGroupRegistryName,
@@ -1183,7 +1184,10 @@ async function registerServicesOnce(
       // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
       // this boot registered are published, unless the definition keeps them. After the migrations,
       // so the review states table is there to read where it exists at all.
-      await withdrawApprovalsUnderEarlierDefinitions(adapter, workflows.values());
+      await withdrawApprovalsUnderEarlierDefinitions(
+        adapter,
+        workflows.values()
+      );
 
       // The stored language list is read before any plugin starts and before registration publishes:
       // until its first read the registry knows no stored languages, and a plugin's `init` writing
@@ -1821,6 +1825,11 @@ async function reconcileBuilderTargets<T>(
   const builderEntities = await loadBuilderEntities(adapter);
 
   assertRegisteredKeepTheirKind(transformedConfig, builderEntities);
+  judgeFieldGroupCyclesAtStart({
+    code: transformedConfig.fieldGroups ?? [],
+    registered: builderEntities.components ?? [],
+    warn: message => logger.warn(message),
+  });
 
   // The configuration's addresses, judged by the one address rule before the boot writes
   // anything. Only an address no registry row holds, and whose table does not exist yet, is new

@@ -24,6 +24,7 @@ import {
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { assertSaveLeavesNoFieldGroupCycle } from "../../domains/field-groups/field-group-cycles";
 import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
 import {
   registerComponentRuntimeSchema,
@@ -500,6 +501,12 @@ export const COMPONENTS_METHODS: Record<
             fields,
             component.fields ?? []
           );
+          // Nor may the save leave this field group placed inside itself, judged against every
+          // field group as stored now, inside the exclusion.
+          assertSaveLeavesNoFieldGroupCycle({
+            saved: { slug, fields },
+            stored: await svc.registry.getAllFieldLists(),
+          });
 
           // i18n: prefer the request's localized flag over the persisted one (stale on a
           // simultaneous toggle+field-change save); fall back to the registry value.

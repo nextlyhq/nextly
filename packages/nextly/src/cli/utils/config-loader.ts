@@ -31,6 +31,7 @@ import {
 } from "../../collections/config/define-config";
 import type { NextlyServiceConfig } from "../../di/register";
 import { emailRetentionAfterTransform } from "../../domains/email/retention-config";
+import { judgeFieldGroupCyclesAtStart } from "../../domains/field-groups/field-group-cycles";
 import { adoptPerLanguageStorage } from "../../domains/i18n/per-language-storage";
 import {
   clearFieldTypes,
@@ -81,6 +82,7 @@ import {
   CONFIG_SEARCH_DIRS,
   findConfigFile,
 } from "../../shared/lib/config-file";
+import { consoleLogger } from "../../shared/types";
 
 import { bundleAndRequire } from "./config-bundler";
 
@@ -735,6 +737,11 @@ async function loadConfigInternal(
       // fold could not see them, and the runtime boot makes the same check
       // against the registry rows (register.ts), so the two paths agree (D50).
       assertRegisteredKeepTheirKind(config, builderEntities);
+      judgeFieldGroupCyclesAtStart({
+        code: config.fieldGroups ?? [],
+        registered: builderEntities.components ?? [],
+        warn: message => consoleLogger.warn(message),
+      });
       resolveBuilderExtends(folded.deferredExtends, builderEntities);
       finalizeRelationTargets(
         collectUnresolvedRelationTargets(
