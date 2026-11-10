@@ -630,6 +630,7 @@ describe("a field group's and a Single's dependents", () => {
           referencesTable: "single_home",
         },
       ],
+      retainedKeys: [],
       elements: [],
     });
   });
@@ -690,5 +691,119 @@ describe("a field group's and a Single's dependents", () => {
     expect(refusal.logContext).toMatchObject({
       reason: "single-dependents-unreadable",
     });
+  });
+});
+
+describe("keys the database holds that no configuration declares", () => {
+  const SEO = {
+    kind: "fieldGroup" as const,
+    slug: "seo",
+    tables: ["comp_seo", "comp_seo_locales"],
+  };
+  /** Sources whose live catalog holds `live`, recording which tables it was asked about. */
+  function withLive(
+    live:
+      | Awaited<ReturnType<NonNullable<DependentsSources["liveKeysInto"]>>>
+      | Error,
+    rest: Parameters<typeof sources>[0] = {}
+  ) {
+    const asked: string[][] = [];
+    return {
+      asked,
+      sources: {
+        ...sources(rest),
+        liveKeysInto: (tables: readonly string[]) => {
+          asked.push([...tables]);
+          return live instanceof Error
+            ? Promise.reject(live)
+            : Promise.resolve(live);
+        },
+      } satisfies DependentsSources,
+    };
+  }
+
+  it("counts a key into a field group's table that nothing declares, with its table's recorded owner", async () => {
+    const { sources: read } = withLive([
+      {
+        table: "plg__links",
+        referencesTable: "comp_seo",
+        owner: { kind: "plugin", id: "plg" },
+      },
+      { table: "stray", referencesTable: "comp_seo_locales", owner: null },
+    ]);
+
+    const refusal = await refusalOf(assertNothingDependsOn([SEO], read));
+
+    expect(refusal.publicMessage).toBe(
+      `"seo" cannot be deleted while other schema depends on it. Foreign keys that point at its tables: a key on "plg__links" (plugin "plg", which no longer declares it), a key on "stray" (an owner nothing records). Remove the keys no configuration declares any more, by running the migration that drops them or by hand, then delete "seo".`
+    );
+  });
+
+  it("does not count a key twice when the configuration still declares it, nor one from a table deleted with it", async () => {
+    const schema = schemaWith({
+      specs: [
+        {
+          name: "plg__links",
+          columns: [],
+          foreignKeys: [
+            {
+              name: "fk_links_seo",
+              columns: ["seo_id"],
+              referencesTable: "comp_seo",
+              referencesColumns: ["id"],
+              onDelete: "no action",
+              onUpdate: "no action",
+            },
+          ],
+        },
+      ],
+      owners: new Map([["plg__links", { kind: "plugin", id: "plg" }]]),
+    });
+    const { sources: read } = withLive(
+      [
+        {
+          table: "plg__links",
+          referencesTable: "comp_seo",
+          owner: { kind: "plugin", id: "plg" },
+        },
+        { table: "comp_seo_locales", referencesTable: "comp_seo", owner: null },
+      ],
+      { schema }
+    );
+
+    const found = await findEntityDependents([SEO], read);
+
+    expect(found.get("seo")?.foreignKeys.map(key => key.name)).toEqual([
+      "fk_links_seo",
+    ]);
+    expect(found.get("seo")?.retainedKeys).toEqual([]);
+  });
+
+  it("asks the catalog only about Singles' and field groups' tables, never a collection's", async () => {
+    const { sources: read, asked } = withLive([
+      { table: "dc_posts", referencesTable: "dc_tags", owner: null },
+    ]);
+
+    await expect(
+      findEntityDependents([{ slug: "tags", tables: ["dc_tags"] }], read)
+    ).resolves.toEqual(new Map());
+    expect(asked).toEqual([]);
+
+    await findEntityDependents(
+      [{ slug: "tags", tables: ["dc_tags"] }, SEO],
+      read
+    );
+    expect(asked).toEqual([["comp_seo", "comp_seo_locales"]]);
+  });
+
+  it("refuses when the catalog cannot be read, naming it", async () => {
+    const { sources: read } = withLive(new Error("catalog unreadable"));
+
+    const refusal = await refusalOf(findEntityDependents([SEO], read));
+
+    expect(refusal.code).toBe("SERVICE_UNAVAILABLE");
+    expect(refusal.publicMessage).toBe(
+      `"seo" was not deleted, because the foreign keys the database holds into its tables could not be read, so whether anything depends on it is unknown. Nothing was removed. Fix the cause in the server log and try again.`
+    );
   });
 });

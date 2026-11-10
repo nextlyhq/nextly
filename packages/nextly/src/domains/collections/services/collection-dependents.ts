@@ -52,10 +52,12 @@ import {
   distinctElements,
   elementsAddedTo,
   foreignKeysInto,
+  readLiveKeysInto,
   readRecordedElementsOn,
   type ElementOnTable,
   type ExtensionSchemaRecord,
   type ForeignKeyInto,
+  type LiveKeyInto,
 } from "../../schema/ownership/dependent-elements";
 import { ELEMENT_NOUNS } from "../../schema/ownership/owner-registry";
 import { parseJsonIfString } from "../../singles/services/single-utils";
@@ -118,6 +120,13 @@ export interface EntityDependents {
   readonly kind: EntityKind;
   readonly fields: readonly FieldReference[];
   readonly foreignKeys: readonly ForeignKeyInto[];
+  /**
+   * Keys the database holds into its tables that no configuration declares:
+   * a key whose owner stopped declaring it, until a migration removes it.
+   * Asked of a Single or field group, whose tables nothing of Nextly's own
+   * points into from outside them.
+   */
+  readonly retainedKeys: readonly LiveKeyInto[];
   readonly elements: readonly ElementOnTable[];
 }
 
@@ -138,6 +147,12 @@ export interface DependentsSources {
   recordedElements(
     tables: readonly string[]
   ): Promise<readonly ElementOnTable[]>;
+  /**
+   * The foreign keys the database's catalog holds into these tables, from
+   * any table. Absent where no database is read, as for a command that judges
+   * a migration file; then only declared keys are asked about.
+   */
+  liveKeysInto?(tables: readonly string[]): Promise<readonly LiveKeyInto[]>;
 }
 
 /** Field types whose target names the collection a value points at. */
@@ -273,11 +288,12 @@ function referencesAmong(
 }
 
 /** What could not be read, in the words a refusal uses. */
-type UnreadableRecord = "fields" | "foreignKeys" | "elements";
+type UnreadableRecord = "fields" | "foreignKeys" | "liveKeys" | "elements";
 
 const UNREADABLE_WORDS: Record<UnreadableRecord, string> = {
   fields: "the fields of collections, Singles and field groups",
   foreignKeys: "the foreign keys plugins and the app declare",
+  liveKeys: "the foreign keys the database holds into its tables",
   elements:
     "the record of columns, indexes, foreign keys and checks other owners added to its tables",
 };
@@ -427,6 +443,10 @@ export async function findEntityDependents(
               goingToo
             ),
       foreignKeys: records.keys.filter(key => own.has(key.referencesTable)),
+      retainedKeys:
+        kind === "collection"
+          ? []
+          : retainedKeysInto(own, records, new Set(records.tables)),
       elements: records.elements.filter(element => own.has(element.table)),
     };
     if (hasAny(dependents)) found.set(entity.slug, dependents);
@@ -434,19 +454,46 @@ export async function findEntityDependents(
   return found;
 }
 
+/**
+ * The keys the database holds into `own` from outside the operation that no
+ * declared key accounts for. A key is told by the table it is on and the
+ * table it points at, since the catalog does not name every key.
+ */
+function retainedKeysInto(
+  own: ReadonlySet<string>,
+  records: DependentRecords,
+  goingTables: ReadonlySet<string>
+): LiveKeyInto[] {
+  return records.liveKeys.filter(
+    key =>
+      own.has(key.referencesTable) &&
+      !goingTables.has(key.table) &&
+      !records.keys.some(
+        declared =>
+          declared.table === key.table &&
+          declared.referencesTable === key.referencesTable
+      )
+  );
+}
+
 function hasAny(dependents: EntityDependents): boolean {
   return (
     dependents.fields.length > 0 ||
     dependents.foreignKeys.length > 0 ||
+    dependents.retainedKeys.length > 0 ||
     dependents.elements.length > 0
   );
 }
 
 /** Every record a set of deletes is judged against, all read. */
 interface DependentRecords {
+  /** Every table the set drops. */
+  tables: readonly string[];
   owners: readonly FieldOwner[];
   /** Declared keys into any of the set's tables, from outside them. */
   keys: readonly ForeignKeyInto[];
+  /** Keys the database holds into the set's Singles' and field groups' tables. */
+  liveKeys: readonly LiveKeyInto[];
   /** Other owners' elements on any of the set's tables, once each. */
   elements: readonly ElementOnTable[];
 }
@@ -461,10 +508,20 @@ async function readDependentRecords(
   sources: DependentsSources
 ): Promise<DependentRecords> {
   const allTables = entities.flatMap(entity => entity.tables);
-  const [owners, schema, recorded] = await Promise.all([
+  // Collections are left out: a Builder relationship holds a real key into
+  // its target collection's table, which the relationship's field answers for.
+  const liveTables = entities
+    .filter(entity => kindOf(entity) !== "collection")
+    .flatMap(entity => entity.tables);
+  const [owners, schema, recorded, live] = await Promise.all([
     attempt(() => sources.fieldOwners()),
     attempt(() => sources.extensionSchema()),
     attempt(() => sources.recordedElements(allTables)),
+    attempt(async () =>
+      liveTables.length === 0 || sources.liveKeysInto === undefined
+        ? []
+        : sources.liveKeysInto(liveTables)
+    ),
   ]);
   // The compiled schema's elements are read only once the schema is: a
   // schema that could not be read leaves its elements unread too.
@@ -477,6 +534,7 @@ async function readDependentRecords(
   const failed = failedReads({
     fields: owners,
     foreignKeys: schema,
+    liveKeys: live,
     // The compiled schema's elements and the recorded rows are one record.
     elements: compiled.ok ? recorded : compiled,
   });
@@ -490,9 +548,11 @@ async function readDependentRecords(
 
   const extension = valueOf(schema);
   return {
+    tables: allTables,
     owners: valueOf(owners),
     keys:
       extension === null ? [] : foreignKeysInto(extension, new Set(allTables)),
+    liveKeys: valueOf(live),
     elements: distinctElements([...valueOf(compiled), ...valueOf(recorded)]),
   };
 }
@@ -523,6 +583,14 @@ function describeFieldReference(reference: FieldReference): string {
   return path;
 }
 
+function describeRetainedKey(key: LiveKeyInto): string {
+  const owner =
+    key.owner === null
+      ? "an owner nothing records"
+      : `${describeOwner(key.owner)}, which no longer declares it`;
+  return `a key on "${key.table}" (${owner})`;
+}
+
 function describeForeignKey(key: ForeignKeyInto): string {
   return `"${key.name}" on "${key.table}" (${describeOwner(key.owner)})`;
 }
@@ -547,9 +615,12 @@ function describeDependents(dependents: EntityDependents): string {
       `${FIELDS_THAT[dependents.kind]}: ${dependents.fields.map(describeFieldReference).join(", ")}.`
     );
   }
-  if (dependents.foreignKeys.length > 0) {
+  if (dependents.foreignKeys.length > 0 || dependents.retainedKeys.length > 0) {
     parts.push(
-      `Foreign keys that point at its tables: ${dependents.foreignKeys.map(describeForeignKey).join(", ")}.`
+      `Foreign keys that point at its tables: ${[
+        ...dependents.foreignKeys.map(describeForeignKey),
+        ...dependents.retainedKeys.map(describeRetainedKey),
+      ].join(", ")}.`
     );
   }
   if (dependents.elements.length > 0) {
@@ -592,6 +663,11 @@ function howToProceed(found: ReadonlyMap<string, EntityDependents>): string {
   ) {
     steps.push(
       "have each owner named remove its foreign keys, columns, indexes and checks (a plugin's go when the plugin stops declaring them or is uninstalled)"
+    );
+  }
+  if (all.some(dependents => dependents.retainedKeys.length > 0)) {
+    steps.push(
+      "remove the keys no configuration declares any more, by running the migration that drops them or by hand"
     );
   }
   const first = steps.join(", and ");
@@ -755,5 +831,6 @@ export function databaseDependentsSources(
     fieldOwners: () => readFieldOwners(adapter, options),
     extensionSchema,
     recordedElements: tables => readRecordedElementsOn(adapter, tables),
+    liveKeysInto: tables => readLiveKeysInto(adapter, tables),
   };
 }

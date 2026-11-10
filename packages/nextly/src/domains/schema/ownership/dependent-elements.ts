@@ -198,6 +198,78 @@ export async function readRecordedElementsOn(
 }
 
 /**
+ * A foreign key the database holds into one of the tables, as its catalog
+ * reports it, whatever any configuration declares now. A key a plugin or the
+ * app stopped declaring stays in the database until a migration removes it,
+ * and a drop meets it all the same: PostgreSQL's `CASCADE` strips it, MySQL
+ * refuses the drop.
+ */
+export interface LiveKeyInto {
+  /** The table the key is on. */
+  table: string;
+  /** The table it points at. */
+  referencesTable: string;
+  /** Who owns the table it is on, as recorded; `null` when nothing records one. */
+  owner: SchemaOwner | null;
+}
+
+/**
+ * Every foreign key the database holds into `targets`, from the database's
+ * own catalog, with the recorded owner of the table each is on.
+ *
+ * The catalog names the tables a key is on, not every key's name (SQLite keeps
+ * none), so a key is told by its table and the table it points at. Any failure
+ * to read the catalog or the owner record is thrown: the caller must not take
+ * it for none.
+ *
+ * @param adapter the database the keys and the owner record live in
+ * @param targets the tables a delete would drop
+ */
+export async function readLiveKeysInto(
+  adapter: RecordedElementsAdapter,
+  targets: readonly string[]
+): Promise<LiveKeyInto[]> {
+  // Imported when asked: the catalog readers carry every dialect's queries.
+  const { readReferencingTables } = await import(
+    "../pipeline/live-table-facts"
+  );
+  const keys: Omit<LiveKeyInto, "owner">[] = [];
+  for (const target of targets) {
+    for (const table of await readReferencingTables(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      target
+    )) {
+      keys.push({ table, referencesTable: target });
+    }
+  }
+  if (keys.length === 0) return [];
+  const owners = await recordedTableOwners(adapter, [
+    ...new Set(keys.map(key => key.table)),
+  ]);
+  return keys.map(key => ({ ...key, owner: owners.get(key.table) ?? null }));
+}
+
+/** The recorded owner of each of `tables` that has one. */
+async function recordedTableOwners(
+  adapter: RecordedElementsAdapter,
+  tables: readonly string[]
+): Promise<Map<string, SchemaOwner>> {
+  const owners = new Map<string, SchemaOwner>();
+  if (!(await schemaOwnersTableExists(adapter))) return owners;
+  const rows = await new SchemaOwnersRepository(
+    adapter.getDrizzle(),
+    adapter.dialect
+  ).read(tables);
+  for (const row of rows) {
+    if ((row.elementKind ?? "table") === "table") {
+      owners.set(row.tableName, ownerOfRow(row));
+    }
+  }
+  return owners;
+}
+
+/**
  * The elements once each, keyed as owner rows are: by table, kind and name.
  * The compiled schema and the recorded rows describe the same element when
  * both hold it, and listing it twice would read as two.

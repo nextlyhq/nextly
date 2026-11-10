@@ -74,7 +74,12 @@ import {
 
 // The extension schema a booted process publishes, made unreadable by the
 // one test that needs it to be: every other test reads the real one.
-const extensionSchema = vi.hoisted(() => ({ unreadable: false }));
+const extensionSchema = vi.hoisted(() => ({
+  unreadable: false,
+  // Read as if the configuration declared nothing: a key a plugin stopped
+  // declaring, still in the database until its migration removes it.
+  undeclared: false,
+}));
 vi.mock("../../schema/extension/active-schema", async importOriginal => {
   const actual =
     await importOriginal<
@@ -88,7 +93,29 @@ vi.mock("../../schema/extension/active-schema", async importOriginal => {
       if (extensionSchema.unreadable) {
         throw new Error("a plugin's schema hook threw");
       }
+      if (extensionSchema.undeclared) return null;
       return actual.getActiveExtensionSchema(...args);
+    },
+  };
+});
+
+// The database's own record of the keys pointing into a table, made
+// unreadable by the one test that needs it to be.
+const liveCatalog = vi.hoisted(() => ({ unreadable: false }));
+vi.mock("../../schema/pipeline/live-table-facts", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("../../schema/pipeline/live-table-facts")
+    >();
+  return {
+    ...actual,
+    readReferencingTables: (
+      ...args: Parameters<typeof actual.readReferencingTables>
+    ) => {
+      if (liveCatalog.unreadable) {
+        return Promise.reject(new Error("the catalog could not be read"));
+      }
+      return actual.readReferencingTables(...args);
     },
   };
 });
@@ -97,6 +124,8 @@ let current: TestNextly | undefined;
 
 afterEach(async () => {
   extensionSchema.unreadable = false;
+  extensionSchema.undeclared = false;
+  liveCatalog.unreadable = false;
   resetSessionStandingForTests();
   await current?.destroy();
   current = undefined;
@@ -383,6 +412,37 @@ describeEachDialect("deleting a field group something uses", dialect => {
     });
   }, 120_000);
 
+  for (const way of WAYS) {
+    it(`refuses the ${way} delete while a key no configuration declares any more points at its table, and keeps the key`, async () => {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [plainSeoGroup],
+        plugins: [linksPluginTo(SEO_TABLE)],
+      });
+      await unlock(current, SEO);
+      const keys = await liveForeignKeys(current.adapter, dialect, LINKS_TABLE);
+      expect(keys).toHaveLength(1);
+      // The plugin stopped declaring the key; its migration has not removed it.
+      extensionSchema.undeclared = true;
+
+      const outcome = await deleteVia(way, current, SEO);
+
+      extensionSchema.undeclared = false;
+      expect(outcome.status).toBe(409);
+      expect(outcome.message).toContain(
+        `"${SEO}" cannot be deleted while other schema depends on it. Foreign keys that point at its tables: `
+      );
+      expect(outcome.message).toContain(`a key on "${LINKS_TABLE}"`);
+      expect(
+        await liveForeignKeys(current.adapter, dialect, LINKS_TABLE)
+      ).toEqual(keys);
+      expect(await seoState(current, false)).toEqual({
+        table: true,
+        registry: 1,
+      });
+    }, 120_000);
+  }
+
   it("still deletes a field group nothing uses", async () => {
     current = await createTestNextly({
       dialect,
@@ -462,6 +522,29 @@ describeEachDialect("deleting a field group something uses", dialect => {
       status: 503,
       message: UNREADABLE(
         "the foreign keys plugins and the app declare and the record of columns, indexes, foreign keys and checks other owners added to its tables"
+      ),
+    });
+    expect(await seoState(current, false)).toEqual({
+      table: true,
+      registry: 1,
+    });
+  }, 120_000);
+
+  it("refuses when the keys the database holds into its tables cannot be read, and removes nothing", async () => {
+    current = await createTestNextly({
+      dialect,
+      fieldGroups: [plainSeoGroup],
+    });
+    await unlock(current, SEO);
+    liveCatalog.unreadable = true;
+
+    const outcome = await deleteVia("builder", current, SEO);
+
+    liveCatalog.unreadable = false;
+    expect(outcome).toEqual({
+      status: 503,
+      message: UNREADABLE(
+        "the foreign keys the database holds into its tables"
       ),
     });
     expect(await seoState(current, false)).toEqual({

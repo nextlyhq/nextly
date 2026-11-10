@@ -55,7 +55,12 @@ import type { SingleEntryService } from "../services/single-entry-service";
 
 // The extension schema a booted process publishes, made unreadable by the
 // one test that needs it to be: every other test reads the real one.
-const extensionSchema = vi.hoisted(() => ({ unreadable: false }));
+const extensionSchema = vi.hoisted(() => ({
+  unreadable: false,
+  // Read as if the configuration declared nothing: a key a plugin stopped
+  // declaring, still in the database until its migration removes it.
+  undeclared: false,
+}));
 vi.mock("../../schema/extension/active-schema", async importOriginal => {
   const actual =
     await importOriginal<
@@ -69,7 +74,29 @@ vi.mock("../../schema/extension/active-schema", async importOriginal => {
       if (extensionSchema.unreadable) {
         throw new Error("a plugin's schema hook threw");
       }
+      if (extensionSchema.undeclared) return null;
       return actual.getActiveExtensionSchema(...args);
+    },
+  };
+});
+
+// The database's own record of the keys pointing into a table, made
+// unreadable by the one test that needs it to be.
+const liveCatalog = vi.hoisted(() => ({ unreadable: false }));
+vi.mock("../../schema/pipeline/live-table-facts", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("../../schema/pipeline/live-table-facts")
+    >();
+  return {
+    ...actual,
+    readReferencingTables: (
+      ...args: Parameters<typeof actual.readReferencingTables>
+    ) => {
+      if (liveCatalog.unreadable) {
+        return Promise.reject(new Error("the catalog could not be read"));
+      }
+      return actual.readReferencingTables(...args);
     },
   };
 });
@@ -78,6 +105,8 @@ let current: TestNextly | undefined;
 
 afterEach(async () => {
   extensionSchema.unreadable = false;
+  extensionSchema.undeclared = false;
+  liveCatalog.unreadable = false;
   resetSessionStandingForTests();
   await current?.destroy();
   current = undefined;
@@ -225,6 +254,29 @@ describeEachDialect("deleting a Single something depends on", dialect => {
     }, 120_000);
   }
 
+  for (const way of WAYS) {
+    it(`refuses the ${way} delete while a key no configuration declares any more points at its table, and keeps the key`, async () => {
+      const t = await boot(dialect, linksPluginTo(HOME_TABLE));
+      const keys = await liveForeignKeys(t.adapter, dialect, LINKS_TABLE);
+      expect(keys).toHaveLength(1);
+      // The plugin stopped declaring the key; its migration has not removed it.
+      extensionSchema.undeclared = true;
+
+      const outcome = await deleteVia(way, t, HOME);
+
+      extensionSchema.undeclared = false;
+      expect(outcome.status).toBe(409);
+      expect(outcome.message).toContain(
+        `"${HOME}" cannot be deleted while other schema depends on it. Foreign keys that point at its tables: `
+      );
+      expect(outcome.message).toContain(`a key on "${LINKS_TABLE}"`);
+      expect(await liveForeignKeys(t.adapter, dialect, LINKS_TABLE)).toEqual(
+        keys
+      );
+      expect(await homeState(t)).toEqual(INTACT);
+    }, 120_000);
+  }
+
   // -------------------------------------------------------------------------
   // What cannot be read is refused, never counted as nothing
   // -------------------------------------------------------------------------
@@ -279,6 +331,22 @@ describeEachDialect("deleting a Single something depends on", dialect => {
       expect(await homeState(t)).toEqual(INTACT);
     }, 120_000);
   }
+
+  it("refuses the Builder's delete when the keys the database holds into its tables cannot be read, and removes nothing", async () => {
+    const t = await boot(dialect);
+    liveCatalog.unreadable = true;
+
+    const outcome = await deleteVia("builder", t, HOME);
+
+    liveCatalog.unreadable = false;
+    expect(outcome).toEqual({
+      status: 503,
+      message: UNREADABLE(
+        "the foreign keys the database holds into its tables"
+      ),
+    });
+    expect(await homeState(t)).toEqual(INTACT);
+  }, 120_000);
 
   it("refuses the Builder's delete when the record of other owners' elements cannot be read, and removes nothing", async () => {
     const t = await boot(dialect);
