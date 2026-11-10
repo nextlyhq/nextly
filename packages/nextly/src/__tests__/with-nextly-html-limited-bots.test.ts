@@ -69,6 +69,20 @@ describe("nextlyHtmlLimitedBots", () => {
 /** `withNextly()` on a config typed as Next.js reads it: any key, any value. */
 const wrap = (config: Record<string, unknown>) => withNextly(config);
 
+describe("nextly/next in a CommonJS config", () => {
+  it("is found by require, as Next.js loads next.config.ts on Node before native TypeScript", () => {
+    // Resolved through this package's own exports, as an app's config is:
+    // an export with only an `import` condition is not found by require.
+    const loaded = createRequire(import.meta.url)("nextly/next") as {
+      nextlyHtmlLimitedBots?: unknown;
+    };
+    expect(loaded.nextlyHtmlLimitedBots).toBeInstanceOf(RegExp);
+    expect((loaded.nextlyHtmlLimitedBots as RegExp).source).toBe(
+      nextlyHtmlLimitedBots.source
+    );
+  });
+});
+
 describe("withNextly's htmlLimitedBots", () => {
   it("sets Nextly's list where the app set none", () => {
     expect(wrap({}).htmlLimitedBots).toBe(nextlyHtmlLimitedBots);
