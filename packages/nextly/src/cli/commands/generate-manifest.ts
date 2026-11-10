@@ -35,7 +35,7 @@
  */
 
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { resolve, dirname, join, relative, sep } from "node:path";
+import { resolve, dirname, join } from "node:path";
 
 import type { Command } from "commander";
 
@@ -47,7 +47,7 @@ import {
 } from "../../plugins/codegen/block-manifest";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
-import { reportDryRun, type DryRunChange } from "../dry-run";
+import { reportDryRun, shownPath, type DryRunChange } from "../dry-run";
 import { exitWithError } from "../errors";
 import { blockManifestStale } from "../errors/areas/commands";
 import { createContext, type CommandContext } from "../program";
@@ -174,14 +174,6 @@ async function read(path: string): Promise<string | null> {
       logContext: { reason: "block-manifest-unreadable", path, detail },
     });
   }
-}
-
-/**
- * A path as a dry run names it: relative to the project, "/"-separated, as
- * the developer would type it there.
- */
-export function shownPath(cwd: string, path: string): string {
-  return relative(cwd, path).split(sep).join("/");
 }
 
 /** A filesystem error meaning the path holds nothing, rather than something unreadable. */
