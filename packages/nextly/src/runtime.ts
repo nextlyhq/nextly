@@ -182,8 +182,11 @@ export {
   type PublicSiteSettings,
   type PublicSiteSettingsSource,
 } from "./runtime/site-settings-read";
+// And the same fields as declared, whoever may read them: what a save judges
+// a binding against, since binding a field the public may not read is allowed.
 export {
   bindingFieldShapes,
+  declaredFieldShapes,
   type BindingFieldShape,
   type BindingFieldShapesOptions,
   type BindingSourceRef,

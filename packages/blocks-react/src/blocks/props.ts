@@ -19,6 +19,8 @@ import {
 import type { BoundValue, RemotePatternInput } from "@nextlyhq/blocks-engine";
 import { createElement, type ReactNode } from "react";
 
+import type { ReadClaim } from "../context";
+
 /**
  * Whether a stored value is text an author actually put there.
  *
@@ -70,6 +72,21 @@ export function oneOf<T extends string>(
 /** A boolean prop. Only a real boolean counts; a stored `"false"` is not one. */
 export function flag(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+/** A bound image prop's value: what it holds, and its binding's fallback. */
+export type BoundImage = Extract<BoundValue, { readonly kind: "image" }>;
+
+/**
+ * An image prop's bound value, when its binding filled it: whether the prop
+ * now holds a media id or an image address, and the fallback to draw when
+ * the host finds no record for the id. Nothing for a prop showing its own
+ * value, which the block reads as it always has.
+ */
+export function boundImage(
+  bound: BoundValue | undefined
+): BoundImage | undefined {
+  return bound?.kind === "image" ? bound : undefined;
 }
 
 /** A finite number within bounds, or the fallback. */
@@ -209,6 +226,26 @@ export const LINK_PROPS = {
   },
   rel: { label: "Link relationship", type: "text" },
 } as const;
+
+/**
+ * The claim a block's own reads are made with, naming it, so a page past its
+ * allowance names the block among those drawn without their data. Nothing
+ * for a block drawn outside a page (a host or a test calling its render
+ * directly), whose reads are then claimed unnamed.
+ */
+export function readClaimOf(
+  node: { readonly id: string } | undefined
+): ReadClaim | undefined {
+  return node === undefined ? undefined : { nodeId: node.id };
+}
+
+/** Whether a block's prop holds text, for its draw checks. */
+export function isPresent(props: object, prop: string): boolean {
+  const value: unknown = Object.hasOwn(props, prop)
+    ? Reflect.get(props, prop)
+    : undefined;
+  return text(value) !== "";
+}
 
 /** A link's attributes, ready to spread onto an `<a>`. */
 export interface LinkAttributes {

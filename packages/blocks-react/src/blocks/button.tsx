@@ -16,7 +16,14 @@ import type { BlockRenderArgs, PageContext } from "../context";
 import { INTERACTIVE } from "./categories";
 import { libraryDefinition } from "./classic-spacing";
 import { buttonLooks } from "./looks";
-import { boundText, LINK_PROPS, linkFor, oneOf, text } from "./props";
+import {
+  boundText,
+  LINK_PROPS,
+  linkFor,
+  oneOf,
+  readClaimOf,
+  text,
+} from "./props";
 
 /** The button's HTML behaviour when it is not a link. */
 export const BUTTON_TYPES = ["button", "submit", "reset"] as const;
@@ -44,13 +51,15 @@ export async function renderButton({
   props,
   className,
   ctx,
+  node,
   bound,
 }: BlockRenderArgs<ButtonProps>): Promise<ReactElement> {
   // A bound date keeps its machine-readable value inside the button or link.
   const label = boundText(text(props.label), bound?.label);
   // Where it goes, read as every linking block reads it.
+  // Claimed as this block's, so a page past its allowance names it.
   const link = await linkFor(props, (collection, id) =>
-    ctx.resolveEntryPath(collection, id)
+    ctx.resolveEntryPath(collection, id, readClaimOf(node))
   );
   const ariaLabel = text(props.ariaLabel);
   const shared = {

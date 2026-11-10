@@ -87,6 +87,14 @@ export function templateAddressProblem(address: unknown): string | null {
 }
 
 /**
+ * An address in its one spelling as its path segments, each decoded: what
+ * an entry's address is made under.
+ */
+export function addressSegments(address: string): readonly string[] {
+  return address.slice(1).split("/").map(decodeURIComponent);
+}
+
+/**
  * The declared addresses, checked, as each collection's address segments.
  *
  * @throws When an address is not in its one spelling, or two collections
@@ -124,7 +132,7 @@ export function checkedTemplateAddresses(
       continue;
     }
     byAddress.set(path, collection);
-    addresses.set(collection, path.slice(1).split("/").map(decodeURIComponent));
+    addresses.set(collection, addressSegments(path));
   }
   if (problems.length > 0) {
     throw new Error(

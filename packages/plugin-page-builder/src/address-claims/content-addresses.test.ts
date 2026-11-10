@@ -52,7 +52,8 @@ describe("the addresses listed for pre-rendering", () => {
       defaultLocale: () => "en",
       collections: [],
       holders: ["pages", "posts"],
-      entryHolders: ["posts"],
+      entryHolders: async () => ["posts"],
+      storesAddress: async () => false,
       startup: () => running,
     });
 
@@ -79,7 +80,8 @@ describe("the addresses listed for pre-rendering", () => {
       defaultLocale: () => "en",
       collections: [],
       holders: ["pages", "posts"],
-      entryHolders: ["posts"],
+      entryHolders: async () => ["posts"],
+      storesAddress: async () => false,
       startup: () => null,
     });
     expect((await service.addresses("en", { limit: 10 })).paths).toEqual([
@@ -120,7 +122,8 @@ describe("the addresses listed for pre-rendering", () => {
       defaultLocale: () => "en",
       collections: [],
       holders: ["pages", "posts"],
-      entryHolders: ["posts"],
+      entryHolders: async () => ["posts"],
+      storesAddress: async () => false,
     });
     expect((await service.addresses("en", { limit: 1 })).paths).toEqual([
       ["blog", "hello"],
@@ -144,7 +147,8 @@ describe("the addresses listed for pre-rendering", () => {
       defaultLocale: () => "en",
       collections: [],
       holders: ["pages"],
-      entryHolders: [],
+      entryHolders: async () => [],
+      storesAddress: async () => false,
     });
     expect(await service.addresses("en", { limit: 10 })).toEqual({
       paths: [],

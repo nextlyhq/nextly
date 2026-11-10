@@ -580,6 +580,23 @@ function parseCollectionRoutes(
     };
   }
 
+  // GET /api/collections/schema/{slug}/delete-impact → what deleting the
+  // collection takes with it, by plugin (a dry run the delete dialog asks)
+  if (
+    id === "schema" &&
+    subresource &&
+    subId === "delete-impact" &&
+    httpMethod === "GET"
+  ) {
+    routeParams.collectionName = subresource;
+    return {
+      service: "collections",
+      operation: "single",
+      method: "previewCollectionDelete",
+      routeParams,
+    };
+  }
+
   if (id === "schema" && subresource && httpMethod === "GET") {
     // GET /api/collections/schema/course → get collection schema with enriched component fields
     routeParams.collectionName = subresource;

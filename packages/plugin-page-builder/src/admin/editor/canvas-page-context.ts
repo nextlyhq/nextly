@@ -35,15 +35,13 @@ import {
   type ResolvedIcon,
   type ResolvedMedia,
 } from "@nextlyhq/blocks-react";
-import {
-  useCurrentUserId,
-  useDocumentIdentity,
-  useMediaResolver,
-} from "@nextlyhq/plugin-sdk/admin";
+import { useCurrentUserId, useMediaResolver } from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useMemo, useState } from "react";
 
 import { canvasListReadsIn } from "../list-entries-client";
 import { canvasNamedQueriesIn } from "../named-queries-client";
+
+import { useCanvasEntryIdentity } from "./canvas-entry";
 
 /**
  * An icon as the canvas draws it, from the set a published page draws with.
@@ -101,7 +99,9 @@ function canvasQueryBudget(): CanvasQueryBudget {
 
 /**
  * The collection a document is an entry of, as its lists judge a related
- * source: the collection's slug for an entry; `null` for a Single, whose
+ * source: the collection's slug for an entry (for a template, the entry of
+ * its collection it is previewed with, which the editor hands the canvas as
+ * its identity); `null` for a Single, whose
  * page has no entry a related list could read, so the inspector refuses
  * such a list as the save does; nothing while no document is known, nor for
  * a component, which is drawn on the pages placing it and judged with each
@@ -144,8 +144,9 @@ export function useCanvasPageContext(
   });
   // The entry the document is stored on, by its collection and id, so a list
   // of its related entries reads the relation as the canvas reads the entry:
-  // again, through the canvas's reader, never from the form's values.
-  const identity = useDocumentIdentity();
+  // again, through the canvas's reader, never from the form's values. For a
+  // template, the entry of its collection being previewed.
+  const identity = useCanvasEntryIdentity();
   const entryCollection =
     listEntryCollectionOf(identity, document) ?? undefined;
   const entryId =

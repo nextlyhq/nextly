@@ -105,6 +105,7 @@ import { readSiteStyleRecord } from "./site-style-record";
 import {
   SITE_STYLE_SLUG,
   VARIABLE_REMOVE_WRITE_CONTEXT,
+  storedVariableIdentity,
   storedVariables,
   suppliedVariableIds,
   type NamedVariable,
@@ -455,7 +456,7 @@ function withoutVariables(
   return {
     ...section,
     tokens: entries.filter(entry => {
-      const id = identityOfEntry(entry);
+      const id = storedVariableIdentity(entry);
       return id === undefined || !gone.has(id);
     }),
   };
@@ -477,7 +478,7 @@ function withVariablesBack(
   const held = new Set(storedVariables({ tokens: entries }).keys());
   const was: unknown[] = Array.isArray(original.tokens) ? original.tokens : [];
   was.forEach((entry, at) => {
-    const id = identityOfEntry(entry);
+    const id = storedVariableIdentity(entry);
     if (id !== undefined && gone.has(id) && !held.has(id)) {
       entries.splice(Math.min(at, entries.length), 0, entry);
     }
@@ -504,12 +505,6 @@ async function restoreRemoved(
     from => store.write(withVariablesBack(from.section, original, gone), from),
     { read: after }
   );
-}
-
-/** A stored entry's identity, read by the Single's own token rules. */
-function identityOfEntry(entry: unknown): string | undefined {
-  const [only] = storedVariables({ tokens: [entry] }).keys();
-  return only;
 }
 
 /**

@@ -1,6 +1,7 @@
 import type {
   BindingFieldShape,
   BindingIssue,
+  BindingRun,
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockDefinition as EngineBlockDefinition,
   ConditionIssue,
@@ -358,8 +359,14 @@ export const emptyDataProvider: BlocksDataProvider = {
  * thousand loops over one both spend the same.
  */
 export interface QueryBudget {
-  /** Claim one read. False when the page has spent its allowance. */
-  take(): boolean;
+  /**
+   * Claim one read. False when the page has spent its allowance.
+   *
+   * `claim` says what the read is for and which block asked, so a page that
+   * outruns its allowance can say what it cost and which blocks went
+   * without their data. Optional: a read claimed without one still counts.
+   */
+  take(claim?: ReadClaim): boolean;
   /**
    * How many reads are left, claiming none: what a host that makes a run
    * elsewhere hands that place, so it never spends more than the page has.
@@ -373,6 +380,109 @@ export interface QueryBudget {
    * answers the current render's, so no run outlives its render.
    */
   generation?(): object;
+  /**
+   * What this budget has counted so far. Absent on a budget that does not
+   * count, such as one a host wrote itself.
+   *
+   * @experimental
+   */
+  report?(): PageReadReport;
+}
+
+/**
+ * What a read is for, as an author would name it:
+ * - `entries`: a list's entries;
+ * - `related`: entries reached through a relation, for a list's items or
+ *   the page's own bindings;
+ * - `image`: a media record;
+ * - `link`: where a link to an entry goes, its ownership checks included;
+ * - `page`: the page's own data: its entry, a Single, the site settings;
+ * - `component`: the components and Layouts the page places.
+ *
+ * @experimental
+ */
+export type ReadKind =
+  | "entries"
+  | "related"
+  | "image"
+  | "link"
+  | "page"
+  | "component";
+
+/**
+ * One read's claim: what it is for, and the block that asked, where a block
+ * did. A claim with no kind counts as the page's own data.
+ *
+ * @experimental
+ */
+export interface ReadClaim {
+  readonly kind?: ReadKind;
+  readonly nodeId?: string;
+}
+
+/** A block drawn without its data, because the page had spent its reads. */
+export interface UnreadBlock {
+  readonly nodeId: string;
+  readonly what: ReadKind;
+}
+
+/**
+ * One render's count of the reads a page made against its allowance.
+ *
+ * @experimental
+ */
+export interface PageReadReport {
+  /** The allowance: the route's `maxQueries`, 500 by default. */
+  readonly cap: number;
+  /** Reads made. Never more than `cap`. */
+  readonly used: number;
+  /**
+   * Reads asked for once the allowance was spent: a lower bound on what the
+   * page needs, since a list whose read was refused never asks for its
+   * entries' images.
+   */
+  readonly refused: number;
+  /** Reads made, by what they were for. */
+  readonly byKind: Readonly<Partial<Record<ReadKind, number>>>;
+  /** The blocks whose read was refused, in the order they asked, each once. */
+  readonly unread: readonly UnreadBlock[];
+}
+
+/**
+ * The reads a collection list asks for its entries all at once, before it
+ * draws them, so what a list costs does not grow with its length: each
+ * relation its items' bindings follow, and each link to an entry its
+ * template draws, one read per batch rather than one per entry. (An image
+ * costs one read per distinct media id per render through `resolveMedia`.)
+ *
+ * The links read here prime what `resolveEntryPath` then answers from, so a
+ * block drawn inside an entry claims nothing for what was read ahead. A host without it draws each
+ * entry's reads one at a time, as before; anything a batch could not settle
+ * falls back to that path too.
+ *
+ * @experimental
+ */
+export interface ListBatchReads {
+  /**
+   * The entries a to-one relation of `collection` named `field` points at,
+   * by the id each item stores, with `fields` read. `undefined` when the
+   * relation cannot be followed (not a to-one relation the public may read,
+   * or a read refused or failed): the items keep their ids.
+   */
+  related(
+    collection: string,
+    field: string,
+    ids: readonly (string | number)[],
+    fields: readonly string[],
+    claim: ReadClaim
+  ): Promise<
+    ReadonlyMap<string, Readonly<Record<string, unknown>>> | undefined
+  >;
+  /** Settle these links' paths ahead, for `resolveEntryPath` to answer from. */
+  entryPaths(
+    refs: readonly { readonly collection: string; readonly id: string }[],
+    claim: ReadClaim
+  ): Promise<void>;
 }
 
 /**
@@ -542,7 +652,7 @@ export interface PageContext {
    * synchronous signature would force every such host to pre-resolve every
    * media id on every render, or to lie.
    */
-  resolveMedia(id: string): Promise<ResolvedMedia | null>;
+  resolveMedia(id: string, claim?: ReadClaim): Promise<ResolvedMedia | null>;
   /**
    * Resolve an icon id (`lucide:star`) to the SVG it draws, or `null` when
    * this host does not draw that icon.
@@ -562,7 +672,44 @@ export interface PageContext {
    * Async for the same reason: the path depends on the referenced entry's slug
    * and status, which is a read.
    */
-  resolveEntryPath(collection: string, id: string): Promise<string | null>;
+  resolveEntryPath(
+    collection: string,
+    id: string,
+    claim?: ReadClaim
+  ): Promise<string | null>;
+  /**
+   * What a collection list reads ahead for the entries it draws. Absent, each
+   * entry's reads are made as it is drawn.
+   *
+   * @experimental
+   */
+  listReads?: ListBatchReads;
+  /**
+   * The related entries a list read ahead for the item being drawn, by the
+   * relation field it followed: what an item binding through that relation
+   * (`author.name`) reads, while the item keeps the id it stores, which a
+   * binding to the field itself (`author`) reads. Absent, both read the
+   * item's own values.
+   *
+   * @experimental
+   */
+  itemFollowed?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  /**
+   * The blocks the route kept because their conditions held for the page's
+   * entry, by id: what a list asks the renderer's own condition gate with,
+   * so it reads ahead for exactly the blocks each entry draws.
+   *
+   * @experimental
+   */
+  heldConditions?: ReadonlySet<string>;
+  /**
+   * The binding pass the renderer fills list items' bindings with: what a
+   * list reads ahead by, so it reads for the props each entry is drawn with,
+   * fallbacks included. Absent, no item binding is filled.
+   *
+   * @experimental
+   */
+  itemBindingRun?: BindingRun;
   /**
    * The entry the surrounding repeater is currently on.
    *
@@ -814,6 +961,13 @@ export interface PageBindings {
    * day, whatever the zone.
    */
   readonly timeZone?: string;
+  /**
+   * The collection whose ids `resolveMedia` reads, so an image is filled only
+   * from an upload field pointing there. `media`, Nextly's media library,
+   * when absent: a host resolving media from a collection of its own names
+   * it here.
+   */
+  readonly mediaCollection?: string;
 }
 
 /**
@@ -871,22 +1025,76 @@ export const DEFAULT_MAX_QUERIES = 500;
  * on restart, which is the hardest kind to attribute.
  */
 export function createQueryBudget(
-  max: number = DEFAULT_MAX_QUERIES
-): QueryBudget {
+  max: number = DEFAULT_MAX_QUERIES,
+  options: QueryBudgetOptions = {}
+): QueryBudget & { remaining(): number; report(): PageReadReport } {
   // `NaN` is what `Number(process.env.MAX_QUERIES)` produces for an unset or
   // malformed variable, and every comparison against it is false — so
   // `remaining <= 0` never fires and the budget silently becomes unlimited.
   // That is the failure this exists to prevent, reached by a configuration
   // mistake rather than by a document.
-  let remaining = Number.isNaN(max) ? DEFAULT_MAX_QUERIES : max;
+  // A count of reads is a whole number, not below zero, so `take`,
+  // `remaining` and `report` agree on what a fractional or negative cap
+  // allows: 2.7 allows 2, and -1 none. Unlimited stays unlimited.
+  const cap = Number.isNaN(max)
+    ? DEFAULT_MAX_QUERIES
+    : max === Infinity
+      ? Infinity
+      : Math.max(0, Math.floor(max));
+  let remaining = cap;
+  // What was counted, for the editor's meter and the overrun warning. The
+  // count is the sum of the kinds, every granted claim adding to one, so the
+  // total and its breakdown cannot disagree.
+  let refused = 0;
+  const byKind: Partial<Record<ReadKind, number>> = {};
+  const unread = new Map<string, UnreadBlock>();
   return {
     remaining: () => Math.max(0, remaining),
-    take: () => {
-      if (remaining <= 0) return false;
+    take: (claim: ReadClaim = {}) => {
+      const kind = claim.kind ?? "page";
+      if (remaining <= 0) {
+        refused += 1;
+        noteUnread(unread, claim.nodeId, kind);
+        options.onRefused?.(claim);
+        return false;
+      }
       remaining -= 1;
+      byKind[kind] = (byKind[kind] ?? 0) + 1;
       return true;
     },
+    report: () => ({
+      cap,
+      used: sumOf(byKind),
+      refused,
+      byKind: { ...byKind },
+      unread: [...unread.values()],
+    }),
   };
+}
+
+/** A refused block, kept once per block and kind, in the order it asked. */
+function noteUnread(
+  unread: Map<string, UnreadBlock>,
+  nodeId: string | undefined,
+  what: ReadKind
+): void {
+  if (nodeId === undefined) return;
+  const key = `${nodeId}\u0000${what}`;
+  if (!unread.has(key)) unread.set(key, { nodeId, what });
+}
+
+/** Options for {@link createQueryBudget}. */
+export interface QueryBudgetOptions {
+  /**
+   * Told of each claim refused, as it is refused: what a route logs the
+   * overrun from.
+   */
+  readonly onRefused?: (claim: ReadClaim) => void;
+}
+
+/** The reads counted, by kind, added up. */
+function sumOf(byKind: Partial<Record<ReadKind, number>>): number {
+  return Object.values(byKind).reduce((total, count) => total + count, 0);
 }
 
 /**

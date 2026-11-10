@@ -631,6 +631,31 @@ const COLLECTIONS_METHODS: Record<
       );
     },
   },
+  // What deleting a collection takes with it besides its own entries, by the
+  // plugin that holds it (`ctx.hooks.onCollectionDelete`), for the delete
+  // dialog to list before the confirm. `?together=a,b` names the collections
+  // a bulk delete removes with this one, as on the delete. Reads only.
+  previewCollectionDelete: {
+    execute: async (_svc, p) => {
+      const collectionName = requireParam(p, "collectionName");
+      const slugs = [
+        ...new Set([collectionName, ...parseTogetherParam(p.together)]),
+      ];
+      const [{ collectionDeleteImpact }, { getActiveHookRegistry }] =
+        await Promise.all([
+          import(
+            "../../domains/collections/services/collection-delete-plugins"
+          ),
+          import("../../hooks/hook-registry"),
+        ]);
+      const impact = await collectionDeleteImpact(
+        getActiveHookRegistry(),
+        slugs
+      );
+      // Read for this caller's dialog only; no shared cache keeps it.
+      return withSessionCacheHeaders(respondData({ impact }));
+    },
+  },
   // Preview schema changes (dry-run diff with row-count impact)
   previewSchemaChanges: {
     execute: async (_svc, p, body) => {

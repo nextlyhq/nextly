@@ -343,6 +343,25 @@ caller's roles are looked up. They return the row itself
 (`deleteEntryInTransaction` returns nothing) rather than the
 `{ message, item, warnings? }` envelope.
 
+`getCollection` reads a collection's record through the pool, so inside a transaction on a
+pool of one connection, the usual serverless setting, it waits for the connection the
+transaction holds until the pool gives up. `getCollectionInTransaction(tx, slug)`
+(`@experimental`) answers the same record on the transaction's own connection, from the
+work's `tx` or an in-transaction handler's `transaction`. Like `getCollection`, it asks
+nothing of the caller's access and is refused with `NOT_FOUND` for a collection there is no
+record of. It takes no lock: use `holdCollectionInTransaction` where a write must not
+outlive the collection.
+
+```ts
+ctx.hooks.onInTransaction("*", async write => {
+  const record = await ctx.services.collections.getCollectionInTransaction(
+    write.transaction,
+    write.collection
+  );
+  // ...
+});
+```
+
 `ctx.services.users` may create and update accounts, but not decide who administers the
 site. It refuses, with `NextlyError` code `FORBIDDEN`, to create an install's first
 account (core makes that one super-admin), to give a role that reaches `super-admin`
@@ -492,6 +511,33 @@ started is judged as it is now. Anything else is refused with `INVALID_INPUT`
 the content's read hooks, for that one collection or Single and that one call; a related
 row keeps its own hooks. The same warning applies: never return what they read to a
 person.
+
+To find that content without naming it first, `listHostTypesInTransaction(tx)`
+(`@experimental`) answers `{ collections, singles }`: each collection and Single holding a
+field of a type your plugin registered, as `services.collections.listCollections` and
+`services.singles.list` list them, judged by the same rule, so a host read of any slug it
+lists is not refused on the same transaction. Your own collections and Singles are judged
+like any other. Those two listings take a pooled connection, which inside a transaction on
+a pool of one waits for the connection the transaction holds; this one reads on the
+transaction's connection, in a few statements whatever the number of collections and
+Singles: the collections, the Singles, and every component's fields when a schema names a
+component. Each collection and Single is judged by the schema read in the same statement
+as itself. A plugin that registered no field type gets both lists empty.
+
+```ts
+await ctx.services.collections.withTransaction(async tx => {
+  const { collections, singles } =
+    await ctx.services.ownCollections.listHostTypesInTransaction(tx);
+  for (const collection of collections) {
+    const page = await ctx.services.ownCollections.listHostEntriesInTransaction(
+      tx,
+      collection.name,
+      { pagination: { limit: 50 } }
+    );
+    // ...
+  }
+});
+```
 
 ## When to drop to `ctx.db`
 
