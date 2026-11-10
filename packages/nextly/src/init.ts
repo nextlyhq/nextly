@@ -418,7 +418,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         );
         consoleLogger.info(`  - Full-text search: ${capabilities.supportsFts}`);
 
-        // F8 PR 6: drift check, in a development start only. First-run
+        // The drift check, in a development start only. First-run
         // static-table setup already ran inside registerServices (see
         // first-run.ts). This path only logs a single warning when config
         // has drifted from the live schema — it does NOT auto-apply (real
