@@ -93,6 +93,32 @@ describe("useDocumentValues", () => {
     expect(preview()).toEqual({ title: "Saved title!" });
   });
 
+  it("draws again when a field inside a group it reads changes", async () => {
+    // The form keeps a group's object and changes it in place, so the group
+    // read must not be judged unchanged by its identity.
+    const groups: unknown[] = [];
+    function Group() {
+      const values = useDocumentValues(["seo"]);
+      groups.push(values?.seo);
+      return <pre data-testid="preview">{JSON.stringify(values)}</pre>;
+    }
+    render(
+      <Document>
+        <Group />
+      </Document>
+    );
+    await userEvent.type(screen.getByLabelText("SEO title"), "Search");
+    expect(preview()).toEqual({ seo: { title: "Search" } });
+    const kept = groups.at(-1);
+
+    await userEvent.type(screen.getByLabelText("SEO title"), "!");
+    expect(preview()).toEqual({ seo: { title: "Search!" } });
+    // A group handed out is the reader's own: the next keystroke gives a new
+    // one rather than changing the one a component kept.
+    expect(groups.at(-1)).not.toBe(kept);
+    expect(kept).toEqual({ title: "Search" });
+  });
+
   it("draws again only when a field it reads changes", async () => {
     const drawn = vi.fn();
     function Counted() {
@@ -179,6 +205,72 @@ describe("useDocumentField", () => {
     expect(wrote).toBe(false);
     expect(screen.getByLabelText("SEO title")).toHaveValue("");
     expect(screen.getByLabelText("Dirty")).toHaveTextContent("false");
+  });
+
+  it("checks a write again once a save has been refused, as typing would", async () => {
+    // The editors check a field as it changes only after a refused save,
+    // and a plugin's write is checked the same way.
+    let field: DocumentField | null = null;
+    function Checked() {
+      const form = useForm<Record<string, unknown>>({
+        defaultValues: { title: "" },
+        mode: "onSubmit",
+        reValidateMode: "onChange",
+      });
+      return (
+        <EntryFormProvider
+          form={form}
+          onSubmit={form.handleSubmit(() => {})}
+          contentHeld={false}
+        >
+          <input
+            aria-label="Title"
+            {...form.register("title", { required: "Give it a title" })}
+          />
+          <p role="alert">
+            {String(form.formState.errors.title?.message ?? "")}
+          </p>
+          <button type="submit">Save</button>
+          <FieldControl path="title" onField={f => (field = f)} />
+        </EntryFormProvider>
+      );
+    }
+    render(<Checked />);
+    // Before any save, a write is not checked, however long it is waited on.
+    await act(async () => {
+      field!.set("");
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("");
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Give it a title");
+
+    await act(async () => {
+      field!.set("A title");
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("");
+  });
+
+  it("writes nothing through a setter kept from before the content was held", () => {
+    let field: DocumentField | null = null;
+    const { rerender } = render(
+      <Document contentHeld={false}>
+        <FieldControl path="seo.title" onField={f => (field = f)} />
+      </Document>
+    );
+    const kept = field!;
+    rerender(
+      <Document contentHeld>
+        <FieldControl path="seo.title" onField={f => (field = f)} />
+      </Document>
+    );
+
+    let wrote = true;
+    act(() => {
+      wrote = kept.set("Late");
+    });
+    expect(wrote).toBe(false);
+    expect(screen.getByLabelText("SEO title")).toHaveValue("");
   });
 
   it("is null outside a document", () => {

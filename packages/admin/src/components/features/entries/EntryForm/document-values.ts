@@ -37,7 +37,16 @@ interface DocumentForm {
   contentHeld: boolean;
 }
 
-const DocumentFormContext = createContext<DocumentForm | null>(null);
+/**
+ * What the hooks are handed: the form, the hold as of the last drawing, and
+ * the hold as it is at the moment of asking, which a write checks so that a
+ * setter kept from before a hold began still writes nothing once it has.
+ */
+interface DocumentFormSourceValue extends DocumentForm {
+  heldNow: () => boolean;
+}
+
+const DocumentFormContext = createContext<DocumentFormSourceValue | null>(null);
 
 /** Hands the document's form down to what the editor draws inside it. */
 export function DocumentFormSource({
@@ -45,7 +54,14 @@ export function DocumentFormSource({
   contentHeld,
   children,
 }: DocumentForm & { children: ReactNode }): ReactNode {
-  const value = useMemo(() => ({ form, contentHeld }), [form, contentHeld]);
+  // The hold as of this drawing, read by every setter handed out so far, as
+  // the editors keep their own writes' hold (`writesHeldNow`).
+  const held = useRef(contentHeld);
+  held.current = contentHeld;
+  const value = useMemo(
+    () => ({ form, contentHeld, heldNow: () => held.current }),
+    [form, contentHeld]
+  );
   return createElement(DocumentFormContext.Provider, { value }, children);
 }
 
@@ -58,6 +74,19 @@ function touches(changed: string | undefined, path: string): boolean {
     changed.startsWith(`${path}.`) ||
     path.startsWith(`${changed}.`)
   );
+}
+
+/**
+ * A value as it stands, detached from the form's own objects. A value that
+ * cannot be copied, such as a function, is handed as it is.
+ */
+function copyOf(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  try {
+    return structuredClone(value);
+  } catch {
+    return value;
+  }
 }
 
 /** No document: nothing to subscribe to. */
@@ -77,14 +106,26 @@ export function useDocumentValues(
   // One key for the paths, so a new array of the same paths, as a literal
   // gives on every render, is not a new subscription.
   const key = paths.join("\u0000");
-  const last = useRef<Readonly<Record<string, unknown>> | null>(null);
+  // The answer handed out, and the count of changes it was read at. The form
+  // changes a group's object in place, so a group read cannot be judged
+  // unchanged by its identity: a change that touches a read path counts
+  // instead, and only a counted change reads the values again.
+  const last = useRef<{
+    form: unknown;
+    key: string;
+    seen: number;
+    values: Readonly<Record<string, unknown>>;
+  } | null>(null);
+  const changes = useRef(0);
 
   const subscribe = useCallback(
     (changed: () => void) => {
       if (form === undefined) return () => {};
       const named = key === "" ? [] : key.split("\u0000");
       const subscription = form.watch((_values, { name }) => {
-        if (named.some(path => touches(name, path))) changed();
+        if (!named.some(path => touches(name, path))) return;
+        changes.current += 1;
+        changed();
       });
       return () => subscription.unsubscribe();
     },
@@ -93,22 +134,25 @@ export function useDocumentValues(
 
   const snapshot = useCallback((): Readonly<Record<string, unknown>> | null => {
     if (form === undefined) return null;
-    const named = key === "" ? [] : key.split("\u0000");
-    const next = Object.fromEntries(
-      named.map(path => [path, form.getValues(path)])
-    );
-    // The same values give the same object, so nothing draws again for a
-    // change that touched none of them.
     const previous = last.current;
+    // Nothing the paths read has changed: the same answer, so nothing draws
+    // again for a change that touched none of them.
     if (
       previous !== null &&
-      named.length === Object.keys(previous).length &&
-      named.every(path => Object.is(previous[path], next[path]))
+      previous.form === form &&
+      previous.key === key &&
+      previous.seen === changes.current
     ) {
-      return previous;
+      return previous.values;
     }
-    last.current = next;
-    return next;
+    const named = key === "" ? [] : key.split("\u0000");
+    // Copies, so a group handed out is the reader's own, never the form's
+    // object that the next keystroke changes in place.
+    const values = Object.fromEntries(
+      named.map(path => [path, copyOf(form.getValues(path))])
+    );
+    last.current = { form, key, seen: changes.current, values };
+    return values;
   }, [form, key]);
 
   return useSyncExternalStore(
@@ -142,8 +186,15 @@ export function useDocumentField(path: string): DocumentField | null {
   const values = useDocumentValues([path]);
   const set = useCallback(
     (next: unknown): boolean => {
-      if (source === null || source.contentHeld) return false;
-      source.form.setValue(path, next, { shouldDirty: true });
+      // The hold as it is now, not as it was when this setter was handed out.
+      if (source === null || source.heldNow()) return false;
+      const { form } = source;
+      // Checked as typing into the field would be: once a save has been
+      // refused, a field is checked as it changes; before, it is not.
+      form.setValue(path, next, {
+        shouldDirty: true,
+        shouldValidate: form.formState.isSubmitted,
+      });
       return true;
     },
     [source, path]
