@@ -17,8 +17,8 @@
  *
  * @module runtime/routing/declared-fields
  */
-import type { FieldConfig } from "../../collections/fields/types";
 import { getService, isServicesRegistered } from "../../di/service-access";
+import { withSystemTextFields } from "../../domains/collections/system-text-fields";
 import { buildEnvelope } from "../../domains/webhooks/envelope";
 import { expandComponentFields } from "../../domains/webhooks/expand-component-fields";
 import {
@@ -35,7 +35,7 @@ export interface SourceEntity {
 
 /** What the registry holds for a source that a read of it is shaped by. */
 interface Declaration {
-  readonly fields: readonly FieldConfig[];
+  readonly fields: readonly SensitiveFieldSource[];
   /**
    * The timestamps a read of it returns: a collection's entries carry
    * `createdAt` and `updatedAt` unless it turns timestamps off, as its type
@@ -52,13 +52,17 @@ async function declarationOf(
     const record = await getService(
       "collectionRegistryService"
     ).getCollectionBySlug(source.slug);
-    return record === null
-      ? undefined
-      : {
-          fields: record.fields,
-          timestamps:
-            record.timestamps === false ? [] : ["createdAt", "updatedAt"],
-        };
+    if (record === null) return undefined;
+    return {
+      // A collection's own `title` and `slug` are read with every entry. A
+      // plugin's collection holds only the fields it declares, as its writes
+      // treat it, so nothing is added for one.
+      fields:
+        record.admin?.isPlugin === true
+          ? record.fields
+          : withSystemTextFields(record.fields),
+      timestamps: record.timestamps === false ? [] : ["createdAt", "updatedAt"],
+    };
   }
   const record = await getService("singleRegistryService").getSingleBySlug(
     source.slug
