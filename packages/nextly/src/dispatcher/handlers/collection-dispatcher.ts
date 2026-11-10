@@ -21,6 +21,7 @@
 import { z } from "zod";
 
 import {
+  assertBuilderFieldNames,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
 } from "../../api/fields-payload";
@@ -34,8 +35,10 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
+import { container } from "../../di/container";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { DynamicCollectionService } from "../../domains/dynamic-collections/services/dynamic-collection-service";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
 import {
@@ -43,6 +46,15 @@ import {
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
+import {
+  previewCollectionSave,
+  writeCollectionSave,
+  type BuilderSaveSetup,
+} from "../../domains/schema/builder-save/collection-save";
+import {
+  saveOfSchemaChange,
+  type SchemaChangeAnswers,
+} from "../../domains/schema/builder-save/schema-change-save";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
@@ -54,6 +66,7 @@ import { generateRuntimeSchema } from "../../domains/schema/services/runtime-sch
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
+import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { NextlyError } from "../../errors";
 import {
   applyPluginAdminViews,
@@ -691,7 +704,11 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields, { kind: "collection" });
+      // A field name the collection already holds keeps working whatever its case.
+      assertValidFieldsPayload(fields, {
+        kind: "collection",
+        stored: collection.fields ?? [],
+      });
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -746,24 +763,45 @@ const COLLECTIONS_METHODS: Record<
         recordedFields: recordedFieldsOf(collection),
       };
 
-      return respondData(
-        await builderSchemaPreviewBody({
-          desired,
-          db,
-          dialect,
-          slug: p.collectionName,
-          tableName,
-          builtBy: "collection",
-          entity: collection,
-          currentFields,
-          newFields: fields as FieldDefinition[],
-          requestedLocalized: previewLocalized,
-          // Legacy rows (schema_version NULL) read as 1, so the editor always has a concrete
-          // version to echo back on Apply; JSON omits an undefined one and the guard would reject
-          // the first save as version-less.
-          schemaVersion: collection.schemaVersion ?? 1,
-        })
-      );
+      const preview = await builderSchemaPreviewBody({
+        desired,
+        db,
+        dialect,
+        slug: p.collectionName,
+        tableName,
+        builtBy: "collection",
+        entity: collection,
+        currentFields,
+        newFields: fields as FieldDefinition[],
+        requestedLocalized: previewLocalized,
+        // Legacy rows (schema_version NULL) read as 1, so the editor always has a concrete
+        // version to echo back on Apply; JSON omits an undefined one and the guard would reject
+        // the first save as version-less.
+        schemaVersion: collection.schemaVersion ?? 1,
+      });
+      // What the save writes beyond the person's change, for the review to
+      // show before they confirm: each conversion, fill and delete. The
+      // answers are optional here, so the review can ask again once chosen.
+      const answers = body as SchemaChangeAnswers;
+      const notices = await reviewLinesOf({
+        slug: p.collectionName,
+        collection: writerRowOf(collection),
+        fields: fields as FieldDefinition[],
+        localized:
+          previewLocalized ??
+          (collection as { localized?: boolean }).localized === true,
+        answers: {
+          renameResolutions: answers.renameResolutions ?? [],
+          eventResolutions: answers.eventResolutions ?? [],
+          ...(answers.resolutions === undefined
+            ? {}
+            : { resolutions: answers.resolutions }),
+          ...(answers.acknowledgedConversions === undefined
+            ? {}
+            : { acknowledgedConversions: answers.acknowledgedConversions }),
+        },
+      });
+      return respondData({ ...preview, notices });
     },
   },
   // Apply confirmed schema changes via the in-process schema service.
@@ -829,7 +867,10 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields, { kind: "collection" });
+      assertValidFieldsPayload(fields, {
+        kind: "collection",
+        stored: "under-lock",
+      });
 
       // Log a debug line when hints arrive so we can track adoption
       // without surprising operators with errors. The current version
@@ -865,6 +906,9 @@ const COLLECTIONS_METHODS: Record<
           );
           if (!collection) throw new Error("Collection not found");
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
+          // A field name the collection already holds keeps working whatever its case; one this
+          // save creates is the Builder's own. Judged against the row as stored now.
+          assertBuilderFieldNames(fields, collection.fields ?? []);
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write; one the entity already holds keeps working. Asked here because this
           // road reaches its DDL through no shared service that could ask it.
@@ -923,7 +967,19 @@ const COLLECTIONS_METHODS: Record<
           // One apply of the schema pipeline, with the admin's answers from the dialog, then the
           // companion brought in step: the same path a Builder save of the collection takes. Legacy
           // per-field answers are translated to typed resolutions inside the prompt dispatcher.
-          const result = await applyCollectionSchemaChange({
+          // With the Builder save writer set up, the change is the migration
+          // `migrate:create` would write for this collection, with the
+          // person's renames and answers in it, run in development as
+          // `nextly migrate` runs it (`writeCollectionSave`).
+          const acknowledgedConversions = (
+            body as { acknowledgedConversions?: string[] }
+          ).acknowledgedConversions;
+          // A translated collection, or one turning translation on or off,
+          // keeps its push in development, which carries values across the
+          // change; the writer writes its migration and records it once the
+          // push has run.
+          const translated = wasLocalized || isLocalized;
+          const change: Parameters<typeof applyCollectionSchemaChange>[0] = {
             slug: p.collectionName,
             collection,
             fields: fields as unknown as FieldDefinition[],
@@ -937,7 +993,34 @@ const COLLECTIONS_METHODS: Record<
             legacyResolutions: resolutions
               ? { tableName, byFieldName: resolutions }
               : undefined,
+          };
+          let pushedSummary: PushSummary | undefined;
+          const push = async (): Promise<void> => {
+            pushedSummary = (await applyCollectionSchemaChange(change)).summary;
+          };
+          const written = await saveThroughWriter({
+            ...(translated ? { appliedBy: push } : {}),
+            slug: p.collectionName,
+            collection: writerRowOf(collection),
+            fields: fields as unknown as FieldDefinition[],
+            localized: isLocalized,
+            answers: {
+              renameResolutions: renameResolutions ?? [],
+              eventResolutions: eventResolutions ?? [],
+              ...(resolutions === undefined ? {} : { resolutions }),
+              ...(acknowledgedConversions === undefined
+                ? {}
+                : { acknowledgedConversions }),
+            },
           });
+          const storedFields =
+            written === undefined
+              ? (fields as unknown as FieldDefinition[])
+              : written.fields;
+          const result =
+            written !== undefined
+              ? { summary: pushedSummary }
+              : await applyCollectionSchemaChange(change);
 
           // pipeline.apply mutates the live DB (renamed/added/dropped
           // columns) but does NOT persist the updated `fields` JSON on
@@ -963,8 +1046,13 @@ const COLLECTIONS_METHODS: Record<
             await adapter.update(
               "dynamic_collections",
               {
-                fields: JSON.stringify(fields),
+                fields: JSON.stringify(storedFields),
                 schema_version: newSchemaVersion,
+                // Written but not run outside development: `nextly migrate`
+                // applies it on deploy.
+                ...(written !== undefined && !written.applied
+                  ? { migration_status: "pending" }
+                  : {}),
                 // i18n: persist the state this apply actually ran with (mirrors
                 // the singles apply). The DDL above already performed any
                 // false→true transition, so leaving the stored flag behind would
@@ -1036,7 +1124,7 @@ const COLLECTIONS_METHODS: Record<
             // per-language reads/writes resolve in THIS process without a restart.
             const { table: freshTable } = generateRuntimeSchema(
               tableName,
-              fields as FieldDefinition[],
+              storedFields,
               dialect,
               {
                 localized: isStoredPerLanguage,
@@ -1636,3 +1724,114 @@ export const formatToastSummaryForTest = formatToastSummary;
 // Test seam for the hint-receipt decision helper. The behavioural
 // contract is "non-empty renames map -> log; everything else -> silent".
 export const shouldLogF14HintReceiptForTest = shouldLogF14HintReceipt;
+
+/**
+ * A registry row as the writer reads it: its table and its fields, which the
+ * registry stores as the field definitions they were saved as.
+ */
+function writerRowOf(collection: { tableName: string; fields?: unknown }): {
+  tableName: string;
+  fields: FieldDefinition[];
+} {
+  return {
+    tableName: collection.tableName,
+    fields: (collection.fields ?? []) as FieldDefinition[],
+  };
+}
+
+/** What a field change gives the Builder save writer. */
+interface WriterChange {
+  slug: string;
+  collection: { tableName: string; fields?: FieldDefinition[] };
+  fields: FieldDefinition[];
+  localized: boolean;
+  answers: SchemaChangeAnswers;
+}
+
+/**
+ * The Builder save writer's dependencies and the save a field change makes
+ * (`saveOfSchemaChange`), read from the definition as it stands. Undefined
+ * when the app registered no writer.
+ */
+async function writerSaveOf(change: WriterChange): Promise<
+  | {
+      deps: Parameters<typeof writeCollectionSave>[0];
+      save: Parameters<typeof writeCollectionSave>[1];
+      fields: FieldDefinition[];
+    }
+  | undefined
+> {
+  if (!container.has("builderSaveSetup")) return undefined;
+  const setup = container.get<BuilderSaveSetup>("builderSaveSetup");
+  const adapter = getAdapterFromDI();
+  if (!adapter) throw new Error("Database adapter not initialized");
+  const logger = getLoggerFromDI() ?? consoleLogger;
+  const dynamic = new DynamicCollectionService(adapter, logger);
+  const before = change.collection.fields ?? [];
+  const { save, fields } = saveOfSchemaChange({
+    slug: change.slug,
+    table: change.collection.tableName,
+    definition: await loadUiSchema({
+      projectRoot: setup.projectRoot,
+      uiSchemaFile: setup.config.db.uiSchemaFile,
+    }),
+    row: change.collection,
+    fields: change.fields,
+    localized: change.localized,
+    answers: change.answers,
+    // Keys and junctions to the tables their targets are stored in.
+    ...(await dynamic.writerRelations(
+      change.collection.tableName,
+      before,
+      change.fields
+    )),
+  });
+  return {
+    deps: {
+      ...setup,
+      adapter,
+      logger,
+      applies: process.env.NODE_ENV === "development",
+    },
+    save,
+    fields,
+  };
+}
+
+/**
+ * A field change through the Builder save writer, when the app registered
+ * one: written and, in development, run, or applied by `appliedBy` and then
+ * recorded. Undefined without a writer, where the push pipeline applies the
+ * change as it did before.
+ */
+async function saveThroughWriter(
+  change: WriterChange & {
+    /** Applies the change in development instead of the file (`writeCollectionSave`). */
+    appliedBy?: () => Promise<void>;
+  }
+): Promise<{ fields: FieldDefinition[]; applied: boolean } | undefined> {
+  const prepared = await writerSaveOf(change);
+  if (prepared === undefined) return undefined;
+  const result = await writeCollectionSave(
+    prepared.deps,
+    prepared.save,
+    change.appliedBy === undefined ? {} : { appliedBy: change.appliedBy }
+  );
+  return { fields: prepared.fields, applied: result.applied };
+}
+
+/**
+ * The lines the review shows for a field change through the writer: each
+ * conversion an adoption makes, each fill and each delete
+ * (`previewCollectionSave`). None without a writer.
+ */
+async function reviewLinesOf(change: WriterChange): Promise<string[]> {
+  const prepared = await writerSaveOf(change);
+  if (prepared === undefined) return [];
+  return (await previewCollectionSave(prepared.deps, prepared.save)).notices;
+}
+
+/** What a push reports of the change it applied. */
+type PushSummary = Awaited<
+  ReturnType<typeof applyCollectionSchemaChange>
+>["summary"];

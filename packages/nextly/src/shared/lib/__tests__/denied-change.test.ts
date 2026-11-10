@@ -16,6 +16,7 @@ import {
   declaredFieldNames,
   keepDeniedAtStored,
   resolvePromotedDocument,
+  storedProvenance,
 } from "../denied-change";
 
 /** Removes the named top-level or nested paths, as the field rules would. */
@@ -410,7 +411,7 @@ describe("keepDeniedAtStored", () => {
   it("keeps each denied value on its own row when the rows are reordered", async () => {
     // A container written whole: the update swaps the rows and sends a
     // forged `locked` on one. Each row keeps its own stored value.
-    const kept = await keepDeniedAtStored({
+    const { kept } = await keepDeniedAtStored({
       update: {
         rows: [
           { id: "b", heading: "b2", locked: "forged" },
@@ -435,7 +436,7 @@ describe("keepDeniedAtStored", () => {
   it("gives a row repeating another's id no stored value", async () => {
     // One id names one stored row: the first row sent with it is that row,
     // and a later one repeating it is new, so it takes none of its values.
-    const kept = await keepDeniedAtStored({
+    const { kept } = await keepDeniedAtStored({
       update: {
         rows: [
           { id: "a", heading: "a2" },
@@ -456,7 +457,7 @@ describe("keepDeniedAtStored", () => {
     // A list already stored with a repeated id: the first row naming it is
     // the first stored row with it, the second the second. Neither stored row
     // is left over to be put back beside the rows sent.
-    const kept = await keepDeniedAtStored({
+    const { kept } = await keepDeniedAtStored({
       update: {
         rows: [
           { id: "a", heading: "x" },
@@ -483,7 +484,7 @@ describe("keepDeniedAtStored", () => {
     // open row twice and the closed one without its child: the closed row is
     // judged as the update leaves it, not with the siblings of whichever row
     // sits at its index, so its child stays.
-    const kept = await keepDeniedAtStored({
+    const { kept } = await keepDeniedAtStored({
       update: {
         rows: [
           { id: "a", mode: "open" },
@@ -517,7 +518,7 @@ describe("keepDeniedAtStored", () => {
   it("gives a new row no stored value when the stored rows carry ids", async () => {
     // A row without an id, added ahead of rows that keep theirs, is new: the
     // stored row at its index is the one the next row names, not this one.
-    const kept = await keepDeniedAtStored({
+    const { kept } = await keepDeniedAtStored({
       update: {
         rows: [
           { heading: "new" },
@@ -545,7 +546,7 @@ describe("keepDeniedAtStored", () => {
     // `a` is writable only while `b` is not "x". The update writes the group
     // whole with `b` set and `a` left out, which as the update leaves it the
     // rule denies, so the stored `a` stays rather than being cleared.
-    const kept = await keepDeniedAtStored({
+    const { kept } = await keepDeniedAtStored({
       update: { g: { b: "x" } },
       stored: { g: { a: "old" } },
       applyRules: document => {
@@ -561,7 +562,7 @@ describe("keepDeniedAtStored", () => {
   it("keeps a branch the update leaves out when it holds a denied value", async () => {
     // The group is written whole without `inner`, whose `locked` the writer
     // may not change: leaving `inner` out would delete it.
-    const kept = await keepDeniedAtStored({
+    const { kept } = await keepDeniedAtStored({
       update: { g: { other: "x" } },
       stored: { g: { other: "o", inner: { heading: "h", locked: "L" } } },
       applyRules: document => {
@@ -581,7 +582,7 @@ describe("keepDeniedAtStored", () => {
   it("keeps a row the update leaves out when it holds a denied value", async () => {
     // `b` holds a value the writer may not change, so leaving it out of a
     // list written whole would delete it; `c` holds none, and goes.
-    const kept = await keepDeniedAtStored({
+    const { kept } = await keepDeniedAtStored({
       update: { rows: [{ id: "a", heading: "a2" }] },
       stored: {
         rows: [
@@ -604,7 +605,7 @@ describe("keepDeniedAtStored", () => {
     // inserts a new row first and closes `a`'s mode, leaving `child` out of a
     // list written whole: judged with `a`'s own new mode, it is denied and
     // stays, rather than judged with the inserted row's.
-    const kept = await keepDeniedAtStored({
+    const { kept } = await keepDeniedAtStored({
       update: {
         rows: [{ heading: "new" }, { id: "a", mode: "closed" }],
       },
@@ -628,7 +629,7 @@ describe("keepDeniedAtStored", () => {
   it("lets a write drop a row whose denied field holds nothing", async () => {
     // `c` carries `locked` only as an empty value: there is nothing the writer
     // may not change, so leaving `c` out removes it.
-    const kept = await keepDeniedAtStored({
+    const { kept } = await keepDeniedAtStored({
       update: { rows: [{ id: "a", heading: "a2" }] },
       stored: {
         rows: [
@@ -645,7 +646,7 @@ describe("keepDeniedAtStored", () => {
   it("pairs rows by position when they carry no id", async () => {
     // The control: rows that cannot be told apart keep the value at their
     // index, as they always have.
-    const kept = await keepDeniedAtStored({
+    const { kept } = await keepDeniedAtStored({
       update: {
         rows: [{ heading: "x2" }, { heading: "y2", locked: "forged" }],
       },
@@ -664,3 +665,36 @@ describe("keepDeniedAtStored", () => {
     ]);
   });
 });
+
+  it("storedProvenance marks the restored paths, with the values the row holds", async () => {
+    const { kept, permitted } = await keepDeniedAtStored({
+      update: { meta: { label: "edited" }, rows: [{ id: "b", n: 2 }] },
+      stored: {
+        meta: { label: "kept", rating: 2.5 },
+        rows: [
+          { id: "a", n: 2.5 },
+          { id: "b", n: 2 },
+        ],
+      },
+      applyRules: document => {
+        const meta = document.meta as Record<string, unknown> | undefined;
+        if (meta) delete meta.rating;
+        const rows = document.rows as
+          | Array<Record<string, unknown>>
+          | undefined;
+        if (rows) {
+          document.rows = rows.filter(row => row.id !== "a");
+        }
+        return Promise.resolve();
+      },
+    });
+    const { paths, values } = storedProvenance(kept, permitted);
+    expect(paths.has("meta.rating")).toBe(true);
+    expect(values.get("meta.rating")).toBe(2.5);
+    // The restored row among kept ones is its own path; the kept row is
+    // not marked — it is the caller's own.
+    expect(paths.has("rows[0]")).toBe(true);
+    expect(values.get("rows[0]")).toEqual({ id: "a", n: 2.5 });
+    expect(paths.has("rows[1]")).toBe(false);
+    expect(paths.has("meta.label")).toBe(false);
+  });

@@ -12,6 +12,7 @@
  */
 
 import {
+  assertBuilderFieldNames,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
 } from "../../api/fields-payload";
@@ -409,7 +410,8 @@ export const COMPONENTS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields);
+      // A field name the field group already holds keeps working whatever its case.
+      assertValidFieldsPayload(fields, { stored: component.fields ?? [] });
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -522,7 +524,7 @@ export const COMPONENTS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields);
+      assertValidFieldsPayload(fields, { stored: "under-lock" });
 
       return withSchemaChangeExcluded(
         {
@@ -552,6 +554,9 @@ export const COMPONENTS_METHODS: Record<
           // to reconcile it. Refusing them would make the state harder to escape rather than safer,
           // which is the same reason metadata-only edits stay allowed.
           assertNotDiverged(slug, component);
+          // A field name the field group already holds keeps working whatever its case; one this
+          // save creates is the Builder's own. Judged against the fields as stored now.
+          assertBuilderFieldNames(fields, component.fields ?? []);
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write, against the fields as stored now; one the field group already holds keeps
           // working. Asked here because this road reaches its DDL through no shared service.

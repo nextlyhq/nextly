@@ -254,3 +254,34 @@ export function uniquenessCanBeAnIndex(
   // size of both included.
   return !isMysqlTextOrBlobType(columnType);
 }
+
+/**
+ * The refusal for a field marked unique whose column `dialect` cannot key: a
+ * MySQL TEXT or BLOB, say. One error for every path that judges it, the
+ * Builder's own DDL and the save writer alike.
+ */
+export function uniquenessNotEnforceableError(
+  tableName: string,
+  field: { name: string; type: string },
+  dialect: string
+): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: `fields.${field.name}`,
+        code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
+        message:
+          `"${field.name}" is marked unique, but ${dialect} cannot enforce ` +
+          `uniqueness on a ${field.type} column. Store the value in a short-variant ` +
+          `text field, which becomes a bounded VARCHAR the server can key, or remove ` +
+          `the unique flag.`,
+      },
+    ],
+    logContext: {
+      tableName,
+      field: field.name,
+      type: field.type,
+      dialect,
+    },
+  });
+}

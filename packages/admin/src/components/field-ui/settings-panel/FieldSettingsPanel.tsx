@@ -14,8 +14,9 @@
  * the plugin types it names, how a label becomes a name, the settings it fixes
  * and why, its own extra settings by tab, and its conditions. Every field type
  * has a settings section: a built-in type's comes from the core table, Blocks
- * included, and a type that is not built in still gets every setting fields
- * share, with a line saying it has none of its own.
+ * included; a plugin's type shows the settings its plugin declared; and a type
+ * that declares none still gets every setting fields share, with a line saying
+ * it has none of its own.
  */
 import { Button, Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import type { JSX, ReactNode } from "react";
@@ -24,7 +25,6 @@ import { useId, useState } from "react";
 import { X } from "@admin/components/icons";
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
 
-import { coreFieldTypeSettings } from "./core-type-settings";
 import { fieldApiPath } from "./field-api-path";
 import { ConditionsTab } from "./tabs/ConditionsTab";
 import { DisplayTab } from "./tabs/DisplayTab";
@@ -36,6 +36,10 @@ import type {
   FieldSettingsTab,
   FixedFieldSetting,
 } from "./types";
+import {
+  useFieldTypeSettings,
+  type FieldTypeSettingsLookup,
+} from "./use-field-type-settings";
 
 const TABS: readonly { value: FieldSettingsTab; label: string }[] = [
   { value: "general", label: "General" },
@@ -70,7 +74,8 @@ export function FieldSettingsPanel({
   const [tab, setTab] = useState<FieldSettingsTab>("general");
   const headingId = useId();
   const typeLabel = useFieldTypeLabel(surface.surface)(field.type);
-  const typeSettings = coreFieldTypeSettings(field.type);
+  const lookup = useFieldTypeSettings(field.type);
+  const typeSettings = lookup.status === "known" ? lookup.settings : undefined;
   const typeFixedReason = fixedReason(surface.fixed, "type", saved);
 
   const control: FieldSettingsControlProps = { field, readOnly, onChange };
@@ -140,7 +145,11 @@ export function FieldSettingsPanel({
           ))}
         </TabsList>
 
-        <div className="flex-1 overflow-y-auto p-4">
+        {/* Keyed by the field, so the controls' own state (a number's typed
+            text, a list's unsent entry) starts from the field shown even for
+            a host that hands this panel another field without remounting it:
+            otherwise one field's text could be written into the next. */}
+        <div key={field.id} className="flex-1 overflow-y-auto p-4">
           <TabsContent value="general">
             <GeneralTab
               field={field}
@@ -159,12 +168,7 @@ export function FieldSettingsPanel({
               }
               definingLabel={`${typeLabel} settings`}
             >
-              {typeSettings === undefined && (
-                <p className="text-sm text-muted-foreground">
-                  {typeLabel} has no settings of its own; the settings every
-                  field has are above and in the other tabs.
-                </p>
-              )}
+              <TypeSettingsNote lookup={lookup} typeLabel={typeLabel} />
               {additions("general")}
             </GeneralTab>
           </TabsContent>
@@ -229,4 +233,51 @@ function TypeOwnSettings({
       {children}
     </fieldset>
   );
+}
+
+/**
+ * The line under General's settings for a type without settings of its own,
+ * or whose settings cannot be known yet. Only a settled plugin list proves a
+ * plugin's type declares none; until it arrives, or when it never could, the
+ * panel says so instead, so a missing list never reads as an empty one.
+ */
+function TypeSettingsNote({
+  lookup,
+  typeLabel,
+}: {
+  lookup: FieldTypeSettingsLookup;
+  typeLabel: string;
+}): JSX.Element | null {
+  switch (lookup.status) {
+    case "loading":
+      return (
+        <p className="text-sm text-muted-foreground">
+          Loading this type&apos;s settings…
+        </p>
+      );
+    case "unavailable":
+      return (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <p>
+            {typeLabel}&apos;s own settings could not be loaded; the settings
+            every field has are above and in the other tabs.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={lookup.retry}
+          >
+            Retry
+          </Button>
+        </div>
+      );
+    case "known":
+      return lookup.settings === undefined ? (
+        <p className="text-sm text-muted-foreground">
+          {typeLabel} has no settings of its own; the settings every field has
+          are above and in the other tabs.
+        </p>
+      ) : null;
+  }
 }

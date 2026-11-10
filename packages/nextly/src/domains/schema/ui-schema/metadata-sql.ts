@@ -33,10 +33,9 @@
  * @module domains/schema/ui-schema/metadata-sql
  * @since v0.0.3-alpha (Plan D2b)
  */
-import { createHash } from "node:crypto";
-
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
@@ -50,19 +49,9 @@ import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { calculateSchemaHash } from "../services/schema-hash";
 import { quoteSqlLiteral } from "../utils/sql-literal";
 
-type Dialect = SupportedDialect;
+import { registryRowKeys, type RegistryRowKeys } from "./registry-row-keys";
 
-/** Deterministic UUID-shaped id from a slug (stable committed SQL). */
-function deterministicId(slug: string): string {
-  const hex = createHash("sha256").update(`ui:${slug}`).digest("hex");
-  return [
-    hex.slice(0, 8),
-    hex.slice(8, 12),
-    hex.slice(12, 16),
-    hex.slice(16, 20),
-    hex.slice(20, 32),
-  ].join("-");
-}
+type Dialect = SupportedDialect;
 
 /** SQL single-quoted string literal (standard single-quote doubling). */
 /**
@@ -262,11 +251,22 @@ function buildUpsert(
   return `${insert} ON CONFLICT (${quoteIdent("slug", dialect)}) DO UPDATE SET ${sets}`;
 }
 
-function tableNameFor(
-  slug: string,
-  prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
-): string {
-  return `${prefix}${slug.replace(/-/g, "_")}`;
+/**
+ * The `id` and `table_name` the row of `slug` is written with in one of the
+ * three registries, derived as `registryRowKeys` derives them for the reading
+ * that judges whose row an upsert writes.
+ */
+function keysOf(registryTable: string, slug: string): RegistryRowKeys {
+  const keys = registryRowKeys(registryTable, slug);
+  if (keys === undefined) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "no derived keys for this registry",
+        registryTable,
+      },
+    });
+  }
+  return keys;
 }
 
 function singular(entity: UiSchemaEntity): string {
@@ -287,13 +287,14 @@ export function buildCollectionMetadataUpsert(
     singular: singular(entity),
     plural: entity.labels?.plural ?? toPluralLabel(entity.slug),
   };
+  const keys = keysOf("dynamic_collections", entity.slug);
   const columns: Column[] = [
-    { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
+    { name: "id", value: sqlStr(keys.id, dialect) },
     { name: "slug", value: sqlStr(entity.slug, dialect) },
     { name: "labels", value: jsonLiteral(labels, dialect), update: true },
     {
       name: "table_name",
-      value: sqlStr(tableNameFor(entity.slug, "dc_"), dialect),
+      value: sqlStr(keys.table_name, dialect),
     },
     {
       name: "fields",
@@ -370,13 +371,14 @@ export function buildSingleMetadataUpsert(
   entity: UiSchemaEntity,
   dialect: Dialect
 ): string {
+  const keys = keysOf("dynamic_singles", entity.slug);
   const columns: Column[] = [
-    { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
+    { name: "id", value: sqlStr(keys.id, dialect) },
     { name: "slug", value: sqlStr(entity.slug, dialect) },
     { name: "label", value: sqlStr(singular(entity), dialect), update: true },
     {
       name: "table_name",
-      value: sqlStr(tableNameFor(entity.slug, "single_"), dialect),
+      value: sqlStr(keys.table_name, dialect),
     },
     {
       name: "fields",
@@ -439,16 +441,14 @@ export function buildComponentMetadataUpsert(
   entity: UiSchemaEntity,
   dialect: Dialect
 ): string {
+  const keys = keysOf(STORAGE_FORMAT.registryTable, entity.slug);
   const columns: Column[] = [
-    { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
+    { name: "id", value: sqlStr(keys.id, dialect) },
     { name: "slug", value: sqlStr(entity.slug, dialect) },
     { name: "label", value: sqlStr(singular(entity), dialect), update: true },
     {
       name: "table_name",
-      value: sqlStr(
-        tableNameFor(entity.slug, STORAGE_FORMAT.tablePrefix),
-        dialect
-      ),
+      value: sqlStr(keys.table_name, dialect),
     },
     {
       name: "fields",

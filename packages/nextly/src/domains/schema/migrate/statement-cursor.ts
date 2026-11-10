@@ -68,6 +68,20 @@ export class StatementCursor {
   }
 
   /**
+   * Consumes one or more names separated by commas (`name()` each), or
+   * returns undefined when one of them is not a plain name.
+   */
+  names(): string[] | undefined {
+    const names: string[] = [];
+    do {
+      const name = this.name();
+      if (name === undefined) return undefined;
+      names.push(name);
+    } while (this.accept(","));
+    return names;
+  }
+
+  /**
    * Consumes a name with exactly one qualifier (`s.t`, `"s"."t"`) and returns
    * both parts lower-cased, or undefined, consuming nothing, when the next
    * tokens are not one. Which schema the qualifier names is the caller's to
@@ -143,9 +157,32 @@ export class StatementCursor {
  */
 export function cursorOf(
   statement: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  options: {
+    /**
+     * Read a quoted name not written in lower case as no name: PostgreSQL
+     * keeps a quoted name's case, so `"DC_POSTS"` is not `dc_posts`, and a
+     * reader judging whose table a statement changes fails closed on it.
+     */
+    exactQuotedNames?: boolean;
+  } = {}
 ): StatementCursor {
   const tokens = statementTokens(statement, dialect);
   while (tokens.length > 0 && tokens[tokens.length - 1] === ";") tokens.pop();
-  return new StatementCursor(tokens);
+  return new StatementCursor(
+    options.exactQuotedNames === true ? tokens.map(lowerCaseQuotedOnly) : tokens
+  );
+}
+
+/** A quoted name written in another case than lower, as no name; any other token as it is. */
+function lowerCaseQuotedOnly(token: StatementToken): StatementToken {
+  if (
+    typeof token === "string" ||
+    token.kind !== "name" ||
+    token.written === undefined ||
+    token.written === token.written.toLowerCase()
+  ) {
+    return token;
+  }
+  return { ...token, name: undefined };
 }

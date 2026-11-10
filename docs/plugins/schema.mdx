@@ -109,8 +109,17 @@ warning at startup, instead of stopping the boot as a slug target does. The site
 its own field; the plugin's field isn't added there.
 
 Put `except` behind a plugin option, as above, so the site turns a type off in its
-`nextly.config.ts`. Migrations read that file, so a type that's off never gets the
-column.
+`nextly.config.ts`. Migrations read that file, so a type that's off before its first
+migration never gets the column.
+
+A type switched off later keeps its column and the values in it. The field stops
+showing: the API, the admin and the outputs no longer have it, and a new entry saves
+without it. Switch the type on again and the saved values are back. Dev push,
+`nextly migrate:create` and `nextly migrate:check` all keep the column: none of them
+plans a drop, and the migration records only that the type no longer has the field. A
+field marked `required` is kept as optional while its type is off, so an entry saved
+then needs no value for it. A type made in the Schema Builder takes the change when the
+site next starts.
 
 `typesReachedBy(scope, types)` gives the same answer to anything else that needs to
 know which types a scope covers.
