@@ -74,6 +74,8 @@ vi.mock(
   })
 );
 
+import { useDocumentValues } from "@admin/components/features/entries/EntryForm/document-values";
+
 import {
   SingleForm,
   type SingleDocumentData,
@@ -109,6 +111,12 @@ function component(path: string, testId: string): string {
   )) as never);
   return path;
 }
+/** A plugin's block showing the hero title as it is typed. */
+const LIVE = "@acme/a/admin#SingleLiveTitle";
+registerComponent(LIVE, (() => {
+  const values = useDocumentValues(["heroTitle"]);
+  return <output data-testid="live-hero">{String(values?.heroTitle)}</output>;
+}) as never);
 const TOP = component("@acme/a/admin#SingleTop", "top-block");
 const TAB = component("@acme/a/admin#SingleTab", "plugin-tab");
 const SECTION = component("@acme/a/admin#SingleSection", "plugin-section");
@@ -254,5 +262,28 @@ describe("the edit page's place in the Single editor", () => {
     expect(
       JSON.parse(screen.getByTestId("plugin-section").textContent ?? "")
     ).toEqual(TOLD);
+  });
+});
+
+describe("a plugin's block reading the Single as it is typed", () => {
+  it("reads a field typed on a Single's edit page, before any save", async () => {
+    meta.contributions = {
+      "single.edit": {
+        block: [
+          { builtIn: "document-bar" },
+          { builtIn: "editor" },
+          {
+            plugin: "@acme/a",
+            id: "acme-a.live",
+            kind: "block",
+            component: LIVE,
+          },
+        ],
+      },
+    } as AdminContributionsMeta;
+    renderEditor();
+
+    await userEvent.type(screen.getByLabelText("Hero Title"), "Spring");
+    expect(screen.getByTestId("live-hero")).toHaveTextContent("Spring");
   });
 });

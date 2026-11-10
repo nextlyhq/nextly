@@ -281,6 +281,7 @@ export function registerJobServices(ctx: RegistrationContext): void {
       createDurableEventsDispatchJob({
         adapter: () => container.get<DispatchAdapter>("adapter"),
         subscribers: getDurableSubscribers,
+        logger,
       })
     );
     // Queued email: one attempt per run of a queued email's job, which carries

@@ -12,7 +12,6 @@
  * a release notice makes, with the instant the release was scheduled for.
  *
  * @module domains/releases/release-notice-email
- * @experimental Until the notices feature is complete.
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
@@ -42,10 +41,10 @@ export const RELEASE_NOTICE_EMAIL_JOB = "releases:notice-email";
 /** What the job is given: the notice to copy, by id, and nothing of it. */
 export type ReleaseNoticeEmailJobInput = NoticeEmailJobInput;
 
-/** What the job reads and sends through. @experimental */
+/** What the job reads and sends through. */
 export type ReleaseNoticeEmailDeps = NoticeEmailDeps;
 
-/** The email made from one notice. @experimental */
+/** The email made from one notice. */
 export type ReleaseNoticeMessage = NoticeEmailMessage;
 
 /**
@@ -67,8 +66,6 @@ const RELEASE_NOTICE_EMAIL: NoticeEmail = {
 /**
  * Hand a newly recorded notice's email to the job queue, in the notice's own
  * transaction, so the job exists only if the notice does.
- *
- * @experimental
  */
 export async function enqueueReleaseNoticeEmail(
   tx: Pick<TransactionContext, "getDrizzle">,
@@ -88,8 +85,6 @@ export async function enqueueReleaseNoticeEmail(
 /**
  * The key a notice's email is sent under: the same on every run of its job,
  * and unlike any other notice's.
- *
- * @experimental
  */
 export function releaseNoticeEmailKey(noticeId: string): string {
   return noticeEmailKey(RELEASE_NOTICE_EMAIL, noticeId);
@@ -100,8 +95,6 @@ export function releaseNoticeEmailKey(noticeId: string): string {
  * different things, then the instant the release was scheduled for, written
  * in the zone it was scheduled in and named (an email has no reader's zone),
  * then the link to it where there is one.
- *
- * @experimental
  */
 export function releaseNoticeMessage(input: {
   text: NoticeText;
@@ -129,8 +122,6 @@ export function releaseNoticeMessage(input: {
  * releases' slug. Its dependencies are resolved per run, as the queued email's
  * own job resolves them, so the send service is the one registered when it
  * runs.
- *
- * @experimental
  */
 export function createReleaseNoticeEmailJob(
   deps: () => ReleaseNoticeEmailDeps
@@ -146,7 +137,6 @@ export function createReleaseNoticeEmailJob(
  * judged as it is made.
  *
  * @returns the send's outcome, or `null` when nothing was sent
- * @experimental
  */
 export function emailReleaseNotice(
   deps: ReleaseNoticeEmailDeps,

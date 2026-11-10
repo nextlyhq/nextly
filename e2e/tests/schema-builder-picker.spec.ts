@@ -65,8 +65,8 @@ test("adds three fields between two existing ones, in order", async ({
     await addField(page, "One", "Add and add another");
     await addField(page, "Two", "Add and add another");
     await addField(page, "Three", "Add field");
-    // The last add opens the new field for editing; close it.
-    await page.keyboard.press("Escape");
+    // The last add opens the new field in the settings panel; close it.
+    await page.getByRole("button", { name: "Close field settings" }).click();
 
     expect(await fieldOrder(page)).toEqual([
       "first_field",

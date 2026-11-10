@@ -75,6 +75,20 @@ export {
   type SeoMetaInput,
 } from "./runtime/seo";
 
+// The page-metadata contract: what a plugin that works out a page's head is
+// asked and answers. The route helpers ask it by default; see
+// `runtime/seo/page-metadata-contract`.
+export {
+  PAGE_METADATA_CAPABILITY,
+  PAGE_METADATA_SERVICE,
+  type PageMetadataAnswer,
+  type PageMetadataImage,
+  type PageMetadataInput,
+  type PageMetadataResolver,
+  type PageMetadataSource,
+  type PageMetadataValues,
+} from "./runtime/seo";
+
 // Draft previews — the route that turns a scoped preview link into a draft
 // session, and the reader a read path asks what that session may see. `next` is
 // not imported at all: the caller passes `draftMode` and `cookies` in, which
@@ -207,6 +221,7 @@ export {
 export {
   resolveContent,
   isReservedPath,
+  contentPageMetadata,
   createContentRoute,
   createPublicContentRoute,
   createSingleRoute,

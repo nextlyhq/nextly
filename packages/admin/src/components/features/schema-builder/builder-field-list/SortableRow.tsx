@@ -211,7 +211,7 @@ function FieldCard({
           use the `title` HTML attribute as a portable tooltip; on richer
           platforms this becomes a Radix Tooltip in a follow-up. */}
       <span
-        title={`Width: ${widthPct}%. Configure in the field's Display tab.`}
+        title={`Width: ${widthPct}%. Configure in the field's General tab.`}
         className="text-xs border border-border rounded-sm px-1 py-0.5 text-muted-foreground"
       >
         {widthPct}%
