@@ -155,7 +155,9 @@ export async function findByID<TSlug extends CollectionSlug>(
     });
 
     if (!result.success) {
-      if (config.disableErrors) {
+      // A rule that could not run never answered, so `disableErrors` does not
+      // read it as a missing document: the call ends with that answer.
+      if (config.disableErrors && result.code !== "RULE_COULD_NOT_RUN") {
         return null;
       }
       throw createErrorFromResult(result);

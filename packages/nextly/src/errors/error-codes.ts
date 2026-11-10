@@ -85,6 +85,10 @@ export const NEXTLY_ERROR_STATUS = {
   // wrong with the request, and retrying shortly is the remedy, which
   // `retryAfterSeconds` and Retry-After say.
   DATABASE_BUSY: 503,
+  // An access or field rule the request needs could not run: its own database
+  // query waited out `pool.connectionTimeoutMs`. 503, not 403: the rule never
+  // answered, so nothing was refused, and retrying shortly is the remedy.
+  RULE_COULD_NOT_RUN: 503,
   EXTERNAL_SERVICE_ERROR: 502,
   SERVICE_UNAVAILABLE: 503,
   // The app nextly runs in is set up so nextly cannot work: its config, or the
@@ -366,6 +370,8 @@ const GENERIC_PUBLIC_MESSAGE: Readonly<
   EXTERNAL_SERVICE_ERROR: "An upstream service failed.",
   SERVICE_UNAVAILABLE: "The service is temporarily unavailable.",
   DATABASE_BUSY: "The database is busy. Please try again shortly.",
+  RULE_COULD_NOT_RUN:
+    "A check this request needs could not run. Please try again shortly.",
   INTERNAL_ERROR: "An unexpected error occurred.",
 };
 
