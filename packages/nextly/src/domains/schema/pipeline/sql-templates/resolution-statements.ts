@@ -25,10 +25,7 @@ export type ColumnResolution =
  * dialect stores it. Anything else is refused: the value has been checked
  * against the column's type before it reaches here.
  */
-export function sqlValueLiteral(
-  value: unknown,
-  dialect: SupportedDialect
-): string {
+function sqlValueLiteral(value: unknown, dialect: SupportedDialect): string {
   if (typeof value === "string") {
     const quoted = value.replace(/'/g, "''");
     return `'${dialect === "mysql" ? quoted.replace(/\\/g, "\\\\") : quoted}'`;
