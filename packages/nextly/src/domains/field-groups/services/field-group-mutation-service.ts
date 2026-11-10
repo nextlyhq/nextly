@@ -6,6 +6,7 @@ import type {
   SelectOptions,
   SupportedDialect,
   TransactionContext,
+  WhereClause,
 } from "@nextlyhq/adapter-drizzle/types";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
@@ -81,7 +82,6 @@ import {
   containedComponentResolver,
   type ComponentFieldResolver,
 } from "../../versions/tag-component-types";
-import { omitDirectComponentFields } from "../direct-component-fields";
 import { applyInlineFieldGroupWriteAccess } from "../field-group-write-access";
 import {
   isFieldGroupFieldType,
@@ -91,7 +91,6 @@ import {
   currentFieldGroupTypeKey,
   readFieldGroupType,
 } from "../storage/field-group-type-key";
-import { unstoredNestedComponentIssues } from "../unstored-nested-components";
 
 import {
   COMPONENT_META_KEYS,
@@ -204,6 +203,33 @@ export interface SaveComponentDataParams {
 /**
  * Parameters for deleting all component data when a parent entry is removed.
  */
+/**
+ * The instance a level down is written beneath: its row's id, the table it is a row of, its field
+ * group's fields, and its value, which holds the field groups placed directly in it.
+ */
+interface NestedParent {
+  /** Absent for an instance judged but not stored. */
+  id: string | undefined;
+  tableName: string;
+  fields: FieldConfig[];
+  data: Record<string, unknown>;
+}
+
+/** What a write carries down unchanged from one level to the next. */
+type NestedWriteParams = Pick<
+  SaveComponentDataParams,
+  "locale" | "req" | "write"
+>;
+
+/** What the cascading delete reads and deletes through: the transaction, or the pooled adapter. */
+interface RowStore {
+  select<T>(table: string, options: SelectOptions): Promise<T[]>;
+  delete(table: string, where: WhereClause): Promise<unknown>;
+}
+
+/** Ids per `IN (...)` list, well below every driver's bind-parameter limit. */
+const NESTED_ID_CHUNK = 500;
+
 export interface DeleteComponentDataParams {
   parentId: string;
   parentTable: string;
@@ -664,16 +690,7 @@ export class FieldGroupMutationService extends BaseService {
       save: (field: FieldGroupFieldConfig, fieldData: unknown) => Promise<void>;
     }
   ): Promise<void> {
-    for (const field of fields) {
-      if (!isFieldGroupField(field)) continue;
-      // A virtual field-group field stores nothing: its value is computed on
-      // read, and a document that carries it back must not become instance
-      // rows in the referenced group's table. Skipped here because every
-      // field-group write — collection, Single, pooled or in-transaction —
-      // walks its payload through this one loop.
-      if (isVirtualField(field)) continue;
-
-      const f = withResolvedFieldGroupReferences(field);
+    for (const f of this.storedFieldGroupFields(fields)) {
       const fieldData = data[f.name];
 
       if (fieldData === undefined) continue;
@@ -690,63 +707,66 @@ export class FieldGroupMutationService extends BaseService {
    * Save component data for all component fields of a parent entry.
    */
   async saveComponentData(params: SaveComponentDataParams): Promise<void> {
-    const { parentId, parentTable, fields, data, locale, req } = params;
-
     // A pooled write reads pooled; the scope still shares what it resolves; see `writeScope`.
     const connection = {
-      locale,
+      locale: params.locale,
       select: (tableName: string, options: SelectOptions) =>
         this.adapter.select<Record<string, unknown>>(tableName, options),
     };
     await writeScope.run(
       newWriteScope(undefined, params.access, connection),
-      () =>
-        this.eachFieldGroupWrite(fields, data, {
-          clear: async f => {
-            await this.deleteFieldComponentData(
+      () => this.writeFieldGroupsPooled(params)
+    );
+  }
+
+  /**
+   * {@link writeFieldGroupsInTx} for the pooled write: one level's field groups, an entry's or,
+   * a level down, an instance's, inside the write scope the entry's write opened.
+   */
+  private async writeFieldGroupsPooled(
+    params: Omit<SaveComponentDataParams, "access">
+  ): Promise<void> {
+    const { parentId, parentTable, fields, data, locale, req } = params;
+    await this.eachFieldGroupWrite(fields, data, {
+      clear: async f => {
+        await this.deleteFieldComponentData(parentId, parentTable, f.name, f);
+      },
+      save: async (f, fieldData) => {
+        if (f.components && f.components.length > 0) {
+          await this.saveMultiComponents({
+            parentId,
+            parentTable,
+            fieldName: f.name,
+            field: f,
+            data: fieldData,
+            locale,
+            req,
+          });
+        } else if (f.component) {
+          if (f.repeatable) {
+            await this.saveRepeatableComponents({
               parentId,
               parentTable,
-              f.name,
-              f
-            );
-          },
-          save: async (f, fieldData) => {
-            if (f.components && f.components.length > 0) {
-              await this.saveMultiComponents({
-                parentId,
-                parentTable,
-                fieldName: f.name,
-                field: f,
-                data: fieldData,
-                locale,
-                req,
-              });
-            } else if (f.component) {
-              if (f.repeatable) {
-                await this.saveRepeatableComponents({
-                  parentId,
-                  parentTable,
-                  fieldName: f.name,
-                  componentSlug: f.component,
-                  data: fieldData,
-                  locale,
-                  req,
-                });
-              } else {
-                await this.saveSingleComponent({
-                  parentId,
-                  parentTable,
-                  fieldName: f.name,
-                  componentSlug: f.component,
-                  data: fieldData as ComponentInstanceData,
-                  locale,
-                  req,
-                });
-              }
-            }
-          },
-        })
-    );
+              fieldName: f.name,
+              componentSlug: f.component,
+              data: fieldData,
+              locale,
+              req,
+            });
+          } else {
+            await this.saveSingleComponent({
+              parentId,
+              parentTable,
+              fieldName: f.name,
+              componentSlug: f.component,
+              data: fieldData as ComponentInstanceData,
+              locale,
+              req,
+            });
+          }
+        }
+      },
+    });
   }
 
   /**
@@ -871,83 +891,95 @@ export class FieldGroupMutationService extends BaseService {
      */
     validateOnly = false
   ): Promise<void> {
-    const { parentId, parentTable, fields, data, locale, req, write } = params;
-
     // Every read made beneath this write goes through the transaction's own connection; see
     // `writeScope`.
     const connection = {
-      locale,
+      locale: params.locale,
       select: (tableName: string, options: SelectOptions) =>
         tx.select<Record<string, unknown>>(tableName, options),
     };
     await writeScope.run(
       newWriteScope(tx.getDrizzle(), params.access, connection),
-      () =>
-        this.eachFieldGroupWrite(fields, data, {
-          clear: async f => {
-            // Clearing a field holds nothing to validate.
-            if (validateOnly) return;
-            await this.deleteFieldComponentDataInTx(
-              tx,
-              parentId,
-              parentTable,
-              f.name,
-              f
-            );
-          },
-          save: async (f, fieldData) => {
-            if (f.components && f.components.length > 0) {
-              await this.saveMultiComponentsInTx(
-                tx,
-                {
-                  parentId,
-                  parentTable,
-                  fieldName: f.name,
-                  field: f,
-                  data: fieldData,
-                  locale,
-                  req,
-                  write,
-                },
-                validateOnly
-              );
-            } else if (f.component) {
-              if (f.repeatable) {
-                await this.saveRepeatableComponentsInTx(
-                  tx,
-                  {
-                    parentId,
-                    parentTable,
-                    fieldName: f.name,
-                    componentSlug: f.component,
-                    data: fieldData,
-                    locale,
-                    req,
-                    write,
-                  },
-                  validateOnly
-                );
-              } else {
-                await this.saveSingleComponentInTx(
-                  tx,
-                  {
-                    parentId,
-                    parentTable,
-                    fieldName: f.name,
-                    componentSlug: f.component,
-                    data: fieldData as ComponentInstanceData,
-                    locale,
-                    req,
-                    write,
-                  },
-                  validateOnly
-                );
-              }
-            }
-          },
-        })
+      () => this.writeFieldGroupsInTx(tx, params, validateOnly)
     );
   }
+
+  /**
+   * One level's field groups written on the transaction: an entry's own, or, a level down, the
+   * ones placed directly in an instance's fields, whose parent is that instance. Runs inside the
+   * write scope the entry's write opened, so every level is judged by the same caller.
+   */
+  private async writeFieldGroupsInTx(
+    tx: TransactionContext,
+    params: Omit<SaveComponentDataParams, "access">,
+    validateOnly: boolean
+  ): Promise<void> {
+    const { parentId, parentTable, fields, data, locale, req, write } = params;
+    await this.eachFieldGroupWrite(fields, data, {
+      clear: async f => {
+        // Clearing a field holds nothing to validate.
+        if (validateOnly) return;
+        await this.deleteFieldComponentDataInTx(
+          tx,
+          parentId,
+          parentTable,
+          f.name,
+          f
+        );
+      },
+      save: async (f, fieldData) => {
+        if (f.components && f.components.length > 0) {
+          await this.saveMultiComponentsInTx(
+            tx,
+            {
+              parentId,
+              parentTable,
+              fieldName: f.name,
+              field: f,
+              data: fieldData,
+              locale,
+              req,
+              write,
+            },
+            validateOnly
+          );
+        } else if (f.component) {
+          if (f.repeatable) {
+            await this.saveRepeatableComponentsInTx(
+              tx,
+              {
+                parentId,
+                parentTable,
+                fieldName: f.name,
+                componentSlug: f.component,
+                data: fieldData,
+                locale,
+                req,
+                write,
+              },
+              validateOnly
+            );
+          } else {
+            await this.saveSingleComponentInTx(
+              tx,
+              {
+                parentId,
+                parentTable,
+                fieldName: f.name,
+                componentSlug: f.component,
+                data: fieldData as ComponentInstanceData,
+                locale,
+                req,
+                write,
+              },
+              validateOnly
+            );
+          }
+        }
+      },
+    });
+  }
+
   /**
    * Validates component values the way {@link saveComponentDataInTransaction}
    * would before writing them, and writes nothing: the same walk over the
@@ -1111,6 +1143,11 @@ export class FieldGroupMutationService extends BaseService {
           locale
         );
       }
+      // The field groups placed directly in it, as rows whose parent is this one.
+      await this.writeNestedPooled(
+        { id: instanceId, tableName, fields: componentFields, data },
+        { locale, req }
+      );
     } catch (error) {
       // Rethrow already-mapped NextlyErrors (and ServiceError shims, which
       // share the cross-realm brand) so factory-thrown errors aren't
@@ -1177,9 +1214,18 @@ export class FieldGroupMutationService extends BaseService {
         existing[0]?.id,
         params.write
       );
-      // Validation only: the instance has been judged as the write would
-      // judge it, and nothing is stored.
-      if (validateOnly) return;
+      const nested = { tableName, fields: componentFields, data };
+      // Validation only: the instance, and the field groups placed directly in it, have been
+      // judged as the write would judge them, and nothing is stored.
+      if (validateOnly) {
+        await this.writeNestedInTx(
+          tx,
+          { ...nested, id: existing[0]?.id },
+          { locale, req, write: params.write },
+          true
+        );
+        return;
+      }
 
       // i18n: split translatable values out of the main comp_ write (companion-owned).
       const { schema, main, companion } = await this.splitLocalizedComponent(
@@ -1226,6 +1272,13 @@ export class FieldGroupMutationService extends BaseService {
           this.txWriteAdapter(tx)
         );
       }
+      // The field groups placed directly in it, as rows whose parent is this one.
+      await this.writeNestedInTx(
+        tx,
+        { ...nested, id: instanceId },
+        { locale, req, write: params.write },
+        false
+      );
     } catch (error) {
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
       // map raw DB errors via fromDatabaseError. Normalise raw driver errors
@@ -1327,6 +1380,15 @@ export class FieldGroupMutationService extends BaseService {
               locale
             );
           }
+          await this.writeNestedPooled(
+            {
+              id: instanceId,
+              tableName,
+              fields: componentFields,
+              data: instance,
+            },
+            { locale, req }
+          );
         } else {
           const row = this.buildInsertRow({
             data: main,
@@ -1347,10 +1409,24 @@ export class FieldGroupMutationService extends BaseService {
               locale
             );
           }
+          await this.writeNestedPooled(
+            {
+              id: row.id as string,
+              tableName,
+              fields: componentFields,
+              data: instance,
+            },
+            { locale, req }
+          );
         }
       }
 
-      await this.deleteRemovedInstances(tableName, existingMap, incomingIds);
+      await this.deleteRemovedInstances(
+        tableName,
+        componentFields,
+        existingMap,
+        incomingIds
+      );
 
       this.logger.debug("Saved repeatable component instances", {
         componentSlug,
@@ -1438,8 +1514,29 @@ export class FieldGroupMutationService extends BaseService {
           instanceId && existingMap.has(instanceId) ? instanceId : undefined,
           params.write
         );
-        // Validation only: judge every instance, store none.
-        if (validateOnly) continue;
+        const nested = {
+          tableName,
+          fields: componentFields,
+          data: instance,
+        };
+        const carried = { locale, req, write: params.write };
+        // Validation only: judge every instance, and the field groups placed directly in it, store
+        // none.
+        if (validateOnly) {
+          await this.writeNestedInTx(
+            tx,
+            {
+              ...nested,
+              id:
+                instanceId && existingMap.has(instanceId)
+                  ? instanceId
+                  : undefined,
+            },
+            carried,
+            true
+          );
+          continue;
+        }
 
         // i18n: split translatable values out (companion-owned) per instance.
         const { schema, main, companion } = await this.splitLocalizedComponent(
@@ -1473,6 +1570,12 @@ export class FieldGroupMutationService extends BaseService {
               this.txWriteAdapter(tx)
             );
           }
+          await this.writeNestedInTx(
+            tx,
+            { ...nested, id: instanceId },
+            carried,
+            false
+          );
         } else {
           const row = this.buildInsertRow({
             data: main,
@@ -1494,6 +1597,12 @@ export class FieldGroupMutationService extends BaseService {
               this.txWriteAdapter(tx)
             );
           }
+          await this.writeNestedInTx(
+            tx,
+            { ...nested, id: row.id as string },
+            carried,
+            false
+          );
         }
       }
 
@@ -1502,6 +1611,7 @@ export class FieldGroupMutationService extends BaseService {
       await this.deleteRemovedInstancesInTx(
         tx,
         tableName,
+        componentFields,
         existingMap,
         incomingIds
       );
@@ -1648,6 +1758,15 @@ export class FieldGroupMutationService extends BaseService {
               locale
             );
           }
+          await this.writeNestedPooled(
+            {
+              id: instanceId,
+              tableName: existingEntry.tableName,
+              fields: componentFields,
+              data: instance,
+            },
+            { locale, req }
+          );
         } else {
           const row = this.buildInsertRow({
             data: main,
@@ -1670,13 +1789,32 @@ export class FieldGroupMutationService extends BaseService {
               locale
             );
           }
+          await this.writeNestedPooled(
+            {
+              id: row.id as string,
+              tableName: meta.tableName,
+              fields: componentFields,
+              data: instance,
+            },
+            { locale, req }
+          );
         }
       }
 
+      const fieldsByTable = new Map(
+        [...metaCache.values()].map(meta => [meta.tableName, meta.fields])
+      );
       for (const [id, entry] of globalExistingMap) {
-        if (!incomingIds.has(id)) {
-          await this.adapter.delete(entry.tableName, this.whereEq("id", id));
-        }
+        if (incomingIds.has(id)) continue;
+        // The field groups placed directly in a removed instance go with it, at every depth.
+        await this.deleteNestedInstances(
+          this.adapter,
+          undefined,
+          entry.tableName,
+          fieldsByTable.get(entry.tableName) ?? [],
+          [id]
+        );
+        await this.adapter.delete(entry.tableName, this.whereEq("id", id));
       }
 
       this.logger.debug("Saved multi-component instances", {
@@ -1787,8 +1925,23 @@ export class FieldGroupMutationService extends BaseService {
         });
         if (!prepared) continue;
         const { meta, componentFields, instanceId, existingEntry } = prepared;
-        // Validation only: judge every instance, store none.
-        if (validateOnly) continue;
+        const nested = {
+          tableName: meta.tableName,
+          fields: componentFields,
+          data: instance,
+        };
+        const carried = { locale, req, write: params.write };
+        // Validation only: judge every instance, and the field groups placed directly in it, store
+        // none.
+        if (validateOnly) {
+          await this.writeNestedInTx(
+            tx,
+            { ...nested, id: existingEntry ? instanceId : undefined },
+            carried,
+            true
+          );
+          continue;
+        }
 
         // i18n: split translatable values out per instance using its own component meta.
         const { schema, main, companion } = await this.splitLocalizedComponent(
@@ -1823,6 +1976,12 @@ export class FieldGroupMutationService extends BaseService {
               this.txWriteAdapter(tx)
             );
           }
+          await this.writeNestedInTx(
+            tx,
+            { ...nested, tableName: existingEntry.tableName, id: instanceId },
+            carried,
+            false
+          );
         } else {
           const row = this.buildInsertRow({
             data: main,
@@ -1844,14 +2003,31 @@ export class FieldGroupMutationService extends BaseService {
               this.txWriteAdapter(tx)
             );
           }
+          await this.writeNestedInTx(
+            tx,
+            { ...nested, id: row.id as string },
+            carried,
+            false
+          );
         }
       }
 
+      // Validation only stored nothing, so it removes nothing either.
+      if (validateOnly) return;
+      const fieldsByTable = new Map(
+        [...metaCache.values()].map(meta => [meta.tableName, meta.fields])
+      );
       for (const [id, entry] of globalExistingMap) {
-        // Validation only stored nothing, so it removes nothing either.
-        if (!validateOnly && !incomingIds.has(id)) {
-          await tx.delete(entry.tableName, this.whereEq("id", id));
-        }
+        if (incomingIds.has(id)) continue;
+        // The field groups placed directly in a removed instance go with it, at every depth.
+        await this.deleteNestedInstances(
+          tx,
+          tx.getDrizzle(),
+          entry.tableName,
+          fieldsByTable.get(entry.tableName) ?? [],
+          [id]
+        );
+        await tx.delete(entry.tableName, this.whereEq("id", id));
       }
     } catch (error) {
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
@@ -1873,14 +2049,24 @@ export class FieldGroupMutationService extends BaseService {
     for (const slug of slugs) {
       try {
         const meta = await this.registryService.getComponent(slug);
-        await this.adapter.delete(
+        const where = this.whereAnd({
+          [STORAGE_FORMAT.columns.parentId]: parentId,
+          [STORAGE_FORMAT.columns.parentTable]: parentTable,
+          [STORAGE_FORMAT.columns.parentField]: fieldName,
+        });
+        // The field groups placed directly in each instance go with it, at every depth.
+        const rows = await this.adapter.select<{ id: string }>(meta.tableName, {
+          where,
+          columns: ["id"],
+        });
+        await this.deleteNestedInstances(
+          this.adapter,
+          undefined,
           meta.tableName,
-          this.whereAnd({
-            [STORAGE_FORMAT.columns.parentId]: parentId,
-            [STORAGE_FORMAT.columns.parentTable]: parentTable,
-            [STORAGE_FORMAT.columns.parentField]: fieldName,
-          })
+          meta.fields,
+          rows.map(row => row.id)
         );
+        await this.adapter.delete(meta.tableName, where);
       } catch (error) {
         this.logger.debug("Could not delete component data for field", {
           slug,
@@ -1909,14 +2095,24 @@ export class FieldGroupMutationService extends BaseService {
           slug,
           tx.getDrizzle()
         );
-        await tx.delete(
+        const where = this.whereAnd({
+          [STORAGE_FORMAT.columns.parentId]: parentId,
+          [STORAGE_FORMAT.columns.parentTable]: parentTable,
+          [STORAGE_FORMAT.columns.parentField]: fieldName,
+        });
+        // The field groups placed directly in each instance go with it, at every depth.
+        const rows = await tx.select<{ id: string }>(meta.tableName, {
+          where,
+          columns: ["id"],
+        });
+        await this.deleteNestedInstances(
+          tx,
+          tx.getDrizzle(),
           meta.tableName,
-          this.whereAnd({
-            [STORAGE_FORMAT.columns.parentId]: parentId,
-            [STORAGE_FORMAT.columns.parentTable]: parentTable,
-            [STORAGE_FORMAT.columns.parentField]: fieldName,
-          })
+          meta.fields,
+          rows.map(row => row.id)
         );
+        await tx.delete(meta.tableName, where);
       } catch (error) {
         this.logger.debug("Could not delete component data for field in tx", {
           slug,
@@ -2083,36 +2279,34 @@ export class FieldGroupMutationService extends BaseService {
     // The stored definition carries no functions, so a component field's own
     // `validate` is attached from the field-level registry, as the parent's
     // fields are; without it that validator never ran on any write.
-    // A component placed directly among these fields is judged by the refusal alone: nothing
-    // stores it and the admin never draws it, so the rest of validation does not ask for it, a
-    // required one included, or an instance of this component could never be written.
-    const judged = omitDirectComponentFields(componentFields);
-    const issues = [
-      ...unstoredNestedComponentIssues(instance, componentFields),
-      ...(await validateEntryData(
-        instance,
-        slug ? attachFieldValidators("fieldGroup", slug, judged) : judged,
-        {
-          mode,
-          req,
-          componentFields: nested,
-          // A field type that reads the library judges this instance with the
-          // host write's context, as it judges the host's own field.
-          ...(write === undefined
-            ? {}
-            : {
-                write: instanceWriteOf(
-                  write,
-                  new Set(
-                    componentFields.flatMap(field =>
-                      typeof field.name === "string" ? [field.name] : []
-                    )
+    // Every field is judged, a field group placed directly among them included: what such a field
+    // holds is a row of its own, judged by its own write one level down, so here only what the
+    // field itself asks of the instance applies, a required one included.
+    const issues = await validateEntryData(
+      instance,
+      slug
+        ? attachFieldValidators("fieldGroup", slug, componentFields)
+        : componentFields,
+      {
+        mode,
+        req,
+        componentFields: nested,
+        // A field type that reads the library judges this instance with the
+        // host write's context, as it judges the host's own field.
+        ...(write === undefined
+          ? {}
+          : {
+              write: instanceWriteOf(
+                write,
+                new Set(
+                  componentFields.flatMap(field =>
+                    typeof field.name === "string" ? [field.name] : []
                   )
-                ),
-              }),
-        }
-      )),
-    ];
+                )
+              ),
+            }),
+      }
+    );
     if (issues.length > 0) {
       throw NextlyError.validation({
         errors: await this.instanceIssuesTheWriterMaySee(issues, {
@@ -2572,25 +2766,161 @@ export class FieldGroupMutationService extends BaseService {
 
   private async deleteRemovedInstances(
     tableName: string,
+    componentFields: readonly FieldConfig[],
     existingMap: Map<string, ComponentRow>,
     incomingIds: Set<string>
   ): Promise<void> {
-    for (const [id] of existingMap) {
-      if (!incomingIds.has(id)) {
-        await this.adapter.delete(tableName, this.whereEq("id", id));
-      }
+    const removed = [...existingMap.keys()].filter(id => !incomingIds.has(id));
+    // The field groups placed directly in each removed instance go with it, at every depth.
+    await this.deleteNestedInstances(
+      this.adapter,
+      undefined,
+      tableName,
+      componentFields,
+      removed
+    );
+    for (const id of removed) {
+      await this.adapter.delete(tableName, this.whereEq("id", id));
     }
   }
 
   private async deleteRemovedInstancesInTx(
     tx: TransactionContext,
     tableName: string,
+    componentFields: readonly FieldConfig[],
     existingMap: Map<string, ComponentRow>,
     incomingIds: Set<string>
   ): Promise<void> {
-    for (const [id] of existingMap) {
-      if (!incomingIds.has(id)) {
-        await tx.delete(tableName, this.whereEq("id", id));
+    const removed = [...existingMap.keys()].filter(id => !incomingIds.has(id));
+    // The field groups placed directly in each removed instance go with it, at every depth.
+    await this.deleteNestedInstances(
+      tx,
+      tx.getDrizzle(),
+      tableName,
+      componentFields,
+      removed
+    );
+    for (const id of removed) {
+      await tx.delete(tableName, this.whereEq("id", id));
+    }
+  }
+
+  /**
+   * The field-group fields among `fields` whose instances are rows of their own, with their
+   * references resolved onto the keys the save paths read. A virtual one stores nothing: its value
+   * is computed on read, and a document that carries it back must not become instance rows. Every
+   * field-group write, at an entry or a level down in an instance, and the delete that follows rows
+   * down from an instance, ask this, so they agree on which fields hold rows beneath one.
+   */
+  private storedFieldGroupFields(
+    fields: readonly FieldConfig[]
+  ): FieldGroupFieldConfig[] {
+    const found: FieldGroupFieldConfig[] = [];
+    for (const field of fields) {
+      if (!isFieldGroupField(field) || isVirtualField(field)) continue;
+      found.push(withResolvedFieldGroupReferences(field));
+    }
+    return found;
+  }
+
+  /**
+   * After one instance is written or judged, the field groups placed directly in its fields, written
+   * or judged as instances whose parent is it: the same walk as an entry's, one level down. An
+   * instance judged but not stored has no row of its own, so it is given an id no row holds, and
+   * every field group in it is judged as new.
+   */
+  private async writeNestedInTx(
+    tx: TransactionContext,
+    instance: NestedParent,
+    params: NestedWriteParams,
+    validateOnly: boolean
+  ): Promise<void> {
+    if (this.storedFieldGroupFields(instance.fields).length === 0) return;
+    await this.writeFieldGroupsInTx(
+      tx,
+      {
+        ...params,
+        parentId: instance.id ?? crypto.randomUUID(),
+        parentTable: instance.tableName,
+        fields: instance.fields,
+        data: instance.data,
+      },
+      validateOnly
+    );
+  }
+
+  /** {@link writeNestedInTx} for the pooled write. */
+  private async writeNestedPooled(
+    instance: NestedParent & { id: string },
+    params: NestedWriteParams
+  ): Promise<void> {
+    if (this.storedFieldGroupFields(instance.fields).length === 0) return;
+    await this.writeFieldGroupsPooled({
+      ...params,
+      parentId: instance.id,
+      parentTable: instance.tableName,
+      fields: instance.fields,
+      data: instance.data,
+    });
+  }
+
+  /**
+   * Delete, beneath the instances `ids` of the field group stored in `tableName`, the instances of
+   * every field group placed directly in its `fields`, and theirs, at every depth. They name this
+   * table and these ids as their parent, so nothing else reaches them; a row's translations go with
+   * it through the companion's foreign key. Each level's ids are read before its rows are deleted,
+   * so the level below can be found from them. `reached` keeps a row named as its own ancestor,
+   * which only a damaged table holds, from being followed for ever.
+   */
+  private async deleteNestedInstances(
+    store: RowStore,
+    executor: unknown,
+    tableName: string,
+    fields: readonly FieldConfig[],
+    ids: readonly string[],
+    reached: Set<string> = new Set()
+  ): Promise<void> {
+    const fresh = ids.filter(id => !reached.has(`${tableName}:${id}`));
+    if (fresh.length === 0) return;
+    for (const id of fresh) reached.add(`${tableName}:${id}`);
+    for (const field of this.storedFieldGroupFields(fields)) {
+      for (const slug of this.getComponentSlugs(field)) {
+        const meta = await this.registryService.getComponent(slug, executor);
+        for (let at = 0; at < fresh.length; at += NESTED_ID_CHUNK) {
+          const where: WhereClause = {
+            and: [
+              {
+                column: STORAGE_FORMAT.columns.parentTable,
+                op: "=",
+                value: tableName,
+              },
+              {
+                column: STORAGE_FORMAT.columns.parentField,
+                op: "=",
+                value: field.name,
+              },
+              {
+                column: STORAGE_FORMAT.columns.parentId,
+                op: "IN",
+                value: fresh.slice(at, at + NESTED_ID_CHUNK),
+              },
+            ],
+          };
+          const rows = await store.select<{ id: string }>(meta.tableName, {
+            where,
+            columns: ["id"],
+          });
+          if (rows.length === 0) continue;
+          await this.deleteNestedInstances(
+            store,
+            executor,
+            meta.tableName,
+            meta.fields,
+            rows.map(row => row.id),
+            reached
+          );
+          await store.delete(meta.tableName, where);
+        }
       }
     }
   }

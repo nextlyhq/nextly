@@ -50,7 +50,10 @@ import {
   isFieldGroupFieldType,
   withResolvedFieldGroupReferences,
 } from "../storage/field-group-field-type";
-import { currentFieldGroupTypeKey } from "../storage/field-group-type-key";
+import {
+  currentFieldGroupTypeKey,
+  readFieldGroupType,
+} from "../storage/field-group-type-key";
 
 import {
   DEFAULT_COMPONENT_DEPTH,
@@ -268,6 +271,19 @@ interface BatchPopulateRead {
   access: ComponentReadAccess;
   strict: boolean;
   executor?: unknown;
+}
+
+/** The instance objects one field-group field's read values hold: a single one, a list's, or none. */
+function instancesIn(values: readonly unknown[]): Record<string, unknown>[] {
+  const found: Record<string, unknown>[] = [];
+  for (const value of values) {
+    for (const item of Array.isArray(value) ? value : [value]) {
+      if (item !== null && typeof item === "object" && !Array.isArray(item)) {
+        found.push(item as Record<string, unknown>);
+      }
+    }
+  }
+  return found;
 }
 
 // Duplicated here (and in the mutation service) to avoid a cross-domain
@@ -867,6 +883,23 @@ export class FieldGroupQueryService extends BaseService {
         values?.forEach((value, index) => {
           results[index][fieldName] = value;
         });
+        // The field groups placed directly in what was read, at every depth: each language's
+        // copy holds its own instances, so each is read in its own language.
+        for (const [index, language] of languages.entries()) {
+          await this.populateNestedInstances(
+            instancesIn([values?.[index]]),
+            f,
+            {
+              depth,
+              currentDepth,
+              locale: language.locale,
+              fallbackLocale: language.fallbackLocale,
+              access,
+              strict,
+              executor,
+            }
+          );
+        }
       } catch (error) {
         // A rule that could not run never answered: the request ends with
         // that, not with the component replaced by a default.
@@ -885,6 +918,51 @@ export class FieldGroupQueryService extends BaseService {
     }
 
     return results;
+  }
+
+  /**
+   * Read, into each of `instances` under its field's name, the field groups placed directly in its
+   * fields, at every depth. The instances are what one field-group field read: one field group's,
+   * or a zone's of several. Each field group's are read together, through the batch read, so a
+   * level costs one read per field group placed in it however many instances hold one, and that
+   * read descends in turn. A level whose instances hold no rows below ends the descent, so a
+   * definition that places a field group inside itself ends with the data.
+   *
+   * Nesting is not a relationship hop: each level keeps the relationship depth of the one above.
+   */
+  private async populateNestedInstances(
+    instances: Record<string, unknown>[],
+    field: FieldGroupFieldConfig,
+    read: BatchPopulateRead
+  ): Promise<void> {
+    if (instances.length === 0) return;
+    const bySlug = new Map<string, Record<string, unknown>[]>();
+    if (field.components && field.components.length > 0) {
+      for (const instance of instances) {
+        const slug = readFieldGroupType(instance);
+        if (slug === undefined || !field.components.includes(slug)) continue;
+        bySlug.set(slug, [...(bySlug.get(slug) ?? []), instance]);
+      }
+    } else if (field.component) {
+      bySlug.set(field.component, instances);
+    }
+    for (const [slug, group] of bySlug) {
+      const meta = await this.registryService.getComponent(slug, read.executor);
+      if (!meta.fields.some(isFieldGroupField)) continue;
+      const filled = await this.populateComponentDataMany({
+        entries: group,
+        parentTable: meta.tableName,
+        fields: meta.fields,
+        depth: read.depth,
+        currentDepth: read.currentDepth,
+        locale: read.locale,
+        fallbackLocale: read.fallbackLocale,
+        access: read.access,
+        strict: read.strict,
+        executor: read.executor,
+      });
+      filled.forEach((value, index) => Object.assign(group[index], value));
+    }
   }
 
   /**
@@ -971,6 +1049,12 @@ export class FieldGroupQueryService extends BaseService {
             fieldDataMaps.set(field.name, dataMap);
           }
         }
+        // The field groups placed directly in what was read, at every depth, every entry's at once.
+        await this.populateNestedInstances(
+          instancesIn([...(fieldDataMaps.get(field.name)?.values() ?? [])]),
+          field,
+          read
+        );
       } catch (error) {
         // A rule that could not run never answered: see the catch above.
         rethrowIfRuleCouldNotRun(error);
