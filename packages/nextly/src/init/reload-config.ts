@@ -113,6 +113,7 @@ import type {
 import {
   currentWithheldScopeFields,
   publishWithheldScopeFields,
+  withheldScopeFieldsOf,
 } from "../domains/schema/pipeline/withheld-scope-fields";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
@@ -1051,6 +1052,38 @@ async function unlessLeavingRefused(
   return pass();
 }
 
+/** A field as the localization restore reads it. */
+type RestoredField = { name: string; type: string; localized?: boolean };
+
+/**
+ * `entity`'s fields, then those a plugin's scope holds back from it, one to a
+ * name, the entity's own first. Restoring an entity whose translation is
+ * turned off copies these back from its translations table: a held-back
+ * field's values would otherwise stay behind there, and switching the field
+ * on again would find an empty column. A field with no column in both tables
+ * is passed over by the restore.
+ */
+function withHeldBackFields(
+  kind: I18nTransitionKind,
+  entity: { slug?: string; fields?: RestoredField[] }
+): RestoredField[] {
+  const own = entity.fields ?? [];
+  if (kind === "fieldGroup" || entity.slug === undefined) return own;
+  const seen = new Set(own.map(field => field.name.toLowerCase()));
+  const held: RestoredField[] = [];
+  for (const field of withheldScopeFieldsOf(kind, entity.slug)) {
+    const { name, type } = field as { name?: unknown; type?: unknown };
+    if (typeof name !== "string" || typeof type !== "string") continue;
+    if (seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    held.push({
+      name,
+      type,
+      localized: (field as { localized?: boolean }).localized,
+    });
+  }
+  return [...own, ...held];
+}
 /**
  * Create, and bring into step, the `_locales` companion of every localized collection, single
  * and field group in the reloaded config.
@@ -1240,7 +1273,10 @@ async function ensureLocalizedCompanionsForReload(
               kind,
               slug: entity.slug,
               tableName: resolveTableName(entity),
-              fields: entity.fields ?? [],
+              // With the fields a plugin's scope holds back from it: their
+              // values go back to the main table too, where the apply kept
+              // their columns, so switching the field on again finds them.
+              fields: withHeldBackFields(kind, entity),
               dialect: adapter.dialect,
               defaultLocale: transitions?.defaultLocale,
               store: transitionStore,

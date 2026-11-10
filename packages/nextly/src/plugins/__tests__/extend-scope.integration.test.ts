@@ -354,7 +354,7 @@ describe.each(getConfiguredTestDialects())(
       expect((await read())?.seo_title).toBe("Kept");
     }, 240_000);
 
-    it("keeps a translated type's values, hidden, while it is switched off in development", async () => {
+    it("keeps a translated type's values, hidden, while it is switched off in development, its translation turned off meanwhile", async () => {
       database = await openDatabase(dialect);
       const adapter = database.adapter;
       vi.stubEnv("NODE_ENV", "development");
@@ -409,6 +409,28 @@ describe.each(getConfiguredTestDialects())(
       expect(hidden).not.toHaveProperty("seo_title");
 
       configWith(site, [translatedSeo()]);
+      await reloadNextlyConfig();
+      expect((await read())?.seo_title).toBe("Kept");
+
+      // Switched off again, and then the type stops being translated: its
+      // translated values go back to its own table, the held-back one with
+      // the rest, so switching it on again finds its value there.
+      configWith(site, [translatedSeo(["es_pages"])]);
+      await reloadNextlyConfig();
+      const untranslated = {
+        collections: [
+          posts,
+          defineCollection({
+            slug: "es_pages",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+        localization,
+      };
+      configWith(untranslated, [translatedSeo(["es_pages"])]);
+      await reloadNextlyConfig();
+      expect((await read())?.title).toBe("Saved");
+      configWith(untranslated, [translatedSeo()]);
       await reloadNextlyConfig();
       expect((await read())?.seo_title).toBe("Kept");
     }, 240_000);

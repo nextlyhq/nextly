@@ -184,6 +184,22 @@ export function withKeptScopeFields<T extends TypeShape>(
     : { ...type, fields: [...type.fields, ...kept] };
 }
 
+/**
+ * The translations tables of the types in `desired` that something is held
+ * back from: where a held-back translated field keeps its column, which a
+ * read of the types' own tables does not see. None when nothing is held back.
+ */
+export function companionsHoldingBack(desired: DesiredSchema): string[] {
+  const of = (kind: ScopedKind, types: Record<string, TypeShape>) =>
+    Object.values(types)
+      .filter(type => withheldScopeFieldsOf(kind, type.slug).length > 0)
+      .map(type => companionTableOf(type.tableName));
+  return [
+    ...of("collection", desired.collections),
+    ...of("single", desired.singles),
+  ];
+}
+
 /** `desired` with every type's kept fields, judged against `live`. */
 export function withKeptScopeFieldsIn(
   desired: DesiredSchema,
