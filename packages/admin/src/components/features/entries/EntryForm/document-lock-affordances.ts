@@ -477,3 +477,26 @@ function claimAffordances(
           );
   }
 }
+
+/**
+ * What holds the document for what a plugin draws on its editor, a side panel
+ * section, a replaced action or a tab, as both editors tell it: `readOnly`
+ * where the fields and the language panel's copies into the form are held
+ * (`contentHeld`), and `actionsDisabled` where the built-in Delete is: a
+ * colleague's claim or a past version on screen (`writesHeld`), a refused
+ * publish's recovery, or a document removed from code, where the server
+ * refuses every write. A reader's page alone is not among them: a plugin's
+ * own write follows its own permission, which its route judges.
+ */
+export function pluginDocumentLock(holds: {
+  contentHeld: boolean;
+  writesHeld: boolean;
+  recovering: boolean;
+  removedFromCode: boolean;
+}): DocumentLockGates {
+  return {
+    readOnly: holds.contentHeld,
+    actionsDisabled:
+      holds.writesHeld || holds.recovering || holds.removedFromCode,
+  };
+}
