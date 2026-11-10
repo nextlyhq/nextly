@@ -8,6 +8,7 @@ import {
 import { pressSave } from "../canvas/editor-driver";
 import { gotoAdmin } from "../support/admin";
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * The page builder's composition exit tests, against a PRODUCTION build.
@@ -33,8 +34,6 @@ import { test } from "../support/visible";
  * @module tests/production/composition-exit
  */
 
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
-
 const API = "/admin/api";
 const PLUGIN = `${API}/plugins/@nextlyhq/plugin-page-builder`;
 const INSTANCE = "nextly/component-instance";
@@ -55,19 +54,6 @@ interface BlockNodeJson {
   props: Json;
   slots?: Record<string, BlockNodeJson[]>;
   origin?: unknown;
-}
-
-/** Sign in through the real form; dev auto-login is blocked here. */
-async function signIn(page: Page): Promise<APIRequestContext> {
-  await page.goto("/admin");
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-  // By role, not label: "Show password" also matches a password label.
-  await page
-    .getByRole("textbox", { name: /password/i })
-    .fill(DEV_USER.password);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
-  return page.request;
 }
 
 /**

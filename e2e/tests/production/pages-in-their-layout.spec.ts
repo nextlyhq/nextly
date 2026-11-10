@@ -5,6 +5,7 @@ import {
 } from "@playwright/test";
 
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 /**
  * A published page is served inside its Layout, from a PRODUCTION build.
@@ -26,8 +27,6 @@ import { test } from "../support/visible";
  *
  * @module tests/production/pages-in-their-layout
  */
-
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 const API = "/admin/api";
 const PLUGIN = `${API}/plugins/@nextlyhq/plugin-page-builder`;
@@ -82,14 +81,8 @@ test.describe("a page served inside its Layout", () => {
     page,
     request,
   }, testInfo) => {
-    // 1. Sign in through the real form; dev auto-login is blocked here.
-    await page.goto("/admin");
-    await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-    await page
-      .getByRole("textbox", { name: /password/i })
-      .fill(DEV_USER.password);
-    await page.getByRole("button", { name: /sign in|log in/i }).click();
-    await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+    // 1. Signed in as the file's one sign-in; dev auto-login is blocked here.
+    await signIn(page);
     const api = page.request;
 
     // 2. A header and a footer component, a Layout naming them, and that
