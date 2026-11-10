@@ -440,9 +440,10 @@ than that would do harm.
 ### Handling a delivery once
 
 `ctx.security.webhooks.claimDelivery(result, { provider })` claims a verified
-delivery once per plugin, `provider` and delivery. The delivery is the id the
-scheme read (`webhook-id` in Standard Webhooks), or the `id` you pass for a
-provider that puts its id in the body, or, with neither, a SHA-256 of the body.
+delivery once per plugin, `provider` and delivery. The delivery is the `id` you
+pass, for a provider that puts its id in the body; else the id the scheme read
+(`webhook-id` in Standard Webhooks); else a SHA-256 of the body. An `id` you
+pass overrides the scheme's.
 `provider` is your own name for the sender: an id is unique only within it.
 
 Pass it the result exactly as `verify` returned it. A copy, or an object built
@@ -480,9 +481,10 @@ processed: `release()` then answers `{ released: false }`, so the catch in the
 example above is safe even when `complete()` itself threw. A handler that crashes holding it
 costs the sender one retry, never the delivery: a retry during the lease is
 `in-progress`, and the first one after it is `first`. Set `leaseSeconds` longer
-than your handler takes. If a lease does run out and a retry takes the claim
-over, the first handler's `complete()` returns `{ completed: false }`: the work
-may have run twice, so keep its effects safe to repeat. Called without `tx`
+than your handler takes. Once-only holds while the lease does: a handler that
+outlives its lease may still be running when a retry takes the claim over, and
+its `complete()` then returns `{ completed: false }`. The work may have run
+twice, so keep its effects safe to repeat. Called without `tx`
 while your code has a transaction open, `claimDelivery` is refused.
 
 A processed delivery's record is kept 30 days, then removed; so is a claim

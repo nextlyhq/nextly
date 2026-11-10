@@ -354,6 +354,16 @@ export function createPluginReceivedWebhooks(
     async claimDelivery(verified, claimOptions: ClaimDeliveryOptions) {
       // Every check before any write: a refused claim leaves nothing behind.
       const facts = factsOf(verified);
+      // The plugin's name is stored with every claim, and nothing before here
+      // holds it to what every dialect can store: refused, before any write,
+      // rather than failing on PostgreSQL alone.
+      if (!isStorableText(owner)) {
+        throw NextlyError.invalidInput({
+          message:
+            "This plugin's name holds a character a database cannot store, so it cannot claim a delivery.",
+          logContext: { owner },
+        });
+      }
       const provider = checkName("provider", claimOptions.provider);
       const id =
         claimOptions.id === undefined

@@ -145,6 +145,19 @@ describe("claimDelivery's refusals", () => {
     // transaction.
     expect(uses).toEqual([]);
 
+    // A plugin whose name holds a NUL, which no check before here refuses and
+    // PostgreSQL cannot store: refused before anything is written.
+    const nulOwner = createPluginReceivedWebhooks({
+      owner: "@test/c\u0000laims",
+      adapter: () => {
+        throw new Error("a refused claim reached the database");
+      },
+      now: () => AT,
+    });
+    expect(
+      (await refusal(nulOwner.claimDelivery(real, { provider: "acme" }))).code
+    ).toBe("INVALID_INPUT");
+
     // Valid in every part, but called while the flow holds a transaction and
     // passing none: refused before it writes.
     const open = helper({ transactionOpen: true });
