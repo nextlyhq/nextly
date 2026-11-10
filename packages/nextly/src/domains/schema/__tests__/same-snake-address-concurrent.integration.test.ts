@@ -37,6 +37,7 @@ process.env.NEXTLY_SECRET =
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { container } from "../../../di";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import {
@@ -44,6 +45,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { CacheRevalidator } from "../../../revalidation/types";
 import type { ServiceContainer } from "../../../services";
 import { addressSnakeForm } from "../../../shared/address-rule";
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
@@ -366,6 +368,46 @@ describe.each(getConfiguredTestDialects())(
           expect(await holdersOf("gap_start")).toEqual([
             { kind: renamed, slug: "gap-start" },
           ]);
+        });
+      },
+      120_000
+    );
+
+    // The lock a rename holds ends with its transaction. Its post-commit work (the cached content
+    // of both slugs flushed, which may wait on the cache) runs after, so a schema save made then
+    // is not refused as if the rename still held the lock.
+    it.each(["collection", "single"] as const)(
+      "a %s rename holds the lock no longer than its transaction",
+      async renamed => {
+        await inDevelopment(async () => {
+          expect(await answerOf(() => create(renamed, "flush-start"))).toEqual({
+            accepted: true,
+          });
+          const revalidator =
+            container.get<CacheRevalidator>("cacheRevalidator");
+          const real = revalidator.flush.bind(revalidator);
+          let during: Answer | undefined;
+          const spy = vi
+            .spyOn(revalidator, "flush")
+            .mockImplementation(async (...args) => {
+              // The first flush is the rename's own, after its commit.
+              if (during === undefined) {
+                during = await answerOf(() =>
+                  create("collection", "made-during-flush")
+                );
+              }
+              return real(...args);
+            });
+          try {
+            expect(
+              await answerOf(() => rename(renamed, "flush-start", "flush-end"))
+            ).toEqual({ accepted: true });
+          } finally {
+            spy.mockRestore();
+          }
+          expect(during, "a save made during the rename's flush").toEqual({
+            accepted: true,
+          });
         });
       },
       120_000

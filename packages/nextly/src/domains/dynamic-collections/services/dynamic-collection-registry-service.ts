@@ -28,7 +28,6 @@ import {
   deletedEntityIntent,
   flushContentChange,
 } from "../../flush-content-change";
-import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -400,45 +399,33 @@ export class DynamicCollectionRegistryService extends BaseService {
         // them and the next collection created under the old slug would inherit
         // them.
         //
-        // The new address is judged and the rename written under one hold of the schema lock, so
-        // a collection or Single that takes the same snake_case form while this waits is seen
-        // here, and one that tries while this holds it is refused. The rule is the one every
-        // road applies (reserved names, routes, a taken slug, and a same snake_case form among
-        // collections and Singles). `renameEntity` takes the same lock again, which nests.
-        const renamed = await withSchemaChangeExcluded(
-          {
-            adapter: this.adapter,
-            logger: this.logger,
-            label: `rename collection "${collectionSlug}" to "${targetSlug}"`,
-            // A rename writes rows and no DDL, as `renameEntity` says of itself.
-            issuesDdl: false,
-          },
-          async () => {
-            await assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {
+        // The new address is judged inside the schema lock `renameEntity` holds for the rename,
+        // so a collection or Single that takes the same snake_case form while this waits is seen,
+        // and one that tries while the rename holds the lock is refused. The rule is the one
+        // every road applies (reserved names, routes, a taken slug, and a same snake_case form
+        // among collections and Singles).
+        const renamed = await renameEntity(this.adapter, {
+          dialect: this.dialect,
+          move,
+          judgeTarget: () =>
+            assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {
               currentResourceType: "collection",
               currentResourceId: existing[0].id,
-            });
-            return renameEntity(this.adapter, {
-              dialect: this.dialect,
-              move,
-              writeRegistry: async tx => {
-                const written = await writeRow(
-                  tx.drizzleWithRelations<DatabaseAdapter["db"]>(
-                    resolveRelations(this.dialect)
-                  )
-                );
-                // No row under the old slug with the id read above any more
-                // (deleted, replaced, or renamed by another request, since the
-                // lookup): nothing is moved, so no history follows a registry
-                // row that did not move.
-                return affectedRowCount(written, this.dialect) === 0
-                  ? null
-                  : move;
-              },
-              logger: this.logger,
-            });
-          }
-        );
+            }),
+          writeRegistry: async tx => {
+            const written = await writeRow(
+              tx.drizzleWithRelations<DatabaseAdapter["db"]>(
+                resolveRelations(this.dialect)
+              )
+            );
+            // No row under the old slug with the id read above any more
+            // (deleted, replaced, or renamed by another request, since the
+            // lookup): nothing is moved, so no history follows a registry row
+            // that did not move.
+            return affectedRowCount(written, this.dialect) === 0 ? null : move;
+          },
+          logger: this.logger,
+        });
         if (renamed === null) {
           throw NextlyError.notFound({
             message: `Collection "${collectionSlug}" not found`,
