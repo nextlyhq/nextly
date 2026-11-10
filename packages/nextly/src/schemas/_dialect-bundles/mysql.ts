@@ -31,6 +31,10 @@ export { nextlyDeletedPrincipals } from "../deleted-principals/mysql";
 export { nextlyPluginSettings } from "../plugin-settings/mysql";
 export { nextlyOneTimeSecrets } from "../one-time-secrets/mysql";
 export { nextlyReceivedWebhooks } from "../received-webhooks/mysql";
+export {
+  nextlyPluginEvents,
+  nextlyPluginEventDeliveries,
+} from "../plugin-events/mysql";
 export { nextlyLimitStore } from "../limit-store/mysql";
 export { nextlyCacheTagExpiries } from "../cache-tag-expiries/mysql";
 export { nextlySpentChallenges } from "../spent-challenges/mysql";

@@ -52,6 +52,11 @@ import {
   ONE_TIME_SECRETS_TABLE,
   oneTimeSecretsTables,
 } from "./one-time-secrets";
+import {
+  PLUGIN_EVENT_DELIVERIES_TABLE,
+  PLUGIN_EVENTS_TABLE,
+  pluginEventsTables,
+} from "./plugin-events";
 import { PLUGIN_SETTINGS_TABLE, pluginSettingsTables } from "./plugin-settings";
 import { previewLinksTables } from "./preview-links";
 import { rbacTables } from "./rbac";
@@ -209,6 +214,11 @@ export function getCoreSchema(
     // claim per plugin, provider and delivery, with no payload kept. Declared
     // here for the same reason as its neighbours.
     ...Object.values(receivedWebhooksTables(dialect)),
+    // `nextly_plugin_events` and `nextly_plugin_event_deliveries` — the
+    // durable events plugins record, and one delivery of each to each
+    // subscriber, apart from the webhook outbox. Declared here for the same
+    // reason as their neighbours.
+    ...Object.values(pluginEventsTables(dialect)),
     // `nextly_limit_store` — the counts of the database limit store, used only
     // when a site selects it. Declared here for the same reason as its
     // neighbours: a table outside this set is never created on a real
@@ -360,6 +370,8 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   PLUGIN_SETTINGS_TABLE,
   ONE_TIME_SECRETS_TABLE,
   RECEIVED_WEBHOOKS_TABLE,
+  PLUGIN_EVENTS_TABLE,
+  PLUGIN_EVENT_DELIVERIES_TABLE,
   LIMIT_STORE_TABLE,
   CACHE_TAG_EXPIRIES_TABLE,
   SPENT_CHALLENGES_TABLE,
