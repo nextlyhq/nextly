@@ -1,4 +1,5 @@
 import { NextlyError } from "../../../errors/nextly-error";
+import { publicStateNames } from "../../../lib/content-states";
 
 import {
   castText,
@@ -12,6 +13,7 @@ import type {
   ArchiveOwner,
   CompanionCopyRef,
   CompanionMigrationSpec,
+  CopyLiveness,
 } from "./types";
 
 const ARCHIVE = "nextly_i18n_archive";
@@ -131,7 +133,9 @@ export function buildDefaultLocaleRestoreStatements(
 
 /**
  * The value a main row takes from the companion's `source` expression when it is restored: from
- * the row in the default language, else the parent's first row by language code. One row per
+ * the row {@link chosenRowOrder} ranks first, which is what the entry's readers saw where the
+ * spec says which rows are live, and otherwise the default language's row, else the first by
+ * language code. One row per
  * parent, chosen by rank, so every column read this way reads from the SAME row and a parent whose
  * preferred translation leaves one field empty cannot take that field from another language.
  *
@@ -139,13 +143,89 @@ export function buildDefaultLocaleRestoreStatements(
  * has to judge the values the restore will write before it runs.
  */
 export function restoredValue(spec: CompanionCopyRef, source: string): string {
-  const { dialect, mainTable, companionTable, defaultLocale } = spec;
+  const { dialect, mainTable, companionTable } = spec;
   const comp = q(companionTable, dialect);
   const parent = `${comp}.${q("_parent", dialect)} = ${q(mainTable, dialect)}.${q("id", dialect)}`;
   return (
     `(SELECT ${source} FROM ${comp} WHERE ${parent} ` +
-    `ORDER BY (${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)}) DESC, ` +
-    `${comp}.${q("_locale", dialect)} ASC LIMIT 1)`
+    `ORDER BY ${chosenRowOrder(spec, comp)} LIMIT 1)`
+  );
+}
+
+/**
+ * What {@link chosenRowOrder} ranks an entity's translation rows by, from the site's language
+ * order and whether each language publishes on its own; undefined without a language order, for
+ * the ranking callers had before (the default language, else the first by code). The publish
+ * states readers see are the ones a public read is bounded to (`publicStateNames`).
+ */
+export function copyLiveness(
+  languageOrder: readonly string[] | undefined,
+  companionHasStatus: boolean | undefined
+): CopyLiveness | undefined {
+  if (languageOrder === undefined) return undefined;
+  return {
+    languageOrder,
+    publicStates: publicStateNames(),
+    companionHasStatus: companionHasStatus === true,
+  };
+}
+
+/**
+ * The order a parent's translation rows are ranked in to choose the one its shared value is taken
+ * from: one ranking for the copy, the archive (which keeps every row but the chosen one) and the
+ * preview's counts, so the three cannot disagree on which language wins.
+ *
+ * With `liveness`, readers keep what they saw: the default language's row where it is live, else
+ * the first live row in the site's language order, else the default language's row, else the
+ * first in the site's order. A row is live when its own `_status` is a public state, where each
+ * language publishes on its own; otherwise every row is. The entry's main status is not asked: it
+ * is the same for all of an entry's rows, so it cannot change their order. Without `liveness`,
+ * the default language's row, else the first by language code.
+ *
+ * `row` names the translation row: a table or an alias.
+ */
+export function chosenRowOrder(
+  spec: Pick<CompanionCopyRef, "dialect" | "defaultLocale" | "liveness">,
+  row: string
+): string {
+  const { dialect, defaultLocale, liveness } = spec;
+  const locale = `${row}.${q("_locale", dialect)}`;
+  const isDefault = `${locale} = ${lit(defaultLocale)}`;
+  if (!liveness) return `(${isDefault}) DESC, ${locale} ASC`;
+  const states = liveness.publicStates.map(lit).join(", ");
+  const isLive =
+    states !== "" && liveness.companionHasStatus
+      ? `${row}.${q("_status", dialect)} IN (${states})`
+      : "1 = 1";
+  const siteOrder =
+    liveness.languageOrder.length > 0
+      ? `CASE ${locale} ${liveness.languageOrder
+          .map((code, index) => `WHEN ${lit(code)} THEN ${index}`)
+          .join(" ")} ELSE ${liveness.languageOrder.length} END, `
+      : "";
+  return (
+    `CASE WHEN ${isLive} AND ${isDefault} THEN 0 WHEN ${isLive} THEN 1 ` +
+    `WHEN ${isDefault} THEN 2 ELSE 3 END, ${siteOrder}${locale} ASC`
+  );
+}
+
+/**
+ * The language of the row an entry's shared value is taken from, for the entry whose id is
+ * `parent`: the same ranking as {@link restoredValue}, read beside a row of another table.
+ */
+function chosenLocaleOf(
+  spec: Pick<
+    CompanionCopyRef,
+    "dialect" | "companionTable" | "defaultLocale" | "liveness"
+  >,
+  parent: string
+): string {
+  const { dialect } = spec;
+  const chosen = q("chosen", dialect);
+  return (
+    `(SELECT ${chosen}.${q("_locale", dialect)} FROM ${q(spec.companionTable, dialect)} ${chosen} ` +
+    `WHERE ${chosen}.${q("_parent", dialect)} = ${parent} ` +
+    `ORDER BY ${chosenRowOrder(spec, chosen)} LIMIT 1)`
   );
 }
 
@@ -203,7 +283,10 @@ export function archiveOwnerOf(
 }
 
 function buildArchiveNonDefaultStatement(
-  ref: Pick<CompanionCopyRef, "dialect" | "companionTable" | "defaultLocale">,
+  ref: Pick<
+    CompanionCopyRef,
+    "dialect" | "companionTable" | "defaultLocale" | "liveness"
+  >,
   owner: ArchiveOwner,
   columnName: string,
   /** The field the rows are recorded under, when it differs from the column they are read from. */
@@ -213,6 +296,11 @@ function buildArchiveNonDefaultStatement(
   const source = q("source", dialect);
   const archived = q("archived", dialect);
   const value = castText(`${source}.${q(columnName, dialect)}`, dialect);
+  // The language whose value becomes the shared one, and so is not archived: the row the copy
+  // takes (`chosenRowOrder`) where readers keep what they saw, else the default language.
+  const keptLocale = ref.liveness
+    ? chosenLocaleOf(ref, `${source}.${q("_parent", dialect)}`)
+    : lit(defaultLocale);
   // The value archived last for this entry, language and field, or NULL when there is none.
   const newest =
     `(SELECT ${archived}.${q("value", dialect)} FROM ${q(ARCHIVE, dialect)} ${archived} ` +
@@ -229,7 +317,7 @@ function buildArchiveNonDefaultStatement(
     `INSERT INTO ${q(ARCHIVE, dialect)} ` +
     `(${q("collection", dialect)}, ${q("entity_kind", dialect)}, ${q("entry_id", dialect)}, ${q("locale", dialect)}, ${q("field", dialect)}, ${q("value", dialect)}) ` +
     `SELECT ${lit(owner.slug)}, ${lit(owner.kind)}, ${source}.${q("_parent", dialect)}, ${source}.${q("_locale", dialect)}, ${lit(archivedAs)}, ${value} ` +
-    `FROM ${q(companionTable, dialect)} ${source} WHERE ${source}.${q("_locale", dialect)} <> ${lit(defaultLocale)} ` +
+    `FROM ${q(companionTable, dialect)} ${source} WHERE ${source}.${q("_locale", dialect)} <> ${keptLocale} ` +
     `AND ${nullSafeDiffers(exactText(newest, dialect), exactText(value, dialect), dialect)}`
   );
 }
@@ -242,7 +330,10 @@ function buildArchiveNonDefaultStatement(
  * for the rest.
  */
 export function buildFieldLeavesTranslationArchiveStatement(
-  ref: Pick<CompanionCopyRef, "dialect" | "companionTable" | "defaultLocale">,
+  ref: Pick<
+    CompanionCopyRef,
+    "dialect" | "companionTable" | "defaultLocale" | "liveness"
+  >,
   owner: ArchiveOwner,
   columnName: string,
   /**

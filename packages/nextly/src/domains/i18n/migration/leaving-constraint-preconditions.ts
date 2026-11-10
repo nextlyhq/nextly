@@ -25,7 +25,7 @@ import {
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import { restoredValue } from "./generate-down";
-import type { CompanionMigrationSpec } from "./types";
+import type { CompanionMigrationSpec, CopyLiveness } from "./types";
 
 interface PreconditionAdapter {
   executeQuery<T = unknown>(sql: string): Promise<T[]>;
@@ -54,6 +54,8 @@ interface LeavingValuesSource {
   mainTable: string;
   companionTable: string;
   defaultLocale: string;
+  /** What decides the language an entry's shared value is taken from (`restoredValue`). */
+  liveness?: CopyLiveness;
 }
 
 /**
@@ -146,6 +148,12 @@ export async function refusalsForConstrainedFieldsLeaving(args: {
   tableName: string;
   builtBy: ColumnOrigin;
   defaultLocale: string;
+  /**
+   * What decides the language each entry's shared value is taken from, so the values judged are
+   * the ones the copy writes (`copyLiveness`). Omitted, the default language's, else the first by
+   * code.
+   */
+  liveness?: CopyLiveness;
   leaving: ReadonlySet<string>;
   oldFields: readonly LeavingFieldLike[];
   newFields: readonly LeavingFieldLike[];
@@ -167,6 +175,7 @@ export async function refusalsForConstrainedFieldsLeaving(args: {
     mainTable: args.tableName,
     companionTable: `${args.tableName}_locales`,
     defaultLocale: args.defaultLocale,
+    liveness: args.liveness,
   };
   const missing = (col: string) => entriesWithoutDefaultValue(source, col);
   const sharing = (col: string) => entriesSharingAValue(source, col);

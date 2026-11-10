@@ -302,6 +302,17 @@ export class DynamicCollectionService extends BaseService {
       : (source.current()?.defaultLocale ?? "en");
   }
 
+  /**
+   * The site's languages in its order as they are now, from the same source as the default
+   * language; undefined where this service was handed only a default.
+   */
+  private get languageOrder(): string[] | undefined {
+    const source = this.defaultLocaleSource;
+    return typeof source === "string"
+      ? undefined
+      : source.current()?.locales.map(locale => locale.code);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -1543,6 +1554,7 @@ export class DynamicCollectionService extends BaseService {
         builtBy: "collection",
         tableName: collection.tableName,
         defaultLocale: this.defaultLocale,
+        languageOrder: this.languageOrder,
         adapter: this.adapter,
         entity: collectionName,
         kind: "collection",
@@ -1853,6 +1865,7 @@ export class DynamicCollectionService extends BaseService {
         builtBy: "collection",
         tableName: collection.tableName,
         defaultLocale: this.defaultLocale,
+        languageOrder: this.languageOrder,
         adapter: this.adapter,
         entity: collectionName,
         kind: "collection",

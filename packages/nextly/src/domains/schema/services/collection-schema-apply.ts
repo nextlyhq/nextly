@@ -33,7 +33,10 @@ import { getProductionNotifier } from "../../../runtime/notifications/index";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
-import { appLocalization } from "../../i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
   fieldsWithLeavingSettingsDeferred,
@@ -668,6 +671,7 @@ async function applyHoldingSchemaLock(
     renamed: companionRename,
     tableName,
     defaultLocale,
+    languageOrder: appLanguageOrder(),
     adapter,
     entity: slug,
     kind: "collection",
@@ -756,6 +760,7 @@ async function reconcileCompanion(args: {
       tableName,
       dialect: adapter.dialect,
       defaultLocale: args.defaultLocale,
+      languageOrder: appLanguageOrder(),
       // Under per-language storage a per-language `_status` only where it publishes each language
       // on its own; otherwise the Draft/Published flag, as it has always been.
       status: perLanguageStorageEnabled()

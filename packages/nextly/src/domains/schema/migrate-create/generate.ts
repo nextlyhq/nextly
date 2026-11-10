@@ -47,6 +47,7 @@ import {
   refusalsForFieldsLeavingTranslation,
 } from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
+import { copyLiveness } from "../../i18n/migration/generate-down";
 import {
   planCompanionMigration,
   type CompanionMigrationPlan,
@@ -227,6 +228,12 @@ export interface GenerateArgs {
    * an enable transition. Defaults to `"en"` when omitted.
    */
   defaultLocale?: string;
+  /**
+   * The site's languages in the configuration's order. With each language's own publish state, it
+   * decides the language a field leaving translation takes its shared value from (`copyLiveness`);
+   * omitted, the default language's, else the first by code.
+   */
+  languageOrder?: readonly string[];
   /**
    * Where to say what this run could not check, for the operator to act on. A warning never stops
    * the run; a refusal throws.
@@ -411,7 +418,8 @@ export async function generateMigration(
     args.defaultLocale ?? "en",
     companionHistory,
     args.onWarning ?? (() => {}),
-    desiredSnapshot
+    desiredSnapshot,
+    args.languageOrder
   );
 
   // 3c. Shared fields that become translated while their entity stays translated. The diff above
@@ -1500,7 +1508,8 @@ function planFieldsLeavingTranslation(
   defaultLocale: string,
   history: TranslationRecords,
   warn: (message: string) => void,
-  desiredSnapshot: NextlySchemaSnapshot
+  desiredSnapshot: NextlySchemaSnapshot,
+  languageOrder?: readonly string[]
 ): FieldLeavesEntry[] {
   const entries: FieldLeavesEntry[] = [];
   for (const entry of entities) {
@@ -1542,6 +1551,14 @@ function planFieldsLeavingTranslation(
           mainTable: c.tableName,
           companionTable: `${c.tableName}_locales`,
           defaultLocale,
+          // Each language's own publish state is read where the translations table the snapshot
+          // records has one; otherwise every language of an entry is ranked as live.
+          liveness: copyLiveness(
+            languageOrder,
+            previousSnapshot.tables
+              .find(t => t.name === `${c.tableName}_locales`)
+              ?.columns.some(col => col.name === "_status") === true
+          ),
           parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
           columns: leaving.map(l => l.column),
           // A rollback recreates default-language rows with the main row's publishing state, when

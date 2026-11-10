@@ -38,7 +38,10 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
-import { appLocalization } from "../../domains/i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../domains/i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
   fieldsAsFirstPushed,
@@ -1328,6 +1331,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             renamed: companionRename,
             tableName: single.tableName,
             defaultLocale: appLocalization()?.defaultLocale ?? "en",
+            languageOrder: appLanguageOrder(),
             adapter,
             entity: slug,
             kind: "single",

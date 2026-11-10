@@ -21,6 +21,7 @@ import {
   buildFieldLeavesTranslationArchiveStatement,
   buildFieldLeavesTranslationStatements,
   buildLocalizationDownStatements,
+  copyLiveness,
 } from "./generate-down";
 import {
   buildCompanionCreateOnlySql,
@@ -115,6 +116,12 @@ export interface ReconcileCompanionArgs {
    * already published. Omit to skip the back-fill (e.g. a migrate path with no live default locale).
    */
   defaultLocale?: string;
+  /**
+   * The site's languages in its order, which decides, with `companionHasStatus`, the language a
+   * field leaving translation takes its shared value from (`copyLiveness`). Omitted, the default
+   * language's value, else the first by code.
+   */
+  languageOrder?: readonly string[];
   /**
    * Names of fields that leave the companion because they stop being translated while still
    * existing as shared fields. Before such a column is dropped, its non-default values are
@@ -487,6 +494,8 @@ function keepLeavingFieldValues(
       mainTable: args.tableName,
       companionTable,
       defaultLocale: args.defaultLocale,
+      // What the entry's readers saw decides the shared value, and so what is archived.
+      liveness: copyLiveness(args.languageOrder, args.companionHasStatus),
     },
     archiveOwnerOf(args.slug, args.kind),
     column,
@@ -599,6 +608,8 @@ export interface CompanionTransitionArgs {
   builtBy: ColumnOrigin;
   /** Default locale — the language seeded onto/restored from the companion. */
   defaultLocale: string;
+  /** See `ReconcileCompanionArgs.languageOrder`. */
+  languageOrder?: readonly string[];
   /** Desired Draft/Published state (companion `_status`). */
   status: boolean;
   /** Localization state BEFORE this save (persisted). */
@@ -747,6 +758,10 @@ export function buildLeavingFieldsArchiveStatements(args: {
   dialect: SupportedDialect;
   builtBy: ColumnOrigin;
   defaultLocale: string;
+  /** See `ReconcileCompanionArgs.languageOrder`. */
+  languageOrder?: readonly string[];
+  /** Whether each language has its own publish state, which the ranking reads with the order. */
+  companionHasStatus?: boolean;
   oldFields: readonly CompanionFieldLike[];
   newFields: readonly CompanionFieldLike[];
   /**
@@ -770,6 +785,11 @@ export function buildLeavingFieldsArchiveStatements(args: {
                 dialect: args.dialect,
                 companionTable,
                 defaultLocale: args.defaultLocale,
+                // Every language but the one the copy takes the shared value from.
+                liveness: copyLiveness(
+                  args.languageOrder,
+                  args.companionHasStatus
+                ),
               },
               { slug: args.slug, kind: args.kind },
               args.renamedFrom?.get(col.name) ?? col.name,
@@ -951,6 +971,8 @@ export function buildCompanionTransitionStatements(
             dialect,
             builtBy,
             defaultLocale,
+            languageOrder: args.languageOrder,
+            companionHasStatus: args.companionHasStatus,
             oldFields: before,
             newFields,
           }),
@@ -978,6 +1000,8 @@ export function buildCompanionTransitionStatements(
       // default-locale companion row from the main row's status, and a field leaving
       // translation keeps its default language's value.
       defaultLocale,
+      // With the order, the value its readers saw (`copyLiveness`).
+      languageOrder: args.languageOrder,
       sharedAfter,
       sharedAfterArchived: archiveFirst,
       joinedBefore: args.joinedBefore,

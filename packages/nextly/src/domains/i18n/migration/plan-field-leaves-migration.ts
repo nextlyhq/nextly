@@ -89,9 +89,12 @@ export function planFieldLeavesTranslationMigration(
     defaultLocale,
     collection,
     kind,
+    liveness,
   } = spec;
   const owner = archiveOwnerOf(collection, kind);
-  const ref = { dialect, mainTable, companionTable, defaultLocale };
+  // `liveness` decides the language each entry's shared value comes from, for the copy and the
+  // archive alike.
+  const ref = { dialect, mainTable, companionTable, defaultLocale, liveness };
   const comp = q(companionTable, dialect);
   const main = q(mainTable, dialect);
   const names = spec.columns.map(c => c.name);

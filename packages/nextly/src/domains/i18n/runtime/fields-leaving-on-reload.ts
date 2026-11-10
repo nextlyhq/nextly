@@ -18,6 +18,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DesiredSchema } from "../../schema/pipeline/types";
 import { resolveLocalizedFieldNames } from "../classify-fields";
+import { appLanguageOrder } from "../configured-locales";
 import { companionUniqueIndexName } from "../migration/companion-unique-indexes";
 import {
   type LeavingFieldLike,
@@ -638,6 +639,7 @@ async function planLeavingMove(
     tableName: e.tableName,
     dialect,
     defaultLocale,
+    languageOrder: appLanguageOrder(),
     status: e.status,
     wasStatus: e.status,
     wasLocalized: true,
