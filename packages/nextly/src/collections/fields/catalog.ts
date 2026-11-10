@@ -258,6 +258,28 @@ export type PluginFieldTypeSetting =
     });
 
 /**
+ * A plugin field type as the admin receives it in `/admin-meta`: the editor
+ * component path, the storage primitive (which decides binding
+ * compatibility), the picker presentation, the `surfaces` the type opted into,
+ * the `"takeover"` layout hint, and the settings the type declares. Declared
+ * here, beside the types it is made of, so the server that serves it and the
+ * admin that reads it share one shape.
+ */
+export interface PluginFieldTypeMeta {
+  type: string;
+  component: string;
+  storage: FieldStoragePrimitive;
+  layout?: "takeover";
+  label?: string;
+  description?: string;
+  icon?: string;
+  category?: FieldTypeCategory;
+  surfaces?: readonly FieldSurface[];
+  /** The type's own settings, drawn in the settings panel; checked at boot. */
+  settings?: readonly PluginFieldTypeSetting[];
+}
+
+/**
  * The surface a plugin field type targets when its author declares none. Shared
  * so the server-side gate and the client-side picker projection never diverge.
  */

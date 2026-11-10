@@ -20,15 +20,11 @@
  */
 import { Button, Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import type { JSX, ReactNode } from "react";
-import { useId, useMemo, useState } from "react";
+import { useId, useState } from "react";
 
 import { X } from "@admin/components/icons";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
-import { pluginFieldTypeSettings } from "@admin/lib/builder/plugin-field-type-entries";
 
-import { coreFieldTypeSettings } from "./core-type-settings";
-import { declaredTypeSettings } from "./DeclaredTypeSettings";
 import { fieldApiPath } from "./field-api-path";
 import { ConditionsTab } from "./tabs/ConditionsTab";
 import { DisplayTab } from "./tabs/DisplayTab";
@@ -40,6 +36,7 @@ import type {
   FieldSettingsTab,
   FixedFieldSetting,
 } from "./types";
+import { useFieldTypeSettings } from "./use-field-type-settings";
 
 const TABS: readonly { value: FieldSettingsTab; label: string }[] = [
   { value: "general", label: "General" },
@@ -74,15 +71,7 @@ export function FieldSettingsPanel({
   const [tab, setTab] = useState<FieldSettingsTab>("general");
   const headingId = useId();
   const typeLabel = useFieldTypeLabel(surface.surface)(field.type);
-  // A built-in type's settings come from the core table; any other type's are
-  // the ones its plugin declared, made once per declared list so the controls
-  // keep their identity while a person types.
-  const declared = pluginFieldTypeSettings(useBranding().plugins, field.type);
-  const declaredSettings = useMemo(
-    () => (declared ? declaredTypeSettings(declared) : undefined),
-    [declared]
-  );
-  const typeSettings = coreFieldTypeSettings(field.type) ?? declaredSettings;
+  const typeSettings = useFieldTypeSettings(field.type);
   const typeFixedReason = fixedReason(surface.fixed, "type", saved);
 
   const control: FieldSettingsControlProps = { field, readOnly, onChange };

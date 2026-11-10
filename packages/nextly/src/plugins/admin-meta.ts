@@ -6,11 +6,7 @@
  * @module plugins/admin-meta
  */
 
-import type {
-  FieldStoragePrimitive,
-  FieldTypeCategory,
-  PluginFieldTypeSetting,
-} from "../collections/fields/catalog";
+import type { PluginFieldTypeMeta } from "../collections/fields/catalog";
 import type { PluginOverride } from "../shared/types/config";
 
 import type {
@@ -20,7 +16,7 @@ import type {
   PluginMenuItem,
 } from "./admin-contributions";
 import { contributedListFilters } from "./admin-filters";
-import type { FieldSurface, PluginTranslations } from "./contributions";
+import type { PluginTranslations } from "./contributions";
 import {
   publishedDocumentSurfaces,
   type PublishedDocumentActionOverride,
@@ -180,19 +176,7 @@ export interface PluginAdminMeta {
    * enabled state (a disabled plugin's collections + their fields are
    * retained, D14/D49).
    */
-  fieldTypes?: Array<{
-    type: string;
-    component: string;
-    storage: FieldStoragePrimitive;
-    layout?: "takeover";
-    label?: string;
-    description?: string;
-    icon?: string;
-    category?: FieldTypeCategory;
-    surfaces?: readonly FieldSurface[];
-    /** The type's own settings, for the settings panel; checked at boot. */
-    settings?: readonly PluginFieldTypeSetting[];
-  }>;
+  fieldTypes?: PluginFieldTypeMeta[];
 }
 
 /**

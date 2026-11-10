@@ -6,7 +6,6 @@ import type {
   FieldSurface,
   FieldTypeCategory,
   PluginFieldTypeSetting,
-  PluginFieldTypeSettingBase,
 } from "../collections/fields/catalog";
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 import type { JsonValue as JobJsonValue } from "../direct-api/types/jobs";
@@ -263,7 +262,7 @@ export type { FieldSurface };
 // Declared in the field catalog, beside the surface and category types, so the
 // admin reads the same shape the plugin writes; re-exported here so plugin
 // authors import it from the plugin surface.
-export type { PluginFieldTypeSetting, PluginFieldTypeSettingBase };
+export type { PluginFieldTypeSetting };
 
 export interface PluginFieldType {
   /** Field type id used as `field.type` (e.g. `"rating"`). Must not collide with a built-in. */
