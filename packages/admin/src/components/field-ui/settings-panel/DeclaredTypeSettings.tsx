@@ -21,7 +21,7 @@ import {
 } from "@nextlyhq/ui";
 import type { PluginFieldTypeSetting } from "nextly/field-catalog";
 import type { ComponentType, JSX } from "react";
-import { useId } from "react";
+import { useId, useState } from "react";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
@@ -78,16 +78,12 @@ function DeclaredSetting({
         );
       case "number":
         return (
-          <Input
+          <NumberSettingInput
             id={id}
-            type="number"
-            aria-describedby={describedBy}
-            value={typeof stored === "number" ? String(stored) : ""}
-            disabled={readOnly}
-            // An emptied box removes the setting rather than storing 0.
-            onChange={e =>
-              set(e.target.value === "" ? undefined : Number(e.target.value))
-            }
+            describedBy={describedBy}
+            stored={typeof stored === "number" ? stored : undefined}
+            readOnly={readOnly}
+            onValue={set}
           />
         );
       case "select":
@@ -146,6 +142,48 @@ function DeclaredSetting({
       </div>
       {setting.control !== "boolean" && control}
     </div>
+  );
+}
+
+/**
+ * A declared number, typed as text. A number input reports a value it cannot
+ * parse yet (`-`, `1.`) as empty, so writing on every keystroke would clear
+ * the setting and swallow the sign or the point mid-entry. The box keeps what
+ * was typed, writes the number once the text is one, and removes the setting
+ * when it is emptied rather than storing 0.
+ */
+function NumberSettingInput({
+  id,
+  describedBy,
+  stored,
+  readOnly,
+  onValue,
+}: {
+  id: string;
+  describedBy: string | undefined;
+  stored: number | undefined;
+  readOnly: boolean;
+  onValue: (value: number | undefined) => void;
+}): JSX.Element {
+  const [text, setText] = useState(stored === undefined ? "" : String(stored));
+  return (
+    <Input
+      id={id}
+      inputMode="decimal"
+      aria-describedby={describedBy}
+      value={text}
+      disabled={readOnly}
+      onChange={e => {
+        const next = e.target.value;
+        setText(next);
+        if (next.trim() === "") {
+          onValue(undefined);
+          return;
+        }
+        const parsed = Number(next);
+        if (Number.isFinite(parsed)) onValue(parsed);
+      }}
+    />
   );
 }
 

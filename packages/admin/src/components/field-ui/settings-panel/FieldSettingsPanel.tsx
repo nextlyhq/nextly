@@ -36,7 +36,10 @@ import type {
   FieldSettingsTab,
   FixedFieldSetting,
 } from "./types";
-import { useFieldTypeSettings } from "./use-field-type-settings";
+import {
+  useFieldTypeSettings,
+  type FieldTypeSettingsLookup,
+} from "./use-field-type-settings";
 
 const TABS: readonly { value: FieldSettingsTab; label: string }[] = [
   { value: "general", label: "General" },
@@ -71,7 +74,8 @@ export function FieldSettingsPanel({
   const [tab, setTab] = useState<FieldSettingsTab>("general");
   const headingId = useId();
   const typeLabel = useFieldTypeLabel(surface.surface)(field.type);
-  const typeSettings = useFieldTypeSettings(field.type);
+  const lookup = useFieldTypeSettings(field.type);
+  const typeSettings = lookup.status === "known" ? lookup.settings : undefined;
   const typeFixedReason = fixedReason(surface.fixed, "type", saved);
 
   const control: FieldSettingsControlProps = { field, readOnly, onChange };
@@ -160,12 +164,7 @@ export function FieldSettingsPanel({
               }
               definingLabel={`${typeLabel} settings`}
             >
-              {typeSettings === undefined && (
-                <p className="text-sm text-muted-foreground">
-                  {typeLabel} has no settings of its own; the settings every
-                  field has are above and in the other tabs.
-                </p>
-              )}
+              <TypeSettingsNote lookup={lookup} typeLabel={typeLabel} />
               {additions("general")}
             </GeneralTab>
           </TabsContent>
@@ -230,4 +229,51 @@ function TypeOwnSettings({
       {children}
     </fieldset>
   );
+}
+
+/**
+ * The line under General's settings for a type without settings of its own,
+ * or whose settings cannot be known yet. Only a settled plugin list proves a
+ * plugin's type declares none; until it arrives, or when it never could, the
+ * panel says so instead, so a missing list never reads as an empty one.
+ */
+function TypeSettingsNote({
+  lookup,
+  typeLabel,
+}: {
+  lookup: FieldTypeSettingsLookup;
+  typeLabel: string;
+}): JSX.Element | null {
+  switch (lookup.status) {
+    case "loading":
+      return (
+        <p className="text-sm text-muted-foreground">
+          Loading this type&apos;s settings…
+        </p>
+      );
+    case "unavailable":
+      return (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <p>
+            {typeLabel}&apos;s own settings could not be loaded; the settings
+            every field has are above and in the other tabs.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={lookup.retry}
+          >
+            Retry
+          </Button>
+        </div>
+      );
+    case "known":
+      return lookup.settings === undefined ? (
+        <p className="text-sm text-muted-foreground">
+          {typeLabel} has no settings of its own; the settings every field has
+          are above and in the other tabs.
+        </p>
+      ) : null;
+  }
 }

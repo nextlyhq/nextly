@@ -23,12 +23,21 @@ import {
 // The installed plugins the panel sees, so a test can contribute a field type
 // the way /admin-meta does. Empty unless a test sets it.
 const branding = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+// Whether the workspace metadata (the plugin list) has answered: settled by
+// default, so a missing plugin is a fact unless a test says otherwise.
+const brandingStatus = vi.hoisted(() => ({
+  current: { isPending: false, isUnavailable: false, retry: () => {} },
+}));
 
 vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   ...(await importOriginal<
     typeof import("@admin/context/providers/BrandingProvider")
   >()),
   useBranding: () => branding.current,
+  useBrandingStatus: () => ({
+    ...brandingStatus.current,
+    isBrandingUnavailable: false,
+  }),
 }));
 
 // What the link and field-group editors list to choose from: two of each, so
@@ -545,6 +554,99 @@ describe("FieldSettingsPanel", () => {
     } finally {
       branding.current = {};
     }
+  });
+
+  it("keeps a declared number's sign and decimal point while it is typed", async () => {
+    const user = userEvent.setup();
+    branding.current = {
+      plugins: [
+        {
+          name: "rating-plugin",
+          enabled: true,
+          fieldTypes: [
+            {
+              type: "star-rating",
+              component: "rating-plugin/StarRating",
+              storage: "number",
+              label: "Star rating",
+              settings: [{ key: "offset", label: "Offset", control: "number" }],
+            },
+          ],
+        },
+      ],
+    };
+    try {
+      let current: BuilderField = {
+        id: "f-rating",
+        name: "rating",
+        label: "Rating",
+        type: "star-rating",
+      };
+      render(
+        <Host
+          initial={current}
+          onChange={next => {
+            current = next;
+          }}
+        />
+      );
+      const offset = screen.getByLabelText("Offset");
+      await user.type(offset, "-5");
+      expect(current.pluginOptions?.offset).toBe(-5);
+      await user.clear(offset);
+      expect(current.pluginOptions).not.toHaveProperty("offset");
+      await user.type(offset, "1.5");
+      expect(current.pluginOptions?.offset).toBe(1.5);
+      expect(offset).toHaveValue("1.5");
+    } finally {
+      branding.current = {};
+    }
+  });
+
+  describe("a plugin type whose plugin list has not arrived", () => {
+    const rating: BuilderField = {
+      id: "f-rating",
+      name: "rating",
+      label: "Rating",
+      type: "star-rating",
+    };
+
+    it("says its settings are loading, not that it has none", () => {
+      brandingStatus.current = { ...brandingStatus.current, isPending: true };
+      try {
+        render(<Host initial={rating} />);
+        expect(
+          screen.getByText(/loading this type's settings/i)
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/has no settings of its own/)).toBeNull();
+      } finally {
+        brandingStatus.current = {
+          ...brandingStatus.current,
+          isPending: false,
+        };
+      }
+    });
+
+    it("says its settings could not be loaded, with a retry, when the list never came", async () => {
+      const user = userEvent.setup();
+      const retry = vi.fn();
+      brandingStatus.current = { isPending: false, isUnavailable: true, retry };
+      try {
+        render(<Host initial={rating} />);
+        expect(
+          screen.getByText(/settings could not be loaded/i)
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/has no settings of its own/)).toBeNull();
+        await user.click(screen.getByRole("button", { name: "Retry" }));
+        expect(retry).toHaveBeenCalledTimes(1);
+      } finally {
+        brandingStatus.current = {
+          isPending: false,
+          isUnavailable: false,
+          retry: () => {},
+        };
+      }
+    });
   });
 
   it("a test plugin's field type that declares no settings", () => {
