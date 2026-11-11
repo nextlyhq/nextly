@@ -201,6 +201,36 @@ describe.each(getConfiguredTestDialects())(
       expect(bySku.items.map(item => item.reference)).toEqual([lathe]);
     });
 
+    it("refuses a fractional stock or line cap once, each field for itself", async () => {
+      // The de-duplicated rule covers every whole-number field the
+      // collection declares, not the price alone: each fractional stock or
+      // line-cap write is refused once, by the write gate's whole-number
+      // rule naming the field — no second error beside it.
+      const ctx = await boot();
+
+      const cases: [string, Record<string, unknown>][] = [
+        ["a counted product's stock", { stockCount: 1.5 }],
+        ["a made-to-order product's line cap", { maxPerLine: 2.5 }],
+      ];
+      for (const [label, over] of cases) {
+        const error = await ctx.services.collections
+          .createEntry(
+            "products",
+            { name: `Drill press (${label})`, ...over },
+            { as: "system" }
+          )
+          .then(
+            () => undefined,
+            (caught: unknown) => caught
+          );
+        expect(NextlyError.isCode(error, "VALIDATION_ERROR")).toBe(true);
+        const [path] = Object.keys(over);
+        expect(NextlyError.is(error) && error.publicData).toMatchObject({
+          errors: [expect.objectContaining({ path, code: "INVALID_TYPE" })],
+        });
+      }
+    });
+
     it("refuses a price that is not a whole number when it is written", async () => {
       const ctx = await boot();
 
