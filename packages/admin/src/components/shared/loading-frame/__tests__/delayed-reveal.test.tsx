@@ -18,13 +18,22 @@ import { ScreenOutline } from "../outlines";
 import { ScreenWaitProvider, ScreenWaitSigns } from "../screen-wait";
 
 /** A frame with a screen that waits for as long as `waiting` is true. */
-function Frame({ waiting, openedAt }: { waiting: boolean; openedAt?: number }) {
+function Frame({
+  waiting,
+  openedAt,
+  part = "screen",
+}: {
+  waiting: boolean;
+  openedAt?: number;
+  /** Which part of the screen waits: a new part is a new outline. */
+  part?: string;
+}) {
   return (
     <WaitClockContext.Provider value={openedAt ?? null}>
       <ScreenWaitProvider>
         <ScreenWaitSigns />
         {waiting ? (
-          <ScreenOutline>
+          <ScreenOutline key={part}>
             <span>outline</span>
           </ScreenOutline>
         ) : (
@@ -146,5 +155,43 @@ describe("the frame's wait signs", () => {
     expect(status()).toBeNull();
     at(LOADING_FRAME_TIMES.status + LOADING_FRAME_TIMES.outline);
     expect(outline()).not.toBeNull();
+  });
+
+  it("times a wait that begins after the screen has loaded from its own start", () => {
+    // The screen loaded, and later waits again (an editor switching its
+    // content language): that wait is a new one, not the screen's first, so
+    // its signs follow their times again rather than appearing at once.
+    const openedAt = Date.now();
+    const view = render(<Frame waiting openedAt={openedAt} />);
+    at(2_000);
+    view.rerender(<Frame waiting={false} openedAt={openedAt} />);
+    at(10_000);
+
+    view.rerender(<Frame waiting openedAt={openedAt} part="language" />);
+    expect(outline()).toBeNull();
+    expect(line()).toBeNull();
+    expect(status()).toBeNull();
+    at(10_000 + LOADING_FRAME_TIMES.outline);
+    expect(outline()).not.toBeNull();
+    expect(line()).toBeNull();
+    at(10_000 + LOADING_FRAME_TIMES.line);
+    expect(line()).not.toBeNull();
+    expect(status()).toBeNull();
+  });
+
+  it("keeps one clock across waits that follow one another without a pause", () => {
+    // The session's outline gives way to the permissions' and then the
+    // data's at once: one wait, so the line already shown stays shown.
+    const openedAt = Date.now();
+    const view = render(<Frame waiting openedAt={openedAt} part="session" />);
+    at(2_000);
+    expect(line()).not.toBeNull();
+    view.rerender(<Frame waiting openedAt={openedAt} part="permissions" />);
+    expect(outline()).not.toBeNull();
+    expect(line()).not.toBeNull();
+    view.rerender(<Frame waiting openedAt={openedAt} part="data" />);
+    expect(outline()).not.toBeNull();
+    at(LOADING_FRAME_TIMES.status);
+    expect(status()).not.toBeNull();
   });
 });
