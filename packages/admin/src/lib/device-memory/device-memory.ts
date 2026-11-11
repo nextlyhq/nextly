@@ -232,6 +232,13 @@ interface PageState {
    * new session's answer gives new labels.
    */
   forgotten: boolean;
+  /**
+   * Whether this tab has seen the server confirm a session since it last
+   * forgot the person. Kept in memory, not storage, so a tab knows it was
+   * signed in where the site keeps nothing on the device or storage refuses
+   * it, and can still tell the other tabs when that session ends.
+   */
+  confirmedHere: boolean;
 }
 
 const state: PageState = {
@@ -239,6 +246,7 @@ const state: PageState = {
   labels: null,
   pending: new Map(),
   forgotten: false,
+  confirmedHere: false,
 };
 
 function storage(): Storage | null {
@@ -439,6 +447,9 @@ export function hasSignedInHere(): boolean {
  * the frame for a browser that signed in here and the sign-in form otherwise.
  */
 export function rememberSignedInHere(): void {
+  // Known to this tab whatever storage does: it is what says the other tabs
+  // must hear when this session ends.
+  state.confirmedHere = true;
   if (state.remembering === "off") return;
   writeRaw(SIGNED_IN_HERE_KEY, "1");
 }
@@ -554,13 +565,18 @@ export function applyRememberingSwitch(on: boolean): void {
  * tab's session storage. The public branding stays. Labelled entries are not
  * written again until the next session's answer gives new labels.
  *
- * Returns whether this browser had a record of a sign-in, which says whether
- * there was anyone to forget.
+ * Returns whether there was anyone to forget: this browser kept a record of
+ * a sign-in, or this tab saw the server confirm a session. The second holds
+ * where nothing is kept on the device, so the caller tells the other tabs of
+ * a session that ended either way.
  */
 export function forgetPerson(): boolean {
-  const hadRecord = hasSignedInHere();
+  const knewSomeone = hasSignedInHere() || state.confirmedHere;
+  // Only forgetting the person ends what this tab knew of their session: the
+  // off switch removes what is stored, and the session goes on.
+  state.confirmedHere = false;
   forget(key => key !== REMEMBERED_BRANDING_KEY);
-  return hadRecord;
+  return knewSomeone;
 }
 
 /** Remove everything the admin kept on this device. */
@@ -625,6 +641,8 @@ export function onSignedOutElsewhere(listener: () => void): () => void {
     state.labels = null;
     state.pending.clear();
     state.forgotten = true;
+    // The session this tab held ended with the other tab's.
+    state.confirmedHere = false;
     listener();
   };
   return () => receiver.close();
@@ -641,4 +659,5 @@ export function resetDeviceMemoryForTests(): void {
   state.labels = null;
   state.pending.clear();
   state.forgotten = false;
+  state.confirmedHere = false;
 }

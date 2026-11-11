@@ -278,6 +278,17 @@ describe("forgetting the person", () => {
   it("says there was no one to forget in a browser with no sign-in record", () => {
     expect(forgetPerson()).toBe(false);
   });
+
+  it("says there was someone where this tab confirmed a session but kept no record", () => {
+    // As a page learns it: the session confirmed, then the server's switch,
+    // which removes the record and keeps nothing.
+    rememberSignedInHere();
+    applyRememberingSwitch(false);
+    expect(hasSignedInHere()).toBe(false);
+    expect(forgetPerson()).toBe(true);
+    // Forgotten, there is no one left to forget.
+    expect(forgetPerson()).toBe(false);
+  });
 });
 
 describe("the off switch", () => {
