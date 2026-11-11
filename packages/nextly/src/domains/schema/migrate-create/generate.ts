@@ -28,6 +28,7 @@ import { resolve } from "node:path";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import {
   type CompanionHistory,
@@ -3134,25 +3135,36 @@ export function applyRenameDecisionsForTest(
 }
 
 /*
- * The collection tables a migration would drop. Here, beside the snapshot
- * they are read from: most runs drop none, so `migrate:create` asks this
- * first and loads the check that judges them (`removed-collections`), with
- * the readers it needs, only when there is something to judge.
+ * The entity tables a migration would drop. Here, beside the snapshot they
+ * are read from: most runs drop none, so `migrate:create` asks this first and
+ * loads the check that judges them (`removed-collections`), with the readers
+ * it needs, only when there is something to judge.
  */
 /** Every collection's table starts with this, whatever its slug or `dbName`. */
 export const COLLECTION_TABLE_PREFIX = "dc_";
+/** Every Single's table starts with this, whatever its slug or `dbName`. */
+export const SINGLE_TABLE_PREFIX = "single_";
+
+/** The tables a migration would drop, by the kind of entity each belongs to. */
+export interface RemovedEntityTables {
+  collections: string[];
+  singles: string[];
+  fieldGroups: string[];
+}
 
 /**
- * The collection tables the latest snapshot holds that the configuration no
- * longer declares: the tables the next migration would drop.
+ * The entity tables the latest snapshot holds that the configuration no
+ * longer declares: the tables the next migration would drop, each by the
+ * prefix its kind of entity names it with. A removed entity's translation
+ * and junction tables are among them, under the same prefix.
  */
-export function removedCollectionTables(input: {
+export function removedEntityTables(input: {
   previous: NextlySchemaSnapshot;
   collections: MinimalConfigEntity[];
   singles: MinimalConfigEntity[];
   components: MinimalConfigEntity[];
   dialect: SupportedDialect;
-}): string[] {
+}): RemovedEntityTables {
   const desired = new Set(
     buildDesiredSnapshotFromConfig(
       input.collections,
@@ -3161,11 +3173,18 @@ export function removedCollectionTables(input: {
       input.dialect
     ).tables.map(table => table.name)
   );
-  return input.previous.tables
+  const removed = input.previous.tables
     .map(table => table.name)
-    .filter(
-      name => name.startsWith(COLLECTION_TABLE_PREFIX) && !desired.has(name)
-    );
+    .filter(name => !desired.has(name));
+  return {
+    collections: removed.filter(name =>
+      name.startsWith(COLLECTION_TABLE_PREFIX)
+    ),
+    singles: removed.filter(name => name.startsWith(SINGLE_TABLE_PREFIX)),
+    fieldGroups: removed.filter(name =>
+      name.startsWith(STORAGE_FORMAT.tablePrefix)
+    ),
+  };
 }
 
 /**
