@@ -22,12 +22,17 @@ import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../../plugin";
-import type { SeoContentType } from "../contract";
+import {
+  isSwitchedOff,
+  type ListedContentType,
+  type SeoContentType,
+} from "../contract";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
 const POSTS = "seoc_posts";
 const CASES = "seoc_cases";
 const NOTES = "seoc_notes";
+const TESTIMONIALS = "seoc_testimonials";
 
 let current: TestNextly | undefined;
 
@@ -66,6 +71,12 @@ describe.each(getConfiguredTestDialects())(
             slug: CASES,
             labels: { singular: "Case study", plural: "Case studies" },
             fields: [text({ name: "name" })],
+          }),
+          // The site's own, with no SEO: listed greyed, after the rest.
+          defineCollection({
+            slug: TESTIMONIALS,
+            labels: { singular: "Testimonial", plural: "Testimonials" },
+            fields: [text({ name: "quote" })],
           }),
         ],
         plugins: [
@@ -138,7 +149,7 @@ describe.each(getConfiguredTestDialects())(
         { params: Promise.resolve({ params: segments }) }
       );
       if (!res.ok) return { status: res.status, items: undefined };
-      const body = (await res.json()) as { items: SeoContentType[] };
+      const body = (await res.json()) as { items: ListedContentType[] };
       return { status: res.status, items: body.items };
     }
 
@@ -168,6 +179,13 @@ describe.each(getConfiguredTestDialects())(
             { name: "category", token: "Category" },
             { name: "excerpt", token: "Excerpt" },
           ],
+          // Every field a structured data detail may be read from.
+          mappableFields: [
+            { name: "title", label: "Title" },
+            { name: "slug", label: "Slug" },
+            { name: "category", label: "Category" },
+            { name: "excerpt", label: "Excerpt" },
+          ],
           example: {
             title: "Surfer SEO vs Rext AI",
             values: {
@@ -177,6 +195,7 @@ describe.each(getConfiguredTestDialects())(
             },
             address: "/blog/surfer-seo-vs-rext-ai",
           },
+          count: 1,
           public: true,
         },
         // No address declared, and no page yet. `name` is what `{Title}`
@@ -185,7 +204,22 @@ describe.each(getConfiguredTestDialects())(
           key: CASES,
           label: "Case studies",
           fields: [{ name: "slug", token: "Slug" }],
+          // The title and slug every collection carries come first.
+          mappableFields: [
+            { name: "title", label: "Title" },
+            { name: "slug", label: "Slug" },
+            { name: "name", label: "Name" },
+          ],
+          count: 0,
           public: false,
+        },
+        // Neither the plugin's own collections nor the system's are listed.
+        {
+          key: TESTIMONIALS,
+          label: "Testimonials",
+          count: 0,
+          public: false,
+          seo: false,
         },
       ]);
     });
@@ -204,7 +238,14 @@ describe.each(getConfiguredTestDialects())(
 
       const answered = await listFor(t, settingsOnly);
       expect(answered.status).toBe(200);
-      expect(answered.items?.map(type => type.example)).toEqual([
+      expect(
+        answered.items?.map(type =>
+          isSwitchedOff(type) ? undefined : type.example
+        )
+      ).toEqual([undefined, undefined, undefined]);
+      // Nor how many entries a type has, with SEO or without.
+      expect(answered.items?.map(type => type.count)).toEqual([
+        undefined,
         undefined,
         undefined,
       ]);
@@ -231,7 +272,10 @@ describe.each(getConfiguredTestDialects())(
       const { status, items } = await listFor(t, reader);
 
       expect(status).toBe(200);
-      expect(items?.[0]?.example?.title).toBe("Open note");
+      const notes = items?.[0] as SeoContentType | undefined;
+      expect(notes?.example?.title).toBe("Open note");
+      // The count is of what the reader may read too.
+      expect(items?.[0]?.count).toBe(1);
     });
   }
 );

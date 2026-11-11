@@ -6,7 +6,7 @@
  * the outline, and focus returns to it as customise mode ends. These render it
  * against each state of the user read.
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type UserRead = {
@@ -18,6 +18,8 @@ let userRead: UserRead = { user: null, isLoading: true, error: null };
 vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => userRead,
 }));
+
+import { LOADING_FRAME_TIMES } from "@admin/components/shared/loading-frame/delayed-reveal";
 
 import {
   DASHBOARD_HEADING_ID,
@@ -93,15 +95,23 @@ describe("the dashboard's greeting", () => {
   });
 
   it("holds the line's height while the reader is on its way, so the cards do not move when the name arrives", () => {
+    vi.useFakeTimers();
     const view = render(<WelcomeHeader />);
     const heading = screen.getByRole("heading", { level: 1 });
     // jsdom lays nothing out: the hold is the line's own minimum height, the
     // same with the placeholder and with the greeting, and the placeholder is
     // a block the greeting's height, hidden from assistive tech.
     expect(heading).toHaveClass("min-h-7", "text-xl");
+    // The placeholder follows the frame's timing: nothing for a quick answer.
+    expect(screen.queryByTestId("dashboard-greeting-placeholder")).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(LOADING_FRAME_TIMES.outline);
+    });
     const placeholder = screen.getByTestId("dashboard-greeting-placeholder");
     expect(placeholder).toHaveAttribute("aria-hidden", "true");
     expect(placeholder).toHaveClass("inline-block", "h-5");
+    // Still, never pulsing.
+    expect(placeholder.className).not.toMatch(/animate-/);
     expect(heading).toHaveAccessibleName("Dashboard");
 
     userRead = { user: ADA, isLoading: false, error: null };

@@ -2,7 +2,8 @@
  * What the SEO settings save reaches the page's head on every configured
  * dialect, through a real content route: a content type hidden from search
  * in the settings is served `noindex`, over the plugin's own option, and the
- * saved site name finishes the default title pattern.
+ * saved site name finishes the default title pattern and names the site on
+ * the social card and in structured data.
  */
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
@@ -34,13 +35,14 @@ afterEach(async () => {
 describe.each(getConfiguredTestDialects())(
   "the SEO settings in a page's head (%s)",
   (dialect: TestDialect) => {
-    async function boot(hiddenTypes?: string[]) {
+    async function boot(hiddenTypes?: string[], siteName?: string) {
       current = await createTestNextly({
         dialect,
         plugins: [
           seoPlugin({
             collections: [PAGES],
             ...(hiddenTypes === undefined ? {} : { hiddenTypes }),
+            ...(siteName === undefined ? {} : { socialCard: { siteName } }),
           }),
         ],
         collections: [
@@ -81,6 +83,28 @@ describe.each(getConfiguredTestDialects())(
 
       expect(head.robots).toMatchObject({ index: false });
       expect(head.title).toBe("About | Acme");
+    });
+
+    it("names the site on the social card and in structured data as the title does", async () => {
+      const t = await boot(undefined, "Old name");
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, siteName: "Acme" },
+      });
+
+      const head = await headOf(t, "about");
+
+      expect(head.title).toBe("About | Acme");
+      expect(head.openGraph).toMatchObject({ siteName: "Acme" });
+      expect(JSON.stringify(head)).not.toContain("Old name");
+    });
+
+    it("names the site on the social card by the plugin's option until the settings name it", async () => {
+      const t = await boot(undefined, "Old name");
+
+      expect((await headOf(t, "about")).openGraph).toMatchObject({
+        siteName: "Old name",
+      });
     });
 
     it("lets the settings show a type the plugin's options hide", async () => {

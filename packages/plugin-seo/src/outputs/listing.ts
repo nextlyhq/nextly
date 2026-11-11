@@ -89,6 +89,11 @@ export interface ListingOptions {
   readRules?: ReadRules;
   /** Only these collections, where given; Singles are listed either way. */
   collections?: readonly string[];
+  /**
+   * Stop once at least this many pages are listed, where given: a reader
+   * that shows only the first pages reads no more of the site than that.
+   */
+  limit?: number;
 }
 
 /** How many documents one read takes. */
@@ -228,6 +233,9 @@ export async function listPages(
       },
       found
     );
+    if (options.limit !== undefined && found.pages.length >= options.limit) {
+      break;
+    }
   }
   return found;
 }
