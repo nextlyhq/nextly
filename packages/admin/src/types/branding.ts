@@ -131,6 +131,13 @@ export interface PluginMetadata {
   order?: number;
   /** Position anchor for standalone plugins (which built-in section to appear after). */
   after?: string;
+  /**
+   * Where a standalone plugin's rail item goes, as an admin address the
+   * server has already resolved and checked against what the plugin owns.
+   * Absent when the plugin names none; the rail then opens the first
+   * collection or menu item its panel lists (`standalonePluginLanding`).
+   */
+  landing?: string;
   collections: string[];
   /** Slugs of contributed singles, for the detail page's contributions view. */
   singles?: string[];

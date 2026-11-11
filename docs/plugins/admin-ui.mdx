@@ -897,6 +897,15 @@ definePlugin({
 Placement defaults to `plugins`. `standalone` gives the plugin its own top-level icon,
 anchored after the section named by `after`.
 
+A standalone plugin's icon opens the page named by `landing`, written the way a menu
+item's `to` is: one of the plugin's own pages (`/admin/plugins/<slug>/<path>`, a
+`contributes.admin.pages` path) or one of its own collections
+(`/admin/collections/<slug>`, which follows a host's rename). Without `landing`, the icon
+opens the first collection its panel lists for the reader, and with none, the first menu
+item the panel lists. A `landing` naming anything else is ignored, and a development
+start warns about it, as it does about a standalone plugin with menu items but no
+collections and no `landing`.
+
 The value is written out rather than read from the `AdminPlacement` constant, which ships
 from `nextly` and not from `@nextlyhq/plugin-sdk`. The SDK is the only surface a plugin
 should depend on, so reaching into core for a constant would tie your plugin to core's
