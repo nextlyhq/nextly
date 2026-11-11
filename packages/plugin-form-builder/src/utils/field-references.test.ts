@@ -5,6 +5,8 @@ import type { FormField, FormNotification } from "../types";
 import {
   buildFieldReferenceMap,
   findFieldReferences,
+  renameInFieldConditions,
+  renameInNotifications,
 } from "./field-references";
 
 function textField(name: string, label = name): FormField {
@@ -190,5 +192,71 @@ describe("findFieldReferences", () => {
         [notification({ name: "Plain" })]
       )
     ).toEqual([]);
+  });
+});
+
+describe("moving references with a renamed field", () => {
+  const notification: FormNotification = {
+    id: "n1",
+    name: "Team",
+    enabled: false,
+    recipientType: "field",
+    to: "{{ email }}",
+    cc: ["{{email}}", "{{email_2}}"],
+    bcc: ["boss@example.com"],
+    replyTo: "{{email}}",
+    condition: { field: "email", comparison: "isNotEmpty" },
+  };
+
+  it("renames every address and the condition, and nothing else", () => {
+    const [next] = renameInNotifications([notification], "email", "work");
+    expect(next).toEqual({
+      ...notification,
+      to: "{{work}}",
+      cc: ["{{work}}", "{{email_2}}"],
+      bcc: ["boss@example.com"],
+      replyTo: "{{work}}",
+      condition: { field: "work", comparison: "isNotEmpty" },
+    });
+  });
+
+  it("renames conditions on the field in every other field, enabled or not", () => {
+    const fields = [
+      { type: "email", name: "email", label: "Email" },
+      {
+        type: "text",
+        name: "company",
+        label: "Company",
+        conditionalLogic: {
+          enabled: false,
+          action: "show",
+          operator: "AND",
+          conditions: [
+            { field: "email", comparison: "isNotEmpty" },
+            { field: "email_2", comparison: "isNotEmpty" },
+          ],
+        },
+      },
+    ] as FormField[];
+    const [, company] = renameInFieldConditions(fields, "email", "work");
+    expect(company?.conditionalLogic?.conditions).toEqual([
+      { field: "work", comparison: "isNotEmpty" },
+      { field: "email_2", comparison: "isNotEmpty" },
+    ]);
+  });
+
+  it("renames in a stored notification that predates the cc and bcc lists", () => {
+    const { cc: _cc, bcc: _bcc, ...older } = notification;
+    const [next] = renameInNotifications(
+      [older as FormNotification],
+      "email",
+      "work"
+    );
+    expect(next).toEqual({
+      ...older,
+      to: "{{work}}",
+      replyTo: "{{work}}",
+      condition: { field: "work", comparison: "isNotEmpty" },
+    });
   });
 });

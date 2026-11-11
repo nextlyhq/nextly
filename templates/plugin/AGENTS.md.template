@@ -41,8 +41,8 @@ working on an app.
 - **Plugin APIs come from `@nextlyhq/plugin-sdk`; schema APIs come from
   `nextly/config`.** The SDK is the stability boundary for everything a plugin
   does AS a plugin: `definePlugin`, field factories, `pluginField` and
-  `NextlyError` from `@nextlyhq/plugin-sdk`; `registerComponents` and
-  `registerKnownPlugin` from `@nextlyhq/plugin-sdk/admin`; `createTestNextly`
+  `NextlyError` from `@nextlyhq/plugin-sdk`; `registerComponents` from
+  `@nextlyhq/plugin-sdk/admin`; `createTestNextly`
   from `@nextlyhq/plugin-sdk/testing`. Collections and singles are defined the same way an app defines
   them, with `defineCollection` from `nextly/config` — which is what
   `src/collections/example.ts` does.

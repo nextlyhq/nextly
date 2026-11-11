@@ -37,6 +37,27 @@ export function computeHiddenHeaderButtons(
 }
 
 /** Which of the answers the header's account controls wait on are still unanswered. */
+/** One plugin's own top-bar item: the component path its config names. */
+export interface PluginHeaderItem {
+  name: string;
+  slot: string;
+}
+
+/**
+ * The plugins' own top-bar items, in plugin order. `header.slot` is the current
+ * spelling and wins over the deprecated `headerSlot`.
+ */
+export function pluginHeaderItems(
+  plugins: PluginMetadata[] | undefined
+): PluginHeaderItem[] {
+  return (plugins ?? [])
+    .map(plugin => ({
+      name: plugin.name,
+      slot: plugin.header?.slot ?? plugin.headerSlot,
+    }))
+    .filter((item): item is PluginHeaderItem => Boolean(item.slot));
+}
+
 export interface HeaderAnswersPending {
   /** The workspace answer: the plugins (what they hide and add) and whether the builder runs. */
   workspace: boolean;

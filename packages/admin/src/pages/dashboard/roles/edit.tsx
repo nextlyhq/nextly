@@ -19,7 +19,7 @@ export default function EditRolePage(): JSX.Element {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       {/* Wide: a row holds a collection's name, its levels side by side and
           its switch, which a form's width cannot. */}
-      <PageContainer width="wide">
+      <PageContainer type="form">
         <RoleBreadcrumbs currentPage="edit" />
 
         <RoleForm roleId={roleId} />

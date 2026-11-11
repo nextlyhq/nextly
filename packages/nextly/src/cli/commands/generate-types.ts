@@ -306,6 +306,8 @@ export async function runGenerateTypes(
     // component against its widget. None for a site running on the default config.
     configResult.configPath,
     configResult.config.admin?.dashboard,
+    // The site's own collections, whose own views the map lists too.
+    configResult.config.collections,
   ];
   // A dry run names each file of the pair the real run would rewrite, from the
   // plan the writer writes from.

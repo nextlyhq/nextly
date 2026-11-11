@@ -11,6 +11,7 @@
  * @module pages/dashboard/releases
  */
 
+import { PageHeader } from "@nextlyhq/ui";
 import { useState, type JSX } from "react";
 
 import { CreateReleaseDialog } from "@admin/components/features/releases/CreateReleaseDialog";
@@ -43,54 +44,54 @@ export default function ReleasesPage(): JSX.Element {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Releases</h1>
-            {/* Names the page's SUBJECT rather than one of its questions, so it
+        {/* Names the page's SUBJECT rather than one of its questions, so it
                 stays true whether the list is empty, full of drafts, or showing
                 a launch that already happened. */}
-            <p className="mt-1 text-sm font-normal text-muted-foreground">
-              Documents that go live together, at one moment.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Toggle BUTTONS, deliberately not a radiogroup. A radiogroup
+        <PageHeader
+          title="Releases"
+          description="Documents that go live together, at one moment."
+          actions={
+            <>
+              <div className="flex items-center gap-2">
+                {/* Toggle BUTTONS, deliberately not a radiogroup. A radiogroup
                 promises composite keyboard behaviour — one tab stop, arrows to
                 move and select — and declaring one without providing it is
                 worse than plain controls: it tells a keyboard user to press
                 arrows that do nothing. `aria-pressed` says the same thing about
                 state and promises only what these actually do. */}
-            <div
-              role="group"
-              aria-label="View releases as"
-              className="flex items-center rounded-md border border-border p-0.5"
-            >
-              {(["list", "calendar"] as const).map(option => (
-                <button
-                  key={option}
-                  type="button"
-                  aria-pressed={view === option}
-                  onClick={() => setView(option)}
-                  className={[
-                    "rounded px-3 py-1 text-sm capitalize transition-colors",
-                    view === option
-                      ? "bg-accent text-accent-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  ].join(" ")}
+                <div
+                  role="group"
+                  aria-label="View releases as"
+                  className="flex items-center rounded-md border border-border p-0.5"
                 >
-                  {option}
-                </button>
-              ))}
-            </div>
-            {canAssemble ? (
-              <Button onClick={() => setCreating(true)}>
-                {/* The same affordance as "New" on every other list page. */}
-                <Plus className="size-4" aria-hidden />
-                New release
-              </Button>
-            ) : null}
-          </div>
-        </div>
+                  {(["list", "calendar"] as const).map(option => (
+                    <button
+                      key={option}
+                      type="button"
+                      aria-pressed={view === option}
+                      onClick={() => setView(option)}
+                      className={[
+                        "rounded px-3 py-1 text-sm capitalize transition-colors",
+                        view === option
+                          ? "bg-accent text-accent-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                      ].join(" ")}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+                {canAssemble ? (
+                  <Button onClick={() => setCreating(true)}>
+                    {/* The same affordance as "New" on every other list page. */}
+                    <Plus className="size-4" aria-hidden />
+                    New release
+                  </Button>
+                ) : null}
+              </div>
+            </>
+          }
+        />
 
         {/* Above both views: a stopped or overdue release needs acting on
             whichever way the page is being read. "View all" leads to the

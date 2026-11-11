@@ -13,7 +13,6 @@
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
-import { useMemo } from "react";
 
 import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
@@ -56,7 +55,6 @@ import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
@@ -68,7 +66,6 @@ import {
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
 import { entryKeys } from "@admin/services/entryApi";
 import { getCollectionFields } from "@admin/types/collection";
-import type { ApiCollection } from "@admin/types/entities";
 
 // ============================================================================
 // Types
@@ -131,7 +128,7 @@ function EditEntryPageSkeleton() {
           The horizontal half would pull this skeleton past the measured
           column, and the editor that replaces it would then jump 64px
           narrower. */}
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-my-8">
+      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-var(--admin-bar-height))] items-stretch lg:-my-8">
         {/* Main Content */}
         {/* `min-w-0` as the editor that replaces this carries it: without it
             this pane will not shrink and pushes the rail past the column. */}
@@ -165,7 +162,7 @@ function EditEntryPageSkeleton() {
 
         {/* Sidebar */}
         <div className="w-full lg:w-[320px] shrink-0  border-t border-border lg:border-t-0 lg:border-l border-border lg:border-border bg-card flex flex-col relative z-10">
-          <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] flex flex-col">
+          <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-var(--admin-bar-height))] flex flex-col">
             {/* Sidebar Header/Actions Skeleton */}
             <div className="p-6  border-b border-border space-y-3">
               <div className="flex gap-3">
@@ -390,15 +387,6 @@ export default function EditEntryPage({
     locale: translateFrom ?? defaultLocale,
     enabled: isNonDefaultLocale || !!translateFrom,
   });
-
-  // Auto-register plugin components when collection is loaded
-  // Auto-register plugin components when collection is loaded
-  // This ensures custom Edit view components are available before rendering
-  const collectionsForRegistration = useMemo(
-    () => (collection ? [collection as unknown as ApiCollection] : undefined),
-    [collection]
-  );
-  usePluginAutoRegistration(collectionsForRegistration);
 
   const isLoading = isLoadingCollection || isLoadingEntry;
   const error = collectionError || entryError;

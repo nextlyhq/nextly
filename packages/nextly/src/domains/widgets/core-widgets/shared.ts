@@ -14,13 +14,15 @@ import { MAX_WIDGET_ROWS } from "../query-limits";
 import { WIDGET_TABS, type WidgetTab } from "../sources";
 
 /**
- * A list card's "Number of items", from 1 to the most rows a card draws
+ * A list card's "Number of entries", from 1 to the most rows a card draws
  * (`MAX_WIDGET_ROWS`), so the editor never offers rows the card would not draw.
- * Keyed `limit` by every card that declares it; each card's `load` reads it to
- * size the rows it asks for.
+ * Keyed `limit` by every card that declares it; each card's `load` reads it
+ * through `listEntries` to size the rows it asks for, and the admin draws that
+ * many. A number from 1 to 20 rather than a fixed choice, so a value a reader
+ * saved before (7, say) is still read as saved.
  */
 export const LIST_ITEMS = setting.number({
-  label: "Number of items",
+  label: "Number of entries",
   defaultValue: 5,
   min: 1,
   max: MAX_WIDGET_ROWS,

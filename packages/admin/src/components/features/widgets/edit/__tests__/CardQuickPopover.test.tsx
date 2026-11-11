@@ -180,18 +180,14 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("the quick popover of core's cards", () => {
   it.each([
-    [CORE_WIDGET_ID.count, "Count", ["Collection", "Width", "Height"]],
+    [CORE_WIDGET_ID.count, "Count", ["Collection", "Width"]],
     [
       CORE_WIDGET_ID.overTime,
       "Over time",
-      ["Collection", "Date range", "Width", "Height"],
+      ["Collection", "Date range", "Width"],
     ],
-    [
-      CORE_WIDGET_ID.recentEntries,
-      "Recent entries",
-      ["Collection", "Width", "Height"],
-    ],
-    [CORE_WIDGET_ID.note, "Note", ["Width", "Height"]],
+    [CORE_WIDGET_ID.recentEntries, "Recent entries", ["Collection", "Width"]],
+    [CORE_WIDGET_ID.note, "Note", ["Width"]],
   ])(
     "for %s holds its Collection, its quick setting and its Size, then More settings",
     async (id, title, expected) => {
@@ -240,9 +236,7 @@ describe("a change in the quick popover", () => {
     const { resize } = draw(CORE_WIDGET_ID.note);
     const { user, popover } = await openFromTitle("Note");
     await user.click(within(popover).getByRole("combobox", { name: "Width" }));
-    await user.click(
-      screen.getByRole("option", { name: "Full width, 12 columns" })
-    );
+    await user.click(screen.getByRole("option", { name: "100% width" }));
     expect(resize.mock.calls[0]?.[0]).toEqual({
       w: 12,
       h: 3,

@@ -101,6 +101,9 @@ import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
+import { startAddressPhase } from "../domains/public-addresses/address-phase";
+import { assertConfiguredPublicAddresses } from "../domains/public-addresses/distinct-public-addresses";
+import { clearParticipants } from "../domains/public-addresses/participants";
 import type { ReleasesService } from "../domains/releases/services/releases-service";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
@@ -249,6 +252,7 @@ import {
 } from "../plugins/services/plugin-services-registry";
 import { assertSettingsPermissionsOwned } from "../plugins/settings-permission";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
+import { assertFieldTypeSettings } from "../plugins/validate-field-type-settings";
 import { setBootedConfig } from "../route-handler/auth-handler";
 import {
   installTagExpiryLedger,
@@ -346,7 +350,7 @@ import {
 import { languageChangeContentCache } from "./registrations/language-change-content-cache";
 // Looking a service up needs only the container, so it lives apart from
 // this file and its every registration.
-import { getService } from "./service-access";
+import { announceServicesRegistered, getService } from "./service-access";
 
 // ============================================================
 // Configuration Interface
@@ -915,6 +919,9 @@ async function registerServicesOnce(
   // shutdown, and the config reload -- reaches the instance they went into
   // rather than whichever one happens to be global at the time.
   setActiveHookRegistry(hookRegistry);
+  // Core's public-address question joins this registry while any plugin
+  // keeps an address record (`ctx.publicAddresses.participate`).
+  startAddressPhase(hookRegistry);
 
   // Masked once here, whatever logger the app supplied: every service is
   // handed this one, so no line it writes carries a full email address
@@ -1008,7 +1015,8 @@ async function registerServicesOnce(
   // of the framework's two schema modes had no queryable source.
   resetWidgetRegistries(
     transformedConfig.plugins ?? [],
-    transformedConfig.admin?.dashboard
+    transformedConfig.admin?.dashboard,
+    transformedConfig.collections
   );
 
   // Every schema write a development start makes runs inside one hold of the
@@ -1146,6 +1154,7 @@ async function registerServicesOnce(
         }),
         schemasDir,
         migrationsDir,
+        deferredExtends,
         storage,
         mediaStorage,
         imageProcessor,
@@ -1328,6 +1337,9 @@ async function registerServicesOnce(
   // settled or refused, never pending.
 
   globalForReg.__nextly_isRegistered = true;
+  // Work a plugin started during the boot without awaiting it (an address
+  // catch-up, say) waits for this moment rather than failing before it.
+  announceServicesRegistered();
 
   // Re-point the handler store at the TRANSFORMED plugin list, and only now.
   //
@@ -1551,6 +1563,12 @@ function validateBootContributions(
     transformedPlugins
   );
 
+  // Fail fast on a public address that breaks the template rule, or two
+  // Singles at one address. Asked of the merged configuration, since a
+  // plugin's types reach it without passing through `defineCollection` or
+  // `defineSingle`, and a plugin must not take a page the site declares.
+  assertConfiguredPublicAddresses(transformedConfig);
+
   // Fail fast on role-bundle collisions. Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
   collectRoles(transformedConfig, transformedPlugins);
@@ -1595,6 +1613,9 @@ function validateBootContributions(
  * boot; fail-fast on collision.
  */
 function registerPluginFieldTypes(plugins: PluginDefinition[]): void {
+  // A type's declared settings are checked before any type is registered, so
+  // a malformed list refuses boot naming the plugin, not a panel control later.
+  assertFieldTypeSettings(plugins);
   clearFieldTypes();
   for (const fieldTypePlugin of plugins) {
     for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
@@ -2173,6 +2194,9 @@ async function addMissingCompanionColumns(
       },
     });
   }
+  // What the reconcile reports, kept apart from the create's: the create's failure has already been
+  // thrown above, so a check of it here would always read nothing.
+  let reconcileFailure: unknown;
   const inStep = await reconcileCompanionColumns(
     ctx.adapter,
     {
@@ -2184,12 +2208,12 @@ async function addMissingCompanionColumns(
       status: entity.status,
     },
     error => {
-      failure = error;
+      reconcileFailure = error;
     }
   );
   if (inStep) return;
   throw NextlyError.internal({
-    ...(failure instanceof Error ? { cause: failure } : {}),
+    ...(reconcileFailure instanceof Error ? { cause: reconcileFailure } : {}),
     logContext: {
       reason: "builder-companion-columns-failed",
       slug: entity.slug,
@@ -5119,6 +5143,8 @@ async function initializePlugins(
  */
 function clearActiveHookRegistry(): void {
   getActiveHookRegistry().clear();
+  // Participants were added by the plugins torn down with these hooks.
+  clearParticipants();
   setActiveHookRegistry(undefined);
   // Nothing is initialized in a process whose services have been cleared, and a
   // stale list would let the next reload treat a plugin as started.

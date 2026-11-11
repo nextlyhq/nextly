@@ -64,7 +64,9 @@ export async function runComponentMapCheck(
       cwd,
       loaded.configPath,
       // The site's own widgets, which the map lists beside the plugins'.
-      loaded.config.admin?.dashboard
+      loaded.config.admin?.dashboard,
+      // And the views the site's own collections name.
+      loaded.config.collections
     );
     // The contributions the map leaves out, named as `generate:types` names
     // them: the check passes without them, and their places draw fallbacks.

@@ -12,7 +12,7 @@ description: The public plugin surface re-exported by @nextlyhq/plugin-sdk.
 | `@nextlyhq/plugin-sdk`         | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`                                                            | no                  |
 | `@nextlyhq/plugin-sdk/testing` | `createTestNextly`                                                                                                                                               | no                  |
 | `@nextlyhq/plugin-sdk/client`  | `useCan`, `<Can>`                                                                                                                                                | yes (optional peer) |
-| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin`, `ChallengeViewProps`, `ChallengeResolveResult`                                                 | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin` (deprecated), `ChallengeViewProps`, `ChallengeResolveResult`                                    | yes (optional peer) |
 | `@nextlyhq/plugin-sdk/routing` | `slugToStaticParam`                                                                                                                                              | no                  |
 | `@nextlyhq/plugin-sdk/db`      | Drizzle query operators (`eq`, `and`, `inArray`, …); `sql` is not among them — a declaration a reviewer reads, not a boundary, since a plugin can bundle its own | no                  |
 | `@nextlyhq/plugin-sdk/widgets` | `WidgetProps`, `WidgetData`, `WidgetRenderSize`, `WidgetResult`, `WidgetResultField` — types only, no runtime                                                    | no                  |
@@ -292,12 +292,11 @@ const Can: React.FC<{ permission: string; fallback?: ReactNode; children: ReactN
 ```ts
 registerComponent(path, Component);
 registerComponents({ [path]: Component });
-registerKnownPlugin(packagePrefix, async () => {
-  /* register */
-});
 ```
 
-When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that calls `registerComponents` for you, with a `plugin-admin-components.generated.ts` listing its paths. The app's admin page imports the first, and its server layout hands the second to `checkAdminComponents` from `nextly/runtime`, which writes the pair again in development when it falls behind, so your `contributes.admin` and `contributes.dashboard` components load with no manual wiring. `nextly generate:types --check` holds the committed pair to the config in CI. See [Admin UI](/docs/plugins/admin-ui) for how the map stays current.
+`registerKnownPlugin(packagePrefix, register)` is deprecated, and removed at the next major release after two minor releases. It still runs `register` straight away and says once that it is deprecated. Call `registerComponents` in your admin module instead: the generated component map imports that module, so every component it registers is there before a page asks for it.
+
+When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that registers your components for you, with a `plugin-admin-components.generated.ts` listing its paths. It calls `registerComponentMap` (experimental), which registers them as `registerComponents` does and then tells the admin the map is complete, so a component missing from it draws its fallback rather than loading. The app's admin page imports the first, and its server layout hands the second to `checkAdminComponents` from `nextly/runtime`, which writes the pair again in development when it falls behind, so your `contributes.admin` and `contributes.dashboard` components load with no manual wiring. `nextly generate:types --check` holds the committed pair to the config in CI. See [Admin UI](/docs/plugins/admin-ui) for how the map stays current.
 
 ## Testing (`/testing`)
 
@@ -618,13 +617,13 @@ export default definePlugin({
 The route helpers in `nextly/runtime` and `@nextlyhq/blocks-react/next` then ask it for every
 page they serve, with no change to the site's routes. `resolve` is told:
 
-| Field     | What it holds                                                                                                                                |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `path`    | The address the page was served at, from `/`. Absent for a Single route, which is never told where the app mounts it.                         |
-| `locale`  | The language the route read the page in, when the route states one.                                                                         |
-| `source`  | The document: `{ kind: "entry", collection, entry }` or `{ kind: "single", slug, document }`, as read for this request.                      |
+| Field     | What it holds                                                                                                                                   |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | The address the page was served at, from `/`. Absent for a Single route, which is never told where the app mounts it.                           |
+| `locale`  | The language the route read the page in, when the route states one.                                                                             |
+| `source`  | The document: `{ kind: "entry", collection, entry }` or `{ kind: "single", slug, document }`, as read for this request.                         |
 | `code`    | The title, description and social values the route's own `buildMetadata` or `metadata` set. A route never supplies visibility or the canonical. |
-| `derived` | What the page's content offers, such as the title, description and picture a Page Builder page's blocks show.                               |
+| `derived` | What the page's content offers, such as the title, description and picture a Page Builder page's blocks show.                                   |
 
 It answers a `PageMetadataAnswer`: `title`, `description`, `canonical`, `robots`, `social` and
 `languages`, each optional. The route turns the answer into Next.js `Metadata`. Whatever else the
@@ -819,9 +818,9 @@ reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
 
-Settings, a user's detail page, the account page, the entry form, the login
-page, both edit pages and the dashboard draw what is sent to them; the other core places draw nothing
-yet. A plugin draws its own
+Every core place draws what is sent to it: settings, a user's detail page, the
+account page, the entry form, the login page, both edit pages, the dashboard
+and the entry list. A plugin draws its own
 place on one of its pages with `TargetSlot` and `PlaceTabs` from
 `@nextlyhq/plugin-sdk/admin` (`@experimental`), the parts core's pages use:
 
@@ -954,8 +953,9 @@ four built-in sections, in order: `status`, `publishing`, `language` and
 banners under it, `document-bar`, and the editor, the fields with the side
 panel, `editor`; settings and a user's detail page name the page's own
 content `content`, the account page names its profile card `profile`, the
-entry form names its fields `fields`, and the login page
-names the sign-in form `form`. A plugin that replaces the login page's `form`
+entry form names its fields `fields`, the entry list names its header
+`toolbar` and its list `table`, and the login page names the sign-in form
+`form`. A plugin that replaces the login page's `form`
 takes over sign-in for the site.
 
 **The dashboard.** Its blocks stand around the page's own two, the welcome
@@ -1083,9 +1083,13 @@ export function TitleLength() {
 }
 ```
 
-The entry list offers a collection's row actions in each row's menu,
-after its own, on the rows whose `visibleWhen` holds. Columns, bulk actions,
-and blocks at the entry list arrive as data and are not drawn yet.
+The entry list draws blocks around its own header (`toolbar`) and its list
+(`table`); declared columns after the collection's own, a `field` column through
+that field's own cell and a component column one cell at a time, each cell
+behind its own boundary and receiving the place's `context` and its `row`; row
+actions in each row's menu, after its own, on the rows whose `visibleWhen`
+holds; and bulk actions in the bar shown while rows are selected, offered when
+the action's `visibleWhen` holds for every selected row.
 
 **Running an action.** An action that `open`s a component draws it with the
 rows it was run on. In a bundled admin, that component resolves only once

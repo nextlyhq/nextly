@@ -139,6 +139,15 @@ export {
  * beside the formatters for the reason they are: a `load` runs on the server.
  */
 export { rowsThatFit } from "nextly";
+/**
+ * @experimental `listEntries(limit)` — how many rows a list card loads and shows
+ * for its "Number of entries" setting (`limit`): the setting, five where it is
+ * missing, at most `MAX_WIDGET_ROWS` (twenty), the most that setting may offer.
+ * A card is as tall as its content, so a list's length is its reader's choice,
+ * not its size: a widget's `load` asks `listEntries(settings.limit)` rows, with
+ * `total: true` so the card's footer can say "View all (N)" when there are more.
+ */
+export { listEntries, MAX_WIDGET_ROWS } from "nextly";
 
 /**
  * @experimental `defineAttentionItem` — declares one line of the Needs
@@ -337,6 +346,17 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental The settings a plugin field type declares in
+ * `contributes.fieldTypes[].settings`: drawn in the Schema Builder's settings
+ * panel for every field of the type and stored in its `pluginOptions`.
+ * Experimental with the settings panel they are drawn in.
+ */
+export type {
+  PluginFieldTypeSetting,
+  PluginFieldTypeSettingBase,
+} from "nextly/field-catalog";
+
+/**
  * The runtime surfaces a plugin receives when it declares them, and the
  * declarations that ask for them.
  * @experimental `PluginSettingsApi` (`ctx.settings`), `PluginCacheApi`
@@ -524,6 +544,41 @@ export type {
   ContentTypeCandidate,
   ContentTypeKind,
   ContentTypeScope,
+} from "nextly";
+
+/**
+ * Where an entry is served, as the site declares it. `publicAddressOf` answers
+ * one entry's public address, from the address its type declares in code
+ * (`publicAddress`) or, for a type made in the Schema Builder, from the
+ * `publicAddress.template` seam a plugin answers; a type with neither has no
+ * address, never a guessed one. `typesWithoutAddress` lists the site's types
+ * that have none yet.
+ *
+ * @experimental
+ */
+export { publicAddressOf, typesWithoutAddress } from "nextly";
+export type { PublicAddress, PublicAddressType } from "nextly";
+
+/**
+ * Keeping every public address to one page. A plugin that keeps a record of
+ * who holds each address takes part through `ctx.publicAddresses.participate`
+ * with a `PublicAddressParticipant`: core asks every participant, inside each
+ * save, whether another page holds an address the saved document now holds,
+ * refuses the save where one does, and otherwise tells every participant what
+ * the document holds. Core keeps no record of its own.
+ *
+ * Intended to become stable: experimental until the SEO plugin and Page
+ * Builder both ship on it, then changed only with a major version.
+ *
+ * @experimental
+ */
+export type {
+  AddressHolder,
+  HeldAddress,
+  HeldAddressUpdate,
+  PluginPublicAddresses,
+  PublicAddressParticipant,
+  RefusedAddressUpdate,
 } from "nextly";
 
 /**
@@ -1061,6 +1116,7 @@ export {
   type NavFilterContext,
   type ListQueryWhere,
   type ListQueryFilterContext,
+  type PublicAddressTemplateContext,
 } from "nextly";
 
 /**

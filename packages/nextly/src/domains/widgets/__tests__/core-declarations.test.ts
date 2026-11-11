@@ -17,7 +17,6 @@ import { resetWidgetRegistries } from "../../../di/registrations/register-widget
 import * as loggerModule from "../../../observability/logger";
 import { IN_RELEASE_KEY } from "../../collections/query/reserved-filter-keys";
 import { allWidgets, sizeFacts } from "../canonical";
-import { rowsThatFit } from "../card-geometry";
 import { breakdownWidget } from "../core-widgets/breakdown";
 import { countWidget } from "../core-widgets/count";
 import { overTimeWidget } from "../core-widgets/over-time";
@@ -479,36 +478,36 @@ describe("Recent entries' load", () => {
   }
 
   it.each([
-    [4, "default"],
-    [8, "default"],
-    [6, "compact"],
+    [10, 2, "default"],
+    [10, 8, "default"],
+    [10, 8, "compact"],
+    [20, 2, "default"],
+    [20, 8, "default"],
+    [20, 8, "compact"],
   ] as const)(
-    "asks the rows a card %i rows tall holds at %s density, and one more",
-    async (h, density) => {
+    "asks its Number of entries of %i and one more on a card %i rows tall at %s density",
+    async (limit, h, density) => {
       const services = bound();
-      // The most items a card offers, so its height alone decides the rows.
       await loadRecent(
-        { collection: "posts", limit: 10, density },
+        { collection: "posts", limit, density },
         { w: 6, h, tier: "medium" },
         services
       );
       expect(services.find).toHaveBeenCalledWith(
         "posts",
-        expect.objectContaining({
-          limit: rowsThatFit({ h }, { density }) + 1,
-        })
+        expect.objectContaining({ limit: limit + 1 })
       );
     }
   );
 
-  it("asks a different number of rows at two heights", async () => {
-    // The control for the cases above: a load that ignored its size would ask
-    // the same at both.
+  it("asks the same rows at every height: its size never decides them", async () => {
+    // The control for the cases above: a load that still read its size asks fewer on the card
+    // two rows tall, which holds no whole row, than on the one eight rows tall.
     const asked: unknown[] = [];
-    for (const h of [4, 8]) {
+    for (const h of [2, 3, 5, 8]) {
       const services = bound();
       await loadRecent(
-        { collection: "posts", limit: 10 },
+        { collection: "posts", limit: 20 },
         { w: 6, h, tier: "medium" },
         services
       );
@@ -518,10 +517,10 @@ describe("Recent entries' load", () => {
       ];
       asked.push(options.limit);
     }
-    expect(asked[0]).not.toEqual(asked[1]);
+    expect(asked).toEqual([21, 21, 21, 21]);
   });
 
-  it("asks at most its Number of items, and one more", async () => {
+  it("asks at most its Number of entries, and one more", async () => {
     const services = bound();
     await loadRecent(
       { collection: "posts", limit: 2 },
@@ -544,7 +543,8 @@ describe("Recent entries' load", () => {
     expect(services.find).toHaveBeenCalledWith("posts", {
       select: ["title", "status", "updatedAt"],
       sort: "-updatedAt",
-      limit: Math.min(5, rowsThatFit({ h: 5 }, { density: "default" })) + 1,
+      // Five, the Number of entries a card holds until its reader sets one, and one more.
+      limit: 6,
       status: "all",
       total: true,
     });

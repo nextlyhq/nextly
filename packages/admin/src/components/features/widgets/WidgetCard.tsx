@@ -69,8 +69,7 @@ import {
   type CardState,
   type SkeletonHint,
 } from "./frame/card-state";
-import { COLLAPSED_PADDING_CLASS, useFrameCollapsed } from "./frame/collapse";
-import { useLoadingFitsOneItem } from "./frame/fit";
+import { useFrameCollapsed } from "./frame/collapse";
 import {
   CardFooterClaimProvider,
   CardFooterSlotProvider,
@@ -81,8 +80,7 @@ import {
 import { CardHeaderSlotProvider } from "./frame/header-slot";
 import { CardSubtitleContext } from "./frame/header-subtitle";
 import { frameIds } from "./frame/ids";
-import { ListDensityContext, useListDensity } from "./frame/list-rows";
-import type { RowsSize } from "./frame/list-rows";
+import { ListDensityContext } from "./frame/list-rows";
 import {
   FRAME_BODY_GAP,
   FRAME_FOOTER_GAP,
@@ -158,9 +156,9 @@ export interface WidgetCardProps {
   /** The shape the loading skeleton takes. */
   skeleton?: SkeletonShape;
   /**
-   * A list or table card's items setting. Its loading skeleton then holds the place of the rows
-   * the card will draw at its tier (`rowsDrawn`), so the first answer does not make the card
-   * jump; absent, a skeleton draws its default rows.
+   * A list or table card's "Number of entries" setting. Its loading skeleton then holds the place
+   * of the rows the card will draw (`rowsDrawn`), so the first answer does not make the card jump;
+   * absent, a skeleton draws its default rows.
    */
   skeletonItems?: unknown;
   /** The density a list card draws its rows at, and its skeleton counts them at. */
@@ -266,11 +264,6 @@ function bodyClassName(
 function useDrawnCollapsed(customizing: boolean): boolean {
   const collapsed = useFrameCollapsed();
   return collapsed && !customizing;
-}
-
-/** The frame's padding: its own, or the collapsed card's one line. */
-function framePaddingClass(collapsed: boolean): string {
-  return collapsed ? COLLAPSED_PADDING_CLASS : FRAME_PADDING.className;
 }
 
 /** A boolean as a data attribute: present and empty while it holds, absent otherwise. */
@@ -446,7 +439,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
               data-hidden-empty={presentWhile(flags.hiddenEmpty)}
               className={cn(
                 "flex h-full flex-col",
-                framePaddingClass(collapsed),
+                FRAME_PADDING.className,
                 props.className
               )}
             >
@@ -616,48 +609,30 @@ function CentredState({ children }: { children: ReactNode }) {
 /**
  * The loading skeleton: shaped as the body reported, or else as the card's own declaration says,
  * holding the place of the rows the card will draw at its tier, by the rule the list and table
- * bodies draw by. Medium until the card has measured itself, as those bodies are.
- *
- * A card whose body reports its content's height asks its cell, while loading, for the height a
- * one-item answer takes (`useLoadingFitsOneItem`), so the row it shares stands at the height the
- * common answer draws rather than at the stored rows the answer would then shrink it from.
+ * bodies draw by. Medium until the card has measured itself, as those bodies are. Its height is
+ * the default for the card's kind; a card drawn before holds the height it was last drawn at
+ * (`frame/held-height`).
  */
 function LoadingBody({
   hint,
   props,
 }: {
   hint: SkeletonHint | undefined;
-  props: Pick<
-    WidgetCardProps,
-    "skeleton" | "skeletonItems" | "skeletonFields" | "widgetId"
-  >;
+  props: Pick<WidgetCardProps, "skeleton" | "skeletonItems" | "skeletonFields">;
 }) {
-  // Drawn one row high when it asks for a one-item answer's height, so its skeleton is one row.
-  const oneItem = useLoadingFitsOneItem(props.widgetId);
   const tier = useCardTier() ?? "medium";
-  // The card's height and density, as the rows that will arrive are counted at.
-  const h = useContext(CardHeightContext);
-  const density = useListDensity();
   return (
     <CardSkeleton
       shape={hint?.shape ?? props.skeleton}
-      rows={
-        oneItem
-          ? 1
-          : (hint?.rows ?? heldRows({ tier, h }, props.skeletonItems, density))
-      }
+      rows={hint?.rows ?? heldRows(props.skeletonItems)}
       layout={hint?.layout ?? heldLayout(tier, props.skeletonFields)}
     />
   );
 }
 
-/** The rows a list or table card's skeleton holds at `size` and `density`, from its items setting. */
-function heldRows(
-  size: RowsSize,
-  items: unknown,
-  density: ListDensity
-): number | undefined {
-  return items === undefined ? undefined : rowsDrawn(size, items, density);
+/** The rows a list or table card's skeleton holds, from its "Number of entries" setting. */
+function heldRows(items: unknown): number | undefined {
+  return items === undefined ? undefined : rowsDrawn(items);
 }
 
 /** How a list or table card's skeleton lays its rows out at `tier`, from its column count. */

@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 import {
   discoverMigrationGroups,
+  readMigrationFolder,
   selectVariant,
   getSortedBaseNames,
 } from "../migration-discovery";
@@ -58,7 +59,7 @@ describe("migration-discovery", () => {
     it("should group base file only", async () => {
       await createMigrationFile("0001_000000_init.sql");
 
-      const groups = await discoverMigrationGroups(testDir);
+      const groups = await discoverMigrationGroups(testDir, "postgresql");
 
       expect(groups.size).toBe(1);
       expect(groups.has("0001_000000_init")).toBe(true);
@@ -73,7 +74,7 @@ describe("migration-discovery", () => {
       await createMigrationFile("0001_000000_blog_schema.mysql.sql");
       await createMigrationFile("0001_000000_blog_schema.sqlite.sql");
 
-      const groups = await discoverMigrationGroups(testDir);
+      const groups = await discoverMigrationGroups(testDir, "postgresql");
 
       expect(groups.size).toBe(1);
       expect(groups.has("0001_000000_blog_schema")).toBe(true);
@@ -94,7 +95,7 @@ describe("migration-discovery", () => {
       await createMigrationFile("0002_000000_posts.sql");
       await createMigrationFile("0002_000000_posts.mysql.sql");
 
-      const groups = await discoverMigrationGroups(testDir);
+      const groups = await discoverMigrationGroups(testDir, "postgresql");
 
       expect(groups.size).toBe(2);
       expect(groups.has("0001_000000_init")).toBe(true);
@@ -158,7 +159,7 @@ describe("migration-discovery", () => {
       await createMigrationFile("0001_000000_blog_schema.mysql.sql");
       await createMigrationFile("0001_000000_blog_schema.sqlite.sql");
 
-      const groups = await discoverMigrationGroups(testDir);
+      const groups = await discoverMigrationGroups(testDir, "postgresql");
 
       // Should group 3 files into 1 logical migration
       expect(groups.size).toBe(1);
@@ -181,6 +182,160 @@ describe("migration-discovery", () => {
 
       const baseVariant = selectVariant(groups.get(baseName)!.variants);
       expect(baseVariant).toBe("0001_000000_blog_schema.sql");
+    });
+  });
+
+  // Every reader reads the folder through this, so an old Schema Builder file
+  // is taken out here once. One folder holds a file of each kind; each
+  // assertion is the one a reader that skipped the classification fails.
+  describe("readMigrationFolder", () => {
+    const OLD = "1730000000000_create_posts.sql";
+    const HAND = "1730000000001_create_notes.sql";
+    const OLD_CONTENT = `CREATE TABLE "dc_posts" ("id" text PRIMARY KEY);`;
+
+    beforeEach(async () => {
+      await createMigrationFile("20260101_000000_000_init.sql");
+      await createMigrationFile(OLD, OLD_CONTENT);
+      // The Builder's name, but a statement on another entity's table.
+      await createMigrationFile(
+        HAND,
+        `ALTER TABLE "dc_posts" ADD COLUMN "x" text;`
+      );
+    });
+
+    it("takes an old Builder file out of the migrations and lists it apart", async () => {
+      const folder = await readMigrationFolder(testDir, "postgresql");
+      expect([...folder.groups.keys()].sort()).toEqual([
+        "1730000000001_create_notes",
+        "20260101_000000_000_init",
+      ]);
+      expect(folder.oldBuilderFiles).toEqual([
+        { file: OLD, entity: "posts", checksum: expect.any(String) },
+      ]);
+    });
+
+    it("keeps a file with only part of the signature, naming what it lacks", async () => {
+      const folder = await readMigrationFolder(testDir, "postgresql");
+      expect(folder.partialBuilderFiles).toEqual([
+        { file: HAND, lacks: ["scope"], checksum: expect.any(String) },
+      ]);
+    });
+
+    it("keeps an old Builder name with a snapshot beside it", async () => {
+      await fs.mkdir(path.join(testDir, "meta"));
+      await fs.writeFile(
+        path.join(testDir, "meta", "1730000000000_create_posts.snapshot.json"),
+        "{}"
+      );
+      const folder = await readMigrationFolder(testDir, "postgresql");
+      expect(folder.groups.has("1730000000000_create_posts")).toBe(true);
+      expect(folder.oldBuilderFiles).toEqual([]);
+      expect(folder.partialBuilderFiles.map(f => f.file)).toContain(OLD);
+    });
+
+    // The Builder never wrote a dialect variant. A base file with one beside
+    // it is one migration with the variant, so it stays in its group: taken
+    // out, its ledger name would hide the variant's rows, and another
+    // dialect would fall back to running the variant written for MySQL.
+    it("keeps an old Builder name with a dialect variant beside it", async () => {
+      const VARIANT = "1730000000000_create_posts.mysql.sql";
+      await createMigrationFile(
+        VARIANT,
+        "CREATE TABLE `dc_posts` (`id` varchar(36) PRIMARY KEY);"
+      );
+      for (const dialect of ["postgresql", "mysql"] as const) {
+        const folder = await readMigrationFolder(testDir, dialect);
+        const group = folder.groups.get("1730000000000_create_posts");
+        expect(selectVariant(group?.variants ?? [], "postgresql")).toBe(OLD);
+        expect(selectVariant(group?.variants ?? [], "mysql")).toBe(VARIANT);
+        expect(folder.oldBuilderFiles).toEqual([]);
+        // Both the base and the variant lack the variant's absence (on MySQL
+        // the base's Postgres quoting is out of scope too): each is checked
+        // as a migration, and neither is ignored.
+        const lacking = new Map(
+          folder.partialBuilderFiles.map(f => [f.file, f.lacks])
+        );
+        expect([...lacking.keys()].sort()).toEqual([OLD, VARIANT, HAND].sort());
+        expect(lacking.get(OLD)).toContain("variant");
+        expect(lacking.get(VARIANT)).toContain("variant");
+      }
+    });
+
+    // A snapshot that cannot be checked is not a missing one: reading it as
+    // absent would set the file aside as an old Builder file. Windows ignores
+    // the mode, and root reads past it, so neither can make the folder unreadable.
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+      "refuses when whether a snapshot exists cannot be told",
+      async () => {
+        const meta = path.join(testDir, "meta");
+        await fs.mkdir(meta);
+        await fs.chmod(meta, 0o000);
+        try {
+          await expect(
+            readMigrationFolder(testDir, "postgresql")
+          ).rejects.toMatchObject({ code: "EACCES" });
+        } finally {
+          await fs.chmod(meta, 0o755);
+        }
+      }
+    );
+
+    // A folder that cannot be listed is not an empty one: read as empty, every
+    // mark would name a deleted file and a changed marked file would go unseen.
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+      "refuses when the folder cannot be listed",
+      async () => {
+        await fs.chmod(testDir, 0o000);
+        try {
+          await expect(
+            readMigrationFolder(testDir, "postgresql")
+          ).rejects.toMatchObject({ code: "EACCES" });
+        } finally {
+          await fs.chmod(testDir, 0o755);
+        }
+      }
+    );
+
+    it("reads a folder that is not there as holding no migrations", async () => {
+      const folder = await readMigrationFolder(
+        path.join(testDir, "absent"),
+        "postgresql"
+      );
+      expect(folder.groups.size).toBe(0);
+      expect(folder.oldBuilderFiles).toEqual([]);
+    });
+
+    it("sets aside a file on a declared junction table only when the set is handed in", async () => {
+      // An update, where nothing but a declaration ties a custom junction to
+      // the collection.
+      const file = "1730000000002_update_tags.sql";
+      await createMigrationFile(
+        file,
+        'ALTER TABLE "dc_tags" ADD COLUMN "x" text;\nALTER TABLE "tag_links" ADD COLUMN "y" text;'
+      );
+      const declared = await readMigrationFolder(testDir, "postgresql", {
+        junctions: new Map([["tags", new Set(["tag_links"])]]),
+      });
+      expect(declared.oldBuilderFiles.map(f => f.file)).toContain(file);
+      const none = await readMigrationFolder(testDir, "postgresql");
+      expect(none.partialBuilderFiles.map(f => f.file)).toContain(file);
+    });
+
+    // `nextly/cli/utils` publishes this with a one-argument contract: called
+    // without a dialect it lists every file as it always did, unclassified.
+    it("discoverMigrationGroups keeps its one-argument contract", async () => {
+      const groups = await discoverMigrationGroups(testDir);
+      expect([...groups.keys()].sort()).toEqual([
+        "1730000000000_create_posts",
+        "1730000000001_create_notes",
+        "20260101_000000_000_init",
+      ]);
+    });
+
+    it("discoverMigrationGroups reads the same migrations", async () => {
+      const groups = await discoverMigrationGroups(testDir, "postgresql");
+      expect(groups.has("1730000000000_create_posts")).toBe(false);
+      expect(groups.has("1730000000001_create_notes")).toBe(true);
     });
   });
 });

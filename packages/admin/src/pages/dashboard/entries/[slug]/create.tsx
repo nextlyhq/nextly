@@ -13,7 +13,6 @@
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
-import { useMemo } from "react";
 
 import {
   EntryForm,
@@ -33,13 +32,11 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
-import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
   type CustomEditViewProps,
 } from "@admin/lib/plugins/component-registry";
-import type { ApiCollection } from "@admin/types/entities";
 
 // ============================================================================
 // Types
@@ -96,7 +93,7 @@ function CreateEntryPageSkeleton() {
           The horizontal half would pull this skeleton past the measured
           column, and the editor that replaces it would then jump 64px
           narrower. */}
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-my-8">
+      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-var(--admin-bar-height))] items-stretch lg:-my-8">
         {/* Main Content */}
         {/* `min-w-0` as the editor that replaces this carries it: without it
             this pane will not shrink and pushes the rail past the column. */}
@@ -154,14 +151,6 @@ export default function CreateEntryPage({
 
   // Fetch enriched collection schema (component fields are populated)
   const { data: collection, isLoading, error } = useCollectionSchema(slug);
-
-  // Auto-register plugin components when collection is loaded
-  // This ensures custom Edit view components are available before rendering
-  const collectionsForRegistration = useMemo(
-    () => (collection ? [collection as unknown as ApiCollection] : undefined),
-    [collection]
-  );
-  usePluginAutoRegistration(collectionsForRegistration);
 
   /**
    * The page's measure, on every branch.
