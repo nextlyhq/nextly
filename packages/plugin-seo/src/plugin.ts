@@ -48,8 +48,10 @@ import { problemRoutes } from "./problems/route";
 import { problemsCollection } from "./problems/store";
 import { RECEIVED_PAGE, RECEIVED_PAGE_HREF } from "./received/contract";
 import { receivedRoutes } from "./received/route";
-import { redirectsCollection } from "./redirects/collection";
+import { REDIRECTS_SLUG, redirectsCollection } from "./redirects/collection";
+import { REDIRECTS_PAGE } from "./redirects/contract";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
+import { redirectRoutes } from "./redirects/routes";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import {
   contentTypesRoute,
@@ -58,10 +60,12 @@ import {
 import {
   SEO_SETTINGS_SLUG,
   SETTINGS_PAGE,
+  SEO_ADMIN_SLUG,
   SETTINGS_PAGE_HREF,
 } from "./settings/contract";
 import { readSeoRules, rememberSettingsSingle } from "./settings/rules";
 import { seoSettingsSingle } from "./settings/single";
+import { socialCardFromSettings } from "./settings/social-card-rules";
 import { structuredDataFromSettings } from "./settings/structured-data-rules";
 import {
   resolveBaseOrigin,
@@ -77,6 +81,7 @@ import { shareImageRoute } from "./social/route";
 import { decideStanding, stagingGuard } from "./staging/guard";
 import { withStructuredData } from "./structured-data/provider";
 import {
+  checkedTypeRules,
   rulesFromOptions,
   type StructuredDataOptions,
 } from "./structured-data/rules";
@@ -85,6 +90,9 @@ import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
+/** Where the redirects screen is, for the admin's menu. */
+const REDIRECTS_PAGE_HREF = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
+
 const require = createRequire(import.meta.url);
 const { version: PLUGIN_VERSION } = require("../package.json") as {
   version: string;
@@ -201,9 +209,10 @@ export interface SeoPluginOptions {
    */
   structuredData?: StructuredDataOptions;
   /**
-   * @experimental What every page's social card states beyond the page,
-   * until the SEO settings hold it: the site's name, and the language of a
-   * page the route read in no particular language, as a language tag.
+   * @experimental What every page's social card states beyond the page:
+   * the site's name, until one is saved in the SEO settings, and the
+   * language of a page the route read in no particular language, as a
+   * language tag.
    *
    * ```ts
    * seoPlugin({
@@ -213,8 +222,9 @@ export interface SeoPluginOptions {
    * });
    * ```
    *
-   * A share image stored with a path from the root is stated on `baseUrl`,
-   * since a network reading the card needs its full address.
+   * A share image stored with a path from the root is stated on the site's
+   * production address, else on `baseUrl`, since a network reading the card
+   * needs its full address.
    */
   socialCard?: SocialCardOptions;
 }
@@ -404,9 +414,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options.baseUrl,
     options.structuredData
   );
-  const readSocialCardRules = socialCardRulesFromOptions(
-    options.baseUrl,
-    options.socialCard
+  const readSocialCardRules = socialCardFromSettings(
+    socialCardRulesFromOptions(options.baseUrl, options.socialCard)
   );
 
   // The SEO tab on each page the group is added to, and the route it reads
@@ -452,8 +461,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   };
 
   // The site's sitemap and robots.txt, the action that makes a share image
-  // of the right size, the check of what search engines received, the SEO
-  // tab's own and the problem list's; all added below.
+  // of the right size, the settings and redirects screens' routes, the
+  // check of what search engines received, the SEO tab's own and the
+  // problem list's; all added below.
   const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
@@ -492,15 +502,28 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
-    // robots.txt asks AI tools until the site chooses: not a secret, it is
-    // what the site's own robots.txt says.
+    // the plugin's options answer until the site chooses: what robots.txt
+    // asks AI tools and which types are hidden, which the site's own
+    // robots.txt and pages already say.
     admin: {
       ...tab.admin,
-      clientConfig: { aiCrawlers: options.aiCrawlers ?? "all" },
+      clientConfig: {
+        aiCrawlers: options.aiCrawlers ?? "all",
+        hiddenTypes: [...new Set(options.hiddenTypes ?? [])],
+        // Each type's structured data choice the options make, which the
+        // screen shows until the site chooses its own.
+        structuredData: checkedTypeRules(options.structuredData?.types),
+      },
       menu: [
         // Shown to everyone in the admin: the list answers each person with
         // the pages of the types they may read, and says so where none.
         { label: "Problems", to: PROBLEMS_PAGE_HREF, icon: "AlertTriangle" },
+        {
+          label: "Redirects",
+          to: REDIRECTS_PAGE_HREF,
+          icon: "Route",
+          requiredPermission: `read-${REDIRECTS_SLUG}`,
+        },
         // Shown to everyone in the admin: the check fetches only the site's
         // own public pages, and compares only those whose type the person
         // may read.
@@ -519,6 +542,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       pages: [
         PROBLEMS_PAGE,
         { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
+        { ...REDIRECTS_PAGE, requiredPermission: `read-${REDIRECTS_SLUG}` },
         RECEIVED_PAGE,
       ],
     },
@@ -546,6 +570,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Single holds the settings.
     contentTypesRoute(targets),
     settingsDocumentRoute(),
+    // What the redirects screen reads and writes.
+    ...redirectRoutes(),
     // What the "What search engines received" screen reads and checks.
     ...receivedRoutes({
       collections: targets,

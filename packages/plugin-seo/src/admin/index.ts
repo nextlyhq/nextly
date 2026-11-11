@@ -2,10 +2,10 @@
 
 /**
  * `@nextlyhq/plugin-seo/admin`: the admin's SEO screens, each registered
- * under the component path the plugin names it by: the settings page, the
- * SEO tab on each page the plugin adds SEO to, its side panel line, and the
- * panel the tab draws, for any surface that edits a page's SEO, the problem
- * list, and the "What search engines received" page.
+ * under the component path the plugin names it by: the settings and redirects
+ * pages, the SEO tab on each page the plugin adds SEO to, its side panel line,
+ * and the panel the tab draws, for any surface that edits a page's SEO, the
+ * problem list, and the "What search engines received" page.
  *
  * The registration is what makes them render: the admin resolves a component
  * path through its registry, so a component exported but not registered
@@ -17,11 +17,13 @@ import { registerComponents } from "@nextlyhq/plugin-sdk/admin";
 
 import { PROBLEMS_PAGE } from "../problems/contract";
 import { RECEIVED_PAGE } from "../received/contract";
+import { REDIRECTS_PAGE } from "../redirects/contract";
 import { SETTINGS_PAGE } from "../settings/contract";
 import { SEO_STATUS_COMPONENT, SEO_TAB_COMPONENT } from "../tab/contributions";
 
 import { SeoProblemsPage } from "./SeoProblemsPage";
 import { SeoReceivedPage } from "./SeoReceivedPage";
+import { SeoRedirectsPage } from "./SeoRedirectsPage";
 import { SeoSettingsPage } from "./SeoSettingsPage";
 import { SeoTab } from "./SeoTab";
 import { SeoStatusSection } from "./status";
@@ -30,6 +32,7 @@ import { SeoStatusSection } from "./status";
 registerComponents({
   [SETTINGS_PAGE.component]: SeoSettingsPage,
   [RECEIVED_PAGE.component]: SeoReceivedPage,
+  [REDIRECTS_PAGE.component]: SeoRedirectsPage,
   [SEO_TAB_COMPONENT]: SeoTab,
   [SEO_STATUS_COMPONENT]: SeoStatusSection,
   [PROBLEMS_PAGE.component]: SeoProblemsPage,
@@ -37,6 +40,7 @@ registerComponents({
 
 export { SeoProblemsPage } from "./SeoProblemsPage";
 export { SeoReceivedPage } from "./SeoReceivedPage";
+export { SeoRedirectsPage } from "./SeoRedirectsPage";
 export { SeoSettingsPage } from "./SeoSettingsPage";
 export { SeoTab } from "./SeoTab";
 export { SeoStatusSection } from "./status";
