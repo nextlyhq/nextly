@@ -233,7 +233,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await rows()).toEqual([]);
     });
 
-    it("a plugin torn down for a re-registration stops running, and is still owed what is dispatched meanwhile", async () => {
+    it("a plugin torn down for a re-registration stops running, is still owed what is dispatched meanwhile, and gets it on the next pass once back", async () => {
       const { orders, adapter, pass, delivered } = await boot();
       clearPluginSubscriptions(LOYALTY);
       expect(getDurableSubscribers().handlerOf(`${LOYALTY}:award`)).toBe(
@@ -258,6 +258,16 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(event?.id).toBe(id);
       expect(event?.finishedAt ?? null).toBeNull();
+
+      // Registered again, as the reloaded plugin's init does: the next pass
+      // delivers, without waiting out the hold of a subscriber that is gone.
+      for (const name of ["award", "receipt"]) {
+        getDurableSubscribers().register(LOYALTY, PAID, name, event => {
+          delivered.push(`${name}:${event.id}`);
+        });
+      }
+      await pass();
+      expect([...delivered].sort()).toEqual([`award:${id}`, `receipt:${id}`]);
     });
 
     it("an emit its transaction's callback did not wait for is recorded, and its commit offers the prompt dispatch", async () => {

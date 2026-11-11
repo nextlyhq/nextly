@@ -90,6 +90,9 @@ describe("durable subscribers", () => {
       "@acme/email:notice",
     ]);
     expect(subscribers.handlerOf("@acme/email:receipt")).toBeUndefined();
+    expect(subscribers.isRetired("@acme/email:receipt")).toBe(true);
+    expect(subscribers.isRetired("@acme/loyalty:award")).toBe(false);
+    expect(subscribers.isRetired("@acme/email:gone")).toBe(false);
 
     // Registered again under the same name: the new handler is the one.
     const receipt = () => "receipt";
@@ -104,5 +107,6 @@ describe("durable subscribers", () => {
     expect(keys()).toContain("@acme/email:notice");
     clock += 1;
     expect(keys()).toEqual(["@acme/loyalty:award", "@acme/email:receipt"]);
+    expect(subscribers.isRetired("@acme/email:notice")).toBe(false);
   });
 });
