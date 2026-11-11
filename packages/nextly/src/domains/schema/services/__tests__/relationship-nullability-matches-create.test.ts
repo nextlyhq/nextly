@@ -40,20 +40,23 @@ describe.each<Dialect>(["postgresql", "mysql", "sqlite"])(
   dialect => {
     const service = new DynamicCollectionSchemaService(undefined, dialect);
 
-    it.each([true, false])("agrees with the CREATE when required is %s", required => {
-      const field = relationship(required);
-      const descriptor = getColumnDescriptor(field, dialect, "collection");
-      // Positive control: the relationship has a column of its own on both sides.
-      expect(descriptor).not.toBeNull();
-      const created = createdNotNull(
-        service.generateMigrationSQL(TABLE, [field], {}),
-        descriptor!.name
-      );
-      expect(created).not.toBeNull();
+    it.each([true, false])(
+      "agrees with the CREATE when required is %s",
+      required => {
+        const field = relationship(required);
+        const descriptor = getColumnDescriptor(field, dialect, "collection");
+        // Positive control: the relationship has a column of its own on both sides.
+        expect(descriptor).not.toBeNull();
+        const created = createdNotNull(
+          service.generateMigrationSQL(TABLE, [field], {}),
+          descriptor!.name
+        );
+        expect(created).not.toBeNull();
 
-      expect(descriptor!.nullable).toBe(!created);
-      // And what `required` means: NOT NULL exactly when it is required.
-      expect(created).toBe(required);
-    });
+        expect(descriptor!.nullable).toBe(!created);
+        // And what `required` means: NOT NULL exactly when it is required.
+        expect(created).toBe(required);
+      }
+    );
   }
 );
