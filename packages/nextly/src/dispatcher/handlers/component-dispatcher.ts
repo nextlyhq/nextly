@@ -53,7 +53,6 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
-import { getHandlerConfig } from "../../route-handler/auth-handler";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 // From the types module, not the barrel, which loads every dialect's tables.
 import {
@@ -81,7 +80,7 @@ import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
 import { readListOffset } from "./list-offset";
-import { ownerSlugLists, pluginOwnedSlugs, readListOwner } from "./list-owner";
+import { readListOwner, slugListsForOwner } from "./list-owner";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 
 interface ComponentsServices {
@@ -229,13 +228,7 @@ export const COMPONENTS_METHODS: Record<
       // The site's own field groups or the plugins', as conditions on the
       // same query. Field groups carry no per-reader allowlist, so the
       // plugins' list is the plugins' slugs.
-      const slugLists = ownerSlugLists(
-        owner,
-        owner
-          ? pluginOwnedSlugs("fieldGroups", getHandlerConfig()?.plugins ?? [])
-          : [],
-        undefined
-      );
+      const slugLists = slugListsForOwner(owner, "fieldGroups", undefined);
       const result = await svc.registry.listComponents({
         source: p.source as "code" | "ui" | undefined,
         // 🔴 Filtered by the DATABASE, not by the caller narrowing a page it was already sent.

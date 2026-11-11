@@ -121,7 +121,7 @@ import {
 import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
-import { ownerSlugLists, pluginOwnedSlugs, readListOwner } from "./list-owner";
+import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
@@ -518,13 +518,7 @@ const COLLECTIONS_METHODS: Record<
       );
       // The site's own collections or the plugins', as conditions on the
       // same query: the plugins' list only narrows what the reader may read.
-      const slugLists = ownerSlugLists(
-        owner,
-        owner
-          ? pluginOwnedSlugs("collections", getHandlerConfig()?.plugins ?? [])
-          : [],
-        readable
-      );
+      const slugLists = slugListsForOwner(owner, "collections", readable);
 
       const result = await svc.listCollections({
         page: toNumber(p.page),

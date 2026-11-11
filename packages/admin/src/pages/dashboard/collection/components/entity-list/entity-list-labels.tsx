@@ -76,7 +76,7 @@ export const SCHEMA_COLUMN_HEADER = "SCHEMA";
  * Every schema state any of the three lists records: derived from the three
  * entity types, so a state added to any of them has to be labelled below.
  */
-export type SchemaState =
+type SchemaState =
   | MigrationStatus
   | SingleMigrationStatus
   | FieldGroupMigrationStatus;

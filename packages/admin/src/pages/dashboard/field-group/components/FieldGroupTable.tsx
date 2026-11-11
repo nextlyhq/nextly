@@ -1,23 +1,12 @@
 "use client";
 
-import {
-  Badge,
-  Button,
-  DropdownMenuCheckboxItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  Skeleton,
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@nextlyhq/ui";
+import { Badge, Button, Skeleton } from "@nextlyhq/ui";
 import { Eye, Pencil, Plus, Puzzle, RefreshCw, Trash2 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, type JSX } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { ReconcileFieldGroupDialog } from "@admin/components/features/field-groups/ReconcileFieldGroupDialog";
 import * as Icons from "@admin/components/icons";
-import { Lock } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
@@ -41,7 +30,6 @@ import {
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { usePagination } from "@admin/hooks/usePagination";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
-import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
 import { fieldGroupApi } from "@admin/services/fieldGroupApi";
 import type {
@@ -51,17 +39,16 @@ import type {
 } from "@admin/types/entities";
 
 import {
-  SCHEMA_COLUMN_HEADER,
-  SchemaStateCell,
-  SourceCell,
-  schemaStateOf,
-  sourceLabel,
-} from "../../collection/components/entity-list/entity-list-labels";
+  EntityListFilterItems,
+  EntityNameCell,
+  createdColumn,
+  entityIcon,
+  fieldCountColumn,
+  schemaColumn,
+  sourceColumn,
+} from "../../collection/components/entity-list/entity-list-columns";
 import { PluginEntitySections } from "../../collection/components/entity-list/PluginEntitySections";
-import {
-  usePluginEntities,
-  useSiteEntityPage,
-} from "../../collection/components/entity-list/use-entity-lists-by-owner";
+import { useSiteEntityPage } from "../../collection/components/entity-list/use-entity-lists-by-owner";
 
 import { FieldGroupTableSkeleton } from "./FieldGroupTableSkeleton";
 
@@ -81,14 +68,10 @@ const SCHEMA_FILTERS: FieldGroupMigrationStatus[] = [
 /** A field group's slug, which the plugins' metadata names it by. */
 const slugOfFieldGroup = (fieldGroup: ApiFieldGroup): string => fieldGroup.slug;
 
-/** Whether a field group's label or slug holds the search text. */
-function matchesSearch(fieldGroup: ApiFieldGroup, search: string): boolean {
-  const needle = search.trim().toLowerCase();
-  if (!needle) return true;
-  return (
-    fieldGroup.label.toLowerCase().includes(needle) ||
-    fieldGroup.slug.toLowerCase().includes(needle)
-  );
+/** How many fields a field group has, as the list's answer counts them. */
+function fieldCountOf(fieldGroup: ApiFieldGroup): number {
+  if (fieldGroup.fieldCount !== undefined) return fieldGroup.fieldCount;
+  return fieldGroup.fields?.length || 0;
 }
 
 /**
@@ -184,11 +167,6 @@ export default function FieldGroupTable(): JSX.Element {
         filters: { source: sourceFilter, migrationStatus: migrationFilter },
       },
     },
-    fieldGroupApi.fetchComponents
-  );
-  // Every plugin field group, for the sections under the table.
-  const { data: pluginFieldGroups } = usePluginEntities(
-    fieldGroupKeys.lists(),
     fieldGroupApi.fetchComponents
   );
 
@@ -303,49 +281,20 @@ export default function FieldGroupTable(): JSX.Element {
     });
   }, [filteredData, selectedIds, bulkDeleteFieldGroups, clearSelection]);
 
-  const getFieldCount = useCallback((fieldGroup: ApiFieldGroup): number => {
-    if (fieldGroup.fieldCount !== undefined) return fieldGroup.fieldCount;
-    return fieldGroup.fields?.length || 0;
-  }, []);
-
   // The columns, with the source cell naming the plugin on a plugin's rows.
   const columnsFor = useCallback(
     (pluginName?: string): NextlyColumn<ApiFieldGroup>[] => [
       {
         name: "label",
         header: "FIELD GROUP",
-        cell: ({ row }) => {
-          const iconName = row.admin?.icon || "Puzzle";
-          const IconComponent =
-            (Icons as Record<string, React.ElementType>)[iconName] || Icons.Box;
-          return (
-            <div className="flex items-center gap-3">
-              <div className="table-row-icon-cover">
-                <IconComponent className="h-4 w-4" />
-              </div>
-              <div className="flex min-w-0 flex-1 flex-col">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium text-foreground">
-                    {row.label}
-                  </span>
-                  {row.locked && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Locked: Cannot be edited or deleted from UI</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-                <span className="truncate text-xs text-muted-foreground">
-                  {row.slug}
-                </span>
-              </div>
-            </div>
-          );
-        },
+        cell: ({ row }) => (
+          <EntityNameCell
+            icon={entityIcon(row.admin?.icon || "Puzzle", Icons.Box)}
+            label={row.label}
+            slug={row.slug}
+            locked={row.locked}
+          />
+        ),
       },
       {
         name: "admin",
@@ -362,44 +311,18 @@ export default function FieldGroupTable(): JSX.Element {
           );
         },
       },
-      {
-        name: "source",
-        header: "SOURCE",
-        cell: ({ row }) => (
-          <SourceCell source={row.source} pluginName={pluginName} />
-        ),
-      },
-      {
-        // The stored column choice is keyed by this name, so it stays.
-        name: "migrationStatus",
-        header: SCHEMA_COLUMN_HEADER,
-        cell: ({ row }) => <SchemaStateCell state={row.migrationStatus} />,
-      },
+      sourceColumn(pluginName),
+      schemaColumn(),
       {
         // The fields that place this group, wherever they are.
         name: "placedBy",
         header: "USED BY",
         cell: ({ row }) => <UsedByCell placedBy={row.placedBy} />,
       },
-      {
-        name: "fields",
-        header: "FIELDS",
-        cell: ({ row }) => (
-          <span className="text-sm tabular-nums">{getFieldCount(row)}</span>
-        ),
-      },
-      {
-        name: "createdAt",
-        header: "CREATED",
-        hideOnMobile: true,
-        cell: ({ value }) => (
-          <span className="text-sm text-muted-foreground">
-            {formatDateTime(value as string | undefined)}
-          </span>
-        ),
-      },
+      fieldCountColumn("fields", fieldCountOf),
+      createdColumn(),
     ],
-    [getFieldCount]
+    []
   );
   const allColumns = useMemo(() => columnsFor(), [columnsFor]);
 
@@ -485,16 +408,6 @@ export default function FieldGroupTable(): JSX.Element {
     [handleEdit]
   );
 
-  // The plugins' field groups the search finds; the source and schema
-  // filters narrow the site's own list only.
-  const pluginRows = useMemo(
-    () =>
-      (pluginFieldGroups ?? []).filter(fieldGroup =>
-        matchesSearch(fieldGroup, debouncedSearch)
-      ),
-    [pluginFieldGroups, debouncedSearch]
-  );
-
   const showLoadingSkeleton =
     (isLoading || isFetching) && (!data || data.items.length === 0);
   const isFiltering = sourceFilter !== "all" || migrationFilter !== "all";
@@ -514,41 +427,14 @@ export default function FieldGroupTable(): JSX.Element {
         // hold their place so the row does not resize when they arrive.
         filters={
           showLoadingSkeleton ? undefined : (
-            <>
-              <DropdownMenuLabel>Filter by</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "all"}
-                onCheckedChange={() => handleSourceFilterChange("all")}
-              >
-                Any source
-              </DropdownMenuCheckboxItem>
-              {SOURCE_FILTERS.map(source => (
-                <DropdownMenuCheckboxItem
-                  key={source}
-                  checked={sourceFilter === source}
-                  onCheckedChange={() => handleSourceFilterChange(source)}
-                >
-                  {sourceLabel(source)}
-                </DropdownMenuCheckboxItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "all"}
-                onCheckedChange={() => handleMigrationFilterChange("all")}
-              >
-                Any schema state
-              </DropdownMenuCheckboxItem>
-              {SCHEMA_FILTERS.map(state => (
-                <DropdownMenuCheckboxItem
-                  key={state}
-                  checked={migrationFilter === state}
-                  onCheckedChange={() => handleMigrationFilterChange(state)}
-                >
-                  {schemaStateOf(state).label}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </>
+            <EntityListFilterItems
+              sources={SOURCE_FILTERS}
+              source={sourceFilter}
+              onSource={handleSourceFilterChange}
+              states={SCHEMA_FILTERS}
+              state={migrationFilter}
+              onState={handleMigrationFilterChange}
+            />
           )
         }
         columnsControl={showLoadingSkeleton ? undefined : columnsControl}
@@ -637,7 +523,9 @@ export default function FieldGroupTable(): JSX.Element {
       <PluginEntitySections<ApiFieldGroup>
         kind="fieldGroups"
         noun={{ one: "field group", many: "field groups" }}
-        rows={pluginRows}
+        listKey={fieldGroupKeys.lists()}
+        fetchPage={fieldGroupApi.fetchComponents}
+        search={debouncedSearch}
         slugOf={slugOfFieldGroup}
         columnsFor={columnsFor}
         rowActions={pluginRowActions}

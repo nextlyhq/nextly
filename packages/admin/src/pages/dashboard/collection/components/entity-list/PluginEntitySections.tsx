@@ -12,6 +12,12 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { pluginDisplayName } from "@admin/lib/plugins/plugin-display-name";
 import type { PluginMetadata } from "@admin/types/branding";
 
+import { matchesSearch } from "./entity-list-columns";
+import {
+  usePluginEntities,
+  type OwnedListFetcher,
+} from "./use-entity-lists-by-owner";
+
 /** The kinds of entity a plugin's metadata lists, by its slug lists' names. */
 export type PluginEntityKind = "collections" | "singles" | "fieldGroups";
 
@@ -28,7 +34,7 @@ interface PluginGroup<Row> {
  * place (metadata still loading, or a plugin it does not describe) is grouped
  * under "Plugins" rather than under a name nobody chose.
  */
-export function groupByPlugin<Row>(
+function groupByPlugin<Row>(
   rows: readonly Row[],
   slugOf: (row: Row) => string,
   kind: PluginEntityKind,
@@ -54,12 +60,16 @@ export function groupByPlugin<Row>(
   return groups;
 }
 
-export interface PluginEntitySectionsProps<Row extends object> {
+export interface PluginEntitySectionsProps<Row extends { label?: string }> {
   kind: PluginEntityKind;
   /** What one and several entries are called: "collection", "collections". */
   noun: { one: string; many: string };
-  /** Every plugin entry this reader may read, already narrowed by any search. */
-  rows: readonly Row[];
+  /** The entity's `lists()` key, so its list refreshes refresh these too. */
+  listKey: readonly unknown[];
+  /** The entity's list read, asked for the plugins' entries. */
+  fetchPage: OwnedListFetcher<Row>;
+  /** The list's search text: the sections show the entries it finds. */
+  search: string;
   slugOf: (row: Row) => string;
   /** The section's columns, given the plugin's name for its source cell. */
   columnsFor: (pluginName: string) => NextlyColumn<Row>[];
@@ -74,19 +84,32 @@ export interface PluginEntitySectionsProps<Row extends object> {
  * a plugin's entries so a reader can find and open them, and offers nothing
  * that would change them — no selection, no delete.
  */
-export function PluginEntitySections<Row extends object>({
+export function PluginEntitySections<Row extends { label?: string }>({
   kind,
   noun,
-  rows,
+  listKey,
+  fetchPage,
+  search,
   slugOf,
   columnsFor,
   rowActions,
   onRowClick,
 }: PluginEntitySectionsProps<Row>): JSX.Element | null {
   const plugins = useBranding().plugins;
+  // Every plugin entry this reader may read, then the ones the search finds;
+  // the list's source and schema filters narrow the site's own entries only.
+  const { data: rows } = usePluginEntities(listKey, fetchPage);
   const groups = useMemo(
-    () => groupByPlugin(rows, slugOf, kind, plugins ?? []),
-    [rows, slugOf, kind, plugins]
+    () =>
+      groupByPlugin(
+        (rows ?? []).filter(row =>
+          matchesSearch({ label: row.label, slug: slugOf(row) }, search)
+        ),
+        slugOf,
+        kind,
+        plugins ?? []
+      ),
+    [rows, search, slugOf, kind, plugins]
   );
   if (groups.length === 0) return null;
   return (
@@ -106,7 +129,7 @@ export function PluginEntitySections<Row extends object>({
   );
 }
 
-function PluginSection<Row extends object>({
+function PluginSection<Row extends { label?: string }>({
   group,
   noun,
   slugOf,

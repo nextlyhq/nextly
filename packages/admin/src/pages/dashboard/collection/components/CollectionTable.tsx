@@ -1,21 +1,11 @@
 "use client";
 
-import {
-  Button,
-  DropdownMenuCheckboxItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  Skeleton,
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@nextlyhq/ui";
+import { Button, Skeleton } from "@nextlyhq/ui";
 import { Eye, Layers, List, Pencil, Plus, Trash2 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, type JSX } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import * as Icons from "@admin/components/icons";
-import { Lock } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
@@ -39,7 +29,6 @@ import {
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { usePagination } from "@admin/hooks/usePagination";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
-import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
 import { collectionApi } from "@admin/services/collectionApi";
 import type {
@@ -54,17 +43,16 @@ import {
 } from "./CollectionDeleteImpact";
 import { CollectionTableSkeleton } from "./CollectionTableSkeleton";
 import {
-  SCHEMA_COLUMN_HEADER,
-  SchemaStateCell,
-  SourceCell,
-  schemaStateOf,
-  sourceLabel,
-} from "./entity-list/entity-list-labels";
+  EntityListFilterItems,
+  EntityNameCell,
+  createdColumn,
+  entityIcon,
+  fieldCountColumn,
+  schemaColumn,
+  sourceColumn,
+} from "./entity-list/entity-list-columns";
 import { PluginEntitySections } from "./entity-list/PluginEntitySections";
-import {
-  usePluginEntities,
-  useSiteEntityPage,
-} from "./entity-list/use-entity-lists-by-owner";
+import { useSiteEntityPage } from "./entity-list/use-entity-lists-by-owner";
 
 /** The source filter's options, in the order the menu offers them. */
 const SOURCE_FILTERS: CollectionSource[] = ["code", "ui", "built-in"];
@@ -81,13 +69,13 @@ const SCHEMA_FILTERS: MigrationStatus[] = [
 /** A collection's slug, which the plugins' metadata names it by. */
 const slugOfCollection = (collection: ApiCollection): string => collection.name;
 
-/** Whether a collection's label or slug holds the search text. */
-function matchesSearch(collection: ApiCollection, search: string): boolean {
-  const needle = search.trim().toLowerCase();
-  if (!needle) return true;
+/** How many fields a collection has, as the list's answer counts them. */
+function fieldCountOf(collection: ApiCollection): number {
+  if (collection.fieldCount !== undefined) return collection.fieldCount;
   return (
-    collection.label.toLowerCase().includes(needle) ||
-    collection.name.toLowerCase().includes(needle)
+    collection.fields?.length ||
+    collection.schemaDefinition?.fields?.length ||
+    0
   );
 }
 
@@ -96,6 +84,44 @@ function truncateWords(text: string, maxWords: number): string {
   const words = text.split(/\s+/);
   if (words.length <= maxWords) return text;
   return words.slice(0, maxWords).join(" ") + "...";
+}
+
+/**
+ * Opens a collection in the Builder. Code-first (locked) collections open the
+ * same route; the Builder renders read-only when the collection is locked.
+ */
+function handleEdit(collection: ApiCollection): void {
+  navigateTo(
+    buildRoute(ROUTES.BUILDER_COLLECTIONS_EDIT, { slug: collection.name })
+  );
+}
+
+/** Opens the collection's own entries page, where its entries are listed. */
+function handleViewEntries(collection: ApiCollection): void {
+  navigateTo(buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: collection.name }));
+}
+
+/**
+ * A plugin's collection is read-only: it can be opened and its entries
+ * listed, never deleted.
+ */
+function pluginRowActions(
+  collection: ApiCollection
+): RowAction<ApiCollection>[] {
+  return [
+    {
+      id: "edit",
+      label: "View",
+      icon: <Eye className="h-4 w-4" />,
+      onSelect: () => handleEdit(collection),
+    },
+    {
+      id: "view-entries",
+      label: "View entries",
+      icon: <List className="h-4 w-4" />,
+      onSelect: () => handleViewEntries(collection),
+    },
+  ];
 }
 
 /** Columns pinned as always-visible in the column toggle. */
@@ -146,11 +172,6 @@ export default function CollectionTable(): JSX.Element {
     },
     collectionApi.fetchCollections
   );
-  // Every plugin collection, for the sections under the table.
-  const { data: pluginCollections } = usePluginEntities(
-    collectionKeys.lists(),
-    collectionApi.fetchCollections
-  );
 
   const { mutate: deleteCollection, isPending: isDeleting } =
     useDeleteCollection();
@@ -197,14 +218,6 @@ export default function CollectionTable(): JSX.Element {
     bulkDeleteDialogOpen
   );
 
-  // Code-first (locked) collections open the same builder route; the builder
-  // renders read-only when the loaded collection is locked.
-  const handleEdit = useCallback((collection: ApiCollection) => {
-    navigateTo(
-      buildRoute(ROUTES.BUILDER_COLLECTIONS_EDIT, { slug: collection.name })
-    );
-  }, []);
-
   const handleDelete = useCallback((collection: ApiCollection) => {
     if (collection.locked) {
       toast.error("Cannot delete locked collection", {
@@ -214,13 +227,6 @@ export default function CollectionTable(): JSX.Element {
     }
     setCollectionToDelete({ id: collection.id, name: collection.name });
     setDeleteDialogOpen(true);
-  }, []);
-
-  // The collection's own entries page, where its entries are listed.
-  const handleViewEntries = useCallback((collection: ApiCollection) => {
-    navigateTo(
-      buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: collection.name })
-    );
   }, []);
 
   const handleConfirmDelete = () => {
@@ -280,68 +286,23 @@ export default function CollectionTable(): JSX.Element {
     });
   };
 
-  const getFieldCount = (collection: ApiCollection): number => {
-    if (collection.fieldCount !== undefined) return collection.fieldCount;
-    return (
-      collection.fields?.length ||
-      collection.schemaDefinition?.fields?.length ||
-      0
-    );
-  };
-
   // The columns, with the source cell naming the plugin on a plugin's rows.
   const columnsFor = useCallback(
     (pluginName?: string): NextlyColumn<ApiCollection>[] => [
       {
         name: "label",
         header: "COLLECTION",
-        cell: ({ row }) => {
-          const iconName = row.admin?.icon || "Database";
-          const IconComponent =
-            (Icons as Record<string, React.ElementType>)[iconName] ||
-            Icons.Database;
-          return (
-            <div className="flex items-center gap-3">
-              <div className="table-row-icon-cover">
-                <IconComponent className="h-4 w-4" />
-              </div>
-              <div className="flex min-w-0 flex-1 flex-col">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium text-foreground">
-                    {row.label}
-                  </span>
-                  {row.locked && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Locked: Cannot be edited or deleted from UI</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-                <span className="truncate text-xs text-muted-foreground">
-                  {row.name}
-                </span>
-              </div>
-            </div>
-          );
-        },
-      },
-      {
-        name: "source",
-        header: "SOURCE",
         cell: ({ row }) => (
-          <SourceCell source={row.source} pluginName={pluginName} />
+          <EntityNameCell
+            icon={entityIcon(row.admin?.icon, Icons.Database)}
+            label={row.label}
+            slug={row.name}
+            locked={row.locked}
+          />
         ),
       },
-      {
-        // The stored column choice is keyed by this name, so it stays.
-        name: "migrationStatus",
-        header: SCHEMA_COLUMN_HEADER,
-        cell: ({ row }) => <SchemaStateCell state={row.migrationStatus} />,
-      },
+      sourceColumn(pluginName),
+      schemaColumn(),
       {
         name: "description",
         header: "DESCRIPTION",
@@ -352,23 +313,8 @@ export default function CollectionTable(): JSX.Element {
           </span>
         ),
       },
-      {
-        name: "schemaDefinition",
-        header: "FIELDS",
-        cell: ({ row }) => (
-          <span className="text-sm tabular-nums">{getFieldCount(row)}</span>
-        ),
-      },
-      {
-        name: "createdAt",
-        header: "CREATED",
-        hideOnMobile: true,
-        cell: ({ value }) => (
-          <span className="text-sm text-muted-foreground">
-            {formatDateTime(value as string | undefined)}
-          </span>
-        ),
-      },
+      fieldCountColumn("schemaDefinition", fieldCountOf),
+      createdColumn(),
     ],
     []
   );
@@ -433,37 +379,7 @@ export default function CollectionTable(): JSX.Element {
         onSelect: () => handleDelete(collection),
       },
     ],
-    [handleEdit, handleViewEntries, handleDelete]
-  );
-
-  // A plugin's collection is read-only: it can be opened and its entries
-  // listed, never deleted.
-  const pluginRowActions = useCallback(
-    (collection: ApiCollection): RowAction<ApiCollection>[] => [
-      {
-        id: "edit",
-        label: "View",
-        icon: <Eye className="h-4 w-4" />,
-        onSelect: () => handleEdit(collection),
-      },
-      {
-        id: "view-entries",
-        label: "View entries",
-        icon: <List className="h-4 w-4" />,
-        onSelect: () => handleViewEntries(collection),
-      },
-    ],
-    [handleEdit, handleViewEntries]
-  );
-
-  // The plugins' collections the search finds; the source and schema
-  // filters narrow the site's own list only.
-  const pluginRows = useMemo(
-    () =>
-      (pluginCollections ?? []).filter(collection =>
-        matchesSearch(collection, debouncedSearch)
-      ),
-    [pluginCollections, debouncedSearch]
+    [handleDelete]
   );
 
   const showLoadingSkeleton =
@@ -485,41 +401,14 @@ export default function CollectionTable(): JSX.Element {
         // hold their place so the row does not resize when they arrive.
         filters={
           showLoadingSkeleton ? undefined : (
-            <>
-              <DropdownMenuLabel>Filter by</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "all"}
-                onCheckedChange={() => handleSourceFilterChange("all")}
-              >
-                Any source
-              </DropdownMenuCheckboxItem>
-              {SOURCE_FILTERS.map(source => (
-                <DropdownMenuCheckboxItem
-                  key={source}
-                  checked={sourceFilter === source}
-                  onCheckedChange={() => handleSourceFilterChange(source)}
-                >
-                  {sourceLabel(source)}
-                </DropdownMenuCheckboxItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "all"}
-                onCheckedChange={() => handleMigrationFilterChange("all")}
-              >
-                Any schema state
-              </DropdownMenuCheckboxItem>
-              {SCHEMA_FILTERS.map(state => (
-                <DropdownMenuCheckboxItem
-                  key={state}
-                  checked={migrationFilter === state}
-                  onCheckedChange={() => handleMigrationFilterChange(state)}
-                >
-                  {schemaStateOf(state).label}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </>
+            <EntityListFilterItems
+              sources={SOURCE_FILTERS}
+              source={sourceFilter}
+              onSource={handleSourceFilterChange}
+              states={SCHEMA_FILTERS}
+              state={migrationFilter}
+              onState={handleMigrationFilterChange}
+            />
           )
         }
         columnsControl={showLoadingSkeleton ? undefined : columnsControl}
@@ -606,7 +495,9 @@ export default function CollectionTable(): JSX.Element {
       <PluginEntitySections<ApiCollection>
         kind="collections"
         noun={{ one: "collection", many: "collections" }}
-        rows={pluginRows}
+        listKey={collectionKeys.lists()}
+        fetchPage={collectionApi.fetchCollections}
+        search={debouncedSearch}
         slugOf={slugOfCollection}
         columnsFor={columnsFor}
         rowActions={pluginRowActions}

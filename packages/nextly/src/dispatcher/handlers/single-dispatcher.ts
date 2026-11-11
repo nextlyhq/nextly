@@ -76,7 +76,6 @@ import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks"
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
-import { getHandlerConfig } from "../../route-handler/auth-handler";
 import { withSessionCacheHeaders } from "../../routeHandler";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
@@ -127,7 +126,7 @@ import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readListOffset } from "./list-offset";
-import { ownerSlugLists, pluginOwnedSlugs, readListOwner } from "./list-owner";
+import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
@@ -512,13 +511,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       );
       // The site's own Singles or the plugins', as conditions on the same
       // query: the plugins' list only narrows what the reader may read.
-      const slugLists = ownerSlugLists(
-        owner,
-        owner
-          ? pluginOwnedSlugs("singles", getHandlerConfig()?.plugins ?? [])
-          : [],
-        readable
-      );
+      const slugLists = slugListsForOwner(owner, "singles", readable);
 
       const result = await svc.registry.listSingles({
         source: p.source as "code" | "ui" | "built-in" | undefined,

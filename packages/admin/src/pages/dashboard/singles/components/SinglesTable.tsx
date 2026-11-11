@@ -1,15 +1,6 @@
 "use client";
 
-import {
-  Button,
-  DropdownMenuCheckboxItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  Skeleton,
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@nextlyhq/ui";
+import { Button, Skeleton } from "@nextlyhq/ui";
 import { Eye, FileEdit, Pencil, Plus, Trash2 } from "lucide-react";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 
@@ -22,8 +13,7 @@ import {
   RemovedFromCodeDescription,
   RemovedFromCodeMark,
 } from "@admin/components/features/entries/RemovedFromCodeNotice";
-import * as Icons from "@admin/components/icons";
-import { FileText, Lock, type LucideIcon } from "@admin/components/icons";
+import { FileText } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
@@ -47,7 +37,6 @@ import {
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { usePagination } from "@admin/hooks/usePagination";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
-import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
 import { singleApi } from "@admin/services/singleApi";
 import type {
@@ -57,17 +46,16 @@ import type {
 } from "@admin/types/entities";
 
 import {
-  SCHEMA_COLUMN_HEADER,
-  SchemaStateCell,
-  SourceCell,
-  schemaStateOf,
-  sourceLabel,
-} from "../../collection/components/entity-list/entity-list-labels";
+  EntityListFilterItems,
+  EntityNameCell,
+  createdColumn,
+  entityIcon,
+  fieldCountColumn,
+  schemaColumn,
+  sourceColumn,
+} from "../../collection/components/entity-list/entity-list-columns";
 import { PluginEntitySections } from "../../collection/components/entity-list/PluginEntitySections";
-import {
-  usePluginEntities,
-  useSiteEntityPage,
-} from "../../collection/components/entity-list/use-entity-lists-by-owner";
+import { useSiteEntityPage } from "../../collection/components/entity-list/use-entity-lists-by-owner";
 
 import { SinglesTableSkeleton } from "./SinglesTableSkeleton";
 
@@ -94,21 +82,15 @@ const SCHEMA_FILTERS: SingleMigrationStatus[] = [
 /** A Single's slug, which the plugins' metadata names it by. */
 const slugOfSingle = (single: ApiSingle): string => single.slug;
 
-/** Whether a Single's label or slug holds the search text. */
-function matchesSearch(single: ApiSingle, search: string): boolean {
-  const needle = search.trim().toLowerCase();
-  if (!needle) return true;
-  return (
-    (single.label ?? "").toLowerCase().includes(needle) ||
-    single.slug.toLowerCase().includes(needle)
-  );
+/** How many fields a Single has, as the list's answer counts them. */
+function fieldCountOf(single: ApiSingle): number {
+  if (single.fieldCount !== undefined) return single.fieldCount;
+  return single.fields?.length || 0;
 }
 
 interface SinglesTableProps {
   mode?: "builder" | "content";
 }
-
-const iconMap = Icons as unknown as Record<string, LucideIcon>;
 
 /** Columns pinned as always-visible in the column toggle. */
 const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
@@ -157,11 +139,6 @@ export default function SinglesTable({
       sorting: [],
       filters: { search: debouncedSearch },
     },
-    singleApi.fetchSingles
-  );
-  // Every plugin Single, for the sections under the table.
-  const { data: pluginSingles } = usePluginEntities(
-    singleKeys.lists(),
     singleApi.fetchSingles
   );
 
@@ -282,11 +259,6 @@ export default function SinglesTable({
     });
   }, [selectedIds, bulkDeleteSingles, clearSelection, filteredData]);
 
-  const getFieldCount = useCallback((single: ApiSingle): number => {
-    if (single.fieldCount !== undefined) return single.fieldCount;
-    return single.fields?.length || 0;
-  }, []);
-
   // The columns, with the source cell naming the plugin on a plugin's rows.
   const columnsFor = useCallback(
     (pluginName?: string): NextlyColumn<ApiSingle>[] => [
@@ -294,82 +266,36 @@ export default function SinglesTable({
         name: "label",
         header: "SINGLE",
         cell: ({ row }) => (
-          <div className="flex items-center gap-3">
-            <div className="table-row-icon-cover">
-              {React.createElement(iconMap[row.admin?.icon || ""] || FileText, {
-                className: "h-4 w-4",
-              })}
-            </div>
-            <div className="flex min-w-0 flex-1 flex-col">
-              <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium text-foreground">
-                  {row.label}
-                </span>
-                {row.locked && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Locked: Cannot be edited or deleted from UI</p>
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-                {/* Listed, and marked, once the configuration no longer
-                    declares it; the notice with its next step is read out. */}
-                {isRemovedFromCode(row) && (
-                  <>
-                    <RemovedFromCodeMark
-                      entity={removedSingle(row)}
-                      state={row.removedFromCodeState}
-                      className="ml-0"
-                    />
-                    <RemovedFromCodeDescription
-                      entity={removedSingle(row)}
-                      state={row.removedFromCodeState}
-                    />
-                  </>
-                )}
-              </div>
-              <span className="truncate text-xs text-muted-foreground">
-                {row.slug}
-              </span>
-            </div>
-          </div>
+          <EntityNameCell
+            icon={entityIcon(row.admin?.icon, FileText)}
+            label={row.label}
+            slug={row.slug}
+            locked={row.locked}
+          >
+            {/* Listed, and marked, once the configuration no longer
+                declares it; the notice with its next step is read out. */}
+            {isRemovedFromCode(row) && (
+              <>
+                <RemovedFromCodeMark
+                  entity={removedSingle(row)}
+                  state={row.removedFromCodeState}
+                  className="ml-0"
+                />
+                <RemovedFromCodeDescription
+                  entity={removedSingle(row)}
+                  state={row.removedFromCodeState}
+                />
+              </>
+            )}
+          </EntityNameCell>
         ),
       },
-      {
-        name: "source",
-        header: "SOURCE",
-        cell: ({ row }) => (
-          <SourceCell source={row.source} pluginName={pluginName} />
-        ),
-      },
-      {
-        // The stored column choice is keyed by this name, so it stays.
-        name: "migrationStatus",
-        header: SCHEMA_COLUMN_HEADER,
-        cell: ({ row }) => <SchemaStateCell state={row.migrationStatus} />,
-      },
-      {
-        name: "fields",
-        header: "FIELDS",
-        cell: ({ row }) => (
-          <span className="text-sm tabular-nums">{getFieldCount(row)}</span>
-        ),
-      },
-      {
-        name: "createdAt",
-        header: "CREATED",
-        hideOnMobile: true,
-        cell: ({ value }) => (
-          <span className="text-sm text-muted-foreground">
-            {formatDateTime(value as string | undefined)}
-          </span>
-        ),
-      },
+      sourceColumn(pluginName),
+      schemaColumn(),
+      fieldCountColumn("fields", fieldCountOf),
+      createdColumn(),
     ],
-    [getFieldCount]
+    []
   );
   const allColumns = useMemo(() => columnsFor(), [columnsFor]);
 
@@ -461,16 +387,6 @@ export default function SinglesTable({
     [handleEdit, handleViewDocument]
   );
 
-  // The plugins' Singles the search finds; the source and schema filters
-  // narrow the site's own list only.
-  const pluginRows = useMemo(
-    () =>
-      (pluginSingles ?? []).filter(single =>
-        matchesSearch(single, debouncedSearch)
-      ),
-    [pluginSingles, debouncedSearch]
-  );
-
   /*
    * Loading and failure are TABLE states rather than replacements for the page.
    * Rendering either one in place of the whole surface takes the search field
@@ -509,41 +425,14 @@ export default function SinglesTable({
         // from data nobody has yet would open onto nothing.
         filters={
           showLoadingSkeleton ? undefined : (
-            <>
-              <DropdownMenuLabel>Filter by</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "all"}
-                onCheckedChange={() => handleSourceFilterChange("all")}
-              >
-                Any source
-              </DropdownMenuCheckboxItem>
-              {SOURCE_FILTERS.map(source => (
-                <DropdownMenuCheckboxItem
-                  key={source}
-                  checked={sourceFilter === source}
-                  onCheckedChange={() => handleSourceFilterChange(source)}
-                >
-                  {sourceLabel(source)}
-                </DropdownMenuCheckboxItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "all"}
-                onCheckedChange={() => handleMigrationFilterChange("all")}
-              >
-                Any schema state
-              </DropdownMenuCheckboxItem>
-              {SCHEMA_FILTERS.map(state => (
-                <DropdownMenuCheckboxItem
-                  key={state}
-                  checked={migrationFilter === state}
-                  onCheckedChange={() => handleMigrationFilterChange(state)}
-                >
-                  {schemaStateOf(state).label}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </>
+            <EntityListFilterItems
+              sources={SOURCE_FILTERS}
+              source={sourceFilter}
+              onSource={handleSourceFilterChange}
+              states={SCHEMA_FILTERS}
+              state={migrationFilter}
+              onState={handleMigrationFilterChange}
+            />
           )
         }
         columnsControl={showLoadingSkeleton ? undefined : columnsControl}
@@ -618,7 +507,9 @@ export default function SinglesTable({
       <PluginEntitySections<ApiSingle>
         kind="singles"
         noun={{ one: "Single", many: "Singles" }}
-        rows={pluginRows}
+        listKey={singleKeys.lists()}
+        fetchPage={singleApi.fetchSingles}
+        search={debouncedSearch}
         slugOf={slugOfSingle}
         columnsFor={columnsFor}
         rowActions={pluginRowActions}
