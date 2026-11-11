@@ -24,6 +24,15 @@ const brandingJson = adminBrandingJson(config.admin?.branding);
 export const metadata = adminMetadataFor(config.admin?.branding);
 
 /**
+ * `/admin` itself is built ahead, so it is served from the build's files. The
+ * admin's other paths are drawn by the same page in the browser, and are
+ * served the same prebuilt shell.
+ */
+export function generateStaticParams(): { params: string[] }[] {
+  return [{ params: [] }];
+}
+
+/**
  * The panel's own shell, mounted here rather than at the app root so the public
  * routes beside it are not charged for a client runtime they never use.
  *

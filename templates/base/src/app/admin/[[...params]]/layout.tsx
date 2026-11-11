@@ -23,6 +23,15 @@ const brandingJson = adminBrandingJson(config.admin?.branding);
 export const metadata = adminMetadataFor(config.admin?.branding);
 
 /**
+ * `/admin` itself is built ahead, so it is served from the build's files. The
+ * admin's other paths are drawn by the same page in the browser, and are
+ * served the same prebuilt shell.
+ */
+export function generateStaticParams(): { params: string[] }[] {
+  return [{ params: [] }];
+}
+
+/**
  * Prebuilt in production: the same page for every visitor, built once, with
  * no request-time work and nothing read from the database. Everything about
  * the person comes from the admin's own requests once it loads, so a CDN or
