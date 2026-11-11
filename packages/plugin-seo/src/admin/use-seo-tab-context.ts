@@ -1,0 +1,90 @@
+/**
+ * The page's levels, read from the plugin's route as the author types: once
+ * as the tab opens, then again a moment after the document stops changing.
+ * What is typed in the `seo` group is left out of the request, since the tab
+ * puts it on top itself, so typing there asks the server nothing.
+ *
+ * @module admin/use-seo-tab-context
+ */
+import { writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import { useEffect, useRef, useState } from "react";
+
+import {
+  SEO_PLUGIN_NAME,
+  SEO_RESOLVE_PATH,
+  type SeoTabContext,
+} from "../tab/contract";
+import { withoutTyped } from "../tab/typed";
+
+/** How long the document stays unchanged before the levels are read again. */
+const SETTLE_MS = 300;
+
+/** Which document the tab is on. */
+export interface SeoTabDocument {
+  kind: "collection" | "single";
+  slug: string;
+  locale: string | null;
+}
+
+/** The levels last read, and whether a read is under way or failed. */
+export interface SeoTabContextState {
+  context: SeoTabContext | undefined;
+  status: "ready" | "loading" | "failed";
+}
+
+export function useSeoTabContext(
+  target: SeoTabDocument | null,
+  document: Readonly<Record<string, unknown>>
+): SeoTabContextState {
+  const [state, setState] = useState<SeoTabContextState>({
+    context: undefined,
+    status: "loading",
+  });
+  // What was last answered or is being asked, so an unchanged request is not
+  // sent again.
+  const asked = useRef<string | null>(null);
+  const kind = target?.kind;
+  const slug = target?.slug;
+  const locale = target?.locale ?? null;
+
+  useEffect(() => {
+    if (kind === undefined || slug === undefined) return undefined;
+    const body = { kind, slug, locale, document: withoutTyped(document) };
+    const key = JSON.stringify(body);
+    if (key === asked.current) return undefined;
+    const controller = new AbortController();
+    let settled = false;
+    const timer = setTimeout(
+      () => {
+        asked.current = key;
+        writePluginRoute<SeoTabContext>({
+          plugin: SEO_PLUGIN_NAME,
+          path: SEO_RESOLVE_PATH,
+          body,
+          signal: controller.signal,
+        }).then(
+          context => {
+            settled = true;
+            if (context !== undefined) setState({ context, status: "ready" });
+          },
+          () => {
+            settled = true;
+            if (controller.signal.aborted) return;
+            // Asked again on the next change rather than taken as answered.
+            asked.current = null;
+            setState(was => ({ context: was.context, status: "failed" }));
+          }
+        );
+      },
+      asked.current === null ? 0 : SETTLE_MS
+    );
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+      // A request stopped before its answer is asked again.
+      if (!settled && asked.current === key) asked.current = null;
+    };
+  }, [kind, slug, locale, document]);
+
+  return state;
+}

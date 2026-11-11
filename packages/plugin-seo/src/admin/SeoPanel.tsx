@@ -1,0 +1,232 @@
+/**
+ * The SEO panel: the page's preview on Google and when shared, its title and
+ * description first, each showing what will be used and where it comes from,
+ * and every other setting under Advanced.
+ *
+ * Drawn from props alone, so every surface that edits a page's SEO draws this
+ * one panel: an entry's SEO tab hands it the document's values and writes
+ * what it sets back to the document; another surface, such as a template's
+ * settings, hands it its own.
+ *
+ * @module admin/SeoPanel
+ */
+import { Input, Textarea } from "@nextlyhq/ui";
+import { useId, type ReactNode } from "react";
+
+import type { Sourced } from "../resolver/order";
+import type { SeoTabContext } from "../tab/contract";
+import {
+  DESCRIPTION_LIMIT,
+  TITLE_LIMIT,
+  type SeoProblem,
+} from "../tab/problems";
+
+import { AdvancedSection } from "./advanced";
+import {
+  AutomaticSource,
+  CharacterCount,
+  Chip,
+  LinkAction,
+  SourceRow,
+  type SourceNames,
+} from "./parts";
+import { PreviewCard } from "./previews";
+import {
+  isTyped,
+  typedText,
+  type ChosenImage,
+  type PanelAnswers,
+  type SeoPanelField,
+  type SeoPanelValues,
+} from "./values";
+
+export interface SeoPanelProps {
+  /** The page's levels and what names them, once read. */
+  context: SeoTabContext | undefined;
+  /** Whether the levels are being read, or could not be. */
+  status: "ready" | "loading" | "failed";
+  /** The page's answer, and its automatic one, from `panelAnswers`. */
+  answers: PanelAnswers | undefined;
+  /** The page's problems, from `seoProblems`. */
+  problems: readonly SeoProblem[];
+  /** The values the panel edits, as typed. */
+  values: SeoPanelValues;
+  /** The share image chosen for the page, where one is and has been read. */
+  chosenImage: ChosenImage | undefined;
+  /** Whether the values can be changed now. */
+  writable: boolean;
+  /** Why a value was refused when the page was saved, by field. */
+  errors?: Partial<Record<SeoPanelField, string>>;
+  /** Sets one value; `null` returns it to automatic. */
+  onSet: (field: SeoPanelField, value: unknown) => void;
+  /** Opens the media library to choose a share image. */
+  onChooseImage?: () => void;
+  /** Whether Advanced starts open. Closed on a real page. */
+  defaultAdvancedOpen?: boolean;
+}
+
+/** The values whose problems the Advanced section holds. */
+const ADVANCED_VALUES: readonly string[] = [];
+
+export function SeoPanel(props: SeoPanelProps): ReactNode {
+  const { context, answers, problems, values, writable, errors, onSet } = props;
+  const names: SourceNames = {
+    typeLabel: context?.typeLabel ?? "page",
+    fieldLabels: context?.fieldLabels ?? {},
+  };
+  const answer = answers?.answer;
+  return (
+    <div className="flex flex-col gap-[18px] pb-12">
+      <PreviewCard
+        answer={answer}
+        site={context?.site}
+        status={props.status}
+        sharedTitleTyped={isTyped(values.socialTitle)}
+      />
+      <SeoTextField
+        label="Title on Google"
+        help="The blue link people click in Google's results. Google shows about 60 characters."
+        typed={typedText(values.metaTitle)}
+        used={answer?.title}
+        automatic={answers?.automatic.title}
+        limit={TITLE_LIMIT}
+        value="title"
+        names={names}
+        problem={problems.find(p => p.value === "title")}
+        error={errors?.metaTitle}
+        writable={writable}
+        onChange={next => onSet("metaTitle", next)}
+      />
+      <SeoTextField
+        multiline
+        label="Description on Google"
+        help="The grey text under the link. It doesn't change rankings, but it helps people decide to click."
+        typed={typedText(values.metaDescription)}
+        used={answer?.description}
+        automatic={answers?.automatic.description}
+        limit={DESCRIPTION_LIMIT}
+        value="description"
+        names={names}
+        problem={problems.find(p => p.value === "description")}
+        error={errors?.metaDescription}
+        writable={writable}
+        onChange={next => onSet("metaDescription", next)}
+      />
+      <AdvancedSection
+        values={values}
+        answer={answer}
+        context={context}
+        names={names}
+        chosenImage={props.chosenImage}
+        writable={writable}
+        problemCount={
+          problems.filter(p => ADVANCED_VALUES.includes(p.value)).length
+        }
+        defaultOpen={props.defaultAdvancedOpen ?? false}
+        onSet={onSet}
+        {...(props.onChooseImage === undefined
+          ? {}
+          : { onChooseImage: props.onChooseImage })}
+      />
+    </div>
+  );
+}
+
+/**
+ * The title or the description: a count of what will be used, one plain
+ * sentence, the field with the automatic value as its placeholder, and where
+ * the value comes from, with one action back to automatic once typed.
+ */
+function SeoTextField({
+  label,
+  help,
+  typed,
+  used,
+  automatic,
+  limit,
+  value,
+  names,
+  problem,
+  error,
+  writable,
+  multiline = false,
+  onChange,
+}: {
+  label: string;
+  help: string;
+  typed: string;
+  used: Sourced<string> | undefined;
+  automatic: Sourced<string> | undefined;
+  limit: number;
+  value: "title" | "description";
+  names: SourceNames;
+  problem: SeoProblem | undefined;
+  error: string | undefined;
+  writable: boolean;
+  multiline?: boolean;
+  onChange: (next: string | null) => void;
+}): ReactNode {
+  const id = useId();
+  const field = {
+    id,
+    value: typed,
+    placeholder: automatic?.value ?? "",
+    disabled: !writable,
+    "aria-describedby": `${id}-help ${id}-source${error === undefined ? "" : ` ${id}-error`}`,
+    "aria-invalid": error !== undefined,
+    // A field emptied is a field returned to automatic.
+    onChange: (event: { target: { value: string } }) =>
+      onChange(event.target.value === "" ? null : event.target.value),
+  };
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-baseline justify-between gap-2.5">
+        <label
+          htmlFor={id}
+          className="text-[13px] font-semibold text-foreground"
+        >
+          {label}
+        </label>
+        <CharacterCount count={used?.value.length ?? 0} limit={limit} />
+      </div>
+      <p
+        id={`${id}-help`}
+        className="m-0 text-[12.5px] leading-[1.45] text-muted-foreground"
+      >
+        {help}
+      </p>
+      {multiline ? <Textarea rows={3} {...field} /> : <Input {...field} />}
+      <SourceRow id={`${id}-source`}>
+        {isTyped(typed) ? (
+          <>
+            <Chip kind="typed">Typed for this page</Chip>
+            <LinkAction disabled={!writable} onClick={() => onChange(null)}>
+              Go back to automatic
+            </LinkAction>
+          </>
+        ) : automatic === undefined ? (
+          <span
+            className={
+              problem === undefined
+                ? undefined
+                : "font-medium text-warning-text"
+            }
+          >
+            Nothing to use yet. {problem?.text ?? ""}
+          </span>
+        ) : (
+          <AutomaticSource sourced={automatic} value={value} names={names} />
+        )}
+      </SourceRow>
+      {error === undefined ? null : (
+        <p
+          id={`${id}-error`}
+          role="alert"
+          className="m-0 text-xs font-medium text-danger-text"
+        >
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}

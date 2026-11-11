@@ -53,6 +53,8 @@ describe("seoPlugin", () => {
     ).toEqual([
       "metaTitle",
       "metaDescription",
+      "socialTitle",
+      "socialDescription",
       "ogImage",
       "canonical",
       "noindex",
@@ -68,17 +70,22 @@ describe("seoPlugin", () => {
 
   it("serves the sitemap route by default", () => {
     const plugin = seoPlugin({ collections: ["pages"] });
-    expect(plugin.contributes?.routes?.[0]).toMatchObject({
-      method: "GET",
-      path: "/sitemap.xml",
-      public: true,
-    });
+    expect(plugin.contributes?.routes).toContainEqual(
+      expect.objectContaining({
+        method: "GET",
+        path: "/sitemap.xml",
+        public: true,
+      })
+    );
   });
 
   it("omits the sitemap route when sitemap is disabled", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
-    // No public enumeration route when the sitemap is turned off.
-    expect(plugin.contributes?.routes).toBeUndefined();
+    // No public enumeration route when the sitemap is turned off: only the
+    // SEO tab's own, which a signed-in editor calls.
+    expect(
+      plugin.contributes?.routes?.map(route => [route.method, route.path])
+    ).toEqual([["POST", "/resolve"]]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
   });
@@ -113,6 +120,8 @@ describe("seoPlugin", () => {
     expect(fieldNames(defaultSeoFields())).toEqual([
       "metaTitle",
       "metaDescription",
+      "socialTitle",
+      "socialDescription",
       "ogImage",
       "canonical",
       "noindex",
@@ -147,7 +156,10 @@ describe("the dashboard card the plugin contributes", () => {
     // `admin.widgets`, and no data source under `widgetSources`.
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
-    expect(plugin.contributes?.admin).toBeUndefined();
+    // Its admin contributions are the SEO tab alone.
+    expect(plugin.contributes?.admin).toEqual({
+      contributions: [expect.objectContaining({ kind: "tab" })],
+    });
     // Read as a property of the value: `widgetSources` is no field of the
     // contributions type, so a typed read of it does not compile.
     expect(plugin.contributes).toBeDefined();
@@ -173,5 +185,47 @@ describe("the dashboard card the plugin contributes", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
     expect(plugin.nextly).toBe(`>=${plugin.version}`);
+  });
+});
+
+describe("the SEO tab the plugin contributes", () => {
+  it("adds one tab to each extended collection's and Single's page, editing the seo group", () => {
+    const plugin = seoPlugin({
+      collections: ["pages", "posts"],
+      singles: ["homepage"],
+      sitemap: false,
+    });
+    expect(plugin.contributes?.extend?.[0]?.target).toEqual([
+      "pages",
+      "posts",
+      "homepage",
+    ]);
+    expect(plugin.contributes?.admin?.contributions).toEqual([
+      {
+        id: "nextlyhq-plugin-seo.tab",
+        kind: "tab",
+        place: "collection.edit",
+        label: "SEO",
+        component: "@nextlyhq/plugin-seo/admin#SeoTab",
+        collections: ["pages", "posts"],
+        fields: ["seo"],
+      },
+      {
+        id: "nextlyhq-plugin-seo.single-tab",
+        kind: "tab",
+        place: "single.edit",
+        label: "SEO",
+        component: "@nextlyhq/plugin-seo/admin#SeoTab",
+        singles: ["homepage"],
+        fields: ["seo"],
+      },
+    ]);
+  });
+
+  it("adds no Single's tab while it extends no Single", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    expect(
+      plugin.contributes?.admin?.contributions?.map(each => each.place)
+    ).toEqual(["collection.edit"]);
   });
 });

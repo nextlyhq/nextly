@@ -96,9 +96,10 @@ function text(value: string | undefined): string | undefined {
 /**
  * A typed canonical a search engine can follow: a path from the site's root,
  * or an http(s) address, trimmed. Anything else (`mailto:`, `javascript:`,
- * stray text) is no canonical, and the page's own address is used.
+ * stray text) is no canonical, and the page's own address is used. Exported
+ * so every place that judges a typed canonical uses this one rule.
  */
-function usableCanonical(value: string | undefined): string | undefined {
+export function usableCanonical(value: string | undefined): string | undefined {
   const typed = text(value)?.trim();
   if (typed === undefined) return undefined;
   if (typed.startsWith("/")) return typed;

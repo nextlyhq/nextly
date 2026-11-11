@@ -31,6 +31,8 @@ import {
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
+import { seoTabContributions } from "./tab/contributions";
+import { seoTabRoute } from "./tab/route";
 import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
@@ -47,9 +49,14 @@ export interface SeoPluginOptions {
    */
   collections: string[];
   /**
+   * The Singles to extend with the SEO field group, such as a homepage. None
+   * when absent. A Single's page gets the same SEO tab a collection's has.
+   */
+  singles?: string[];
+  /**
    * The fields placed INSIDE the `seo` group. Defaults to
-   * {@link defaultSeoFields} (metaTitle, metaDescription, ogImage, canonical,
-   * noindex). Custom fields are still nested under `seo` (e.g. a `focusKeyword`
+   * {@link defaultSeoFields} (metaTitle, metaDescription, socialTitle,
+   * socialDescription, ogImage, canonical, noindex). Custom fields are still nested under `seo` (e.g. a `focusKeyword`
    * override lands at `entry.seo.focusKeyword`), so consumers always read SEO
    * data from one predictable place.
    */
@@ -132,6 +139,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // twice (a duplicate-field error), and would list the same URLs twice in the
   // sitemap.
   const targets = [...new Set(options.collections)];
+  const singleTargets = [...new Set(options.singles ?? [])];
 
   // The sitemap is on by default; `sitemap: false` disables the route, and
   // `{ collections }` narrows which collections it advertises (defaulting to the
@@ -166,11 +174,26 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
 
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
-    extend: [{ target: targets, fields: [seoGroup] }],
+    extend: [{ target: [...targets, ...singleTargets], fields: [seoGroup] }],
     // The record that keeps each public address to one page.
     collections: [addressRecordCollection()],
     // Every page's head, worked out by the one order of who wins.
     services: { pageMetadata: ctx => seoPageMetadata(ctx) },
+    // The SEO tab on each page the group is added to, and the route it reads
+    // a page's automatic values from.
+    admin: {
+      contributions: seoTabContributions({
+        collections: targets,
+        singles: singleTargets,
+      }),
+    },
+    routes: [
+      seoTabRoute({
+        collections: targets,
+        singles: singleTargets,
+        ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+      }),
+    ],
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -196,6 +219,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // of the canonical `/sitemap.xml` belongs to the Next delivery layer, and
     // headless consumers cache at their edge.
     contributes.routes = [
+      ...(contributes.routes ?? []),
       {
         method: "GET",
         path: "/sitemap.xml",

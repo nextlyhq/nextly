@@ -1,9 +1,9 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
-  // Single Node-safe entry: the plugin adds an SEO field group. No `next` or
-  // `react` coupling, so it stays usable in headless and admin-only projects.
-  entry: ["src/index.ts"],
+  // The Node-safe root, with no `next` or `react` coupling, so it stays usable
+  // in headless projects, and the admin's SEO tab, which only the admin loads.
+  entry: ["src/index.ts", "src/admin/index.ts"],
   format: ["esm"],
   // `.js` and `.d.ts`, the names the exports map already publishes.
   fixedExtension: false,

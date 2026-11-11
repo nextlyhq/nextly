@@ -13,11 +13,17 @@ export default defineConfig({
     // What each file loaded on its last run, so `--changed` and `related` pick
     // tests from real dependencies rather than a static import graph.
     experimental: { recordDependencies: true },
-    include: ["src/**/*.{test,spec}.ts"],
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
     exclude: [
       "**/node_modules/**",
       "**/dist/**",
       "src/**/*.integration.test.ts",
     ],
+    // The SEO tab's suites render React under jsdom, asked for per file
+    // (`@vitest-environment jsdom`), which is heavier than the node suites
+    // the 5s default is sized for; the value the other admin suites use.
+    testTimeout: 10_000,
+    // Fills in what jsdom lacks; inert for the node suites.
+    setupFiles: ["./src/__tests__/setup.ts"],
   },
 });

@@ -1,0 +1,252 @@
+/**
+ * The SEO tab's route: every level of the order of who wins for a document as
+ * the author is typing it, except what they typed in its `seo` group, with
+ * what the tab needs to draw the answer (the site's name and address, the
+ * content type's name, and the names of the fields a value came from).
+ *
+ * The tab puts the typed values on top itself (`tab/typed`) and works out the
+ * answer with the same `resolveOrder` the page's head is answered by, so its
+ * preview follows each keystroke and agrees with what the page serves. Levels
+ * are read by `levelsOf`, the resolver's own reading of a page, never a copy.
+ *
+ * What a route's code supplies cannot be known here: the admin does not run
+ * the page's route. That level is left empty until the address record keeps
+ * what each route supplies.
+ *
+ * Gated as editing the document is: the caller must be able to create or
+ * update entries of the collection, or update the Single.
+ *
+ * @module tab/route
+ */
+import {
+  humanizeFieldName,
+  NextlyError,
+  type PageMetadataInput,
+  type PluginContext,
+  type PluginRouteContext,
+} from "@nextlyhq/plugin-sdk";
+import { z } from "nextly/zod";
+
+import type { Levels } from "../resolver/order";
+import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
+
+import { SEO_RESOLVE_PATH, type SeoTabContext } from "./contract";
+import { withoutTyped } from "./typed";
+
+/** The site's rules, with the addresses it is served from in production. */
+export interface TabRules extends SiteRules {
+  /** Origins such as `https://acme.com`, the main one first. */
+  productionAddresses?: readonly string[];
+}
+
+/** Where the route reads the site's rules from, in a language. */
+export type ReadTabRules = (
+  ctx: PluginContext,
+  locale: string | undefined
+) => Promise<TabRules>;
+
+/** No settings yet: the site's rules are empty. */
+const noTabRules: ReadTabRules = () => Promise.resolve(NO_RULES);
+
+/** The request: the document as typed, and which document it is. */
+const RESOLVE_BODY = z.object({
+  kind: z.enum(["collection", "single"]),
+  slug: z.string().min(1),
+  locale: z.string().min(1).nullish(),
+  document: z.record(z.string(), z.unknown()),
+});
+
+type ResolveBody = z.infer<typeof RESOLVE_BODY>;
+
+/** Where the plugin's SEO is, and how the route reads the site's rules. */
+export interface SeoTabRouteSetup {
+  /** The collections the plugin adds SEO to. */
+  collections: readonly string[];
+  /** The Singles the plugin adds SEO to. */
+  singles: readonly string[];
+  /** The origin the plugin was configured with, where it was. */
+  baseUrl?: string;
+  readRules?: ReadTabRules;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** The request body, parsed, or a refusal naming what is wrong. */
+async function bodyOf(req: Request): Promise<ResolveBody> {
+  let raw: unknown;
+  try {
+    raw = await req.json();
+  } catch {
+    throw NextlyError.invalidInput({
+      message: "The request body is not JSON.",
+      logContext: { reason: "seo-resolve-body-not-json" },
+    });
+  }
+  const parsed = RESOLVE_BODY.safeParse(raw);
+  if (!parsed.success) {
+    throw NextlyError.invalidInput({
+      message: "The request body is not one this route accepts.",
+      logContext: {
+        reason: "seo-resolve-body-invalid",
+        issues: parsed.error.issues.map(issue => issue.path.join(".")),
+      },
+    });
+  }
+  return parsed.data;
+}
+
+/** Whether the caller may edit documents of this kind, as the editor asks. */
+async function mayEdit(
+  ctx: PluginRouteContext,
+  body: ResolveBody
+): Promise<boolean> {
+  const caller = ctx.caller;
+  if (caller === null) return false;
+  if (body.kind === "single") return caller.can("update", body.slug);
+  return (
+    (await caller.can("update", body.slug, { anyEntry: true })) ||
+    (await caller.can("create", body.slug, { anyEntry: true }))
+  );
+}
+
+/** The type's declaration in the app's configuration, where it is there. */
+function declarationOf(
+  ctx: PluginContext,
+  body: ResolveBody
+): Record<string, unknown> | undefined {
+  const declared: readonly unknown[] =
+    (body.kind === "collection"
+      ? ctx.config.collections
+      : ctx.config.singles) ?? [];
+  return declared.find(
+    (entity): entity is Record<string, unknown> =>
+      isRecord(entity) && entity.slug === body.slug
+  );
+}
+
+/** A declaration's name for one of its pages, else its slug made readable. */
+function typeLabelOf(
+  declaration: Record<string, unknown> | undefined,
+  slug: string
+): string {
+  const named = declaration?.labels ?? declaration?.label;
+  if (typeof named === "string" && named.trim() !== "") return named;
+  if (isRecord(named) && typeof named.singular === "string") {
+    return named.singular;
+  }
+  return humanizeFieldName(slug);
+}
+
+/** What each field a value came from is called on screen. */
+function fieldLabelsOf(
+  declaration: Record<string, unknown> | undefined,
+  levels: Levels
+): Record<string, string> {
+  const named = [
+    levels.content.title?.field,
+    levels.content.description?.field,
+    levels.content.image?.field,
+  ].filter((name): name is string => name !== undefined);
+  const fields = Array.isArray(declaration?.fields) ? declaration.fields : [];
+  const labels: Record<string, string> = {};
+  for (const name of named) {
+    const field: unknown = fields.find(
+      (each: unknown) => isRecord(each) && each.name === name
+    );
+    const label = isRecord(field) ? field.label : undefined;
+    labels[name] =
+      typeof label === "string" && label.trim() !== ""
+        ? label
+        : humanizeFieldName(name);
+  }
+  return labels;
+}
+
+/** An address's origin, or nothing where it is not an http(s) address. */
+function originOf(address: string | undefined): string | undefined {
+  if (address === undefined) return undefined;
+  try {
+    const url = new URL(address);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url.origin
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Where the site is shown to be: its main production address, else the
+ * origin the plugin was configured with, else the one the admin is on.
+ */
+function siteOf(
+  rules: TabRules,
+  baseUrl: string | undefined,
+  req: Request
+): SeoTabContext["site"] {
+  const origins = [
+    ...(rules.productionAddresses ?? []).map(originOf),
+    originOf(baseUrl),
+    originOf(req.url),
+  ].filter((origin): origin is string => origin !== undefined);
+  const origin = origins[0] ?? new URL(req.url).origin;
+  const hosts = [
+    ...new Set(origins.map(each => new URL(each).hostname.toLowerCase())),
+  ];
+  return {
+    ...(rules.siteName === undefined ? {} : { name: rules.siteName }),
+    origin,
+    hosts,
+  };
+}
+
+/** The route the SEO tab reads its levels from. */
+export function seoTabRoute(setup: SeoTabRouteSetup): {
+  method: "POST";
+  path: string;
+  handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
+} {
+  const readRules = setup.readRules ?? noTabRules;
+  return {
+    method: "POST",
+    path: SEO_RESOLVE_PATH,
+    handler: async (req, ctx) => {
+      const body = await bodyOf(req);
+      // Only the types this plugin adds SEO to have a tab to answer.
+      const targets =
+        body.kind === "collection" ? setup.collections : setup.singles;
+      if (!targets.includes(body.slug)) {
+        throw NextlyError.notFound({
+          logContext: { reason: "seo-resolve-not-a-target", slug: body.slug },
+        });
+      }
+      if (!(await mayEdit(ctx, body))) {
+        throw NextlyError.forbidden({
+          logContext: { reason: "seo-resolve-not-an-editor", slug: body.slug },
+        });
+      }
+      const locale = body.locale ?? undefined;
+      const document = withoutTyped(body.document);
+      const input: PageMetadataInput = {
+        ...(locale === undefined ? {} : { locale }),
+        source:
+          body.kind === "collection"
+            ? { kind: "entry", collection: body.slug, entry: document }
+            : { kind: "single", slug: body.slug, document },
+        code: {},
+        derived: {},
+      };
+      const rules = await readRules(ctx, locale);
+      const levels = await levelsOf(ctx, input, rules);
+      const declaration = declarationOf(ctx, body);
+      const answer: SeoTabContext = {
+        levels,
+        site: siteOf(rules, setup.baseUrl, req),
+        typeLabel: typeLabelOf(declaration, body.slug),
+        fieldLabels: fieldLabelsOf(declaration, levels),
+      };
+      return Response.json(answer);
+    },
+  };
+}

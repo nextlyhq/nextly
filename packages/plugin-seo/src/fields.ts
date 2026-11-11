@@ -29,6 +29,16 @@ export function defaultSeoFields(): FieldConfig[] {
       // Search engines truncate descriptions past ~160 chars.
       maxLength: 160,
     }),
+    // The social card's own text, where a person wants it to differ from the
+    // Google title and description; empty, the card uses those.
+    text({
+      name: "socialTitle",
+      label: "Title when shared",
+    }),
+    textarea({
+      name: "socialDescription",
+      label: "Description when shared",
+    }),
     upload({
       name: "ogImage",
       label: "Social Share Image",
