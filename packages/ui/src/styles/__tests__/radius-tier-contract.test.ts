@@ -90,7 +90,8 @@ const COMPONENT_CLAIMS: { component: string; classes: string[] }[] = [
   { component: "avatar", classes: ["rounded-full"] },
   { component: "tabs", classes: ["rounded-none"] },
   // Anchored to the viewport edge, so it carries no corner at all.
-  { component: "sheet", classes: [] },
+  // A bottom sheet's grab strip is a pill, as a switch's track is.
+  { component: "sheet", classes: ["rounded-full"] },
 ];
 
 describe("radius tier contract", () => {
