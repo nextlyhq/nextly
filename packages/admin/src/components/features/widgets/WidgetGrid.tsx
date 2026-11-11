@@ -113,9 +113,12 @@ registerCoreWidgetComponents();
 function NothingToDraw({
   isPending,
   isUnavailable,
+  widths,
 }: {
   isPending: boolean;
   isUnavailable: boolean;
+  /** The outline's cards' widths, where the arrangement is known. */
+  widths: readonly number[] | undefined;
 }) {
   if (isUnavailable) {
     return (
@@ -138,7 +141,7 @@ function NothingToDraw({
     return (
       <section aria-label="Dashboard widgets" data-testid="widget-grid-loading">
         <ScreenOutline>
-          <DashboardCardsOutline />
+          <DashboardCardsOutline widths={widths} />
         </ScreenOutline>
       </section>
     );
@@ -410,6 +413,7 @@ function ArrangementLoading() {
   return (
     <div data-testid="widget-grid-loading">
       <ScreenOutline>
+        {/* The arrangement is what is being read, so the default stands in. */}
         <DashboardCardsOutline />
       </ScreenOutline>
     </div>
@@ -478,18 +482,38 @@ function holdingBody({
   awaitingArrangement,
   isPending,
   isUnavailable,
+  arrangement,
 }: {
   declared: number;
   awaitingArrangement: boolean;
   isPending: boolean;
   isUnavailable: boolean;
+  /** The reader's arrangement, where its read has answered. */
+  arrangement: DashboardLayoutRead | undefined;
 }): ReactNode | null {
   if (declared === 0) {
     return (
-      <NothingToDraw isPending={isPending} isUnavailable={isUnavailable} />
+      <NothingToDraw
+        isPending={isPending}
+        isUnavailable={isUnavailable}
+        widths={arrangedWidths(arrangement)}
+      />
     );
   }
   return awaitingArrangement ? <ArrangementLoading /> : null;
+}
+
+/**
+ * The widths of the cards an answered arrangement places, in order, for the
+ * outline that stands in while the cards themselves are not drawable yet (the
+ * widgets' declarations still on their way). `undefined` before it answers.
+ */
+function arrangedWidths(
+  arrangement: DashboardLayoutRead | undefined
+): number[] | undefined {
+  return arrangement?.placements
+    .filter(placement => !placement.removed)
+    .map(placement => placement.w);
 }
 
 /**
@@ -625,6 +649,7 @@ export function WidgetGrid(): JSX.Element {
     awaitingArrangement: arrangement.awaitingArrangement,
     isPending,
     isUnavailable,
+    arrangement: layout.layout,
   });
   if (holding !== null) {
     return (

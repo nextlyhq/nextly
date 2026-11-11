@@ -31,6 +31,10 @@ import {
 import type { CSSProperties, JSX, ReactNode } from "react";
 
 import {
+  cardSpanClass,
+  GRID_CLASS,
+} from "@admin/components/features/widgets/sizes";
+import {
   ChevronDown,
   Eye,
   History,
@@ -279,35 +283,58 @@ export function ListOutline({
 const RECENT_ROW_WIDTHS = [180, 220, 140, 160] as const;
 
 /**
- * The dashboard's cards: four figures, then a list card and a smaller card
- * beside it, on the dashboard's own twelve-column grid. Columns follow the
- * dashboard's width: four figures in a row on a wide screen, two at laptop
- * width, one on a phone.
+ * Core's own default dashboard, as each card's width in columns: what a reader
+ * with no saved arrangement is drawn, so the widths the outline stands in for
+ * when the reader's own arrangement is not known yet. Every card is half the
+ * row. A test holds these to core's default, which they must follow.
  */
-export function DashboardCardsOutline(): JSX.Element {
+const DEFAULT_CARD_WIDTHS: readonly number[] = [6, 6, 6, 6, 6, 6, 6];
+
+/** A card's outline height for its stored rows: the grid's rows, with the gaps between them. */
+const cardOutlineHeight = (rows: number): number => rows * 72 + (rows - 1) * 16;
+
+/**
+ * The dashboard's cards, each a titled card with a few rows, on the
+ * dashboard's own grid: the grid's classes (`GRID_CLASS`) and each card's
+ * span classes for its width (`cardSpanClass`), the ones its real card takes,
+ * so at every dashboard width the outline's cards stand where the real ones
+ * land. The widths are the reader's arrangement where it is known, and core's
+ * default otherwise.
+ */
+export function DashboardCardsOutline({
+  widths = DEFAULT_CARD_WIDTHS,
+}: {
+  /** Each card's width in the grid's twelve columns, in order. */
+  widths?: readonly number[];
+}): JSX.Element {
   return (
-    <div className="grid grid-cols-12 gap-4 @min-[1280px]/dashboard:gap-x-6">
-      {[0, 1, 2, 3].map(tile => (
-        <div
-          key={tile}
-          className="col-span-12 flex min-h-24 flex-col gap-2 rounded-lg border border-border bg-card p-4 @min-[560px]/dashboard:col-span-6 @min-[1100px]/dashboard:col-span-3"
-        >
-          <OutlineBar className="h-[11px] w-14" />
-          <OutlineBar className="h-6 w-10" />
-        </div>
-      ))}
-      <div className="col-span-12 flex min-h-[220px] flex-col gap-3 rounded-lg border border-border bg-card p-4 @min-[1100px]/dashboard:col-span-8">
-        <OutlineBar className="h-3.5 w-[120px]" />
-        {RECENT_ROW_WIDTHS.map(width => (
-          <div key={width} className="flex min-h-[22px] items-center gap-3">
-            <OutlineBar className="h-3 max-w-[60%]" style={{ width }} />
-            <OutlineBar soft className="ml-auto h-3 w-12" />
+    <div data-testid="dashboard-cards-outline" className={GRID_CLASS}>
+      {widths.map((w, index) => {
+        const span = cardSpanClass(w);
+        return (
+          <div
+            // Cards are told apart only by their place: an outline names none.
+            key={index}
+            data-testid="dashboard-card-outline"
+            data-span={span}
+            className={cn(
+              span,
+              "flex flex-col gap-3 rounded-lg border border-border bg-card p-4"
+            )}
+            // A card of the default's four rows; the real card is as tall as
+            // its content, which no outline can know.
+            style={{ minHeight: cardOutlineHeight(4) }}
+          >
+            <OutlineBar className="h-3.5 w-[120px]" />
+            {RECENT_ROW_WIDTHS.map(width => (
+              <div key={width} className="flex min-h-[22px] items-center gap-3">
+                <OutlineBar className="h-3 max-w-[60%]" style={{ width }} />
+                <OutlineBar soft className="ml-auto h-3 w-12" />
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      <div className="col-span-12 flex min-h-[220px] flex-col gap-3 rounded-lg border border-border bg-card p-4 @min-[1100px]/dashboard:col-span-4">
-        <OutlineBar className="h-3.5 w-[60px]" />
-      </div>
+        );
+      })}
     </div>
   );
 }

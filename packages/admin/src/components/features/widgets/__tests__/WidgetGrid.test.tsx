@@ -4,6 +4,7 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -13,6 +14,7 @@ import {
 import { useEffect, useState, type JSX, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { LOADING_FRAME_TIMES } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import {
@@ -23,7 +25,7 @@ import type { AdminBranding } from "@admin/types/branding";
 import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
 
 import { useCardCollapsed } from "../frame/collapse";
-import { GRID_CLASS } from "../sizes";
+import { cardSpanClass, GRID_CLASS } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
 
 import { stubDashboardWidth, unstubDashboardWidth } from "./dashboard-width";
@@ -720,6 +722,33 @@ describe("WidgetGrid — sizing", () => {
     );
     return { client, ...render(<WidgetGrid />, { wrapper: Wrapper }) };
   }
+
+  it("draws its outline at the stored arrangement's widths while the widgets are on their way", () => {
+    // The arrangement answered, the workspace's declarations not yet: the
+    // outline stands in, and its cards take the stored cards' spans, so the
+    // cards land where it drew them. A removed card takes no place.
+    mockBranding = brandingWith([]);
+    mockBrandingStatus = { ...mockBrandingStatus, isPending: true };
+    const layout = storedLayout(4);
+    layout.placements = [
+      { id: "a", widgetId: "acme/one", w: 3, h: 2, removed: false },
+      { id: "b", widgetId: "acme/one", w: 3, h: 2, removed: true },
+      { id: "c", widgetId: "acme/one", w: 8, h: 4, removed: false },
+    ];
+    // The outline is drawn once its 0.4 s have passed.
+    vi.useFakeTimers();
+    renderStored(layout);
+    act(() => {
+      vi.advanceTimersByTime(LOADING_FRAME_TIMES.outline);
+    });
+    vi.useRealTimers();
+    const outline = within(screen.getByTestId("widget-grid-loading"));
+    expect(
+      outline
+        .getAllByTestId("dashboard-card-outline")
+        .map(card => card.getAttribute("data-span"))
+    ).toEqual([cardSpanClass(3), cardSpanClass(8)]);
+  });
 
   it("draws a layout stored with any h alike, keeping the stored h and setting no height from it", async () => {
     // 🔴 Fails where a stored `h` still sizes the cell: a row span, or a height asked for, of two
