@@ -423,6 +423,26 @@ function validateIndexes(
  * Dispatches to shared helpers for name/type/relationship/select/component
  * rules, and recurses into `repeater`/`group` children.
  */
+/**
+ * The refusal of `unique` on a relation holding a list of references, or none. Such a relation
+ * cannot be unique on any dialect (`relationHoldsReferenceList` says why), so the mark is refused
+ * where the config is defined rather than built as an index that refuses long lists, or as none at
+ * all. One rule for every config a field is defined in: a collection's and a Single's.
+ */
+export function uniqueOnListError(
+  field: Record<string, unknown>,
+  path: string
+): { path: string; message: string; code: "UNIQUE_NOT_ON_LIST" } | null {
+  if (field.unique !== true || !relationHoldsReferenceList(field)) return null;
+  return {
+    path: `${path}.unique`,
+    message:
+      `"${String(field.name)}" holds a list of references, which cannot be unique. ` +
+      "Remove the unique flag.",
+    code: "UNIQUE_NOT_ON_LIST",
+  };
+}
+
 function validateField(
   field: unknown,
   path: string,
@@ -455,18 +475,8 @@ function validateField(
   }
   const fieldType = f.type as string;
 
-  // A relation holding a list of references cannot be unique on any dialect
-  // (`relationHoldsReferenceList` says why), so the mark is refused here
-  // rather than built as an index that refuses long lists, or as none at all.
-  if (f.unique === true && relationHoldsReferenceList(f)) {
-    errors.push({
-      path: `${path}.unique`,
-      message:
-        `"${String(f.name)}" holds a list of references, which cannot be unique. ` +
-        "Remove the unique flag.",
-      code: "UNIQUE_NOT_ON_LIST",
-    });
-  }
+  const listUnique = uniqueOnListError(f, path);
+  if (listUnique) errors.push(listUnique);
 
   // A plugin type reaches none of the cases below, so its own declaration
   // checks run here rather than as a case that could never be written for a
