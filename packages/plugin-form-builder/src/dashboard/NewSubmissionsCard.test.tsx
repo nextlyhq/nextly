@@ -228,6 +228,32 @@ describe("New form submissions", () => {
     expect(all).toHaveAttribute("href", ALL);
   });
 
+  it("draws the Number of entries its reader chose, ten of twelve, never the eleventh", () => {
+    // 🔴 Drawn with no setting, the list falls back to five: only the card handing its
+    // reader's "Number of entries" to the list draws ten here.
+    const twelve: NewSubmissionsData = {
+      ...TWO_NEW,
+      items: Array.from({ length: 12 }, (_, i) => ({
+        id: `n${i}`,
+        title: `Person ${i}`,
+        at: "2026-01-05T09:30:00.000Z",
+        href: `${ALL}/n${i}`,
+      })),
+      total: 12,
+    };
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <NewSubmissionsCard data={twelve} settings={{ limit: 10 }} />
+      </QueryClientProvider>
+    );
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(10);
+    expect(screen.getByText("Person 9")).toBeInTheDocument();
+    expect(screen.queryByText("Person 10")).toBeNull();
+    expect(screen.getByRole("link", { name: /View all/ })).toHaveTextContent(
+      "View all (12)"
+    );
+  });
+
   it("says View all with no count when it draws every new submission", () => {
     drawCard("ready", TWO_NEW);
     const card = screen.getByRole("region", { name: CARD });
