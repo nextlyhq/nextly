@@ -172,6 +172,7 @@ import { provisionUserFieldStorage } from "../../domains/users/services/provisio
 import { UserExtSchemaService } from "../../domains/users/services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
 import { NextlyError, describeError } from "../../errors";
+import { configWatchAllowed } from "../../runtime/hmr-listener";
 import type { UserConfig } from "../../users/config/types";
 import { CliError, exitWithError } from "../errors";
 import type { CommandContext } from "../program";
@@ -512,6 +513,11 @@ export async function runMigrate(
         migrationsDir: appMigrationsDir,
         logger,
         ...(await pluginMigrationArgs(configResult.config.plugins ?? [])),
+        // Where a live sync keeps the registry rows in step with the code as
+        // it is edited (`next dev`), only absent rows are inserted, so a hand
+        // run does not put unmigrated edits back to the snapshot. Everywhere
+        // else the rows are brought to the newest applied snapshot.
+        registryRows: configWatchAllowed() ? "insert-missing" : "write",
         // A run that finds the schema lock held waits about a minute for it, then stops naming
         // what holds it.
         lockMode: "wait",
@@ -575,7 +581,9 @@ export async function runMigrate(
       const ran = applied + pluginModulesApplied;
       logger.success(
         ran === 0
-          ? metadata.stillPending > 0 || metadata.unreadable.length > 0
+          ? metadata.stillPending > 0 ||
+            metadata.unreadable.length > 0 ||
+            metadata.rowsNotWritten.length > 0
             ? "No migration files to apply."
             : "Nothing to migrate. Database is up to date."
           : `${formatCount(ran, "migration")} applied.`
@@ -870,6 +878,11 @@ export interface MigrateCoreDeps {
    * further row. Absent, every write goes ahead.
    */
   assertLockHeld?: () => Promise<void> | void;
+  /**
+   * Each plugin-contributed collection's origin, `plugin:<name>`, for a
+   * registry row the run creates (`pluginMigrationArgs`).
+   */
+  collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
   /**
    * Seam for tests; defaults to recording and retiring element owner rows
    * against the database.
@@ -1818,6 +1831,15 @@ function reportMetadataOutcome(
     );
   }
 
+  // Rows the registry source records that could not be written: each is
+  // warned on as it fails, and named again here beside the run's outcome, so
+  // a run that left them behind never reads as an up-to-date registry.
+  if (metadata.rowsNotWritten.length > 0) {
+    logger.warn(
+      `${formatCount(metadata.rowsNotWritten.length, "registry row")} not brought to the newest applied snapshot: ${metadata.rowsNotWritten.join(", ")}. Re-run \`nextly migrate\` once the cause is fixed.`
+    );
+  }
+
   if (marked > 0) {
     logger.success(
       `${formatCount(marked, "registry row")} recorded as applied.`
@@ -2030,6 +2052,9 @@ export async function migrateCore(
         ...(deps.assertLockHeld === undefined
           ? {}
           : { assertLockHeld: deps.assertLockHeld }),
+        ...(deps.collectionSources === undefined
+          ? {}
+          : { collectionSources: deps.collectionSources }),
         logger: {
           info: (m: string) => deps.logger.debug(m),
           warn: (m: string) => deps.logger.warn(m),

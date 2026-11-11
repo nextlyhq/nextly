@@ -60,6 +60,12 @@ export interface RegistryWriteDeps {
    * further. Absent, every write goes ahead.
    */
   assertLockHeld?: () => Promise<void> | void;
+  /**
+   * The origin of each collection a plugin contributes, `plugin:<name>` by
+   * slug, as the start gives it: a row the writer creates for one of them
+   * is that plugin's, not the app's.
+   */
+  collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
 }
 
 export interface RegistryWriteResult {
@@ -86,7 +92,7 @@ export async function writeRegistryFromSource(
     failed: [],
   };
   try {
-    for (const row of recordedRows(source, deps)) {
+    for (const row of await recordedRows(source, deps)) {
       // Outside the per-row guard below: a lost lock stops the pass, it is
       // never one row's failure to report and go on from.
       await deps.assertLockHeld?.();
@@ -110,11 +116,14 @@ export async function writeRegistryFromSource(
   return result;
 }
 
-/** Every row the source records, in kind order, reserved slugs left out. */
-function recordedRows(
+/**
+ * Every row the source records, in kind order, reserved slugs left out. Each
+ * registry table is read once, here, rather than once per entity.
+ */
+async function recordedRows(
   source: Extract<RegistrySource, { kind: "snapshot" }>,
   deps: RegistryWriteDeps
-): RecordedRow[] {
+): Promise<RecordedRow[]> {
   const collections = new CollectionRegistryService(deps.adapter, deps.logger);
   const singles = new SingleRegistryService(deps.adapter, deps.logger);
   const fieldGroups = new FieldGroupRegistryService(deps.adapter, deps.logger);
@@ -123,6 +132,12 @@ function recordedRows(
   const kept = ([slug]: [string, RecordedEntitySettings]) =>
     !isReservedResourceSlug(slug);
   const { entities } = source;
+  const [storedCollections, storedSingles, storedFieldGroups] =
+    await Promise.all([
+      storedBySlug(() => collections.getAllCollections()),
+      storedBySlug(() => singles.getAllSingles()),
+      storedBySlug(() => fieldGroups.getAllComponents()),
+    ]);
   return [
     ...Object.entries(entities.collections)
       .filter(kept)
@@ -132,7 +147,8 @@ function recordedRows(
         write: () =>
           collections.writeRecordedCollection(
             recordedCollection(slug, recorded),
-            originOf(recorded)
+            collectionOriginOf(recorded, deps.collectionSources?.get(slug)),
+            recordedOptions(recorded, storedCollections, slug)
           ),
       })),
     ...Object.entries(entities.singles)
@@ -143,21 +159,81 @@ function recordedRows(
         write: () =>
           singles.writeRecordedSingle(
             recordedSingle(slug, recorded),
-            originOf(recorded)
+            originOf(recorded),
+            recordedOptions(recorded, storedSingles, slug)
           ),
       })),
     ...Object.entries(entities.fieldGroups)
       .filter(kept)
-      .map(([slug, recorded]) => ({
-        kind: "fieldGroup" as const,
-        slug,
-        write: () =>
-          fieldGroups.writeRecordedComponent(
-            recordedFieldGroup(slug, recorded),
-            originOf(recorded)
-          ),
-      })),
+      .map(([slug, recorded]) => {
+        const { config, tableName } = recordedFieldGroup(slug, recorded);
+        return {
+          kind: "fieldGroup" as const,
+          slug,
+          write: () =>
+            fieldGroups.writeRecordedComponent(config, originOf(recorded), {
+              ...recordedOptions(recorded, storedFieldGroups, slug),
+              ...(tableName === undefined ? {} : { tableName }),
+            }),
+        };
+      }),
   ];
+}
+
+/**
+ * A registry table's rows by slug, read once; undefined where it cannot be
+ * read, so each row is read on its own and one that fails costs only itself.
+ */
+async function storedBySlug<TRecord extends { slug: string }>(
+  read: () => Promise<TRecord[]>
+): Promise<ReadonlyMap<string, TRecord> | undefined> {
+  try {
+    return new Map((await read()).map(row => [row.slug, row]));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * How one recorded entity is handed to its service: its stored row, as read
+ * with the rest (`null` when the table holds none), and whether it leaves
+ * what it does not say, as a Builder record does.
+ */
+function recordedOptions<TRecord>(
+  recorded: RecordedEntitySettings,
+  stored: ReadonlyMap<string, TRecord> | undefined,
+  slug: string
+): { existing?: TRecord | null; leavesUnsaid: boolean } {
+  return {
+    ...(stored === undefined ? {} : { existing: stored.get(slug) ?? null }),
+    leavesUnsaid: recorded.source === "builder",
+  };
+}
+
+/**
+ * What a row the writer creates says about where it came from, as the start
+ * would say it: a code-first entity a plugin contributes is that plugin's
+ * (`plugin`), any other code-first one the app's, a Builder one the
+ * Builder's. Used only for a row the writer creates.
+ */
+function originOf(recorded: RecordedEntitySettings): {
+  source: "code" | "ui";
+  locked: boolean;
+} {
+  return recorded.source === "code"
+    ? { source: "code", locked: true }
+    : { source: "ui", locked: false };
+}
+
+/** `originOf` for a collection, which a plugin can contribute (`plugin`). */
+function collectionOriginOf(
+  recorded: RecordedEntitySettings,
+  plugin: `plugin:${string}` | undefined
+): { source: "code" | "ui" | `plugin:${string}`; locked: boolean } {
+  const origin = originOf(recorded);
+  return origin.source === "code" && plugin !== undefined
+    ? { ...origin, source: plugin }
+    : origin;
 }
 
 /** A recorded Single, as the code-first sync's payload (`recordedCollection`). */
@@ -193,39 +269,37 @@ function recordedSingle(
   };
 }
 
-/** A recorded field group, as the code-first sync's payload (`recordedCollection`). */
+/**
+ * A recorded field group, as the code-first sync's payload
+ * (`recordedCollection`), and for a Builder one the table its own row names,
+ * which its slug can spell differently from the code-first derivation.
+ */
 function recordedFieldGroup(
   slug: string,
   recorded: RecordedEntitySettings
-): CodeFirstComponentConfig {
+): { config: CodeFirstComponentConfig; tableName?: string } {
   const declared = { ...declaration(recorded), slug };
   if (recorded.source === "code") {
-    return toCodeFirstComponentConfig(declared as CodeFirstComponentSource);
+    return {
+      config: toCodeFirstComponentConfig(declared as CodeFirstComponentSource),
+    };
   }
   const row = componentRowValues(declared as UiSchemaEntity);
   return {
-    slug,
-    label: row.label,
-    fields: row.fields,
-    ...(row.description === undefined || row.description === null
-      ? {}
-      : { description: row.description }),
-    localized: row.localized,
-    ...(row.admin === undefined || row.admin === null
-      ? {}
-      : { admin: row.admin }),
+    config: {
+      slug,
+      label: row.label,
+      fields: row.fields,
+      ...(row.description === undefined || row.description === null
+        ? {}
+        : { description: row.description }),
+      localized: row.localized,
+      ...(row.admin === undefined || row.admin === null
+        ? {}
+        : { admin: row.admin }),
+    },
+    tableName: row.tableName,
   };
-}
-
-/** What a row the writer creates says about where it came from. */
-function originOf(recorded: RecordedEntitySettings): {
-  source: "code" | "ui";
-  locked: boolean;
-} {
-  // As the start registers a code-first entity and the Builder its own.
-  return recorded.source === "code"
-    ? { source: "code", locked: true }
-    : { source: "ui", locked: false };
 }
 
 /**

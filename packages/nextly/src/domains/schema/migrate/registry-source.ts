@@ -19,7 +19,7 @@ import { join, resolve } from "node:path";
 import type { EntitySettingsRecord } from "../migrate-create/entity-settings";
 import { parseSnapshotFile } from "../migrate-create/snapshot-io";
 
-import type { IsAppliedFn } from "./snapshot-source";
+import { ledgerNameOfSnapshot, type IsAppliedFn } from "./snapshot-source";
 
 /** The registry source at the newest applied point, or why there is none. */
 export type RegistrySource =
@@ -68,9 +68,7 @@ export async function readRegistrySource(args: {
     .sort()
     .reverse();
   for (const file of newestFirst) {
-    // The ledger names a migration by its group's `.sql` name.
-    const ledgerName = `${file.slice(0, -SNAPSHOT_SUFFIX.length)}.sql`;
-    if (!(await args.isApplied(ledgerName))) continue;
+    if (!(await args.isApplied(ledgerNameOfSnapshot(file)))) continue;
     return sourceIn(join(metaDir, file), file);
   }
   return { kind: "none", reason: "no-snapshot" };

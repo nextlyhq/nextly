@@ -171,8 +171,9 @@ describe("FieldGroupRegistryService.writeRecordedComponent", () => {
       localized: 0,
       schema_hash: calculateSchemaHash(fields),
     });
-    // Where the row came from is the origin's, not the declaration's.
-    expect(row.config_path).toBeUndefined();
+    // The config path is the projection's, as a start gives the row it
+    // creates; source and lock are the origin's.
+    expect(row.config_path).toBe("components/other-path.ts");
   });
 
   it("writes nothing when the row already matches", async () => {
@@ -253,6 +254,38 @@ describe("FieldGroupRegistryService.writeRecordedComponent", () => {
       expect("fields" in data).toBe(false);
     }
   );
+
+  // A Builder field group's own row names its table, which its slug can spell
+  // differently from the code-first derivation (`a__b` keeps its doubled
+  // `_`, the derivation folds it): the row is held to that table, and found
+  // matching rather than diverged.
+  it("holds a Builder field group to the table its own row names", async () => {
+    ctx.adapter.selectOne.mockResolvedValue(
+      dbRow({ slug: "a__b", table_name: "comp_a__b", source: "ui", locked: 0 })
+    );
+
+    const outcome = await ctx.service.writeRecordedComponent(
+      declared({ slug: "a__b", configPath: undefined }),
+      { source: "ui", locked: false },
+      { tableName: "comp_a__b" }
+    );
+
+    expect(outcome).toBe("unchanged");
+    expect(ctx.adapter.update).not.toHaveBeenCalled();
+  });
+
+  it("gives a code-first row it creates the config path a start gives it", async () => {
+    ctx.adapter.selectOne.mockResolvedValue(null);
+    ctx.adapter.insert.mockResolvedValue(dbRow());
+
+    await ctx.service.writeRecordedComponent(
+      declared({ configPath: "components/seo.ts" }),
+      { source: "code", locked: true }
+    );
+
+    const row = ctx.adapter.insert.mock.calls[0][1] as Record<string, unknown>;
+    expect(row.config_path).toBe("components/seo.ts");
+  });
 
   // A declaration that no longer says a description or admin options clears
   // them, rather than leaving what an earlier declaration said.

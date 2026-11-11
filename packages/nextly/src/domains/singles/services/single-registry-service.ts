@@ -48,6 +48,10 @@ import {
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
+import {
+  withUnsaidKept,
+  type RecordedWriteOptions,
+} from "../../collections/services/collection-registry-service";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
@@ -1231,13 +1235,19 @@ export class SingleRegistryService extends BaseRegistryService<
    * creates.
    */
   async writeRecordedSingle(
-    config: CodeFirstSingleConfig,
-    origin: { source: SingleSource; locked: boolean }
+    recorded: CodeFirstSingleConfig,
+    origin: { source: SingleSource; locked: boolean },
+    options: RecordedWriteOptions<DynamicSingleRecord> = {}
   ): Promise<"created" | "updated" | "unchanged"> {
-    const decision = this.codeFirstSyncStep(
-      config,
-      await this.findRecordForWrite(config.slug)
-    );
+    const existing =
+      options.existing === undefined
+        ? await this.findRecordForWrite(recorded.slug)
+        : options.existing;
+    const config =
+      options.leavesUnsaid === true
+        ? withUnsaidKept(recorded, existing)
+        : recorded;
+    const decision = this.codeFirstSyncStep(config, existing);
     const { schemaHash } = decision;
     if (decision.step === "unchanged") return "unchanged";
     if (decision.step === "create") {

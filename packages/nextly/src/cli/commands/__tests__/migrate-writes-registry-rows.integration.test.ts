@@ -477,6 +477,71 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    // Under `next dev` a live sync keeps the rows in step with the code as it
+    // is edited, ahead of any migration, so a hand run there puts nothing
+    // back to the snapshot. The control is the same run outside development,
+    // which restores the row (below).
+    it("rewrites no row in development, where a live sync keeps them", async () => {
+      await migrateCreate(posts("Posts"), "create_posts");
+      await migrated(posts("Posts"));
+      const db = (
+        instance!.adapter as unknown as DrizzleAdapter
+      ).getDrizzle<Selecting>();
+      const { tables } = loadedDialect(dialect);
+      const { eq } = await import("drizzle-orm");
+      await db
+        .update(tables.dynamicCollections)
+        .set({ description: "synced from the code" })
+        .where(eq(tables.dynamicCollections.slug, "rr_posts"));
+
+      vi.stubEnv("NODE_ENV", "development");
+      try {
+        await migrated(posts("Posts"));
+      } finally {
+        vi.unstubAllEnvs();
+      }
+      expect(
+        (await collectionRow(instance!, dialect, "rr_posts"))?.description
+      ).toBe("synced from the code");
+    });
+
+    // The Builder's own registry upsert leaves a description or admin block
+    // its manifest entry omits, so the writer does not clear one either.
+    it("keeps a Builder entity's description its manifest entry does not say", async () => {
+      const builderOnly = defineConfig({
+        collections: [],
+        db: { migrationsDir: "./migrations" },
+      });
+      await writeFile(
+        join(dir, "ui-schema.json"),
+        `${JSON.stringify(
+          uiSchemaManifest.parse({
+            collections: [
+              { slug: "rr_notes", fields: [{ name: "title", type: "text" }] },
+            ],
+          }),
+          null,
+          2
+        )}\n`
+      );
+      await migrateCreate(builderOnly, "create_notes");
+      await migrated(builderOnly);
+      const db = (
+        instance!.adapter as unknown as DrizzleAdapter
+      ).getDrizzle<Selecting>();
+      const { tables } = loadedDialect(dialect);
+      const { eq } = await import("drizzle-orm");
+      await db
+        .update(tables.dynamicCollections)
+        .set({ description: "set in the admin" })
+        .where(eq(tables.dynamicCollections.slug, "rr_notes"));
+
+      await migrated(builderOnly);
+      expect(
+        (await collectionRow(instance!, dialect, "rr_notes"))?.description
+      ).toBe("set in the admin");
+    });
+
     it("restores a row edited by hand with no migration pending", async () => {
       await migrateCreate(posts("Posts"), "create_posts");
       await migrated(posts("Posts"));

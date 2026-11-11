@@ -452,6 +452,15 @@ describe.each(getConfiguredTestDialects())(
       );
       const afterApp = await collectionRows(instance!, dialect);
       await expectRowsAsSnapshot(afterApp, slugs);
+      // A row the run creates says who contributed it, as a start says it:
+      // the plugin's collection is the plugin's, the app's own is the app's.
+      // A start never rewrites a row's origin, so this is the row's for good.
+      expect(afterApp.find(row => row.slug === "rrp_notes")?.source).toBe(
+        `plugin:${PLUGIN}`
+      );
+      expect(afterApp.find(row => row.slug === "rrp_posts")?.source).toBe(
+        "code"
+      );
 
       // The plugin's second module changes its own table, and no app
       // migration is written for it.

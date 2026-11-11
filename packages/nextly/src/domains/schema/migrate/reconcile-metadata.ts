@@ -115,6 +115,8 @@ export interface ReconcileMetadataDeps {
    * longer show it holds the schema lock (`RegistryWriteDeps.assertLockHeld`).
    */
   assertLockHeld?: () => Promise<void> | void;
+  /** Each plugin-contributed collection's origin (`RegistryWriteDeps.collectionSources`). */
+  collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
   /**
    * Seam for tests; defaults to reading the migration headers from disk.
    *
@@ -467,10 +469,18 @@ async function registerRows(
   if (deps.registryRows === "insert-missing") return insertMissing();
   const source = await readRegistrySource({ migrationsDir, isApplied });
   if (source.kind !== "snapshot") {
+    // Fail closed: an unreadable newest snapshot may record anything, so no
+    // row is written from it, nor from an older one in its place.
     if (source.reason === "unreadable") {
       logger.warn(
         `The registry rows were not written: the newest applied snapshot (${source.file ?? "unknown"}) could not be read.`
       );
+      return {
+        collectionsRegistered: 0,
+        singlesRegistered: 0,
+        fieldGroupsRegistered: 0,
+        rowsNotWritten: [],
+      };
     }
     return insertMissing();
   }
@@ -482,6 +492,9 @@ async function registerRows(
       ...(deps.assertLockHeld === undefined
         ? {}
         : { assertLockHeld: deps.assertLockHeld }),
+      ...(deps.collectionSources === undefined
+        ? {}
+        : { collectionSources: deps.collectionSources }),
     }
   );
   return {

@@ -112,6 +112,7 @@ import {
   registerFieldType,
   withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
+import { pluginCollectionSources } from "../domains/schema/migrate/plugin/plugin-collection-sources";
 import {
   holdRecordedAtStart,
   registryRows,
@@ -3739,12 +3740,9 @@ async function syncCodeFirstCollections(
   // Provenance (D14): tag each collection by who contributed it. A slug that a
   // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
   // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
-  const sourceBySlug = new Map<string, CollectionSource>();
-  for (const plugin of transformedConfig.plugins ?? []) {
-    for (const contributed of plugin.contributes?.collections ?? []) {
-      sourceBySlug.set(contributed.slug, `plugin:${plugin.name}`);
-    }
-  }
+  // The rule `nextly migrate`'s registry writer gives a row it creates, too.
+  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
+    pluginCollectionSources(transformedConfig.plugins ?? []);
 
   // The projection every sync route shares, so what boot stores and publishes
   // for a collection is what reload and `db:sync` store and publish for it.

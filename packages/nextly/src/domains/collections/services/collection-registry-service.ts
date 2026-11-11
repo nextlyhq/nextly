@@ -235,6 +235,47 @@ function declaredMetadata(
   };
 }
 
+/** How `nextly migrate`'s writer hands a recorded entity to its registry service. */
+export interface RecordedWriteOptions<TRecord> {
+  /**
+   * The row as read before this write, `null` for none, so a caller that
+   * reads the whole registry once asks for no row of its own. Absent, the
+   * service reads it.
+   */
+  existing?: TRecord | null;
+  /**
+   * A Builder record leaves what it does not say: a description or admin
+   * block it omits keeps the stored one, as the Builder's own registry upsert
+   * does, rather than clearing it.
+   */
+  leavesUnsaid?: boolean;
+}
+
+/**
+ * `config` with the description and admin block it does not say taken from
+ * `existing`, so they are neither compared nor written (`leavesUnsaid`). One
+ * rule for every kind's recorded writer.
+ */
+export function withUnsaidKept<
+  TConfig extends { description?: string; admin?: unknown },
+>(
+  config: TConfig,
+  existing: { description?: string | null; admin?: unknown } | null
+): TConfig {
+  if (existing === null) return config;
+  return {
+    ...config,
+    ...(config.description === undefined &&
+    existing.description !== null &&
+    existing.description !== undefined
+      ? { description: existing.description }
+      : {}),
+    ...(config.admin === undefined && existing.admin
+      ? { admin: existing.admin }
+      : {}),
+  };
+}
+
 /** Result of syncing code-first collections. */
 export interface SyncResult {
   created: string[];
@@ -986,13 +1027,19 @@ export class CollectionRegistryService extends BaseRegistryService<
    * writer's. `origin` is used only for a row it creates.
    */
   async writeRecordedCollection(
-    config: CodeFirstCollectionConfig,
-    origin: { source: CollectionSource; locked: boolean }
+    recorded: CodeFirstCollectionConfig,
+    origin: { source: CollectionSource; locked: boolean },
+    options: RecordedWriteOptions<DynamicCollectionRecord> = {}
   ): Promise<"created" | "updated" | "unchanged"> {
-    const decision = this.codeFirstSyncStep(
-      config,
-      await this.getCollectionBySlug(config.slug)
-    );
+    const existing =
+      options.existing === undefined
+        ? await this.getCollectionBySlug(recorded.slug)
+        : options.existing;
+    const config =
+      options.leavesUnsaid === true
+        ? withUnsaidKept(recorded, existing)
+        : recorded;
+    const decision = this.codeFirstSyncStep(config, existing);
     const { schemaHash, desiredTableName } = decision;
     if (decision.step === "unchanged") return "unchanged";
     if (decision.step === "create") {

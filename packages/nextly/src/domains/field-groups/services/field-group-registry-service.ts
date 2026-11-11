@@ -20,6 +20,10 @@ import type {
   BaseListResult,
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
+import {
+  withUnsaidKept,
+  type RecordedWriteOptions,
+} from "../../collections/services/collection-registry-service";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import {
@@ -198,6 +202,28 @@ function declaredComponentMetadata(
     description: config.description ?? null,
     admin: config.admin ?? null,
   };
+}
+
+/**
+ * Where a stored table pointer stands against the one a Builder record's own
+ * row names: in agreement (or no row yet), or diverged, which no write
+ * resolves.
+ */
+function recordedTablePointer(
+  tableName: string,
+  existing: DynamicFieldGroupRecord | null
+): CodeFirstTablePointer {
+  return existing === null || existing.tableName === tableName
+    ? {
+        matches: true,
+        desiredTableName: tableName,
+        repairedTableName: undefined,
+      }
+    : {
+        matches: false,
+        desiredTableName: tableName,
+        storedTableName: existing.tableName,
+      };
 }
 
 /**
@@ -1015,9 +1041,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * What a code-first sync does with `config` on a component the registry
    * already holds: write a schema change through (`update`: the table pointer is
    * repaired, the fields changed by hash, or localization flipped), write only
-   * its admin options (`metadata`), or leave it (`unchanged`). A changed label
-   * or description alone opens neither write; either is written only alongside
-   * a schema change.
+   * its label, description and admin options (`metadata`), as a collection's
+   * and a Single's are written, or leave it (`unchanged`).
    *
    * The one decision of it: `syncCodeFirstComponents` and
    * `writeRecordedComponent` both act on it, so a start and `nextly migrate`
@@ -1130,12 +1155,30 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    *   written.
    */
   async writeRecordedComponent(
-    config: CodeFirstComponentConfig,
-    origin: { source: FieldGroupSource; locked: boolean }
+    recorded: CodeFirstComponentConfig,
+    origin: { source: FieldGroupSource; locked: boolean },
+    options: RecordedWriteOptions<DynamicFieldGroupRecord> & {
+      /**
+       * The table a Builder record's own row names (`componentRowValues`),
+       * which a slug can spell differently from the code-first derivation:
+       * the row is held to that one, never to the derived name.
+       */
+      tableName?: string;
+    } = {}
   ): Promise<"created" | "updated" | "unchanged"> {
-    const existing = await this.findRecordForWrite(config.slug);
+    const existing =
+      options.existing === undefined
+        ? await this.findRecordForWrite(recorded.slug)
+        : options.existing;
+    const config =
+      options.leavesUnsaid === true
+        ? withUnsaidKept(recorded, existing)
+        : recorded;
     const schemaHash = calculateSchemaHash(config.fields);
-    const pointer = await this.codeFirstTablePointer(config.slug, existing);
+    const pointer =
+      options.tableName === undefined
+        ? await this.codeFirstTablePointer(config.slug, existing)
+        : recordedTablePointer(options.tableName, existing);
     if (!pointer.matches) {
       // The table names stay in the log: the public message says what to do.
       throw NextlyError.conflict({
@@ -1156,6 +1199,11 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           schemaHash,
           pointer.desiredTableName
         ),
+        // The config path a start gives the row it creates, from the same
+        // projection; a Builder record has none.
+        ...(config.configPath === undefined
+          ? {}
+          : { configPath: config.configPath }),
         ...origin,
       });
       return "created";
