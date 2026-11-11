@@ -86,6 +86,19 @@ describe("fields with deleted", () => {
     ]);
   });
 
+  it("shows a deleted container without a field moved out of it first", () => {
+    // "y" moved to the top, then its group was deleted: "y" shows once, where
+    // it is now, and the deleted group holds only what went with it.
+    const current = [text("y"), text("a"), text("b"), text("c")];
+    expect(ids(fieldsWithDeleted(current, saved))).toEqual([
+      "y",
+      "a",
+      "b",
+      ["g", ["x", "z"]],
+      "c",
+    ]);
+  });
+
   it("never shows a field that was moved, only deleted ones", () => {
     const current = [
       text("a"),

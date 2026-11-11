@@ -257,6 +257,42 @@ describe("builder pending changes", () => {
     expect(result.current.state.pending.canUndo).toBe(false);
   });
 
+  it("edits made after a same-field edit during a save stay steps of their own", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "A",
+      })
+    );
+    const pinWhenSaved = result.current.state.pinFields;
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "AB",
+      })
+    );
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("summary"),
+        label: "S",
+      })
+    );
+    act(() => pinWhenSaved());
+    // One undo takes back the last edit only.
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("summary").label).toBe("Summary");
+    expect(field("headline").label).toBe("AB");
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("headline").label).toBe("A");
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+
   it("the count is the changes plus one for the settings", () => {
     const { result, field } = setup();
     act(() =>

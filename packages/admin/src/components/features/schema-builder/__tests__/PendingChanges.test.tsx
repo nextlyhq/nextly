@@ -76,6 +76,8 @@ const settingsOf = (loaded: Entity): BuilderSettingsValues => ({
 
 /** What a test reaches into: the builder the controls are driven through. */
 let builder: ReturnType<typeof useFieldBuilder>;
+/** The overlays the layout asked for, in order: the picker among them. */
+let activeChanges: unknown[] = [];
 let setSettings: (next: BuilderSettingsValues) => void;
 
 function Harness({ locked = false }: { locked?: boolean }) {
@@ -315,6 +317,29 @@ describe("pending changes controls", () => {
     expect(announced()?.trim()).toBe("Undid: added a new field");
   });
 
+  it("the keys do nothing while a dialog is open over the builder", async () => {
+    const user = setup();
+    act(() =>
+      builder.handleFieldUpdate({ ...field("summary"), label: "Excerpt" })
+    );
+    // A confirmation waiting on the person, as a schema change's preview is.
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "alertdialog");
+    dialog.setAttribute("aria-modal", "true");
+    const confirm = document.createElement("button");
+    dialog.append(confirm);
+    document.body.append(dialog);
+    try {
+      confirm.focus();
+      await user.keyboard("{Control>}z{/Control}");
+      expect(field("summary").label).toBe("Excerpt");
+    } finally {
+      dialog.remove();
+    }
+    await user.keyboard("{Control>}z{/Control}");
+    expect(field("summary").label).toBe("Summary");
+  });
+
   it("a read-only entity offers none of them", () => {
     setup(true);
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
@@ -363,7 +388,9 @@ function LayoutHarness() {
       settings={state.settings}
       onSettingsChange={state.setSettings}
       active={{ kind: "none" }}
-      onActiveChange={() => {}}
+      onActiveChange={next => {
+        activeChanges.push(next);
+      }}
       onDuplicateField={() => {}}
       onRowDragEnd={() => {}}
       isSaving={false}
@@ -441,6 +468,21 @@ describe("pending changes in the outline", () => {
     row("summary").focus();
     await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
     expect(names()).toEqual(["headline", "address"]);
+  });
+
+  it("a deleted row adds nothing by key", async () => {
+    const user = userEvent.setup();
+    activeChanges = [];
+    render(<LayoutHarness />, { wrapper: Providers });
+    // On a live row, "/" opens the picker to add after it.
+    row("headline").focus();
+    await user.keyboard("/");
+    expect(activeChanges).toHaveLength(1);
+    act(() => builder.handleFieldDelete(field("summary").id));
+    activeChanges = [];
+    row("summary").focus();
+    await user.keyboard("/");
+    expect(activeChanges).toEqual([]);
   });
 
   it("a deleted row offers no place to add, inside it or before it", () => {
