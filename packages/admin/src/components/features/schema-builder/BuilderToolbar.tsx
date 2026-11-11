@@ -17,7 +17,6 @@ import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 // Prose names the kind through the shared table, so the toolbar spells each
 // kind as every other builder message does.
 import { BUILDER_KIND_NOUN, type BuilderConfig } from "./builder-config";
-import { mayLeaveBuilder } from "./leave-builder";
 import { PendingChangesControls } from "./PendingChangesControls";
 
 type Props = {
@@ -72,13 +71,6 @@ export function BuilderToolbar({
     ? `This ${BUILDER_KIND_NOUN[config.kind]} is managed in code. Update its definition in code to make changes.`
     : undefined;
 
-  // The crumb is the page's only exit, and no builder page mounts a
-  // navigation guard — a click with unsaved fields would discard them
-  // silently. Blocked with a confirm while dirty.
-  const handleCrumbClick = (e: { preventDefault: () => void }) => {
-    if (!mayLeaveBuilder(unsavedCount, config.kind)) e.preventDefault();
-  };
-
   return (
     <div className="flex items-center gap-3 px-6 py-3 border-b border-border sticky top-0 z-30 bg-background">
       <div className="flex items-center gap-3 min-w-0">
@@ -87,7 +79,6 @@ export function BuilderToolbar({
             the list — plain text left the reader stranded after saving. */}
         <Link
           href={KIND_LIST_ROUTE[config.kind]}
-          onClick={handleCrumbClick}
           className="flex items-center gap-0.5 min-w-0 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           aria-label={`Back to ${kindListName(config.kind)}`}
         >
