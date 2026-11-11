@@ -63,6 +63,8 @@ export interface SettingsDraft {
   hiddenTypes: string[];
   /** Each content type's structured data choice and detail mapping, by key. */
   structuredData: Record<string, StructuredDataTypeRule>;
+  /** Whether IndexNow is told of changed pages. */
+  indexNow: boolean;
   /** Whether `/llms.txt` is served. */
   llmsTxt: boolean;
   /** Whether each listed page has a plain-text copy. */
@@ -167,6 +169,7 @@ export function draftOf(
       ...structuredDataOf(stored.structuredData),
     },
     // Off unless stored as switched on.
+    indexNow: stored.indexNow === true,
     llmsTxt: stored.llmsTxt === true,
     plainTextCopies: stored.plainTextCopies === true,
   };

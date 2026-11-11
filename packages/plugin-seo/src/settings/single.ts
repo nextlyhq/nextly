@@ -133,7 +133,8 @@ export function seoSettingsSingle(): SingleConfig {
         label: "Structured data",
         validate: refusing(structuredDataSettingsProblem),
       }),
-      // The optional outputs for AI tools, each off until switched on.
+      // The optional connections and outputs, each off until switched on.
+      checkbox({ name: "indexNow", label: "IndexNow" }),
       checkbox({ name: "llmsTxt", label: "llms.txt" }),
       checkbox({
         name: "plainTextCopies",
