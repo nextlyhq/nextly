@@ -376,179 +376,191 @@ async function approvalOf(slug: string, entryId: string, part: string | null) {
 describe.each(getConfiguredTestDialects())(
   "a workflow never strands a document (%s)",
   dialect => {
-    describe("a deploy that removes, renames and redirects stages", () => {
-      it("renames, redirects with approvals withdrawn, and leaves an unmapped stage's parts stranded, listed and filtered", async () => {
-        await boot(dialect);
-        const shelved = await entry(app(), "posts");
-        const checking = await entry(app(), "posts");
-        const parked = await entry(app(), "posts");
-        const clean = await entry(app(), "posts");
-        await seedState(app(), partOf("posts", shelved, "en"), "archive", {
-          definitionHash: DESK,
-        });
-        await seedState(app(), partOf("posts", shelved, "es"), "legal", {
-          definitionHash: DESK,
-        });
-        await seedState(app(), partOf("posts", checking, "en"), "factcheck", {
-          definitionHash: DESK,
-          approval: await approvalOf("posts", checking, "en"),
-        });
-        await seedState(app(), partOf("posts", parked, "en"), "hold", {
-          definitionHash: DESK,
-        });
-        await seedState(app(), partOf("posts", clean, "en"), "legal", {
-          definitionHash: DESK,
-        });
+    // SQLite only: a deploy boots again on the same database, and the test harness releases a
+    // server-backed database when the next instance boots, so the second boot would find it gone.
+    // The sweep reads and writes through the adapter alike on every dialect.
+    describe.skipIf(dialect !== "sqlite")(
+      "a deploy that removes, renames and redirects stages",
+      () => {
+        it("renames, redirects with approvals withdrawn, and leaves an unmapped stage's parts stranded, listed and filtered", async () => {
+          await boot(dialect);
+          const shelved = await entry(app(), "posts");
+          const checking = await entry(app(), "posts");
+          const parked = await entry(app(), "posts");
+          const clean = await entry(app(), "posts");
+          await seedState(app(), partOf("posts", shelved, "en"), "archive", {
+            definitionHash: DESK,
+          });
+          await seedState(app(), partOf("posts", shelved, "es"), "legal", {
+            definitionHash: DESK,
+          });
+          await seedState(app(), partOf("posts", checking, "en"), "factcheck", {
+            definitionHash: DESK,
+            approval: await approvalOf("posts", checking, "en"),
+          });
+          await seedState(app(), partOf("posts", parked, "en"), "hold", {
+            definitionHash: DESK,
+          });
+          await seedState(app(), partOf("posts", clean, "en"), "legal", {
+            definitionHash: DESK,
+          });
 
-        await redeploy(dialect, { posts: deskRedrawn, pages: deskRedrawn });
-        const now = workflowDefinitionHash(deskRedrawn);
+          await redeploy(dialect, { posts: deskRedrawn, pages: deskRedrawn });
+          const now = workflowDefinitionHash(deskRedrawn);
 
-        // Renamed: the part follows its stage to the new name, recorded as the system's act.
-        expect(
-          await stateOf(app(), partOf("posts", parked, "en"))
-        ).toMatchObject({ stage: "paused" });
-        expect(
-          await eventsOf("posts", parked, "workflow-stage-renamed")
-        ).toEqual([
-          expect.objectContaining({
-            actorKind: "system",
-            fromState: "hold",
-            toState: "paused",
-            parts: ["en"],
+          // Renamed: the part follows its stage to the new name, recorded as the system's act.
+          expect(
+            await stateOf(app(), partOf("posts", parked, "en"))
+          ).toMatchObject({ stage: "paused" });
+          expect(
+            await eventsOf("posts", parked, "workflow-stage-renamed")
+          ).toEqual([
+            expect.objectContaining({
+              actorKind: "system",
+              fromState: "hold",
+              toState: "paused",
+              parts: ["en"],
+              definitionHash: now,
+            }),
+          ]);
+
+          // Redirected: moved where the definition says, its approval withdrawn, recorded.
+          expect(
+            await stateOf(app(), partOf("posts", checking, "en"))
+          ).toMatchObject({
+            stage: "draft",
+            approval: null,
             definitionHash: now,
-          }),
-        ]);
+          });
+          expect(
+            await eventsOf("posts", checking, "workflow-stage-removed")
+          ).toEqual([
+            expect.objectContaining({
+              actorKind: "system",
+              fromState: "factcheck",
+              toState: "draft",
+              parts: ["en"],
+              payload: { approvalWithdrawn: true },
+              definitionHash: now,
+            }),
+          ]);
 
-        // Redirected: moved where the definition says, its approval withdrawn, recorded.
-        expect(
-          await stateOf(app(), partOf("posts", checking, "en"))
-        ).toMatchObject({
-          stage: "draft",
-          approval: null,
-          definitionHash: now,
-        });
-        expect(
-          await eventsOf("posts", checking, "workflow-stage-removed")
-        ).toEqual([
-          expect.objectContaining({
-            actorKind: "system",
-            fromState: "factcheck",
-            toState: "draft",
-            parts: ["en"],
-            payload: { approvalWithdrawn: true },
-            definitionHash: now,
-          }),
-        ]);
+          // Removed with nowhere named: left as it is, and the only part listed as stranded.
+          expect(
+            await stateOf(app(), partOf("posts", shelved, "en"))
+          ).toMatchObject({ stage: "archive" });
+          const stranded = await strandedReviewStates(app().adapter);
+          expect(
+            stranded.map(state => [state.entryId, state.part, state.stage])
+          ).toEqual([[shelved, "en", "archive"]]);
+          expect(stranded[0]).toMatchObject({
+            workflow: "desk",
+            message: "Stage 'archive' no longer exists",
+          });
+          expect(await strandedListed("posts")).toEqual({
+            ids: [shelved],
+            total: 1,
+          });
+          expect(await strandedListed("pages")).toEqual({ ids: [], total: 0 });
 
-        // Removed with nowhere named: left as it is, and the only part listed as stranded.
-        expect(
-          await stateOf(app(), partOf("posts", shelved, "en"))
-        ).toMatchObject({ stage: "archive" });
-        const stranded = await strandedReviewStates(app().adapter);
-        expect(
-          stranded.map(state => [state.entryId, state.part, state.stage])
-        ).toEqual([[shelved, "en", "archive"]]);
-        expect(stranded[0]).toMatchObject({
-          workflow: "desk",
-          message: "Stage 'archive' no longer exists",
-        });
-        expect(await strandedListed("posts")).toEqual({
-          ids: [shelved],
-          total: 1,
-        });
-        expect(await strandedListed("pages")).toEqual({ ids: [], total: 0 });
-
-        // A second boot of the same definition finds nothing left to move.
-        await redeploy(dialect, { posts: deskRedrawn, pages: deskRedrawn });
-        expect(
-          await eventsOf("posts", parked, "workflow-stage-renamed")
-        ).toHaveLength(1);
-        expect(
-          await eventsOf("posts", checking, "workflow-stage-removed")
-        ).toHaveLength(1);
-      });
-
-      it("keeps approvals across a deploy whose only change is a rename", async () => {
-        await boot(dialect);
-        const approved = await entry(app(), "posts");
-        const parked = await entry(app(), "posts");
-        const approval = await approvalOf("posts", approved, "en");
-        await seedState(app(), partOf("posts", approved, "en"), "approved", {
-          definitionHash: DESK,
-          approval,
-        });
-        await seedState(app(), partOf("posts", parked, "en"), "hold", {
-          definitionHash: DESK,
+          // A second boot of the same definition finds nothing left to move.
+          await redeploy(dialect, { posts: deskRedrawn, pages: deskRedrawn });
+          expect(
+            await eventsOf("posts", parked, "workflow-stage-renamed")
+          ).toHaveLength(1);
+          expect(
+            await eventsOf("posts", checking, "workflow-stage-removed")
+          ).toHaveLength(1);
         });
 
-        await redeploy(dialect, { posts: deskRenamed, pages: deskRenamed });
-        const now = workflowDefinitionHash(deskRenamed);
+        it("keeps approvals across a deploy whose only change is a rename", async () => {
+          await boot(dialect);
+          const approved = await entry(app(), "posts");
+          const parked = await entry(app(), "posts");
+          const approval = await approvalOf("posts", approved, "en");
+          await seedState(app(), partOf("posts", approved, "en"), "approved", {
+            definitionHash: DESK,
+            approval,
+          });
+          await seedState(app(), partOf("posts", parked, "en"), "hold", {
+            definitionHash: DESK,
+          });
 
-        expect(
-          await stateOf(app(), partOf("posts", approved, "en"))
-        ).toMatchObject({ stage: "approved", approval, definitionHash: now });
-        expect(
-          await eventsOf(
+          await redeploy(dialect, { posts: deskRenamed, pages: deskRenamed });
+          const now = workflowDefinitionHash(deskRenamed);
+
+          expect(
+            await stateOf(app(), partOf("posts", approved, "en"))
+          ).toMatchObject({ stage: "approved", approval, definitionHash: now });
+          expect(
+            await eventsOf(
+              "posts",
+              approved,
+              "workflow-approval-withdrawn-by-definition"
+            )
+          ).toEqual([]);
+          expect(
+            await stateOf(app(), partOf("posts", parked, "en"))
+          ).toMatchObject({ stage: "paused", definitionHash: now });
+          expect(
+            await eventsOf("posts", parked, "workflow-stage-renamed")
+          ).toHaveLength(1);
+        });
+      }
+    );
+
+    // SQLite only: a deploy boots again on the same database, and the test harness releases a
+    // server-backed database when the next instance boots, so the second boot would find it gone.
+    // The sweep reads and writes through the adapter alike on every dialect.
+    describe.skipIf(dialect !== "sqlite")(
+      "a deploy that detaches a workflow",
+      () => {
+        it("removes the collection's review state and pins, records it per document, and revives nothing when attached again", async () => {
+          await boot(dialect);
+          const post = await entry(app(), "posts");
+          const page = await entry(app(), "pages");
+          const approvedNo = await shownVersion(app(), "posts", post, "en");
+          await seedState(app(), partOf("posts", post, "en"), "approved", {
+            definitionHash: DESK,
+            approval: await approvalOf("posts", post, "en"),
+          });
+          await seedState(app(), partOf("posts", post, "es"), "legal", {
+            definitionHash: DESK,
+          });
+          await pin("posts", post, "approved:en", approvedNo);
+          await seedState(app(), partOf("pages", page, null), "legal", {
+            definitionHash: DESK,
+          });
+
+          await redeploy(dialect, { posts: null });
+
+          expect(await statesOf("posts", post)).toEqual([]);
+          expect(await pinsOf("posts", post)).toEqual({});
+          const [detached, ...more] = await eventsOf(
             "posts",
-            approved,
-            "workflow-approval-withdrawn-by-definition"
-          )
-        ).toEqual([]);
-        expect(
-          await stateOf(app(), partOf("posts", parked, "en"))
-        ).toMatchObject({ stage: "paused", definitionHash: now });
-        expect(
-          await eventsOf("posts", parked, "workflow-stage-renamed")
-        ).toHaveLength(1);
-      });
-    });
+            post,
+            "workflow-detached"
+          );
+          expect(more).toEqual([]);
+          expect(detached).toMatchObject({ actorKind: "system" });
+          expect([...(detached?.parts ?? [])].sort()).toEqual(["en", "es"]);
+          // Pages keeps its workflow, and its review state.
+          expect(
+            await stateOf(app(), partOf("pages", page, null))
+          ).toMatchObject({ stage: "legal" });
 
-    describe("a deploy that detaches a workflow", () => {
-      it("removes the collection's review state and pins, records it per document, and revives nothing when attached again", async () => {
-        await boot(dialect);
-        const post = await entry(app(), "posts");
-        const page = await entry(app(), "pages");
-        const approvedNo = await shownVersion(app(), "posts", post, "en");
-        await seedState(app(), partOf("posts", post, "en"), "approved", {
-          definitionHash: DESK,
-          approval: await approvalOf("posts", post, "en"),
+          // Edited and published while detached, then attached again.
+          await save("posts", post, { title: "Detached edit" }, "en");
+          await save("posts", post, { status: "published" }, "en");
+          await redeploy(dialect, { posts: desk });
+
+          expect(await statesOf("posts", post)).toEqual([]);
+          expect(
+            await eventsOf("posts", post, "workflow-detached")
+          ).toHaveLength(1);
         });
-        await seedState(app(), partOf("posts", post, "es"), "legal", {
-          definitionHash: DESK,
-        });
-        await pin("posts", post, "approved:en", approvedNo);
-        await seedState(app(), partOf("pages", page, null), "legal", {
-          definitionHash: DESK,
-        });
-
-        await redeploy(dialect, { posts: null });
-
-        expect(await statesOf("posts", post)).toEqual([]);
-        expect(await pinsOf("posts", post)).toEqual({});
-        const [detached, ...more] = await eventsOf(
-          "posts",
-          post,
-          "workflow-detached"
-        );
-        expect(more).toEqual([]);
-        expect(detached).toMatchObject({ actorKind: "system" });
-        expect([...(detached?.parts ?? [])].sort()).toEqual(["en", "es"]);
-        // Pages keeps its workflow, and its review state.
-        expect(await stateOf(app(), partOf("pages", page, null))).toMatchObject(
-          { stage: "legal" }
-        );
-
-        // Edited and published while detached, then attached again.
-        await save("posts", post, { title: "Detached edit" }, "en");
-        await save("posts", post, { status: "published" }, "en");
-        await redeploy(dialect, { posts: desk });
-
-        expect(await statesOf("posts", post)).toEqual([]);
-        expect(await eventsOf("posts", post, "workflow-detached")).toHaveLength(
-          1
-        );
-      });
-    });
+      }
+    );
 
     describe("deleting a document", () => {
       it("removes its review state by every delete path, and no other document's", async () => {
