@@ -73,6 +73,7 @@ import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { assertSchemaName } from "@nextlyhq/adapter-drizzle/schema-name";
 import type {
   PostgresAdapterConfig,
+  ConnectionInspection,
   DatabaseCapabilities,
   PoolStats,
   TransactionContext,
@@ -93,7 +94,7 @@ import type { AnyRelations, SQL } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import type { PoolClient, PoolConfig } from "pg";
-import { Pool } from "pg";
+import { Client, Pool } from "pg";
 
 import { reportPoolWaitTimeout } from "./pool-wait";
 import {
@@ -918,6 +919,70 @@ export class PostgresAdapter extends DrizzleAdapter {
       waiting: this.pool.waitingCount,
       active: this.pool.totalCount - this.pool.idleCount,
     };
+  }
+
+  /**
+   * The connection as a health check reads it, on one pooled client: the
+   * server's version, and that client's own row in `pg_stat_ssl`, which says
+   * whether the session's connection is encrypted. The query is timed for the
+   * round trip.
+   *
+   * @remarks
+   * A client that negotiated TLS itself counts as encrypted whatever the row
+   * says: node-postgres refuses to connect at all once `ssl` is set and the
+   * server will not speak TLS, so a connected client with `ssl` set is
+   * encrypted on the way out of this machine. Behind a connection pooler such
+   * as PgBouncer the row describes the pooler's own connection to the server,
+   * which can be plain inside the provider's network.
+   *
+   * Whether the database is on this machine is judged from the configured
+   * address, which never leaves this method. Any failure answers `"unknown"`.
+   */
+  override async inspectConnection(): Promise<ConnectionInspection> {
+    const local = this.isLocalHost(this.connectionHost());
+    let client: PoolClient | undefined;
+    try {
+      client = await this.ensurePool().connect();
+      const started = performance.now();
+      const result = await client.query<{
+        version: string | null;
+        ssl: boolean | null;
+      }>(
+        "SELECT current_setting('server_version') AS version, " +
+          "(SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()) AS ssl"
+      );
+      const roundTripMs = Math.max(0, Math.round(performance.now() - started));
+      const row = result.rows[0];
+      const clientTls = client instanceof Client && Boolean(client.ssl);
+      let encryption: ConnectionInspection["encryption"] = "unknown";
+      if (row?.ssl === true || clientTls) encryption = "encrypted";
+      else if (row?.ssl === false) encryption = "unencrypted";
+      const version = row?.version?.split(" ")[0];
+      return {
+        encryption,
+        local,
+        roundTripMs,
+        ...(version ? { serverVersion: version } : {}),
+      };
+    } catch {
+      return { encryption: "unknown", local };
+    } finally {
+      client?.release();
+    }
+  }
+
+  /**
+   * The host this adapter connects to, as node-postgres resolves it: the
+   * connection string's when one is set, else the `host` option, else the
+   * `PGHOST` environment variable, else `localhost`. `undefined` when the
+   * connection string cannot be read.
+   */
+  private connectionHost(): string | undefined {
+    const configured = this.config.url
+      ? this.hostOfUrl(this.config.url)
+      : (this.config.host ?? "");
+    if (configured !== "") return configured;
+    return process.env.PGHOST || "localhost";
   }
 
   /**

@@ -67,6 +67,7 @@ import type {
   TransactionOptions,
   SessionOptions,
   StatementSession,
+  ConnectionInspection,
   DatabaseCapabilities,
   PoolStats,
   DatabaseError,
@@ -2096,6 +2097,67 @@ export abstract class DrizzleAdapter {
    */
   getPoolStats(): PoolStats | null {
     return null;
+  }
+
+  /**
+   * What this adapter can say about its connection, for a health check:
+   * whether it is encrypted (read from a database session, never from
+   * configuration), whether the database is on this machine, the server's
+   * version and how long a small query took.
+   *
+   * @remarks
+   * Never throws: a read that fails answers `"unknown"` encryption, which a
+   * caller must treat as unchecked, not as encrypted. This default knows
+   * nothing about the connection, so it answers exactly that; the dialect
+   * adapters override it.
+   *
+   * @returns The inspection, holding no address
+   */
+  async inspectConnection(): Promise<ConnectionInspection> {
+    return { encryption: "unknown", local: false };
+  }
+
+  /**
+   * Whether `host` names this machine: a loopback name or address, or a local
+   * socket path. Anything else, an empty or unreadable host included, is
+   * judged remote, so a connection is never excused for an address that
+   * could not be read.
+   *
+   * @param host - A host as configured or parsed from a connection string
+   */
+  protected isLocalHost(host: string | undefined): boolean {
+    if (host === undefined) return false;
+    let name = host.trim().toLowerCase();
+    try {
+      name = decodeURIComponent(name);
+    } catch {
+      return false;
+    }
+    if (name.startsWith("/")) return true;
+    if (name.startsWith("[") && name.endsWith("]")) name = name.slice(1, -1);
+    if (name === "localhost" || name.endsWith(".localhost")) return true;
+    if (name === "::1" || name === "0:0:0:0:0:0:0:1") return true;
+    const v4 = name.startsWith("::ffff:") ? name.slice("::ffff:".length) : name;
+    return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v4);
+  }
+
+  /**
+   * The host a connection string names, for {@link isLocalHost}: its
+   * `host` query parameter when it carries one (a socket directory), else
+   * its host name; `""` when it names none, so the driver's default applies;
+   * and `undefined` when the string cannot be read.
+   *
+   * @param url - A `postgres://` or `mysql://` connection string
+   */
+  protected hostOfUrl(url: string): string | undefined {
+    try {
+      const parsed = new URL(url);
+      const socket = parsed.searchParams.get("host");
+      if (socket !== null && socket !== "") return socket;
+      return parsed.hostname;
+    } catch {
+      return undefined;
+    }
   }
 
   // ============================================================
