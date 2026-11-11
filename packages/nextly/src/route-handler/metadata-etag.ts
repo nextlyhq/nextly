@@ -1,60 +1,31 @@
 /**
- * The "unchanged" answer for the admin's metadata reads: an entity tag made
- * from the versions the answer depends on, so a caller that sends the tag of
- * what it holds (`If-None-Match`) is told `304 Not Modified`, decided before
- * the read runs, instead of being sent the same schema again.
+ * The "unchanged" answer for the admin's metadata reads: an entity tag that is
+ * a hash of the body actually sent, so a caller that sends the tag of what it
+ * holds (`If-None-Match`) is told `304 Not Modified` instead of being sent the
+ * same body again.
  *
- * Only the reads whose answer is the schema as one caller may see it are
+ * Made from the body rather than from the inputs the body is made from,
+ * because those are many and keep growing: the schema, what the caller may
+ * read (permissions, an assignment's expiry, a code-defined read rule deciding
+ * on any state at all), a field group's use counts, a removed entity's
+ * retirement state read from files and tables. A tag over the body is correct
+ * whatever the body depends on: two answers share a tag exactly when they are
+ * the same bytes. The read still runs; what is saved is sending it.
+ *
+ * Only the reads the admin makes again for metadata it may already hold are
  * tagged ({@link METADATA_READS}): the collection, Single and field group
- * lists and schemas. Each such answer is made from:
- * - the registry rows, which the schema version (`seq`) follows: every write
- *   of them moves it, on whichever server copy;
- * - what the caller may read, which the permission version (the RBAC epoch)
- *   follows, and who the caller is (person or key, and a session's claims,
- *   which a rule may read). An assignment's expiry moves neither version, so
- *   the roles in force for the caller now, and the soonest expiry among
- *   them, are part of it too: read through the permission layer's own cache
- *   (`resolveUserRoles`), which keeps them no longer than that expiry;
- * - for a list, which collections or Singles the caller may read: the shared
- *   visibility decision (`readableSlugAllowlist`, with the caller the list
- *   handlers build), asked here as they ask it, since a code-defined read rule
- *   may decide on state no version follows (the time, another service);
- * - the running configuration (plugins' admin views, the "removed from code"
- *   marks), which changes only with a new configuration: a deploy, or a
- *   development reload, each a new configuration object here;
- * - the request itself: its path, its query and its language.
- * The tag hashes all of them, so it names none of them, and a tag one caller
- * holds never answers another's request.
- *
- * Nothing is tagged where a version is unknown or cannot be trusted: the
- * schema version not yet read, definitions a failed reload left behind it
- * (`schemaDefinitionsInSync`), or a permission version this process cannot
- * trust (`epochIsTrustworthy`). The answer is then sent in full, as before.
- *
- * Asked inside the request's dispatch context, so the visibility decision
- * reads the caller every handler reads.
+ * lists and schemas. The route marks a successful answer to one of them
+ * ({@link markConditional}), and the boundary every response passes
+ * ({@link answerConditional}) tags it once its body is final, after the date
+ * formatting that boundary applies, so the tag is of what the caller receives.
  *
  * @module route-handler/metadata-etag
  */
-import { createHash, randomUUID } from "node:crypto";
-
-import type { AuthContext } from "../auth/middleware";
-import { readAccessCallerForDispatch } from "../dispatcher/handlers/read-access-caller";
-import { readAuthenticatedUser } from "../dispatcher/helpers/authenticated-user";
-import { resolveUserRoles } from "../services/lib/permissions";
-import {
-  currentEpoch,
-  epochIsTrustworthy,
-  refreshEpoch,
-} from "../services/lib/rbac-epoch";
-import { readableSlugAllowlist } from "../services/lib/readable-slug-allowlist";
-
-import { schemaDefinitionsInSync } from "./schema-version";
+import { createHash } from "node:crypto";
 
 /**
  * The metadata reads an "unchanged" answer may stand for, as
- * `<service>.<method>`: each answers with schema the caller may read, and
- * nothing else that changes between versions.
+ * `<service>.<method>`.
  */
 const METADATA_READS: ReadonlySet<string> = new Set([
   "collections.listCollections",
@@ -66,113 +37,29 @@ const METADATA_READS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The lists whose rows are the entities the caller may read, by the kind the
- * shared visibility decision names.
+ * The internal header a route puts on a response the boundary may answer
+ * "unchanged"; the boundary removes it, so no caller ever receives it.
  */
-const LIST_KINDS: Readonly<Record<string, "collection" | "single">> = {
-  "collections.listCollections": "collection",
-  "singles.listSingles": "single",
-};
+const CONDITIONAL_HEADER = "x-nextly-conditional";
 
 /**
- * An identity per running configuration object, so a new configuration (a
- * development reload) never matches a tag made under the previous one.
+ * Mark `response`, the answer to `<service>.<method>`, as one the boundary
+ * may answer "unchanged": only a metadata read's successful answer is marked.
  */
-const configIdentity = new WeakMap<object, string>();
-/** The identity used while no configuration is stored. */
-const NO_CONFIG = randomUUID();
-
-function identityOf(config: object | null): string {
-  if (config === null) return NO_CONFIG;
-  let identity = configIdentity.get(config);
-  if (identity === undefined) {
-    identity = randomUUID();
-    configIdentity.set(config, identity);
-  }
-  return identity;
+export function markConditional(
+  service: string,
+  method: string,
+  response: Response
+): void {
+  if (response.status !== 200) return;
+  if (!METADATA_READS.has(`${service}.${method}`)) return;
+  response.headers.set(CONDITIONAL_HEADER, "1");
 }
 
-/** What a metadata read's tag is made from, beyond the request. */
-export interface MetadataTagInputs {
-  service: string;
-  method: string;
-  /** The authenticated caller; a read for nobody is not tagged. */
-  caller: AuthContext | undefined;
-  /** The schema version this copy serves (`servedSchemaVersion`). */
-  schemaVersion: number | undefined;
-  /** The running configuration (`getHandlerConfig`). */
-  config: object | null;
-}
-
-/**
- * The entity tag for `req`, a metadata read, or undefined where the read is
- * not one {@link METADATA_READS} names or a version it depends on is unknown.
- * Asked after the caller is authenticated and authorized, never before: the
- * "unchanged" answer is an answer, and the gate decides who gets one.
- */
-export async function metadataEtag(
-  req: Request,
-  inputs: MetadataTagInputs
-): Promise<string | undefined> {
-  const { service, method, caller, schemaVersion, config } = inputs;
-  if (req.method !== "GET") return undefined;
-  if (!METADATA_READS.has(`${service}.${method}`)) return undefined;
-  if (caller === undefined || schemaVersion === undefined) return undefined;
-  if (!schemaDefinitionsInSync()) return undefined;
-  let permissionVersion: string;
-  let roles: { roleIds: string[]; validUntil: number | undefined };
-  let visible: string[] | undefined;
-  try {
-    await refreshEpoch();
-    if (!epochIsTrustworthy()) return undefined;
-    permissionVersion = currentEpoch();
-    // The roles in force now: one that lapsed since a tag was made is gone
-    // from this, so that tag no longer matches.
-    const resolved = await resolveUserRoles(caller.userId);
-    roles = {
-      roleIds: [...resolved.roleIds].sort(),
-      validUntil: resolved.validUntil,
-    };
-    // A list's rows: what the shared decision admits now, as its handler asks.
-    const kind = LIST_KINDS[`${service}.${method}`];
-    if (kind !== undefined) {
-      const reader = readAuthenticatedUser();
-      visible = await readableSlugAllowlist(
-        reader ? readAccessCallerForDispatch(reader) : undefined,
-        kind
-      );
-    }
-  } catch {
-    // The permission version, the roles or what the caller may read could not
-    // be read: answered in full.
-    return undefined;
-  }
-  const url = new URL(req.url);
-  const digest = createHash("sha256")
-    .update(
-      JSON.stringify([
-        schemaVersion,
-        permissionVersion,
-        caller.authMethod,
-        caller.userId,
-        caller.apiKeyId ?? null,
-        caller.claims ?? null,
-        // A key's own scope, and its maker's super-admin authority, are
-        // decided per request: each is part of what the key may read.
-        [...caller.permissions].sort(),
-        caller.keyHoldsSuperAdmin ?? null,
-        roles.roleIds,
-        roles.validUntil ?? null,
-        visible === undefined ? null : [...visible].sort(),
-        identityOf(config),
-        url.pathname,
-        url.search,
-        req.headers.get("accept-language"),
-      ])
-    )
-    .digest("base64url");
-  // Weak: the same schema, though a date in it may be formatted afresh.
-  return `W/"${digest.slice(0, 32)}"`;
+/** The weak tag of `body`: the same bytes, the same tag. */
+function tagOf(body: string): string {
+  // Weak: it says the answers are the same, which is all `If-None-Match` asks.
+  return `W/"${createHash("sha1").update(body).digest("base64url")}"`;
 }
 
 /**
@@ -180,15 +67,42 @@ export async function metadataEtag(
  * header is (RFC 9110, 13.1.2): any listed tag equal to it once a `W/`
  * prefix is set aside.
  *
- * `*` is not honoured. It means "any current answer exists", which the tag,
- * decided before the read runs, cannot say: a schema that does not exist, or
- * one this caller may not read, would be answered "unchanged" instead of
- * its 404. Such a request is answered in full.
+ * `*` is not honoured: it asks whether any answer exists, which says nothing
+ * about whether the caller holds this one.
  */
-export function holdsCurrentTag(req: Request, etag: string): boolean {
+function holdsTag(req: Request, etag: string): boolean {
   const header = req.headers.get("if-none-match");
   if (header === null) return false;
   const opaque = (tag: string) => tag.trim().replace(/^W\//, "");
   const wanted = opaque(etag);
   return header.split(",").some(tag => opaque(tag) === wanted);
+}
+
+/**
+ * The response as the caller receives it: an unmarked one as it is; a marked
+ * one with its tag (`ETag`), or, where the request holds that tag,
+ * `304 Not Modified` with the tag and no body. Every other header is kept,
+ * so a signed-in answer stays private and varies as it did.
+ */
+export async function answerConditional(
+  req: Request,
+  response: Response
+): Promise<Response> {
+  if (!response.headers.has(CONDITIONAL_HEADER)) return response;
+  const headers = new Headers(response.headers);
+  headers.delete(CONDITIONAL_HEADER);
+  const body = await response.text();
+  const etag = tagOf(body);
+  headers.set("ETag", etag);
+  if (holdsTag(req, etag)) {
+    // A 304 carries no body, so nothing describing one.
+    headers.delete("content-length");
+    headers.delete("content-type");
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }

@@ -71,8 +71,8 @@ interface ServedSchema {
   stale: boolean;
   /**
    * Whether the definitions were loaded at `seq`: false from a reload that did
-   * not register every entity until one does. While false, the version served
-   * may be one the database has moved past.
+   * not register every entity until one does, and while false every read
+   * reloads again, even one finding the version it served.
    */
   inSync: boolean;
   /** The read (and any reload after it) every concurrent request waits on. */
@@ -203,17 +203,6 @@ async function loadDefinitionsAgain(): Promise<boolean> {
   }
   handler?.forgetCollectionSchemas();
   return loaded;
-}
-
-/**
- * Whether this copy's definitions were loaded at the version it serves: false
- * after a reload that did not register every entity, until one does. An
- * answer that stands for the current schema (a metadata read's tag) is not
- * given while it is false, since the rows a read returns may already be newer
- * than the version served.
- */
-export function schemaDefinitionsInSync(): boolean {
-  return served().inSync;
 }
 
 /**

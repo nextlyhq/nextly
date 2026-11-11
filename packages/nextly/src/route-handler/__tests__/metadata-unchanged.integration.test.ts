@@ -1,38 +1,42 @@
 /**
- * The admin's metadata reads answer "unchanged" from the versions, on every
- * dialect, through the real catch-all handler.
+ * The admin's metadata reads answer "unchanged" only when an ordinary request
+ * would send the same body, on every dialect, through the real catch-all
+ * handler.
  *
  * Each read (the collection, Single and field group lists, and a collection's
  * and a Single's schema) answers with a tag (`ETag`). Asked again with that
- * tag (`If-None-Match`), it answers `304` with no body. The separating cases
- * are what must NOT be answered "unchanged", since a handler that answers 304
- * to any tag passes the first half alone:
- * - after a schema change (a field added in the Schema Builder), the old tag
- *   gets the full, new answer;
- * - after a change to what the caller may read (a role granted), the old tag
- *   gets the full answer;
- * - another caller sending this caller's tag gets the full answer;
- * - once a role the caller held lapses (an assignment's expiry passes, which
- *   moves neither version), the old tag gets the full answer;
- * - `If-None-Match: *` never answers "unchanged", so a missing schema is
- *   still answered 404;
- * - a list whose visibility a code-defined read rule decides on state no
- *   version follows (here a flag the rule reads) is answered in full once the
- *   rule answers differently.
- * The startup request, which answers several reads at once, never answers a
- * part "unchanged", whatever it is sent.
+ * tag (`If-None-Match`), it answers `304` with no body while the answer is the
+ * same. The separating cases change what the body would hold, each through a
+ * different input, and must get the full, new body: a handler that answers 304
+ * to any tag, or one tagging fewer inputs than the body depends on, fails one.
+ * - a field added in the Schema Builder (the schema);
+ * - a role given, and a role whose assignment lapses (what the caller may
+ *   read, the second moving no version);
+ * - a code-defined read rule answering differently (state nothing versions);
+ * - a field group's use count, shown only to a reader of every owner, turning
+ *   to none when one owner stops being readable;
+ * - another caller, whose answer differs, sending this caller's tag.
+ * And a change that leaves the body as it was (an entry written) still
+ * answers "unchanged". `If-None-Match: *` never answers "unchanged", so a
+ * missing schema is still answered 404, and the startup request, which
+ * answers several reads at once, answers every part in full.
  */
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  grantTo,
   superAdminUser,
   userWhoMay,
 } from "../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
-import { defineCollection, defineSingle, text } from "../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  text,
+} from "../../config";
 import { getDialectTables } from "../../database/index";
 import { dispatchCollections } from "../../dispatcher/handlers/collection-dispatcher";
 import {
@@ -49,6 +53,7 @@ const GATED = "unchanged_gated";
 const gate = { open: true };
 const TAGS = "unchanged_tags";
 const HOME = "unchanged_home";
+const CARD = "unchanged_card";
 const EDITOR = "unchanged-editor";
 const READER = "unchanged-reader";
 const ORIGIN = "http://localhost";
@@ -66,6 +71,7 @@ const LIST = READS[0];
 
 let current: TestNextly | undefined;
 afterEach(async () => {
+  gate.open = true;
   await current?.destroy();
   current = undefined;
 });
@@ -107,13 +113,89 @@ async function get(
   });
 }
 
-/** The tag `path` answers `userId` with, asserting it answered in full. */
-async function tagOf(userId: string, path: string): Promise<string> {
+/** The body `path` answers `userId` with in full, and its tag. */
+async function answerOf(
+  userId: string,
+  path: string
+): Promise<{ body: string; tag: string }> {
   const response = await get(userId, path);
   expect(response.status, path).toBe(200);
-  const tag = response.headers.get("etag");
+  const tag = response.headers.get("etag") ?? "";
   expect(tag, path).toMatch(/^W\/".+"$/);
-  return tag ?? "";
+  return { body: await response.text(), tag };
+}
+
+/**
+ * Take `userId`'s answer to `path` and its tag, see the tag answered
+ * "unchanged", run `change`, and send the tag again: the answer must be the
+ * new body in full, the same an ordinary request now receives, under a new
+ * tag. Asserts the change did change the body, so a case that never reached
+ * its input cannot pass. Returns the new body.
+ */
+async function answeredAfter(
+  userId: string,
+  path: string,
+  change: () => Promise<unknown>
+): Promise<string> {
+  const before = await answerOf(userId, path);
+  expect((await get(userId, path, before.tag)).status, path).toBe(304);
+  await change();
+  const conditional = await get(userId, path, before.tag);
+  expect(conditional.status, path).toBe(200);
+  const body = await conditional.text();
+  expect(body, "the change reached the body").not.toBe(before.body);
+  expect(conditional.headers.get("etag")).not.toBe(before.tag);
+  expect(body).toBe((await answerOf(userId, path)).body);
+  return body;
+}
+
+/** The slugs a list's body names. */
+function slugsOf(body: string): string[] {
+  return (JSON.parse(body) as { items: { slug: string }[] }).items.map(
+    item => item.slug
+  );
+}
+
+/** A Drizzle handle, as far as these writes go. */
+function rawDb(t: TestNextly) {
+  return t.adapter.getDrizzle() as unknown as {
+    select(fields: Record<string, unknown>): {
+      from(table: unknown): {
+        where(condition: unknown): Promise<Record<string, unknown>[]>;
+      };
+    };
+    insert(table: unknown): {
+      values(values: Record<string, unknown>): Promise<unknown>;
+    };
+    update(table: unknown): {
+      set(values: Record<string, unknown>): {
+        where(condition: unknown): Promise<unknown>;
+      };
+    };
+  };
+}
+
+/** Give `to` every role `from` holds, by a row each. */
+async function giveRolesOf(
+  t: TestNextly,
+  from: string,
+  to: string
+): Promise<void> {
+  const { userRoles } = getDialectTables(t.adapter.dialect);
+  const rows = await rawDb(t)
+    .select({ roleId: userRoles.roleId })
+    .from(userRoles)
+    .where(eq(userRoles.userId, from));
+  for (const row of rows) {
+    await rawDb(t)
+      .insert(userRoles)
+      .values({
+        id: `${to}-${String(row.roleId)}`,
+        userId: to,
+        roleId: row.roleId,
+        createdAt: new Date(),
+      });
+  }
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -123,7 +205,13 @@ describe.each(getConfiguredTestDialects())(
       current = await createTestNextly({
         dialect,
         collections: [
-          defineCollection({ slug: NOTES, fields: [text({ name: "title" })] }),
+          defineCollection({
+            slug: NOTES,
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "card", component: CARD }),
+            ],
+          }),
           defineCollection({
             slug: GATED,
             access: { read: () => gate.open },
@@ -133,15 +221,18 @@ describe.each(getConfiguredTestDialects())(
         singles: [
           defineSingle({ slug: HOME, fields: [text({ name: "heading" })] }),
         ],
+        fieldGroups: [
+          defineFieldGroup({ slug: CARD, fields: [text({ name: "heading" })] }),
+        ],
       });
       await superAdminUser(current, EDITOR);
       return current;
     }
 
-    it("answers 'unchanged', with no body, to a caller holding the current answer", async () => {
+    it("answers 'unchanged', with no body, while the answer is the same", async () => {
       await boot();
       for (const path of READS) {
-        const tag = await tagOf(EDITOR, path);
+        const { tag } = await answerOf(EDITOR, path);
         const again = await get(EDITOR, path, tag);
         expect(again.status, path).toBe(304);
         expect(await again.text(), path).toBe("");
@@ -151,6 +242,17 @@ describe.each(getConfiguredTestDialects())(
         // A tag that is not the current one is answered in full.
         expect((await get(EDITOR, path, 'W/"other"')).status, path).toBe(200);
       }
+    }, 300_000);
+
+    it("answers 'unchanged' after a change that leaves the answer as it was", async () => {
+      const t = await boot();
+      const schema = `/collections/schema/${NOTES}`;
+      const { tag } = await answerOf(EDITOR, schema);
+      await t.nextly.create({
+        collection: NOTES,
+        data: { title: "An entry, not the schema" },
+      });
+      expect((await get(EDITOR, schema, tag)).status).toBe(304);
     }, 300_000);
 
     it("answers in full once the schema changed", async () => {
@@ -163,40 +265,39 @@ describe.each(getConfiguredTestDialects())(
         {},
         { name: TAGS, label: TAGS, fields }
       );
-      const schema = `/collections/schema/${TAGS}`;
-      const tag = await tagOf(EDITOR, schema);
-      expect((await get(EDITOR, schema, tag)).status).toBe(304);
-
-      // A field added: a schema change, and no change to who may read what.
-      const row = await t.adapter.selectOne<{ schema_version?: unknown }>(
-        "dynamic_collections",
-        { where: { and: [{ column: "slug", op: "=", value: TAGS }] } }
-      );
-      await dispatchCollections(
-        {} as ServiceContainer,
-        "applySchemaChanges",
-        { collectionName: TAGS },
-        {
-          fields: [...fields, { name: "colour", type: "text" }],
-          confirmed: true,
-          schemaVersion: Number(row?.schema_version ?? 1),
+      const body = await answeredAfter(
+        EDITOR,
+        `/collections/schema/${TAGS}`,
+        async () => {
+          const row = await t.adapter.selectOne<{ schema_version?: unknown }>(
+            "dynamic_collections",
+            { where: { and: [{ column: "slug", op: "=", value: TAGS }] } }
+          );
+          await dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: TAGS },
+            {
+              fields: [...fields, { name: "colour", type: "text" }],
+              confirmed: true,
+              schemaVersion: Number(row?.schema_version ?? 1),
+            }
+          );
         }
       );
-      const after = await get(EDITOR, schema, tag);
-      expect(after.status).toBe(200);
-      expect(after.headers.get("etag")).not.toBe(tag);
-      const body = (await after.json()) as { fields: { name: string }[] };
-      expect(body.fields.map(field => field.name)).toContain("colour");
+      const now = (JSON.parse(body) as { fields: { name: string }[] }).fields;
+      expect(now.map(field => field.name)).toContain("colour");
     }, 300_000);
 
-    it("answers in full once what the caller may read changed", async () => {
+    it("answers in full once the caller may read more", async () => {
       const t = await boot();
       await userWhoMay(t, READER, "read", [NOTES]);
-      const tag = await tagOf(READER, LIST);
-      expect((await get(READER, LIST, tag)).status).toBe(304);
-
-      await grantTo(t, READER, "update", [NOTES]);
-      expect((await get(READER, LIST, tag)).status).toBe(200);
+      const body = await answeredAfter(READER, LIST, async () => {
+        // A role that may read GATED, given to this reader too.
+        await userWhoMay(t, `${READER}-2`, "read", [GATED]);
+        await giveRolesOf(t, `${READER}-2`, READER);
+      });
+      expect(slugsOf(body)).toContain(GATED);
     }, 300_000);
 
     it("answers in full once a role the caller held lapses", async () => {
@@ -205,33 +306,55 @@ describe.each(getConfiguredTestDialects())(
       // The role that lets the reader read NOTES lapses a few seconds from now.
       const lapses = Date.now() + 3000;
       const { userRoles } = getDialectTables(t.adapter.dialect);
-      const db = t.adapter.getDrizzle() as unknown as {
-        update(table: unknown): {
-          set(values: Record<string, unknown>): {
-            where(condition: unknown): Promise<unknown>;
-          };
-        };
-      };
-      await db
+      await rawDb(t)
         .update(userRoles)
         .set({ expiresAt: new Date(lapses) })
         .where(eq(userRoles.userId, READER));
-      const slugs = async (response: Response) =>
-        ((await response.json()) as { items: { slug: string }[] }).items.map(
-          item => item.slug
-        );
-
-      const first = await get(READER, LIST);
-      const tag = first.headers.get("etag") ?? "";
-      expect(await slugs(first)).toContain(NOTES);
-      expect((await get(READER, LIST, tag)).status).toBe(304);
-
-      await new Promise(resolve =>
-        setTimeout(resolve, Math.max(0, lapses - Date.now()) + 500)
+      const body = await answeredAfter(
+        READER,
+        LIST,
+        () =>
+          new Promise(resolve =>
+            setTimeout(resolve, Math.max(0, lapses - Date.now()) + 500)
+          )
       );
-      const after = await get(READER, LIST, tag);
-      expect(after.status).toBe(200);
-      expect(await slugs(after)).not.toContain(NOTES);
+      expect(slugsOf(body)).not.toContain(NOTES);
+    }, 300_000);
+
+    it("answers a list in full once a read rule answers differently", async () => {
+      const t = await boot();
+      await userWhoMay(t, READER, "read", [NOTES, GATED]);
+      // The rule now refuses: no version moves, and the list is different.
+      const body = await answeredAfter(READER, LIST, async () => {
+        gate.open = false;
+      });
+      expect(slugsOf(body)).not.toContain(GATED);
+    }, 300_000);
+
+    it("answers a field group's use count in full once it is no longer shown", async () => {
+      const t = await boot();
+      // A reader of every collection and Single is shown how often each field
+      // group is placed; one who cannot read them all is shown none.
+      await userWhoMay(t, READER, "read", [NOTES, GATED, HOME]);
+      const placedBy = (body: string) =>
+        (
+          JSON.parse(body) as { items: { slug: string; placedBy: unknown }[] }
+        ).items.find(item => item.slug === CARD)?.placedBy;
+      const shown = await answerOf(READER, "/field-groups");
+      expect(placedBy(shown.body)).toEqual(expect.any(Number));
+      const body = await answeredAfter(READER, "/field-groups", async () => {
+        gate.open = false;
+      });
+      expect(placedBy(body)).toBeNull();
+    }, 300_000);
+
+    it("answers another caller whose answer differs in full, whatever tag it sends", async () => {
+      const t = await boot();
+      await userWhoMay(t, READER, "read", [NOTES]);
+      const editors = await answerOf(EDITOR, LIST);
+      const answer = await get(READER, LIST, editors.tag);
+      expect(answer.status).toBe(200);
+      expect(await answer.text()).not.toBe(editors.body);
     }, 300_000);
 
     it("answers `If-None-Match: *` in full, and a missing schema 404", async () => {
@@ -243,42 +366,9 @@ describe.each(getConfiguredTestDialects())(
       expect(present.status).toBe(200);
     }, 300_000);
 
-    it("answers a list in full once a read rule answers differently", async () => {
-      const t = await boot();
-      gate.open = true;
-      await userWhoMay(t, READER, "read", [NOTES, GATED]);
-      const slugs = async (response: Response) =>
-        ((await response.json()) as { items: { slug: string }[] }).items.map(
-          item => item.slug
-        );
-      const first = await get(READER, LIST);
-      const tag = first.headers.get("etag") ?? "";
-      expect(await slugs(first)).toContain(GATED);
-      expect((await get(READER, LIST, tag)).status).toBe(304);
-
-      // The rule now refuses: no version moved, and the list is different.
-      gate.open = false;
-      try {
-        const after = await get(READER, LIST, tag);
-        expect(after.status).toBe(200);
-        expect(await slugs(after)).not.toContain(GATED);
-      } finally {
-        gate.open = true;
-      }
-    }, 300_000);
-
-    it("answers another caller in full, whatever tag it sends", async () => {
-      const t = await boot();
-      await userWhoMay(t, READER, "read", [NOTES]);
-      const editors = await tagOf(EDITOR, LIST);
-      const answer = await get(READER, LIST, editors);
-      expect(answer.status).toBe(200);
-      expect(answer.headers.get("etag")).not.toBe(editors);
-    }, 300_000);
-
     it("answers every part of the startup request in full", async () => {
       await boot();
-      const tag = await tagOf(EDITOR, LIST);
+      const { tag } = await answerOf(EDITOR, LIST);
       const response = await get(
         EDITOR,
         `/startup?path=${encodeURIComponent(LIST)}`,

@@ -218,7 +218,10 @@ import {
   getHandlerConfig,
 } from "./route-handler";
 import { handleDevSchemaRequest } from "./route-handler/dev-schema-handler";
-import { holdsCurrentTag, metadataEtag } from "./route-handler/metadata-etag";
+import {
+  answerConditional,
+  markConditional,
+} from "./route-handler/metadata-etag";
 import {
   bumpSchemaVersion,
   servedSchemaVersion,
@@ -1849,8 +1852,6 @@ async function serveServiceRequest(
   };
 
   const dispatcher = await getDispatcher();
-  // The tag a metadata read is answered under, set inside the dispatch below.
-  let etag: string | undefined;
   // The key's own scope is pinned for the whole dispatch rather than serialized
   // into route params beside it. The params carry strings, so the scope written
   // there was a lossy copy: it held the stored permission slugs and neither the
@@ -1864,35 +1865,14 @@ async function serveServiceRequest(
       : undefined,
     () =>
       runWithRequestCaller(caller, () =>
-        runAsRoleChangeCaller(roleChangeCallerFor(authorizedUser), async () => {
-          // The admin's metadata reads answer "unchanged" from what they
-          // depend on, decided after the gate above and before any of the
-          // read runs, inside this context so a list's visibility is decided
-          // for the caller its handler would decide it for. A caller already
-          // holding the current answer is not sent it again.
-          etag = await metadataEtag(req, {
-            service,
-            method,
-            caller: authorizedUser,
-            schemaVersion: await servedSchemaVersion(),
-            config: getHandlerConfig(),
-          });
-          if (etag !== undefined && holdsCurrentTag(req, etag)) {
-            return { success: true, status: 304 };
-          }
-          return dispatcher.dispatch(dispatchRequest);
-        })
+        runAsRoleChangeCaller(roleChangeCallerFor(authorizedUser), () =>
+          dispatcher.dispatch(dispatchRequest)
+        )
       )
   );
 
   if (result.status === 204 || result.status === 205 || result.status === 304) {
-    // An "unchanged" answer names the tag it stands for.
-    return new Response(null, {
-      status: result.status,
-      ...(result.status === 304 && etag !== undefined
-        ? { headers: { ETag: etag } }
-        : {}),
-    });
+    return new Response(null, { status: result.status });
   }
 
   // Build response headers with schema version for cross-flow notification.
@@ -1994,10 +1974,9 @@ async function serveServiceRequest(
     if (schemaVersion !== undefined) {
       response.headers.set("X-Nextly-Schema-Version", String(schemaVersion));
     }
-    // The tag a metadata read was answered under, for the caller to send back.
-    if (etag !== undefined && response.status === 200) {
-      response.headers.set("ETag", etag);
-    }
+    // A metadata read's answer, tagged by its body at the boundary, which
+    // answers "unchanged" to a caller already holding it.
+    markConditional(service, method, response);
     return response;
   }
 
@@ -2009,12 +1988,13 @@ async function serveServiceRequest(
   if (result.meta !== undefined) {
     successBody.meta = result.meta;
   }
-  // As on the migrated path above: the tag a metadata read was answered under.
-  if (etag !== undefined && result.status === 200) headers.ETag = etag;
-  return new Response(JSON.stringify(successBody), {
+  const legacy = new Response(JSON.stringify(successBody), {
     status: result.status,
     headers,
   });
+  // As on the migrated path above.
+  markConditional(service, method, legacy);
+  return legacy;
 }
 
 // ============================================================================
@@ -2957,9 +2937,12 @@ export function createDynamicHandlers(options?: {
       identifiedResponse,
       req
     );
+    // Tagged once the body is final, after the formatting above, so the tag
+    // is of the bytes the caller receives.
+    const answered = await answerConditional(req, formattedResponse);
     const corsResponse = cors.applyHeaders(
       req,
-      privateToSignedIn(req, formattedResponse)
+      privateToSignedIn(req, answered)
     );
     return applySecurityHeaders(corsResponse);
   }
