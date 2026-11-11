@@ -132,7 +132,7 @@ export function AutomaticSource({
  * A type's name inside a sentence: "Blog post" becomes "blog post", while a
  * name that opens with an acronym, such as "SEO page", keeps its capitals.
  */
-function inSentence(name: string): string {
+export function inSentence(name: string): string {
   const [first = "", second = ""] = name;
   return second !== "" &&
     second === second.toUpperCase() &&

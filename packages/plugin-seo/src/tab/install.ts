@@ -9,6 +9,7 @@
 import type { FieldConfig, PluginContributions } from "@nextlyhq/plugin-sdk";
 
 import type { ReadRules } from "../resolver/provider";
+import type { ReadSocialCardRules } from "../social/card";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
 
 import { seoTabContributions, tabEditsGroup } from "./contributions";
@@ -26,6 +27,8 @@ export function seoTabParts(setup: {
   readRules: ReadRules;
   /** Where structured data reads its rules from. */
   readStructuredDataRules: ReadStructuredDataRules;
+  /** Where the social card reads its rules from. */
+  readSocialCardRules: ReadSocialCardRules;
 }): Pick<PluginContributions, "admin"> & {
   routes: NonNullable<PluginContributions["routes"]>;
 } {
@@ -50,6 +53,7 @@ export function seoTabParts(setup: {
         fields: names,
         readRules: setup.readRules,
         readStructuredDataRules: setup.readStructuredDataRules,
+        readSocialCardRules: setup.readSocialCardRules,
         ...(baseUrl === undefined ? {} : { baseUrl }),
       }),
     ],

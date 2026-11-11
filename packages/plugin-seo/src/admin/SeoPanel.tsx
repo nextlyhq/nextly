@@ -11,6 +11,7 @@
  * @module admin/SeoPanel
  */
 import { Input, Textarea } from "@nextlyhq/ui";
+import { EyeOff } from "lucide-react";
 import { useId, type ReactNode } from "react";
 
 import type { Sourced } from "../resolver/order";
@@ -26,7 +27,9 @@ import {
   AutomaticSource,
   CharacterCount,
   Chip,
+  inSentence,
   LinkAction,
+  Note,
   SourceRow,
   type SourceNames,
 } from "./parts";
@@ -61,6 +64,12 @@ export interface SeoPanelProps {
   onSet: (field: SeoPanelField, value: unknown) => void;
   /** Opens the media library to choose a share image. */
   onChooseImage?: () => void;
+  /** The file of the share image shown while none is chosen, where read. */
+  shownImageFile?: ChosenImage | undefined;
+  /** Makes a share image of the right size; answers whether it did. */
+  onMakeShareImage?: (() => Promise<boolean>) | undefined;
+  /** Opens the page's own content at one of its fields. */
+  onGoToField?: ((field: string) => void) | undefined;
   /** Whether Advanced starts open. Closed on a real page. */
   defaultAdvancedOpen?: boolean;
   /**
@@ -71,7 +80,7 @@ export interface SeoPanelProps {
 }
 
 /** The values whose problems the Advanced section holds. */
-const ADVANCED_VALUES: readonly string[] = ["structuredData"];
+const ADVANCED_VALUES: readonly string[] = ["structuredData", "image"];
 
 export function SeoPanel(props: SeoPanelProps): ReactNode {
   const { context, answers, problems, values, writable, errors, onSet } = props;
@@ -82,6 +91,15 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
   const answer = answers?.answer;
   return (
     <div className="flex flex-col gap-[18px] pt-4 pb-12">
+      {answer?.robots.from === "type" ? (
+        <Note icon={<EyeOff className="size-4" />}>
+          <b className="font-semibold">
+            Every {inSentence(names.typeLabel)} page is hidden from search.
+          </b>{" "}
+          This page stays hidden whatever its own switch says. People can still
+          share it.
+        </Note>
+      ) : null}
       <PreviewCard
         answer={answer}
         site={context?.site}
@@ -134,6 +152,9 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
         {...(props.onChooseImage === undefined
           ? {}
           : { onChooseImage: props.onChooseImage })}
+        shownImageFile={props.shownImageFile}
+        onMakeShareImage={props.onMakeShareImage}
+        onGoToField={props.onGoToField}
       />
     </div>
   );

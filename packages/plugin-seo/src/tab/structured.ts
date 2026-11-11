@@ -53,7 +53,9 @@ function withoutChoice(input: PageMetadataInput): PageMetadataInput {
 export async function tabStructuredData(
   ctx: PluginContext,
   input: PageMetadataInput,
-  readers: StructuredDataReaders
+  readers: StructuredDataReaders,
+  /** What a field of the page is called on screen. */
+  labelOf: (field: string) => string
 ): Promise<TabStructuredData> {
   const [page, automatic] = await Promise.all([
     pageStructuredData(ctx, input, readers),
@@ -64,7 +66,18 @@ export async function tabStructuredData(
     chosen: page.chosen,
     automatic: offeredType(automatic.type),
     offered: page.offered.map(offeredType),
-    problems: page.problems.map(problem => ({ message: problem.message })),
+    problems: page.problems.map(problem => ({
+      message: problem.message,
+      fix: problem.fix,
+      ...(problem.field === undefined
+        ? {}
+        : {
+            field: {
+              name: problem.field,
+              label: labelOf(problem.field),
+            },
+          }),
+    })),
     details: STRUCTURED_DATA_TYPES[page.type].needs.map(
       detail => DETAIL_LABELS[detail]
     ),

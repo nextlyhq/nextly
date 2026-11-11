@@ -31,6 +31,8 @@ import { z } from "nextly/zod";
 import type { Levels } from "../resolver/order";
 import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
+import type { ReadSocialCardRules } from "../social/card";
+import { shareImageProblems } from "../social/problems";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
 
 import {
@@ -68,6 +70,8 @@ export interface SeoTabRouteSetup {
   readRules?: ReadRules;
   /** Where structured data reads its rules from. */
   readStructuredDataRules?: ReadStructuredDataRules;
+  /** Where the social card reads its rules from. */
+  readSocialCardRules?: ReadSocialCardRules;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -171,6 +175,21 @@ function typeLabelOf(
   return humanizeFieldName(slug);
 }
 
+/** What one of the declaration's fields is called on screen. */
+function fieldLabelOf(
+  declaration: Record<string, unknown> | undefined,
+  name: string
+): string {
+  const fields = Array.isArray(declaration?.fields) ? declaration.fields : [];
+  const field: unknown = fields.find(
+    (each: unknown) => isRecord(each) && each.name === name
+  );
+  const label = isRecord(field) ? field.label : undefined;
+  return typeof label === "string" && label.trim() !== ""
+    ? label
+    : humanizeFieldName(name);
+}
+
 /** What each field a value came from is called on screen. */
 function fieldLabelsOf(
   declaration: Record<string, unknown> | undefined,
@@ -181,19 +200,9 @@ function fieldLabelsOf(
     levels.content.description?.field,
     levels.content.image?.field,
   ].filter((name): name is string => name !== undefined);
-  const fields = Array.isArray(declaration?.fields) ? declaration.fields : [];
-  const labels: Record<string, string> = {};
-  for (const name of named) {
-    const field: unknown = fields.find(
-      (each: unknown) => isRecord(each) && each.name === name
-    );
-    const label = isRecord(field) ? field.label : undefined;
-    labels[name] =
-      typeof label === "string" && label.trim() !== ""
-        ? label
-        : humanizeFieldName(name);
-  }
-  return labels;
+  return Object.fromEntries(
+    named.map(name => [name, fieldLabelOf(declaration, name)])
+  );
 }
 
 /** An address's origin, or nothing where it is not an http(s) address. */
@@ -284,25 +293,36 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
         fieldLabels: fieldLabelsOf(declaration, levels),
         fields: [...setup.fields],
       };
+      // Read for the document as typed, the tab's own values included.
+      const typed: PageMetadataInput = {
+        ...input,
+        source:
+          body.kind === "collection"
+            ? { kind: "entry", collection: body.slug, entry: body.document }
+            : { kind: "single", slug: body.slug, document: body.document },
+      };
       if (setup.fields.includes(STRUCTURED_DATA_FIELD)) {
-        // Read for the document as typed, its own choice of type included.
         answer.structuredData = await tabStructuredData(
           reading,
-          {
-            ...input,
-            source:
-              body.kind === "collection"
-                ? { kind: "entry", collection: body.slug, entry: body.document }
-                : { kind: "single", slug: body.slug, document: body.document },
-          },
+          typed,
           {
             readRules,
             ...(setup.readStructuredDataRules === undefined
               ? {}
               : { readStructuredDataRules: setup.readStructuredDataRules }),
-          }
+          },
+          name => fieldLabelOf(declaration, name)
         );
       }
+      const shareProblems = await shareImageProblems(reading, typed, {
+        readRules,
+        ...(setup.readSocialCardRules === undefined
+          ? {}
+          : { readSocialCardRules: setup.readSocialCardRules }),
+      });
+      answer.shareImage = {
+        problems: shareProblems.map(({ message, fix }) => ({ message, fix })),
+      };
       return Response.json(answer);
     },
   };

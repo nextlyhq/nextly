@@ -381,6 +381,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     baseUrl: options.baseUrl,
     readRules,
     readStructuredDataRules,
+    readSocialCardRules,
   });
 
   // The site's sitemap and robots.txt, the action that makes a share image

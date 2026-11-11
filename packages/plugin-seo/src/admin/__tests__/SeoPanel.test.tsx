@@ -69,7 +69,13 @@ const CONTEXT: SeoTabContext = {
       { key: "article", label: "Article" },
       { key: "webPage", label: "Web page" },
     ],
-    problems: [{ message: "Missing: author." }],
+    problems: [
+      {
+        message: "Missing: author.",
+        fix: "content",
+        field: { name: "author", label: "Author" },
+      },
+    ],
     details: ["Author", "Date published", "Image"],
   },
 };
@@ -82,7 +88,11 @@ function Harness({
   context = CONTEXT,
   documentKey,
   errors,
+  onMakeShareImage,
+  onGoToField,
 }: {
+  onMakeShareImage?: () => Promise<boolean>;
+  onGoToField?: (field: string) => void;
   context?: SeoTabContext;
   documentKey?: string;
   errors?: Partial<Record<SeoPanelField, string>>;
@@ -110,13 +120,18 @@ function Harness({
         problems={
           answers === undefined
             ? []
-            : seoProblems(answers.answer, context.structuredData)
+            : seoProblems(answers.answer, {
+                structuredData: context.structuredData,
+                shareImage: context.shareImage,
+              })
         }
         values={values}
         chosenImage={undefined}
         writable
         {...(documentKey === undefined ? {} : { documentKey })}
         {...(errors === undefined ? {} : { errors })}
+        onMakeShareImage={onMakeShareImage}
+        onGoToField={onGoToField}
         onSet={(field, next) => {
           onWrite?.(field, next);
           setValues(was => ({ ...was, [field]: next }));
@@ -381,6 +396,89 @@ describe("Advanced", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Enter a valid address."
     );
+  });
+
+  it("opens the content at the field structured data lacks", async () => {
+    const user = userEvent.setup();
+    const opened: string[] = [];
+    render(<Harness onGoToField={field => opened.push(field)} />);
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(
+      screen.getByRole("button", { name: "Add an author on the Content tab" })
+    );
+    expect(opened).toEqual(["author"]);
+  });
+
+  it("says what keeps the share image from showing, and makes one of the right size", async () => {
+    const user = userEvent.setup();
+    const imaged: SeoTabContext = {
+      ...CONTEXT,
+      levels: {
+        ...LEVELS,
+        content: {
+          ...LEVELS.content,
+          image: {
+            value: { url: "/media/cover.webp", width: 800, height: 600 },
+            field: "coverImage",
+          },
+        },
+      },
+      fieldLabels: { ...CONTEXT.fieldLabels, coverImage: "Cover image" },
+      shareImage: {
+        problems: [
+          { message: "800 × 600, LinkedIn will crop it", fix: "make" },
+        ],
+      },
+    };
+    let made = 0;
+    render(
+      <Harness
+        context={imaged}
+        onMakeShareImage={() => {
+          made += 1;
+          return Promise.resolve(false);
+        }}
+      />
+    );
+    const advanced = screen.getByRole("button", { name: /Advanced/ });
+    // The share image's problem and structured data's are both in Advanced.
+    expect(advanced).toHaveTextContent("structured data2");
+    await user.click(advanced);
+    expect(
+      screen.getByText("1 thing to fix: 800 × 600, LinkedIn will crop it.")
+    ).toBeVisible();
+    expect(screen.getByText("800 × 600")).toBeVisible();
+    expect(
+      screen.getAllByText(/from the blog post's/).map(line => line.textContent)
+    ).toContain("from the blog post's Cover image");
+    await user.click(
+      screen.getByRole("button", { name: "Make a share image" })
+    );
+    expect(made).toBe(1);
+  });
+
+  it("says a page hidden with its whole type stays hidden, and locks its switch", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        context={{ ...CONTEXT, levels: { ...LEVELS, typeHidden: true } }}
+      />
+    );
+    expect(
+      screen.getByText("Every blog post page is hidden from search.")
+    ).toBeVisible();
+    expect(
+      screen.getByText("Hidden from search: Google won't list this page")
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    const hide = screen.getByRole("switch", {
+      name: "Hide this page from search",
+    });
+    expect(hide).toBeChecked();
+    expect(hide).toBeDisabled();
+    expect(
+      screen.getByText(/On for every blog post page, so this switch/)
+    ).toBeVisible();
   });
 
   it("says why a typed address cannot be used", async () => {

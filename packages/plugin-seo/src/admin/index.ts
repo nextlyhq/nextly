@@ -9,11 +9,13 @@
  */
 import { registerComponents } from "@nextlyhq/plugin-sdk/admin";
 
-import { SEO_TAB_COMPONENT } from "../tab/contributions";
+import { SEO_STATUS_COMPONENT, SEO_TAB_COMPONENT } from "../tab/contributions";
 
 import { SeoTab } from "./SeoTab";
+import { SeoStatusSection } from "./status";
 
 export { SeoTab } from "./SeoTab";
+export { SeoStatusSection } from "./status";
 export { SeoPanel, type SeoPanelProps } from "./SeoPanel";
 export {
   panelAnswers,
@@ -24,4 +26,7 @@ export {
   type SeoPanelValues,
 } from "./values";
 
-registerComponents({ [SEO_TAB_COMPONENT]: SeoTab });
+registerComponents({
+  [SEO_TAB_COMPONENT]: SeoTab,
+  [SEO_STATUS_COMPONENT]: SeoStatusSection,
+});

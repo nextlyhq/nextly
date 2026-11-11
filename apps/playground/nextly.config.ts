@@ -32,6 +32,7 @@ import {
   defineSingle,
   text,
   textarea,
+  upload,
 } from "nextly/config";
 
 import { JOURNAL, JOURNAL_COLLECTIONS } from "./src/blog-fixture/collections";
@@ -101,8 +102,21 @@ const SeoPages = defineCollection({
     text({ name: "title", label: "Title", required: true }),
     text({ name: "slug", label: "Slug" }),
     textarea({ name: "excerpt", label: "Excerpt" }),
+    text({ name: "author", label: "Author" }),
+    upload({ name: "coverImage", label: "Cover image", relationTo: "media" }),
   ],
   publicAddress: "/seo/{slug}",
+});
+/** A kind of listing page hidden from search as a whole, as tag pages often are. */
+const SeoTags = defineCollection({
+  slug: "seo-tags",
+  labels: { singular: "Tag", plural: "Tags" },
+  fields: [
+    text({ name: "title", label: "Title", required: true }),
+    text({ name: "slug", label: "Slug" }),
+    textarea({ name: "description", label: "Description" }),
+  ],
+  publicAddress: "/seo/tag/{slug}",
 });
 const SeoHome = defineSingle({
   slug: "seo-home",
@@ -278,7 +292,7 @@ export default defineConfig({
       ? JOURNAL_COLLECTIONS
       : []),
     // The collection the SEO plugin extends, by the plugin's own switch.
-    ...(seoPluginEnabled ? [SeoPages] : []),
+    ...(seoPluginEnabled ? [SeoPages, SeoTags] : []),
     // The admin speed check's extra collections; none unless it asks.
     ...speedExtraCollections,
   ],
@@ -366,9 +380,13 @@ export default defineConfig({
     ...(seoPluginEnabled
       ? [
           seoPlugin({
-            collections: [SeoPages.slug],
+            collections: [SeoPages.slug, SeoTags.slug],
             singles: [SeoHome.slug],
             sitemap: false,
+            // Its pages are articles, which name their author; its tags are
+            // hidden from search whole.
+            structuredData: { types: { [SeoPages.slug]: { type: "article" } } },
+            hiddenTypes: [SeoTags.slug],
           }),
         ]
       : []),

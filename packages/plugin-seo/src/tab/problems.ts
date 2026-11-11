@@ -3,8 +3,8 @@
  * its label and marks beside the field each one belongs to.
  *
  * What the answer itself shows (a title or description longer than Google
- * shows, or either one missing from every level) and what keeps the page's
- * structured data out. The checks a site
+ * shows, or either one missing from every level), what keeps the page's
+ * structured data out, and what keeps its share image from showing well. The checks a site
  * publishes for its whole problem list grow from this one function, so the
  * tab and the list cannot count a page differently.
  *
@@ -25,9 +25,10 @@ export interface SeoProblem {
     | "title-too-long"
     | "no-description"
     | "description-too-long"
-    | "structured-data";
+    | "structured-data"
+    | "share-image";
   /** The value it is about, where the tab marks it. */
-  value: "title" | "description" | "structuredData";
+  value: "title" | "description" | "structuredData" | "image";
   /** What is wrong, in one plain sentence. */
   text: string;
 }
@@ -38,7 +39,10 @@ export interface SeoProblem {
  */
 export function seoProblems(
   answer: SeoAnswer,
-  structuredData?: { problems: readonly { message: string }[] }
+  more: {
+    structuredData?: { problems: readonly { message: string }[] } | undefined;
+    shareImage?: { problems: readonly { message: string }[] } | undefined;
+  } = {}
 ): SeoProblem[] {
   const problems: SeoProblem[] = [];
   const title = answer.title?.value;
@@ -69,12 +73,15 @@ export function seoProblems(
       text: "The description is longer than Google shows.",
     });
   }
-  for (const problem of structuredData?.problems ?? []) {
+  for (const problem of more.structuredData?.problems ?? []) {
     problems.push({
       id: "structured-data",
       value: "structuredData",
       text: problem.message,
     });
+  }
+  for (const problem of more.shareImage?.problems ?? []) {
+    problems.push({ id: "share-image", value: "image", text: problem.message });
   }
   return problems;
 }

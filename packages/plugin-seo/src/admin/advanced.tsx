@@ -6,25 +6,26 @@
  *
  * @module admin/advanced
  */
-import { Button, Checkbox, Input, Switch, Textarea } from "@nextlyhq/ui";
-import { Check, ChevronDown, TriangleAlert } from "lucide-react";
+import { Checkbox, Input, Switch, Textarea } from "@nextlyhq/ui";
+import { Check, ChevronDown, Lock, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { SeoAnswer } from "../resolver/order";
 import { checkCanonical, storedCanonical } from "../tab/canonical";
 import type { SeoTabContext } from "../tab/contract";
-import { absoluteAddress, fileNameOf } from "../tab/display";
+import { absoluteAddress } from "../tab/display";
 import { thingsToFix } from "../tab/problems";
 
 import {
-  AutomaticSource,
   Chip,
   cx,
-  LinkAction,
+  inSentence,
   Note,
-  SourceRow,
   type SourceNames,
+  SourceRow,
 } from "./parts";
+import { Row, RowButton } from "./rows";
+import { ShareImageRow } from "./share-image-row";
 import {
   isTyped,
   typedText,
@@ -49,6 +50,15 @@ export interface AdvancedProps {
   onSet: (field: SeoPanelField, value: unknown) => void;
   /** Opens the media library; absent where no image can be chosen. */
   onChooseImage?: () => void;
+  /** The file of the picture shown while none is chosen, where it was read. */
+  shownImageFile?: ChosenImage | undefined;
+  /**
+   * Makes a share image of the right size from the picture shown and sets it
+   * as the page's; answers whether it did. Absent where none can be made.
+   */
+  onMakeShareImage?: (() => Promise<boolean>) | undefined;
+  /** Opens the page's own content at one of its fields. */
+  onGoToField?: ((field: string) => void) | undefined;
 }
 
 export function AdvancedSection(props: AdvancedProps): ReactNode {
@@ -164,9 +174,45 @@ function SharingRows(props: AdvancedProps): ReactNode {
 }
 
 /** The type of thing Google is told the page is, and whether it is complete. */
+/**
+ * One action per detail the page's own content lacks, opening the content
+ * at that field: "Add an author on the Content tab".
+ */
+function ContentFixes({
+  problems,
+  onGoToField,
+}: {
+  problems: NonNullable<SeoTabContext["structuredData"]>["problems"];
+  onGoToField: ((field: string) => void) | undefined;
+}): ReactNode {
+  if (onGoToField === undefined) return null;
+  const fields = problems.flatMap(problem =>
+    problem.fix === "content" && problem.field !== undefined
+      ? [problem.field]
+      : []
+  );
+  if (fields.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {fields.map(field => (
+        <RowButton key={field.name} onClick={() => onGoToField(field.name)}>
+          Add {withArticle(field.label)} on the Content tab
+        </RowButton>
+      ))}
+    </div>
+  );
+}
+
+/** A field's name with "a" or "an" before it, in a sentence: "an author". */
+function withArticle(label: string): string {
+  const name = inSentence(label);
+  return /^[aeiou]/i.test(name) ? `an ${name}` : `a ${name}`;
+}
+
 function StructuredDataRow({
   values,
   context,
+  onGoToField,
   writable,
   errors,
   onSet,
@@ -212,6 +258,10 @@ function StructuredDataRow({
           ))}
           Google gets no {structured.type.label} details for this page until
           then.
+          <ContentFixes
+            problems={structured.problems}
+            onGoToField={onGoToField}
+          />
         </Note>
       ) : (
         <SourceRow>
@@ -272,80 +322,17 @@ function confirmedElsewhere(
   );
 }
 
-/** One row of the section: its label and sentence, a control, and below. */
-function Row({
-  label,
-  labelId,
-  help,
-  control,
-  error,
-  children,
-}: {
-  label: string;
-  labelId?: string;
-  help: string;
-  control?: ReactNode;
-  /** Why the row's value was refused at save, where it was. */
-  error?: string | undefined;
-  children?: ReactNode;
-}): ReactNode {
-  return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 border-t border-border-subtle p-3.5">
-      <div>
-        <div id={labelId} className="text-[13px] font-semibold text-foreground">
-          {label}
-        </div>
-        <p className="m-0 mt-0.5 text-[12.5px] leading-[1.45] text-muted-foreground">
-          {help}
-        </p>
-      </div>
-      {control ?? <span />}
-      {children === undefined ? null : (
-        <div className="col-span-full grid gap-2">{children}</div>
-      )}
-      {error && (
-        <p
-          role="alert"
-          className="col-span-full m-0 text-xs font-medium text-danger-text"
-        >
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/** The small outlined button rows use. */
-function RowButton({
-  onClick,
-  disabled,
-  children,
-}: {
-  onClick: () => void;
-  disabled?: boolean;
-  children: ReactNode;
-}): ReactNode {
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      onClick={onClick}
-      disabled={disabled}
-      className="h-7 px-2.5 text-xs"
-    >
-      {children}
-    </Button>
-  );
-}
-
 function HideRow({
   values,
+  answer,
+  names,
   writable,
   errors,
   onSet,
 }: AdvancedProps): ReactNode {
   const label = "Hide this page from search";
+  // Hidden with its whole type: the page's own switch cannot show it.
+  const byType = answer?.robots.from === "type";
   return (
     <Row
       error={errors.noindex}
@@ -354,12 +341,19 @@ function HideRow({
       control={
         <Switch
           aria-label={label}
-          checked={values.noindex === true}
-          disabled={!writable}
+          checked={byType || values.noindex === true}
+          disabled={!writable || byType}
           onCheckedChange={checked => onSet("noindex", checked)}
         />
       }
-    />
+    >
+      {byType ? (
+        <Note icon={<Lock className="size-4" />}>
+          On for every {inSentence(names.typeLabel)} page, so this switch
+          can&apos;t turn it off.
+        </Note>
+      ) : undefined}
+    </Row>
   );
 }
 
@@ -647,104 +641,6 @@ function SharedTitleRow({
           )}
         </>
       ) : undefined}
-    </Row>
-  );
-}
-
-/** The image the row shows: the one chosen, else the automatic one. */
-function shownImage(
-  chosen: boolean,
-  chosenImage: ChosenImage | undefined,
-  automatic: ChosenImage | undefined
-): ChosenImage | undefined {
-  return chosen ? chosenImage : automatic;
-}
-
-/** The image's thumbnail, name and size. */
-function ImageSummary({
-  shown,
-}: {
-  shown: ChosenImage | undefined;
-}): ReactNode {
-  if (shown === undefined) {
-    return <div className="text-muted-foreground">No share image yet.</div>;
-  }
-  const size =
-    shown.width !== undefined && shown.height !== undefined
-      ? `${shown.width} × ${shown.height}`
-      : undefined;
-  return (
-    <>
-      <div className="break-all">{shown.filename ?? fileNameOf(shown.url)}</div>
-      {size === undefined ? null : (
-        <div className="font-mono text-xs text-muted-foreground">{size}</div>
-      )}
-    </>
-  );
-}
-
-/** The picture shown when someone shares the page. */
-function ShareImageRow({
-  values,
-  answer,
-  chosenImage,
-  names,
-  writable,
-  errors,
-  onSet,
-  onChooseImage,
-}: AdvancedProps): ReactNode {
-  const chosen = values.ogImage !== null && values.ogImage !== undefined;
-  const image = answer?.image;
-  const shown = shownImage(
-    chosen,
-    chosenImage,
-    image && { ...image.value, filename: fileNameOf(image.value.url) }
-  );
-  const choose =
-    onChooseImage === undefined ? undefined : (
-      <RowButton disabled={!writable} onClick={onChooseImage}>
-        {shown === undefined ? "Choose an image" : "Choose another image"}
-      </RowButton>
-    );
-  return (
-    <Row
-      error={errors.ogImage}
-      label="Share image"
-      help="The picture shown when someone shares this page on LinkedIn, X, Slack and others."
-      control={choose}
-    >
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative h-[62px] w-[88px] flex-none overflow-hidden rounded-md bg-muted">
-          {shown && (
-            <img
-              src={shown.url}
-              alt={shown.alt ?? ""}
-              className="size-full object-cover"
-            />
-          )}
-        </div>
-        <div className="min-w-0 text-[13px] leading-normal text-foreground">
-          <ImageSummary shown={shown} />
-          <SourceRow>
-            {chosen ? (
-              <>
-                <Chip kind="typed">Chosen for this page</Chip>
-                <LinkAction
-                  disabled={!writable}
-                  onClick={() => onSet("ogImage", null)}
-                >
-                  Go back to automatic
-                </LinkAction>
-              </>
-            ) : (
-              image && (
-                <AutomaticSource sourced={image} value="image" names={names} />
-              )
-            )}
-          </SourceRow>
-        </div>
-      </div>
     </Row>
   );
 }

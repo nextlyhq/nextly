@@ -33,7 +33,13 @@ export interface TabStructuredData {
   /** The types the page may choose from. */
   offered: TabStructuredType[];
   /** What keeps the type's markup out, each in one sentence. */
-  problems: { message: string }[];
+  problems: {
+    message: string;
+    /** Where it is fixed: the page's content, the mapping, the route or the settings. */
+    fix: "content" | "mapping" | "route" | "settings";
+    /** The page's field the detail is read from, and what it is called. */
+    field?: { name: string; label: string };
+  }[];
   /** The details the type is described with, as a person names them. */
   details: string[];
 }
@@ -58,4 +64,12 @@ export interface SeoTabContext {
   fields: string[];
   /** The page's structured data, where the group holds its type. */
   structuredData?: TabStructuredData;
+  /** What keeps the page's share image from showing well on a card. */
+  shareImage?: {
+    problems: {
+      message: string;
+      /** Made from the picture, set by the route or design, or in the settings. */
+      fix: "make" | "route" | "settings";
+    }[];
+  };
 }

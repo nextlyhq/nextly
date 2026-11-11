@@ -1,7 +1,8 @@
 /**
  * The SEO tab, as the plugin adds it to the admin: one tab on the edit page
  * of each collection and Single the plugin adds SEO to, while creating one
- * as well, after the page's own content.
+ * as well, after the page's own content; and the side panel's one read-only
+ * line saying whether the page is listed, after the panel's details.
  *
  * The tab edits the `seo` group, so the page draws the group there and not
  * among its own fields; its values stay in the document's form and are saved
@@ -17,8 +18,15 @@ import { SEO_GROUP } from "./typed";
 /** The tab's component, as the admin's component map names it. */
 export const SEO_TAB_COMPONENT = "@nextlyhq/plugin-seo/admin#SeoTab";
 
-/** The tab's label, and its name in the address (`?tab=`). */
+/** The side panel's read-only SEO line, as the component map names it. */
+export const SEO_STATUS_COMPONENT =
+  "@nextlyhq/plugin-seo/admin#SeoStatusSection";
+
+/** The tab's label. */
 const LABEL = "SEO";
+
+/** The side panel line's heading. */
+const STATUS_LABEL = "Search";
 
 /**
  * Every field of the `seo` group the tab has a control for, and the field
@@ -111,6 +119,15 @@ export function seoTabContributions({
       collections: [...collections],
       fields: [SEO_GROUP],
     });
+    contributions.push({
+      id: "nextlyhq-plugin-seo.status",
+      kind: "sidebarSection",
+      place: "collection.edit",
+      label: STATUS_LABEL,
+      component: SEO_STATUS_COMPONENT,
+      after: "details",
+      collections: [...collections],
+    });
   }
   if (singles.length > 0) {
     contributions.push({
@@ -121,6 +138,15 @@ export function seoTabContributions({
       component: SEO_TAB_COMPONENT,
       singles: [...singles],
       fields: [SEO_GROUP],
+    });
+    contributions.push({
+      id: "nextlyhq-plugin-seo.single-status",
+      kind: "sidebarSection",
+      place: "single.edit",
+      label: STATUS_LABEL,
+      component: SEO_STATUS_COMPONENT,
+      after: "details",
+      singles: [...singles],
     });
   }
   return contributions;

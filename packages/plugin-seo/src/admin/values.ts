@@ -36,6 +36,10 @@ export interface ChosenImage {
   width?: number;
   height?: number;
   alt?: string;
+  /** The file's weight in bytes, where it was read. */
+  bytes?: number;
+  /** The file's type, such as `image/webp`, where it was read. */
+  mimeType?: string;
 }
 
 /** The page's answer, and what it would be with nothing typed. */
