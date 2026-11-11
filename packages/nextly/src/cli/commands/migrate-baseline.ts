@@ -58,6 +58,7 @@ import {
   coreTableNames,
   NO_ELEMENTS,
   standingContribution,
+  tracking,
   unexplainedElements,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
@@ -657,9 +658,13 @@ function contributedElementStatements(
   for (const [name, spec] of folded.recordedSpecs) {
     const bare = appStream.baselines.get(name);
     if (bare === undefined) continue;
+    // The bare side is made to track every dimension the recorded side
+    // tracks: the diff skips a dimension either side leaves untracked, and a
+    // CHECK a contributed `col.enum()` carries would otherwise never reach
+    // the file — the same rule `foreignTableSides` holds its two sides to.
     statements.push(
       ...generateStatements(
-        diffSnapshots({ tables: [bare] }, { tables: [spec] }),
+        diffSnapshots({ tables: [tracking(bare, spec)] }, { tables: [spec] }),
         dialect,
         [spec]
       )

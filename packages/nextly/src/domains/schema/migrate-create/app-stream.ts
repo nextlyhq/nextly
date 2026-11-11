@@ -525,7 +525,7 @@ export function foreignTableSides(input: {
  * a contributor's `col.enum()` adds to a table with none of its own is then
  * emitted, and dropped again when the contribution is withdrawn.
  */
-function tracking(side: TableSpec, other: TableSpec): TableSpec {
+export function tracking(side: TableSpec, other: TableSpec): TableSpec {
   return {
     ...side,
     ...(other.checks !== undefined && side.checks === undefined

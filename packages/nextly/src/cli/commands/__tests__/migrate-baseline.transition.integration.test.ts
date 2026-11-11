@@ -175,6 +175,15 @@ const pendingConfig = (extend: SchemaHook[]) =>
     ...(extend.length > 0 ? { db: { schema: { extend } } } : {}),
   });
 
+/** An enum contribution, whose CHECK is part of what the app ships. */
+const contributesEnum: SchemaHook = ({ schema }) => {
+  schema.extendTable("fx__notes", {
+    columns: {
+      reviewState: col.enum(["open", "done"], { nullable: true }),
+    },
+  });
+};
+
 const logger = createLogger({ quiet: true });
 const context = { logger, options: {} } as CommandContext;
 
@@ -724,6 +733,52 @@ function runSuite(dialect: SupportedDialect): void {
     expect(adopted.mismatches).toEqual([
       { table: "fx__notes", elements: ["app_ref", "idx_fx_notes_app_ref"] },
     ]);
+  });
+
+  it("builds the CHECK of a contributed enum column into the baseline", async () => {
+    // An enum's CHECK is part of what the app contributes: without it in the
+    // file, a fresh environment accepts values the adopted database rejects.
+    // The bare side of the diff declares no checks, and a dimension either
+    // side leaves untracked is one the diff skips — so the emission makes
+    // the bare side track what the recorded side tracks, as the app stream's
+    // own two-sided diff does.
+    await runDbSync(h, pendingConfig([contributesEnum]));
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: pendingConfig([contributesEnum]),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    if (adopted.kind !== "baselined")
+      throw new Error(`expected a baseline, got ${adopted.kind}`);
+
+    const up = splitSqlStatements(
+      parseSqlSections(await readFile(adopted.sqlPath, "utf-8")).upSql
+    );
+    expect(
+      up.filter(s => /^ALTER TABLE/i.test(s) && s.includes("review_state"))
+    ).not.toEqual([]);
+    // A dialect whose introspection reports CHECK constraints carries the
+    // constraint itself; one whose does not still carries the column, and
+    // the next migration against the live table is where its constraint
+    // then arrives.
+    const checks = up.filter(
+      s => /CHECK/i.test(s) && s.includes("review_state")
+    );
+    if (h.dialect !== "sqlite") {
+      expect(checks).not.toEqual([]);
+    } else {
+      expect(up.filter(s => s.includes("review_state")).length).toBeGreaterThan(
+        0
+      );
+    }
   });
 
   it("carries a localized companion into the baseline SQL, but not the snapshot", async () => {
