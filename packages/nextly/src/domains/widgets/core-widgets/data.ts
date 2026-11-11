@@ -151,12 +151,27 @@ export interface CoreListWidgetData {
 }
 
 /**
- * What the Team card draws: how many people and roles there are, each only
- * when the reader may see it, so a count withheld is never drawn as zero.
+ * One person on the Team card, as JSON carries them.
+ *
+ * @internal
+ */
+export interface TeamPersonData {
+  /** Their name; absent when they have none. */
+  name?: string;
+  email: string;
+  /** The role shown beside them; absent when they hold none. */
+  role?: string;
+  /** When they were last active, as an ISO string; absent when unknown. */
+  lastActiveAt?: string;
+}
+
+/**
+ * What the Team card draws: the people, most recently active first, at most
+ * its "Number of people", and how many its role filter matched in all.
  *
  * @internal
  */
 export interface TeamWidgetData {
-  users?: number;
-  roles?: number;
+  people: TeamPersonData[];
+  total: number;
 }

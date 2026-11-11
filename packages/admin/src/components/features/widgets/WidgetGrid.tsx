@@ -55,6 +55,8 @@ import { DashboardCrumb } from "./edit/DashboardBarControls";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
 import { CardDragContext } from "./edit/drag/CardDragContext";
 import { useCardDrag } from "./edit/drag/useCardDrag";
+import { useCardFlip } from "./edit/drag/useCardFlip";
+import { useCardResize } from "./edit/drag/useCardResize";
 import { RemovalNotice } from "./edit/RemovalNotice";
 import {
   bringRefusedPanelForward,
@@ -216,24 +218,25 @@ const NO_CARDS: [] = [];
 
 /**
  * The element the dashboard's width is measured from, the one batch of the cards, and dragging
- * the cards.
+ * and resizing the cards.
  *
  * Each card is asked for at the size it will be drawn at. The width is measured before the first
  * paint, and no card is asked before it is known, so every first ask carries its card's size.
- * Dragging is decided from the same width: on wherever more than one column is drawn.
+ * Dragging and resizing are decided from the same width: dragging on wherever more than one
+ * column is drawn, resizing from 1,024px. Both slide the cards they move (`useCardFlip`).
  * The batch is asked under the token of `layout`, the layout answer the cards are drawn from.
  */
 function useCardsAtDashboardWidth(
   visible: ArrangedWidget[],
   editing: boolean,
-  carry: Pick<
-    Parameters<typeof useCardDrag>[0],
-    "gridRef" | "say" | "drop" | "requestFocus"
-  >,
+  carry: Pick<Parameters<typeof useCardDrag>[0], "gridRef" | "say" | "drop"> &
+    Pick<Parameters<typeof useCardResize>[0], "setSize">,
   layout: DashboardLayoutResponse | undefined
 ) {
   const dashboardRef = useRef<HTMLDivElement>(null);
   const dashboardWidth = useDashboardWidth(dashboardRef);
+  const { gridRef, say, drop, setSize } = carry;
+  const flip = useCardFlip(gridRef);
   const cards = useMemo(
     () =>
       dashboardWidth === undefined
@@ -246,7 +249,15 @@ function useCardsAtDashboardWidth(
   return {
     dashboardRef,
     dashboardWidth,
-    drag: useCardDrag({ rows: visible, width: dashboardWidth, ...carry }),
+    drag: useCardDrag({
+      rows: visible,
+      width: dashboardWidth,
+      gridRef,
+      flip,
+      say,
+      drop,
+    }),
+    resize: useCardResize({ width: dashboardWidth, gridRef, flip, setSize }),
     // Asked under the token of the layout answer the cards are drawn from, and again under a new
     // one that hides or reveals a card: a layout read that lands after the batch started is then
     // the load the cards are drawn from, and the server answers a card that load read ahead only
@@ -560,6 +571,7 @@ export function WidgetGrid(): JSX.Element {
     dashboardRef,
     dashboardWidth,
     drag,
+    resize,
     slots,
     fetchingPlacementIds,
     updatedAtFor,
@@ -578,7 +590,7 @@ export function WidgetGrid(): JSX.Element {
       gridRef: focus.gridRef,
       say: announce.drag,
       drop: arrangement.dropCard,
-      requestFocus: focus.request,
+      setSize: arrangement.setCardSize,
     },
     layout.layout
   );
@@ -697,6 +709,7 @@ export function WidgetGrid(): JSX.Element {
                   gridRef={focus.gridRef}
                   highlightedId={ring.highlightedId}
                   drag={drag}
+                  resize={resize}
                   on={cardActions(arrangement, removal, editor)}
                 />
               </CardContexts>

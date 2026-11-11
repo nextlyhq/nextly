@@ -3,8 +3,8 @@
  * browser: each draws from its own answer and offers the way on that its name
  * promises.
  *
- * - Team draws the number of people and links to Users. It is not on the default dashboard:
- *   a reader who manages the team adds it.
+ * - Team lists the people and links to Users. It is not on the default dashboard: a reader
+ *   who may read users adds it.
  * - Content draws a tile per collection, each linking to its list.
  * - Upcoming releases hides while nothing is scheduled, stopped or overdue, and
  *   otherwise leads to Releases.
@@ -69,7 +69,7 @@ async function placeCards(page: Page): Promise<void> {
       throw new Error(`${id} is not visible to this reader`);
     }
   }
-  // Offered to this reader, and still not on their default: a reader who manages the team adds
+  // Offered to this reader, and still not on their default: a reader who may read users adds
   // Team from the add panel.
   expect(layout.defaultPlacements.map(p => p.widgetId)).not.toContain(
     "core/team"
@@ -104,8 +104,11 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
     await gotoAdmin(page, "/", theme);
 
     const team = cell(page, "core/team");
-    await expect(team.getByText("Users").first()).toBeVisible();
-    await expect(team.getByRole("link", { name: "All users" })).toHaveAttribute(
+    // The reader, a super-admin, is among the people listed.
+    await expect(team.getByTestId("entity-row").first()).toBeVisible();
+    await expect(team.getByText("Super Admin").first()).toBeVisible();
+    // "All users", or "View all (N)" when earlier specs left more people than the card lists.
+    await expect(team.getByTestId("team-view-all")).toHaveAttribute(
       "href",
       /\/admin\/users$/
     );

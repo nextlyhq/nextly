@@ -171,9 +171,19 @@ describe("the drawer for each kind of card", () => {
     ).toEqual(["Comfortable", "Compact"]);
   });
 
-  it("draws Team with its title and width alone", () => {
+  it("draws Team's role and Number of people, then its title and last active", () => {
     drawer(core("core/team"), undefined);
-    expect(sections()).toEqual(["Display", "Size"]);
+    expect(sections()).toEqual(["Content", "Display", "Size"]);
+    expect(holds("Content")).toMatch(/Role.*Number of people/s);
+    expect(holds("Content")).toContain(
+      "People can also switch this from the card."
+    );
+    expect(
+      within(screen.getByRole("radiogroup", { name: "Number of people" }))
+        .getAllByRole("radio")
+        .map(radio => radio.textContent)
+    ).toEqual(["5", "10", "20"]);
+    expect(holds("Display")).toContain("Show last active");
   });
 
   it("draws the Note's text with what Markdown it takes and the characters left", () => {
