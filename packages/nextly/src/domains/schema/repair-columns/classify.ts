@@ -25,6 +25,7 @@ import type {
 } from "../value-conversion/types";
 
 import { buildColumnConversion, type ColumnConversionPlan } from "./conversion";
+import { realToDoubleOnPostgres } from "./conversion/postgres";
 import type { ColumnLocation, ColumnState, RepairEntityKind } from "./types";
 
 /** Whether `column` is a JSON column. */
@@ -87,6 +88,11 @@ function conversionFor(
     to: expected,
     compareAs: compareAsFor(field, expected),
     ...(referenceList ? { referenceList: true } : {}),
+    // The PostgreSQL conversion reads a real becoming a double through its text
+    // (`conversion/postgres.ts`), so its judgement may count on it.
+    ...(realToDoubleOnPostgres(live, expected, dialect)
+      ? { throughText: true }
+      : {}),
   };
 }
 

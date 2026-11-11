@@ -46,7 +46,7 @@ import {
 } from "./app-stream";
 import { toMinimalEntities } from "./config-entities";
 import type { EntitySettingsRecord, SettingsObject } from "./entity-settings";
-import { removedCollectionTables, type MinimalConfigEntity } from "./generate";
+import { removedEntityTables, type MinimalConfigEntity } from "./generate";
 import { assertMigrationSiblingFields } from "./sibling-fields";
 import {
   EMPTY_SNAPSHOT,
@@ -234,26 +234,30 @@ export async function appMigrationInputs(
   const latest = await loadLatestSnapshot(resolve(input.migrationsDir, "meta"));
 
   // Before the app stream compiles: a plugin hook still extending a removed
-  // collection's table would stop that compile with a bare "does not exist",
-  // where this names what the hook adds. A drop of a collection something
-  // still depends on is refused with the message a delete gets. The check and
-  // its readers are loaded only when the migration would drop a collection,
-  // which most runs do not.
-  const removedTables = removedCollectionTables({
+  // collection's, Single's or field group's table would stop that compile with
+  // a bare "does not exist", where this names what the hook adds. A drop of an
+  // entity something still depends on is refused with the message a delete
+  // gets. The check and its readers are loaded only when the migration would
+  // drop one, which most runs do not.
+  const removed = removedEntityTables({
     previous: latest?.data.snapshot ?? EMPTY_SNAPSHOT,
     collections,
     singles,
     components,
     dialect,
   });
-  if (removedTables.length > 0) {
-    const [{ assertRemovedCollectionsUnused }, { compileExtensionSchemaWith }] =
+  if (
+    removed.collections.length > 0 ||
+    removed.singles.length > 0 ||
+    removed.fieldGroups.length > 0
+  ) {
+    const [{ assertRemovedEntitiesUnused }, { compileExtensionSchemaWith }] =
       await Promise.all([
         import("./removed-collections"),
         import("../../collections/services/collection-dependents-schema"),
       ]);
-    await assertRemovedCollectionsUnused({
-      removedTables,
+    await assertRemovedEntitiesUnused({
+      removed,
       collections,
       singles,
       components,
