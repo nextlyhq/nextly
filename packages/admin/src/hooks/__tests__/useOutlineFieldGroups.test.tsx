@@ -46,6 +46,17 @@ describe("useOutlineFieldGroups", () => {
     expect(get).not.toHaveBeenCalled();
   });
 
+  it("carries whether each field group translates its fields", async () => {
+    list.mockResolvedValue([
+      { slug: "seo", label: "SEO", fields: [], localized: true },
+      { slug: "social", label: "Social", fields: [] },
+    ]);
+    const { result } = renderHook(() => useOutlineFieldGroups(), { wrapper });
+    await waitFor(() => expect(result.current.load).toBe("loaded"));
+    expect(result.current.fieldGroups.get("seo")?.localized).toBe(true);
+    expect(result.current.fieldGroups.get("social")?.localized).toBe(false);
+  });
+
   it("says it could not read them, rather than looking like it is still loading", async () => {
     list.mockRejectedValue(new Error("down"));
     const { result } = renderHook(() => useOutlineFieldGroups(), { wrapper });

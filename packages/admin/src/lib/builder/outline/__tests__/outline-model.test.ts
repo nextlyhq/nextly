@@ -96,8 +96,76 @@ describe("the outline of the nested fixture", () => {
     });
   });
 
-  it("shows a blocks field with the number of blocks it accepts", () => {
-    expect(byPath(outline()).get("body")?.blocks).toEqual({ accepted: 2 });
+  it("carries a blocks field's policy as written, not a count of it", () => {
+    expect(byPath(outline()).get("body")?.blocks).toEqual({
+      allow: ["core/heading", "acme/hero"],
+    });
+  });
+
+  describe("which fields are translatable", () => {
+    const text = (id: string, extra: Partial<BuilderField> = {}) =>
+      ({ id, name: id, label: id, type: "text", ...extra }) as BuilderField;
+    const translatable = (
+      fields: BuilderField[],
+      options: { entityLocalized?: boolean; groupLocalized?: boolean } = {}
+    ) =>
+      new Map(
+        flattenOutline(
+          buildOutline(fields, {
+            entityReadOnly: false,
+            entityLocalized: options.entityLocalized,
+            fieldGroups: new Map([
+              [
+                "seo",
+                {
+                  slug: "seo",
+                  label: "SEO",
+                  fields: [
+                    { name: "meta_title", label: "Meta title", type: "text" },
+                  ] as FieldDefinition[],
+                  localized: options.groupLocalized === true,
+                },
+              ],
+            ]),
+          })
+        ).map(node => [node.path, node.translatable])
+      );
+
+    it("translates a text field left at its default when the entity is translated", () => {
+      expect(
+        translatable([text("headline")], { entityLocalized: true }).get(
+          "headline"
+        )
+      ).toBe(true);
+    });
+
+    it("translates nothing in an entity that is not translated, whatever the field says", () => {
+      expect(
+        translatable([text("headline", { advanced: { localized: true } })]).get(
+          "headline"
+        )
+      ).toBe(false);
+    });
+
+    it("keeps a field set to shared out, in a translated entity", () => {
+      expect(
+        translatable([text("headline", { advanced: { localized: false } })], {
+          entityLocalized: true,
+        }).get("headline")
+      ).toBe(false);
+    });
+
+    it("reads a field group's fields against the field group's own setting", () => {
+      const uses = [
+        { ...text("seo"), type: "component", component: "seo" } as BuilderField,
+      ];
+      expect(
+        translatable(uses, { entityLocalized: true }).get("seo/meta_title")
+      ).toBe(false);
+      expect(
+        translatable(uses, { groupLocalized: true }).get("seo/meta_title")
+      ).toBe(true);
+    });
   });
 
   it("keeps two same-named fields in different containers apart", () => {

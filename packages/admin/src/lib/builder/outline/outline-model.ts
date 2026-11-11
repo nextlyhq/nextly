@@ -16,6 +16,7 @@ import {
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import type { FieldDefinition } from "@admin/types/collection";
 
+import { fieldLocalized } from "../field-localized";
 import type { FieldPlacement } from "../field-placement";
 import { convertToBuilderField } from "../field-transformers";
 
@@ -24,6 +25,8 @@ export interface LoadedFieldGroup {
   slug: string;
   label: string;
   fields: FieldDefinition[];
+  /** Whether the field group is translated, so its fields can be. */
+  localized?: boolean;
 }
 
 /** Why a row offers no change, naming where it is defined. */
@@ -141,8 +144,13 @@ export interface OutlineNode {
      */
     unavailable?: "loading" | "failed" | "not-found";
   };
-  /** For a blocks field: how many blocks it accepts. */
-  blocks?: { accepted: number | "all" };
+  /**
+   * For a blocks field: the blocks it accepts, as its policy names them (a
+   * block's name or a pattern); absent when it accepts any block.
+   */
+  blocks?: { allow: readonly string[] | undefined };
+  /** Keeps a value per language: its own rule, in a translated holder. */
+  translatable: boolean;
 }
 
 /** Whether the field groups the outline reads have arrived. */
@@ -181,6 +189,8 @@ interface Level {
   chain: readonly string[];
   /** In the entity's own definition, as opposed to a field group's. */
   own: boolean;
+  /** Whether what holds this level (the entity, or a field group) is translated. */
+  localized: boolean;
 }
 
 /** One field's row, before what it holds is filled in. */
@@ -197,6 +207,7 @@ function nodeFor(field: BuilderField, level: Level): OutlineNode {
     children: [],
     readOnly: fieldReadOnlyReason(field, level.inherited),
     own: level.own,
+    translatable: level.localized && fieldLocalized(field),
   };
 }
 
@@ -218,13 +229,11 @@ function fillContainer(
     case "field-group":
       fillFieldGroup(node, ctx, level.chain);
       return;
-    case "blocks": {
-      const allow = node.field.blocks?.allow;
-      node.blocks = {
-        accepted: allow && allow.length > 0 ? allow.length : "all",
-      };
+    case "blocks":
+      // The policy as written: no list accepts any block, an empty list none,
+      // and an entry may be a pattern standing for many.
+      node.blocks = { allow: node.field.blocks?.allow };
       return;
-    }
     default:
       return;
   }
@@ -266,6 +275,8 @@ function fieldGroupChildren(
     inherited: { kind: "field-group", slug, label: group.label },
     chain: [...chain, slug],
     own: false,
+    // A field group's fields translate by its own setting, wherever it is used.
+    localized: group.localized === true,
   });
 }
 
@@ -314,6 +325,7 @@ function fillFieldGroup(
         children: [],
         readOnly: { kind: "field-group", slug, label: group?.label ?? slug },
         own: false,
+        translatable: false,
       };
       entry.children = record(
         slug,
@@ -346,6 +358,8 @@ export function buildOutline(
   fields: readonly BuilderField[],
   options: {
     entityReadOnly: boolean;
+    /** Whether the entity is translated, so its fields can be. */
+    entityLocalized?: boolean;
     fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
     /** Whether `fieldGroups` has arrived; loaded unless said. */
     fieldGroupsLoad?: FieldGroupsLoad;
@@ -362,6 +376,7 @@ export function buildOutline(
       inherited: options.entityReadOnly ? { kind: "entity" } : null,
       chain: [],
       own: true,
+      localized: options.entityLocalized === true,
     }
   );
 }

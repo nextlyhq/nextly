@@ -43,6 +43,7 @@ function callbacks(): OutlineCallbacks &
 function fixtureOutline(entityReadOnly = false): OutlineNode[] {
   return buildOutline(nestedFixtureFields(), {
     entityReadOnly,
+    entityLocalized: true,
     fieldGroups: nestedFixtureFieldGroups(),
   });
 }
@@ -119,8 +120,10 @@ describe("the outline of the nested fixture", () => {
       "Locked · Defined by @acme/reviews"
     );
     expect(badges("sections/items/cta/kind")).toContain("Has an error");
-    // A field with none of them carries none.
-    expect(badges("summary_a")).not.toMatch(
+    // A long-text field left at its default translates in a translated
+    // entity; a checkbox does not, and carries no badge at all.
+    expect(badges("summary_a")).toContain("Translatable");
+    expect(badges("show_banner")).not.toMatch(
       /Required|Translatable|Hidden|Has a condition|Locked|Has an error/
     );
   });
@@ -213,10 +216,35 @@ describe("the outline of the nested fixture", () => {
     expect(on.openFieldGroup).toHaveBeenCalledWith("seo");
   });
 
-  it("shows a blocks field with how many blocks it accepts", () => {
+  it("shows a blocks field with the blocks it accepts", () => {
     renderOutline();
-    expect(row("body")).toHaveTextContent("Blocks: 2 accepted");
+    expect(row("body")).toHaveTextContent("Blocks: core/heading, acme/hero");
   });
+
+  it.each([
+    [undefined, "Blocks: any block"],
+    [[], "Blocks: none accepted"],
+    [["core/*", "acme/hero"], "Blocks: core/*, acme/hero"],
+    [["a", "b", "c", "d", "e"], "Blocks: a, b, c and 2 more"],
+  ] as const)(
+    "says what a blocks field allowing %j accepts",
+    (allow, words) => {
+      const body: BuilderField = {
+        id: "f-body",
+        name: "body",
+        label: "Body",
+        type: "blocks",
+        ...(allow === undefined ? {} : { blocks: { allow: [...allow] } }),
+      } as BuilderField;
+      renderOutline({
+        nodes: buildOutline([body], {
+          entityReadOnly: false,
+          fieldGroups: new Map(),
+        }),
+      });
+      expect(row("body")).toHaveTextContent(words);
+    }
+  );
 });
 
 describe("a read-only row", () => {
@@ -513,6 +541,40 @@ describe("the form preview's fields", () => {
     );
     expect(screen.queryByLabelText(/Title/)).toBeNull();
     expect(screen.getByLabelText(/Body/)).toBeInTheDocument();
+  });
+
+  it("seeds each field with its default, as the create form does, so a condition reading one holds", () => {
+    render(
+      <FormPreview
+        kind="collection"
+        fields={[
+          {
+            id: "f-show",
+            name: "show_banner",
+            label: "Show banner",
+            type: "checkbox",
+            defaultValue: true,
+          },
+          {
+            id: "f-banner",
+            name: "banner_text",
+            label: "Banner text",
+            type: "text",
+            defaultValue: "Welcome",
+            admin: {
+              condition: {
+                field: "show_banner",
+                operator: "equals",
+                value: true,
+              },
+            },
+          },
+        ]}
+        fieldGroups={new Map()}
+        fieldGroupsLoad="loaded"
+      />
+    );
+    expect(screen.getByLabelText(/Banner text/)).toHaveValue("Welcome");
   });
 
   it("says when the field groups it uses could not be loaded", () => {

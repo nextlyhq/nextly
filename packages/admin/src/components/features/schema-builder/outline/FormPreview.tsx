@@ -20,6 +20,7 @@ import type {
   FieldGroupsLoad,
   LoadedFieldGroup,
 } from "@admin/lib/builder/outline/outline-model";
+import { getDefaultValues } from "@admin/lib/form/default-values";
 import type { FieldDefinition } from "@admin/types/collection";
 
 import type { BuilderKind } from "../builder-config";
@@ -99,6 +100,12 @@ export function FormPreview({
       ),
     [kind, fields, fieldGroups]
   );
+  // Seeded as the create form seeds itself, so a default, and a condition
+  // that reads one, show as editors will meet them.
+  const values = useMemo(
+    () => getDefaultValues(definitions as unknown as FieldConfig[]),
+    [definitions]
+  );
   return (
     <div className="space-y-3">
       {/* Said, so a form missing a field group's fields is not taken for the
@@ -112,7 +119,7 @@ export function FormPreview({
       )}
       <ReadOnlyDocumentForm
         fields={definitions as unknown as FieldConfig[]}
-        values={{}}
+        values={values}
         mode="create"
       />
     </div>

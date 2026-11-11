@@ -71,11 +71,17 @@ function Badge({
   );
 }
 
-/** What a blocks field accepts, in words. */
-function blocksNote(blocks: { accepted: number | "all" }): string {
-  return blocks.accepted === "all"
-    ? "Blocks: every block accepted"
-    : `Blocks: ${blocks.accepted} accepted`;
+/**
+ * What a blocks field accepts, in words, as its policy says it: any block when
+ * it names none, no block for an empty list, else the blocks and patterns it
+ * names, the first few of them.
+ */
+function blocksNote(allow: readonly string[] | undefined): string {
+  if (allow === undefined) return "Blocks: any block";
+  if (allow.length === 0) return "Blocks: none accepted";
+  const shown = allow.slice(0, 3).join(", ");
+  const more = allow.length - 3;
+  return more > 0 ? `Blocks: ${shown} and ${more} more` : `Blocks: ${shown}`;
 }
 
 /**
@@ -101,7 +107,7 @@ function fieldGroupNote(
 
 /** What a row says beside its name, if anything. */
 function rowNote(node: OutlineNode): string | null {
-  if (node.blocks) return blocksNote(node.blocks);
+  if (node.blocks) return blocksNote(node.blocks.allow);
   return node.fieldGroup ? fieldGroupNote(node.fieldGroup) : null;
 }
 
@@ -116,7 +122,7 @@ function RowBadges({
   const { field } = node;
   const marks: { show: unknown; text: string }[] = [
     { show: field.validation?.required, text: "Required" },
-    { show: field.advanced?.localized, text: "Translatable" },
+    { show: node.translatable, text: "Translatable" },
     { show: field.admin?.hidden, text: "Hidden" },
     { show: field.admin?.condition, text: "Has a condition" },
     {

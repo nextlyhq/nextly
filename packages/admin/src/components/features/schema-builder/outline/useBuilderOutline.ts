@@ -19,7 +19,9 @@ import type { BuilderField } from "../types";
 
 export function useBuilderOutline(
   fields: readonly BuilderField[],
-  entityReadOnly: boolean
+  entityReadOnly: boolean,
+  /** Whether the entity is translated, so its fields can be. */
+  entityLocalized: boolean
 ): {
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
@@ -30,10 +32,11 @@ export function useBuilderOutline(
     () =>
       buildOutline(fields, {
         entityReadOnly,
+        entityLocalized,
         fieldGroups,
         fieldGroupsLoad: load,
       }),
-    [fields, entityReadOnly, fieldGroups, load]
+    [fields, entityReadOnly, entityLocalized, fieldGroups, load]
   );
   return { outline, fieldGroups, fieldGroupsLoad: load };
 }

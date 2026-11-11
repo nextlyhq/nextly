@@ -151,11 +151,13 @@ function BuilderWorkspace(
     | "onDuplicateField"
     | "onRowDragEnd"
     | "savedFieldIds"
+    | "settings"
   >
 ): JSX.Element {
   const { outline, fieldGroups, fieldGroupsLoad } = useBuilderOutline(
     props.builder.fields,
-    props.locked
+    props.locked,
+    props.settings.i18n === true
   );
   return (
     <div className="flex flex-1 items-start">

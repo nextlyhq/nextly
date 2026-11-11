@@ -35,6 +35,10 @@ export function useOutlineFieldGroups(): {
         slug: group.slug,
         label: group.label,
         fields: group.fields,
+        // Whether the field group translates its fields. The server sends it
+        // on every record; the record's type does not name it, so it is read
+        // through a check that holds whatever arrives.
+        localized: "localized" in group && group.localized === true,
       });
     }
     return map;
