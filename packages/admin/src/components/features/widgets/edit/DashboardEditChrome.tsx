@@ -239,6 +239,55 @@ function SaveProblem({
   );
 }
 
+/**
+ * Leaving customise mode, as Cancel and the breadcrumb's "Dashboard" both do,
+ * through this one path: with nothing unsaved at once, otherwise once the
+ * reader agrees to lose their changes.
+ *
+ * Never while a write is on its way: leaving drops the draft without stopping
+ * the write, so a save would land after its changes were "discarded", or fail
+ * with nothing left to retry. Cancel is disabled then, and the breadcrumb
+ * offers no way out until the write settles.
+ */
+function useLeaveCustomise({
+  isWriting,
+  hasUnsavedChanges,
+  cancel,
+  requestFocus,
+}: {
+  isWriting: boolean;
+  hasUnsavedChanges: boolean;
+  cancel: () => void;
+  requestFocus: DashboardFocus["request"];
+}) {
+  const [asking, setAsking] = useState(false);
+  // Set as the reader agrees to leave. The question holds focus until it has
+  // closed, and the control that asked has gone with the mode, so focus goes
+  // to the greeting then, as it does when the mode ends without asking.
+  const leaving = useRef(false);
+  const canLeave = !isWriting;
+  return {
+    canLeave,
+    asking,
+    setAsking,
+    request: () => {
+      if (!canLeave) return;
+      if (hasUnsavedChanges) setAsking(true);
+      else cancel();
+    },
+    confirm: () => {
+      leaving.current = true;
+      cancel();
+    },
+    onCloseAutoFocus: (event: Event) => {
+      if (!leaving.current) return;
+      leaving.current = false;
+      event.preventDefault();
+      requestFocus({ kind: "heading" });
+    },
+  };
+}
+
 export function DashboardEditChrome({
   editor,
   writeError,
@@ -251,35 +300,23 @@ export function DashboardEditChrome({
   focus,
 }: DashboardEditChromeProps): JSX.Element {
   const [askingReset, setAskingReset] = useState(false);
-  const [askingLeave, setAskingLeave] = useState(false);
-  // Set as the reader agrees to leave. The question holds focus until it has
-  // closed, and the control that asked has gone with the mode, so focus goes
-  // to the greeting then, as it does when the mode ends without asking.
-  const leaving = useRef(false);
   const requestSave = () => void saveRequest.request();
   // A card's open settings panel holding a change is an unsaved change of the dashboard's too:
   // Save keeps it with the draft (`useSaveRequest`), so Save is offered for it.
   const panelHoldsChanges = useSettingsPanelHoldsChanges();
   const hasUnsavedChanges =
     editor.hasUnsavedChanges || (editor.isEditing && panelHoldsChanges);
-
-  // Cancel and the breadcrumb's "Dashboard" both leave the mode, through this
-  // one path: with nothing unsaved at once, otherwise once the reader agrees to
-  // lose their changes. Never while a write is on its way: leaving drops the
-  // draft without stopping the write, so a save would land after its changes
-  // were "discarded", or fail with nothing left to retry. Cancel is disabled
-  // then, and the breadcrumb offers no way out until the write settles.
-  const canLeave = !editor.isWriting;
-  const requestLeave = () => {
-    if (!canLeave) return;
-    if (hasUnsavedChanges) setAskingLeave(true);
-    else on.cancel();
-  };
+  const leave = useLeaveCustomise({
+    isWriting: editor.isWriting,
+    hasUnsavedChanges,
+    cancel: on.cancel,
+    requestFocus: focus.request,
+  });
 
   return (
     <>
       <DashboardCrumb
-        onLeave={editor.isEditing && canLeave ? requestLeave : undefined}
+        onLeave={editor.isEditing && leave.canLeave ? leave.request : undefined}
         isEditing={editor.isEditing}
       />
       <DashboardBarControls
@@ -291,7 +328,7 @@ export function DashboardEditChrome({
         canReset={canReset}
         onBegin={on.begin}
         onSave={requestSave}
-        onLeave={requestLeave}
+        onLeave={leave.request}
         onReset={() => setAskingReset(true)}
         onAddWidget={on.addWidget}
         addWidgetRef={focus.addWidgetRef}
@@ -309,22 +346,14 @@ export function DashboardEditChrome({
         testId="dashboard-reset-ask"
       />
       <ConfirmDialog
-        open={askingLeave}
-        onOpenChange={setAskingLeave}
+        open={leave.asking}
+        onOpenChange={leave.setAsking}
         title="Discard your changes?"
         description="Your changes to the dashboard haven't been saved, and leaving Customize dashboard discards them."
         confirm="Discard changes"
         keep="Keep editing"
-        onConfirm={() => {
-          leaving.current = true;
-          on.cancel();
-        }}
-        onCloseAutoFocus={event => {
-          if (!leaving.current) return;
-          leaving.current = false;
-          event.preventDefault();
-          focus.request({ kind: "heading" });
-        }}
+        onConfirm={leave.confirm}
+        onCloseAutoFocus={leave.onCloseAutoFocus}
         testId="dashboard-leave-ask"
       />
       {/* 🔴 Over an unreadable stored layout, Save first asks. The server
