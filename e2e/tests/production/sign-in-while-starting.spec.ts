@@ -65,9 +65,12 @@ test("a sign-in typed while the server starts is sent once, when it answers", as
   await expect(page.getByTestId("sign-in-connecting")).toHaveText(
     "Connecting…"
   );
-  // Pressed while the server is held: taken, and not sent yet.
-  await button.click();
-  await button.click();
+  // Pressed while the server is held: taken, and not sent yet. Enter in the
+  // form, and a click on the button: a browser lets both through, while
+  // Playwright's own click waits for a control marked unavailable, so it is
+  // forced past that wait.
+  await password.press("Enter");
+  await button.click({ force: true });
   await page.waitForTimeout(500);
   expect(signIns).toHaveLength(0);
   expect(held).toBeGreaterThan(0);
