@@ -80,6 +80,14 @@ describe("the build step for a new plugin", () => {
     );
   });
 
+  it("says what to add, and edits nothing, when a carried value is quoted", () => {
+    const answer = buildScriptEdit(
+      manifest('nextly migrate --config "config/site cms.ts" && next build'),
+      PLUGIN
+    );
+    expect(answer).toMatchObject({ kind: "manual" });
+  });
+
   it("keeps the rest of package.json as it was", () => {
     const answer = buildScriptEdit(
       manifest("nextly migrate && next build"),

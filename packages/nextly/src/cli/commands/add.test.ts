@@ -33,15 +33,33 @@ const install = vi.hoisted(() => ({
   environment: undefined as string | undefined,
   // The plugins the site's config registers when it is loaded, by name.
   configured: [] as string[],
+  // Whether loading a config that lists a plugin fails, as one whose plugin
+  // the loader refuses does.
+  refuses: false,
 }));
 
 vi.mock("../utils/config-loader", async () => ({
   ...(await vi.importActual<typeof import("../utils/config-loader")>(
     "../utils/config-loader"
   )),
-  loadConfig: async () => ({
-    config: { plugins: install.configured.map(name => ({ name })) },
-  }),
+  loadConfig: async ({ cwd }: { cwd: string }) => {
+    const { readFile: read } = await import("node:fs/promises");
+    const { join: joined } = await import("node:path");
+    const text = await read(joined(cwd, "nextly.config.ts"), "utf8");
+    if (install.refuses && text.includes("plugins: [")) {
+      // As the loader refuses a plugin, through a NextlyError.
+      const { NextlyError: Refusal } = await import(
+        "../../errors/nextly-error"
+      );
+      throw Refusal.conflict({
+        reason: "state",
+        message: 'The plugin "@acme/p" needs nextly >=99.0.0.',
+      });
+    }
+    return {
+      config: { plugins: install.configured.map(name => ({ name })) },
+    };
+  },
 }));
 
 vi.mock("../environment", async () => ({
@@ -210,6 +228,7 @@ describe("nextly plugins add", () => {
     install.asked = [];
     install.environment = undefined;
     install.configured = [];
+    install.refuses = false;
     output = [];
     const record = (...parts: unknown[]) => {
       output.push(parts.map(String).join(" "));
@@ -431,6 +450,16 @@ export default defineConfig({ plugins: [made.plugin] });
     expect(await add({ skipInstall: true })).toBeUndefined();
     expect(await config()).toBe(factory);
     expect(output.join("\n")).toMatch(/already registers @acme\/p/);
+  });
+
+  it("puts the config back when the loader refuses it with the plugin, and stops", async () => {
+    await installed(PLAIN);
+    install.refuses = true;
+    expect(await add({ skipInstall: true })).toBe(1);
+    expect(await config()).toBe(CONFIG);
+    expect(await build()).toBe("nextly migrate && next build");
+    expect(install.steps).toEqual([]);
+    expect(output.join("\n")).toMatch(/was put back as it was/);
   });
 
   describe("--dry-run", () => {

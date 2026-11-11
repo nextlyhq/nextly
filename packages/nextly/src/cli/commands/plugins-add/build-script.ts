@@ -40,6 +40,9 @@ const CARRIED_FLAGS = [
 /** A plugin name a shell reads as one word, with nothing it would act on. */
 const SHELL_SAFE_NAME = /^[A-Za-z0-9@/._-]+$/;
 
+/** A flag's value a shell reads as one plain word, as written. */
+const SHELL_WORD = /^[A-Za-z0-9@/._:+-]+$/;
+
 /** One `&&`-separated step of a script, trimmed, and where it ends in the script. */
 interface Step {
   text: string;
@@ -118,10 +121,22 @@ export function buildScriptEdit(
   // it read, so it finds the plugin where the migration found the rest, and
   // installs it on the database the migration prepared.
   const args = last.match?.[3] ?? "";
-  const flags = CARRIED_FLAGS.map(({ pattern, flag }) => {
-    const value = pattern.exec(args)?.[1];
-    return value === undefined ? "" : ` ${flag} ${value}`;
-  }).join("");
+  const values = CARRIED_FLAGS.map(({ pattern, flag }) => ({
+    flag,
+    value: pattern.exec(args)?.[1],
+  }));
+  // A value written with quotes or escapes is more than one plain word to a
+  // shell; copied as read, it could leave the build unable to run at all.
+  if (
+    values.some(({ value }) => value !== undefined && !SHELL_WORD.test(value))
+  ) {
+    return manual(
+      "The build's migration step gives its configuration or mode in a form this edit does not copy safely"
+    );
+  }
+  const flags = values
+    .map(({ flag, value }) => (value === undefined ? "" : ` ${flag} ${value}`))
+    .join("");
   const script = `${build.slice(0, last.end)} && ${runner}${step}${flags}${build.slice(last.end)}`;
   const edited = {
     ...(manifest as object),

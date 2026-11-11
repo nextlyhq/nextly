@@ -250,6 +250,32 @@ async function alreadyConfigured(
   }
 }
 
+/**
+ * Loads the edited config as every command loads it, and puts the file back
+ * as it was when that fails: a plugin the loader refuses, such as one asking
+ * for another core version, would otherwise leave a site whose config no
+ * longer loads, in development, at build and at start.
+ */
+async function keepOnlyIfItLoads(
+  file: string,
+  before: string,
+  cwd: string,
+  options: ResolvedAddOptions,
+  context: CommandContext
+): Promise<void> {
+  try {
+    await loadConfig({ configPath: options.config, cwd });
+  } catch (error) {
+    await writeFile(file, before);
+    context.logger.warn(
+      `${projectPath(cwd, file)} did not load with the plugin in it, so it was put back as it was.`
+    );
+    throw error;
+  } finally {
+    clearConfigCache();
+  }
+}
+
 /** Registers the plugin in the config, or names that edit under a dry run. */
 async function register(
   name: string,
@@ -313,6 +339,7 @@ async function register(
   await writeFile(file, answer.after);
   // The loader keeps the config it read last; the next step must read this one.
   clearConfigCache();
+  await keepOnlyIfItLoads(file, text, cwd, options, context);
   context.logger.success(
     `Registered ${plugin.name} in ${projectPath(cwd, file)}`
   );
