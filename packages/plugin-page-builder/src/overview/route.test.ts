@@ -227,7 +227,9 @@ describe("where the overview says the builder is used", () => {
     const answer = await readOverview(
       contextFor(() => true),
       { collection: "site-components" },
-      readsOf(COUNTS, ["homepage", "about"])
+      // The Single removed from config would answer a read; it is left
+      // out as one the site no longer declares.
+      readsOf(COUNTS, ["homepage", "about", "old-home"])
     );
     expect(answer.usedIn.map(use => `${use.kind}:${use.slug}`)).toEqual([
       // By name: Landing, Pages.
