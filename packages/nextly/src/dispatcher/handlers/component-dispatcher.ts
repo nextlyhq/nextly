@@ -24,6 +24,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
+import type { FieldOwner } from "../../domains/collections/services/collection-dependents";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertSaveLeavesNoFieldGroupCycle } from "../../domains/field-groups/field-group-cycles";
 import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
@@ -53,7 +54,6 @@ import type { FieldResolution } from "../../domains/schema/services/schema-chang
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
-import type { FieldOwner } from "../../domains/collections/services/collection-dependents";
 import { NextlyError } from "../../errors";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 // From the types module, not the barrel, which loads every dialect's tables.
@@ -201,7 +201,9 @@ async function placementsOf(slug: string) {
       "../../domains/collections/services/collection-dependents"
     );
     const { owners } = await readableFieldOwners(adapter);
-    return await fieldGroupUsedBy(slug, { fieldOwners: async () => owners });
+    return await fieldGroupUsedBy(slug, {
+      fieldOwners: () => Promise.resolve(owners),
+    });
   } catch (error) {
     throw placementsUnreadable(slug, error);
   }
@@ -299,7 +301,7 @@ async function placementCountsFor(
     // hidden use.
     if (!complete) return null;
     return await fieldGroupPlacementCounts(slugs, {
-      fieldOwners: async () => owners,
+      fieldOwners: () => Promise.resolve(owners),
     });
   } catch (error) {
     (getLoggerFromDI() ?? DISCARDED_LOG).warn(
