@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-`withNextly()` rewrites `/robots.txt`, `/sitemap.xml` and `/llms.txt` to the API handler, so a plugin route mounted at the root answers them at the site root. The site's own files and routes still win. A second argument names more root files, or a handler mounted somewhere other than `/admin/api`.
+`withNextly()` rewrites `/robots.txt`, `/sitemap.xml` and `/llms.txt` to the API handler, so a plugin route mounted at the root answers them at the site root. The site's own files, routes and rewrites still win. A second argument names more root files, or a handler mounted somewhere other than `/admin/api`.

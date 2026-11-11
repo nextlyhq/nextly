@@ -13,8 +13,11 @@ type Rewrites = {
 async function rewritesOf(config: Record<string, unknown>): Promise<Rewrites> {
   const rewrites = config.rewrites as (() => Promise<unknown>) | undefined;
   if (rewrites === undefined) throw new Error("no rewrites");
-  return (await rewrites()) as Rewrites;
+  // As Next calls it: as a method of the config.
+  return (await rewrites.call(config)) as Rewrites;
 }
+
+const sources = (rules: Rewrite[]) => rules.map(rule => rule.source);
 
 describe("withNextly serves the site's root files from plugins", () => {
   it("rewrites robots.txt, sitemap.xml and llms.txt to the API handler, after the site's own files", async () => {
@@ -67,5 +70,57 @@ describe("withNextly serves the site's root files from plugins", () => {
     expect(fromPhases.afterFiles[0]).toEqual(own);
     expect(fromPhases.afterFiles).toHaveLength(4);
     expect(fromPhases.fallback).toEqual([own]);
+  });
+
+  it("leaves a root file the site rewrites itself, in any phase, to the site", async () => {
+    const theirs = { source: "/robots.txt", destination: "/api/robots" };
+
+    const { afterFiles, fallback } = await rewritesOf(
+      withNextly({ rewrites: async () => ({ fallback: [theirs] }) })
+    );
+
+    // Next asks afterFiles before fallback: an entry of ours would win.
+    expect(sources(afterFiles)).not.toContain("/robots.txt");
+    expect(sources(afterFiles)).toEqual(["/sitemap.xml", "/llms.txt"]);
+    expect(fallback).toEqual([theirs]);
+  });
+
+  it("leaves to the site every root file a pattern of its own matches", async () => {
+    // A site passing everything it does not serve on to an older one.
+    const legacy = {
+      source: "/:path*",
+      destination: "https://legacy.example.com/:path*",
+    };
+    const blog = { source: "/blog/:slug", destination: "/posts/:slug" };
+
+    const { afterFiles } = await rewritesOf(
+      withNextly({ rewrites: async () => ({ fallback: [blog, legacy] }) })
+    );
+    expect(sources(afterFiles)).toEqual([]);
+
+    // A pattern that cannot match a root file leaves them to the plugins,
+    // one starting with a parameter included: Next's own matcher decides.
+    const feeds = { source: "/:slug/feed.xml", destination: "/feeds/:slug" };
+    const onlyBlog = await rewritesOf(
+      withNextly({ rewrites: async () => ({ fallback: [blog, feeds] }) })
+    );
+    expect(sources(onlyBlog.afterFiles)).toEqual([
+      "/robots.txt",
+      "/sitemap.xml",
+      "/llms.txt",
+    ]);
+  });
+
+  it("calls the site's own rewrites as a method of its config", async () => {
+    const config = {
+      basePath: "/docs",
+      async rewrites(this: { basePath: string }) {
+        return [{ source: "/old", destination: `${this.basePath}/new` }];
+      },
+    };
+
+    const { afterFiles } = await rewritesOf(withNextly(config));
+
+    expect(afterFiles[0]).toEqual({ source: "/old", destination: "/docs/new" });
   });
 });

@@ -78,7 +78,7 @@ export default definePlugin({
 });
 ```
 
-`withNextly()` rewrites `/robots.txt`, `/sitemap.xml` and `/llms.txt` to that address, so they reach the plugin at the site root. The rewrite is checked after the site's own files and routes: a site that ships its own `public/robots.txt` or `app/robots.ts` keeps serving it. Name more files, or a handler mounted somewhere other than `/admin/api`, with the second argument:
+`withNextly()` rewrites `/robots.txt`, `/sitemap.xml` and `/llms.txt` to that address, so they reach the plugin at the site root. The rewrite is checked after the site's own files and routes: a site that ships its own `public/robots.txt` or `app/robots.ts` keeps serving it. So does a site that rewrites one of these files itself, in any phase of its own `rewrites()`, including a pattern such as `/:path*` passing everything on to an older site: that file is left to the site's rewrite. Name more files, or a handler mounted somewhere other than `/admin/api`, with the second argument:
 
 ```ts
 // next.config.ts
