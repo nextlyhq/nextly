@@ -11,8 +11,13 @@ import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
 
 import { parseSource, storedTarget } from "./addresses";
 import type { ImportResult, ImportRowView, RedirectType } from "./contract";
-import { keptFrom, servedOf } from "./served";
-import { putRedirect, redirectFrom } from "./store";
+import { keptFrom, originBeside, servedOf } from "./served";
+import {
+  putRedirect,
+  redirectFrom,
+  type RedirectOutcome,
+  type StoredRedirect,
+} from "./store";
 
 /** The most rows one file may hold. */
 export const MOST_IMPORTED_ROWS = 5000;
@@ -90,83 +95,134 @@ export function readImportFile(text: string): ImportRow[] {
 
 type Transaction = Parameters<typeof putRedirect>[1];
 
-/** What one row does, applied in turn on `transaction`. */
-async function importRow(
+/** How a file is imported, and for whom. */
+export interface ImportOptions {
+  /** Keep the rows, rather than only say what each would do. */
+  apply: boolean;
+  /** The origin a row's paths are read on, as a visitor opens them. */
+  origin: string;
+  /** Who the imported redirects are recorded as added by. */
+  addedBy: string | null;
+  /** Whether a row may replace a redirect already from its From address. */
+  mayReplace: boolean;
+}
+
+/** The part of a row's view every outcome shares. */
+type RowOf = Pick<ImportRowView, "line" | "from" | "to">;
+
+function refusedRow(view: RowOf, says: string, loop = false): ImportRowView {
+  return { ...view, kind: "refused", says, refusal: loop ? "loop" : "other" };
+}
+
+/**
+ * Where a row's redirect is kept: its language, From and To, a To path read
+ * on the From address's domain. Or why it can't be, as a refusal.
+ */
+async function placeOf(
   ctx: PluginContext,
-  transaction: Transaction,
   row: ImportRow,
-  origin: string,
-  addedBy: string | null
-): Promise<ImportRowView> {
-  const view = { line: row.line, from: row.from, to: row.to };
-  const refused = (says: string, loop = false): ImportRowView => ({
-    ...view,
-    kind: "refused",
-    says,
-    refusal: loop ? "loop" : "other",
-  });
+  origin: string
+): Promise<{ locale: string; source: string; target: string } | string> {
   const from = await keptFrom(ctx, row.from, origin);
-  const to = await keptFrom(ctx, row.to, origin);
+  const to = await keptFrom(ctx, row.to, originBeside(row.from.trim(), origin));
   const locale = from.locale ?? "";
   if (
     from.locale !== undefined &&
     to.locale !== undefined &&
     to.locale !== locale
   ) {
-    return refused(
-      "Send it to an address in the same language as the From address."
-    );
+    return "Send it to an address in the same language as the From address.";
   }
-  const target = to.locale === undefined ? row.to : to.path;
-  const parsed = parseSource(from.path);
-  const existing = parsed.ok
-    ? await redirectFrom(ctx, transaction, locale, parsed.source)
-    : undefined;
-  if (existing !== undefined && existing.target === storedTarget(target)) {
-    return { ...view, kind: "same", says: "Already there, no change." };
-  }
-  const outcome = await putRedirect(
-    ctx,
-    transaction,
-    {
-      locale,
-      source: from.path,
-      target,
-      permanent: row.type === "permanent",
-      origin: "import",
-      addedBy,
-    },
-    existing?.id
-  );
-  if ("refused" in outcome) {
-    return refused(
-      outcome.refused.replace("That makes a loop", "Loop"),
-      outcome.reason === "loop"
-    );
-  }
-  const final = await servedOf(outcome.saved.target, locale);
-  if (existing !== undefined) {
+  return {
+    locale,
+    source: from.path,
+    target: to.locale === undefined ? row.to : to.path,
+  };
+}
+
+/** What a saved row did, in the words the dry run shows. */
+async function savedRow(
+  view: RowOf,
+  outcome: Extract<RedirectOutcome, { saved: unknown }>,
+  replaced: StoredRedirect | undefined,
+  pattern: boolean
+): Promise<ImportRowView> {
+  const { locale } = outcome.saved;
+  if (replaced !== undefined) {
+    // The old type is named where only the type changes, so the row says why.
+    const type =
+      replaced.permanent === outcome.saved.permanent
+        ? ""
+        : `, ${replaced.permanent ? "permanent" : "temporary"}`;
     return {
       ...view,
       kind: "replaced",
-      says: `Replaces ${row.from} → ${await servedOf(existing.target, locale)}.`,
+      says: `Replaces ${view.from} → ${await servedOf(replaced.target, locale)}${type}.`,
     };
   }
   if (outcome.chain.length > 1) {
+    const final = await servedOf(outcome.saved.target, locale);
     return {
       ...view,
       kind: "joined",
-      says: `Chain joined: ${[row.from, ...outcome.chain].join(" → ")} becomes one hop to ${final}.`,
+      says: `Chain joined: ${[view.from, ...outcome.chain].join(" → ")} becomes one hop to ${final}.`,
     };
   }
   return {
     ...view,
     kind: "new",
-    says:
-      parsed.ok && parsed.address.range
-        ? "New pattern: every old address goes to the same place under the new one."
-        : "New.",
+    says: pattern
+      ? "New pattern: every old address goes to the same place under the new one."
+      : "New.",
   };
+}
+
+/** What one row does, applied in turn on `transaction`. */
+async function importRow(
+  ctx: PluginContext,
+  transaction: Transaction,
+  row: ImportRow,
+  options: ImportOptions
+): Promise<ImportRowView> {
+  const view = { line: row.line, from: row.from, to: row.to };
+  const place = await placeOf(ctx, row, options.origin);
+  if (typeof place === "string") return refusedRow(view, place);
+  const parsed = parseSource(place.source);
+  const existing = parsed.ok
+    ? await redirectFrom(ctx, transaction, place.locale, parsed.source)
+    : undefined;
+  const permanent = row.type === "permanent";
+  if (
+    existing?.target === storedTarget(place.target) &&
+    existing.permanent === permanent
+  ) {
+    return { ...view, kind: "same", says: "Already there, no change." };
+  }
+  if (existing !== undefined && !options.mayReplace) {
+    return refusedRow(
+      view,
+      `You can add redirects but not change them, so ${row.from} can't be replaced.`
+    );
+  }
+  const outcome = await putRedirect(
+    ctx,
+    transaction,
+    { ...place, permanent, origin: "import", addedBy: options.addedBy },
+    existing?.id
+  );
+  if ("refused" in outcome) {
+    return refusedRow(
+      view,
+      outcome.refused.replace("That makes a loop", "Loop"),
+      outcome.reason === "loop"
+    );
+  }
+  return savedRow(
+    view,
+    outcome,
+    existing,
+    parsed.ok && parsed.address.range === true
+  );
 }
 
 /**
@@ -177,7 +233,7 @@ async function importRow(
 export async function importRedirects(
   ctx: PluginContext,
   rows: readonly ImportRow[],
-  options: { apply: boolean; origin: string; addedBy: string | null }
+  options: ImportOptions
 ): Promise<ImportResult> {
   // Thrown to roll the transaction back once every row has been read.
   const rollBack = NextlyError.conflict({
@@ -190,15 +246,7 @@ export async function importRedirects(
     await ctx.services.collections.withTransaction(async transaction => {
       views = [];
       for (const row of rows) {
-        views.push(
-          await importRow(
-            ctx,
-            transaction,
-            row,
-            options.origin,
-            options.addedBy
-          )
-        );
+        views.push(await importRow(ctx, transaction, row, options));
       }
       if (!options.apply || views.some(view => view.kind === "refused")) {
         throw rollBack;

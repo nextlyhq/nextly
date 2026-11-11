@@ -46,7 +46,14 @@ export interface RedirectView {
 /** An address not found as the screen shows it. */
 export interface NotFoundView {
   id: string;
+  /** The address as the visitor asked for it, as the list shows it. */
   path: string;
+  /**
+   * The address a redirect from it is added by: `path`, or, on another
+   * language's domain, the full address, so the redirect is made in the
+   * language it was asked for in whichever domain the admin is open on.
+   */
+  from: string;
   hits: number;
   lastSeen: string;
   /** `moved` for an old address a deploy moved whose redirect could not be saved. */

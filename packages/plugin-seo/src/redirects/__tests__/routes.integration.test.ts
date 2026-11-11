@@ -28,7 +28,7 @@ import { recordNotFound } from "../../not-found/log";
 import { keptSeoContext, logNotFound } from "../../not-found/report";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../collection";
-import { redirectRoutes } from "../routes";
+import { listRedirects, redirectRoutes } from "../routes";
 
 let current: TestNextly | undefined;
 
@@ -40,13 +40,26 @@ afterEach(async () => {
 /** Makes the next saves of one From address fail, as a store that went down. */
 const faults = { failSourceOf: "" };
 
-async function boot(dialect: TestDialect, languages = false) {
+/**
+ * `prefixed`: languages and no address rule, so every language is read as
+ * prefixed. `domains`: English on example.com and German on example.de.
+ */
+type Languages = false | "prefixed" | "domains";
+
+async function boot(dialect: TestDialect, languages: Languages = false) {
   faults.failSourceOf = "";
   current = await createTestNextly({
     dialect,
-    // Languages and no address rule: every language is read as prefixed.
-    ...(languages
-      ? { localization: { locales: ["en", "de"], defaultLocale: "en" } }
+    ...(languages === false
+      ? {}
+      : { localization: { locales: ["en", "de"], defaultLocale: "en" } }),
+    ...(languages === "domains"
+      ? {
+          languageAddresses: {
+            by: "domain" as const,
+            domains: { en: "https://example.com", de: "https://example.de" },
+          },
+        }
       : {}),
     plugins: [
       seoPlugin({ collections: ["pages"] }),
@@ -81,12 +94,18 @@ async function boot(dialect: TestDialect, languages = false) {
   return { t: current, seo };
 }
 
+/** Sara may do anything to redirects, unless a test says otherwise. */
+const mayDoAnything = { can: async () => true };
+
 /** Call one of the screen's routes as Sara, signed in. */
 async function call(
   seo: PluginContext,
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  caller: {
+    can: (action: string, resource: string) => Promise<boolean>;
+  } = mayDoAnything
 ) {
   const [routePath, id] =
     path.startsWith("/redirects/") && path !== "/redirects/import"
@@ -99,6 +118,7 @@ async function call(
   const ctx = {
     ...seo,
     user: { id: "u1", email: "sara@example.com", name: "Sara Khan" },
+    caller,
     params: id === undefined ? {} : { id },
   } as unknown as PluginRouteContext;
   try {
@@ -355,7 +375,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("reads an address no language serves in the default language, on the screen, in the Proxy and in the log", async () => {
-      const { t, seo } = await boot(dialect, true);
+      const { t, seo } = await boot(dialect, "prefixed");
       const proxy = createNextlyProxy(
         {} as Parameters<typeof createNextlyProxy>[0],
         {
@@ -394,6 +414,149 @@ describe.each(getConfiguredTestDialects())(
       const listed = await call(seo, "GET", "/not-found");
       // Shown as the visitor asked for it, not as the rule spells it.
       expect(items(listed.body).map(item => item.path)).toEqual(["/gone"]);
+    });
+    it("refuses to replace a redirect from a file for someone who may add redirects but not change them", async () => {
+      const { seo } = await boot(dialect);
+      await call(seo, "POST", "/redirects", { from: "/a", to: "/b" });
+      const addOnly = {
+        can: async (action: string) => action !== "update",
+      };
+
+      const tried = await call(
+        seo,
+        "POST",
+        "/redirects/import",
+        { file: "/a,/c\n/d,/e", apply: true },
+        addOnly
+      );
+
+      const result = tried.body.item as {
+        rows: Record<string, unknown>[];
+        applied: boolean;
+      };
+      expect(result.applied).toBe(false);
+      expect(result.rows.map(row => `${row.kind} ${row.says}`)).toEqual([
+        "refused You can add redirects but not change them, so /a can't be replaced.",
+        "new New.",
+      ]);
+      expect(
+        items((await call(seo, "GET", "/redirects")).body).map(
+          item => `${item.from} ${item.to}`
+        )
+      ).toEqual(["/a /b"]);
+
+      const added = await call(
+        seo,
+        "POST",
+        "/redirects/import",
+        { file: "/d,/e", apply: true },
+        addOnly
+      );
+      expect((added.body.item as { applied: boolean }).applied).toBe(true);
+    });
+
+    it("imports a row that only changes a redirect's type", async () => {
+      const { seo } = await boot(dialect);
+      await call(seo, "POST", "/redirects", { from: "/a", to: "/b" });
+
+      const done = await call(seo, "POST", "/redirects/import", {
+        file: "From,To,Type\n/a,/b,temporary",
+        apply: true,
+      });
+
+      expect(
+        (done.body.item as { rows: Record<string, unknown>[] }).rows.map(
+          row => `${row.kind} ${row.says}`
+        )
+      ).toEqual(["replaced Replaces /a → /b, permanent."]);
+      expect(
+        items((await call(seo, "GET", "/redirects")).body).map(
+          item => `${item.from} ${item.to} ${item.type}`
+        )
+      ).toEqual(["/a /b temporary"]);
+    });
+
+    it("lists every redirect, past the first page of rows", async () => {
+      const { seo } = await boot(dialect);
+      for (const n of [1, 2, 3, 4, 5]) {
+        await call(seo, "POST", "/redirects", { from: `/old-${n}`, to: "/x" });
+      }
+
+      // Two rows a page: three pages, the last one short.
+      const listed = await listRedirects(seo, 2);
+      const body = (await listed.json()) as Record<string, unknown>;
+
+      expect(
+        items(body)
+          .map(item => item.from)
+          .sort()
+      ).toEqual(["/old-1", "/old-2", "/old-3", "/old-4", "/old-5"]);
+      expect(body.meta).toMatchObject({ total: 5, hasNext: false });
+    });
+
+    it("keeps a To address's query on a site whose languages are prefixed", async () => {
+      const { seo } = await boot(dialect, "prefixed");
+      const proxy = createNextlyProxy(
+        {} as Parameters<typeof createNextlyProxy>[0],
+        {
+          start: async () => undefined,
+          next: () => () => new Response(null),
+        }
+      );
+
+      const added = await call(seo, "POST", "/redirects", {
+        from: "/de/alt",
+        to: "/de/neu?ref=1#teil",
+      });
+
+      expect(added.body.item).toMatchObject({
+        from: "/de/alt",
+        to: "/de/neu?ref=1#teil",
+      });
+      const answer = await proxy(new Request("https://example.com/de/alt"));
+      expect(answer?.headers.get("location")).toBe(
+        "https://example.com/de/neu?ref=1#teil"
+      );
+    });
+
+    it("redirects an address not found on another language's domain in that language", async () => {
+      const { seo } = await boot(dialect, "domains");
+      const proxy = createNextlyProxy(
+        {} as Parameters<typeof createNextlyProxy>[0],
+        {
+          start: async () => undefined,
+          next: () => () => new Response(null),
+        }
+      );
+      await logNotFound(
+        new Headers({ "x-nextly-seo-asked-for": "https://example.de/weg" })
+      );
+
+      const [missing] = items((await call(seo, "GET", "/not-found")).body);
+      expect(missing).toMatchObject({
+        path: "/weg",
+        from: "https://example.de/weg",
+      });
+      const added = await call(seo, "POST", "/redirects", {
+        from: missing?.from,
+        to: "/neu",
+      });
+
+      expect(added.body.item).toMatchObject({
+        from: "https://example.de/weg",
+        to: "https://example.de/neu",
+      });
+      const answer = await proxy(new Request("https://example.de/weg"));
+      expect(answer?.headers.get("location")).toBe("https://example.de/neu");
+      const edited = await call(
+        seo,
+        "PATCH",
+        `/redirects/${String((added.body.item as { id: string }).id)}`,
+        { to: "/neu-2", type: "permanent" }
+      );
+      expect(edited.body.item).toMatchObject({
+        to: "https://example.de/neu-2",
+      });
     });
   }
 );

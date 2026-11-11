@@ -59,11 +59,15 @@ const SARA: RedirectView = {
 const MISSING: NotFoundView = {
   id: "n1",
   path: "/pricing-plans",
+  from: "/pricing-plans",
   hits: 17,
   lastSeen: "2026-11-07T10:00:00.000Z",
   kind: "missing",
   suggestion: "/pricing",
 };
+
+/** What the fake server answers the not-found list with. */
+let notFoundAnswer: () => { items?: NotFoundView[]; error?: Error };
 
 /** Every write the screen made, in order. */
 let writes: { path: string; method?: string; body?: unknown }[];
@@ -77,14 +81,20 @@ let answer: (request: {
 beforeEach(() => {
   writes = [];
   answer = () => ({ message: "Done.", item: {} });
+  notFoundAnswer = () => ({ items: [MISSING] });
   const refetch = vi.fn();
-  vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
-    data: { items: args.path === "/not-found" ? [MISSING] : [AUTO, SARA] },
-    pending: false,
-    error: null,
-    refetch,
-    fetching: false,
-  })) as unknown as typeof usePluginRoute);
+  vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => {
+    const answered =
+      args.path === "/not-found" ? notFoundAnswer() : { items: [AUTO, SARA] };
+    return {
+      data:
+        answered.items === undefined ? undefined : { items: answered.items },
+      pending: false,
+      error: answered.error ?? null,
+      refetch,
+      fetching: false,
+    };
+  }) as unknown as typeof usePluginRoute);
   vi.mocked(writePluginRoute).mockImplementation((async (request: {
     path: string;
     method?: string;
@@ -306,5 +316,43 @@ describe("the redirects screen", () => {
       file: "/old-blog/*,/blog/*",
       apply: true,
     });
+  });
+  it("keeps the redirects usable for someone who may not read the addresses not found", () => {
+    notFoundAnswer = () => ({
+      error: Object.assign(new Error("forbidden"), {
+        status: 403,
+        code: "FORBIDDEN",
+        message: "You don't have permission to do that.",
+      }),
+    });
+    render(<SeoRedirectsPage />);
+
+    expect(
+      screen.getByRole("button", { name: "Edit redirect from /webinar" })
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: /Not found/ }));
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The addresses not found could not be read."
+    );
+  });
+
+  it("fills the form with an address not found on another language's domain as it was asked for", () => {
+    notFoundAnswer = () => ({
+      items: [
+        {
+          ...MISSING,
+          path: "/weg",
+          from: "https://example.de/weg",
+          suggestion: "https://example.de/neu",
+        },
+      ],
+    });
+    render(<SeoRedirectsPage />);
+
+    fireEvent.click(screen.getByRole("tab", { name: /Not found/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Redirect /weg" }));
+
+    expect(from().value).toBe("https://example.de/weg");
+    expect(to().value).toBe("https://example.de/neu");
   });
 });

@@ -26,7 +26,7 @@ import { closestPage } from "../not-found/suggest";
 import { REDIRECTS_SLUG, redirectsSlug } from "./collection";
 import type { NotFoundView, RedirectView } from "./contract";
 import { importRedirects, readImportFile } from "./import";
-import { keptFrom, servedOf } from "./served";
+import { keptFrom, originBeside, servedOf } from "./served";
 import {
   putRedirect,
   redirectOf,
@@ -35,7 +35,7 @@ import {
   type StoredRedirect,
 } from "./store";
 
-/** The most rows one list answers with. */
+/** How many rows one read of a list takes. */
 const MOST_LISTED = 500;
 
 /** How many held addresses a suggestion is chosen from, at most. */
@@ -122,23 +122,34 @@ async function bodyOf(req: Request): Promise<unknown> {
   }
 }
 
-/** Every redirect, newest first. */
-async function listRedirects(ctx: PluginContext): Promise<Response> {
-  const { data } = await ctx.services.ownCollections.listEntries(
-    redirectsSlug(ctx),
-    {
-      pagination: { limit: MOST_LISTED, page: 1 },
-      sort: { field: "createdAt", direction: "desc" },
-      depth: 0,
-    }
-  );
+/**
+ * Every redirect, newest first, read `pageSize` rows at a time: the list
+ * route's answer, the page size a parameter so a test can cross a page.
+ */
+export async function listRedirects(
+  ctx: PluginContext,
+  pageSize: number = MOST_LISTED
+): Promise<Response> {
+  const entries: unknown[] = [];
+  for (let page = 1; ; page++) {
+    const { data } = await ctx.services.ownCollections.listEntries(
+      redirectsSlug(ctx),
+      {
+        pagination: { limit: pageSize, page },
+        sort: { field: "createdAt", direction: "desc" },
+        depth: 0,
+      }
+    );
+    entries.push(...(data as unknown[]));
+    if ((data as unknown[]).length < pageSize) break;
+  }
   const items = await Promise.all(
-    (data as unknown[]).map(entry => viewOf(redirectOf(entry)))
+    entries.map(entry => viewOf(redirectOf(entry)))
   );
   return respondList(items, {
     total: items.length,
     page: 1,
-    limit: MOST_LISTED,
+    limit: items.length,
     totalPages: 1,
     hasNext: false,
     hasPrev: false,
@@ -152,7 +163,13 @@ async function addRedirect(
   const body = addBody.parse(await bodyOf(req));
   const origin = new URL(req.url).origin;
   const from = await keptFrom(ctx, body.from, origin);
-  const to = await keptFrom(ctx, body.to, origin);
+  // A To path is read on the From address's domain, so `/neu` beside
+  // `https://example.de/alt` is German whichever domain the admin is on.
+  const to = await keptFrom(
+    ctx,
+    body.to,
+    originBeside(body.from.trim(), origin)
+  );
   const locale = from.locale ?? "";
   // A From address that is no path at all is refused for itself below.
   if (
@@ -194,7 +211,15 @@ async function editRedirect(
   const found = await ctx.services.ownCollections
     .findEntryById(redirectsSlug(ctx), id)
     .then(redirectOf);
-  const to = await keptFrom(ctx, body.to, new URL(req.url).origin);
+  // Read on the domain the redirect's From address is served on.
+  const to = await keptFrom(
+    ctx,
+    body.to,
+    originBeside(
+      await servedOf(found.source, found.locale),
+      new URL(req.url).origin
+    )
+  );
   if (to.locale !== undefined && to.locale !== found.locale) {
     throw NextlyError.invalidInput({
       message:
@@ -274,9 +299,12 @@ async function notFoundViewOf(
   // visitor asked for it, where that is known.
   const served = await servedOf(kept, locale);
   const asked = typeof row.asked === "string" ? row.asked : "";
+  const path = asked === "" ? served : asked;
   return {
     id: String(row.id),
-    path: asked === "" ? served : asked,
+    path,
+    // A full address where its language has a domain of its own.
+    from: served.startsWith("/") ? path : served,
     hits: Number(row.hits ?? 0),
     lastSeen: isoOf(row.lastSeen),
     kind: row.kind === "moved" ? "moved" : "missing",
@@ -333,6 +361,9 @@ async function importFile(
     apply: body.apply,
     origin: new URL(req.url).origin,
     addedBy: nameOf(ctx),
+    // The route asks only to add redirects: replacing one is changing it,
+    // which PATCH asks to be allowed, so a file may do it only for the same.
+    mayReplace: (await ctx.caller?.can("update", redirectsSlug(ctx))) ?? false,
   });
   const saved = result.rows.filter(
     row => row.kind !== "same" && row.kind !== "refused"
@@ -343,43 +374,52 @@ async function importFile(
   return respondMutation(message, result);
 }
 
-/** The routes the redirects screen reads and writes through. */
+/**
+ * The routes the redirects screen reads and writes through, each asking for
+ * its collection's permission under the name an installation gives it.
+ */
 export function redirectRoutes(): PluginRoute[] {
   return [
     {
       method: "GET",
       path: "/redirects",
-      requiredPermission: `read-${REDIRECTS_SLUG}`,
+      requiredPermission: ({ collection }) =>
+        collection(REDIRECTS_SLUG, "read"),
       handler: (_req, ctx) => listRedirects(ctx),
     },
     {
       method: "POST",
       path: "/redirects",
-      requiredPermission: `create-${REDIRECTS_SLUG}`,
+      requiredPermission: ({ collection }) =>
+        collection(REDIRECTS_SLUG, "create"),
       handler: addRedirect,
     },
     {
       method: "PATCH",
       path: "/redirects/:id",
-      requiredPermission: `update-${REDIRECTS_SLUG}`,
+      requiredPermission: ({ collection }) =>
+        collection(REDIRECTS_SLUG, "update"),
       handler: editRedirect,
     },
     {
       method: "DELETE",
       path: "/redirects/:id",
-      requiredPermission: `delete-${REDIRECTS_SLUG}`,
+      requiredPermission: ({ collection }) =>
+        collection(REDIRECTS_SLUG, "delete"),
       handler: (_req, ctx) => deleteRedirect(ctx),
     },
     {
       method: "POST",
       path: "/redirects/import",
-      requiredPermission: `create-${REDIRECTS_SLUG}`,
+      requiredPermission: ({ collection }) =>
+        collection(REDIRECTS_SLUG, "create"),
       handler: importFile,
     },
     {
       method: "GET",
       path: "/not-found",
-      requiredPermission: `read-${NOT_FOUND_SLUG}`,
+      requiredPermission: ({ collection }) =>
+        collection(NOT_FOUND_SLUG, "read"),
       handler: (_req, ctx) => listNotFound(ctx),
     },
   ];

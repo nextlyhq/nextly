@@ -137,8 +137,14 @@ function suggestionNote(suggestion: string | null): FormMessage {
   };
 }
 
-/** The panel's content once both lists are read, or why they are not. */
+/**
+ * A tab's content once its list is read, or why it is not. Each tab waits
+ * on its own list only, so a list someone may not read leaves the other
+ * tab working.
+ */
 function Loaded(props: {
+  /** What the list holds, as the messages name it: "redirects". */
+  what: string;
   failed: unknown;
   pending: boolean;
   children: ReactNode;
@@ -146,14 +152,14 @@ function Loaded(props: {
   if (props.failed) {
     return (
       <p className="nx-seo-alert" role="alert">
-        The redirects could not be read. {apiErrorMessage(props.failed)}
+        The {props.what} could not be read. {apiErrorMessage(props.failed)}
       </p>
     );
   }
   if (props.pending) {
     return (
       <p className="nx-seo-state" role="status">
-        Loading the redirects…
+        Loading the {props.what}…
       </p>
     );
   }
@@ -330,7 +336,9 @@ function useRedirectForm(
   /** Fills the form from an address not found, its To the suggestion. */
   const fillFrom = (row: NotFoundView) => {
     setEditing(null);
-    setFrom(row.path);
+    // The address a redirect is added by, its domain kept where its
+    // language has one.
+    setFrom(row.from);
     setTo(row.suggestion ?? "");
     setMessage(suggestionNote(row.suggestion));
     setFocusTo(count => count + 1);
@@ -516,11 +524,12 @@ export function SeoRedirectsPage(): JSX.Element {
         id="nx-seo-redirects-panel"
         aria-labelledby={`nx-seo-redirects-tab-${tab}`}
       >
-        <Loaded
-          failed={redirects.error ?? notFound.error}
-          pending={redirects.pending || notFound.pending}
-        >
-          {tab === "list" ? (
+        {tab === "list" ? (
+          <Loaded
+            what="redirects"
+            failed={redirects.error}
+            pending={redirects.pending}
+          >
             <ListTab
               rows={rows}
               form={form}
@@ -528,7 +537,13 @@ export function SeoRedirectsPage(): JSX.Element {
               busy={busy}
               onChooseFile={chooseFile}
             />
-          ) : (
+          </Loaded>
+        ) : (
+          <Loaded
+            what="addresses not found"
+            failed={notFound.error}
+            pending={notFound.pending}
+          >
             <NotFoundList
               rows={missing}
               onRedirect={row => {
@@ -536,8 +551,8 @@ export function SeoRedirectsPage(): JSX.Element {
                 form.fillFrom(row);
               }}
             />
-          )}
-        </Loaded>
+          </Loaded>
+        )}
       </div>
     </div>
   );

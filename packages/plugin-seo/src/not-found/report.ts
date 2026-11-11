@@ -11,7 +11,7 @@
  */
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
-import { ASKED_FOR_HEADER } from "../redirects/proxy-handler";
+import { ASKED_FOR_HEADER, REQUEST_HEADER } from "../redirects/proxy-handler";
 import { askedAddress } from "../redirects/served";
 
 import { notAPageAddress, recordNotFound } from "./log";
@@ -30,6 +30,32 @@ export function keepSeoContext(ctx: PluginContext): void {
   shared.__nextly_seoPluginContext = ctx;
 }
 
+/** How many requests' ids are remembered as logged, the oldest let go first. */
+const REMEMBERED_REQUESTS = 1000;
+
+/**
+ * The requests this process has logged, by the id the Proxy gave each. Every
+ * render of one request runs in the process that received it, so this is
+ * enough to count it once.
+ */
+const loggedRequests = new Set<string>();
+
+/**
+ * Whether the request `id` names is logged already, marking it logged. Kept
+ * synchronous, so of two renders of one request at once only the first logs.
+ */
+function loggedBefore(id: string | null): boolean {
+  // A request without an id (the site's Proxy predates it) is logged each time.
+  if (id === null || id === "") return false;
+  if (loggedRequests.has(id)) return true;
+  loggedRequests.add(id);
+  if (loggedRequests.size > REMEMBERED_REQUESTS) {
+    const oldest = loggedRequests.values().next().value;
+    if (oldest !== undefined) loggedRequests.delete(oldest);
+  }
+  return false;
+}
+
 /** Anything that reads a request header by name, as `headers()` does. */
 export interface HeaderReader {
   get(name: string): string | null;
@@ -41,20 +67,25 @@ export interface HeaderReader {
  *
  * ```tsx
  * import { headers } from "next/headers";
+ * import { connection } from "next/server";
  * import { logNotFound } from "@nextlyhq/plugin-seo";
  *
- * export default async function NotFound() {
+ * async function LogThisAddress() {
+ *   await connection();
  *   await logNotFound(await headers());
- *   return <h1>Page not found</h1>;
+ *   return null;
  * }
  * ```
  *
- * It never throws: a log that cannot be written must not break the page.
+ * rendered inside `<Suspense>` on the not-found page. A request is counted
+ * once however many times Next.js renders its not-found page. It never
+ * throws: a log that cannot be written must not break the page.
  */
 export async function logNotFound(headers: HeaderReader): Promise<void> {
   const ctx = shared.__nextly_seoPluginContext;
   const asked = headers.get(ASKED_FOR_HEADER);
   if (ctx === undefined || asked === null || asked === "") return;
+  if (loggedBefore(headers.get(REQUEST_HEADER))) return;
   try {
     const url = new URL(asked);
     if (notAPageAddress(url.pathname)) return;

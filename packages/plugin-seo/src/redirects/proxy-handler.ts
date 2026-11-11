@@ -32,6 +32,12 @@ import { redirectOf, type StoredRedirect } from "./store";
  */
 export const ASKED_FOR_HEADER = "x-nextly-seo-asked-for";
 
+/**
+ * The request header naming one request the Proxy let through, so a
+ * not-found page Next.js renders more than once for it is counted once.
+ */
+export const REQUEST_HEADER = "x-nextly-seo-request";
+
 /** The redirect that answers `address`, if any. */
 async function redirectFor(
   ctx: PluginContext,
@@ -103,7 +109,9 @@ export function redirectsProxyHandler(): PluginProxyHandler {
       if (address === "not-a-page") {
         // Emptied rather than left alone: a value a visitor sent in this
         // header themselves must never be logged as an address asked for.
-        return { requestHeaders: { [ASKED_FOR_HEADER]: "" } };
+        return {
+          requestHeaders: { [ASKED_FOR_HEADER]: "", [REQUEST_HEADER]: "" },
+        };
       }
       const redirect = await redirectFor(ctx, address);
       const location =
@@ -127,7 +135,10 @@ export function redirectsProxyHandler(): PluginProxyHandler {
       // The page is served; should it be found missing, its not-found page
       // reads which address was asked for from this.
       return {
-        requestHeaders: { [ASKED_FOR_HEADER]: `${url.origin}${url.pathname}` },
+        requestHeaders: {
+          [ASKED_FOR_HEADER]: `${url.origin}${url.pathname}`,
+          [REQUEST_HEADER]: crypto.randomUUID(),
+        },
       };
     },
   };

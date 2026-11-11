@@ -10,9 +10,14 @@
  */
 import { logNotFound } from "@nextlyhq/plugin-seo";
 import { headers } from "next/headers";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 async function LogThisAddress(): Promise<null> {
+  // Only a visitor's request is logged: a prerender of the page waits here
+  // for good, so it neither counts a visit nor reads the time while
+  // prerendering, which Next.js refuses.
+  await connection();
   await logNotFound(await headers());
   return null;
 }

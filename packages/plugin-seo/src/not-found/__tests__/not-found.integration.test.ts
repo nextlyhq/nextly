@@ -94,6 +94,19 @@ describe.each(getConfiguredTestDialects())(
       expect(await logged(t)).toEqual({ "/missing": 2, "/blog/feed.xml": 1 });
     });
 
+    it("counts a request once, however many times its not-found page renders", async () => {
+      const { t } = await boot(dialect);
+      const once = await renderedWith("/twice");
+
+      // Next.js may render one request's not-found page more than once, and
+      // at the same time.
+      await Promise.all([logNotFound(once), logNotFound(once)]);
+      await logNotFound(once);
+      await logNotFound(await renderedWith("/twice"));
+
+      expect(await logged(t)).toEqual({ "/twice": 2 });
+    });
+
     it("counts every request for one address when they arrive at once", async () => {
       const { t, seo } = await boot(dialect);
 

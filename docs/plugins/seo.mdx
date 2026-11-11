@@ -748,9 +748,11 @@ Log a request from the site's not-found page, with the request headers the Proxy
 // src/app/not-found.tsx
 import { logNotFound } from "@nextlyhq/plugin-seo";
 import { headers } from "next/headers";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 async function LogThisAddress() {
+  await connection();
   await logNotFound(await headers());
   return null;
 }
@@ -767,9 +769,9 @@ export default function NotFound() {
 }
 ```
 
-The log is written under a `Suspense` boundary because reading the request's headers makes that part dynamic, which Cache Components requires to sit inside one.
+The log is written under a `Suspense` boundary because reading the request's headers makes that part dynamic, which Cache Components requires to sit inside one. `connection()` keeps a prerender of the page from logging anything: only a visitor's request is counted.
 
-`logNotFound` never throws, and logs nothing for a request the Proxy did not pass on.
+A request is counted once, however many times Next.js renders its not-found page. `logNotFound` never throws, and logs nothing for a request the Proxy did not pass on.
 
 ## Next steps
 

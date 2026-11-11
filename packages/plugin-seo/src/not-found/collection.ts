@@ -23,6 +23,10 @@ export function notFoundCollection(): CollectionConfig {
     slug: NOT_FOUND_SLUG,
     labels: { singular: "Address not found", plural: "Addresses not found" },
     internal: true,
+    // Written while a not-found page renders, where Next.js expires no cache
+    // tag, and read only by the admin's routes, which no cache holds: a write
+    // here has nothing to expire, and trying would log a failure every time.
+    revalidate: { disable: true },
     fields: [
       // The SHA-256 of the language and the address, so one address is one
       // row on every dialect, whatever its length.
