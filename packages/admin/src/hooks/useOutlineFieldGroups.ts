@@ -54,6 +54,9 @@ export function useOutlineFieldGroups(): {
         slug: group.slug,
         label: group.label,
         fields: group.fields,
+        // The list answers with each field group's use count; null when it
+        // could not be read, which the outline then leaves unsaid.
+        placedBy: group.placedBy ?? null,
         // Whether the field group translates its fields. The server sends it
         // on every record; the record's type does not name it, so it is read
         // through a check that holds whatever arrives.

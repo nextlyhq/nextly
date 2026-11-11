@@ -111,6 +111,16 @@ function rowNote(node: OutlineNode): string | null {
   return node.fieldGroup ? fieldGroupNote(node.fieldGroup) : null;
 }
 
+/**
+ * A field-group field's badge: shared, and in how many places, when that is
+ * known. The count is of fields, as the field-group list counts them.
+ */
+function sharedText(node: OutlineNode): string {
+  const placedBy = node.fieldGroup?.placedBy;
+  if (placedBy === undefined || placedBy === null) return "Shared";
+  return `Shared · used in ${placedBy} ${placedBy === 1 ? "place" : "places"}`;
+}
+
 /** The badges a row carries, in a fixed order; told in words, not colour. */
 function RowBadges({
   node,
@@ -129,7 +139,7 @@ function RowBadges({
       show: node.readOnly,
       text: node.readOnly ? `Locked · ${describeReadOnly(node.readOnly)}` : "",
     },
-    { show: node.container === "field-group", text: "Shared" },
+    { show: node.container === "field-group", text: sharedText(node) },
   ];
   return (
     <span className="ml-auto flex flex-wrap items-center justify-end gap-1">

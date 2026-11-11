@@ -44,6 +44,7 @@ import {
   getFieldGroupMetadataServiceFromDI,
   getLoggerFromDI,
 } from "../../helpers/di";
+import { NextlyError } from "../../../errors";
 import { dispatchComponents } from "../component-dispatcher";
 
 type Registry = {
@@ -544,5 +545,79 @@ describe("dispatchComponents, actions (respondAction)", () => {
     });
     expect(body).not.toHaveProperty("data");
     expect(body).not.toHaveProperty("item");
+  });
+});
+
+describe("dispatchComponents, where a field group is used (getComponentUsedBy)", () => {
+  const owners = [
+    {
+      entityType: "fieldGroup",
+      entitySlug: "card",
+      fields: [{ name: "meta", type: "component", component: "seo" }],
+    },
+    {
+      entityType: "collection",
+      entitySlug: "pages",
+      fields: [{ name: "seo", type: "component", component: "seo" }],
+    },
+    {
+      entityType: "single",
+      entitySlug: "home",
+      fields: [{ name: "seo", type: "component", component: "seo" }],
+    },
+  ];
+
+  beforeEach(() => {
+    readFieldOwners.mockReset();
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      {} as ReturnType<typeof getAdapterFromDI>
+    );
+  });
+
+  it("lists each field that places the field group, and what holds it, as { items, meta }", async () => {
+    wireRegistry(
+      makeRegistry({ getComponent: vi.fn().mockResolvedValue({ slug: "seo" }) })
+    );
+    readFieldOwners.mockResolvedValue(owners);
+    const response = (await dispatchComponents(
+      "getComponentUsedBy",
+      { slug: "seo" },
+      undefined
+    )) as Response;
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.items).toEqual([
+      { entityType: "fieldGroup", entitySlug: "card", fieldPath: "meta" },
+      { entityType: "collection", entitySlug: "pages", fieldPath: "seo" },
+      { entityType: "single", entitySlug: "home", fieldPath: "seo" },
+    ]);
+    expect(body.meta).toMatchObject({ total: 3 });
+  });
+
+  it("answers not found for a field group that does not exist, before reading any field list", async () => {
+    wireRegistry(
+      makeRegistry({
+        getComponent: vi
+          .fn()
+          .mockRejectedValue(NextlyError.notFound({ logContext: {} })),
+      })
+    );
+    await expect(
+      dispatchComponents("getComponentUsedBy", { slug: "gone" }, undefined)
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(readFieldOwners).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the field lists cannot be read, rather than answering it is used nowhere", async () => {
+    wireRegistry(
+      makeRegistry({ getComponent: vi.fn().mockResolvedValue({ slug: "seo" }) })
+    );
+    readFieldOwners.mockRejectedValue(new Error("registry unreadable"));
+    await expect(
+      dispatchComponents("getComponentUsedBy", { slug: "seo" }, undefined)
+    ).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+      logContext: { reason: "field-group-placements-unreadable", slug: "seo" },
+    });
   });
 });

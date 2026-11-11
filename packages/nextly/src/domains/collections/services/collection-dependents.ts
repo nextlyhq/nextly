@@ -478,18 +478,46 @@ export async function fieldGroupPlacementCounts(
   if (slugs.length === 0) return counts;
   const owners = await sources.fieldOwners();
   for (const slug of slugs) {
-    // What goes with a delete of this field group alone, as the delete
-    // decides it: its own fields, so a reference to itself does not count.
-    const goingToo = fieldsGoingWith(
-      [{ kind: "fieldGroup", slug, tables: [] }],
-      {}
-    );
-    counts.set(
-      slug,
-      referencesAmong(owners, "fieldGroup", slug, goingToo).length
-    );
+    // The count is the length of the list a field group's own editor shows,
+    // never a second walk that could come to disagree with it.
+    counts.set(slug, placementsAmong(owners, slug).length);
   }
   return counts;
+}
+
+/**
+ * The fields that place one field group, read from every stored field list:
+ * each names the collection, Single or field group that holds it, and its
+ * path there. What a field group's own editor lists as using it; its length
+ * is the count the field-group list shows (`fieldGroupPlacementCounts`).
+ *
+ * Rejects when the field lists cannot be read, so the caller decides how to
+ * say it does not know, rather than this answering "used nowhere".
+ *
+ * @param slug the field group, as fields name it
+ * @param sources where the stored field lists are read from
+ */
+export async function fieldGroupUsedBy(
+  slug: string,
+  sources: Pick<DependentsSources, "fieldOwners">
+): Promise<FieldReference[]> {
+  return placementsAmong(await sources.fieldOwners(), slug);
+}
+
+/**
+ * The one walk both answers come from: the delete's own, asked as if this
+ * field group were deleted alone, so its own fields go with it and a
+ * reference to itself does not count.
+ */
+function placementsAmong(
+  owners: readonly FieldOwner[],
+  slug: string
+): FieldReference[] {
+  const goingToo = fieldsGoingWith(
+    [{ kind: "fieldGroup", slug, tables: [] }],
+    {}
+  );
+  return referencesAmong(owners, "fieldGroup", slug, goingToo);
 }
 
 /**

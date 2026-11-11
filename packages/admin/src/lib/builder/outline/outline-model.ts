@@ -25,6 +25,11 @@ export interface LoadedFieldGroup {
   slug: string;
   label: string;
   fields: FieldDefinition[];
+  /**
+   * How many fields place it, across every collection, Single and field
+   * group; null or absent when that is not known.
+   */
+  placedBy?: number | null;
   /** Whether the field group is translated, so its fields can be. */
   localized?: boolean;
 }
@@ -143,6 +148,8 @@ export interface OutlineNode {
      * be read, or read and not there. Undefined when none is missing.
      */
     unavailable?: "loading" | "failed" | "not-found";
+    /** For a field using one field group: how many fields place it. */
+    placedBy?: number | null;
   };
   /**
    * For a blocks field: the blocks it accepts, as its policy names them (a
@@ -338,6 +345,9 @@ function fillFieldGroup(
     slugs,
     missing,
     cycle,
+    ...(refs.single !== undefined
+      ? { placedBy: ctx.fieldGroups.get(refs.single)?.placedBy ?? null }
+      : {}),
     ...(missing.length > 0 ? { unavailable: unavailableWhy(ctx.load) } : {}),
   };
 }

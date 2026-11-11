@@ -181,6 +181,42 @@ function readMigrationStatus(
  * A test reading these keys turns that into a failure by name.
  */
 /**
+ * The fields that place one field group, as its own editor lists them.
+ *
+ * Unlike the list page's count, this refuses when the field lists cannot be
+ * read: the answer is the whole response, and an empty list would claim the
+ * field group is used nowhere when that is not known.
+ */
+async function placementsOf(slug: string) {
+  const adapter = getAdapterFromDI();
+  if (!adapter) throw placementsUnreadable(slug, "no database adapter");
+  try {
+    // Loaded when asked, as the list and the delete path load it.
+    const { fieldGroupUsedBy, readFieldOwners } = await import(
+      "../../domains/collections/services/collection-dependents"
+    );
+    return await fieldGroupUsedBy(slug, {
+      fieldOwners: () => readFieldOwners(adapter),
+    });
+  } catch (error) {
+    throw placementsUnreadable(slug, error);
+  }
+}
+
+/** The refusal when a field group's uses cannot be read. */
+function placementsUnreadable(slug: string, cause: unknown): NextlyError {
+  return NextlyError.serviceUnavailable({
+    publicMessage: `Where the field group "${slug}" is used could not be read. Nothing is known about its uses. Fix the cause in the server log and try again.`,
+    ...(cause instanceof Error ? { cause } : {}),
+    logContext: {
+      reason: "field-group-placements-unreadable",
+      slug,
+      error: cause instanceof Error ? cause.message : String(cause),
+    },
+  });
+}
+
+/**
  * How many fields place each field group on a list page, or `null` when that
  * cannot be read. The list still answers without it: a count is something
  * the page shows, not something the request depends on, so an unreadable
@@ -339,6 +375,21 @@ export const COMPONENTS_METHODS: Record<
       const slug = requireParam(p, "slug", "Component slug");
       const component = await svc.registry.getComponent(slug);
       return respondDoc(component);
+    },
+  },
+
+  // The fields that place one field group, and what holds each: what its own
+  // editor lists as using it. The field group is looked up first, so one
+  // that does not exist answers not found before anything else is read.
+  getComponentUsedBy: {
+    execute: async (svc, p) => {
+      const slug = requireParam(p, "slug", "Component slug");
+      await svc.registry.getComponent(slug);
+      const placements = await placementsOf(slug);
+      return respondList(
+        placements,
+        offsetPaginationToMeta({ total: placements.length })
+      );
     },
   },
 
