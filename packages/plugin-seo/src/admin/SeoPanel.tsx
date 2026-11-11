@@ -13,7 +13,7 @@
 import { navigateTo } from "@nextlyhq/plugin-sdk/admin";
 import { Input, Textarea } from "@nextlyhq/ui";
 import { EyeOff, Lock } from "lucide-react";
-import { useId, type ReactNode } from "react";
+import { useId, type ReactNode, type Ref } from "react";
 
 import type { Sourced } from "../resolver/order";
 import type { SeoTabContext } from "../tab/contract";
@@ -120,7 +120,7 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
         status={props.status}
         sharedTitleTyped={isTyped(values.socialTitle)}
       />
-      <SeoTextField
+      <PageTextField
         label="Title on Google"
         help="The blue link people click in Google's results. Google shows about 60 characters."
         typed={typedText(values.metaTitle)}
@@ -134,7 +134,7 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
         writable={writable}
         onChange={next => onSet("metaTitle", next)}
       />
-      <SeoTextField
+      <PageTextField
         multiline
         label="Description on Google"
         help="The grey text under the link. It doesn't change rankings, but it helps people decide to click."
@@ -249,11 +249,34 @@ function FieldSource({
   );
 }
 
-/** What the title's or the description's control is handed. */
-function fieldProps(
+/** What a page's title or description field is handed. */
+export interface SeoTextFieldProps {
+  label: string;
+  help: string;
+  /** What is typed for the page, `""` for nothing. */
+  value: string;
+  /** The placeholder: the value used while nothing is typed. */
+  placeholder: string;
+  /** How long the value used is, in characters. */
+  count: number;
+  limit: number;
+  /** The line under the field saying where the value comes from, by its id. */
+  source: (id: string) => ReactNode;
+  error?: string | undefined;
+  writable: boolean;
+  multiline?: boolean;
+  /** The most characters the field takes, where it takes no more. */
+  maxLength?: number;
+  inputRef?: Ref<HTMLInputElement>;
+  /** Sets the value; `null` returns it to automatic. */
+  onChange: (next: string | null) => void;
+}
+
+/** What a title's or description's control is handed. */
+function controlProps(
   id: string,
-  typed: string,
-  automatic: Sourced<string> | undefined,
+  value: string,
+  placeholder: string,
   writable: boolean,
   error: string | undefined,
   onChange: (next: string | null) => void
@@ -262,8 +285,8 @@ function fieldProps(
   if (error !== undefined) described.push(`${id}-error`);
   return {
     id,
-    value: typed,
-    placeholder: automatic?.value ?? "",
+    value,
+    placeholder,
     disabled: !writable,
     "aria-describedby": described.join(" "),
     "aria-invalid": error !== undefined,
@@ -273,12 +296,83 @@ function fieldProps(
   };
 }
 
+/** Why a field's value was refused at save, where it was. */
+function FieldError({
+  id,
+  error,
+}: {
+  id: string;
+  error: string | undefined;
+}): ReactNode {
+  if (!error) return null;
+  return (
+    <p
+      id={id}
+      role="alert"
+      className="m-0 text-xs font-medium text-danger-text"
+    >
+      {error}
+    </p>
+  );
+}
+
 /**
- * The title or the description: a count of what will be used, one plain
- * sentence, the field with the automatic value as its placeholder, and where
- * the value comes from, with one action back to automatic once typed.
+ * A page's title or description: a count of what will be used, one plain
+ * sentence, the field with the automatic value as its placeholder, and the
+ * line saying where the value comes from. Every surface that edits a page's
+ * SEO draws its title and description with it.
  */
-function SeoTextField({
+export function SeoTextField({
+  label,
+  help,
+  value,
+  placeholder,
+  count,
+  limit,
+  source,
+  error,
+  writable,
+  multiline = false,
+  maxLength,
+  inputRef,
+  onChange,
+}: SeoTextFieldProps): ReactNode {
+  const id = useId();
+  const field = controlProps(id, value, placeholder, writable, error, onChange);
+  const limited = maxLength === undefined ? {} : { maxLength };
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-baseline justify-between gap-2.5">
+        <label
+          htmlFor={id}
+          className="text-[13px] font-semibold text-foreground"
+        >
+          {label}
+        </label>
+        <CharacterCount count={count} limit={limit} />
+      </div>
+      <p
+        id={`${id}-help`}
+        className="m-0 text-[12.5px] leading-[1.45] text-muted-foreground"
+      >
+        {help}
+      </p>
+      {multiline ? (
+        <Textarea {...field} {...limited} rows={3} />
+      ) : (
+        <Input {...field} {...limited} ref={inputRef} />
+      )}
+      {source(`${id}-source`)}
+      <FieldError id={`${id}-error`} error={error} />
+    </div>
+  );
+}
+
+/**
+ * The tab's title or description: the shared field, saying where the value
+ * comes from with one action back to automatic once typed.
+ */
+function PageTextField({
   label,
   help,
   typed,
@@ -307,50 +401,31 @@ function SeoTextField({
   multiline?: boolean;
   onChange: (next: string | null) => void;
 }): ReactNode {
-  const id = useId();
-  const field = fieldProps(id, typed, automatic, writable, error, onChange);
-  const Control = multiline ? Textarea : Input;
   return (
-    <div className="grid gap-1.5">
-      <div className="flex items-baseline justify-between gap-2.5">
-        <label
-          htmlFor={id}
-          className="text-[13px] font-semibold text-foreground"
-        >
-          {label}
-        </label>
-        {/* Counted as the problems are, so an emoji counts once. */}
-        <CharacterCount
-          count={used === undefined ? 0 : characters(used.value)}
-          limit={limit}
+    <SeoTextField
+      label={label}
+      help={help}
+      value={typed}
+      placeholder={automatic?.value ?? ""}
+      // Counted as the problems are, so an emoji counts once.
+      count={used === undefined ? 0 : characters(used.value)}
+      limit={limit}
+      error={error}
+      writable={writable}
+      multiline={multiline}
+      onChange={onChange}
+      source={id => (
+        <FieldSource
+          id={id}
+          typed={typed}
+          automatic={automatic}
+          value={value}
+          names={names}
+          problem={problem}
+          writable={writable}
+          onAutomatic={() => onChange(null)}
         />
-      </div>
-      <p
-        id={`${id}-help`}
-        className="m-0 text-[12.5px] leading-[1.45] text-muted-foreground"
-      >
-        {help}
-      </p>
-      <Control {...field} {...(multiline ? { rows: 3 } : {})} />
-      <FieldSource
-        id={`${id}-source`}
-        typed={typed}
-        automatic={automatic}
-        value={value}
-        names={names}
-        problem={problem}
-        writable={writable}
-        onAutomatic={() => onChange(null)}
-      />
-      {error && (
-        <p
-          id={`${id}-error`}
-          role="alert"
-          className="m-0 text-xs font-medium text-danger-text"
-        >
-          {error}
-        </p>
       )}
-    </div>
+    />
   );
 }
