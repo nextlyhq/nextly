@@ -102,7 +102,10 @@ import {
   assertPluginHistories,
   assertPluginListsSound,
 } from "../../domains/schema/migrate/plugin/plugin-history";
-import { pluginModuleStatements } from "../../domains/schema/migrate/plugin/plugin-migration";
+import {
+  pluginModuleStatements,
+  type PluginMigration,
+} from "../../domains/schema/migrate/plugin/plugin-migration";
 import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import {
   appliedPluginShas,
@@ -122,6 +125,7 @@ import {
 import {
   refuseRenamesOntoTakenTargets,
   renamesOntoTakenTargets,
+  type SchemaShape,
 } from "../../domains/schema/migrate/rename-preflight";
 import {
   previewRequiredColumns,
@@ -2370,6 +2374,8 @@ interface RunUnit {
   label: string;
   text: string;
   statements: string[];
+  /** A plugin module's: what the rename check reads of where a run may adopt it (`RenameUnit.adoptableAt`). */
+  adoptableAt?: readonly SchemaShape[];
 }
 
 /**
@@ -2444,12 +2450,28 @@ function pluginModuleUnits(
   step: number | undefined,
   dialect: SupportedDialect
 ): RunUnit[] {
-  return pendingPluginModules(lists, applied, step).map(
-    ({ filename, migration }) => {
-      const statements = pluginModuleStatements(migration, dialect, "up");
-      return { label: filename, text: statements.join("\n;\n"), statements };
-    }
-  );
+  const pending = pendingPluginModules(lists, applied, step);
+  const pluginOf = (migration: PluginMigration) =>
+    lists.find(set => set.migrations.includes(migration));
+  return pending.map(({ filename, migration }, at) => {
+    const statements = pluginModuleStatements(migration, dialect, "up");
+    // Where a run may find the database already standing and adopt the module without running
+    // it: its snapshot and each later pending module's of the same plugin. Read only by the
+    // rename check (`refuseRenamesOntoTakenTargets`); the runner decides adoption itself.
+    const adoptableAt = pending
+      .slice(at)
+      .filter(later => pluginOf(later.migration) === pluginOf(migration))
+      .flatMap(later => {
+        const snapshot = later.migration.snapshot[dialect];
+        return snapshot === undefined ? [] : [snapshot];
+      });
+    return {
+      label: filename,
+      text: statements.join("\n;\n"),
+      statements,
+      adoptableAt,
+    };
+  });
 }
 
 /**

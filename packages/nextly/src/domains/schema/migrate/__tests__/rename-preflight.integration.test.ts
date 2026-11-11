@@ -603,6 +603,96 @@ describe.each(LOCK_DIALECTS)(
       }
     );
 
+    // A run may find a dev push already standing at a later module's snapshot and adopt the modules
+    // without running them, so a module's rename whose two names a snapshot holds together is not
+    // judged.
+    it("does not refuse a plugin's module a run would adopt at a later module's snapshot", async () => {
+      const columns = (...names: string[]) =>
+        names.map(name => ({ name, type: "text", nullable: true }));
+      const module = (
+        name: string,
+        up: string[],
+        tables: { name: string; columns: { name: string }[] }[]
+      ) => {
+        const snapshot = { tables } as never;
+        const none = { tables: [] } as never;
+        const content: MigrationContent = {
+          name,
+          schemaVersion: 1,
+          dialects: {
+            postgresql: { up, down: [] },
+            mysql: { up, down: [] },
+            sqlite: { up, down: [] },
+          },
+          snapshot: { postgresql: snapshot, mysql: snapshot, sqlite: snapshot },
+          before: { postgresql: none, mysql: none, sqlite: none },
+        };
+        return { ...content, checksum: migrationChecksum(content) };
+      };
+      const sets = [
+        {
+          pluginName: "rtx",
+          pluginVersion: "1.0.0",
+          migrations: [
+            module(
+              "20261111_000003_rename",
+              [renameColumn("heading", "headline")],
+              [{ name: NOTES, columns: columns("id", "headline") }]
+            ),
+            module(
+              "20261111_000004_heading_again",
+              [`ALTER TABLE ${q(NOTES)} ADD COLUMN ${q("heading")} text`],
+              [{ name: NOTES, columns: columns("id", "heading", "headline") }]
+            ),
+          ],
+        },
+      ];
+
+      await expect(
+        pendingPluginDeletions(sets, {
+          adapter: adapter as never,
+          db: adapter.getDrizzle(),
+          dialect,
+        })
+      ).resolves.toBeDefined();
+    });
+
+    // SQLite keeps a trigger's name apart from a table's.
+    it.runIf(dialect === "sqlite")(
+      "runs a table rename onto a trigger's name",
+      async () => {
+        await run([
+          `CREATE TRIGGER ${q("rtp_trig")} AFTER INSERT ON ${q(OTHER)} BEGIN SELECT 1; END`,
+        ]);
+        writeFile([`ALTER TABLE ${q(NOTES)} RENAME TO ${q("rtp_trig")}`]);
+
+        await migrate();
+
+        expect(await ledger()).toEqual(["applied"]);
+        expect(await tableExists("rtp_trig")).toBe(true);
+      }
+    );
+
+    // `ALTER TABLE … SET SCHEMA` takes a table's indexes with it, freeing their names here.
+    it.runIf(dialect === "postgresql")(
+      "runs a table rename onto the name of an index moved away with its table",
+      async () => {
+        await run([
+          `CREATE SCHEMA ${q("rtp_away")}`,
+          `CREATE INDEX ${q("rtp_moved")} ON ${q(OTHER)} (${q("id")})`,
+        ]);
+        writeFile([
+          `ALTER TABLE ${q(OTHER)} SET SCHEMA ${q("rtp_away")}`,
+          `ALTER TABLE ${q(NOTES)} RENAME TO ${q("rtp_moved")}`,
+        ]);
+
+        await migrate();
+
+        expect(await ledger()).toEqual(["applied"]);
+        expect(await tableExists("rtp_moved")).toBe(true);
+      }
+    );
+
     // Controls.
 
     it("runs a rename onto a free name, and the value follows", async () => {

@@ -32,6 +32,16 @@
  *   `_revision`): the files are judged against the database as they find it.
  * - Every rename after a PostgreSQL `SET ROLE` or `SET SESSION AUTHORIZATION`,
  *   which a `$user` in the search path follows.
+ * - A table renamed onto the name of one of its own indexes (PostgreSQL,
+ *   SQLite): the catalog lookup leaves a table's own indexes out.
+ * - On a MySQL server comparing table names by case, a column rename on a
+ *   table spelled in another case than lower: the name is read lower-cased.
+ * - On SQLite, a rename between spellings that differ only in the case of a
+ *   letter outside ASCII (`Ä`, `ä`): names are read lower-cased, while SQLite
+ *   folds ASCII letters only.
+ * - A plugin module's rename whose old and new names its snapshot, or a later
+ *   pending module's, holds together: a run finding the database there adopts
+ *   the modules without running them (`RenameUnit.adoptableAt`).
  *
  * A rename already made (the old name gone, the new one there) is not refused
  * either: there is nothing left to rename.
@@ -60,6 +70,18 @@ import {
 export interface RenameUnit {
   label: string;
   statements: readonly string[];
+  /**
+   * For a plugin's module: the schemas a run may find already in place and
+   * record it at without running it (its snapshot and each later pending
+   * module's). A rename whose old and new names one of them holds together is
+   * not judged: the database standing there is adopted, not renamed.
+   */
+  adoptableAt?: readonly SchemaShape[];
+}
+
+/** A schema as a module's snapshot describes it: each table's name and its columns' names. */
+export interface SchemaShape {
+  tables: readonly { name: string; columns: readonly { name: string }[] }[];
 }
 
 /** A rename a run would refuse: the file it is in, the rename, and why. */
@@ -127,7 +149,30 @@ const NAMES_A_RELATION: readonly string[][] = [
 function namesARelation(statement: string, dialect: SupportedDialect): boolean {
   if (dialect === "mysql") return false;
   const cursor = cursorOf(statement, dialect);
-  return NAMES_A_RELATION.some(words => cursor.accept(...words));
+  if (NAMES_A_RELATION.some(words => cursor.accept(...words))) return true;
+  // `ALTER TABLE … SET SCHEMA` takes the table's indexes and sequences with it.
+  return cursor.accept("ALTER", "TABLE") && cursor.rest().includes("SCHEMA");
+}
+
+/**
+ * Whether one of `schemas` holds both of `rename`'s names together: both
+ * columns on its table, or both tables.
+ */
+function heldTogether(
+  rename: StatementRename,
+  schemas: readonly SchemaShape[],
+  dialect: SupportedDialect
+): boolean {
+  const key = (name: string) => identifierKey(dialect, name);
+  return schemas.some(({ tables }) => {
+    if (rename.kind === "table") {
+      const names = new Set(tables.map(table => key(table.name)));
+      return names.has(key(rename.from)) && names.has(key(rename.to));
+    }
+    const table = tables.find(t => key(t.name) === key(rename.table));
+    const columns = new Set(table?.columns.map(c => key(c.name)) ?? []);
+    return columns.has(key(rename.from)) && columns.has(key(rename.to));
+  });
 }
 
 /**
@@ -217,11 +262,15 @@ function judgedRenames(
 ): { file: string; rename: StatementRename }[] {
   const judged: { file: string; rename: StatementRename }[] = [];
   const changes: RunChanges = { tables: new Set(), relationNames: false };
-  for (const { label, statements } of units) {
+  for (const { label, statements, adoptableAt = [] } of units) {
     for (const statement of statements) {
       const renames = judgedIn(statement, dialect, changes);
       if (renames === "stop") return judged;
-      judged.push(...renames.map(rename => ({ file: label, rename })));
+      for (const rename of renames) {
+        if (!heldTogether(rename, adoptableAt, dialect)) {
+          judged.push({ file: label, rename });
+        }
+      }
     }
   }
   return judged;
@@ -281,7 +330,9 @@ async function tableNameHolder(
   if (!renamedIsThere) return undefined;
   if (live.has(key(rename.to))) return `a table '${rename.to}' already exists`;
   const holder = holders.get(rename.to);
-  if (holder === undefined) return undefined;
+  // SQLite keeps a trigger's name apart from a table's; every other holder the catalog names
+  // shares it.
+  if (holder === undefined || holder.type === "trigger") return undefined;
   const article = /^[aeiou]/.test(holder.type) ? "an" : "a";
   return `${article} ${holder.type} '${holder.name}' already exists`;
 }
