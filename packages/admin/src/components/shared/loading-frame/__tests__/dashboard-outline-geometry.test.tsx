@@ -11,17 +11,31 @@
  * where the real grid draws two, and that difference is a class.
  */
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   cardSpanClass,
   GRID_CLASS,
 } from "@admin/components/features/widgets/sizes";
 
-// Core's own default dashboard, read where core keeps it, so the outline's
-// default cannot drift from it unnoticed.
-import { CORE_DEFAULT_LAYOUT } from "../../../../../../nextly/src/domains/widgets/core-widgets/ids";
 import { DashboardCardsOutline } from "../outlines";
+
+/**
+ * A default dashboard unlike core's own, in place of the one core publishes:
+ * the outline drawn with no arrangement must follow whichever default core
+ * declares, so a stand-in that differs from it shows whether it is read.
+ */
+const STAND_IN_DEFAULT = vi.hoisted(
+  () =>
+    [
+      { widget: "core/count", w: 3 },
+      { widget: "core/content-table", w: 8 },
+      { widget: "core/note", w: 4 },
+    ] as const
+);
+vi.mock("nextly/core-widget-data", () => ({
+  CORE_DEFAULT_LAYOUT: STAND_IN_DEFAULT,
+}));
 
 const cards = () => screen.getAllByTestId("dashboard-card-outline");
 
@@ -42,7 +56,7 @@ describe("the dashboard's outline", () => {
   it("draws core's default dashboard when the arrangement is not known", () => {
     render(<DashboardCardsOutline />);
     expect(cards().map(card => card.getAttribute("data-span"))).toEqual(
-      CORE_DEFAULT_LAYOUT.map(card => cardSpanClass(card.w ?? 6))
+      STAND_IN_DEFAULT.map(card => cardSpanClass(card.w))
     );
   });
 });

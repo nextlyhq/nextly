@@ -28,6 +28,8 @@ import {
   TableHeader,
   TableRow,
 } from "@nextlyhq/ui";
+import { GRID_COLUMNS } from "nextly/config";
+import { CORE_DEFAULT_LAYOUT } from "nextly/core-widget-data";
 import type { CSSProperties, JSX, ReactNode } from "react";
 
 import {
@@ -285,10 +287,13 @@ const RECENT_ROW_WIDTHS = [180, 220, 140, 160] as const;
 /**
  * Core's own default dashboard, as each card's width in columns: what a reader
  * with no saved arrangement is drawn, so the widths the outline stands in for
- * when the reader's own arrangement is not known yet. Every card is half the
- * row. A test holds these to core's default, which they must follow.
+ * when the reader's own arrangement is not known yet. Read from core's
+ * declaration of it, never copied. A card stating no width takes its widget's
+ * starting width, which only the widget knows; half the row stands in.
  */
-const DEFAULT_CARD_WIDTHS: readonly number[] = [6, 6, 6, 6, 6, 6, 6];
+const DEFAULT_CARD_WIDTHS: readonly number[] = CORE_DEFAULT_LAYOUT.map(
+  card => card.w ?? GRID_COLUMNS / 2
+);
 
 /** A card's outline height for its stored rows: the grid's rows, with the gaps between them. */
 const cardOutlineHeight = (rows: number): number => rows * 72 + (rows - 1) * 16;
