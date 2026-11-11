@@ -14,7 +14,7 @@
  * Drawn by the one list card: each row's collection icon, its title, its
  * collection and when it was edited (and on Team, who saved it) on its meta
  * line, its status at its end, and a table at the large tier. It draws the
- * rows its body holds, at most the "Number of items" its reader chose.
+ * "Number of entries" its reader chose.
  *
  * @module components/features/dashboard/ContinueCard
  */

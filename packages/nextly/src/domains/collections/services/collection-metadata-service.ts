@@ -5,6 +5,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { toDbError } from "../../../database/errors";
+import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 // PR 4 migration: switched DB error mapping from the legacy
 // mapDbErrorToServiceError helper to NextlyError.fromDatabaseError. The
 // public method return shape (MetadataServiceResult) is preserved because
@@ -234,6 +235,19 @@ export class CollectionMetadataService extends BaseService {
     private readonly collectionService: DynamicCollectionService
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * The collection's translations table as the runtime reads it, or null for
+   * one that keeps no values per language: for a reader outside this service
+   * (the public-address phase) that must read every language on a write's
+   * transaction, passed as `executor`.
+   */
+  companionSchemaOf(
+    slug: string,
+    executor?: unknown
+  ): Promise<CompanionSchema | null> {
+    return this.fileManager.loadCompanionSchema(slug, executor);
   }
 
   /**
@@ -748,6 +762,11 @@ export class CollectionMetadataService extends BaseService {
      * `total` this returns counts only rows the caller may see.
      */
     slugAllowlist?: string[];
+    /**
+     * Leave out these slugs, as a query condition the same way: the plugins'
+     * collections, on the list of the site's own.
+     */
+    slugDenylist?: string[];
   }): Promise<MetadataServiceResult> {
     try {
       // Include schema by default since the UI needs field counts

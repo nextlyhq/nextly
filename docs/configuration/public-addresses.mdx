@@ -56,3 +56,7 @@ const address = await publicAddressOf(
 | `"unavailable"` | The type has one, but this entry has no value yet to fill it with, such as an empty slug. |
 
 `typesWithoutAddress()` lists the site's collections and Singles that have no address yet. A plugin's own types and Nextly's system types are never listed.
+
+## Keeping addresses unique
+
+Nextly keeps no record of which page holds which address. Plugins that keep one, such as the SEO plugin, take part in keeping each address to one page: see [Unique public addresses](/docs/plugins/public-addresses).

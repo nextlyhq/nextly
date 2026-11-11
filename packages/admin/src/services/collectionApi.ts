@@ -12,6 +12,8 @@ import type {
 } from "../types/collection";
 import type { ApiCollection } from "../types/entities";
 
+import { withListOwner, type ListOwner } from "./list-owner";
+
 // Build query string for pagination and search using shared utility
 const buildQuery = (params: TableParams): string => {
   return buildQueryUtil(params, {
@@ -29,9 +31,11 @@ const buildQuery = (params: TableParams): string => {
  * Fetch collections with pagination.
  */
 export const fetchCollections = async (
-  params: TableParams
+  params: TableParams,
+  // The site's collections or the plugins'; none lists both.
+  owner?: ListOwner
 ): Promise<ListResponse<ApiCollection>> => {
-  const query = buildQuery(params);
+  const query = withListOwner(buildQuery(params), owner);
   const url = `/collections${query ? `?${query}` : ""}`;
 
   const result = await fetcher<ListResponse<ApiCollection>>(url, {}, true);

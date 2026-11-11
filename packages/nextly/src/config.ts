@@ -469,6 +469,7 @@ export {
   LIST_DENSITIES,
   type ListDensity,
   effectiveWidgetLimit,
+  listEntries,
 } from "./domains/widgets/query-limits";
 // The VALUE as well as the type. A widget result names each column's kind, and
 // the admin has to decide which kinds it can present -- deriving that from this

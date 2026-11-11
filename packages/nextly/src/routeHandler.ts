@@ -160,6 +160,7 @@ import {
   withSideEffectWarnings,
 } from "./hooks/side-effect-warnings";
 import { awaitBootSeeding } from "./init/seed-permissions";
+import { awaitStartInFlight } from "./init/start-in-flight";
 import {
   SKIP_TIMEZONE_FORMAT_HEADER,
   withTimezoneFormatting,
@@ -2375,6 +2376,11 @@ export { withSessionCacheHeaders };
  * choose those fields rather than this package.
  */
 async function handleAdminMetaRequest(): Promise<Response> {
+  // A start already under way is waited for, never begun here: the start-up
+  // hook no longer holds the admin page until Nextly has started, so the page
+  // can ask for this before the saved settings can be read, and the answer it
+  // caches would carry the default name and logo instead of the saved ones.
+  await awaitStartInFlight();
   const { branding } = await buildAdminMeta(NO_WIDGETS, NOBODY);
   return respondAdminMeta(branding);
 }
