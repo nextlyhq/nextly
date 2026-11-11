@@ -24,6 +24,8 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
+import { contentTypesRoute } from "./settings/content-types-route";
+import { seoSettingsSingle } from "./settings/single";
 import {
   generateSitemap,
   resolveBaseOrigin,
@@ -168,6 +170,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     extend: [{ target: targets, fields: [seoGroup] }],
     // The record that keeps each public address to one page.
     collections: [addressRecordCollection()],
+    // The site-wide SEO settings: name, defaults, patterns and brand facts.
+    singles: [seoSettingsSingle()],
+    // What the settings screen lists: the types SEO is added to.
+    routes: [contentTypesRoute(targets)],
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -193,6 +199,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // of the canonical `/sitemap.xml` belongs to the Next delivery layer, and
     // headless consumers cache at their edge.
     contributes.routes = [
+      ...(contributes.routes ?? []),
       {
         method: "GET",
         path: "/sitemap.xml",
