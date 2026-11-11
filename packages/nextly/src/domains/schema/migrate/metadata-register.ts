@@ -353,8 +353,12 @@ async function registerEach<T extends { slug: string }>(
   kind: "collection" | "single",
   insert: (entry: T) => Promise<boolean>,
   logger: NonNullable<RegisterFromMigrationsOptions["logger"]>
-): Promise<number> {
+): Promise<{ registered: number; failed: string[] }> {
   let registered = 0;
+  // Each entity whose row could not be written, as `<kind> <slug>`: reported,
+  // so a caller can tell a registration that wrote every row from one that
+  // only wrote some.
+  const failed: string[] = [];
 
   for (const entry of entries) {
     // A snapshot can carry a name that has since become reserved (a system
@@ -377,13 +381,14 @@ async function registerEach<T extends { slug: string }>(
     } catch (err) {
       // Per entity: one row that cannot be written must not cost the rest
       // their registration.
+      failed.push(`${kind} ${entry.slug}`);
       logger.warn?.(
         `[Migration Metadata] Failed to register ${kind} ${entry.slug}: ${String(err)}`
       );
     }
   }
 
-  return registered;
+  return { registered, failed };
 }
 
 export async function registerFromMigrations(
@@ -391,6 +396,8 @@ export async function registerFromMigrations(
 ): Promise<{
   collectionsRegistered: number;
   singlesRegistered: number;
+  /** Entities whose row could not be written, as `<kind> <slug>`. */
+  rowsNotWritten: string[];
 }> {
   const { migrationsDir, adapter, dialect, logger = consoleLogger } = options;
 
@@ -406,7 +413,11 @@ export async function registerFromMigrations(
 
   if (snapshots.length === 0) {
     logger.debug?.("[Migration Metadata] No snapshot files found");
-    return { collectionsRegistered: 0, singlesRegistered: 0 };
+    return {
+      collectionsRegistered: 0,
+      singlesRegistered: 0,
+      rowsNotWritten: [],
+    };
   }
 
   logger.debug?.(
@@ -421,32 +432,36 @@ export async function registerFromMigrations(
   // stored schema version, whose count moves where any row was registered
   // (`writeRegistryRows`, which also clears the cached registry rows once the
   // writes have run, landed or not).
-  const { collectionsRegistered, singlesRegistered } = await writeRegistryRows(
-    typedAdapter,
-    async tx => {
-      const db = tx.getDrizzle<DrizzleDatabase>();
-      return {
-        collectionsRegistered: await registerEach(
+  const { collectionsRegistered, singlesRegistered, rowsNotWritten } =
+    await writeRegistryRows(
+      typedAdapter,
+      async tx => {
+        const db = tx.getDrizzle<DrizzleDatabase>();
+        const collectionRows = await registerEach(
           typedAdapter,
           collections,
           "collection",
           entry => registerCollection(db, dialect, entry),
           logger
-        ),
-        singlesRegistered: await registerEach(
+        );
+        const singleRows = await registerEach(
           typedAdapter,
           singles,
           "single",
           entry => registerSingle(db, dialect, entry),
           logger
-        ),
-      };
-    },
-    {
-      wrote: registered =>
-        registered.collectionsRegistered + registered.singlesRegistered > 0,
-    }
-  );
+        );
+        return {
+          collectionsRegistered: collectionRows.registered,
+          singlesRegistered: singleRows.registered,
+          rowsNotWritten: [...collectionRows.failed, ...singleRows.failed],
+        };
+      },
+      {
+        wrote: registered =>
+          registered.collectionsRegistered + registered.singlesRegistered > 0,
+      }
+    );
 
   if (collectionsRegistered > 0 || singlesRegistered > 0) {
     logger.info?.(
@@ -454,5 +469,5 @@ export async function registerFromMigrations(
     );
   }
 
-  return { collectionsRegistered, singlesRegistered };
+  return { collectionsRegistered, singlesRegistered, rowsNotWritten };
 }

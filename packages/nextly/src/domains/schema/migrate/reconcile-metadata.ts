@@ -546,9 +546,17 @@ async function registerRows(
       logger,
       isApplied,
     });
+    // Complete only where every entity's row was written: a row that failed
+    // keeps the stored version's migration where it was.
+    const { rowsNotWritten } = inserted;
     return {
-      rows: { ...inserted, fieldGroupsRegistered: 0, rowsNotWritten: [] },
-      complete: true,
+      rows: {
+        collectionsRegistered: inserted.collectionsRegistered,
+        singlesRegistered: inserted.singlesRegistered,
+        fieldGroupsRegistered: 0,
+        rowsNotWritten,
+      },
+      complete: rowsNotWritten.length === 0,
     };
   };
   if (deps.registryRows === "insert-missing") return insertMissing();

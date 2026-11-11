@@ -18,10 +18,11 @@
  * - a migration file's own registry row and the version statement after it
  *   (`schemaVersionStoreSql`), run by the migration runner;
  * - a migration's DOWN rolled back by `migrate:down` (`rollBackOne`);
- * - the Builder save's writes: a registry service's create of a Single and a
- *   field group, and the save's own update of a collection row, wrapped as
- *   the save wraps them (`writeRegistryRows`, `writeRegistryRowsWith`);
- * - the plugin lifecycle record an install writes.
+ * - the Schema Builder's saves, through the handlers the admin calls (the
+ *   second suite below).
+ *
+ * A plugin install's and uninstall's lifecycle record is covered beside the
+ * rest of the install, in `plugin-lifecycle-states.integration.test.ts`.
  *
  * And a run stopped after a migration's first schema statement committed,
  * before its registry rows: on MySQL, where a schema statement commits, and
@@ -29,7 +30,7 @@
  * The stop is the next statement failing, which ends the run there as a
  * killed process would; the version is left as it was.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +44,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest";
 
 import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database";
@@ -53,36 +55,38 @@ import {
 import { installRegistryResolver } from "../../../cli/utils/registry-resolver";
 import { createAdapter } from "../../../database/factory";
 import { shutdownServices } from "../../../di/register";
+import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
+import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
+  type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../services";
 import { consoleLogger } from "../../../shared/types";
-import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
-import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { getSchemaEventsDdl } from "../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { generateMigration } from "../migrate-create/generate";
 import { EMPTY_SNAPSHOT, writeSnapshot } from "../migrate-create/snapshot-io";
 import { runMigrationStatements } from "../migrate/migration-transaction";
+import { noPendingEntities } from "../migrate/pending-entities";
 import { reconcileMigrationMetadata } from "../migrate/reconcile-metadata";
 import { splitSqlStatements } from "../migrate/split-sql";
 import { parseSqlSections } from "../migrate/sql-sections";
-import { recordPluginLifecycle } from "../ownership/plugin-lifecycle-state";
 import {
   readSchemaVersion,
   schemaVersionStoreSql,
   storeSchemaVersion,
-  writeRegistryRows,
-  writeRegistryRowsWith,
   type SchemaVersion,
 } from "../schema-version";
 import { buildCollectionMetadataUpsert } from "../ui-schema/metadata-sql";
 
 const SEED = "20250101_000000_000_seed";
 const MIGRATED = "20260101_000000_000_migrate_svw";
+const REGISTERED = "20260101_000001_000_register_svw";
 const OLDER = "20260102_000000_000_create_svw";
 const NEWER = "20260201_000000_000_change_svw";
 
@@ -231,6 +235,49 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("`nextly migrate`'s registration from snapshots: a row it could not write keeps the migration where it was", async () => {
+      const suffix = dialect.slice(0, 2);
+      const table = `dc_svw_reg_${suffix}`;
+      const slugs = [`svw_reg_a_${suffix}`, `svw_reg_b_${suffix}`];
+      await recordApplied(REGISTERED);
+      // Two collections a snapshot records on one table: the registry holds
+      // a table once, so one row is written and the other refused.
+      mkdirSync(join(dir, "meta"));
+      writeFileSync(
+        join(dir, "meta", `${REGISTERED}.snapshot.json`),
+        JSON.stringify({
+          collections: slugs.map(slug => ({
+            slug,
+            label: slug,
+            tableName: table,
+            fields: [],
+          })),
+          singles: [],
+        })
+      );
+
+      const before = await version();
+      const result = await reconcileMigrationMetadata({
+        adapter,
+        dialect,
+        migrationsDir: dir,
+        logger: silent,
+        registryRows: "insert-missing",
+        readPendingEntitiesFn: async () => noPendingEntities(),
+      });
+      expect(result.rowsNotWritten).toHaveLength(1);
+      const written = await Promise.all(
+        slugs.map(slug => hasRow("dynamic_collections", slug))
+      );
+      expect(written.filter(Boolean)).toHaveLength(1);
+      // A row was written, so the count moves; one was not, so the
+      // migration stays where it was.
+      expect(await version()).toEqual({
+        migration: before?.migration ?? null,
+        seq: (before?.seq ?? 0) + 1,
+      });
+    });
+
     it("a migration file's registry row and the version statement after it", async () => {
       const slug = `svw_file_${dialect.slice(0, 2)}`;
       const statements = [
@@ -302,132 +349,6 @@ describe.each(getConfiguredTestDialects())(
       expect(await ledger.isFileApplied(`${NEWER}.sql`)).toBe(false);
       expect(await version()).toEqual({
         migration: OLDER,
-        seq: (before?.seq ?? 0) + 1,
-      });
-    });
-
-    it("the Builder save's registry writes: a Single, a field group and a collection row's update", async () => {
-      const suffix = dialect.slice(0, 2);
-      const singles = new SingleRegistryService(adapter, consoleLogger);
-      const fieldGroups = new FieldGroupRegistryService(adapter, consoleLogger);
-      const saves: {
-        table: string;
-        slug: string;
-        save: () => Promise<unknown>;
-      }[] = [
-        {
-          table: "dynamic_singles",
-          slug: `svw_single_${suffix}`,
-          save: () =>
-            writeRegistryRowsWith(adapter, () =>
-              singles.registerSingle({
-                slug: `svw_single_${suffix}`,
-                label: "Svw single",
-                tableName: `single_svw_single_${suffix}`,
-                fields: [{ name: "headline", type: "text" }] as never,
-                source: "ui",
-                schemaHash: "svw",
-              })
-            ),
-        },
-        {
-          table: await resolveRegistryTableName(adapter),
-          slug: `svw_group_${suffix}`,
-          save: () =>
-            writeRegistryRowsWith(adapter, () =>
-              fieldGroups.registerComponent({
-                slug: `svw_group_${suffix}`,
-                label: "Svw group",
-                tableName: `comp_svw_group_${suffix}`,
-                fields: [{ name: "headline", type: "text" }] as never,
-                source: "ui",
-                schemaHash: "svw",
-              })
-            ),
-        },
-      ];
-      for (const { table, slug, save } of saves) {
-        const before = await version();
-        await failingAtTheVersion(save);
-        expect(await hasRow(table, slug), `${table} after a failure`).toBe(
-          false
-        );
-        expect(await version()).toEqual(before);
-
-        await save();
-        expect(await hasRow(table, slug), `${table} after a commit`).toBe(true);
-        expect(await version()).toEqual({
-          migration: before?.migration ?? null,
-          seq: (before?.seq ?? 0) + 1,
-        });
-      }
-
-      // The save's own update of a collection row, after its schema change.
-      const slug = `svw_update_${suffix}`;
-      await runMigrationStatements(
-        adapter,
-        [
-          buildCollectionMetadataUpsert(
-            builderCollection(slug) as never,
-            dialect
-          ),
-        ],
-        { source: "svw-fixture", transaction: true }
-      );
-      const update = () =>
-        writeRegistryRows(adapter, tx =>
-          tx.update(
-            "dynamic_collections",
-            { schema_version: 7, updated_at: new Date() },
-            { and: [{ column: "slug", op: "=", value: slug }] }
-          )
-        );
-      const storedVersion = async () =>
-        await adapter.selectOne<{
-          schemaVersion?: number;
-          schema_version?: number;
-        }>("dynamic_collections", {
-          where: { and: [{ column: "slug", op: "=", value: slug }] },
-        });
-      const before = await version();
-      const rowBefore = await storedVersion();
-      await failingAtTheVersion(update);
-      expect(await storedVersion()).toEqual(rowBefore);
-      expect(await version()).toEqual(before);
-
-      await update();
-      expect(await storedVersion()).not.toEqual(rowBefore);
-      expect(await version()).toEqual({
-        migration: before?.migration ?? null,
-        seq: (before?.seq ?? 0) + 1,
-      });
-    });
-
-    it("a plugin install's lifecycle record", async () => {
-      const plugin = `@test/svw-${dialect}`;
-      const ledger = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
-      const recorded = async () =>
-        (await ledger.listPluginLifecycle()).some(
-          row => row.scopeSlug === plugin
-        );
-      const install = () =>
-        writeRegistryRows(adapter, tx =>
-          recordPluginLifecycle(
-            new SchemaEventsRepository(tx.getDrizzle(), dialect),
-            plugin,
-            { state: "installed" }
-          )
-        );
-
-      const before = await version();
-      await failingAtTheVersion(install);
-      expect(await recorded()).toBe(false);
-      expect(await version()).toEqual(before);
-
-      await install();
-      expect(await recorded()).toBe(true);
-      expect(await version()).toEqual({
-        migration: before?.migration ?? null,
         seq: (before?.seq ?? 0) + 1,
       });
     });
@@ -510,6 +431,209 @@ describe.each(getConfiguredTestDialects())(
     // The migrations folder each case writes, removed with it.
     afterEach(() => {
       if (dir) rmSync(dir, { recursive: true, force: true });
+    });
+  }
+);
+
+/**
+ * The Schema Builder's saves, driven through the handlers the admin calls:
+ * creating a Single, a field group and a collection, and confirming a
+ * collection's schema change. Each runs its schema statements, then writes
+ * its registry row and the stored schema version in one transaction; with
+ * `nextly_meta` taken away for the save, the version's write fails at the
+ * end of that transaction, which the save's error, its logged warning or the
+ * schema statements it left behind show it reached; the row is not written.
+ * The committed save of the same kind writes both.
+ * A save whose registry write did not share the version's transaction keeps
+ * its row when the version cannot be written, and fails here.
+ */
+describe.each(getConfiguredTestDialects())(
+  "a Builder save's registry row and the schema version (%s)",
+  (dialect: TestDialect) => {
+    let current: TestNextly | undefined;
+
+    afterEach(async () => {
+      await current?.destroy();
+      current = undefined;
+    });
+
+    const suffix = dialect.slice(0, 2);
+
+    async function started(): Promise<TestNextly> {
+      current = await createTestNextly({ dialect });
+      await storeSchemaVersion(current.adapter.getDrizzle(), dialect, {
+        wrote: true,
+        migration: SEED,
+      });
+      return current;
+    }
+
+    async function versionOf(
+      t: TestNextly
+    ): Promise<SchemaVersion | undefined> {
+      const stored = await readSchemaVersion(t.adapter.getDrizzle(), dialect);
+      return stored.present ? stored.version : undefined;
+    }
+
+    /** The registry row `table` holds for `slug`, or null. */
+    function rowOf(
+      t: TestNextly,
+      table: string,
+      slug: string
+    ): Promise<Record<string, unknown> | null> {
+      return t.adapter.selectOne(table, {
+        where: { and: [{ column: "slug", op: "=", value: slug }] },
+      });
+    }
+
+    /**
+     * Runs `save` with `nextly_meta` taken away, whatever the save answers,
+     * and says what it reported of the failure: the error it threw, and the
+     * warnings it logged, each with the context it carried.
+     */
+    async function savedWithoutTheVersionTable(
+      t: TestNextly,
+      save: () => Promise<unknown>
+    ): Promise<string> {
+      const warned = vi.spyOn(consoleLogger, "warn");
+      await t.adapter.executeQuery(
+        "ALTER TABLE nextly_meta RENAME TO nextly_meta_away"
+      );
+      let reported = "";
+      let logged: string[] = [];
+      try {
+        await save().catch((error: unknown) => {
+          reported = `${String(error)} ${JSON.stringify(
+            (error as { logContext?: unknown }).logContext ?? null
+          )}`;
+        });
+      } finally {
+        await t.adapter.executeQuery(
+          "ALTER TABLE nextly_meta_away RENAME TO nextly_meta"
+        );
+        // Read before the spy is restored, which clears what it recorded.
+        logged = warned.mock.calls.map(call => call.map(String).join(" "));
+        warned.mockRestore();
+      }
+      return [reported, ...logged].join("\n");
+    }
+
+    /** The version after a committed save: the migration kept, the count moved. */
+    async function expectMoved(t: TestNextly, before?: SchemaVersion) {
+      const after = await versionOf(t);
+      expect(after?.migration).toBe(SEED);
+      expect(after?.seq ?? 0).toBeGreaterThan(before?.seq ?? 0);
+    }
+
+    const fields = [{ name: "headline", type: "text" }];
+
+    it("creating a Single", async () => {
+      const t = await started();
+      const create = (slug: string) =>
+        dispatchSingles("createSingle", {}, { slug, label: slug, fields });
+      const failed = `svb_single_fail_${suffix}`;
+      const before = await versionOf(t);
+      await savedWithoutTheVersionTable(t, () => create(failed));
+      expect(await t.adapter.tableExists(`single_${failed}`)).toBe(true);
+      expect(await rowOf(t, "dynamic_singles", failed)).toBeNull();
+      expect(await versionOf(t)).toEqual(before);
+
+      const saved = `svb_single_${suffix}`;
+      await create(saved);
+      expect(await rowOf(t, "dynamic_singles", saved)).not.toBeNull();
+      await expectMoved(t, before);
+    });
+
+    it("creating a field group", async () => {
+      const t = await started();
+      const table = await resolveRegistryTableName(t.adapter);
+      const create = (slug: string) =>
+        dispatchComponents(
+          "createComponent",
+          {},
+          { slug, label: slug, fields }
+        );
+      const failed = `svb_group_fail_${suffix}`;
+      const before = await versionOf(t);
+      await savedWithoutTheVersionTable(t, () => create(failed));
+      expect(await t.adapter.tableExists(`comp_${failed}`)).toBe(true);
+      expect(await rowOf(t, table, failed)).toBeNull();
+      expect(await versionOf(t)).toEqual(before);
+
+      const saved = `svb_group_${suffix}`;
+      await create(saved);
+      expect(await rowOf(t, table, saved)).not.toBeNull();
+      await expectMoved(t, before);
+    });
+
+    it("creating a collection", async () => {
+      const t = await started();
+      const create = (name: string) =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name,
+            label: name,
+            fields,
+          }
+        );
+      const failed = `svb_coll_fail_${suffix}`;
+      const before = await versionOf(t);
+      // The save failed at the version's write, the last of its
+      // transaction: it reached its registry write.
+      expect(
+        await savedWithoutTheVersionTable(t, () => create(failed))
+      ).toContain("nextly_meta");
+      expect(await rowOf(t, "dynamic_collections", failed)).toBeNull();
+      expect(await versionOf(t)).toEqual(before);
+
+      const saved = `svb_coll_${suffix}`;
+      await create(saved);
+      expect(await rowOf(t, "dynamic_collections", saved)).not.toBeNull();
+      await expectMoved(t, before);
+    });
+
+    it("confirming a collection's schema change", async () => {
+      const t = await started();
+      const slug = `svb_apply_${suffix}`;
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: slug,
+          label: slug,
+          fields,
+        }
+      );
+      const apply = (field: string, schemaVersion: number) =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: slug },
+          {
+            fields: [...fields, { name: field, type: "text" }],
+            confirmed: true,
+            schemaVersion,
+          }
+        );
+      const storedFields = async () =>
+        JSON.stringify((await rowOf(t, "dynamic_collections", slug))?.fields);
+      const fieldsBefore = await storedFields();
+      const before = await versionOf(t);
+      // The save reports the registry write it could not make: the version's
+      // write, the last of that write's transaction, failed.
+      expect(
+        await savedWithoutTheVersionTable(t, () => apply("summary", 1))
+      ).toContain("nextly_meta");
+      expect(await storedFields()).toBe(fieldsBefore);
+      expect(await versionOf(t)).toEqual(before);
+
+      await apply("summary", 1);
+      expect(await storedFields()).toContain("summary");
+      await expectMoved(t, before);
     });
   }
 );

@@ -96,6 +96,7 @@ async function run(opts: {
   registerFn?: () => Promise<{
     collectionsRegistered: number;
     singlesRegistered: number;
+    rowsNotWritten: string[];
   }>;
 }) {
   vi.resetModules();
@@ -127,6 +128,7 @@ async function run(opts: {
       (async () => ({
         collectionsRegistered: 0,
         singlesRegistered: 0,
+        rowsNotWritten: [],
       }))) as never,
   });
   return { result, made };
@@ -210,6 +212,7 @@ describe("reconcileMigrationMetadata", () => {
       registerFn: (async () => ({
         collectionsRegistered: 0,
         singlesRegistered: 0,
+        rowsNotWritten: [],
       })) as never,
     });
 
@@ -224,6 +227,7 @@ describe("reconcileMigrationMetadata", () => {
       registerFn: async () => ({
         collectionsRegistered: 2,
         singlesRegistered: 1,
+        rowsNotWritten: [],
       }),
     });
 
@@ -275,6 +279,7 @@ describe("reconcileMigrationMetadata", () => {
       registerFn: (async () => ({
         collectionsRegistered: 0,
         singlesRegistered: 0,
+        rowsNotWritten: [],
       })) as never,
     });
 
@@ -332,6 +337,7 @@ describe("reconcileMigrationMetadata holds a row an unapplied migration names", 
       registerFn: (async () => ({
         collectionsRegistered: 0,
         singlesRegistered: 0,
+        rowsNotWritten: [],
       })) as never,
       readPendingEntitiesFn: opts.awaiting as never,
     });
