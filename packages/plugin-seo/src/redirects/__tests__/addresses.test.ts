@@ -156,6 +156,19 @@ describe("where a redirect sends a request", () => {
     ).toBe("https://example.com/new/x");
   });
 
+  it("never lets the rest of an address name another site", () => {
+    expect(
+      destinationOf(
+        { source: "/old/*", target: "/*" },
+        "/old//attacker.example/path"
+      )
+    ).toBe("/attacker.example/path");
+    // Inside a path a doubled slash names no site, and is left as asked.
+    expect(
+      destinationOf({ source: "/old/*", target: "/new/*" }, "/old//x")
+    ).toBe("/new//x");
+  });
+
   it("sends a whole pattern to one place where the target has no *", () => {
     expect(
       destinationOf({ source: "/old/*", target: "/blog" }, "/old/a/b")

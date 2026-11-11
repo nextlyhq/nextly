@@ -21,7 +21,7 @@ import {
 
 import { notAPageAddress } from "../not-found/log";
 
-import { destinationOf } from "./addresses";
+import { destinationOf, withQuery } from "./addresses";
 import { redirectsSlug } from "./collection";
 import { redirectMeeting } from "./meeting";
 import { redirectOf, type StoredRedirect } from "./store";
@@ -56,7 +56,8 @@ async function locationOf(
   address: KeptAddress,
   url: URL
 ): Promise<string> {
-  const sent = destinationOf(redirect, address.path);
+  // The visitor's own query goes with them, unless the To address names one.
+  const sent = withQuery(destinationOf(redirect, address.path), url.search);
   let location: URL;
   if (sent.startsWith("/")) {
     const served = await languageAddressOf(sent, address.locale);
@@ -69,8 +70,6 @@ async function locationOf(
   } else {
     location = new URL(sent);
   }
-  // The visitor's own query goes with them, unless the To address names one.
-  if (location.search === "" && url.search !== "") location.search = url.search;
   return location.toString();
 }
 
@@ -112,11 +111,21 @@ export function redirectsProxyHandler(): PluginProxyHandler {
       }
       const redirect =
         address === undefined ? undefined : await redirectFor(ctx, address);
-      if (redirect !== undefined && address !== undefined) {
+      const location =
+        redirect !== undefined && address !== undefined
+          ? await locationOf(redirect, address, url)
+          : undefined;
+      // A redirect to the very address asked for would answer it again and
+      // again, as one to this site's own full address would: it is served.
+      if (
+        redirect !== undefined &&
+        location !== undefined &&
+        location !== url.href
+      ) {
         return {
           response: new Response(null, {
             status: redirect.permanent ? 301 : 302,
-            headers: { location: await locationOf(redirect, address, url) },
+            headers: { location },
           }),
         };
       }

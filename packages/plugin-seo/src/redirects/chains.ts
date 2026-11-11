@@ -9,16 +9,15 @@
  *
  * @module redirects/chains
  */
-import { pathOf } from "./addresses";
+import { pathOf, withQuery } from "./addresses";
 
 /**
  * `to` with the query of `from` where `to` names none of its own: what a
  * visitor sent on from `from` arrives at.
  */
 export function withQueryOf(to: string, from: string): string {
-  if (to.includes("?")) return to;
-  const query = from.split("#", 1)[0]?.split("?")[1];
-  return query === undefined || query === "" ? to : `${to}?${query}`;
+  const query = (from.split("#", 1)[0] ?? "").split("?")[1] ?? "";
+  return withQuery(to, query);
 }
 
 /** Where a chain ends, and every address it passes on the way. */

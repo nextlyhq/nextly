@@ -414,6 +414,17 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
     });
   });
 
+  it("keeps a pattern's redirect on the site, and never sends a request back to itself", async () => {
+    const { seo } = await boot(dialect);
+    await put(seo, { source: "/old/*", target: "/*" });
+    await put(seo, { source: "/self", target: "https://example.com/self" });
+
+    expect(await ask("/old//attacker.example/path")).toBe(
+      "301 https://example.com/attacker.example/path"
+    );
+    expect(await ask("/self")).toBe("served");
+  });
+
   it("makes a person's redirect permanent unless they choose otherwise", async () => {
     const { t, ctx, seo } = await boot(dialect);
 

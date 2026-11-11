@@ -210,7 +210,25 @@ export function destinationOf(
   const base = redirect.source.slice(0, -2);
   const rest = path.slice(base.length);
   const sent = redirect.target.slice(0, -2) + rest;
-  return sent === "" ? "/" : sent;
+  if (sent === "") return "/";
+  // The rest of a visitor's address must never begin a second `/` on a path
+  // on this site, which a browser would read as another site's name.
+  return sent.startsWith("/") ? `/${sent.replace(/^\/+/, "")}` : sent;
+}
+
+/**
+ * `to` with `query` (`?a=1`, or empty) where `to` names no query of its own,
+ * placed before any fragment: what a visitor sent on to `to` with that query
+ * arrives at. The one rule both a stored chain and a redirect's response
+ * carry a query by.
+ */
+export function withQuery(to: string, query: string): string {
+  if (query === "" || query === "?") return to;
+  const at = to.indexOf("#");
+  const head = at === -1 ? to : to.slice(0, at);
+  if (head.includes("?")) return to;
+  const fragment = at === -1 ? "" : to.slice(at);
+  return `${head}${query.startsWith("?") ? query : `?${query}`}${fragment}`;
 }
 
 /**

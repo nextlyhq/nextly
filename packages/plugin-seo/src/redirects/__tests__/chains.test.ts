@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { followChain } from "../chains";
+import { followChain, withQueryOf } from "../chains";
 
 /** Exact redirects as a map, read one hop at a time as the store reads them. */
 function hops(map: Record<string, string>) {
@@ -52,15 +52,33 @@ describe("following a redirect's To address to the end of its chain", () => {
     ).toEqual({ final: "/c?ref=y", path: ["/b?campaign=x", "/c?ref=y"] });
   });
 
+  it("puts a carried query before the destination's fragment", async () => {
+    expect(withQueryOf("/c#section", "/b?campaign=x")).toBe(
+      "/c?campaign=x#section"
+    );
+    expect(withQueryOf("https://example.org/c#top", "/b?x=1")).toBe(
+      "https://example.org/c?x=1#top"
+    );
+    expect(withQueryOf("/c?own=1#s", "/b?x=1")).toBe("/c?own=1#s");
+  });
+
   it("ends a chain at a hop to another site, whatever its path", async () => {
     expect(
-      await followChain("/a", "/b", hops({ "/b": "https://elsewhere.example/a" }))
+      await followChain(
+        "/a",
+        "/b",
+        hops({ "/b": "https://elsewhere.example/a" })
+      )
     ).toEqual({
       final: "https://elsewhere.example/a",
       path: ["/b", "https://elsewhere.example/a"],
     });
     expect(
-      await followChain("/a", "/b", hops({ "/b": "https://elsewhere.example/b" }))
+      await followChain(
+        "/a",
+        "/b",
+        hops({ "/b": "https://elsewhere.example/b" })
+      )
     ).toEqual({
       final: "https://elsewhere.example/b",
       path: ["/b", "https://elsewhere.example/b"],
