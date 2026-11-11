@@ -332,7 +332,9 @@ contributes: {
 
 Or with an action, the same `action` a row action takes: `{ open }` draws your component
 in a dialog, and `{ run }` calls one of your routes with
-`{ action: "<plugin-slug>.user-menu", rows: [] }`.
+`{ action: "<plugin-slug>.user-menu", rows: [] }`. The route is then reachable as that
+item, as a route a row action runs is reachable only as that action (see the
+[API reference](/docs/plugins/api-reference)).
 
 ```ts
 contributes: {

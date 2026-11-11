@@ -11,7 +11,11 @@
  * @module plugins/routes/action-binding
  * @experimental
  */
-import type { AdminContribution } from "../admin-contributions";
+import type {
+  AdminContribution,
+  AdminContributionAction,
+} from "../admin-contributions";
+import { userMenuItemId, validUserMenuItem } from "../header-item";
 import type { PluginDefinition } from "../plugin-context";
 import {
   collectionContributors,
@@ -27,12 +31,11 @@ type RunAction = Extract<
   { kind: "rowAction" | "bulkAction" }
 >;
 
-/** Whether a declared contribution is an action that runs `route`. */
-function runs(contribution: AdminContribution, route: PluginRoute): boolean {
-  if (contribution.kind !== "rowAction" && contribution.kind !== "bulkAction") {
-    return false;
-  }
-  const action: RunAction["action"] = contribution.action;
+/** Whether a declared action calls `route`, by method, path and mount. */
+function actionRuns(
+  action: AdminContributionAction,
+  route: PluginRoute
+): boolean {
   if (!("run" in action)) return false;
   return (
     action.run.method === route.method &&
@@ -41,10 +44,36 @@ function runs(contribution: AdminContribution, route: PluginRoute): boolean {
   );
 }
 
+/** Whether a declared contribution is an action that runs `route`. */
+function runs(contribution: AdminContribution, route: PluginRoute): boolean {
+  if (contribution.kind !== "rowAction" && contribution.kind !== "bulkAction") {
+    return false;
+  }
+  return actionRuns(contribution.action, route);
+}
+
+/**
+ * The plugin's person's-menu item, bound to `route` when its action runs it:
+ * called on no rows, under the item's id. Only a staff route is bound, as a
+ * list action may name only one: a public route or a person's has no staff
+ * caller for the check to require, and is left as the plugin declared it.
+ */
+function boundMenuAction(
+  plugin: PluginDefinition,
+  route: PluginRoute
+): BoundAction[] {
+  const item = validUserMenuItem(plugin.contributes?.admin);
+  const action = item?.action;
+  if (action === undefined || !actionRuns(action, route)) return [];
+  if (route.public === true || route.principal !== undefined) return [];
+  return [{ id: userMenuItemId(plugin.name), kind: "userMenuItem" }];
+}
+
 /**
  * @experimental The actions of `plugin` that run `route`, as the check reads
  * them: each named collection under the slug it is served as, through the
- * plugin that contributes it. Read from the declarations boot has already
+ * plugin that contributes it, and the person's-menu item when it runs the
+ * route. Read from the declarations boot has already
  * checked, so a malformed one never reaches here.
  */
 export function boundActionsOf(
@@ -54,9 +83,9 @@ export function boundActionsOf(
 ): BoundAction[] {
   if (plugin.enabled === false) return [];
   const contributors = collectionContributors(plugins);
-  return (plugin.contributes?.admin?.contributions ?? [])
+  const listActions = (plugin.contributes?.admin?.contributions ?? [])
     .filter(contribution => runs(contribution, route))
-    .map(contribution => {
+    .map((contribution): BoundAction => {
       const action = contribution as RunAction;
       return {
         id: action.id,
@@ -74,4 +103,5 @@ export function boundActionsOf(
         ...(action.visibleWhen ? { visibleWhen: action.visibleWhen } : {}),
       };
     });
+  return [...listActions, ...boundMenuAction(plugin, route)];
 }

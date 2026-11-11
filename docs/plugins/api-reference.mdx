@@ -1244,6 +1244,13 @@ A bulk request is refused whole when any row fails. The rows are read once per
 collection, as the caller. Hiding an action in the admin is not its access
 control; this check is.
 
+A staff route your person's-menu item runs (`header.place: "menu"` with an
+`action.run`) is bound to that item too, under the id
+`<plugin-slug>.user-menu`, and its request names no rows:
+`{ "action": "<plugin-slug>.user-menu", "rows": [] }`. No rows are accepted for
+that id alone, and only on the route the item names; a list action on the same
+route still needs its rows.
+
 Boot fails, naming the plugin and the contribution, on an id outside the
 plugin's slug (`admin-contribution-outside-namespace`), one declared twice
 (`admin-contribution-duplicate`), a place that does not exist

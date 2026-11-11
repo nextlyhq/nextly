@@ -13,6 +13,7 @@ import type {
   PluginUserMenuItem,
 } from "./admin-contributions";
 import type { PluginDefinition } from "./plugin-context";
+import { pluginAdminSlug } from "./plugin-slug";
 
 /** The place a plugin's own item goes: the bar's right end unless it says. */
 export function headerItemPlace(
@@ -49,6 +50,14 @@ function userMenuItemProblem(item: unknown): string | undefined {
   return targetProblem(to, action);
 }
 
+/**
+ * The id a plugin's person's-menu item carries, `<plugin-slug>.user-menu`: the
+ * `action` its route is called with, and the id the route is bound under.
+ */
+export function userMenuItemId(pluginName: string): string {
+  return `${pluginAdminSlug(pluginName)}.user-menu`;
+}
+
 /** The plugin's person's-menu item, when it chose the menu and it is well formed. */
 export function validUserMenuItem(
   admin: PluginAdminContributions | undefined
@@ -62,9 +71,7 @@ export function validUserMenuItem(
  * One line per enabled plugin whose person's-menu item is left out, naming the
  * plugin and why.
  */
-function userMenuItemProblems(
-  plugins: readonly PluginDefinition[]
-): string[] {
+function userMenuItemProblems(plugins: readonly PluginDefinition[]): string[] {
   return plugins.flatMap(plugin => {
     const admin = plugin.contributes?.admin;
     if (plugin.enabled === false || headerItemPlace(admin) !== "menu") {

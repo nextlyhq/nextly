@@ -24,7 +24,11 @@ import {
   type PublishedDocumentActionOverride,
   type PublishedPanelSection,
 } from "./document-surfaces";
-import { headerItemPlace, validUserMenuItem } from "./header-item";
+import {
+  headerItemPlace,
+  userMenuItemId,
+  validUserMenuItem,
+} from "./header-item";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
   PluginAdminAppearance,
@@ -414,12 +418,12 @@ export function pluginEntitySlugs(plugin: PluginDefinition): PluginEntitySlugs {
 /** A plugin's own item, where it chose to put it; nothing for none. */
 function ownItemMeta(
   admin: PluginAdminContributions,
-  slug: string
+  pluginName: string
 ): Pick<NonNullable<PluginAdminMeta["header"]>, "slot" | "place" | "item"> {
   const place = headerItemPlace(admin);
   if (place === "menu") {
     const item = validUserMenuItem(admin);
-    return item ? { place, item: publishedUserMenuItem(item, slug) } : {};
+    return item ? { place, item: publishedUserMenuItem(item, pluginName) } : {};
   }
   const slot = admin.header?.slot ?? admin.headerSlot;
   if (!slot) return {};
@@ -429,9 +433,9 @@ function ownItemMeta(
 /** The declared fields alone, so nothing else a config carries is published. */
 function publishedUserMenuItem(
   item: PluginUserMenuItem,
-  slug: string
+  pluginName: string
 ): PublishedUserMenuItem {
-  const id = `${slug}.user-menu`;
+  const id = userMenuItemId(pluginName);
   const { label, icon } = item;
   return item.action === undefined
     ? { id, label, icon, to: item.to }
@@ -441,12 +445,12 @@ function publishedUserMenuItem(
 /** The header record a plugin publishes, or nothing when it says nothing. */
 function headerMeta(
   admin: PluginAdminContributions,
-  slug: string
+  pluginName: string
 ): PluginAdminMeta["header"] {
   const hideDefaults = admin.header?.hideDefaults;
   const hide = admin.header?.hide;
   const header = {
-    ...ownItemMeta(admin, slug),
+    ...ownItemMeta(admin, pluginName),
     ...(hideDefaults ? { hideDefaults } : {}),
     ...(hide && hide.length > 0 ? { hide } : {}),
   };
@@ -557,7 +561,7 @@ export function buildPluginAdminMeta(
       // Header customization. `header.slot` supersedes the deprecated
       // top-level `headerSlot`, which stays mirrored for a slot at the bar,
       // the one place older admins draw it.
-      const header = headerMeta(admin, slug);
+      const header = headerMeta(admin, plugin.name);
       if (header) meta.header = header;
       if (header?.slot && header.place === undefined) {
         meta.headerSlot = header.slot;

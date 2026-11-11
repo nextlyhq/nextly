@@ -91,3 +91,59 @@ describe("boundActionsOf", () => {
     ).toEqual([]);
   });
 });
+
+describe("the person's menu item's action", () => {
+  const REBUILD: PluginRoute = {
+    method: "POST",
+    path: "/rebuild",
+    handler: () => new Response(),
+  };
+  const withMenu = (
+    run: { method: "POST"; path: string },
+    routes: PluginRoute[] = [ESCALATE, REBUILD]
+  ): PluginDefinition => ({
+    ...SUPPORT,
+    contributes: {
+      ...SUPPORT.contributes,
+      routes,
+      admin: {
+        ...SUPPORT.contributes?.admin,
+        header: {
+          place: "menu",
+          item: { label: "Escalate all", icon: "BookOpen", action: { run } },
+        },
+      },
+    },
+  });
+
+  it("binds the item under its id beside the list actions on a shared route", () => {
+    const plugin = withMenu({ method: "POST", path: "/escalate" });
+    expect(
+      boundActionsOf(plugin, ESCALATE, [plugin]).map(a => [a.id, a.kind])
+    ).toEqual([
+      ["acme-support.escalate", "rowAction"],
+      ["acme-support.user-menu", "userMenuItem"],
+    ]);
+  });
+
+  it("binds the item only to the route it runs", () => {
+    const plugin = withMenu({ method: "POST", path: "/rebuild" });
+    expect(boundActionsOf(plugin, REBUILD, [plugin]).map(a => a.id)).toEqual([
+      "acme-support.user-menu",
+    ]);
+    expect(boundActionsOf(plugin, ESCALATE, [plugin]).map(a => a.id)).toEqual([
+      "acme-support.escalate",
+    ]);
+  });
+
+  it("binds no public route, and nothing for a disabled plugin", () => {
+    const open = { ...REBUILD, public: true } as PluginRoute;
+    const plugin = withMenu({ method: "POST", path: "/rebuild" }, [open]);
+    expect(boundActionsOf(plugin, open, [plugin])).toEqual([]);
+    const off = {
+      ...withMenu({ method: "POST", path: "/rebuild" }),
+      enabled: false,
+    };
+    expect(boundActionsOf(off, REBUILD, [off])).toEqual([]);
+  });
+});
