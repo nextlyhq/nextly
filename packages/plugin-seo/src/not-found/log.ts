@@ -14,6 +14,8 @@ import { createHash } from "node:crypto";
 
 import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
 
+import { within } from "../address-record/rows";
+
 import { notFoundSlug } from "./collection";
 
 /** The most addresses the log keeps once it is pruned. */
@@ -259,8 +261,6 @@ export async function forgetNotFoundUnder(
   base: string
 ): Promise<void> {
   const slug = notFoundSlug(ctx);
-  const below = (path: string) =>
-    path === base || path.startsWith(base === "/" ? "/" : `${base}/`);
   let page = 1;
   for (;;) {
     const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
@@ -278,7 +278,7 @@ export async function forgetNotFoundUnder(
     );
     // `contains` matches anywhere in the address; only those below go.
     const rows = (data as unknown[]).map(notFoundRowOf);
-    const gone = rows.filter(row => below(row.path));
+    const gone = rows.filter(row => within(row.path, base));
     for (const row of gone) {
       await ctx.services.collections.deleteEntryInTransaction(
         transaction,

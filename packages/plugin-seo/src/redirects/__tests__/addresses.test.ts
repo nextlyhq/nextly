@@ -5,6 +5,7 @@ import {
   destinationOf,
   parseSource,
   pickRedirect,
+  storedTarget,
   type HeldRow,
 } from "../addresses";
 
@@ -20,6 +21,22 @@ describe("a redirect's From address", () => {
       source: "/old/*",
       address: { path: "/old", range: true },
     });
+  });
+
+  it("spells an address as a browser sends it, so two spellings are one address", () => {
+    expect(parseSource("/café")).toMatchObject({
+      source: "/caf%C3%A9",
+      address: { path: "/caf%C3%A9" },
+    });
+    expect(parseSource("/caf%C3%A9")).toMatchObject({ source: "/caf%C3%A9" });
+    expect(parseSource("/über/*")).toMatchObject({
+      source: "/%C3%BCber/*",
+      address: { path: "/%C3%BCber", range: true },
+    });
+    expect(storedTarget("/café?x=1")).toBe("/caf%C3%A9?x=1");
+    expect(checkTarget("/caf%C3%A9", "/café")).toBe(
+      "That would send the address to itself."
+    );
   });
 
   it("drops a trailing slash, as the address is the same page", () => {

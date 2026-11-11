@@ -401,6 +401,19 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
     });
   });
 
+  it("reads two spellings of one address as one, so they never loop", async () => {
+    const { t, seo } = await boot(dialect);
+    await put(seo, { source: "/a", target: "/café" });
+
+    expect(await put(seo, { source: "/caf%C3%A9", target: "/a" })).toEqual({
+      refused: "That makes a loop: /caf%C3%A9 → /a → /caf%C3%A9.",
+      reason: "loop",
+    });
+    expect(await redirects(t)).toEqual({
+      "en|/a": "/caf%C3%A9 permanent person",
+    });
+  });
+
   it("makes a person's redirect permanent unless they choose otherwise", async () => {
     const { t, ctx, seo } = await boot(dialect);
 

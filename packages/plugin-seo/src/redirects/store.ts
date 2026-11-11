@@ -20,6 +20,7 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { within } from "../address-record/rows";
 import { forgetNotFound, forgetNotFoundUnder } from "../not-found/log";
 
 import {
@@ -28,7 +29,6 @@ import {
   parseSource,
   pathOf,
   storedTarget,
-  within,
 } from "./addresses";
 import { followChain, withQueryOf } from "./chains";
 import { redirectsSlug } from "./collection";

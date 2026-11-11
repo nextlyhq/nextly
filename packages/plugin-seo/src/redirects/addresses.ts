@@ -9,6 +9,7 @@
  *
  * @module redirects/addresses
  */
+import { within } from "../address-record/rows";
 
 /** A From address read: what is stored, and the address it holds. */
 export type ParsedSource =
@@ -31,6 +32,16 @@ function hasDotPart(path: string): boolean {
 }
 
 /** Without a trailing slash, except the root's own. */
+/**
+ * A path spelled as a browser sends it and a URL reads it: `/café` is
+ * `/caf%C3%A9`. Every address is kept in this spelling, so two spellings of
+ * one address are one key, and the address a redirect sends a visitor to is
+ * the very one its lookups followed.
+ */
+function spelled(path: string): string {
+  return new URL(path, "https://address.invalid").pathname;
+}
+
 function trimmed(path: string): string {
   return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
 }
@@ -41,7 +52,7 @@ function trimmed(path: string): string {
  * alone. `/a?ref=1` is the address `/a`.
  */
 export function pathOf(target: string): string {
-  return trimmed(target.split(/[?#]/, 1)[0] ?? target);
+  return trimmed(spelled(target.split(/[?#]/, 1)[0] ?? target));
 }
 
 /**
@@ -82,19 +93,23 @@ export function parseSource(text: string): ParsedSource {
   }
   const stars = value.split("*").length - 1;
   if (stars === 0) {
-    const path = trimmed(value);
+    const path = trimmed(spelled(value));
     return { ok: true, source: path, address: { path } };
   }
   if (stars > 1 || !value.endsWith("/*"))
     return { ok: false, error: STAR_FROM };
-  const base = value.slice(0, -2);
-  if (base === "") {
+  if (value.slice(0, -2) === "") {
     return {
       ok: false,
       error: "A pattern needs a fixed part before the *, as in /old/*.",
     };
   }
-  return { ok: true, source: value, address: { path: base, range: true } };
+  const base = spelled(value.slice(0, -2));
+  return {
+    ok: true,
+    source: `${base}/*`,
+    address: { path: base, range: true },
+  };
 }
 
 /**
@@ -122,15 +137,16 @@ export function checkTarget(target: string, source: string): string | null {
  */
 function sameSiteProblem(to: string, source: string): string | null {
   if (to.includes("\\")) return "Use / rather than \\ in the To address.";
-  if (hasDotPart(pathOf(to))) {
+  // Read as typed: the spelling a URL gives it has resolved them already.
+  if (hasDotPart(to.split(/[?#]/, 1)[0] ?? to)) {
     return "Write the To address without . or .. parts.";
   }
-  if (pathOf(to) === trimmed(source)) {
+  if (pathOf(to) === pathOf(source)) {
     return "That would send the address to itself.";
   }
   if (!source.endsWith("/*")) return null;
   const lands = pathOf(to.endsWith("/*") ? to.slice(0, -2) : to) || "/";
-  return within(lands, source.slice(0, -2))
+  return within(lands, pathOf(source.slice(0, -2)))
     ? `That makes a loop: ${source} would send its addresses back under itself.`
     : null;
 }
@@ -172,7 +188,11 @@ function elsewhereProblem(to: string): string | null {
 /** A To address as stored: without a trailing slash on a site path. */
 export function storedTarget(target: string): string {
   const to = target.trim();
-  return to.startsWith("/") && !to.endsWith("/*") ? trimmed(to) : to;
+  if (!to.startsWith("/")) return to;
+  const at = to.search(/[?#]/);
+  const path = spelled(at === -1 ? to : to.slice(0, at));
+  const rest = at === -1 ? "" : to.slice(at);
+  return `${path.endsWith("/*") ? path : trimmed(path)}${rest}`;
 }
 
 /**
@@ -202,11 +222,6 @@ export interface HeldRow {
   path: string;
   range: boolean;
   redirect: string | null;
-}
-
-/** Whether `path` is `range` or below it. */
-export function within(path: string, range: string): boolean {
-  return path === range || path.startsWith(range === "/" ? "/" : `${range}/`);
 }
 
 /**

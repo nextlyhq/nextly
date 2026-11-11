@@ -81,3 +81,14 @@ export function rowOf(entry: unknown): RecordRow {
 export function recordSlug(ctx: PluginContext): string {
   return ctx.self.collections[ADDRESS_RECORD_SLUG] ?? ADDRESS_RECORD_SLUG;
 }
+
+/**
+ * Whether `path` is the range `range` or below it, by whole path parts:
+ * `/old/x` is below `/old`, `/older` is not. The one rule every reader of a
+ * range asks: the record's claims, the redirects a pattern matches, and the
+ * logged addresses a pattern answers.
+ */
+export function within(path: string, range: string): boolean {
+  if (path === range) return true;
+  return path.startsWith(range === "/" ? "/" : `${range}/`);
+}

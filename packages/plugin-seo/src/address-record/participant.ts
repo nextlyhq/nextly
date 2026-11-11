@@ -35,6 +35,7 @@ import {
   recordSlug,
   rowOf,
   sha256,
+  within,
   type RecordRow,
   type RowKind,
 } from "./rows";
@@ -52,12 +53,6 @@ function holderLockKey(holder: AddressHolder): string {
 /** The kind of row an address is kept as. */
 function kindOf(address: HeldAddress): RowKind {
   return address.range === true ? "range" : "address";
-}
-
-/** Whether `path` is `range` or below it. */
-function within(path: string, range: string): boolean {
-  if (path === range) return true;
-  return path.startsWith(range === "/" ? "/" : `${range}/`);
 }
 
 /**
