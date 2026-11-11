@@ -781,6 +781,65 @@ function runSuite(dialect: SupportedDialect): void {
     }
   });
 
+  it("still has nothing to adopt when the app declares no schema at all", async () => {
+    // The core tables stand in every database ever pushed, and so does the
+    // plugin's table — neither may read as an app schema to graduate. A
+    // project with no collection, no app table and no contribution keeps
+    // its empty-database answer rather than recording an origin that
+    // adopts nothing.
+    await runDbSync(h, pendingConfig([]));
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: pendingConfig([]),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    expect(adopted.kind).toBe("empty-database");
+  });
+
+  it("keeps the retired media sizes column out of the orphan refusal", async () => {
+    // The core reconcile deliberately retains `media.sizes` until an
+    // operator removes it, so it stands there explained by nothing — and a
+    // refusal over it would block every existing installation from
+    // graduating. It is named as retained, never an orphan, and never
+    // recorded either.
+    await runDbSync(h, configV1);
+    await (h.adapter as unknown as DrizzleAdapter).executeQuery(
+      `ALTER TABLE ${id(h, "media")} ADD COLUMN ${id(h, "sizes")} ${
+        h.dialect === "mysql" ? "JSON" : "text"
+      }`
+    );
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: { collections: [] },
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    if (adopted.kind !== "baselined")
+      throw new Error(`expected a baseline, got ${adopted.kind}`);
+    // A core table is never adopted whole, so the retained column reaches
+    // no snapshot: what this asserts is that the adoption happened at all
+    // rather than refusing over the column.
+    const recorded = JSON.parse(
+      await readFile(adopted.snapshotPath, "utf-8")
+    ) as { snapshot: { tables: { name: string }[] } };
+    expect(recorded.snapshot.tables.some(t => t.name === "media")).toBe(false);
+  });
+
   it("carries a localized companion into the baseline SQL, but not the snapshot", async () => {
     // The split is the point. A companion is derived, never declared by
     // config, so recording it in the SNAPSHOT would make the next diff want to

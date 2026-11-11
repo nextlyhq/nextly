@@ -37,6 +37,7 @@ import {
   COMPANION_STATUS_COLUMN,
   COMPANION_STRUCTURAL_COLUMNS,
 } from "../../domains/i18n/migration/generate-up";
+import { RETAINED_SIZES_COLUMN } from "../../domains/media/retired-image-sizes-constants";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -755,17 +756,6 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
       declared: deps.declared,
     }),
   });
-  // A project whose extension schema is all CONTRIBUTIONS owns no managed
-  // table of its own, so the plan reads an empty database — but the owners'
-  // tables standing beside those contributions are reason enough to adopt:
-  // the fold below records what the app has added to them, and the empty
-  // plan simply rebuilds nothing of the app's own.
-  if (plan.kind === "empty-database" && ownerTables.length > 0) {
-    plan = { kind: "baseline", operations: [], snapshot: EMPTY_SNAPSHOT };
-  }
-
-  if (plan.kind !== "baseline") return notAdopting(plan);
-
   // An element standing on an owner's table that neither the owner's
   // declaration nor any current contribution explains is one a withdrawn
   // hook left behind. Nothing records whose it was — the attribution dies
@@ -773,6 +763,8 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   // environment nor schedule its removal, and this database would keep it
   // while every other missed it. Refused and named, like the companion
   // mismatch: dropping content-bearing columns is the operator's decision.
+  // Judged before the empty-database answer, because a config that withdrew
+  // its every contribution is exactly one with nothing currently standing.
   const orphans = deps.appStream
     ? [...ownerLive.entries()].flatMap(([name, table]) => {
         const bare = deps.appStream?.baselines.get(name);
@@ -783,6 +775,10 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
             deps.appStream?.contributed.get(name)?.elements ?? NO_ELEMENTS,
           live: table,
           core: coreTableNames(dialect),
+          // The column the core reconcile itself keeps on an existing
+          // database: the one thing standing there that no declaration
+          // names and no withdrawal explains, on purpose.
+          retained: new Set([RETAINED_SIZES_COLUMN.name]),
         });
         return unexplained.length === 0
           ? []
@@ -792,6 +788,22 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   if (orphans.length > 0) {
     return { kind: "contribution-mismatch", mismatches: orphans };
   }
+
+  // A project whose extension schema is all CONTRIBUTIONS owns no managed
+  // table of its own, so the plan reads an empty database — but a
+  // CONTRIBUTION actually standing is reason enough to adopt: the fold below
+  // records what the app has added to its owner's table, and the empty plan
+  // simply rebuilds nothing of the app's own. The owners' tables alone are
+  // not: the core ones stand in every database ever pushed, and a project
+  // with no schema at all still has nothing to adopt.
+  const contributedStanding = [
+    ...(deps.appStream?.contributed.keys() ?? []),
+  ].filter(name => names.includes(name));
+  if (plan.kind === "empty-database" && contributedStanding.length > 0) {
+    plan = { kind: "baseline", operations: [], snapshot: EMPTY_SNAPSHOT };
+  }
+
+  if (plan.kind !== "baseline") return notAdopting(plan);
 
   const name = slugify(deps.name ?? DEFAULT_BASELINE_NAME);
   const now = deps.now ?? new Date();

@@ -773,6 +773,12 @@ export function unexplainedElements(input: {
   live: TableSpec;
   /** The core tables' names: a bare declaration the dialect bundle wrote. */
   core: ReadonlySet<string>;
+  /**
+   * Column names the database keeps though nothing declares them — the
+   * retired `media.sizes`, which the core reconcile retains until an
+   * operator removes it. Never an orphan, whatever table they stand on.
+   */
+  retained: ReadonlySet<string>;
 }): string[] {
   const unexplained: string[] = [];
   // Columns are always declared, and their names are stable across dialects:
@@ -783,6 +789,7 @@ export function unexplainedElements(input: {
       ...input.elements.columns,
     ].values()
   );
+  for (const name of input.retained) columnNames.add(name);
   for (const column of input.live.columns) {
     if (!columnNames.has(column.name)) unexplained.push(column.name);
   }
