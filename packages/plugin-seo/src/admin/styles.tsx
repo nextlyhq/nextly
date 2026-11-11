@@ -40,7 +40,8 @@ const CSS = `
 .nx-seo-help{margin:0;font-size:13px;color:var(--nx-muted-foreground);line-height:1.45}
 .nx-seo-help b{color:var(--nx-foreground);font-weight:600}
 .nx-seo-error{margin:0;font-size:13px;color:var(--nx-danger-text);font-weight:500}
-.nx-seo-mono{font-family:var(--seo-mono)!important;font-size:13px!important}
+/* Under the root, so the face and size win over a table cell's or a control's own. */
+.nx-seo .nx-seo-mono{font-family:var(--seo-mono);font-size:13px}
 .nx-seo-seg{display:inline-flex;flex-wrap:wrap;padding:3px;border-radius:9px;background:var(--nx-muted);gap:2px;width:max-content}
 .nx-seo-seg button{border:0;background:transparent;min-width:36px;padding:5px 10px;border-radius:7px;font:inherit;font-size:14px;font-weight:500;color:var(--nx-muted-foreground);cursor:pointer}
 .nx-seo-seg button[aria-pressed="true"]{background:var(--nx-card);color:var(--nx-foreground);font-weight:600;box-shadow:0 1px 2px var(--nx-shadow-color)}
@@ -124,7 +125,8 @@ const CSS = `
 .nx-seo-banner b{font-weight:600}
 .nx-seo-alert{margin:12px 24px 0;padding:10px 12px;border-radius:8px;border:1px solid var(--nx-danger-border);background:var(--nx-danger-surface);color:var(--nx-danger-text);font-size:13px}
 .nx-seo-state{padding:40px 24px;color:var(--nx-muted-foreground);font-size:13px}
-.nx-seo-dialog{gap:0!important;padding:0!important;overflow:hidden;display:flex!important;flex-direction:column;max-height:calc(100dvh - 32px)}
+/* The dialog carries the root class itself; both together outrank its own layout. */
+.nx-seo.nx-seo-dialog{gap:0;padding:0;overflow:hidden;display:flex;flex-direction:column;max-height:calc(100dvh - 32px)}
 .nx-seo-dlg-head{padding:18px 48px 0 20px}
 .nx-seo-dlg-head h2{margin:0;font-size:18px;font-weight:700;letter-spacing:-.01em}
 .nx-seo-dlg-head p{margin:4px 0 0;color:var(--nx-muted-foreground);font-size:13px}
@@ -157,7 +159,7 @@ const CSS = `
 .nx-seo-prow:first-child{border-top:0}
 .nx-seo-where{min-width:0}
 .nx-seo-where b{font-weight:600;display:block;overflow-wrap:anywhere}
-.nx-seo-where .nx-seo-mono{display:block;color:var(--nx-muted-foreground);font-size:12px!important;overflow-wrap:anywhere}
+.nx-seo .nx-seo-where .nx-seo-mono{display:block;color:var(--nx-muted-foreground);font-size:12px;overflow-wrap:anywhere}
 .nx-seo-what{line-height:1.45;overflow-wrap:anywhere}
 .nx-seo-fixes{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
 @media (max-width:1100px){
@@ -185,7 +187,7 @@ const CSS = `
 .nx-seo-types td[data-label]::before{content:attr(data-label);display:block;font-size:12px;font-weight:600;color:var(--nx-muted-foreground);margin-bottom:2px}
 .nx-seo-profile{grid-template-columns:minmax(0,1fr) auto}
 .nx-seo-profile .nx-seo-net{grid-column:1/-1}
-.nx-seo-dialog{width:calc(100% - 32px)!important}
+.nx-seo.nx-seo-dialog{width:calc(100% - 32px)}
 .nx-seo-types .nx-seo-switchcell{display:none}
 .nx-seo-mapline{grid-template-columns:minmax(0,1fr)}
 .nx-seo-select{max-width:none}
