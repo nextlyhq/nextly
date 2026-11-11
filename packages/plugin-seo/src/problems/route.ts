@@ -19,11 +19,16 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import {
+  addressRecordReady,
+  retryFailedCatchUp,
+} from "../address-record/catch-up";
+
+import {
   checkSite,
   pageRefKey,
   problemList,
   type ProblemChecks,
-  type ReadablePages,
+  type Reader,
 } from "./check";
 import { PROBLEMS_CHECK_ROUTE_PATH, PROBLEMS_ROUTE_PATH } from "./contract";
 
@@ -49,7 +54,9 @@ async function readableTypes(
 const ID_CHUNK = 100;
 
 /** The pages of `refs` grouped by type, each id once. */
-function idsByType(refs: Parameters<ReadablePages>[0]): Map<string, string[]> {
+function idsByType(
+  refs: Parameters<Reader["pages"]>[0]
+): Map<string, string[]> {
   const byType = new Map<string, Set<string>>();
   for (const { type, id } of refs) {
     const ids = byType.get(type) ?? new Set<string>();
@@ -65,10 +72,7 @@ function idsByType(refs: Parameters<ReadablePages>[0]): Map<string, string[]> {
  * own, say) decides, as it does for every other read. A type the caller may
  * not read at all is not asked about.
  */
-function readableBy(
-  ctx: PluginRouteContext,
-  types: ReadonlySet<string>
-): ReadablePages {
+function readerOf(ctx: PluginRouteContext, types: ReadonlySet<string>): Reader {
   const asReader = {
     as: "user" as const,
     user: ctx.user ?? undefined,
@@ -76,7 +80,7 @@ function readableBy(
       ? {}
       : { authenticatedScope: ctx.authenticatedScope }),
   };
-  return async refs => {
+  const pages: Reader["pages"] = async refs => {
     const allowed = new Set<string>();
     for (const [type, ids] of idsByType(refs)) {
       if (!types.has(type)) continue;
@@ -99,6 +103,12 @@ function readableBy(
     }
     return allowed;
   };
+  return {
+    pages,
+    readsType: type => types.has(type),
+    // Counted as the caller, so a rule admitting only some entries decides.
+    count: type => ctx.services.collections.count(type, {}, asReader),
+  };
 }
 
 /** The routes that read the list and check the site again. */
@@ -111,7 +121,7 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
       handler: async (_req, ctx) => {
         const readable = await readableTypes(ctx, checks.targets);
         return respondDoc(
-          await problemList(ctx, checks, readableBy(ctx, readable))
+          await problemList(ctx, checks, readerOf(ctx, readable))
         );
       },
     },
@@ -121,8 +131,20 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
       handler: async (_req, ctx) => {
         // Asked before the check, which reads and writes as the system.
         const readable = await readableTypes(ctx, checks.targets);
+        // While the address record catches up, or after a catch-up that
+        // failed, a page may not hold its address yet and would be checked
+        // as not public: the person is asked to try again, as the sitemap
+        // asks crawlers, and a failed catch-up is tried again.
+        if (!addressRecordReady()) {
+          retryFailedCatchUp();
+          throw NextlyError.serviceUnavailable({
+            publicMessage:
+              "The site's addresses are being brought up to date. Check again in a minute.",
+            logContext: { reason: "address-record-not-ready" },
+          });
+        }
         await checkSite(ctx, checks);
-        const list = await problemList(ctx, checks, readableBy(ctx, readable));
+        const list = await problemList(ctx, checks, readerOf(ctx, readable));
         const pages = `${list.pagesChecked} ${list.pagesChecked === 1 ? "page" : "pages"}`;
         return respondAction(`Checked ${pages}.`, { ...list });
       },

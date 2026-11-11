@@ -9,12 +9,14 @@ import { describe, expect, it, vi } from "vitest";
 const store = vi.hoisted(() => ({
   calls: [] as string[],
   versionsRead: 0,
+  failVersions: false,
 }));
 
 vi.mock("../store", async importOriginal => ({
   ...(await importOriginal<typeof import("../store")>()),
   // No row before the check; one, by the time the deletion reads.
   readVersions: async () => {
+    if (store.failVersions) throw new Error("the database went away");
     store.calls.push("readVersions");
     store.versionsRead += 1;
     return store.versionsRead === 1
@@ -31,9 +33,18 @@ vi.mock("../store", async importOriginal => ({
   markOutOfDate: async () => {
     store.calls.push("markOutOfDate");
   },
+  readPages: async () => [],
+  saveSiteCheck: async () => {
+    store.calls.push("saveSiteCheck");
+  },
 }));
 
-import { forgetDeleted, recheckSaved, type ProblemChecks } from "../check";
+import {
+  checkSite,
+  forgetDeleted,
+  recheckSaved,
+  type ProblemChecks,
+} from "../check";
 
 const CHECKS = {
   targets: ["posts"],
@@ -76,5 +87,33 @@ describe("a page's checks and its deletion", () => {
       ])
     );
     expect(ctx.logger.error).not.toHaveBeenCalled();
+  });
+
+  it("fail a full check when a page's check fails, and record no check", async () => {
+    store.calls = [];
+    store.failVersions = true;
+    const ctx = {
+      logger: { error: vi.fn() },
+      self: { collections: {} },
+      publicAddresses: {
+        types: async () => [{ kind: "collection", slug: "posts" }],
+        held: async () => ({
+          items: [
+            {
+              holder: { collection: "posts", id: "7" },
+              holds: [{ locale: "en", path: "/blog/7" }],
+            },
+          ],
+        }),
+      },
+    } as unknown as PluginContext;
+    try {
+      await expect(checkSite(ctx, CHECKS)).rejects.toThrow(
+        "the database went away"
+      );
+      expect(store.calls).not.toContain("saveSiteCheck");
+    } finally {
+      store.failVersions = false;
+    }
   });
 });

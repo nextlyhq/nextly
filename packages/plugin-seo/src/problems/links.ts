@@ -101,23 +101,6 @@ function requestOf(
 }
 
 /**
- * The path an address names on the site, spelled as the record keeps it
- * (encoded, without dot segments, query, fragment or trailing slash): a path
- * from the root, or a full address on one of the production addresses.
- * Nothing for any other address.
- */
-export function sitePath(
-  url: string,
-  productionAddresses: readonly string[]
-): string | undefined {
-  if (url.startsWith("/") && !url.startsWith("//")) return pathOf(url);
-  const origin = originOf(url);
-  const own = productionAddresses.flatMap(each => originOf(each) ?? []);
-  if (origin === undefined || !own.includes(origin)) return undefined;
-  return pathOf(new URL(url).pathname);
-}
-
-/**
  * The links in `links` to an address a content type serves that no page
  * holds in the language the address is served in. Each address is asked
  * about once in each language, however many links name it.

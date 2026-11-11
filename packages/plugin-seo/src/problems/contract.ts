@@ -179,6 +179,11 @@ export interface ProblemSubject {
   label: string;
   /** The page's address, or a line saying what else it is (`3 entries`). */
   detail?: string;
+  /**
+   * The language the page was checked in, where it is not the site's
+   * default: its fix opens the editor in that language.
+   */
+  locale?: string;
 }
 
 /** Where the plugin's screens are served. */
@@ -247,7 +252,12 @@ export function fixHref(problem: Problem): string | undefined {
       const editor = subject.type.startsWith("single:")
         ? `/admin/singles/${encodeURIComponent(subject.type.slice(7))}`
         : `/admin/collections/${encodeURIComponent(subject.type)}/${encodeURIComponent(subject.id)}`;
-      return fix.tab === "seo" ? `${editor}?tab=${SEO_TAB_ID}` : editor;
+      const query = new URLSearchParams();
+      if (fix.tab === "seo") query.set("tab", SEO_TAB_ID);
+      // The editor's language, as the admin names it in the address.
+      if (subject.locale !== undefined) query.set("locale", subject.locale);
+      const search = query.toString();
+      return search === "" ? editor : `${editor}?${search}`;
     }
     case "settings":
       return `${SETTINGS_PAGE_HREF}?tab=${fix.tab}`;

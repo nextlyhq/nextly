@@ -8,6 +8,7 @@
  * @module problems/page-checks
  */
 import type { LanguageCodeProblem } from "../languages/hreflang";
+import { standingOf } from "../languages/versions";
 import type { SeoAnswer, Sourced } from "../resolver/order";
 import type { ShareImageProblem } from "../social/problems";
 import { DETAIL_LABELS } from "../structured-data/catalog";
@@ -22,7 +23,6 @@ import {
   type ProblemKind,
   type ProblemSubject,
 } from "./contract";
-import { sitePath } from "./links";
 
 /** An image a page's content shows, and the alt text it is shown with. */
 export interface ImageFact {
@@ -50,10 +50,8 @@ export interface LinkFact {
 export interface PageFacts {
   subject: ProblemSubject;
   answer: SeoAnswer;
-  /** The page's own public address, where its type declares one. */
-  ownAddress?: string;
-  /** Where the site itself is served, as bare origins. */
-  productionAddresses: readonly string[];
+  /** The canonical the answer names is the page's own address ({@link canonicalIsOwn}). */
+  canonicalIsOwn: boolean;
   shareImage: readonly ShareImageProblem[];
   structuredData: readonly StructuredDataProblem[];
   images: readonly ImageFact[];
@@ -170,11 +168,7 @@ function textProblems(facts: PageFacts): Problem[] {
  */
 function canonicalProblem(facts: PageFacts): Problem[] {
   const canonical = facts.answer.canonical;
-  if (canonical?.from !== "page" || facts.ownAddress === undefined) return [];
-  const own = sitePath(facts.ownAddress, facts.productionAddresses);
-  if (sitePath(canonical.value, facts.productionAddresses) === own) {
-    return [];
-  }
+  if (canonical?.from !== "page" || facts.canonicalIsOwn) return [];
   return [
     {
       kind: "canonical",
@@ -365,4 +359,24 @@ export function pageProblems(facts: PageFacts): Problem[] {
     ...structuredDataProblems(facts),
     ...languageCodeProblems(facts),
   ];
+}
+
+/**
+ * Whether the canonical the answer names is the page's own address as its
+ * language serves it (`served`), on its language's own domain where it has
+ * one, else on `origin`. Decided by the rule the sitemap lists pages by, so
+ * a page the sitemap leaves out for naming another address is the page
+ * this reports. Read as listed, so a page hidden from search is judged too.
+ */
+export function canonicalIsOwn(
+  answer: SeoAnswer,
+  origin: string,
+  served: string | undefined
+): boolean {
+  const listed: SeoAnswer = {
+    ...answer,
+    robots: { value: { index: true, follow: true }, from: "site" },
+  };
+  const standing = standingOf(listed, origin, served);
+  return standing !== null && standing !== "lost";
 }

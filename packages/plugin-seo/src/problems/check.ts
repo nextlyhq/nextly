@@ -44,7 +44,7 @@ import {
   type ProblemListBody,
 } from "./contract";
 import { addressShapes, brokenLinks } from "./links";
-import { pageProblems } from "./page-checks";
+import { canonicalIsOwn, pageProblems } from "./page-checks";
 import {
   listingProblems,
   noAddressProblems,
@@ -174,12 +174,21 @@ async function examine(
   const rules = await readers.readRules(ctx, locale);
   const productionAddresses = productionAddressesOf(rules.productionAddresses);
   const content = contentFacts(entry);
-  const subject = { type, id, label: labelOf(entry, id), detail: ownAddress };
+  const subject = {
+    type,
+    id,
+    label: labelOf(entry, id),
+    detail: ownAddress,
+    ...(locale === undefined ? {} : { locale }),
+  };
   const problems = pageProblems({
     subject,
     answer,
-    ownAddress,
-    productionAddresses,
+    canonicalIsOwn: canonicalIsOwn(
+      answer,
+      productionAddresses[0] ?? NO_ORIGIN,
+      ownAddress
+    ),
     shareImage: await shareImageProblems(ctx, input, readers),
     structuredData: await structuredDataProblems(ctx, input, readers),
     images: content.images,
@@ -311,17 +320,11 @@ async function checkType(
       const { id } = document.holder;
       // In the page's turn, so a check of a save made meanwhile and this one
       // never write over each other.
-      await inTurn(
-        ctx,
-        slug,
-        id,
-        "The SEO plugin could not check a page",
-        async () => {
-          for (const key of await checkPage(ctx, checks, slug, id)) {
-            seen.add(key);
-          }
+      await inTurn(slug, id, async () => {
+        for (const key of await checkPage(ctx, checks, slug, id)) {
+          seen.add(key);
         }
-      );
+      });
     }
     after = page.next;
   } while (after !== undefined);
@@ -351,17 +354,11 @@ async function runSiteCheck(
   for (const row of await readPages(ctx)) {
     const { type, id } = row.subject;
     if (seen.has(pageKey(type, id, row.locale))) continue;
-    await inTurn(
-      ctx,
-      type,
-      id,
-      "The SEO plugin could not check a page",
-      async () => {
-        for (const key of await checkPage(ctx, checks, type, id)) {
-          seen.add(key);
-        }
+    await inTurn(type, id, async () => {
+      for (const key of await checkPage(ctx, checks, type, id)) {
+        seen.add(key);
       }
-    );
+    });
   }
   await saveSiteCheck(ctx, {
     checkedAt: new Date().toISOString(),
@@ -483,33 +480,44 @@ const pageQueue = new Map<string, Promise<void>>();
 
 /**
  * Run `work` for the page `type`/`id` once every piece of work already
- * queued for it has settled: a save's check and a deletion's cleanup never
- * overlap, so a check that read the page before it was deleted cannot write
- * its row back after the cleanup removed it. Started, not awaited, so a save
- * or a delete never waits on it; a failure is logged as `failed`, never
- * thrown into the write that is already done.
+ * queued for it has settled: a save's check, a deletion's cleanup and a
+ * full check's never overlap, so none writes over another's result. The
+ * answer is the work's own: a failure rejects it, and the next piece in the
+ * queue runs regardless.
  */
 function inTurn(
+  type: string,
+  id: string,
+  work: () => Promise<void>
+): Promise<void> {
+  const key = `${type}\u0000${id}`;
+  const result = (pageQueue.get(key) ?? Promise.resolve()).then(work);
+  const settled = result.then(
+    () => undefined,
+    () => undefined
+  );
+  pageQueue.set(key, settled);
+  void settled.then(() => {
+    if (pageQueue.get(key) === settled) pageQueue.delete(key);
+  });
+  return result;
+}
+
+/**
+ * {@link inTurn}, started rather than awaited, for work after a save or a
+ * delete: neither waits on it, and a failure is logged as `failed`, never
+ * thrown into the write that is already done.
+ */
+function inTurnAfterWrite(
   ctx: PluginContext,
   type: string,
   id: string,
   failed: string,
   work: () => Promise<void>
-): Promise<void> {
-  const key = `${type}\u0000${id}`;
-  const run = async () => {
-    try {
-      await work();
-    } catch (error) {
-      ctx.logger.error(failed, { error, collection: type, id });
-    }
-  };
-  const next = (pageQueue.get(key) ?? Promise.resolve()).then(run);
-  pageQueue.set(key, next);
-  void next.finally(() => {
-    if (pageQueue.get(key) === next) pageQueue.delete(key);
+): void {
+  inTurn(type, id, work).catch((error: unknown) => {
+    ctx.logger.error(failed, { error, collection: type, id });
   });
-  return next;
 }
 
 /** Check a page after it is saved, in its turn. */
@@ -519,7 +527,7 @@ export function recheckSaved(
   type: string,
   id: string
 ): void {
-  void inTurn(
+  inTurnAfterWrite(
     ctx,
     type,
     id,
@@ -539,7 +547,7 @@ export function forgetDeleted(
   type: string,
   id: string
 ): void {
-  void inTurn(
+  inTurnAfterWrite(
     ctx,
     type,
     id,
@@ -571,12 +579,17 @@ function declared(
 async function siteProblems(
   ctx: PluginContext,
   checks: ProblemChecks,
-  addresses: readonly string[]
+  addresses: readonly string[],
+  reader: Reader
 ): Promise<Problem[]> {
   const standing = addresses.length > 0 ? undefined : await readStanding(ctx);
   const targets = new Set(checks.targets);
+  // A type is named, and its entries counted, only for a reader of it.
   const without = (await typesWithoutAddress()).filter(
-    type => type.kind === "collection" && targets.has(type.slug)
+    type =>
+      type.kind === "collection" &&
+      targets.has(type.slug) &&
+      reader.readsType(type.slug)
   );
   const types = await Promise.all(
     without.map(async ({ slug }) => {
@@ -584,7 +597,7 @@ async function siteProblems(
       return {
         key: slug,
         label: code?.label ?? slug,
-        entries: await ctx.services.collections.count(slug, {}),
+        entries: await reader.count(slug),
         inCode: code !== undefined,
       };
     })
@@ -622,14 +635,19 @@ export interface PageRef {
 }
 
 /**
- * Which of `pages` the reader may read, as `type:id` keys: what the list
- * names of a page is shown only to someone who may read that page.
+ * What the person reading the list may read: what the list names of a page
+ * or a content type is shown only to someone who may read it.
  */
-export type ReadablePages = (
-  pages: readonly PageRef[]
-) => Promise<ReadonlySet<string>>;
+export interface Reader {
+  /** Which of `pages` they may read, as `type:id` keys. */
+  pages(pages: readonly PageRef[]): Promise<ReadonlySet<string>>;
+  /** Whether they may read any entry of the content type `type`. */
+  readsType(type: string): boolean;
+  /** How many entries of `type` they may read. */
+  count(type: string): Promise<number>;
+}
 
-/** A page's key in a {@link ReadablePages} answer. */
+/** A page's key in a {@link Reader.pages} answer. */
 export const pageRefKey = (page: PageRef): string => `${page.type}:${page.id}`;
 
 /** The page a problem is about, where it is about one. */
@@ -639,19 +657,19 @@ function pageOf(problem: Problem): PageRef | undefined {
 }
 
 /**
- * The list as the reader `readable` answers for may see it: every problem of
+ * The list as `reader` may see it: every problem of
  * the whole site, and the problems of the pages they may read, with pages
  * compared only among those.
  */
 export async function problemList(
   ctx: PluginContext,
   checks: ProblemChecks,
-  readable: ReadablePages,
+  reader: Reader,
   now: number = Date.now()
 ): Promise<ProblemListBody> {
   const site = await readSiteCheck(ctx);
   const rows = await readPages(ctx);
-  const allowed = await readable([
+  const allowed = await reader.pages([
     ...rows.map(row => row.subject),
     ...site.problems.flatMap(problem => pageOf(problem) ?? []),
   ]);
@@ -665,7 +683,7 @@ export async function problemList(
   const host =
     addresses[0] === undefined ? undefined : new URL(addresses[0]).host;
   const problems = once([
-    ...(await siteProblems(ctx, checks, addresses)),
+    ...(await siteProblems(ctx, checks, addresses, reader)),
     ...found,
     ...pages.flatMap(row => row.problems),
     ...sharedValueProblems(pages),

@@ -76,6 +76,22 @@ describe("fixHref", () => {
     expect(fixHref(page({ place: "media" }))).toBe("/admin/media");
   });
 
+  it("opens the editor in the language the page was checked in", () => {
+    const german: Problem = {
+      ...page({ place: "page", tab: "seo", field: "metaDescription" }),
+      subject: { type: "posts", id: "7", label: "Hafen", locale: "de" },
+    };
+    expect(fixHref(german)).toBe(
+      "/admin/collections/posts/7?tab=nextlyhq-plugin-seo.tab&locale=de"
+    );
+    expect(
+      fixHref({
+        ...german,
+        fix: { place: "page", tab: "content", field: "body" },
+      })
+    ).toBe("/admin/collections/posts/7?locale=de");
+  });
+
   it("has no address for a note copied for a developer", () => {
     expect(
       fixHref(page({ place: "developer", note: "Add a line." }))

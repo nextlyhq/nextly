@@ -6,10 +6,19 @@
 import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const ready = vi.hoisted(() => ({ record: true }));
+
+vi.mock("../../address-record/catch-up", () => ({
+  addressRecordReady: () => ready.record,
+  retryFailedCatchUp: () => undefined,
+}));
+
 const calls = vi.hoisted(() => ({
   checked: 0,
   readable: [] as string[],
   reads: [] as string[],
+  types: [] as string[],
+  counted: 0,
 }));
 
 vi.mock("../check", () => ({
@@ -20,11 +29,17 @@ vi.mock("../check", () => ({
   problemList: async (
     _ctx: unknown,
     _checks: unknown,
-    readable: (
-      pages: { type: string; id: string }[]
-    ) => Promise<ReadonlySet<string>>
+    reader: {
+      pages: (
+        pages: { type: string; id: string }[]
+      ) => Promise<ReadonlySet<string>>;
+      readsType: (type: string) => boolean;
+      count: (type: string) => Promise<number>;
+    }
   ) => {
-    const answer = await readable([
+    calls.types = ["posts", "pages"].filter(type => reader.readsType(type));
+    calls.counted = await reader.count("posts");
+    const answer = await reader.pages([
       { type: "posts", id: "1" },
       { type: "posts", id: "2" },
       { type: "pages", id: "3" },
@@ -57,6 +72,14 @@ function context(
     user: readable === null ? null : { id: "u1" },
     services: {
       collections: {
+        count: async (
+          _slug: string,
+          _options: unknown,
+          opts: { as?: string }
+        ) => {
+          calls.reads.push(opts.as ?? "system");
+          return own.length;
+        },
         listEntries: async (
           _slug: string,
           options: { where: { id: { in: string[] } } },
@@ -130,6 +153,25 @@ describe("the problem list's routes", () => {
     // The caller may read posts, but their read rule admits only their own.
     expect(await status(list, ["posts", "pages"], ["1"])).toBe(200);
     expect(calls.readable).toEqual(["posts:1"]);
+    // Entries counted as the caller too.
+    expect(calls.counted).toBe(1);
     expect(new Set(calls.reads)).toEqual(new Set(["user"]));
+  });
+
+  it("name only the content types the caller may read", async () => {
+    expect(await status(list, ["posts"])).toBe(200);
+    expect(calls.types).toEqual(["posts"]);
+  });
+
+  it("ask to try again while the address record catches up, before checking", async () => {
+    ready.record = false;
+    try {
+      expect(await status(check, ["posts"])).toBe(503);
+      expect(calls.checked).toBe(0);
+      // The list itself still answers.
+      expect(await status(list, ["posts"])).toBe(200);
+    } finally {
+      ready.record = true;
+    }
   });
 });

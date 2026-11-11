@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SeoAnswer } from "../../resolver/order";
 import type { Problem } from "../contract";
-import { pageProblems, type PageFacts } from "../page-checks";
+import { canonicalIsOwn, pageProblems, type PageFacts } from "../page-checks";
 
 const SUBJECT = {
   type: "posts",
@@ -29,8 +29,7 @@ function facts(over: Partial<PageFacts> = {}): PageFacts {
       canonical: { value: "/blog/harbour-walk", from: "address" },
       robots: { value: { index: true, follow: true }, from: "site" },
     },
-    ownAddress: "/blog/harbour-walk",
-    productionAddresses: ["https://example.com"],
+    canonicalIsOwn: true,
     shareImage: [],
     structuredData: [],
     images: [],
@@ -116,23 +115,13 @@ describe("pageProblems", () => {
 
   it("reports a canonical a person typed that names another address", () => {
     const own = pageProblems(
-      withAnswer({
-        canonical: {
-          value: "https://example.com/blog/harbour-walk/",
-          from: "page",
-        },
-      })
+      withAnswer({ canonical: { value: "/blog/harbour-walk/", from: "page" } })
     );
     expect(own).toEqual([]);
-    // Typed with the characters a person sees, held encoded.
-    const unicode = pageProblems({
-      ...withAnswer({ canonical: { value: "/blog/café", from: "page" } }),
-      ownAddress: "/blog/caf%C3%A9",
+    const elsewhere = pageProblems({
+      ...withAnswer({ canonical: { value: "/blog/other", from: "page" } }),
+      canonicalIsOwn: false,
     });
-    expect(unicode).toEqual([]);
-    const elsewhere = pageProblems(
-      withAnswer({ canonical: { value: "/blog/other", from: "page" } })
-    );
     expect(kinds(elsewhere)).toEqual(["canonical"]);
     expect(elsewhere[0]?.what).toBe("Points search engines to /blog/other");
     expect(elsewhere[0]?.fix).toEqual({
@@ -332,5 +321,42 @@ describe("pageProblems", () => {
         },
       },
     ]);
+  });
+});
+
+describe("canonicalIsOwn", () => {
+  const listed = {
+    value: { index: true, follow: true },
+    from: "site",
+  } as const;
+  const typed = (value: string): SeoAnswer => ({
+    canonical: { value, from: "page" },
+    robots: listed,
+  });
+
+  it("takes a typed canonical naming the page's own address as its own", () => {
+    expect(
+      canonicalIsOwn(typed("/blog/same"), "https://example.com", "/blog/same")
+    ).toBe(true);
+    expect(
+      canonicalIsOwn(
+        typed("https://example.com/blog/caf%C3%A9"),
+        "https://example.com",
+        "/blog/café"
+      )
+    ).toBe(true);
+  });
+
+  it("keeps a language's own domain: the same path on another names elsewhere", () => {
+    expect(
+      canonicalIsOwn(
+        typed("https://en.example.com/blog/same"),
+        "https://en.example.com",
+        "https://fr.example.com/blog/same"
+      )
+    ).toBe(false);
+    expect(
+      canonicalIsOwn(typed("/blog/other"), "https://example.com", "/blog/same")
+    ).toBe(false);
   });
 });

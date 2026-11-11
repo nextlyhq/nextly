@@ -715,8 +715,11 @@ holds its address.
   and whenever someone chooses **Check now**. The list says when it was last checked. No scheduler
   is needed, so this works the same on a self-hosted server.
 - **Serving a page runs no check.** What each check found is kept, and the list reads it.
+- **A full check waits for the plugin's record of addresses** to be brought up to date after a
+  start; until then the list asks to check again in a minute, as the sitemap asks crawlers.
 
-The list answers each person with the pages of the collections they may read. It is served at
+The list answers each person with the pages they may read, and names a collection only to its
+readers. It is served at
 `/admin/api/plugins/@nextlyhq/plugin-seo/problems`, and a full check at
 `/admin/api/plugins/@nextlyhq/plugin-seo/problems/check` (`POST`), for a signed-in person.
 

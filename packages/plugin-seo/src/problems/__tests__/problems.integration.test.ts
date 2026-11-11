@@ -31,7 +31,7 @@ import {
   pageRefKey,
   problemList,
   type ProblemChecks,
-  type ReadablePages,
+  type Reader,
 } from "../check";
 import type { Problem } from "../contract";
 import { PROBLEMS_SLUG } from "../store";
@@ -43,14 +43,29 @@ afterEach(async () => {
   current = undefined;
 });
 
-/** A reader who may read every page. */
-const everything: ReadablePages = async pages => new Set(pages.map(pageRefKey));
+/** The SEO plugin's context the current test runs with. */
+let seoContext: PluginContext | undefined;
 
-/** A reader who may read only the pages `allowed` names. */
-const only =
-  (allowed: (page: { type: string; id: string }) => boolean): ReadablePages =>
-  async pages =>
-    new Set(pages.filter(allowed).map(pageRefKey));
+/**
+ * A reader who may read only the pages `allowed` names, of the types
+ * `types` names, counting entries as the system does.
+ */
+function only(
+  allowed: (page: { type: string; id: string }) => boolean,
+  types: (type: string) => boolean = () => true
+): Reader {
+  return {
+    pages: async pages => new Set(pages.filter(allowed).map(pageRefKey)),
+    readsType: types,
+    count: async type => {
+      if (!seoContext) throw new Error("no SEO plugin context");
+      return seoContext.services.collections.count(type, {});
+    },
+  };
+}
+
+/** A reader who may read every page. */
+const everything: Reader = only(() => true);
 
 /** The checks as the plugin runs them for `posts`, with nothing set. */
 const CHECKS: ProblemChecks = {
@@ -110,6 +125,7 @@ async function boot(dialect: TestDialect) {
     ],
   });
   if (!seen.ctx) throw new Error("the SEO plugin never started");
+  seoContext = seen.ctx;
   return { t: current, ctx: seen.ctx };
 }
 
@@ -307,6 +323,16 @@ describe.each(getConfiguredTestDialects())(
         "productionAddress",
         "noAddress",
       ]);
+      // A type with no address is named only to a reader of that type.
+      const notNotes = await problemList(
+        ctx,
+        CHECKS,
+        only(
+          () => true,
+          type => type !== "notes"
+        )
+      );
+      expect(notNotes.problems.some(p => p.kind === "noAddress")).toBe(false);
     });
 
     it("a full check reads every public page, and a later change marks it out of date", async () => {
@@ -461,6 +487,7 @@ describe.each(getConfiguredTestDialects())(
       const t = current;
       const ctx = seen.ctx;
       if (!ctx) throw new Error("the SEO plugin never started");
+      seoContext = ctx;
       // With no description in English, and one in German.
       const both = await t.nextly.create({
         collection: "posts",
