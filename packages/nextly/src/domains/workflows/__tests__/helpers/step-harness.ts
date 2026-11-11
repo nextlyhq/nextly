@@ -11,7 +11,7 @@
 import { randomUUID } from "node:crypto";
 
 import { apiKeyScope } from "../../../../auth/authenticated-scope";
-import { defineCollection, text } from "../../../../config";
+import { defineCollection, defineSingle, text } from "../../../../config";
 import { getDialectTables } from "../../../../database/index";
 import {
   createTestNextly,
@@ -47,12 +47,19 @@ const drafts = { status: true, versions: { drafts: true } } as const;
 
 /**
  * Boots the install every case uses, with `plugins` beside it: a case that reads what the install
- * emails boots it with a provider's plugin.
+ * emails boots it with a provider's plugin. `tablePrefix` stores each collection's and Single's
+ * table under a name of the file's own, its slug unchanged, so files sharing these slugs never
+ * share a table.
  */
 export function bootSteps(
   dialect: TestDialect,
-  plugins?: CreateTestNextlyOptions["plugins"]
+  plugins?: CreateTestNextlyOptions["plugins"],
+  options: { tablePrefix?: string } = {}
 ): Promise<TestNextly> {
+  const table = (slug: string) =>
+    options.tablePrefix === undefined
+      ? {}
+      : { dbName: `${options.tablePrefix}${slug}` };
   return createTestNextly({
     dialect,
     // Only when given, so every other case boots exactly as before.
@@ -61,6 +68,7 @@ export function bootSteps(
     collections: [
       defineCollection({
         slug: "posts",
+        ...table("posts"),
         localized: true,
         ...drafts,
         workflow: editorial,
@@ -73,6 +81,7 @@ export function bootSteps(
       }),
       defineCollection({
         slug: "pages",
+        ...table("pages"),
         ...drafts,
         workflow: editorial,
         fields: [text({ name: "title" })],
@@ -81,6 +90,7 @@ export function bootSteps(
       // workflow's built-in steps must meet as any write does.
       defineCollection({
         slug: "locked",
+        ...table("locked"),
         ...drafts,
         workflow: editorial,
         access: { update: () => false, publish: () => false },
@@ -89,6 +99,7 @@ export function bootSteps(
       // Its update rule answers by language: Spanish may be edited, no other language.
       defineCollection({
         slug: "translations",
+        ...table("translations"),
         localized: true,
         ...drafts,
         workflow: editorial,
@@ -97,14 +108,35 @@ export function bootSteps(
       }),
       defineCollection({
         slug: "memos",
+        ...table("memos"),
         ...drafts,
         workflow: handover,
         fields: [text({ name: "title" })],
       }),
+      // Read in every language but Spanish: a notice about a Spanish part is not for its reader.
+      defineCollection({
+        slug: "letters",
+        ...table("letters"),
+        localized: true,
+        ...drafts,
+        workflow: editorial,
+        access: { read: ({ locale }) => locale !== "es" },
+        fields: [text({ name: "title", localized: true })],
+      }),
       defineCollection({
         slug: "notes",
+        ...table("notes"),
         ...drafts,
         workflow: reviewWorkflow(),
+        fields: [text({ name: "title" })],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: "banner",
+        ...table("banner"),
+        ...drafts,
+        workflow: editorial,
         fields: [text({ name: "title" })],
       }),
     ],

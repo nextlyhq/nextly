@@ -48,6 +48,7 @@ import {
   type NoticeKind,
   type NoticeRenderContext,
   type NoticeText,
+  type NoticeToJudge,
 } from "../notices/notice-kinds";
 
 import type { ReviewDocument } from "./review-state-repository";
@@ -114,34 +115,32 @@ function documentOf(subjectId: string): {
   return { kind, slug, entryId: id.join(":") };
 }
 
-/** A subject id read back into the collection and the id; null for any other kind of document. */
-function collectionDocumentOf(
-  subjectId: string
-): { slug: string; entryId: string } | null {
-  const document = documentOf(subjectId);
-  return document?.kind === "collection"
-    ? { slug: document.slug, entryId: document.entryId }
-    : null;
-}
-
 /**
- * The subjects among `subjectIds` that the person `userId` may read now, asked of the read path
- * as them (`visibleDocuments`), as any list of documents is: an assignee or accountable person who
- * may not read a document, or no longer may, is not told its title, the step's comment or its
- * page. None for an account that is gone or deactivated. Detached from any request, since the
- * question is the recipient's, whoever's request renders the notice.
+ * The notices among `notices` whose document the person `userId` may read now, each in the
+ * language of the part it names (the shared part as a plain read answers it), asked of the read
+ * path as them (`visibleDocuments`), as any list of documents is. An assignee or accountable person
+ * who may not read a document, or that language of it, or no longer may, is not told its title,
+ * the step's comment or its page. None for an account that is gone or deactivated. Detached from
+ * any request, since the question is the recipient's, whoever's request renders the notice.
  */
-async function readableDocumentSubjects(
+async function readableDocumentNotices(
   userId: string,
-  subjectIds: readonly string[]
+  notices: readonly NoticeToJudge<WorkflowNoticeData>[]
 ): Promise<Set<string>> {
   const adapter = container.get<DrizzleAdapter>("adapter");
   const resolved = await resolveRunAs(databaseRunAs(adapter), userId);
   if (!resolved.ok || resolved.user === null) return new Set();
   const user = resolved.user;
-  const named = subjectIds.flatMap(subjectId => {
-    const document = documentOf(subjectId);
-    return document === null ? [] : [{ subjectId, document }];
+  const named = notices.flatMap(notice => {
+    const document = documentOf(notice.subjectId);
+    if (document === null) return [];
+    const locale = notice.data.part;
+    return [
+      {
+        id: notice.id,
+        document: locale === null ? document : { ...document, locale },
+      },
+    ];
   });
   const visible = await runDetachedFromRequest(async () =>
     visibleDocuments(
@@ -151,23 +150,26 @@ async function readableDocumentSubjects(
       await resolveDocumentVisibilityScope()
     )
   );
-  return new Set(visible.map(each => each.subjectId));
+  return new Set(visible.map(each => each.id));
 }
 
 /**
  * The documents that still exist, each with its edit page in the admin: one read per collection
- * for a page of notices. A document deleted since has none, and its notice says so.
+ * for a page of notices, and one per Single. A document deleted since has none, and its notice
+ * says so.
  */
 async function documentNoticeLinks(
   subjectIds: readonly string[]
 ): Promise<Map<string, string>> {
   const bySlug = new Map<string, Map<string, string>>();
+  const singles = new Map<string, Map<string, string>>();
   for (const subjectId of subjectIds) {
-    const document = collectionDocumentOf(subjectId);
+    const document = documentOf(subjectId);
     if (document === null) continue;
-    const ids = bySlug.get(document.slug) ?? new Map<string, string>();
+    const of = document.kind === "collection" ? bySlug : singles;
+    const ids = of.get(document.slug) ?? new Map<string, string>();
     ids.set(document.entryId, subjectId);
-    bySlug.set(document.slug, ids);
+    of.set(document.slug, ids);
   }
   const links = new Map<string, string>();
   for (const [slug, ids] of bySlug) {
@@ -177,7 +179,30 @@ async function documentNoticeLinks(
         links.set(subjectId, `/admin/collections/${slug}/${entryId}`);
     }
   }
+  for (const [slug, ids] of singles) {
+    // A Single is one document: the notice names it while its id is the Single's own, and a
+    // Single deleted and made again is another document.
+    const live = await liveSingleId(slug);
+    const subjectId = live === null ? undefined : ids.get(live);
+    if (subjectId) links.set(subjectId, `/admin/singles/${slug}`);
+  }
   return links;
+}
+
+/**
+ * The id of the Single `slug`'s document, read without creating it; null where there is none.
+ * Loaded when asked: the Singles service imports the versions domain, which imports this one.
+ */
+async function liveSingleId(slug: string): Promise<string | null> {
+  const { resolveSingleDocumentId } = await import(
+    "../singles/services/single-document-access"
+  );
+  try {
+    return await resolveSingleDocumentId(slug);
+  } catch (error) {
+    if (NextlyError.isNotFound(error)) return null;
+    throw error;
+  }
 }
 
 /**
@@ -246,7 +271,7 @@ function workflowNoticeKind(
       };
     },
     link: documentNoticeLinks,
-    readable: readableDocumentSubjects,
+    readable: readableDocumentNotices,
   });
 }
 
