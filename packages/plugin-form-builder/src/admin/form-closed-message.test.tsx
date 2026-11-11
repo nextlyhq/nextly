@@ -28,7 +28,7 @@ beforeAll(() => {
 
 afterEach(cleanup);
 
-const MESSAGE = /message for visitors/i;
+const MESSAGE = /message when closed/i;
 
 function view(initialData: Record<string, unknown> = {}, onSave = vi.fn()) {
   render(
@@ -44,16 +44,21 @@ function view(initialData: Record<string, unknown> = {}, onSave = vi.fn()) {
           ...initialData,
         }}
         onSave={onSave}
+        // The message is written on the form's Settings page.
+        view="settings"
       />
     </QueryClientProvider>
   );
   return onSave;
 }
 
+/** Picks a status in the bar's menu. */
 async function chooseStatus(label: string) {
   const user = userEvent.setup();
-  await user.click(screen.getByRole("combobox", { name: /status/i }));
-  await user.click(await screen.findByRole("option", { name: label }));
+  await user.click(screen.getByRole("button", { name: /^Status:/ }));
+  await user.click(
+    await screen.findByRole("menuitemradio", { name: new RegExp(`^${label}`) })
+  );
 }
 
 describe("the closed-form message control", () => {
@@ -85,7 +90,7 @@ describe("the closed-form message control", () => {
     const onSave = view({ status: "closed" });
 
     await user.type(screen.getByLabelText(MESSAGE), "We have enough entries.");
-    await user.click(screen.getByRole("button", { name: /save/i }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({ closedMessage: "We have enough entries." })

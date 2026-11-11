@@ -22,7 +22,11 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../../plugin";
-import { readBrandFacts, readSeoRules } from "../rules";
+import {
+  readBrandFacts,
+  readSeoRules,
+  readStructuredDataSettings,
+} from "../rules";
 import { SEO_SETTINGS_SLUG } from "../contract";
 
 /** A 1x1 PNG, the smallest file the media library accepts as an image. */
@@ -199,6 +203,39 @@ describe.each(getConfiguredTestDialects())(
       expect((await readSeoRules(ctx)).productionAddresses).toEqual([
         "https://example.com",
       ]);
+    });
+
+    it("gives structured data the address, brand and each type's choice, and refuses a type not offered", async () => {
+      const { t, ctx } = await boot();
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          siteName: "Rext AI",
+          productionAddresses: ["https://rext.ai", "https://fr.rext.ai"],
+          socialProfiles: [{ network: "X", url: "https://x.com/rextai" }],
+          structuredData: { seot_posts: { type: "blogPosting" } },
+        },
+      });
+
+      expect(await readStructuredDataSettings(ctx)).toEqual({
+        origin: "https://rext.ai",
+        siteName: "Rext AI",
+        brand: {
+          otherNames: [],
+          profiles: [{ network: "X", url: "https://x.com/rextai" }],
+        },
+        types: { seot_posts: { type: "blogPosting" } },
+      });
+      await expect(
+        t.nextly.updateSingle({
+          slug: SEO_SETTINGS_SLUG,
+          data: {
+            _overwrite: true,
+            structuredData: { seot_posts: { type: "recipe" } },
+          },
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     });
 
     it("boots on a translated site and answers the same settings in every language", async () => {

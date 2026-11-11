@@ -74,6 +74,7 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 | `ogImage`         | upload   | Relates to `media`. The social preview image                                                                                                                    |
 | `canonical`       | text     | A per-page canonical URL                                                                                                                                        |
 | `noindex`         | checkbox | Defaults to `false`. Drops the entry from this plugin's sitemap. The `robots` directive that actually tells a crawler comes from `buildMetadata`, which is core |
+| `structuredDataType` | text  | The [structured data type](#structured-data) this page is described as, where it differs from its content type's. Empty uses the content type's |
 
 <Callout type="warn">
 **Ticking `noindex` does not on its own keep a page out of search results.** The plugin
@@ -89,7 +90,7 @@ from `buildMetadata`.
 
 </Callout>
 
-All five are optional. `canonical` and `noindex` ship by default rather than being left for
+All six are optional. `canonical` and `noindex` ship by default rather than being left for
 you to add, because a canonical URL and a search opt-out are baseline controls rather than
 advanced ones.
 
@@ -131,6 +132,7 @@ Overrides stay nested under `seo`: the example above reads at `entry.seo.focusKe
 | `basePath`    | `string`, or a function, or absent                   | `/<collection>`        | Where each collection's route is mounted                                    |
 | `urlFor`      | `(entry, collection) => string \| null \| undefined` | `/<collection>/<slug>` | Builds a whole entry path. Returning `null` or `undefined` drops that entry |
 | `sitemap`     | `boolean` or `{ collections }`                       | `true`                 | Controls the public sitemap route                                           |
+| `structuredData` | `{ brand, types }`                                | none                   | Brand facts, and each content type's [structured data](#structured-data) type and fields |
 
 ## The sitemap
 
@@ -423,6 +425,96 @@ gap. What a person typed always wins, so a route's code fills only what nobody t
 Without the plugin, `buildMetadata` from `nextly/runtime` still turns the `seo` group into a
 Next.js `Metadata` object by hand. The `buildMetadata` section of
 [Routing and SEO](/docs/guides/routing-and-seo) covers it.
+
+## Structured data
+
+Each page served by a route helper also gets structured data: JSON-LD describing the site, the page
+and what the page is about, which search engines read to show details such as an article's author
+and date, or a product's price. It is built from the same answer as the page's head, so its title,
+description, address and image are the head's own. Every address in it is absolute, so it needs the
+site's origin: set `baseUrl`.
+
+A page is described as one linked graph:
+
+- the **organisation** that owns the site (`structuredData.brand`: its name, logo and official
+  profiles), and the **website**, named by the site name;
+- the **page**, at its canonical address, with a **breadcrumb trail** from the site's home;
+- the page's **subject**, as its type describes it.
+
+Only types Google still shows a result for are offered:
+
+| Type            | Key                   | Details it needs                                |
+| --------------- | --------------------- | ----------------------------------------------- |
+| Article         | `article`             | author, date published, image                   |
+| Blog post       | `blogPosting`         | author, date published, image                   |
+| Web page        | `webPage`             | none                                            |
+| Collection page | `collectionPage`      | none                                            |
+| Profile page    | `profilePage`         | person                                          |
+| Software app    | `softwareApplication` | operating system, price, rating, rating count   |
+| Product         | `product`             | price, availability                             |
+| Event           | `event`               | start date, location                            |
+| Video           | `videoObject`         | video file, upload date, image                  |
+| Review          | `review`              | author, item reviewed, item type, rating        |
+| Local business  | `localBusiness`       | street address, opening hours                   |
+
+The image is the page's share image unless a field is mapped to it. A rating is read out of 5, as
+search engines read one with no scale; a content type rating out of 10 maps `bestRating`, such as
+`{ value: "10" }`, and a rating off its scale is reported missing. An event's location is a group or
+an entry with the venue's name and its address, never text alone. A page with no type chosen is
+an Article when it has an author and a publish date, and a Web page otherwise. A content type
+chooses its pages' type, and a page can choose another in its `seo.structuredDataType`. A page
+hidden from search is offered only Web page and Collection page.
+
+Each detail is read from the field the content type maps to it, or else from the first field named
+like it (`author`, `publishedAt`, `price`, `startDate` and so on). Structured data states only what the route
+read for the page, so a relationship names someone only where the route read the entry it holds:
+give a route that shows its author `depth: 1`. The route's own access rules, language and cache
+tags then govern the author as they govern the page, so an unpublished or private author is never
+named. An author with a public address of their own is linked to it. A relationship read at
+`depth: 0` holds only an id, which is not a name, and the problem says the route is the fix.
+
+```ts
+seoPlugin({
+  collections: ["posts", "events"],
+  baseUrl: "https://example.com",
+  structuredData: {
+    brand: { name: "Acme", profiles: [{ url: "https://x.com/acme" }] },
+    types: {
+      posts: { type: "blogPosting" },
+      events: {
+        type: "event",
+        // A field by name, a field in a group, or a value for every page.
+        // A group holding the venue's name and its address.
+        details: { event: { startDate: "startsAt", location: "venue" } },
+      },
+    },
+  },
+});
+```
+
+The [SEO settings](#the-seo-settings) take over from these options fact by fact: their first
+production address is the origin, their brand name (else the site's name), other names, logo and
+social profiles describe the organisation, and a content type's choice kept in the settings wins
+over the one given here. Whatever the settings leave empty, the options still answer.
+
+**A type missing a detail it needs is left out**, rather than sending search engines a description
+they would reject; the page and the site are still described. `structuredDataProblems(ctx, input)`
+lists one problem per missing detail, such as `Missing: author.`, saying whether the page's field is
+empty, no field holds it yet, or the route read its relationship without the entry. A page with no canonical address is given no guessed one: only the
+site is described.
+
+The route helpers hand the page's render the structured data as `context.structuredData`, text
+written so that no value can end its script element. Place it in the page, so it is in the HTML a
+crawler receives:
+
+```tsx
+{context.structuredData && (
+  <script
+    type="application/ld+json"
+    dangerouslySetInnerHTML={{ __html: context.structuredData }}
+  />
+)}
+```
 
 ## Next steps
 

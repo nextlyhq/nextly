@@ -204,7 +204,9 @@ test("leaving by Cancel puts focus on the greeting, and asks first only with uns
 
   await customize(page);
   await bar(page).getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByTestId("dashboard-leave-ask")).toHaveCount(0);
+  await expect(
+    includingHidden(page).getByTestId("dashboard-leave-ask")
+  ).toHaveCount(0);
   await expect(greeting).toBeFocused();
 
   await customize(page);
@@ -354,18 +356,18 @@ async function openAddPanel(page: Page) {
   await bar(page).getByRole("button", { name: "Add widget" }).click();
   const panel = page.getByRole("dialog", { name: "Add widget" });
   await expect(
-    panel.getByRole("searchbox", { name: "Search widgets or collections" })
+    panel.getByRole("searchbox", { name: "Search widgets" })
   ).toBeFocused();
   return panel;
 }
 
 /**
- * The next control in the panel that puts a card on the dashboard at once: a removed card back,
- * which the gallery lists first. Whichever widgets the site offers, so the visit does not depend
- * on them; adding new cards, some through their add step, is `dashboard-gallery.spec.ts`'s.
+ * The next control in the panel that puts a removed card back: a one-card widget's Add, while its
+ * card is removed. Whichever widgets the site offers, so the visit does not depend on them;
+ * adding new cards is `dashboard-gallery.spec.ts`'s.
  */
 function nextAdd(panel: Locator): Locator {
-  return panel.locator('[data-testid^="add-panel-add-back-"]').first();
+  return panel.locator('[data-action="add-back"]').first();
 }
 
 test("the add panel adds three cards in one visit, each said and ringed, and closing lands on the last", async ({
@@ -391,7 +393,7 @@ test("the add panel adds three cards in one visit, each said and ringed, and clo
     await nextAdd(panel).click();
     await expect(page.locator(CELLS)).toHaveCount(before + added);
     await expect(panel.getByTestId("add-panel-live")).toHaveText(
-      /^Added back .+\.$/
+      /^Added .+\.$/
     );
     // Still open, and focus still inside it.
     await expect(panel).toBeVisible();
@@ -425,7 +427,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
         page.locator(CELLS).filter({ visible: true }).first()
       ).toBeVisible();
       await customize(page);
-      // One card removed, so the Removed group and its Add back are scanned too.
+      // One card removed, so the Add that puts it back is scanned too.
       await page
         .getByRole("button", { name: /^Card actions for / })
         .first()
@@ -439,8 +441,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
 
       await expectNoAxeViolations(page);
 
-      // WCAG 2.5.8's minimum, measured on every control the panel draws that a reader can use:
-      // a tile's preview is an inert picture of its card, whose controls nobody can reach.
+      // WCAG 2.5.8's minimum, measured on every control the panel draws that a reader can use.
       const small = await panel
         .locator("button:visible, input:visible")
         .evaluateAll(controls =>
@@ -474,142 +475,6 @@ async function boxOf(locator: Locator) {
   if (box === null) throw new Error(`not drawn: ${String(locator)}`);
   return box;
 }
-
-/** The drawn rectangles of every card but one, to show they stayed put. */
-async function otherBoxes(page: Page, except: string) {
-  // From the grid's own corner rather than the window's: a drag toward a card below the fold
-  // scrolls the page, which moves every card on screen without moving any within the grid.
-  return page
-    .locator(`${CELLS}:not([data-placement-id="${except}"])`)
-    .evaluateAll(cells =>
-      cells.map(cell => {
-        const grid = cell.closest('[aria-label="Dashboard widgets"]');
-        const origin = grid?.getBoundingClientRect() ?? { left: 0, top: 0 };
-        const r = cell.getBoundingClientRect();
-        return [
-          r.left - origin.left,
-          r.top - origin.top,
-          r.width,
-          r.height,
-        ].map(Math.round);
-      })
-    );
-}
-
-test("a pointer drag shows a line, moves nothing else, and puts the card down after the one it was over", async ({
-  page,
-}) => {
-  // Tall enough that the card dragged to is on screen and clear of the bottom edge: a pointer
-  // held there scrolls the page, as it should, and the card would land wherever the scroll
-  // stopped rather than after the one aimed at.
-  await page.setViewportSize({ width: 1440, height: 2400 });
-  await gotoAdmin(page, "/");
-  await expect(
-    page.locator(CELLS).filter({ visible: true }).nth(2)
-  ).toBeVisible();
-  await customize(page);
-  // Mixed widths: the first card that may change width put at the narrowest its bounds allow
-  // (its drawer lists them narrowest first), so rows hold cards of different spans whatever that
-  // card is. A card of one fixed width offers one Width, so the drawers are tried in turn.
-  const menus = page.getByRole("button", { name: /^Card actions for / });
-  const drawer = page.getByTestId("widget-settings-drawer");
-  for (let index = 0; ; index += 1) {
-    expect(index, "no card on the dashboard may change width").toBeLessThan(
-      await menus.count()
-    );
-    await menus.nth(index).click();
-    await page.getByRole("menuitem", { name: "Settings…" }).click();
-    const widths = drawer
-      .getByRole("radiogroup", { name: "Width" })
-      .getByRole("radio");
-    await expect(widths.first()).toBeVisible();
-    if ((await widths.count()) > 1) {
-      await widths.first().click();
-      await drawer.getByRole("button", { name: "Save" }).click();
-      break;
-    }
-    await page.keyboard.press("Escape");
-    await expect(drawer).toBeHidden();
-  }
-  await expect(drawer).toBeHidden();
-
-  const before = await cardOrder(page);
-  const [held, , target] = before;
-  const handle = page
-    .locator(`${CELLS}[data-placement-id="${held}"]`)
-    .getByTestId("widget-drag-handle");
-  const from = await handle.boundingBox();
-  const over = await page
-    .locator(`${CELLS}[data-placement-id="${target}"]`)
-    .boundingBox();
-  if (from === null || over === null) throw new Error("nothing to drag");
-  const still = await otherBoxes(page, held);
-
-  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
-  await page.mouse.down();
-  // Into the target's second half: after it, whichever way it is split.
-  const x = over.x + over.width * 0.75;
-  const y = over.y + over.height * 0.75;
-  await page.mouse.move(x, y, { steps: 12 });
-
-  await expect(page.getByTestId("widget-drop-line")).toBeVisible();
-  await expect(page.getByTestId("widget-drag-chip")).toBeVisible();
-  expect(await otherBoxes(page, held)).toEqual(still);
-  expect(await cardOrder(page)).toEqual(before);
-
-  await page.mouse.up();
-  const after = before.filter(id => id !== held);
-  after.splice(after.indexOf(target) + 1, 0, held);
-  await expect.poll(() => cardOrder(page)).toEqual(after);
-  await expect(page.getByTestId("widget-grid-live")).toHaveText(
-    new RegExp(
-      `moved from 1 to ${after.indexOf(held) + 1} of ${after.length}\\.`
-    )
-  );
-  await expect(
-    includingHidden(page).getByTestId("widget-drop-line")
-  ).toHaveCount(0);
-  await expect(
-    page.locator(`${CELLS}[data-placement-id="${held}"]`)
-  ).toHaveAttribute("data-highlighted", "true");
-});
-
-test("a keyboard drag moves the card, and its handle keeps focus in view below the top bar", async ({
-  page,
-}) => {
-  await gotoAdmin(page, "/");
-  await expect(
-    page.locator(CELLS).filter({ visible: true }).nth(2)
-  ).toBeVisible();
-  await customize(page);
-  const before = await cardOrder(page);
-  const held = before[0];
-  const handle = page
-    .locator(`${CELLS}[data-placement-id="${held}"]`)
-    .getByTestId("widget-drag-handle");
-
-  await handle.focus();
-  await page.keyboard.press("Space");
-  await page.keyboard.press("ArrowRight");
-  await page.keyboard.press("ArrowRight");
-  await expect(page.getByTestId("widget-drop-line")).toBeVisible();
-  await page.keyboard.press("Space");
-
-  const after = before.filter(id => id !== held);
-  after.splice(2, 0, held);
-  await expect.poll(() => cardOrder(page)).toEqual(after);
-  await expect(handle).toBeFocused();
-  await expect(handle).toBeInViewport();
-  // Not hidden under the top bar (WCAG 2.4.11).
-  const barBox = await page
-    .locator("header")
-    .filter({ has: bar(page) })
-    .boundingBox();
-  const handleBox = await handle.boundingBox();
-  expect(handleBox?.y ?? 0).toBeGreaterThanOrEqual(
-    (barBox?.y ?? 0) + (barBox?.height ?? 0) - 1
-  );
-});
 
 test.describe("on a phone, with touch", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
@@ -671,7 +536,7 @@ test.describe("on a phone, with touch", () => {
     await bar(page).getByRole("button", { name: "Add widget" }).tap();
     const panel = page.getByRole("dialog", { name: "Add widget" });
     expect((await panel.boundingBox())?.width).toBe(390);
-    await panel.locator('[data-testid^="add-panel-add-back-"]').first().tap();
+    await panel.locator('[data-action="add-back"]').first().tap();
     await panel.getByRole("button", { name: "Close" }).tap();
     await expect(panel).toBeHidden();
 

@@ -17,6 +17,7 @@ import {
 
 import { isRecord, textOf } from "../plain-values";
 import { imageOf } from "../resolver/page-levels";
+import type { StructuredDataTypeRule } from "../structured-data/rules";
 
 import {
   AI_CRAWLER_CHOICES,
@@ -28,6 +29,7 @@ import {
 import { defaultTitlePattern, SEPARATORS, type Separator } from "./patterns";
 import { productionAddressesProblem } from "./production-addresses";
 import { patternsProblem, socialProfilesProblem } from "./stored-values";
+import { structuredDataSettingsProblem } from "./structured-data-choices";
 
 /** A content type's patterns: the title's, and the description's. */
 export interface TypePatterns {
@@ -226,4 +228,45 @@ export async function readBrandFacts(
   locale?: string
 ): Promise<BrandFacts> {
   return brandOf(await readSeoSettingsDocument(ctx, locale), mediaImages(ctx));
+}
+
+/** What the SEO settings hold for structured data. */
+export interface StructuredDataSettings {
+  /** The first production address. */
+  origin?: string;
+  siteName?: string;
+  brand: Omit<BrandFacts, "siteKind">;
+  /** Per content type: the collection slug, or `single:<slug>` for a Single. */
+  types: Readonly<Record<string, StructuredDataTypeRule>>;
+}
+
+/**
+ * What the SEO settings hold for structured data in `locale`, from one read:
+ * the first production address, the site's name, the brand facts with the
+ * logo read from the media library, and each content type's choices.
+ */
+export async function readStructuredDataSettings(
+  ctx: PluginContext,
+  locale?: string
+): Promise<StructuredDataSettings> {
+  const document = await readSeoSettingsDocument(ctx, locale);
+  const { siteKind: _kind, ...brand } = await brandOf(
+    document,
+    mediaImages(ctx)
+  );
+  const origin = checked<string[]>(
+    document.productionAddresses,
+    productionAddressesProblem
+  )?.[0];
+  const siteName = trimmed(document.siteName);
+  return {
+    ...(origin === undefined ? {} : { origin }),
+    ...(siteName === undefined ? {} : { siteName }),
+    brand,
+    types:
+      checked<Record<string, StructuredDataTypeRule>>(
+        document.structuredData,
+        structuredDataSettingsProblem
+      ) ?? {},
+  };
 }

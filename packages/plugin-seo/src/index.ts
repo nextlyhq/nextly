@@ -45,3 +45,39 @@ export type {
   TypePatterns,
 } from "./settings/rules";
 export { seoSettingsCacheTags } from "./settings/single";
+// Structured data: the types a page can be described as, a page's graph and
+// the problems that keep a chosen type out, and the rules it is read with.
+export {
+  DETAIL_LABELS,
+  REVIEWED_ITEM_TYPES,
+  STRUCTURED_DATA_TYPES,
+  STRUCTURED_DATA_TYPE_KEYS,
+  isStructuredDataTypeKey,
+  structuredDataTypesFor,
+} from "./structured-data/catalog";
+export type {
+  StructuredDataDetail,
+  StructuredDataType,
+  StructuredDataTypeKey,
+} from "./structured-data/catalog";
+export {
+  pageStructuredData,
+  structuredDataProblems,
+  withStructuredData,
+} from "./structured-data/provider";
+export type { StructuredDataReaders } from "./structured-data/provider";
+export type {
+  PageStructuredData,
+  StructuredDataChoice,
+  StructuredDataNode,
+  StructuredDataProblem,
+} from "./structured-data/graph";
+export type {
+  DetailMapping,
+  DetailSource,
+  ReadStructuredDataRules,
+  StructuredDataBrand,
+  StructuredDataOptions,
+  StructuredDataRules,
+  StructuredDataTypeRule,
+} from "./structured-data/rules";

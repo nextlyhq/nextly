@@ -27,6 +27,7 @@ import { SEO_PLUGIN_NAME, SEO_SETTINGS_SLUG, SETUP_STEPS } from "./contract";
 import { SEPARATORS } from "./patterns";
 import { productionAddressesProblem } from "./production-addresses";
 import { patternsProblem, socialProfilesProblem } from "./stored-values";
+import { structuredDataSettingsProblem } from "./structured-data-choices";
 
 /**
  * The cache tags every read of the SEO settings carries. Each write to the
@@ -110,6 +111,11 @@ export function seoSettingsSingle(): SingleConfig {
         name: "patterns",
         label: "Title patterns",
         validate: refusing(patternsProblem),
+      }),
+      json({
+        name: "structuredData",
+        label: "Structured data",
+        validate: refusing(structuredDataSettingsProblem),
       }),
       number({
         name: "setupStep",
