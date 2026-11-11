@@ -98,6 +98,12 @@ describe("an open document inside the admin's shell", () => {
     expect(frame?.className).toContain("[--document-bar-height:0px]");
   });
 
+  it("lets the save state draw only its icon where the bar is narrow", () => {
+    renderInShell();
+    const bar = screen.getByTestId("document-bar");
+    expect(bar.querySelector("[data-save-state-compact]")).not.toBeNull();
+  });
+
   it("keeps every part on the bar's one row", () => {
     renderInShell();
     const bar = screen.getByTestId("document-bar");
@@ -144,15 +150,27 @@ describe("an open document's controls in a narrow bar", () => {
     ).toBeNull();
     // The document's own verbs stay on the bar.
     expect(within(banner).getByRole("button", { name: /save/i })).toBeTruthy();
+    // The menu now holds the toggle, so closing the panel sends focus back to
+    // the menu's trigger.
+    expect(
+      within(banner)
+        .getByRole("button", { name: "More actions" })
+        .hasAttribute("data-document-panel-toggle")
+    ).toBe(true);
   });
 
   it("keeps the panel toggle on the bar where there is room for it", () => {
     reportBarWidth(900);
     renderInShell();
+    const banner = screen.getByRole("banner");
     expect(
-      within(screen.getByRole("banner")).getByRole("button", {
-        name: /document panel/i,
-      })
-    ).toBeTruthy();
+      within(banner)
+        .getByRole("button", { name: /document panel/i })
+        .hasAttribute("data-document-panel-toggle")
+    ).toBe(true);
+    // Only the toggle itself is where focus returns.
+    expect(
+      banner.querySelectorAll("[data-document-panel-toggle]")
+    ).toHaveLength(1);
   });
 });

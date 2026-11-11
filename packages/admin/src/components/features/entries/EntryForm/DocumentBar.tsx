@@ -578,6 +578,7 @@ function narrowItemsFor(
             id: "panel",
             label: panelToggleLabel(panel.collapsed),
             onSelect: panel.toggle,
+            togglesPanel: true,
           },
         ]
       : []),
@@ -892,6 +893,9 @@ function DocumentBarState({
         "flex flex-1 items-center gap-x-3 gap-y-1 text-[13px] leading-[18px] text-muted-foreground",
         inTopBar ? "min-w-0 flex-nowrap" : "flex-wrap"
       )}
+      // In the one-row bar the save state draws its words only where there
+      // is room for them beside the verbs.
+      data-save-state-compact={inTopBar ? "" : undefined}
     >
       <BarStatusPill documentStatus={hasStatus ? documentStatus : undefined} />
       {saveState}

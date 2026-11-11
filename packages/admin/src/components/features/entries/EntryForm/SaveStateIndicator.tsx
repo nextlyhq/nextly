@@ -150,6 +150,15 @@ export function saveIndicatorView(
   }
 }
 
+/**
+ * Where the save state sits in the admin's bar and the bar's right part is
+ * narrower than 32rem (where History and the preview fold into More), each
+ * state keeps its icon, tooltip and button but says its words to a screen
+ * reader only, so the state never runs into the document's verbs.
+ */
+const LABEL_IN_NARROW_BAR =
+  "in-data-[save-state-compact]:@max-lg/toolbar:sr-only";
+
 /** A failed save: what failed, and a Retry reachable from the keyboard. */
 function FailedSaveState({
   view,
@@ -163,7 +172,14 @@ function FailedSaveState({
         className="h-4 w-4 shrink-0 text-destructive"
         aria-hidden="true"
       />
-      <span className="whitespace-nowrap text-destructive">{view.label}</span>
+      <span
+        className={cn(
+          "whitespace-nowrap text-destructive",
+          LABEL_IN_NARROW_BAR
+        )}
+      >
+        {view.label}
+      </span>
       <span id={detailId} className="sr-only">
         {view.detail}
       </span>
@@ -230,7 +246,9 @@ function SettledSaveState({
           <div className="flex items-center gap-1.5">
             {SETTLED_ICON[view.tone]}
             {/* One line at every width: a label that wraps grows the bar. */}
-            <span className="whitespace-nowrap">{view.label}</span>
+            <span className={cn("whitespace-nowrap", LABEL_IN_NARROW_BAR)}>
+              {view.label}
+            </span>
           </div>
         </TooltipTrigger>
         {detail === null ? null : (
@@ -273,7 +291,9 @@ function RecoveryOfferChip({
           className="-mx-1.5 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-foreground hover:bg-muted data-[state=open]:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <RotateCcw className="h-4 w-4 shrink-0" aria-hidden="true" />
-          <span className="whitespace-nowrap">{label}</span>
+          <span className={cn("whitespace-nowrap", LABEL_IN_NARROW_BAR)}>
+            {label}
+          </span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         </button>
       </PopoverTrigger>
@@ -334,7 +354,7 @@ export function SaveStateIndicator({
     // width: the status line has the room a phone's action row did not.
     <div
       className={cn(
-        "flex min-w-[11rem] items-center justify-start gap-1.5 text-muted-foreground",
+        "flex min-w-[11rem] items-center justify-start gap-1.5 text-muted-foreground in-data-[save-state-compact]:@max-lg/toolbar:min-w-0",
         className
       )}
       data-testid="save-state-indicator"

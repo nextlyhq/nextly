@@ -167,4 +167,47 @@ describe("SaveStateIndicator", () => {
     expect(widths[0]).not.toBe("");
     expect(new Set(widths).size).toBe(1);
   });
+  it("in a narrow bar keeps each state's icon and button but says its words only to a screen reader", () => {
+    const states: DocumentSaveState[] = [
+      { kind: "saving" },
+      { kind: "unsaved" },
+      { kind: "saved", at: NOW },
+      {
+        kind: "failed",
+        message: "offline",
+        retry: () => Promise.resolve({ ok: true }),
+      },
+    ];
+    for (const saveState of states) {
+      const { unmount } = render(
+        <div data-save-state-compact="">
+          <SaveStateIndicator saveState={saveState} recovery={noRecovery} />
+        </div>
+      );
+      const label = screen.getByText(
+        saveIndicatorView(saveState, noRecovery)?.label ?? ""
+      );
+      // Read where the bar's right part is under 32rem, and nowhere else.
+      expect(label.className).toContain(
+        "in-data-[save-state-compact]:@max-lg/toolbar:sr-only"
+      );
+      // The reserved width gives way there too, so nothing pushes the verbs.
+      expect(indicator().className).toContain(
+        "in-data-[save-state-compact]:@max-lg/toolbar:min-w-0"
+      );
+      unmount();
+    }
+    // The failed state's control stays a real button.
+    render(
+      <SaveStateIndicator
+        saveState={{
+          kind: "failed",
+          message: "offline",
+          retry: () => Promise.resolve({ ok: true }),
+        }}
+        recovery={noRecovery}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
 });

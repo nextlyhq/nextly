@@ -43,6 +43,7 @@ import {
   withContributedActions,
   type EditorDocumentAction,
 } from "./document-actions";
+import { DOCUMENT_PANEL_TOGGLE_ATTRIBUTE } from "./DocumentSidePanel";
 
 /** What a host wires an action to, and why it might not run right now. */
 export interface ActionBinding {
@@ -189,6 +190,12 @@ export interface NarrowMenuItem {
   label: string;
   onSelect: () => void;
   disabled?: boolean;
+  /**
+   * The row that shows or hides the document panel. While it is folded here,
+   * the menu's trigger is the panel's toggle: where focus goes back to when
+   * the panel closes.
+   */
+  togglesPanel?: boolean;
 }
 
 /**
@@ -644,6 +651,9 @@ function DocumentMenu({
           className="px-2"
           aria-label="More actions"
           title="More actions"
+          {...(narrowItems.some(item => item.togglesPanel === true)
+            ? { [DOCUMENT_PANEL_TOGGLE_ATTRIBUTE]: "" }
+            : {})}
         >
           <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
         </Button>
