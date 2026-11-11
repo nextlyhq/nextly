@@ -76,7 +76,7 @@ test("user fields open from the Users page, under Settings › Users › Fields"
   // The panel keeps Users highlighted here: the fields are reached from it.
   await expect(
     subSidebar(page).getByRole("link", { name: "Users" })
-  ).toHaveAttribute("aria-current", "page");
+  ).toHaveAttribute("data-active", "true");
 });
 
 test("Translations shows on the playground's three-language site", async ({

@@ -81,6 +81,17 @@ import type {
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
 
+/** Whether each rail entry's section has something to show, keyed by entry id. */
+type RailSections = Readonly<Record<string, boolean>>;
+
+/**
+ * Whether a rail entry's section has anything to show. An entry with no
+ * section of its own (Dashboard, Releases) always has.
+ */
+function sectionHasContent(id: string, sections: RailSections): boolean {
+  return sections[id] ?? true;
+}
+
 /**
  * Where keyboard focus is on the rail: a ring, drawn on `:focus-visible`
  * alone, so a pointer click draws none. Offset onto the rail's own surface,
@@ -290,6 +301,30 @@ export function DualSidebar({
   // Whether an entry shows, with an answer still loading read as "shown" for
   // the entries that say so below. The panel and the routes read this; what the
   // rail DRAWS is held to the entries already decided (`rail.items`).
+  // Whether each rail entry's section has anything to show, by the entry's id.
+  const sections = useMemo<RailSections>(
+    () => ({
+      // Shown while either kind has something to list; the panel shows only
+      // the kinds that do.
+      [CONTENT_RAIL_ID]: hasCollectionsSection || hasSinglesSection,
+      plugins: pluginsSectionVisible,
+      media: hasMediaSection,
+      settings: hasSettingsSection,
+      builders: hasBuildersSection,
+      // Only a site with two or more locales has anything to translate.
+      translations: translationsShown,
+    }),
+    [
+      hasCollectionsSection,
+      hasSinglesSection,
+      pluginsSectionVisible,
+      hasMediaSection,
+      hasSettingsSection,
+      hasBuildersSection,
+      translationsShown,
+    ]
+  );
+
   const isMenuItemShown = useCallback(
     (item: MainMenuItem): boolean => {
       // A slug declared on the entry is a hard gate, ahead of the per-section
@@ -313,38 +348,9 @@ export function DualSidebar({
       if (item.id.startsWith("standalone-")) {
         return visibleStandaloneIds.has(item.id);
       }
-      switch (item.id) {
-        case CONTENT_RAIL_ID:
-          // Shown while either kind has something to list; the panel shows
-          // only the kinds that do.
-          return hasCollectionsSection || hasSinglesSection;
-        case "plugins":
-          return pluginsSectionVisible;
-        case "media":
-          return hasMediaSection;
-        case "settings":
-          return hasSettingsSection;
-        case "builders":
-          return hasBuildersSection;
-        case "translations":
-          // Only a site with two or more locales has anything to translate.
-          return translationsShown;
-        default:
-          return true;
-      }
+      return sectionHasContent(item.id, sections);
     },
-    [
-      translationsShown,
-      visibleStandaloneIds,
-      hasPermission,
-      hasPermissionDataPending,
-      hasCollectionsSection,
-      hasSinglesSection,
-      pluginsSectionVisible,
-      hasMediaSection,
-      hasSettingsSection,
-      hasBuildersSection,
-    ]
+    [visibleStandaloneIds, hasPermission, hasPermissionDataPending, sections]
   );
 
   const visibleMenuItems = useMemo(
