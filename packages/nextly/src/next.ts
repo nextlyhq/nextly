@@ -326,10 +326,12 @@ export function withNextly<T extends Record<string, unknown>>(
   // The build's schema version: the newest migration in the app's folder,
   // named while Next.js loads this config, from the project root it loads it
   // in. Handed to the server two ways, since Nextly itself is a server
-  // external that Next.js does not inline values into: through `env`, for
-  // the app's own bundled code, and on `process.env`, which Next.js keeps for
-  // the server it starts after loading the config. No migration, no version,
-  // and a production start then compares nothing.
+  // external that Next.js does not inline values into: through `env`, which
+  // Next.js inlines into the app's `instrumentation.ts` for it to pass to
+  // `createRegister` on every host, and on `process.env`, which Next.js keeps
+  // for the server `next start` starts after loading the config, for a hook
+  // that passes none. No migration, no version, and a production start then
+  // compares nothing.
   const buildVersion = newestMigrationIn(
     resolve(process.cwd(), options.migrationsDir ?? DEFAULT_MIGRATIONS_DIR)
   );

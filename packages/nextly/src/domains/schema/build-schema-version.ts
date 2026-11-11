@@ -2,10 +2,12 @@
  * The build's schema version: the newest app migration the build ships.
  *
  * `withNextly` names it while Next.js loads `next.config`, from the app's
- * migrations folder, and hands it to the server as
- * `NEXTLY_BUILD_SCHEMA_VERSION`, so a production start can compare it with
- * the version the database stores (`schema-version.ts`) without reading the
- * migrations folder at run time. This module imports nothing but the file
+ * migrations folder, and hands it to the app's build as
+ * `NEXTLY_BUILD_SCHEMA_VERSION` through Next.js's `env`. Next.js inlines that
+ * into the app's own `instrumentation.ts`, which passes it to `createRegister`
+ * (`recordBuildSchemaVersion`), so a production start can compare it with the
+ * version the database stores (`schema-version.ts`) without reading the
+ * migrations folder at run time, wherever the server runs. This module imports nothing but the file
  * system and two dependency-free helpers, because it runs inside the config
  * load of every build and every `next start`.
  *
@@ -58,12 +60,38 @@ export function newestMigrationIn(dir: string): string | undefined {
 }
 
 /**
- * The build's schema version as the server was given it, or undefined where
- * it was given none (no migrations folder, or a build `withNextly` did not
- * wrap). Read through the literal property, which is what a bundler replaces
- * where it inlines the value.
+ * Where the version `createRegister` was given is kept: on `globalThis`, so a
+ * copy of this module loaded through another chunk reads the same value.
+ */
+const RECORDED = Symbol.for("nextly/build-schema-version");
+
+/** A version as a value: a non-empty string, anything else none. */
+function versionOf(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/**
+ * Records the build's schema version the app's `instrumentation.ts` handed
+ * `createRegister`: the value Next.js inlined there for
+ * `process.env.NEXTLY_BUILD_SCHEMA_VERSION`. Nextly cannot read that itself:
+ * Next.js inlines values only into code it bundles, and Nextly is a
+ * server-external package. Anything but a non-empty string records none.
+ */
+export function recordBuildSchemaVersion(value: unknown): void {
+  (globalThis as Record<symbol, string | undefined>)[RECORDED] =
+    versionOf(value);
+}
+
+/**
+ * The build's schema version as the server was given it: the one recorded
+ * from `createRegister`, else `NEXTLY_BUILD_SCHEMA_VERSION` in the process's
+ * environment (which `withNextly` sets while `next start` loads the config,
+ * for an app whose `instrumentation.ts` passes none), else undefined: no
+ * migrations folder, or a build `withNextly` did not wrap.
  */
 export function buildSchemaVersion(): string | undefined {
-  const value = process.env.NEXTLY_BUILD_SCHEMA_VERSION;
-  return value === undefined || value === "" ? undefined : value;
+  return (
+    versionOf((globalThis as Record<symbol, unknown>)[RECORDED]) ??
+    versionOf(process.env.NEXTLY_BUILD_SCHEMA_VERSION)
+  );
 }
