@@ -453,25 +453,29 @@ test("a pointer drag shows a line, moves nothing else, and puts the card down af
   ).toBeVisible();
   await customize(page);
   // Mixed widths: the first card that may change width put at the narrowest its bounds allow
-  // (the menu lists them narrowest first), so rows hold cards of different spans whatever that
-  // card is. A card of one fixed width offers no Width, so the menus are tried in turn.
-  // By keyboard: this test is about the drag, and the submenu opens on the arrow with focus on
-  // its first width, wherever the pointer is.
+  // (its drawer lists them narrowest first), so rows hold cards of different spans whatever that
+  // card is. A card of one fixed width offers one Width, so the drawers are tried in turn.
   const menus = page.getByRole("button", { name: /^Card actions for / });
+  const drawer = page.getByTestId("widget-settings-drawer");
   for (let index = 0; ; index += 1) {
     expect(index, "no card on the dashboard may change width").toBeLessThan(
       await menus.count()
     );
     await menus.nth(index).click();
-    if ((await page.getByTestId("card-width-menu").count()) > 0) break;
+    await page.getByRole("menuitem", { name: "Settings…" }).click();
+    const widths = drawer
+      .getByRole("radiogroup", { name: "Width" })
+      .getByRole("radio");
+    await expect(widths.first()).toBeVisible();
+    if ((await widths.count()) > 1) {
+      await widths.first().click();
+      await drawer.getByRole("button", { name: "Save" }).click();
+      break;
+    }
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(drawer).toBeHidden();
   }
-  await page.getByTestId("card-width-menu").focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("menuitemradio").first()).toBeFocused();
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(drawer).toBeHidden();
 
   const before = await cardOrder(page);
   const [held, , target] = before;
@@ -580,18 +584,27 @@ test.describe("on a phone, with touch", () => {
       .poll(() => cardOrder(page))
       .toEqual([before[1], before[0], ...before.slice(2)]);
 
-    // Resize: the sizes are listed in place in the card menu, which fits the screen.
+    // Resize: in the card's settings drawer, which takes the whole width of the screen. The
+    // menu holds no sizes.
     await menu(0).tap();
-    await expect(
-      includingHidden(page).getByTestId("card-width-menu")
-    ).toHaveCount(0);
-    await expect(
-      includingHidden(page).getByTestId("card-height-menu")
-    ).toHaveCount(0);
-    const choice = page.getByRole("menuitemradio").first();
+    await expect(includingHidden(page).getByRole("menuitemradio")).toHaveCount(
+      0
+    );
+    await page.getByRole("menuitem", { name: "Settings…" }).tap();
+    const drawer = page.getByTestId("widget-settings-drawer");
+    await expect(drawer).toBeVisible();
+    expect((await drawer.boundingBox())?.width).toBe(
+      page.viewportSize()?.width
+    );
+    const choice = drawer
+      .getByRole("radiogroup", { name: "Width" })
+      .getByRole("radio")
+      .first();
+    await choice.scrollIntoViewIfNeeded();
     await expect(choice).toBeInViewport({ ratio: 1 });
     await choice.tap();
-    await expect(page.getByRole("menu")).toHaveCount(0);
+    await drawer.getByRole("button", { name: "Save" }).tap();
+    await expect(drawer).toBeHidden();
 
     // Remove, then add one back from the panel, which takes the whole width.
     await menu(0).tap();

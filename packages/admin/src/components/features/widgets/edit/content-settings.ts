@@ -290,18 +290,23 @@ function staleCollection(
   };
 }
 
-/** A section of a card's settings panel: Data, Display or Advanced. */
-export type SettingSection = NonNullable<AnyWidgetSetting["section"]>;
+/**
+ * A section of a card's settings drawer that holds settings: Content (`data`, what the card
+ * reads) or Display (how it shows it). The drawer's Size section holds the card's width alone.
+ */
+export type SettingSection = "data" | "display";
 
 /**
- * The section of the settings panel a setting is drawn in: the one it names,
- * else Data for a setting over the card's content (its Collection, Filter,
+ * The section of the settings drawer a setting is drawn in: the one it names,
+ * else Content for a setting over the card's content (its Collection, Filter,
  * Sort, Group by and Field), and Display for every other, the fields each row
- * shows included. A setting is folded under Advanced only when it says so.
- * The one reading of where a setting goes.
+ * shows included. A setting that names `advanced`, from when the drawer folded
+ * some away, is drawn under Display: nothing is folded. The one reading of
+ * where a setting goes.
  */
 export function sectionOf(setting: AnyWidgetSetting): SettingSection {
-  if (setting.section !== undefined) return setting.section;
+  if (setting.section === "data") return "data";
+  if (setting.section !== undefined) return "display";
   return isContentSetting(setting) && setting.type !== "fields"
     ? "data"
     : "display";

@@ -77,6 +77,23 @@ vi.mock("nextly/runtime", async importOriginal => {
     deferToRequest: async () => {
       runtime.events.push("request");
     },
+    // A site in English and German whose rule prefixes every language, so
+    // a `[locale]` request is told apart without a booted site. A route with
+    // no segment is answered by the real helpers, which read nothing for it.
+    requestLanguage: async (
+      ...args: Parameters<typeof actual.requestLanguage>
+    ) => {
+      const [segment] = args;
+      if (segment === undefined) return actual.requestLanguage(...args);
+      return segment === "en" || segment === "de"
+        ? { locale: segment, fromSegment: true }
+        : null;
+    },
+    servedAddress: async (...args: Parameters<typeof actual.servedAddress>) => {
+      const [path, language] = args;
+      if (!language.fromSegment) return actual.servedAddress(...args);
+      return `/${String(language.locale)}${path === "/" ? "" : path}`;
+    },
   };
 });
 
@@ -841,6 +858,17 @@ describe("an entry's list split into pages", () => {
     expect(html).toContain('href="/blog/hello/page/2"');
   });
 
+  it("redirects the first page to the entry's address in the language a [locale] segment names", async () => {
+    const route = createContentPage(pagedConfig());
+    await expect(
+      route.ContentPage({
+        params: { locale: "de", slug: ["blog", "hello", "page", "1"] },
+      })
+    ).rejects.toMatchObject({
+      digest: expect.stringContaining(";/de/blog/hello;308;"),
+    });
+  });
+
   it("redirects the list's first page under a second spelling to the entry's own address", async () => {
     const route = createContentPage(pagedConfig());
     await expect(
@@ -896,5 +924,104 @@ describe("an entry's list split into pages", () => {
     await expect(
       route.ContentPage({ params: { slug: ["blog", "hello", "page", "2"] } })
     ).rejects.toMatchObject(NOT_FOUND);
+  });
+});
+
+describe("under a [locale] segment", () => {
+  it("asks the store, and reads the entry, in the language the segment names", async () => {
+    const options = config();
+    const route = createContentPage(options);
+    const element = await throughBoundary<PageRendererProps>(
+      route.ContentPage({ params: { locale: "de", slug: ["blog", "hello"] } })
+    );
+    const html = await renderToHtml(createElement(PageRenderer, element.props));
+
+    expect(html).toContain("Hello world");
+    // Its address, then whether it holds its list's later pages: each in
+    // German.
+    expect(options.lookups[0]).toEqual(["de", "/blog/hello"]);
+    expect(options.lookups.every(([locale]) => locale === "de")).toBe(true);
+    const nextly = options.pages.nextly as unknown as ReturnType<
+      typeof instance
+    >;
+    const entryReads = nextly.find.mock.calls
+      .map(([args]) => args)
+      .filter(args => args.collection === "posts");
+    expect(entryReads.length).toBeGreaterThan(0);
+    expect(entryReads.every(args => args.locale === "de")).toBe(true);
+  });
+
+  it("reads the images an entry's design draws in the language the segment names", async () => {
+    const IMAGE = "66666666-6666-4666-8666-666666666666";
+    const withImage = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "template",
+        nodes: [
+          {
+            id: "i",
+            type: "core/image",
+            version: 1,
+            props: { mediaId: IMAGE },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    const options = config({
+      templates: {
+        collection: "templates",
+        read: async collection =>
+          collection === "posts" ? { id: "t1", document: withImage } : null,
+      },
+    });
+    const route = createContentPage({
+      ...options,
+      pages: { ...options.pages, mediaCollection: "photos" },
+    });
+
+    const element = await throughBoundary<PageRendererProps>(
+      route.ContentPage({ params: { locale: "de", slug: ["blog", "hello"] } })
+    );
+    await renderToHtml(createElement(PageRenderer, element.props));
+
+    const nextly = options.pages.nextly as unknown as ReturnType<
+      typeof instance
+    >;
+    const imageReads = nextly.find.mock.calls
+      .map(([args]) => args)
+      .filter(args => args.collection === "photos");
+    expect(imageReads.length).toBeGreaterThan(0);
+    expect(imageReads.every(args => args.locale === "de")).toBe(true);
+  });
+
+  it("answers not found for a segment naming none of the site's languages, asking nothing", async () => {
+    const options = config();
+    await expect(
+      createContentPage(options).ContentPage({
+        params: { locale: "xx", slug: ["blog", "hello"] },
+      })
+    ).rejects.toMatchObject(NOT_FOUND);
+    expect(options.lookups).toEqual([]);
+  });
+
+  it("asks for an entry's head at its address in the language", async () => {
+    await createContentPage(config()).generateMetadata({
+      params: { locale: "de", slug: ["blog", "hello"] },
+    });
+    expect(runtime.metadataPaths).toEqual(["/de/blog/hello"]);
+  });
+
+  it("pre-renders the addresses the store holds in the language the layout hands it", async () => {
+    const asked: (string | undefined)[] = [];
+    const route = createPublicContentPage(
+      config({
+        addresses: async locale => {
+          asked.push(locale);
+          return [];
+        },
+      })
+    );
+    await route.generateStaticParams({ params: { locale: "de" } });
+    expect(asked).toEqual(["de"]);
   });
 });
