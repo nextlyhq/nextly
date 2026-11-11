@@ -224,21 +224,29 @@ describe("the form's ID", () => {
     expect(id).toBeEnabled();
   });
 
-  it.each(["published", "closed"])(
-    "is fixed once the form has been %s, with the reason",
-    async status => {
-      const { user } = view({ status });
-      const id = screen.getByRole("textbox", { name: "Form ID" });
-      expect(id).toBeDisabled();
-      expect(id).toHaveAccessibleDescription(FIXED_FORM_ID_REASON);
+  const STAMP = "2026-11-01T09:00:00.000Z";
 
-      // Renaming the form no longer moves its ID either.
-      await user.type(screen.getByRole("textbox", { name: "Name" }), " form");
-      expect(id).toHaveValue("contact");
-    }
-  );
+  it.each([
+    ["live", { status: "published" }],
+    ["closed after being live", { status: "closed", wentLiveAt: STAMP }],
+    ["back to draft after being live", { status: "draft", wentLiveAt: STAMP }],
+  ])("is fixed while the form is %s, with the reason", async (_, stored) => {
+    const { user } = view(stored);
+    const id = screen.getByRole("textbox", { name: "Form ID" });
+    expect(id).toBeDisabled();
+    expect(id).toHaveAccessibleDescription(FIXED_FORM_ID_REASON);
 
-  it("is fixed once a draft made live is saved, not before", async () => {
+    // Renaming the form no longer moves its ID either.
+    await user.type(screen.getByRole("textbox", { name: "Name" }), " form");
+    expect(id).toHaveValue("contact");
+  });
+
+  it("can still be typed on a form closed before it ever went live", () => {
+    view({ status: "closed" });
+    expect(screen.getByRole("textbox", { name: "Form ID" })).toBeEnabled();
+  });
+
+  it("is fixed once a draft made live is saved, not before, and stays fixed", async () => {
     const { user, fetchMock } = view();
     await user.click(screen.getByRole("button", { name: /^Status:/ }));
     await user.click(
@@ -251,5 +259,15 @@ describe("the form's ID", () => {
     await user.click(save());
     await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
     await waitFor(() => expect(id).toBeDisabled());
+
+    // Set back to draft and saved: it has still been live.
+    await user.click(screen.getByRole("button", { name: /^Status:/ }));
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: /^Draft/ })
+    );
+    await user.click(save());
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(2));
+    expect(saves(fetchMock)[1]?.status).toBe("draft");
+    expect(id).toBeDisabled();
   });
 });

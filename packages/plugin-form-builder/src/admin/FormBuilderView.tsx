@@ -132,6 +132,8 @@ export interface FormBuilderViewProps {
     slug?: string;
     description?: string;
     status?: "draft" | "published" | "closed";
+    /** When the form first went live: what fixes its ID. */
+    wentLiveAt?: string | null;
     closedMessage?: string;
     fields?: unknown[];
     settings?: Record<string, unknown>;
@@ -949,6 +951,7 @@ export function FormBuilderView({
         slug: initialData?.slug,
         description: initialData?.description,
         status: initialData?.status,
+        wentLiveAt: initialData?.wentLiveAt,
         closedMessage: initialData?.closedMessage,
         fields: initialData?.fields as FormField[],
         settings: initialData?.settings as Record<string, unknown>,

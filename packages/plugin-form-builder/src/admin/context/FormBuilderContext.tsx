@@ -41,8 +41,8 @@ import {
 } from "../../utils/form-settings";
 
 import { generateFieldName } from "./field-names";
+import { useBeenLive } from "./use-been-live";
 import { useChangeHistory } from "./use-change-history";
-import { useStoredStatus } from "./use-stored-status";
 import { useFieldIdentity } from "./use-field-identity";
 
 export { generateFieldName } from "./field-names";
@@ -186,10 +186,10 @@ export interface FieldBookkeeping {
    */
   restored: number;
   /**
-   * The status the stored form has, as of the last load or save: what "has
-   * been live" is judged by, whatever an unsaved pick in the bar says.
+   * Whether the form has ever been live, as stored: set back to draft, it
+   * still has. An unsaved pick in the bar does not count.
    */
-  storedStatus: FormBuilderState["formData"]["status"];
+  beenLive: boolean;
   /**
    * The key a field is known by while it is edited, whatever its name
    * becomes: the list's row key and the settings panel's field id.
@@ -219,6 +219,8 @@ export interface FormBuilderProviderProps {
     slug?: string;
     description?: string;
     status?: "draft" | "published" | "closed";
+    /** When the form first went live, as the server stamped it. */
+    wentLiveAt?: string | null;
     closedMessage?: string;
     fields?: AnyFormField[];
     settings?: Partial<FormSettings>;
@@ -760,10 +762,10 @@ export function FormBuilderProvider({
 
   // A save stores the form as it stood when it began, its status among it.
   const {
-    storedStatus,
+    beenLive,
     beginSave: statusBeginSave,
     markSaved: markAsSaved,
-  } = useStoredStatus(initialData, currentDocument, {
+  } = useBeenLive(initialData, currentDocument, {
     beginSave: historyBeginSave,
     markSaved: historyMarkSaved,
   });
@@ -825,7 +827,7 @@ export function FormBuilderProvider({
       changeCount,
       undo,
       restored,
-      storedStatus,
+      beenLive,
       fieldKey,
       editField,
     }),
@@ -860,7 +862,7 @@ export function FormBuilderProvider({
       changeCount,
       undo,
       restored,
-      storedStatus,
+      beenLive,
       fieldKey,
       editField,
     ]

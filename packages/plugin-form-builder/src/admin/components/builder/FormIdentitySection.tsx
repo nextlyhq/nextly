@@ -44,9 +44,9 @@ export const FIXED_FORM_ID_REASON =
 export function FormIdentitySection(): JSX.Element {
   const { formData, settings, updateFormData, updateSettings } =
     useFormBuilder();
-  const { storedStatus } = useFieldBookkeeping();
-  // Live or closed as stored: the site has been reading it by its ID.
-  const idFixed = storedStatus !== "draft";
+  // Once live, the site may have read it by its ID, even if it has since
+  // been closed or set back to draft.
+  const { beenLive: idFixed } = useFieldBookkeeping();
   return (
     <FormSection label="Form">
       <SettingRow
