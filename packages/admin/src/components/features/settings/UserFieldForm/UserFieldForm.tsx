@@ -17,7 +17,14 @@ import {
   Switch,
 } from "@nextlyhq/ui";
 import { USER_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
-import { useEffect, useId, useMemo, useState, type JSX } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type JSX,
+  type KeyboardEvent,
+} from "react";
 
 import {
   describeFieldTypes,
@@ -68,31 +75,62 @@ const PLACEHOLDER_TYPES: readonly string[] = [
 ];
 
 /**
- * The values with the type changed, keeping only what fits the new type, so
- * a default or bound declared for one type never survives into one it cannot
- * fit.
+ * The type-specific values that fit `type`, so a default or bound declared for
+ * one type never survives into one it cannot fit.
+ */
+function keptFor(
+  values: UserFieldFormValues,
+  type: string
+): Partial<UserFieldFormValues> {
+  const lengths = LENGTH_BOUND_TYPES.includes(type);
+  const numeric = type === "number";
+  return {
+    options: type === "select" || type === "radio" ? values.options : [],
+    hasMany: type === "select" ? values.hasMany : false,
+    placeholder: PLACEHOLDER_TYPES.includes(type) ? values.placeholder : "",
+    minLength: lengths ? values.minLength : "",
+    maxLength: lengths ? values.maxLength : "",
+    minValue: numeric ? values.minValue : "",
+    maxValue: numeric ? values.maxValue : "",
+    defaultValue: "",
+  };
+}
+
+/**
+ * The values with the type changed, keeping only what fits it. The label is
+ * the one the picker was given; the name follows it only while it still
+ * follows the old label, so a name the person typed is kept.
  */
 function withType(
   values: UserFieldFormValues,
   choice: FieldPickerChoice
 ): UserFieldFormValues {
-  const type = choice.type;
-  const choices = type === "select" || type === "radio";
-  const lengths = LENGTH_BOUND_TYPES.includes(type);
+  const nameFollowedLabel =
+    values.name === "" || values.name === userFieldName(values.label);
   return {
     ...values,
-    type,
+    ...keptFor(values, choice.type),
+    type: choice.type,
     label: choice.label,
-    name: choice.name,
-    options: choices ? values.options : [],
-    hasMany: type === "select" ? values.hasMany : false,
-    placeholder: PLACEHOLDER_TYPES.includes(type) ? values.placeholder : "",
-    minLength: lengths ? values.minLength : "",
-    maxLength: lengths ? values.maxLength : "",
-    minValue: type === "number" ? values.minValue : "",
-    maxValue: type === "number" ? values.maxValue : "",
-    defaultValue: "",
+    name: nameFollowedLabel ? choice.name : values.name,
   };
+}
+
+/**
+ * Whether an Enter key press saves the field: one in a single-line text box
+ * that no control inside already answered (a list's own Enter, a picker's
+ * search), and not while an input method is composing a character.
+ */
+function enterSaves(event: KeyboardEvent<HTMLElement>): boolean {
+  const target = event.target;
+  return (
+    event.key === "Enter" &&
+    !event.defaultPrevented &&
+    !event.nativeEvent.isComposing &&
+    target instanceof HTMLInputElement &&
+    target.getAttribute("role") !== "combobox" &&
+    !["checkbox", "radio", "button", "submit", "file"].includes(target.type)
+  );
 }
 
 /** What the user-field schema refuses in the values, as sentences. */
@@ -175,7 +213,17 @@ export function UserFieldForm({
   };
 
   return (
-    <div className="space-y-6">
+    // Enter in a text box saves, as it did when this was one form element.
+    // Not a <form>: the shared panel's buttons carry no type, and inside a
+    // form each would submit it.
+    <div
+      className="space-y-6"
+      onKeyDown={event => {
+        if (isLocked || !enterSaves(event)) return;
+        event.preventDefault();
+        submit();
+      }}
+    >
       {isCodeSourced && (
         <Alert>
           <Info className="h-4 w-4" />
@@ -288,6 +336,7 @@ export function UserFieldForm({
           open={picking}
           config={pickerConfig}
           title={values ? "Change the field's type" : undefined}
+          initialLabel={values?.label}
           onCancel={() => setPicking(false)}
           onAdd={choice => pick(choice)}
         />

@@ -16,7 +16,7 @@
  * this page covers: jsdom has no layout for dnd-kit's keyboard sorting.
  */
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 import {
@@ -25,11 +25,17 @@ import {
 } from "@admin/components/features/settings/UserFieldForm";
 import type { UserFieldDefinitionRecord } from "@admin/services/userFieldsApi";
 
+// The plugin list a test sets; none by default.
+const branding = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+afterEach(() => {
+  branding.current = {};
+});
+
 vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   ...(await importOriginal<
     typeof import("@admin/context/providers/BrandingProvider")
   >()),
-  useBranding: () => ({}),
+  useBranding: () => branding.current,
   useBrandingStatus: () => ({
     isPending: false,
     isUnavailable: false,
@@ -153,11 +159,116 @@ describe("user custom fields on the shared picker and panel", () => {
     expect(screen.getByRole("textbox", { name: "Name" })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "Change type…" }));
-    await choose(user, "textarea", "Nickname");
+    const picker = screen.getByRole("dialog");
+    await user.type(
+      within(picker).getByRole("combobox", { name: "Search field types" }),
+      "textarea{Enter}"
+    );
+    // The label step starts with the field's label.
+    expect(within(picker).getByRole("textbox", { name: "Label" })).toHaveValue(
+      "Nickname"
+    );
+    await user.click(within(picker).getByRole("button", { name: "Add field" }));
     await user.click(screen.getByRole("button", { name: "Create Field" }));
     expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "textarea", name: "nickname" })
+      expect.objectContaining({
+        type: "textarea",
+        label: "Nickname",
+        name: "nickname",
+      })
     );
+  });
+
+  it("keeps a typed name through a change of type", async () => {
+    const { user, onSubmit } = createForm();
+    await user.click(
+      screen.getByRole("button", { name: "Choose a field type" })
+    );
+    await choose(user, "text", "Nickname");
+    const name = screen.getByRole("textbox", { name: "Name" });
+    await user.clear(name);
+    await user.type(name, "handle");
+
+    await user.click(screen.getByRole("button", { name: "Change type…" }));
+    const picker = screen.getByRole("dialog");
+    await user.type(
+      within(picker).getByRole("combobox", { name: "Search field types" }),
+      "textarea{Enter}"
+    );
+    await user.click(within(picker).getByRole("button", { name: "Add field" }));
+    await user.click(screen.getByRole("button", { name: "Create Field" }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "textarea", name: "handle" })
+    );
+  });
+
+  it("saves on Enter in a text box", async () => {
+    const { user, onSubmit } = createForm();
+    await user.click(
+      screen.getByRole("button", { name: "Choose a field type" })
+    );
+    await choose(user, "text", "Nickname");
+    await user.type(
+      screen.getByRole("textbox", { name: "Label" }),
+      " given{Enter}"
+    );
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "Nickname given" })
+    );
+  });
+
+  it("clears a choice field's default", async () => {
+    const onSubmit = vi.fn();
+    render(
+      <UserFieldForm
+        mode="edit"
+        userField={{ ...TEAM, defaultValue: "sales" }}
+        isPending={false}
+        onSubmit={onSubmit}
+      />
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Default value" }));
+    await user.click(screen.getByRole("option", { name: "No default" }));
+    await user.click(screen.getByRole("button", { name: "Update Field" }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultValue: "" })
+    );
+  });
+
+  it("says a plugin type's own settings cannot be set here", async () => {
+    branding.current = {
+      plugins: [
+        {
+          name: "acme",
+          enabled: true,
+          fieldTypes: [
+            {
+              type: "acme-rating",
+              component: "acme/Rating",
+              storage: "number",
+              surfaces: ["users"],
+              label: "Rating",
+              settings: [
+                { key: "max", label: "Most stars", control: "number" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    render(
+      <UserFieldForm
+        mode="edit"
+        userField={{ ...TEAM, type: "acme-rating", options: null }}
+        isPending={false}
+        onSubmit={vi.fn()}
+      />
+    );
+    expect(screen.queryByLabelText("Most stars")).toBeNull();
+    expect(
+      screen.getByText(/own settings cannot be set here/)
+    ).toBeInTheDocument();
   });
 
   it("offers only the bounds a user field stores", async () => {

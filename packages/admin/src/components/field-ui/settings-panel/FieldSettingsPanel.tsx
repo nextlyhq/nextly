@@ -311,6 +311,13 @@ function TypeSettingsNote({
           </Button>
         </div>
       );
+    case "withheld":
+      return (
+        <p className="text-sm text-muted-foreground">
+          {typeLabel}&apos;s own settings cannot be set here; the settings every
+          field has are above and in the other tabs.
+        </p>
+      );
     case "known":
       return lookup.settings === undefined ? (
         <p className="text-sm text-muted-foreground">

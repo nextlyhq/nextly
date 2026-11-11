@@ -173,6 +173,9 @@ export function usersFieldSurface(saved: boolean): FieldSettingsSurface {
     displaySwitches: false,
     // A user field stores no width: the profile form lays its fields out.
     widthSetting: false,
+    // A user field's definition keeps no plugin settings: the server takes
+    // none from this page, so a plugin type's own controls would save nothing.
+    pluginSettings: false,
     typeSettings: { checkbox: {}, select: choices, radio: choices },
   };
 }

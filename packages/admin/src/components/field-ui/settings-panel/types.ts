@@ -122,6 +122,13 @@ export interface FieldSettingsSurface {
    */
   widthSetting?: boolean;
   /**
+   * @experimental Whether a plugin field type's declared settings are drawn;
+   * false on a surface that cannot store them, where the panel says so
+   * instead of offering controls whose values would be kept nowhere. Drawn
+   * when absent.
+   */
+  pluginSettings?: boolean;
+  /**
    * @experimental A type's own settings on this surface, by type id, used in
    * place of the core table's: a form's checkbox is one yes/no, where the
    * entry form's is a set of choices. A type named here is known at once,
