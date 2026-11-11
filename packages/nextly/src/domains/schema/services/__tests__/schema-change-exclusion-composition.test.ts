@@ -16,6 +16,14 @@ import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 /** Set to make the plugin-option validator refuse, standing in for a registry swapped underneath. */
 const pluginOptionRefusal: { error: unknown } = { error: undefined };
 
+// Whether the created table holds every requested column is judged by the comparison a push makes,
+// tested on its own (`created-table-shape.test.ts`); this double runs no introspection, so the check
+// answers that nothing was left out and the test stays on the statements.
+vi.mock("../created-table-shape", () => ({
+  columnsTheCreateLeftOut: vi.fn(async () => []),
+  describeColumnsLeftOut: vi.fn(() => ""),
+}));
+
 vi.mock("../../../../api/fields-payload", () => ({
   assertValidPluginFieldOptions: vi.fn(() => {
     if (pluginOptionRefusal.error !== undefined)

@@ -243,6 +243,32 @@ export class FieldGroupMetadataService {
     // 1a. REFUSE names the database would not store, read from the statements themselves.
     await this.assertIdentifiersFit(input, migrationSQL);
 
+    // 1b. CLEAR THE GROUND. A table already standing where this create is about to build is never
+    // adopted: empty, it is dropped so the apply renders every column from this request; holding
+    // rows, the create is refused before any statement runs (`clearLeftoverStorage`).
+    if (this.adapter) {
+      const adapter = this.adapter;
+      const { clearLeftoverStorage } = await import(
+        "../../schema/services/leftover-storage"
+      );
+      await clearLeftoverStorage({
+        adapter,
+        kind: "fieldGroup",
+        slug: input.slug,
+        tableName: input.tableName,
+        logger: this.logger,
+        // The translations table references the main one, so it goes first.
+        dropFamily: async () => {
+          const cascade = adapter.getCapabilities().dialect === "postgresql";
+          await adapter.dropTable(`${input.tableName}_locales`, {
+            ifExists: true,
+            cascade,
+          });
+          await adapter.dropTable(input.tableName, { ifExists: true, cascade });
+        },
+      });
+    }
+
     // 2. APPLY. Never throws; a failure is reported as a status so the row can still record it.
     const migrationStatus = await this.applyCreateDdl(input, migrationSQL);
 
@@ -1119,7 +1145,10 @@ export class FieldGroupMetadataService {
     );
     if (!owner) return;
 
+    // Names the slug the caller asked for, which tells it nothing it did not send; the field group
+    // already owning the table stays in the log.
     throw NextlyError.duplicate({
+      message: `The field group "${input.slug}" could not be created: its name is already taken.`,
       logContext: {
         reason: "component-table-conflict",
         slug: input.slug,
@@ -1127,6 +1156,37 @@ export class FieldGroupMetadataService {
         ownedBy: owner.slug,
       },
     });
+  }
+
+  /**
+   * What the create left out of its table, as one line, or null when the table holds every
+   * requested column as the type asked for. The request is the desired table a push compares the
+   * live one with, built as the creating SQL renders a field group's columns.
+   */
+  private async columnsLeftOut(
+    input: CreateFieldGroupInput,
+    adapter: NonNullable<typeof this.adapter>
+  ): Promise<string | null> {
+    const { buildDesiredTableFromComponentFields } = await import(
+      "../../schema/pipeline/diff/build-from-fields"
+    );
+    const { columnsTheCreateLeftOut, describeColumnsLeftOut } = await import(
+      "../../schema/services/created-table-shape"
+    );
+    const dialect = adapter.getCapabilities().dialect;
+    const leftOut = await columnsTheCreateLeftOut(
+      adapter.getDrizzle(),
+      dialect,
+      buildDesiredTableFromComponentFields(
+        input.tableName,
+        input.fields as unknown as Parameters<
+          typeof buildDesiredTableFromComponentFields
+        >[1],
+        dialect,
+        { localized: storesPerLanguage(input), builtBy: "fieldGroup" }
+      )
+    );
+    return leftOut.length === 0 ? null : describeColumnsLeftOut(leftOut);
   }
 
   /** Render the DDL. Separated from the apply because this half is allowed to reject the request. */
@@ -1175,10 +1235,18 @@ export class FieldGroupMetadataService {
       );
       await applyMigrationStatements(adapter, migrationSQL);
 
-      // Observed, not assumed. "Applied" has to mean the table is there.
+      // Observed, not assumed. "Applied" has to mean the table is there, holding every requested
+      // column as the type asked for (`columnsTheCreateLeftOut`).
       if (!(await adapter.tableExists(input.tableName))) {
         this.logger.error(
           `[FieldGroups] Table "${input.tableName}" was not created after migration`
+        );
+        return "failed";
+      }
+      const leftOut = await this.columnsLeftOut(input, adapter);
+      if (leftOut !== null) {
+        this.logger.error(
+          `[FieldGroups] Table "${input.tableName}" was not created as requested: ${leftOut}`
         );
         return "failed";
       }

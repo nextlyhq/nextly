@@ -17,6 +17,14 @@
  */
 import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
+// Whether the created table holds every requested column is judged by the comparison a push makes,
+// tested on its own (`created-table-shape.test.ts`); this double runs no introspection, so the check
+// answers that nothing was left out and the test stays on the statements.
+vi.mock("../../../domains/schema/services/created-table-shape", () => ({
+  columnsTheCreateLeftOut: vi.fn(async () => []),
+  describeColumnsLeftOut: vi.fn(() => ""),
+}));
+
 vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
   getFieldGroupMetadataServiceFromDI: vi.fn(),
@@ -45,10 +53,15 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
     dialect,
     getCapabilities: () => ({ dialect }),
     // Answers the way a fresh create finds the database: the main table is there once its CREATE
-    // has run, and the companion is NOT — so the companion path CREATEs it rather than altering
-    // one that does not exist. A blanket `true` here made the companion look pre-existing, which
-    // is not a state a create ever starts from.
-    tableExists: vi.fn(async (name: string) => !name.includes("_locales")),
+    // has run and not before, so the leftover probe before the DDL finds clear ground; and the
+    // companion is NOT, so the companion path CREATEs it rather than altering one that does not
+    // exist. A blanket `true` made a table look pre-existing, which is not a state a create starts
+    // from.
+    tableExists: vi.fn(
+      async (name: string) =>
+        !name.includes("_locales") &&
+        executed.some(sql => sql.includes("CREATE TABLE") && sql.includes(name))
+    ),
     executeQuery: vi.fn(async (sql: string) => {
       executed.push(sql);
       return [];

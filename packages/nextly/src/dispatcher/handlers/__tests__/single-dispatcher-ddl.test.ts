@@ -16,6 +16,14 @@
  */
 import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
+// Whether the created table holds every requested column is judged by the comparison a push makes,
+// tested on its own (`created-table-shape.test.ts`); this double runs no introspection, so the check
+// answers that nothing was left out and the test stays on the statements.
+vi.mock("../../../domains/schema/services/created-table-shape", () => ({
+  columnsTheCreateLeftOut: vi.fn(async () => []),
+  describeColumnsLeftOut: vi.fn(() => ""),
+}));
+
 vi.mock("../../helpers/di", () => ({
   getSingleRegistryFromDI: vi.fn(),
   getSingleEntryServiceFromDI: vi.fn(),

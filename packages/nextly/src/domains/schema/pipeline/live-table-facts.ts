@@ -73,32 +73,39 @@ function mysqlRows<T>(result: unknown): T[] {
  * same on a table of ten rows and a table of ten million, where `COUNT(*)` scans.
  */
 /**
- * Whether a probe returned at least one row.
+ * The rows a query returned.
  *
  * Each dialect hands its rows back differently — node-postgres wraps them in a
  * QueryResult, mysql2 may or may not nest them in a tuple, better-sqlite3
- * returns a plain array — and every caller that asks "is there such a row?"
- * had to spell all three. Two did, identically. Asked here once so a fourth
- * caller cannot get one of the three shapes subtly wrong.
+ * returns a plain array — and every caller reading rows had to spell all three.
+ * Asked here once so another caller cannot get one of the three shapes subtly
+ * wrong.
  */
+async function rowsOf<T>(
+  db: unknown,
+  dialect: SupportedDialect,
+  query: SQL
+): Promise<T[]> {
+  if (dialect === "postgresql") {
+    // node-postgres returns the QueryResult object, not a flat row array.
+    const result = (await (db as PgMysqlExecute).execute(query)) as {
+      rows: T[];
+    };
+    return result.rows;
+  }
+  if (dialect === "mysql") {
+    return mysqlRows<T>(await (db as PgMysqlExecute).execute(query));
+  }
+  return (await (db as SqliteAll).all(query)) as T[];
+}
+
+/** Whether a probe returned at least one row. */
 async function probeReturnsRow(
   db: unknown,
   dialect: SupportedDialect,
   probe: SQL
 ): Promise<boolean> {
-  if (dialect === "postgresql") {
-    // node-postgres returns the QueryResult object, not a flat row array.
-    const result = (await (db as PgMysqlExecute).execute(probe)) as {
-      rows: unknown[];
-    };
-    return result.rows.length > 0;
-  }
-  if (dialect === "mysql") {
-    return (
-      mysqlRows<unknown>(await (db as PgMysqlExecute).execute(probe)).length > 0
-    );
-  }
-  return (await (db as SqliteAll).all(probe)).length > 0;
+  return (await rowsOf<unknown>(db, dialect, probe)).length > 0;
 }
 
 export async function tableHasRows(
@@ -111,6 +118,24 @@ export async function tableHasRows(
     dialect,
     sql`SELECT 1 FROM ${sql.identifier(tableName)} LIMIT 1`
   );
+}
+
+/**
+ * How many rows the table holds: what a refusal to build over a standing table names, so whoever
+ * deals with it can tell a stray test row from real content. `COUNT(*)` reads the whole table, so
+ * it is asked only of a table already known to hold rows (`tableHasRows`).
+ */
+export async function countTableRows(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<number> {
+  const [row] = await rowsOf<{ n: unknown }>(
+    db,
+    dialect,
+    sql`SELECT COUNT(*) AS n FROM ${sql.identifier(tableName)}`
+  );
+  return Number(row?.n ?? 0);
 }
 
 /**

@@ -23,6 +23,14 @@ import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
  */
 const bound: string[] = [];
 
+// Whether the created table holds every requested column is judged by the comparison a push makes,
+// tested on its own (`created-table-shape.test.ts`); the double here runs no introspection, so the
+// check answers that nothing was left out and these tests stay on what they inject.
+vi.mock("../../../schema/services/created-table-shape", () => ({
+  columnsTheCreateLeftOut: vi.fn(async () => []),
+  describeColumnsLeftOut: vi.fn(() => ""),
+}));
+
 vi.mock("../field-group-table-provisioning", () => ({
   registerComponentRuntimeSchema: vi.fn((_a, _d, tableName: string) => {
     bound.push(tableName);
@@ -125,14 +133,21 @@ function adapterDouble(
   // leaves a SQLite TEXT untouched, and a guard tested on one dialect says nothing about the other.
   dialect: "postgresql" | "mysql" | "sqlite" = "postgresql"
 ) {
+  // The parameter is declared even though nothing here reads it: `entityStatements` reads the
+  // recorded calls, and a mock with no declared parameters records them as an empty tuple.
+  const executeQuery = vi.fn(async (_sql: string) => []);
   return withMigrationLockSurface({
     getCapabilities: () => ({ dialect }),
-    // The parameter is declared even though nothing here reads it: `entityStatements` reads the
-    // recorded calls, and a mock with no declared parameters records them as an empty tuple.
-    executeQuery: vi.fn(async (_sql: string) => []),
-    tableExists: vi.fn(async (name: string) =>
-      name === "nextly_meta" ? false : tableExists()
-    ),
+    executeQuery,
+    // Before the create's own DDL, its table is not there, so the leftover probe finds nothing to
+    // clear; after it, the supplied answer governs the verification these tests inject.
+    tableExists: vi.fn(async (name: string) => {
+      if (name === "nextly_meta") return false;
+      const built = executeQuery.mock.calls.some(
+        ([sql]) => !isMigrationLockStatement(sql)
+      );
+      return built ? tableExists() : false;
+    }),
   });
 }
 
