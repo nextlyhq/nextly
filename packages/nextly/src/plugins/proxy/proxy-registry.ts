@@ -8,7 +8,7 @@
 import type { PluginContext, PluginDefinition } from "../plugin-context";
 import { resolutionError } from "../resolution-error";
 
-import type { PluginProxyHandler, ProxyAnswer } from "./proxy-types";
+import type { PluginProxyHandler } from "./proxy-types";
 
 /** A handler collected from a plugin, ready to register. */
 export interface CollectedProxyHandler {
@@ -117,6 +117,20 @@ export function hasProxyHandlers(): boolean {
   return registered.length > 0;
 }
 
+/**
+ * Set each of `from`'s headers on `into` under its lower-case name: header
+ * names are case-insensitive, so a later plugin's value for a header replaces
+ * an earlier one's however either spells it.
+ */
+function mergeHeaders(
+  into: Record<string, string>,
+  from: Record<string, string> | undefined
+): void {
+  for (const [name, value] of Object.entries(from ?? {})) {
+    into[name.toLowerCase()] = value;
+  }
+}
+
 /** What every handler said about one request, put together. */
 export interface CombinedProxyAnswer {
   response?: Response;
@@ -155,8 +169,8 @@ export async function answerProxyRequest(
     if (combined.response === undefined && answer.response !== undefined) {
       combined.response = answer.response;
     }
-    Object.assign(combined.headers, answer.headers);
-    Object.assign(combined.requestHeaders, answer.requestHeaders);
+    mergeHeaders(combined.headers, answer.headers);
+    mergeHeaders(combined.requestHeaders, answer.requestHeaders);
   }
   return combined;
 }

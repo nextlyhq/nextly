@@ -137,6 +137,33 @@ describe("putting a request to every handler", () => {
     expect(answer.requestHeaders).toEqual({ "x-path": "/old" });
   });
 
+  it("treats a header named in another case as the same header, the later plugin's value winning", async () => {
+    const names = ["X-Robots-Tag", "x-robots-tag", "X-ROBOTS-TAG"];
+    const values = ["noindex", "index", "noindex, nofollow"];
+    names.forEach((name, at) => {
+      registerProxyHandler(
+        {
+          pluginName: `p${at}`,
+          handler: {
+            name: "h",
+            handle: () => ({
+              headers: { [name]: values[at] ?? "" },
+              requestHeaders: { [name]: values[at] ?? "" },
+            }),
+          },
+        },
+        contextNamed(`p${at}`).ctx
+      );
+    });
+
+    const answer = await answerProxyRequest(request);
+
+    expect(answer.headers).toEqual({ "x-robots-tag": "noindex, nofollow" });
+    expect(answer.requestHeaders).toEqual({
+      "x-robots-tag": "noindex, nofollow",
+    });
+  });
+
   it("logs a handler that throws and goes on with the others", async () => {
     const failing = contextNamed("failing");
     registerProxyHandler(

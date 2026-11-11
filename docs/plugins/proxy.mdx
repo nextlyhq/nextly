@@ -66,7 +66,7 @@ export default definePlugin({
 | `headers` | Set on whatever is served: the page, a prerendered one included, or the response that answered. |
 | `requestHeaders` | Added to the request the page renders for, where `headers()` reads them. Never sent to the visitor. |
 
-Every handler runs on every matched request, all at once, and their answers are put together in plugin order: the first `response` answers, and for a header two handlers both set, the later plugin's value stands. Each needs a `name`, unique within the plugin; startup refuses a handler without one, or without a `handle` function.
+Every handler runs on every matched request, all at once, and their answers are put together in plugin order: the first `response` answers, and for a header two handlers both set, however each spells its name, the later plugin's value stands. Each needs a `name`, unique within the plugin; startup refuses a handler without one, or without a `handle` function.
 
 A handler that throws is logged with its plugin's logger and passed over, and the page is served as if it had answered nothing.
 
