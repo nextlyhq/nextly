@@ -8,7 +8,11 @@
 import type { FieldConfig } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
-import { restorePlan, type RestorePlanInput } from "../restore-plan";
+import {
+  restorePlan,
+  restoresInEditor,
+  type RestorePlanInput,
+} from "../restore-plan";
 
 const fields = [
   { name: "title", type: "text", label: "Title" },
@@ -135,5 +139,20 @@ describe("restorePlan", () => {
     expect(rows.find(row => row.name === "views")).toMatchObject({
       value: 1,
     });
+  });
+});
+
+describe("restoresInEditor", () => {
+  it("restores a version of the language being edited", () => {
+    expect(restoresInEditor("es", "es")).toBe(true);
+  });
+
+  it("does not restore another language's version into this editor", () => {
+    expect(restoresInEditor("es", "en")).toBe(false);
+  });
+
+  it("restores a version that holds no language, or into an untranslated editor", () => {
+    expect(restoresInEditor(null, "en")).toBe(true);
+    expect(restoresInEditor("es", undefined)).toBe(true);
   });
 });

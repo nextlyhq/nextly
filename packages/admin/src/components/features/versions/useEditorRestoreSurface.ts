@@ -46,6 +46,7 @@ export function useEditorRestoreSurface<T extends FieldValues>({
   readOnly,
   localized,
   language,
+  locale,
 }: {
   /** The form's restore; see `useFormRestore`. */
   restore: EditorRestore;
@@ -62,6 +63,8 @@ export function useEditorRestoreSurface<T extends FieldValues>({
   localized: boolean;
   /** The language being edited, by name, on a translated document. */
   language?: string;
+  /** The language being edited, by its code. */
+  locale?: string;
 }): EditorRestoreSurface {
   // The latest answer, read when a restore asks, so a new getter each render
   // does not rebuild the surface every consumer of the history reads.
@@ -96,6 +99,7 @@ export function useEditorRestoreSurface<T extends FieldValues>({
       },
       ...(translatable ? { translatable } : {}),
       ...(localized && language ? { language } : {}),
+      ...(localized && locale ? { locale } : {}),
     };
-  }, [restore, form, fields, localized, language]);
+  }, [restore, form, fields, localized, language, locale]);
 }

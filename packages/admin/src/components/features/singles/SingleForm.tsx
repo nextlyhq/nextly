@@ -1019,6 +1019,7 @@ export function SingleForm({
     readOnly: () => lock.readOnly,
     localized: schema.localized === true,
     ...(editingLanguage ? { language: editingLanguage } : {}),
+    ...(locale ? { locale } : {}),
   });
   const viewedVersionHost = useViewedVersion(
     allFields,

@@ -130,3 +130,16 @@ function labelOf(field: FieldConfig): string {
   const label = (field as { label?: unknown }).label;
   return typeof label === "string" && label.length > 0 ? label : field.name;
 }
+
+/**
+ * Whether a version can be restored into this editor: one of the language
+ * being edited, or one that holds no language. Another language's version
+ * would put its translated values into this language's fields, so it is
+ * restored from that language's editor instead.
+ */
+export function restoresInEditor(
+  versionLocale: string | null | undefined,
+  editorLocale: string | undefined
+): boolean {
+  return !versionLocale || !editorLocale || versionLocale === editorLocale;
+}

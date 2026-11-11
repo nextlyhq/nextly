@@ -46,7 +46,7 @@ import { useHistoryAddress } from "./history-address";
 import { loadedWindow } from "./history-story";
 import { HistoryStoryList } from "./HistoryStoryList";
 import { restoreIntoEditor } from "./restore-into-editor";
-import { restorePlan } from "./restore-plan";
+import { restorePlan, restoresInEditor } from "./restore-plan";
 import { RestoreFieldsDialog } from "./RestoreFieldsDialog";
 import { useMarkVersionSeen } from "./useMarkVersionSeen";
 import { newestInLocale, predecessorOf } from "./version-pairing";
@@ -504,7 +504,11 @@ export function VersionHistorySheet({
     setRestore({
       // A restore puts values into an editor, so it is offered only where one
       // is there to take them.
-      canRestore: canRestore && editor !== undefined,
+      // And only into the editor of the version's own language.
+      canRestore:
+        canRestore &&
+        editor !== undefined &&
+        restoresInEditor(viewedAbout?.locale, editor.locale),
       request: requestRestore,
       returnToCurrent,
       // Where the page steps aside, the version is all that is on screen, so
@@ -537,6 +541,7 @@ export function VersionHistorySheet({
     roomBeside,
     setRestore,
     editor,
+    viewedAbout,
   ]);
 
   // When previewing a version whose previous same-locale version has not loaded

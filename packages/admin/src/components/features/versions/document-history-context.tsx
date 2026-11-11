@@ -43,6 +43,8 @@ export interface EditorRestoreSurface {
   translatable?: ReadonlySet<string>;
   /** The language a translated document's restore writes, by name. */
   language?: string;
+  /** That language's code: a version of another language is not restored here. */
+  locale?: string;
 }
 
 export interface ViewedVersion {

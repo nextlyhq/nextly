@@ -663,6 +663,7 @@ export function EntryForm({
     readOnly: () => restoreReadOnly.current,
     localized: collection.localized === true,
     ...(editingLanguage ? { language: editingLanguage } : {}),
+    ...(locale ? { locale } : {}),
   });
   const viewedVersionHost = useViewedVersion(
     allFields,

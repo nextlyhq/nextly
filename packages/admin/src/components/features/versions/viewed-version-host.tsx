@@ -57,7 +57,7 @@ import {
   type ViewedVersion,
 } from "./document-history-context";
 import { restoreIntoEditor } from "./restore-into-editor";
-import { restorePlan } from "./restore-plan";
+import { restorePlan, restoresInEditor } from "./restore-plan";
 import { snapshotToFormValues } from "./snapshot-to-form-values";
 import { useChangeNavigation } from "./useChangeNavigation";
 import {
@@ -583,7 +583,11 @@ function useFieldRestore(
   editor: EditorRestoreSurface | undefined,
   restore: RestoreAffordance | null
 ): VersionFieldRestore | undefined {
-  const offered = Boolean(editor && restore?.canRestore);
+  const offered = Boolean(
+    editor &&
+      restore?.canRestore &&
+      restoresInEditor(viewing.locale, editor.locale)
+  );
   const rows = useMemo(() => {
     if (!offered || !editor || viewing.isLoading || viewing.error) return null;
     const snapshot =
