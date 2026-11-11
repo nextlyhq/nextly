@@ -361,6 +361,69 @@ export class RolePermissionService extends BaseService {
     permissionIds: string[],
     options: { leaveOrphanedGrants?: boolean } = {}
   ): Promise<Array<{ id: string; action: string; resource: string }>> {
+    const { settled, before } = await this.readSettled(
+      roleId,
+      permissionIds,
+      options
+    );
+    if (settled) return named(before);
+
+    // The content expiry this change owes is queued before it is written; the
+    // reads above return before anything is queued when there is nothing to change.
+    return changingRoleGrants(async () => {
+      await this.adapter.transaction(tx =>
+        this.replaceOn(tx, roleId, permissionIds, options)
+      );
+
+      await afterRoleGrantsChanged(roleId);
+
+      return this.listRolePermissions(roleId);
+    });
+  }
+
+  /**
+   * Whether `roleId` already holds exactly what
+   * {@link setRolePermissions} would set it to, answered by one read outside
+   * any transaction: a caller setting several roles together asks this first,
+   * and opens no transaction where every role is settled.
+   */
+  async rolePermissionsSettled(
+    roleId: string,
+    permissionIds: string[],
+    options: { leaveOrphanedGrants?: boolean } = {}
+  ): Promise<boolean> {
+    return (await this.readSettled(roleId, permissionIds, options)).settled;
+  }
+
+  /**
+   * {@link setRolePermissions}'s replacement on `tx`, a transaction the
+   * caller holds, for a caller that sets several roles' grants in one
+   * transaction with a write of its own, so all of them commit or roll back
+   * together. Returns whether the role's grants changed.
+   *
+   * The caller runs inside `changingRoleGrants` and, once its transaction has
+   * committed, calls `afterRoleGrantsChanged` for each role this changed, as
+   * {@link setRolePermissions} does for its one.
+   */
+  replaceRolePermissionsOn(
+    tx: TransactionContext,
+    roleId: string,
+    permissionIds: string[],
+    options: { leaveOrphanedGrants?: boolean } = {}
+  ): Promise<boolean> {
+    return this.replaceOn(tx, roleId, permissionIds, options);
+  }
+
+  /**
+   * The read {@link setRolePermissions} answers an unchanged set with: the
+   * role's assignments, and whether they are already what `permissionIds`
+   * sets them to.
+   */
+  private async readSettled(
+    roleId: string,
+    permissionIds: string[],
+    options: { leaveOrphanedGrants?: boolean }
+  ): Promise<{ settled: boolean; before: Assignment[] }> {
     // A retired `manage-` permission is stored as the plain four it stands
     // for, so a role set with one, a preset's at each boot included, never
     // holds it again once converted. Read here only to see whether anything
@@ -395,75 +458,75 @@ export class RolePermissionService extends BaseService {
           )
         )
       : unchangedIf;
-    if (sameMembers(heldBefore, wantedBefore)) {
-      return named(before);
+    return { settled: sameMembers(heldBefore, wantedBefore), before };
+  }
+
+  /**
+   * Replace `roleId`'s grants with `permissionIds` on `tx`, by difference,
+   * under the lock on the role's row. Returns whether anything changed.
+   */
+  private async replaceOn(
+    tx: TransactionContext,
+    roleId: string,
+    permissionIds: string[],
+    options: { leaveOrphanedGrants?: boolean }
+  ): Promise<boolean> {
+    // Each statement binds no more parameters than the adapter says one query
+    // may: one per id plus the role's for a removal, and up to one per column
+    // for each inserted row, defaults included (`insertAssignments`).
+    const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+
+    // Serialises writers to this role: a second writer waits, then reads what
+    // the first committed and applies only what is still different. Columns
+    // are named as the schema declares them, which is how the adapter reads a
+    // where clause and returns a row.
+    await tx.lockRow("roles", roleId);
+    const stored = await storedAsPlainLocked(tx, permissionIds, maxParams);
+    const held = await this.heldIn(tx, roleId);
+    // Read under the role's lock, so the grants of orphaned permissions
+    // are left exactly as this transaction finds them.
+    const desired = options.leaveOrphanedGrants
+      ? leavingOrphans(
+          stored,
+          held,
+          await this.orphanedIn(tx, [...new Set([...stored, ...held])])
+        )
+      : stored;
+
+    const extra = [...held].filter(id => !desired.has(id));
+    for (const ids of batches(extra, maxParams - 1)) {
+      await tx.delete("role_permissions", {
+        and: [
+          { column: "roleId", op: "=", value: roleId },
+          { column: "permissionId", op: "IN", value: ids },
+        ],
+      });
     }
 
-    // The content expiry this change owes is queued before it is written; the
-    // reads above return before anything is queued when there is nothing to change.
-    return changingRoleGrants(async () => {
-      // Each statement binds no more parameters than the adapter says one query
-      // may: one per id plus the role's for a removal, and up to one per column
-      // for each inserted row, defaults included (`insertAssignments`).
-      const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+    const missing = [...desired].filter(id => !held.has(id));
 
-      await this.adapter.transaction(async tx => {
-        // Serialises writers to this role: a second writer waits, then reads what
-        // the first committed and applies only what is still different. Columns
-        // are named as the schema declares them, which is how the adapter reads a
-        // where clause and returns a row.
-        await tx.lockRow("roles", roleId);
-        const stored = await storedAsPlainLocked(tx, permissionIds, maxParams);
-        const held = await this.heldIn(tx, roleId);
-        // Read under the role's lock, so the grants of orphaned permissions
-        // are left exactly as this transaction finds them.
-        const desired = options.leaveOrphanedGrants
-          ? leavingOrphans(
-              stored,
-              held,
-              await this.orphanedIn(tx, [...new Set([...stored, ...held])])
-            )
-          : stored;
-
-        const extra = [...held].filter(id => !desired.has(id));
-        for (const ids of batches(extra, maxParams - 1)) {
-          await tx.delete("role_permissions", {
-            and: [
-              { column: "roleId", op: "=", value: roleId },
-              { column: "permissionId", op: "IN", value: ids },
-            ],
-          });
-        }
-
-        const missing = [...desired].filter(id => !held.has(id));
-
-        // Every id added has to name a permission. PostgreSQL and SQLite refuse
-        // one that does not through the foreign key; MySQL's table declares
-        // none, so it would keep an assignment that grants nothing, which the
-        // list leaves out, and the replacement would report success. Thrown here,
-        // inside the transaction, so the removal above is undone with it.
-        const known = new Set<string>();
-        for (const ids of batches(missing, maxParams)) {
-          const rows = await tx.select<{ id: string }>("permissions", {
-            columns: ["id"],
-            where: { and: [{ column: "id", op: "IN", value: ids }] },
-          });
-          for (const row of rows) known.add(String(row.id));
-        }
-        const unknown = missing.filter(id => !known.has(id));
-        if (unknown.length > 0) {
-          throw NextlyError.notFound({
-            logContext: { roleId, permissionIds: unknown },
-          });
-        }
-
-        await this.insertAssignments(tx, roleId, missing);
+    // Every id added has to name a permission. PostgreSQL and SQLite refuse
+    // one that does not through the foreign key; MySQL's table declares
+    // none, so it would keep an assignment that grants nothing, which the
+    // list leaves out, and the replacement would report success. Thrown here,
+    // inside the transaction, so the removal above is undone with it.
+    const known = new Set<string>();
+    for (const ids of batches(missing, maxParams)) {
+      const rows = await tx.select<{ id: string }>("permissions", {
+        columns: ["id"],
+        where: { and: [{ column: "id", op: "IN", value: ids }] },
       });
+      for (const row of rows) known.add(String(row.id));
+    }
+    const unknown = missing.filter(id => !known.has(id));
+    if (unknown.length > 0) {
+      throw NextlyError.notFound({
+        logContext: { roleId, permissionIds: unknown },
+      });
+    }
 
-      await afterRoleGrantsChanged(roleId);
-
-      return this.listRolePermissions(roleId);
-    });
+    await this.insertAssignments(tx, roleId, missing);
+    return extra.length > 0 || missing.length > 0;
   }
 
   /**

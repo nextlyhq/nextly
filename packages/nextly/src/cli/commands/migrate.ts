@@ -49,6 +49,7 @@ import {
   filesWithinStep,
   stepContinuedNotice,
 } from "../../domains/i18n/migration/step-windows";
+import { withPresetGrantsRecorded } from "../../domains/meta/preset-grants-release";
 import { isPluginLedgerRow } from "../../domains/schema/events/ledger-scope";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import {
@@ -187,6 +188,7 @@ import {
 } from "../../domains/workflows/registry";
 import { NextlyError, describeError } from "../../errors";
 import { seedPermissionsRolesAndPresets } from "../../init/seed-permissions";
+import { getCoreVersion } from "../../plugins/core-version";
 import { configWatchAllowed } from "../../runtime/hmr-listener";
 import type { UserConfig } from "../../users/config/types";
 import { CliError, exitWithError } from "../errors";
@@ -755,6 +757,11 @@ export async function runMigrate(
  * cannot attach is refused by every start; here it is said, its workflows'
  * permissions are left to a later run, and a role bundling one is not made yet.
  * The workflows published before are put back after.
+ *
+ * The preset grants are set with a record of this Nextly release, in one
+ * transaction, and a release older than the one recorded leaves them as they
+ * are and says so (`withPresetGrantsRecorded`); the rest of the phase runs
+ * either way.
  */
 async function seedAccessOnCommandConnection(
   adapter: DrizzleAdapter,
@@ -785,11 +792,21 @@ async function seedAccessOnCommandConnection(
       );
     }
     try {
-      await seedPermissionsRolesAndPresets({
-        adapter,
-        config,
-        logger: seedLogger,
-      });
+      // The preset grants are set with the record of this release, in one
+      // transaction, and left as they are where a newer release set them.
+      const release = getCoreVersion();
+      const { leftTo } = await withPresetGrantsRecorded(release, () =>
+        seedPermissionsRolesAndPresets({
+          adapter,
+          config,
+          logger: seedLogger,
+        })
+      );
+      if (leftTo !== undefined) {
+        logger.info(
+          `The preset roles' grants were set by Nextly ${leftTo}, newer than this release (${release}), so they were left as they were. Run \`nextly migrate\` from ${leftTo} or newer to set them again.`
+        );
+      }
     } finally {
       if (previous !== undefined) publishWorkflows(previous);
     }
