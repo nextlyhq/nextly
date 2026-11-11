@@ -484,6 +484,85 @@ describe("contributedAdminContributions", () => {
     });
   });
 
+  describe("a place of a plugin named in `optionalDependsOn`", () => {
+    /** `@acme/billing`, declaring its invoice place, which takes tabs. */
+    const billing = (over: Partial<PluginDefinition> = {}): PluginDefinition =>
+      plugin("@acme/billing", [], {
+        contributes: {
+          admin: {
+            places: [{ name: "acme-billing.invoice", accepts: ["tab"] }],
+          },
+        },
+        ...over,
+      });
+    const LINES = {
+      id: "acme-support.lines",
+      kind: "tab",
+      place: "acme-billing.invoice",
+      label: "Lines",
+      component: "@acme/support/admin#Lines",
+    };
+    /** `@acme/support`, adding a tab to billing's place and one of its own. */
+    const support = (
+      over: Partial<PluginDefinition> = {
+        optionalDependsOn: { "@acme/billing": "^1" },
+      }
+    ) => plugin("@acme/support", [LINES, EDIT_TAB], over);
+
+    it("places the contribution where the owner is enabled", () => {
+      const { contributions } = contributedAdminContributions([
+        billing(),
+        support(),
+      ]);
+      expect(contributions.map(c => c.id)).toEqual([
+        "acme-support.lines",
+        "acme-support.sla-tab",
+      ]);
+    });
+
+    it.each([
+      ["absent", () => [support()]],
+      ["disabled", () => [billing({ enabled: false }), support()]],
+    ])(
+      "skips the contribution, and starts, where the owner is %s",
+      (_case, plugins) => {
+        const { contributions, ordered } =
+          contributedAdminContributions(plugins());
+        expect(contributions.map(c => c.id)).toEqual(["acme-support.sla-tab"]);
+        expect(ordered.has("acme-billing.invoice")).toBe(false);
+      }
+    );
+
+    it("still refuses a place of an absent plugin the contributor does not name", () => {
+      expect(
+        refusalOf(() =>
+          contributedAdminContributions([support({ optionalDependsOn: {} })])
+        )
+      ).toMatchObject({
+        reason: "admin-place-unknown",
+        logContext: { place: "acme-billing.invoice" },
+      });
+    });
+
+    it("still refuses a place the enabled owner does not declare", () => {
+      expect(
+        refusalOf(() =>
+          contributedAdminContributions([
+            billing(),
+            plugin(
+              "@acme/support",
+              [{ ...LINES, place: "acme-billing.receipt" }],
+              { optionalDependsOn: { "@acme/billing": "^1" } }
+            ),
+          ])
+        )
+      ).toMatchObject({
+        reason: "admin-place-unknown",
+        logContext: { place: "acme-billing.receipt" },
+      });
+    });
+  });
+
   it.each<[string, Record<string, unknown>]>([
     [
       "a column on the dashboard",
