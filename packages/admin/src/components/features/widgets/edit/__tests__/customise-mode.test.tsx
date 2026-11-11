@@ -26,7 +26,12 @@ import type {
   WidgetLayoutFacts,
 } from "@admin/types/dashboard/widgets";
 
-import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
+import {
+  TopBarPlacesProvider,
+  TopBarPlaceTarget,
+} from "@admin/components/layout/header/TopBarPlaces";
+
+import { GreetingActionProvider } from "../../../dashboard/GreetingAction";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { WidgetGrid } from "../../WidgetGrid";
 import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
@@ -39,12 +44,6 @@ import { galleryFromLayout, isGalleryPath } from "./gallery-read";
 
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
-
-// The header's New button reads collections and permissions of its own,
-// which this test does not set up; it is a marker here.
-vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
-  NewMenu: () => <div data-testid="dashboard-new" />,
-}));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
@@ -64,11 +63,6 @@ vi.mock("@admin/hooks/useDashboardUser", () => ({
     isLoading: false,
     error: null,
   }),
-}));
-// The page's header beside the grid holds Customize: its own reads stubbed.
-vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
-  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
-  useDashboardSummary: () => ({ data: undefined }),
 }));
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: {
@@ -204,7 +198,19 @@ const DASHBOARD = "/admin";
 const CAME_FROM = "/admin/collections/posts";
 const ELSEWHERE = "/admin/media";
 
-function renderDashboard() {
+/**
+ * The dashboard as the page composes it. `inBar` draws it under the admin's
+ * top bar, whose two places the page fills; without it there is no bar, and
+ * the controls are drawn where they stand.
+ */
+function renderDashboard({
+  inBar = false,
+  greeting = true,
+}: {
+  inBar?: boolean;
+  /** False for a page whose greeting a plugin replaced, which draws no row. */
+  greeting?: boolean;
+} = {}) {
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false, retryDelay: 0, gcTime: 0 },
@@ -215,11 +221,26 @@ function renderDashboard() {
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
   // The page's heading beside the grid, so the outline is the page's.
-  return render(
-    <DashboardChromeProvider>
-      <WelcomeHeader />
+  const page = (
+    <>
+      {greeting ? <WelcomeHeader /> : <h1>A plugin&apos;s welcome</h1>}
       <WidgetGrid />
-    </DashboardChromeProvider>,
+    </>
+  );
+  return render(
+    inBar ? (
+      <TopBarPlacesProvider>
+        <header data-testid="top-bar">
+          <TopBarPlaceTarget name="start" />
+          <TopBarPlaceTarget name="end" />
+        </header>
+        <main>
+          <GreetingActionProvider>{page}</GreetingActionProvider>
+        </main>
+      </TopBarPlacesProvider>
+    ) : (
+      page
+    ),
     { wrapper: Wrapper }
   );
 }
@@ -279,7 +300,22 @@ async function beginEditing(): Promise<User> {
 }
 
 function bar(): HTMLElement {
-  return screen.getByRole("group", { name: "Customize your dashboard" });
+  return screen.getByRole("group", { name: "Customize dashboard" });
+}
+
+/**
+ * Leaves customise mode from the bar's Cancel, agreeing to discard when the
+ * mode asks first (it asks only while there are unsaved changes).
+ */
+async function cancelEditing(user: User): Promise<void> {
+  await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+  const ask = screen.queryByTestId("dashboard-leave-ask");
+  if (ask !== null) {
+    await user.click(
+      within(ask).getByRole("button", { name: "Discard changes" })
+    );
+  }
+  await screen.findByTestId("dashboard-edit-begin");
 }
 
 function drawnOrder(): string[] {
@@ -332,26 +368,28 @@ function saveButton(): HTMLElement {
   return within(bar()).getByRole("button", { name: "Save" });
 }
 
+/** Opens a card's settings drawer from its menu, once its form has loaded. */
+async function openDrawer(user: User, title: string): Promise<HTMLElement> {
+  await choose(user, title, "Settings…");
+  // The drawer opens at once and says it is loading until its code arrives, so wait for its
+  // Width before reading it.
+  await screen.findByRole("radiogroup", { name: "Width" });
+  return screen.getByRole("dialog", { name: title });
+}
+
 /** One change of each kind customise mode can make. */
 const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
   ["a move", user => choose(user, "Posts", "Move later")],
   [
     "a resize",
     async user => {
+      // The drawer's Width, staged with the rest on its Save.
+      const drawer = await openDrawer(user, "Posts");
       await user.click(
-        screen.getByRole("button", { name: "Card actions for Posts" })
+        within(drawer).getByRole("radio", { name: "50% width" })
       );
-      const menu = await screen.findByRole("menu");
-      await user.click(within(menu).getByRole("menuitem", { name: /Width/ }));
-      const widths = await waitFor(() => {
-        const menus = screen.getAllByRole("menu");
-        expect(menus.length).toBe(2);
-        return menus[1];
-      });
-      // By keyboard: jsdom has no geometry, so a pointer crossing into the
-      // submenu reads as leaving it.
-      within(widths).getByRole("menuitemradio", { name: "50% width" }).focus();
-      await user.keyboard("{Enter}");
+      await user.click(within(drawer).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     },
   ],
   ["a removal", user => choose(user, "Posts", "Remove")],
@@ -369,40 +407,11 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
   ],
   ["a reset", user => confirmReset(user)],
   [
-    "a size from the quick popover",
-    async user => {
-      // Settings opens the card's quick popover; its Size is staged with the rest.
-      await choose(user, "Notes", "Settings");
-      const popover = await screen.findByRole("dialog", {
-        name: "Quick settings for Notes",
-      });
-      await user.click(
-        within(popover).getByRole("combobox", { name: "Width" })
-      );
-      await user.click(
-        await screen.findByRole("option", { name: "50% width" })
-      );
-      await user.keyboard("{Escape}");
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    },
-  ],
-  [
     "a setting",
     async user => {
-      // Settings opens the card's quick popover, and More settings the sheet.
-      await choose(user, "Notes", "Settings");
-      const popover = await screen.findByRole("dialog", {
-        name: "Quick settings for Notes",
-      });
-      await user.click(
-        within(popover).getByRole("button", { name: "More settings" })
-      );
-      // The sheet's panel opens at once and says it is loading until its code
-      // arrives, so wait for the form's field before reading the sheet.
-      await screen.findByLabelText(/Heading/);
-      const sheet = screen.getByRole("dialog", { name: "Notes settings" });
+      const sheet = await openDrawer(user, "Notes");
       await user.type(within(sheet).getByLabelText(/Heading/), "Mine");
-      await user.click(within(sheet).getByRole("button", { name: "Done" }));
+      await user.click(within(sheet).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     },
   ],
@@ -438,7 +447,7 @@ describe("customise mode writes nothing before Save", () => {
       const sizes = sizeLabels();
 
       await change(user);
-      await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+      await cancelEditing(user);
 
       expect(drawnOrder()).toEqual(order);
       expect(writes()).toBe(0);
@@ -449,8 +458,8 @@ describe("customise mode writes nothing before Save", () => {
   );
 });
 
-describe("the card menu and quick popover while customising", () => {
-  it("lists Settings, the size, the moves, then Remove", async () => {
+describe("the card menu and the settings drawer while customising", () => {
+  it("lists Settings…, Refresh, Move earlier, Move later and Remove, and no size", async () => {
     renderDashboard();
     const user = await beginEditing();
     await user.click(
@@ -460,73 +469,102 @@ describe("the card menu and quick popover while customising", () => {
     const names = within(menu)
       .getAllByRole("menuitem")
       .map(item => item.textContent?.trim() ?? "");
-    expect(names[0]).toBe("Settings");
-    expect(names[1]).toMatch(/^Width/);
-    // 🔴 Width alone: a card is as tall as its content, so no Height is offered.
-    expect(names.some(name => name.startsWith("Height"))).toBe(false);
-    expect(names.slice(2, 6)).toEqual([
-      "Move to start",
+    // Refresh is offered where the card has data to ask again for.
+    expect(names.filter(name => name !== "Refresh")).toEqual([
+      "Settings…",
       "Move earlier",
       "Move later",
-      "Move to end",
+      "Remove",
     ]);
-    expect(names.at(-1)).toBe("Remove");
+    expect(within(menu).queryByText(/Width|Height/)).toBeNull();
   });
 
-  it("applies a size at once, with the popover still open, and keeps it for Save", async () => {
+  it("leaves the card as it was until the drawer's Save, then stages it until the bar's Save", async () => {
     renderDashboard();
     const user = await beginEditing();
     const before = sizeLabels();
-    await choose(user, "Notes", "Settings");
-    const popover = await screen.findByRole("dialog", {
-      name: "Quick settings for Notes",
-    });
-    await user.click(within(popover).getByRole("combobox", { name: "Width" }));
-    await user.click(await screen.findByRole("option", { name: "50% width" }));
-
-    // Drawn at once in the draft, the popover still open over the card, and nothing written.
-    await waitFor(() => expect(sizeLabels()).not.toEqual(before));
-    // The label's percent, then the name a screen reader hears.
-    expect(sizeLabels()).toContain("50%50% wide");
+    const drawer = await openDrawer(user, "Notes");
+    await user.click(within(drawer).getByRole("radio", { name: "50% width" }));
+    // The preview follows at once; the card itself does not.
     expect(
-      screen.getByRole("dialog", { name: "Quick settings for Notes" })
-    ).toBeInTheDocument();
+      within(drawer).getByTestId("settings-preview-width")
+    ).toHaveTextContent("At 50% of the dashboard");
+    expect(sizeLabels()).toEqual(before);
+
+    await user.click(within(drawer).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // Staged in the draft, drawn at once, and nothing written until the bar's Save.
+    expect(sizeLabels()).toContain("50%50% wide");
+    expect(writes()).toBe(0);
+    await user.click(saveButton());
+    await waitFor(() => expect(writes()).toBe(1));
+  });
+
+  it("discards the drawer's change on Cancel and on Escape, the card untouched", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    const before = sizeLabels();
+    for (const close of ["Cancel", "{Escape}"]) {
+      const drawer = await openDrawer(user, "Notes");
+      await user.click(
+        within(drawer).getByRole("radio", { name: "50% width" })
+      );
+      await user.type(within(drawer).getByLabelText(/Heading/), "Mine");
+      if (close === "Cancel") {
+        await user.click(
+          within(drawer).getByRole("button", { name: "Cancel" })
+        );
+      } else {
+        await user.keyboard(close);
+      }
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(sizeLabels()).toEqual(before);
+    }
+    // Opened again, it holds what is stored, not what was discarded.
+    const drawer = await openDrawer(user, "Notes");
+    expect(within(drawer).getByLabelText(/Heading/)).toHaveValue("");
+    expect(
+      within(drawer).getByRole("radio", { name: "100% width" })
+    ).toHaveAttribute("aria-checked", "true");
     expect(writes()).toBe(0);
   });
 });
 
 describe("the bar", () => {
-  it("is a labelled group with a title, a hint, and Add widget, Reset, Cancel and Save", async () => {
+  it("is a labelled group of Reset, Add widget, Cancel and Save, in place of the cog", async () => {
     renderDashboard();
     await beginEditing();
 
-    expect(bar()).toHaveTextContent("Customizing your dashboard");
-    const status = within(bar()).getByTestId("dashboard-edit-status");
-    expect(status).toHaveTextContent("Only you see this layout.");
-    // The handle is named only where it is drawn: from the dashboard's one-column width up.
-    expect(
-      within(status).getByText("Drag a card by its handle, or use its menu.")
-    ).toHaveClass("hidden", "@min-[640px]/dashboard:inline");
-    expect(
-      within(status).getByText(
-        "Use a card's menu to move, resize or remove it."
-      )
-    ).toHaveClass("@min-[640px]/dashboard:hidden");
     expect(
       within(bar())
         .getAllByRole("button")
         .map(button => button.textContent)
-    ).toEqual(["Add widget", "Reset", "Cancel", "Save"]);
+    ).toEqual(["Reset", "Add widget", "Cancel", "Save"]);
     expect(
       within(bar()).getByRole("button", { name: "Reset to default" })
     ).toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
+    // No way to the widget previews page, in development as anywhere.
+    expect(screen.queryByText("Preview widgets")).toBeNull();
   });
 
-  it("stays at the top of the dashboard area while customising", async () => {
-    // jsdom lays nothing out; the cause is asserted, on the element it is on.
+  it("on a phone's bar, hides Reset and draws Add widget as its icon, keeping its name", async () => {
+    // jsdom lays nothing out; the bar's own width decides, through its container query.
     renderDashboard();
     await beginEditing();
-    expect(bar()).toHaveClass("sticky", "top-0");
+    expect(within(bar()).getByTestId("dashboard-edit-reset")).toHaveClass(
+      "@max-[37.5rem]/topbar:hidden"
+    );
+    const add = within(bar()).getByRole("button", { name: "Add widget" });
+    expect(add).toHaveClass("@max-[37.5rem]/topbar:size-[34px]");
+    expect(within(add).getByText("Add widget")).toHaveClass(
+      "@max-[37.5rem]/topbar:sr-only"
+    );
+    for (const name of ["Cancel", "Save"]) {
+      expect(
+        within(bar()).getByRole("button", { name }).className
+      ).not.toContain("@max-[37.5rem]/topbar:");
+    }
   });
 
   it("draws rows as tall as their cards at rest and while customising, no cell spanning rows or clipping its card", async () => {
@@ -548,24 +586,24 @@ describe("the bar", () => {
     drawnAsTallAsTheirCards();
   });
 
-  it("keeps exactly one level-one heading, the page's own", async () => {
+  it("keeps exactly one level-one heading, the greeting", async () => {
     renderDashboard();
     await beginEditing();
     const mains = screen.getAllByRole("heading", { level: 1 });
     expect(mains).toHaveLength(1);
-    expect(mains[0]).toHaveTextContent("Acme Site");
+    expect(mains[0]).toHaveAttribute("id", "dashboard-heading");
   });
 
-  it("marks unsaved changes only while there are some", async () => {
+  it("offers Save only while there are unsaved changes", async () => {
     renderDashboard();
     const user = await beginEditing();
-    expect(within(bar()).queryByText("Unsaved changes")).toBeNull();
+    expect(saveButton()).toBeDisabled();
 
     await choose(user, "Posts", "Move later");
-    expect(within(bar()).getByText("Unsaved changes")).toBeInTheDocument();
+    expect(saveButton()).toBeEnabled();
 
     await choose(user, "Posts", "Move earlier");
-    expect(within(bar()).queryByText("Unsaved changes")).toBeNull();
+    expect(saveButton()).toBeDisabled();
   });
 
   it("Add widget opens the add panel, with focus in its search", async () => {
@@ -582,7 +620,7 @@ describe("the bar", () => {
     );
   });
 
-  it("shows a failed save inside the bar, with Try again", async () => {
+  it("shows a failed save above the cards, with Try again", async () => {
     api.put.mockRejectedValueOnce(new Error("network"));
     renderDashboard();
     const user = await beginEditing();
@@ -590,12 +628,16 @@ describe("the bar", () => {
     await user.click(saveButton());
 
     const error = await screen.findByTestId("dashboard-edit-error");
-    expect(bar()).toContainElement(error);
+    expect(
+      error.compareDocumentPosition(
+        screen.getByLabelText("Dashboard widgets")
+      ) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     await user.click(within(error).getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2));
   });
 
-  it("shows a refused save inside the bar, with Reload", async () => {
+  it("shows a refused save above the cards, with Reload", async () => {
     api.put.mockRejectedValue(
       Object.assign(new Error("changed"), { status: 409 })
     );
@@ -605,10 +647,205 @@ describe("the bar", () => {
     await user.click(saveButton());
 
     const conflict = await screen.findByTestId("dashboard-edit-conflict");
-    expect(bar()).toContainElement(conflict);
     expect(
       within(conflict).getByRole("button", { name: "Reload" })
     ).toBeInTheDocument();
+  });
+});
+
+describe("in the admin's top bar", () => {
+  function topBar(): HTMLElement {
+    return screen.getByTestId("top-bar");
+  }
+
+  it("holds the breadcrumb at rest, and the cog at the greeting row's end rather than in the bar", async () => {
+    renderDashboard({ inBar: true });
+    const cog = await screen.findByTestId("dashboard-edit-begin");
+    const row = screen.getByTestId("dashboard-greeting-row");
+    expect(row).toContainElement(cog);
+    // After the greeting, so it reads and tabs after the heading it sits beside.
+    expect(row.lastElementChild).toContainElement(cog);
+    expect(topBar()).not.toContainElement(cog);
+    expect(
+      within(topBar()).getByRole("navigation", { name: "Breadcrumb" })
+    ).toHaveTextContent(/^Dashboard$/);
+  });
+
+  it("puts the cog at the bar's right end on a page whose greeting a plugin replaced", async () => {
+    renderDashboard({ inBar: true, greeting: false });
+    const cog = await screen.findByTestId("dashboard-edit-begin");
+    expect(topBar()).toContainElement(cog);
+    expect(screen.queryByTestId("dashboard-greeting-row")).toBeNull();
+  });
+
+  it("the cog is named and tooltipped Customize dashboard", async () => {
+    renderDashboard({ inBar: true });
+    const user = userEvent.setup();
+    const cog = await screen.findByTestId("dashboard-edit-begin");
+    expect(cog).toHaveAccessibleName("Customize dashboard");
+    await user.hover(cog);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Customize dashboard"
+    );
+  });
+
+  it.each(["{Enter}", " "])(
+    "the cog is reached by Tab and opens customise mode on %s",
+    async key => {
+      renderDashboard({ inBar: true });
+      const user = userEvent.setup();
+      const cog = await screen.findByTestId("dashboard-edit-begin");
+      while (document.activeElement !== cog) {
+        await user.tab();
+        expect(document.activeElement).not.toBe(document.body);
+      }
+      await user.keyboard(key);
+      await waitFor(() => expect(bar()).toHaveFocus());
+      expect(topBar()).toContainElement(bar());
+    }
+  );
+
+  it("puts the mode's controls in the bar, the cog leaves the greeting row, and the breadcrumb says Customizing", async () => {
+    renderDashboard({ inBar: true });
+    await beginEditing();
+    expect(topBar()).toContainElement(bar());
+    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
+    expect(screen.getByTestId("dashboard-greeting-row")).not.toContainElement(
+      bar()
+    );
+    const crumb = within(topBar()).getByRole("navigation", {
+      name: "Breadcrumb",
+    });
+    expect(crumb).toHaveTextContent("Dashboard");
+    expect(crumb).toHaveTextContent("Customizing");
+  });
+
+  it("the breadcrumb's Dashboard leaves at once with nothing changed", async () => {
+    renderDashboard({ inBar: true });
+    const user = await beginEditing();
+    await user.click(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    );
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+    expect(await screen.findByTestId("dashboard-edit-begin")).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveFocus()
+    );
+  });
+
+  it("the breadcrumb's Dashboard asks first with unsaved changes, as Cancel does", async () => {
+    renderDashboard({ inBar: true });
+    const user = await beginEditing();
+    const order = drawnOrder();
+    await choose(user, "Posts", "Move later");
+    await user.click(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    );
+    const ask = await screen.findByTestId("dashboard-leave-ask");
+    await user.click(within(ask).getByRole("button", { name: "Keep editing" }));
+    expect(bar()).toBeInTheDocument();
+
+    await user.click(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    );
+    await user.click(
+      within(await screen.findByTestId("dashboard-leave-ask")).getByRole(
+        "button",
+        { name: "Discard changes" }
+      )
+    );
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(drawnOrder()).toEqual(order);
+    expect(writes()).toBe(0);
+  });
+
+  it("offers no way out through the breadcrumb while a save is on its way, as Cancel offers none", async () => {
+    let land: (value: unknown) => void = () => undefined;
+    api.put.mockReturnValue(
+      new Promise(resolve => {
+        land = resolve;
+      })
+    );
+    renderDashboard({ inBar: true });
+    const user = await beginEditing();
+    await choose(user, "Posts", "Move later");
+    expect(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    ).toBeInTheDocument();
+    await user.click(saveButton());
+
+    await waitFor(() =>
+      expect(
+        within(bar()).getByRole("button", { name: "Cancel" })
+      ).toBeDisabled()
+    );
+    expect(
+      within(topBar()).queryByRole("button", { name: "Dashboard" })
+    ).toBeNull();
+    expect(
+      within(topBar()).getByRole("navigation", { name: "Breadcrumb" })
+    ).toHaveTextContent("Customizing");
+
+    // The save then lands, and with it the mode ends as a save does.
+    land({ message: "ok", item: {} });
+    expect(await screen.findByTestId("dashboard-edit-begin")).toBeVisible();
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+  });
+
+  it.each([true, false])(
+    "offers no Preview widgets, with the development server's previews %s",
+    async widgetPreviews => {
+      mockBranding = { ...branding(), widgetPreviews };
+      renderDashboard({ inBar: true });
+      await screen.findByTestId("dashboard-edit-begin");
+      expect(screen.queryByText("Preview widgets")).toBeNull();
+      await beginEditing();
+      expect(screen.queryByText("Preview widgets")).toBeNull();
+      expect(screen.queryByRole("link", { name: /preview/i })).toBeNull();
+    }
+  );
+});
+
+describe("leaving customise mode", () => {
+  it("Cancel with nothing changed leaves at once", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+    expect(await screen.findByTestId("dashboard-edit-begin")).toBeVisible();
+  });
+
+  it("Cancel with unsaved changes asks first; Keep editing stays, with the changes", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await choose(user, "Posts", "Move later");
+    const order = drawnOrder();
+    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+
+    const ask = await screen.findByTestId("dashboard-leave-ask");
+    expect(ask).toHaveTextContent("Discard your changes?");
+    await user.click(within(ask).getByRole("button", { name: "Keep editing" }));
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+    expect(bar()).toBeInTheDocument();
+    expect(drawnOrder()).toEqual(order);
+    expect(saveButton()).toBeEnabled();
+  });
+
+  it("Cancel with unsaved changes discards them once the reader agrees", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    const order = drawnOrder();
+    await choose(user, "Posts", "Move later");
+    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    await user.click(
+      within(await screen.findByTestId("dashboard-leave-ask")).getByRole(
+        "button",
+        { name: "Discard changes" }
+      )
+    );
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(drawnOrder()).toEqual(order);
+    expect(writes()).toBe(0);
   });
 });
 
@@ -619,38 +856,33 @@ describe("focus", () => {
     await waitFor(() => expect(bar()).toHaveFocus());
   });
 
-  it("returns to Customize after Cancel", async () => {
+  it("moves to the greeting after Cancel", async () => {
     renderDashboard();
     const user = await beginEditing();
-    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    await cancelEditing(user);
     await waitFor(() =>
-      expect(screen.getByTestId("dashboard-edit-begin")).toHaveFocus()
+      expect(screen.getByRole("heading", { level: 1 })).toHaveFocus()
     );
   });
 
-  it("returns to Customize once a save has landed", async () => {
+  it("moves to the greeting after discarding changes, not back to the question's Cancel", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await choose(user, "Posts", "Move later");
+    await cancelEditing(user);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveFocus()
+    );
+  });
+
+  it("moves to the greeting once a save has landed", async () => {
     renderDashboard();
     const user = await beginEditing();
     await choose(user, "Posts", "Move later");
     await user.click(saveButton());
     await waitFor(() =>
-      expect(screen.getByTestId("dashboard-edit-begin")).toHaveFocus()
+      expect(screen.getByRole("heading", { level: 1 })).toHaveFocus()
     );
-  });
-
-  it("keeps a card's controls clear of the sticky bar when they take focus", async () => {
-    // Scrolling a focused control into view honours its scroll margin, which
-    // is what keeps it out from under a bar stuck to the top.
-    renderDashboard();
-    await beginEditing();
-    for (const control of [
-      ...screen.getAllByTestId("widget-drag-handle"),
-      ...screen.getAllByRole("button", { name: /^Card actions for / }),
-    ]) {
-      expect(control.closest("[data-testid^='widget-cell-']")).toHaveClass(
-        "[&_button]:scroll-mt-40"
-      );
-    }
   });
 });
 
@@ -684,7 +916,7 @@ describe("the cards' own content while customising", () => {
     it(`gives ${kind}'s content back once customising ends`, async () => {
       renderDashboard();
       const user = await beginEditing();
-      await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+      await cancelEditing(user);
       expect(
         screen.getByRole("link", { name: link }).closest("[inert]")
       ).toBeNull();
@@ -705,7 +937,7 @@ describe("what customise mode says, through the grid's one live region", () => {
     renderDashboard();
     const user = await beginEditing();
     await choose(user, "Posts", "Move later");
-    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    await cancelEditing(user);
     expect(live()).toHaveTextContent("Changes discarded.");
   });
 
@@ -813,16 +1045,9 @@ describe("leaving with unsaved changes", () => {
     expect(window.location.pathname).toBe(DASHBOARD);
   });
 
-  /** Opens Notes' settings panel while customising and changes its Heading, keeping it open. */
+  /** Opens Notes' settings drawer while customising and changes its Heading, keeping it open. */
   async function panelChanged(user: User): Promise<void> {
-    await choose(user, "Notes", "Settings");
-    const popover = await screen.findByRole("dialog", {
-      name: "Quick settings for Notes",
-    });
-    await user.click(
-      within(popover).getByRole("button", { name: "More settings" })
-    );
-    const panel = await screen.findByRole("dialog", { name: /settings$/ });
+    const panel = await openDrawer(user, "Notes");
     await user.type(within(panel).getByLabelText(/Heading/), "Mine");
   }
 
@@ -889,7 +1114,7 @@ describe("leaving with unsaved changes", () => {
   it("Save in the prompt stops, saying why in the panel, when the panel's change is refused", async () => {
     const user = await changed();
     await panelChanged(user);
-    const panel = screen.getByRole("dialog", { name: /settings$/ });
+    const panel = screen.getByRole("dialog", { name: "Notes" });
     const title = within(panel).getByLabelText("Title");
     await user.click(title);
     await user.paste("x".repeat(81));
@@ -920,11 +1145,25 @@ describe("leaving with unsaved changes", () => {
     ).toEqual({ heading: "Mine" });
   });
 
+  it("the bar's Save keeps an open drawer's width too, with its settings", async () => {
+    // A width chosen in the drawer, left open, and the dashboard saved from the bar.
+    renderDashboard();
+    const user = await beginEditing();
+    const drawer = await openDrawer(user, "Notes");
+    await user.click(within(drawer).getByRole("radio", { name: "50% width" }));
+    await user.type(within(drawer).getByLabelText(/Heading/), "Mine");
+    await user.click(saveButton());
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(
+      sentPlacements().find(placement => placement.widgetId === "core/c")
+    ).toMatchObject({ w: 6, config: { heading: "Mine" } });
+  });
+
   it("the bar's Save stops, with the panel saying why, when the panel's change is refused", async () => {
     renderDashboard();
     const user = await beginEditing();
     await panelChanged(user);
-    const panel = screen.getByRole("dialog", { name: /settings$/ });
+    const panel = screen.getByRole("dialog", { name: "Notes" });
     const title = within(panel).getByLabelText("Title");
     await user.click(title);
     await user.paste("x".repeat(81));
@@ -952,14 +1191,14 @@ describe("leaving with unsaved changes", () => {
     renderDashboard();
     const user = await beginEditing();
     await panelChanged(user);
-    const panel = screen.getByRole("dialog", { name: /settings$/ });
+    const panel = screen.getByRole("dialog", { name: "Notes" });
     // The write is held, so the save is on its way while the panel is checked.
     api.put.mockReturnValue(new Promise(() => {}));
     await user.click(saveButton());
     await waitFor(() =>
       expect(within(panel).getByLabelText(/Heading/)).toBeDisabled()
     );
-    // Done says the save is on its way, as it does for the panel's own.
+    // Save says the save is on its way, as it does for the drawer's own.
     expect(
       within(panel).getByRole("button", { name: "Saving…" })
     ).toBeDisabled();
@@ -969,23 +1208,16 @@ describe("leaving with unsaved changes", () => {
     renderDashboard();
     const user = await beginEditing();
     await panelChanged(user);
-    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
-    // "Changes discarded" is true of the panel too: it is closed, with no Done to press.
+    await cancelEditing(user);
+    // "Changes discarded" is true of the drawer too: it is closed, with no Save to press.
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: /settings$/ })).toBeNull()
+      expect(screen.queryByRole("dialog", { name: "Notes" })).toBeNull()
     );
     expect(writes()).toBe(0);
     // Opened again, it holds what is stored, not the discarded Heading.
     await user.click(await screen.findByTestId("dashboard-edit-begin"));
     await screen.findAllByTestId("card-actions");
-    await choose(user, "Notes", "Settings");
-    const popover = await screen.findByRole("dialog", {
-      name: "Quick settings for Notes",
-    });
-    await user.click(
-      within(popover).getByRole("button", { name: "More settings" })
-    );
-    const panel = await screen.findByRole("dialog", { name: /settings$/ });
+    const panel = await openDrawer(user, "Notes");
     expect(within(panel).getByLabelText(/Heading/)).toHaveValue("");
     expect(writes()).toBe(0);
   });
@@ -993,20 +1225,13 @@ describe("leaving with unsaved changes", () => {
   it("hands focus to the card's menu at rest when a panel opened while customising closes after the mode ended", async () => {
     renderDashboard();
     const user = await beginEditing();
-    await choose(user, "Notes", "Settings");
-    const popover = await screen.findByRole("dialog", {
-      name: "Quick settings for Notes",
-    });
-    await user.click(
-      within(popover).getByRole("button", { name: "More settings" })
-    );
-    const panel = await screen.findByRole("dialog", { name: /settings$/ });
+    const panel = await openDrawer(user, "Notes");
     await user.type(within(panel).getByLabelText(/Heading/), "Mine");
-    // Saved, the panel's change with it: customise mode ends, and the controls the popover was
-    // opened from go with it, while the panel stays open.
+    // Saved, the drawer's change with it: customise mode ends, and the menu the drawer was
+    // opened from goes with it, while the drawer stays open.
     await user.click(saveButton());
     await screen.findByTestId("dashboard-edit-begin");
-    expect(screen.getByRole("dialog", { name: /settings$/ })).toBe(panel);
+    expect(screen.getByRole("dialog", { name: "Notes" })).toBe(panel);
     await user.click(within(panel).getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
       expect(
@@ -1148,7 +1373,7 @@ describe("leaving with unsaved changes", () => {
     expect(await screen.findByTestId("dashboard-edit-error")).toBeVisible();
     expect(window.location.pathname).toBe(DASHBOARD);
     expect(drawnOrder()).toEqual(["core/b", "core/a", "core/c"]);
-    expect(within(bar()).getByText("Unsaved changes")).toBeInTheDocument();
+    expect(saveButton()).toBeEnabled();
   });
 
   it("Save Changes during a save already on its way waits for it, and writes once", async () => {

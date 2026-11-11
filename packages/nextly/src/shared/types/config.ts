@@ -27,6 +27,7 @@ import {
 } from "../../domains/email/retention-config";
 import { normalizeLocalization } from "../../domains/i18n/config/normalize";
 import type {
+  LanguageAddressRule,
   LocalizationConfig,
   SanitizedLocalizationConfig,
 } from "../../domains/i18n/config/types";
@@ -967,6 +968,15 @@ export interface NextlyConfig {
    */
   localization?: LocalizationConfig;
 
+  /**
+   * How each language's public address is formed: under a prefix
+   * (`/de/about`) or on a domain of its own. Kept apart from `localization`
+   * so a site whose languages are managed in Settings can declare it too.
+   * Omitted, a site with several languages has every language prefixed.
+   * @experimental
+   */
+  languageAddresses?: LanguageAddressRule;
+
   /** Outbound webhook configuration. */
   webhooks?: WebhookConfig;
   /** Audit and activity trail policy. */
@@ -1120,6 +1130,9 @@ export interface SanitizedNextlyConfig {
 
   /** Normalized multilingual content configuration (undefined when i18n is off). */
   localization?: SanitizedLocalizationConfig;
+
+  /** How each language's public address is formed, as declared. */
+  languageAddresses?: LanguageAddressRule;
 
   /**
    * Resolved webhook retention policy, or null when retention is switched off.
@@ -1486,6 +1499,7 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     localization: config.localization
       ? normalizeLocalization(config.localization)
       : undefined,
+    languageAddresses: config.languageAddresses,
     // Resolved once at boot so nothing downstream re-derives it. Null means the
     // user switched retention off; an absent `webhooks` key resolves to the
     // defaults, since the event ledger fills whether or not webhooks are used.

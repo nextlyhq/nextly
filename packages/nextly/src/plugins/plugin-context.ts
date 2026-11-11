@@ -9,6 +9,7 @@
  * @since 1.0.0
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
   SupportedDialect,
   TransactionContext,
@@ -96,6 +97,7 @@ import {
   type PluginTransaction,
   type PluginTransactionHandles,
 } from "./database/plugin-database";
+import { linkedTransaction } from "./database/plugin-transaction-link";
 import type {
   HookPointContext,
   HookPointNameOf,
@@ -122,6 +124,10 @@ import {
 import { currentDependencies } from "./plugin-dependencies";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
 import { mediaForPlugin, type PluginMediaService } from "./plugin-media";
+import {
+  pluginPublicAddresses,
+  type PluginPublicAddresses,
+} from "./plugin-public-addresses";
 import { createPluginSettings } from "./plugin-settings-provider";
 import { toPluginSingleRecord, wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
@@ -166,10 +172,6 @@ import {
 } from "./service-opts";
 import { buildPluginServicesNamespace } from "./services/plugin-services-registry";
 import { recordPluginSubscription } from "./subscription-tracker";
-import {
-  pluginPublicAddresses,
-  type PluginPublicAddresses,
-} from "./plugin-public-addresses";
 import { type TransactionScope, transactionScope } from "./transaction-scope";
 
 // The typed surface `ctx.db` is, under the names the package exports.
@@ -687,6 +689,29 @@ async function readEventsForPlugin(
   );
 }
 
+/** @experimental Where a plugin's event is delivered from. */
+export interface PluginEmitOptions {
+  /**
+   * The handle `ctx.db.transaction` passes its callback: the event is
+   * delivered once that transaction commits, and never if it rolls back,
+   * from whichever code emits it. A handle whose transaction has ended is
+   * refused; emit without `tx` after the transaction returns.
+   */
+  tx?: PluginTransaction;
+}
+
+/**
+ * @public A plugin's events: the event bus's methods, with an `emit` that
+ * waits for the work that emitted it to commit (see `PluginContext.events`).
+ */
+export type PluginEvents = Omit<EventBus, "emit"> & {
+  emit<P = unknown>(
+    name: EventName,
+    payload: P,
+    options?: PluginEmitOptions
+  ): void;
+};
+
 /** The read itself, as the caller resolved from the plugin's options. */
 function readEventsAs(
   subject: ContentEventSubject,
@@ -827,8 +852,14 @@ export interface PluginContext {
   /**
    * @public Post-commit, observe-only, best-effort event bus.
    * Use a hook to modify/abort; use an event to react/notify.
+   *
+   * `emit` delivers once the work that emitted it commits: with `{ tx }`,
+   * when that plugin transaction commits; inside a transaction the calling
+   * flow holds, when its outermost transaction commits; outside any
+   * transaction, at once. Never for work that rolled back, nor for an
+   * attempt that was retried.
    */
-  events: EventBus;
+  events: PluginEvents;
 
   /**
    * @experimental Running Nextly core version, for feature-detection.
@@ -2612,7 +2643,7 @@ export function createPluginContext(
   // HMR (B2), and `emit()` refuses every name outside the plugin's own
   // namespace, core's included. Every other method
   // delegates to the shared bus unchanged.
-  const events: EventBus = pluginName
+  const events: PluginEvents = pluginName
     ? new Proxy(rawBus, {
         get(target, prop) {
           if (prop === "on") {
@@ -2624,7 +2655,11 @@ export function createPluginContext(
             };
           }
           if (prop === "emit") {
-            return (name: EventName, payload: unknown) => {
+            return (
+              name: EventName,
+              payload: unknown,
+              options?: PluginEmitOptions
+            ) => {
               // Thrown at the plugin author rather than dropped: emitting a
               // core event is a programming error, and a silent no-op would
               // leave them debugging a listener that never fires.
@@ -2648,7 +2683,12 @@ export function createPluginContext(
                   },
                 });
               }
-              target.emit(name, payload);
+              emitAfterCommit(
+                () => target.emit(name, payload),
+                options?.tx,
+                () => getServiceFn("adapter"),
+                logger
+              );
             };
           }
           const value = Reflect.get(target, prop, target);
@@ -2945,4 +2985,55 @@ export function createPluginContext(
     ...(pluginPrincipals ? { principals: pluginPrincipals } : {}),
     ...(pluginLimits ? { limits: pluginLimits } : {}),
   };
+}
+
+/**
+ * Deliver a plugin's event once the work that emitted it commits, by the one
+ * rule every emit follows: with the plugin's own transaction handle, when
+ * that transaction commits; inside a transaction the calling flow holds,
+ * when its outermost transaction commits (a savepoint that rolls back drops
+ * its own, and a retried attempt's are discarded); outside any transaction,
+ * at once. Never for work that rolled back. Called once the name has passed
+ * every refusal, so a refused event is never held.
+ */
+function emitAfterCommit(
+  deliver: () => void,
+  tx: PluginTransaction | undefined,
+  adapter: () => Pick<DrizzleAdapter, "afterCommit">,
+  logger: Pick<Logger, "error">
+): void {
+  if (tx !== undefined) {
+    try {
+      linkedTransaction(tx, "events.emit").afterCommit(deliver);
+    } catch (error) {
+      // A handle whose transaction has ended, committed or rolled back, is
+      // refused, as every use of it is; the message says what to do instead.
+      if (
+        NextlyError.is(error) &&
+        error.logContext?.reason === "plugin-transaction-finished"
+      ) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "tx",
+              code: "INVALID",
+              message:
+                "This transaction has already finished: emit without `tx` once the transaction has returned, or emit inside its callback.",
+            },
+          ],
+          logContext: { reason: "plugin-transaction-finished" },
+        });
+      }
+      throw error;
+    }
+    return;
+  }
+  // Held while the calling flow is inside a transaction, run now (before
+  // this returns) when it is not: the adapter's own rule for what runs after
+  // a commit, so a plugin's event and core's after-commit work agree.
+  void adapter().afterCommit(deliver, error => {
+    logger.error("A plugin's event could not be delivered after commit", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 }

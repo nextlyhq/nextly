@@ -563,6 +563,8 @@ export {
   type FrozenValue,
   type PluginEmailSettings,
   type PluginContext,
+  type PluginEmitOptions,
+  type PluginEvents,
   type PluginContributions,
   type PluginDatabase,
   type PluginRawDatabase,
@@ -697,6 +699,15 @@ export {
   type PublicAddressType,
 } from "./domains/public-addresses/public-address";
 
+// How each language's address is formed, by prefix or by domain, as the site
+// declares it: the address a path kept in one language is opened at.
+// @experimental
+export {
+  languageAddressOf,
+  type LanguageAddress,
+  type LanguageAddressRule,
+} from "./domains/i18n/language-addresses";
+
 // Keeping every public address to one page: the record a plugin keeps, as
 // core asks it on each save (`ctx.publicAddresses`).
 // @experimental
@@ -705,7 +716,9 @@ export type {
   HeldAddress,
   HeldAddressUpdate,
 } from "./domains/public-addresses/participants";
+export type { HeldDocument } from "./domains/public-addresses/held-listing";
 export type {
+  ParticipantTransaction,
   PluginPublicAddresses,
   PublicAddressParticipant,
   RefusedAddressUpdate,

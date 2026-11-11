@@ -109,6 +109,7 @@ import {
 } from "../helpers/service-envelope";
 import {
   isTruthyParam,
+  parseCountParam,
   parseRichTextFormat,
   parseSelectParam,
   parseStatusParam,
@@ -121,6 +122,7 @@ import {
 import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
+import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
@@ -503,16 +505,21 @@ const COLLECTIONS_METHODS: Record<
     // reading that stops at the first page, and everything past it is
     // unreachable. The singles dispatcher resolves its allowlist the same way.
     execute: async (svc, p) => {
+      // Read first, so an owner it does not know is refused before any work.
+      const owner = readListOwner(p.owner);
       // The SHARED resolver, which the singles listing asks too, handed the
       // SAME caller every other read decision takes. `undefined` means no
       // filter — an unauthenticated caller, gated at the route layer, or a
       // session super admin. An empty list means nothing is visible, which
       // the registry short-circuits to a zero-row, zero-total answer.
       const reader = readAuthenticatedUser();
-      const slugAllowlist = await readableSlugAllowlist(
+      const readable = await readableSlugAllowlist(
         reader ? readAccessCallerForDispatch(reader) : undefined,
         "collection"
       );
+      // The site's own collections or the plugins', as conditions on the
+      // same query: the plugins' list only narrows what the reader may read.
+      const slugLists = slugListsForOwner(owner, "collections", readable);
 
       const result = await svc.listCollections({
         page: toNumber(p.page),
@@ -525,7 +532,7 @@ const COLLECTIONS_METHODS: Record<
           | "updatedAt"
           | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
-        slugAllowlist,
+        ...slugLists,
       });
       // Service returns legacy { success, data, meta }. Unwrap throws on
       // failure (which the dispatcher converts to a NextlyError response).
@@ -1251,6 +1258,8 @@ const COLLECTIONS_METHODS: Record<
         fallbackLocale: p["fallback-locale"],
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
+        // `?count=capped` counts the total no further than the list shows.
+        countUpTo: parseCountParam(p.count),
       });
 
       type PaginatedShape = {
@@ -1261,6 +1270,7 @@ const COLLECTIONS_METHODS: Record<
         totalPages: number;
         hasNextPage: boolean;
         hasPrevPage: boolean;
+        totalCapped?: true;
       };
       const paginated = unwrapServiceResult<PaginatedShape>(result, {
         collectionName: p.collectionName,
