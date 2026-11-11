@@ -177,6 +177,7 @@ import {
   withMigrateLock,
 } from "../../domains/schema/pipeline/locks";
 import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
+import { lostLockError } from "../../domains/schema/pipeline/schema-lock";
 import { provisionUserFieldStorage } from "../../domains/users/services/provision-user-field-storage";
 import { UserExtSchemaService } from "../../domains/users/services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
@@ -3410,169 +3411,196 @@ export async function runFileMigrations(args: {
     args.judged
   );
 
-  for (const m of all) {
-    const filename = `${m.name}.sql`;
-    const targetFile = await loadTargetSnapshot(metaDir, m.name);
-    const target = targetFile?.snapshot ?? null;
+  // The last file this run applied, which a run that lost the schema lock names, so the operator
+  // knows where the database stands.
+  let lastApplied: string | null = null;
+  try {
+    for (const m of all) {
+      const filename = `${m.name}.sql`;
+      const targetFile = await loadTargetSnapshot(metaDir, m.name);
+      const target = targetFile?.snapshot ?? null;
 
-    if (plan.done.has(m)) {
-      // Advance the baseline past applied files.
-      if (targetFile) {
-        before = targetFile.snapshot;
-        beforeContributions = targetFile.contributions ?? {};
+      if (plan.done.has(m)) {
+        // Advance the baseline past applied files.
+        if (targetFile) {
+          before = targetFile.snapshot;
+          beforeContributions = targetFile.contributions ?? {};
+        }
+        continue;
       }
-      continue;
-    }
-    if (!plan.runs.has(m)) break;
-    if (m === plan.continuesAt) logger.info(plan.notice);
+      if (!plan.runs.has(m)) break;
+      if (m === plan.continuesAt) logger.info(plan.notice);
 
-    // Both apply routes run the same whole-file judgement, so a foreign drop
-    // — or a statement the runner's transaction cannot hold — is refused
-    // identically with or without a paired snapshot, before the ledger
-    // records an attempt.
-    const upStatements = splitSqlStatements(m.upSql, dialect, m);
-    assertNoForeignDrops({
-      statements: upStatements,
-      stream: "app",
-      owners: fileOwners,
-      elementOwners: fileOwnerRows,
-      // What the app's earlier files contributed to other owners' tables is
-      // the app's before the run ends and writes its element rows.
-      ownedElements: beforeContributions,
-      dialect,
-      source: filename,
-      liveColumns: await readLiveColumns(db, dialect, [upStatements]),
-      liveElements: await readLiveElements(db, dialect, [upStatements]),
-      // Read before each file, after the files before it have run.
-      liveTables: await readLiveTables(db, dialect, [upStatements]),
-      liveIndexTables: await readLiveIndexTables(db, dialect, [upStatements]),
-    });
-    assertRunnableStatements(upStatements, dialect, filename, {
-      transaction: m.transaction,
-      unit: "file",
-    });
-    // A column made required over rows that would break it: refused here, before any statement.
-    await refuseRequiredColumnsOverNulls(db, dialect, upStatements, filename);
-    // A file adding per-language unique indexes is refused here, before the ledger records an
-    // attempt and before any statement, where one cannot hold. It also answers with the UP to
-    // run on THIS database, which leaves out an index already installed here.
-    m.upSql = await refuseUniqueFileThatCannotHold(
-      dz,
-      m.localization,
-      filename,
-      m.upSql
-    );
-    // A file adding translated fields' columns runs without the ADD of a column already there.
-    m.upSql = await adoptColumnsAlreadyAdded(dz, m.localization, m.upSql);
-    // A file moving fields out of translation is refused here too, where their default language's
-    // values cannot take the Required or Unique setting the move applies after its copy: at the
-    // archive file, before the move's first statement, and again at the shared file.
-    await refuseLeavingFileThatCannotTakeItsSettings(
-      dz,
-      m.localization,
-      filename
-    );
-
-    if (!target) {
-      // No paired snapshot (hand-written migration): run verbatim + record.
-      logger.warn(
-        `No snapshot for ${filename}; applying verbatim without drift checks.`
-      );
-      // With no snapshot to place the database, a failed attempt that may
-      // have left statements applied is refused here as the reconcile
-      // refuses it, rather than run again on top of what stayed.
-      await assertNotPartiallyApplied(
-        { filename, transaction: m.transaction },
+      // Both apply routes run the same whole-file judgement, so a foreign drop
+      // — or a statement the runner's transaction cannot hold — is refused
+      // identically with or without a paired snapshot, before the ledger
+      // records an attempt.
+      const upStatements = splitSqlStatements(m.upSql, dialect, m);
+      assertNoForeignDrops({
+        statements: upStatements,
+        stream: "app",
+        owners: fileOwners,
+        elementOwners: fileOwnerRows,
+        // What the app's earlier files contributed to other owners' tables is
+        // the app's before the run ends and writes its element rows.
+        ownedElements: beforeContributions,
         dialect,
-        repo,
-        "rerun",
-        // A file moving fields out of translation says exactly how to tell whether it landed.
-        m.localization?.kind === "shared"
-          ? sharedFileRecoveryAdvice(filename, m.localization.spec)
-          : undefined
+        source: filename,
+        liveColumns: await readLiveColumns(db, dialect, [upStatements]),
+        liveElements: await readLiveElements(db, dialect, [upStatements]),
+        // Read before each file, after the files before it have run.
+        liveTables: await readLiveTables(db, dialect, [upStatements]),
+        liveIndexTables: await readLiveIndexTables(db, dialect, [upStatements]),
+      });
+      assertRunnableStatements(upStatements, dialect, filename, {
+        transaction: m.transaction,
+        unit: "file",
+      });
+      // A column made required over rows that would break it: refused here, before any statement.
+      await refuseRequiredColumnsOverNulls(db, dialect, upStatements, filename);
+      // A file adding per-language unique indexes is refused here, before the ledger records an
+      // attempt and before any statement, where one cannot hold. It also answers with the UP to
+      // run on THIS database, which leaves out an index already installed here.
+      m.upSql = await refuseUniqueFileThatCannotHold(
+        dz,
+        m.localization,
+        filename,
+        m.upSql
       );
-      // Recorded as the reconcile records a file it runs, with the attempt
-      // before the first statement or inside the file's transaction. A
-      // statement's own failure is named with its file, as the reconcile
-      // names it; a refusal of the run's own already says what it refused.
-      try {
-        await runRecordedAttempt({
-          file: {
-            filename,
-            sql: m.upSql,
-            path: m.filePath,
-            sha256: m.checksum,
-            transaction: m.transaction,
-          },
+      // A file adding translated fields' columns runs without the ADD of a column already there.
+      m.upSql = await adoptColumnsAlreadyAdded(dz, m.localization, m.upSql);
+      // A file moving fields out of translation is refused here too, where their default language's
+      // values cannot take the Required or Unique setting the move applies after its copy: at the
+      // archive file, before the move's first statement, and again at the shared file.
+      await refuseLeavingFileThatCannotTakeItsSettings(
+        dz,
+        m.localization,
+        filename
+      );
+
+      if (!target) {
+        // No paired snapshot (hand-written migration): run verbatim + record.
+        logger.warn(
+          `No snapshot for ${filename}; applying verbatim without drift checks.`
+        );
+        // With no snapshot to place the database, a failed attempt that may
+        // have left statements applied is refused here as the reconcile
+        // refuses it, rather than run again on top of what stayed.
+        await assertNotPartiallyApplied(
+          { filename, transaction: m.transaction },
           dialect,
           repo,
-          executeSql,
-        });
-      } catch (err) {
-        throw NextlyError.is(err) ? err : applyFailedError(filename, err);
+          "rerun",
+          // A file moving fields out of translation says exactly how to tell whether it landed.
+          m.localization?.kind === "shared"
+            ? sharedFileRecoveryAdvice(filename, m.localization.spec)
+            : undefined
+        );
+        // Recorded as the reconcile records a file it runs, with the attempt
+        // before the first statement or inside the file's transaction. A
+        // statement's own failure is named with its file, as the reconcile
+        // names it; a refusal of the run's own already says what it refused.
+        try {
+          await runRecordedAttempt({
+            file: {
+              filename,
+              sql: m.upSql,
+              path: m.filePath,
+              sha256: m.checksum,
+              transaction: m.transaction,
+            },
+            dialect,
+            repo,
+            executeSql,
+          });
+        } catch (err) {
+          throw NextlyError.is(err) ? err : applyFailedError(filename, err);
+        }
+        applied++;
+        lastApplied = filename;
+        logger.success(`Applied ${filename}`);
+        continue;
       }
-      applied++;
-      logger.success(`Applied ${filename}`);
-      continue;
-    }
 
-    // Recompute the managed-table scope per file: tables created by earlier
-    // migrations in THIS run must be visible to this file's drift check.
-    // Capturing it once before the loop left it empty on a fresh DB, so the
-    // 2nd+ migration saw its tables as "absent" and aborted with false drift.
-    const liveTables = await safeListTables(adapter);
-    // Managed main tables only, for the same reason `migrate:resolve` uses
-    // this predicate: a localized companion never appears in the snapshot this
-    // is diffed against, so including one reports drift that is not there.
-    // Junctions are excluded alongside companions: neither is declared by
-    // config, so neither can appear in the snapshot this is compared against,
-    // and including one reports drift that no migration could ever resolve.
-    //
-    // The snapshots on either side of this file ARE the declaration, so a
-    // table named in them is a real one however much its name resembles the
-    // `<mainA>_<mainB>_<field>` shape a relationship produces.
-    const declared = new Set([
-      ...before.tables.map(t => t.name),
-      ...target.tables.map(t => t.name),
-    ]);
-    const managed = snapshotComparableTables(
-      liveTables,
-      declared,
-      args.knownJunctions
-    );
-    // Tables the app only contributes to are judged on the app's elements
-    // alone; see `narrowToContributions`.
-    const sides = narrowToContributions({
-      before,
-      target,
-      live: await introspectLiveSnapshot(db, dialect, managed),
-      contributions: mergeContributions(
-        beforeContributions,
-        targetFile?.contributions ?? {}
-      ),
-    });
-    await reconcileFile({
-      file: {
-        filename,
-        sql: m.upSql,
-        path: m.filePath,
-        sha256: m.checksum,
-        transaction: m.transaction,
-      },
-      before: sides.before,
-      target: sides.target,
-      live: sides.live,
-      dialect,
-      repo,
-      executeSql,
-    });
-    before = target;
-    beforeContributions = targetFile?.contributions ?? {};
-    applied++;
-    logger.success(`Applied ${filename}`);
+      // Recompute the managed-table scope per file: tables created by earlier
+      // migrations in THIS run must be visible to this file's drift check.
+      // Capturing it once before the loop left it empty on a fresh DB, so the
+      // 2nd+ migration saw its tables as "absent" and aborted with false drift.
+      const liveTables = await safeListTables(adapter);
+      // Managed main tables only, for the same reason `migrate:resolve` uses
+      // this predicate: a localized companion never appears in the snapshot this
+      // is diffed against, so including one reports drift that is not there.
+      // Junctions are excluded alongside companions: neither is declared by
+      // config, so neither can appear in the snapshot this is compared against,
+      // and including one reports drift that no migration could ever resolve.
+      //
+      // The snapshots on either side of this file ARE the declaration, so a
+      // table named in them is a real one however much its name resembles the
+      // `<mainA>_<mainB>_<field>` shape a relationship produces.
+      const declared = new Set([
+        ...before.tables.map(t => t.name),
+        ...target.tables.map(t => t.name),
+      ]);
+      const managed = snapshotComparableTables(
+        liveTables,
+        declared,
+        args.knownJunctions
+      );
+      // Tables the app only contributes to are judged on the app's elements
+      // alone; see `narrowToContributions`.
+      const sides = narrowToContributions({
+        before,
+        target,
+        live: await introspectLiveSnapshot(db, dialect, managed),
+        contributions: mergeContributions(
+          beforeContributions,
+          targetFile?.contributions ?? {}
+        ),
+      });
+      await reconcileFile({
+        file: {
+          filename,
+          sql: m.upSql,
+          path: m.filePath,
+          sha256: m.checksum,
+          transaction: m.transaction,
+        },
+        before: sides.before,
+        target: sides.target,
+        live: sides.live,
+        dialect,
+        repo,
+        executeSql,
+      });
+      before = target;
+      beforeContributions = targetFile?.contributions ?? {};
+      applied++;
+      lastApplied = filename;
+      logger.success(`Applied ${filename}`);
+    }
+  } catch (error) {
+    throw withLastApplied(error, lastApplied);
   }
 
   return applied;
+}
+
+/**
+ * A run that lost the schema lock part-way through the files, refused naming the last file it
+ * applied; any other error as it is.
+ */
+function withLastApplied(error: unknown, lastApplied: string | null): unknown {
+  if (
+    !NextlyError.is(error) ||
+    error.logContext?.reason !== "schema lock lost while held"
+  ) {
+    return error;
+  }
+  const command = error.logContext.command;
+  return lostLockError(
+    typeof command === "string" ? command : "nextly migrate",
+    lastApplied
+  );
 }
 
 async function discoverMigrations(

@@ -21,6 +21,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { DrizzleStatementExecutor as DrizzleStatementExecutorInterface } from "../pipeline/pushschema-pipeline-interfaces";
 import {
+  assertSchemaLockHeld,
+  markedForSchemaLock,
+} from "../pipeline/schema-lock";
+import {
   isIdempotencyError,
   splitStatements,
 } from "../pipeline/sql-statement-utils";
@@ -70,7 +74,10 @@ export class DrizzleStatementExecutor
     const { sql: sqlTag } = await import("drizzle-orm");
     const txTyped = tx as AsyncExecuteClient;
     for (const stmt of statements) {
-      await txTyped.execute(sqlTag.raw(stmt));
+      // A run that lost the schema lock starts no further statement, and each one carries the
+      // run's claim so a run taking the lock over can find and stop it (`markedForSchemaLock`).
+      assertSchemaLockHeld();
+      await txTyped.execute(sqlTag.raw(markedForSchemaLock(stmt)));
     }
   }
 
@@ -78,7 +85,10 @@ export class DrizzleStatementExecutor
     const { sql: sqlTag } = await import("drizzle-orm");
     const txTyped = tx as AsyncExecuteClient;
     for (const stmt of statements) {
-      await txTyped.execute(sqlTag.raw(stmt));
+      // A run that lost the schema lock starts no further statement, and each one carries the
+      // run's claim so a run taking the lock over can find and stop it (`markedForSchemaLock`).
+      assertSchemaLockHeld();
+      await txTyped.execute(sqlTag.raw(markedForSchemaLock(stmt)));
     }
     // Note: drizzle-kit 0.31.10's silent-drop bug for MySQL applies to
     // pushSchema's apply() method, NOT to manual statement execution.
@@ -110,6 +120,9 @@ export class DrizzleStatementExecutor
     // sql-statement-utils.ts — this executor and fresh-push previously
     // carried drifting private copies of both.
     for (const stmt of splitStatements(statements)) {
+      // A run that lost the schema lock starts no further statement. SQLite runs one writer at a
+      // time, so a statement here needs no claim for a run taking over to find.
+      assertSchemaLockHeld();
       try {
         dbTyped.run(sqlTag.raw(stmt));
       } catch (err) {

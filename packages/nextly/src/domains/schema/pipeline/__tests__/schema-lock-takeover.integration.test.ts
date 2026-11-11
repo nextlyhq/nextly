@@ -289,3 +289,104 @@ describe.each(SERVERS)(
   },
   60_000
 );
+
+const TWO_STATEMENT_HOLDER = join(
+  __dirname,
+  "helpers",
+  "schema-lock-two-statement-holder.ts"
+);
+
+/**
+ * A holder stopped between two statements of a file that runs outside a transaction, on every
+ * dialect: SQLite's one writer lets a second run take the lock only between statements, so this
+ * is where a takeover meets a holder there.
+ */
+describe.each(LOCK_DIALECTS)(
+  "a takeover between two statements of a file run outside a transaction on %s",
+  dialect => {
+    const PAIR = `${PREFIX}_pair`;
+    const PAIR_TABLES = [`${PAIR}_one`, `${PAIR}_two`, `${PAIR}_taker`];
+    let world: LockWorld;
+    let adapter: DrizzleAdapter;
+    let holder: Holder | undefined;
+
+    beforeEach(async () => {
+      world = await lockWorld(dialect);
+      adapter = await world.connect();
+      await world.reset(adapter, PAIR_TABLES);
+    });
+
+    afterEach(async () => {
+      if (holder !== undefined) {
+        holder.kill("SIGCONT");
+        holder.kill("SIGKILL");
+        await holder.exited;
+        holder = undefined;
+      }
+      await world.reset(adapter, PAIR_TABLES);
+      await adapter.disconnect();
+      await world.dispose();
+    });
+
+    async function holderAfterItsFirstStatement(): Promise<Holder> {
+      const started = startScript(TWO_STATEMENT_HOLDER, [
+        dialect,
+        world.url,
+        String(LEASE_SECONDS),
+        PAIR,
+      ]);
+      holder = started;
+      await started.printed("first");
+      return started;
+    }
+
+    /** A second run: takes the lock once the holder's lapsed, and makes its change. */
+    const takeOver = () =>
+      withSchemaLock(
+        {
+          adapter,
+          command: "nextly migrate",
+          whenHeld: "wait",
+          waitMs: 8_000,
+          leaseSeconds: LEASE_SECONDS,
+          logger: quiet,
+        },
+        () => adapter.executeQuery(`CREATE TABLE ${PAIR}_taker (id integer)`)
+      );
+
+    it("sends no further statement of a holder paused past its lease once another run took it", async () => {
+      const paused = await holderAfterItsFirstStatement();
+      paused.kill("SIGSTOP");
+      await sleep(PAST_THE_LEASE_MS);
+
+      expect((await takeOver()).ran).toBe(true);
+
+      // Resumed and asked for its next statement, it finds the lock gone and sends nothing.
+      paused.kill("SIGCONT");
+      paused.send("second");
+      await paused.exited;
+      holder = undefined;
+      expect(paused.lines()).not.toContain("second");
+      expect(await tablesWithPrefix(adapter, PAIR)).toEqual([
+        `${PAIR}_one`,
+        `${PAIR}_taker`,
+      ]);
+    });
+
+    it("lets the lock of a holder killed between its statements lapse within one lease", async () => {
+      const killed = await holderAfterItsFirstStatement();
+      killed.kill("SIGKILL");
+      await killed.exited;
+      holder = undefined;
+      await sleep(PAST_THE_LEASE_MS);
+
+      // Nobody unlocks it by hand: the next run proceeds.
+      expect((await takeOver()).ran).toBe(true);
+      expect(await tablesWithPrefix(adapter, PAIR)).toEqual([
+        `${PAIR}_one`,
+        `${PAIR}_taker`,
+      ]);
+    });
+  },
+  60_000
+);

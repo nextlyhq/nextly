@@ -292,12 +292,31 @@ export function markedForSchemaLock(statement: string): string {
 }
 
 /** The refusal of a run that can no longer show it holds the lock. */
-function lostLockError(command: string): NextlyError {
+/**
+ * The refusal of a run that lost the schema lock. `lastApplied`, where the caller knows it, is the
+ * last file the run applied, which the operator checks the database against; `null` when it
+ * applied none.
+ */
+export function lostLockError(
+  command: string,
+  lastApplied?: string | null
+): NextlyError {
+  const applied =
+    lastApplied === undefined
+      ? ""
+      : lastApplied === null
+        ? " It applied no migration before it lost the lock."
+        : ` The last migration it applied is ${lastApplied}.`;
   return NextlyError.serviceUnavailable({
     publicMessage:
       `${command} lost the schema lock: it could no longer show it held it, so it started no ` +
-      "further statement and recorded nothing further. Check the database before running it again.",
-    logContext: { reason: "schema lock lost while held", command },
+      `further statement and recorded nothing further.${applied} Check the database before ` +
+      "running it again.",
+    logContext: {
+      reason: "schema lock lost while held",
+      command,
+      ...(lastApplied === undefined ? {} : { lastApplied }),
+    },
   });
 }
 

@@ -54,6 +54,7 @@ import {
   filterUnsafeStatements,
   findUnexpectedDestructiveStatements,
 } from "./filter-unsafe-statements";
+import { assertSchemaLockHeld, markedForSchemaLock } from "./schema-lock";
 import { isIdempotencyError, splitStatements } from "./sql-statement-utils";
 
 // Re-exported so existing importers (v1-golden suite) keep working; the
@@ -435,7 +436,10 @@ async function executeStatements(
     // existing schema are expected to emit zero statements instead.
     await (db as PgTxDb).transaction(async tx => {
       for (const stmt of statements) {
-        await tx.execute(sqlTag.raw(stmt));
+        // A run that lost the schema lock starts no further statement, and each carries the run's
+        // claim so a run taking the lock over can find and stop it.
+        assertSchemaLockHeld();
+        await tx.execute(sqlTag.raw(markedForSchemaLock(stmt)));
         executed.push(stmt);
       }
     });
@@ -454,6 +458,7 @@ async function executeStatements(
     run("PRAGMA foreign_keys = OFF");
     try {
       for (const stmt of statements) {
+        assertSchemaLockHeld();
         try {
           run(stmt);
           executed.push(stmt);
@@ -483,8 +488,11 @@ async function executeStatements(
   }
 
   for (const stmt of statements) {
+    assertSchemaLockHeld();
     try {
-      await (db as AsyncExecuteDb).execute(sqlTag.raw(stmt));
+      await (db as AsyncExecuteDb).execute(
+        sqlTag.raw(markedForSchemaLock(stmt))
+      );
       executed.push(stmt);
     } catch (err) {
       if (isIdempotencyError(err)) continue;

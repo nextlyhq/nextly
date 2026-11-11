@@ -52,6 +52,7 @@ import {
 // templates. Eliminates the byte-identical-SQL drift risk.
 import { referenceConversionStatements } from "../reference-list-conversion";
 import { conversionForRename } from "../rename-conversion";
+import { assertSchemaLockHeld, markedForSchemaLock } from "../schema-lock";
 import { generateSQL } from "../sql-templates/index";
 
 interface AsyncExecuteHandle {
@@ -566,6 +567,8 @@ export async function runRaw(
   sqlString: string,
   dialect: SupportedDialect
 ): Promise<void> {
+  // A run that lost the schema lock starts no further statement (`assertSchemaLockHeld`).
+  assertSchemaLockHeld();
   if (dialect === "sqlite") {
     // better-sqlite3 / drizzle-orm/better-sqlite3 uses synchronous .run()
     // (and tx wrappers also expose .run()). The F3 pipeline runs SQLite
@@ -577,5 +580,6 @@ export async function runRaw(
   }
   // PG and MySQL use async .execute()
   const handle = txOrDb as AsyncExecuteHandle;
-  await handle.execute(sql.raw(sqlString));
+  // Carries the run's claim, so a run taking the lock over can find and stop it.
+  await handle.execute(sql.raw(markedForSchemaLock(sqlString)));
 }

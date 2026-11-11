@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { runMigrationStatements } from "../../migrate/migration-transaction";
+import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 import { withSchemaLock } from "../schema-lock";
 
 import {
@@ -107,6 +108,37 @@ describe.each(LOCK_DIALECTS)(
         `${PREFIX}_aside`,
         `${PREFIX}_first`,
       ]);
+    });
+
+    it("starts no further statement of a push once another run took the lock", async () => {
+      // `db:sync` and the development push send their statements through this executor.
+      let refused: unknown;
+      await withSchemaLock(
+        {
+          adapter,
+          command: "nextly db:sync",
+          whenHeld: "refuse",
+          leaseSeconds: 2,
+          logger: quiet,
+        },
+        async () => {
+          await adapter.executeQuery(
+            "UPDATE nextly_schema_lock SET owner = 'another run' WHERE id = 1"
+          );
+          await sleep(PAST_THE_LEASE_MS);
+          const db = adapter.getDrizzle();
+          refused = await new DrizzleStatementExecutor(dialect, db)
+            .executeStatements(db, [
+              `CREATE TABLE ${PREFIX}_second (id integer)`,
+            ])
+            .catch((error: unknown) => error);
+        }
+      ).catch(() => undefined);
+
+      expect(refused).toMatchObject({
+        logContext: { reason: "schema lock lost while held" },
+      });
+      expect(await tablesWithPrefix(adapter, PREFIX)).toEqual([]);
     });
 
     it("records nothing further in the ledger once another run took the lock", async () => {
