@@ -24,8 +24,15 @@
  * is what knows the exact URLs (and query strings) its screens ask for: one
  * list, in the one place that sends the requests.
  *
+ * The answer's own headers say what the server says of the admin as a whole,
+ * for the metadata the admin keeps on the device between visits: the schema
+ * version and the permission version it labels that metadata with, and
+ * whether the site lets it keep any ({@link deviceMemoryHeaders}).
+ *
  * @module route-handler/startup-request
  */
+
+import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
@@ -36,6 +43,16 @@ import {
   SKIP_DATE_FORMATTING_HEADER,
 } from "../api/response-shapes";
 import { NextlyError } from "../errors/nextly-error";
+import { refreshEpoch } from "../services/lib/rbac-epoch";
+
+import { servedSchemaVersion } from "./schema-version";
+
+/**
+ * The environment variable a site sets to `off` so the admin keeps nothing on
+ * its editors' devices (no menu, no schemas, no branding, no record of a
+ * sign-in). Remembering is on when it is unset or anything else.
+ */
+const DEVICE_MEMORY_ENV = "NEXTLY_ADMIN_DEVICE_MEMORY";
 
 /** The most paths one startup request may name. */
 export const MAX_STARTUP_PATHS = 16;
@@ -106,11 +123,53 @@ export async function handleStartupRequest(
   const headers = new Headers({
     "Cache-Control": "private, no-store",
     [SKIP_DATE_FORMATTING_HEADER]: "1",
+    ...(await deviceMemoryHeaders()),
   });
   for (const { cookies } of answered) {
     for (const cookie of cookies) headers.append("Set-Cookie", cookie);
   }
   return respondData({ parts: answered.map(({ part }) => part) }, { headers });
+}
+
+/**
+ * What the admin's device memory is told with every startup answer:
+ *
+ * - `X-Nextly-Device-Memory`: `off` where the site set {@link DEVICE_MEMORY_ENV}
+ *   to `off`, and `on` otherwise; the admin removes what it kept on `off`.
+ * - `X-Nextly-Schema-Version`: the stored schema version this copy serves, as
+ *   every other admin response carries it.
+ * - `X-Nextly-Permission-Version`: the RBAC epoch, which moves on every change
+ *   to a role, a grant or an assignment anywhere in the install. Sent as a
+ *   hash, since the admin only compares it: the raw value would tell anyone
+ *   how often roles change, which the comparison does not need.
+ *
+ * Read after the parts, so a change one of them made is the version sent. A
+ * version that cannot be read is left out, and the admin then keeps nothing
+ * labelled for this page.
+ */
+async function deviceMemoryHeaders(): Promise<Record<string, string>> {
+  const remembering =
+    process.env[DEVICE_MEMORY_ENV]?.trim().toLowerCase() === "off"
+      ? "off"
+      : "on";
+  const headers: Record<string, string> = {
+    "X-Nextly-Device-Memory": remembering,
+  };
+  const schemaVersion = await servedSchemaVersion();
+  if (schemaVersion !== undefined) {
+    headers["X-Nextly-Schema-Version"] = String(schemaVersion);
+  }
+  try {
+    const epoch = await refreshEpoch();
+    headers["X-Nextly-Permission-Version"] = createHash("sha256")
+      .update(epoch)
+      .digest("base64url")
+      .slice(0, 22);
+  } catch {
+    // The epoch could not be read: no permission version is sent, and the
+    // admin labels nothing it learns on this page.
+  }
+  return headers;
 }
 
 /** One path, answered by its own route as the caller's own GET. */
