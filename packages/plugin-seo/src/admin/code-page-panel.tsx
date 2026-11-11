@@ -4,6 +4,11 @@
  * follows what is typed, the title and description, and under Advanced
  * hiding from search, the official address and a share image.
  *
+ * Drawn with the SEO panel's own parts (`SeoTextField`, `PreviewCard`,
+ * `AdvancedFrame`, the rows, chips and notes), so a page built in code is
+ * edited as an entry's SEO tab edits one; only what is said of a value set
+ * in the route's code, and the save, are its own.
+ *
  * @module admin/code-page-panel
  */
 import {
@@ -14,6 +19,8 @@ import {
   useMediaItem,
   usePluginRouteMutation,
 } from "@nextlyhq/plugin-sdk/admin";
+import { Switch } from "@nextlyhq/ui";
+import { Check, Info } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -21,26 +28,27 @@ import {
   useState,
   type CSSProperties,
   type JSX,
-  type Ref,
+  type ReactNode,
 } from "react";
 
 import {
   ADDRESSES_ROUTE_PATH,
   CODE_PAGE_SEO_ROUTE_PATH,
   LONGEST_SEO_TEXT,
+  type AutomaticValue,
   type CodePageSeoInput,
   type SiteAddress,
 } from "../code-pages/contract";
+import type { SeoAnswer, Sourced } from "../resolver/order";
 import { SEO_PLUGIN_NAME } from "../settings/contract";
+import { characters, DESCRIPTION_LIMIT, TITLE_LIMIT } from "../tab/problems";
 
-import { Chevron } from "./pages-styles";
-import {
-  cut,
-  developerNote,
-  hostOf,
-  resultAddress,
-  valueSource,
-} from "./pages-view";
+import { AdvancedFrame } from "./advanced";
+import { developerNote, valueSource } from "./pages-view";
+import { Chip, LinkAction, Note, SourceRow } from "./parts";
+import { PreviewCard } from "./previews";
+import { Row, RowButton } from "./rows";
+import { SeoTextField } from "./SeoPanel";
 import { Icon } from "./styles";
 
 /** Where each source of an address is said to come from. */
@@ -58,26 +66,24 @@ interface Draft {
   image: string | null;
 }
 
-/** A count of characters against what Google usually shows. */
-function Count({ length, max }: { length: number; max: number }): JSX.Element {
-  const over = length > max;
+/** Code text, as the SEO panel's source lines set it. */
+function Code({ children }: { children: ReactNode }): JSX.Element {
   return (
-    <span
-      className={over ? "nx-seo-count over" : "nx-seo-count"}
-      title={over ? `Google usually shows about ${max} characters` : ""}
-    >
-      {length} / {max}
-    </span>
+    <code className="rounded bg-muted px-[5px] py-px font-mono text-xs text-foreground [overflow-wrap:anywhere]">
+      {children}
+    </code>
   );
 }
 
 /** Where a field's value comes from, under the field. */
 function Source({
+  id,
   item,
   field,
   typed,
   onAutomatic,
 }: {
+  id: string;
   item: SiteAddress;
   field: "title" | "description";
   typed: boolean;
@@ -87,45 +93,39 @@ function Source({
   switch (source.kind) {
     case "typed":
       return (
-        <div className="nx-seo-src">
-          <span className="nx-seo-chip typed">Typed for this address</span>
-          <button
-            type="button"
-            className="nx-seo-linkbtn"
-            onClick={onAutomatic}
-          >
-            Go back to automatic
-          </button>
-        </div>
+        <SourceRow id={id}>
+          <Chip kind="typed">Typed for this address</Chip>
+          <LinkAction onClick={onAutomatic}>Go back to automatic</LinkAction>
+        </SourceRow>
       );
     case "code":
       return (
-        <div className="nx-seo-src">
-          <span className="nx-seo-chip code">Set in code</span>
+        <SourceRow id={id}>
+          <Chip kind="code">Set in code</Chip>
           <span>
-            by <code>{item.from}</code>.{" "}
+            by <Code>{item.from}</Code>.{" "}
             {source.connected
               ? "What you type here wins."
               : "What you type here wins once the route is connected."}
           </span>
-        </div>
+        </SourceRow>
       );
     case "pattern":
       return (
-        <div className="nx-seo-src">
-          <span className="nx-seo-chip">Automatic</span>
+        <SourceRow id={id}>
+          <Chip>Automatic</Chip>
           <span>
-            from the site pattern <code>{source.pattern}</code>, with the
+            from the site pattern <Code>{source.pattern}</Code>, with the
             route's page name, {item.name}
           </span>
-        </div>
+        </SourceRow>
       );
     case "site":
       return (
-        <div className="nx-seo-src">
-          <span className="nx-seo-chip">Automatic</span>
+        <SourceRow id={id}>
+          <Chip>Automatic</Chip>
           <span>{siteSourceText(source.field, source.found)}</span>
-        </div>
+        </SourceRow>
       );
   }
 }
@@ -157,267 +157,75 @@ function copyNote(item: SiteAddress): void {
 function ConnectionNote({ item }: { item: SiteAddress }): JSX.Element {
   if (item.standing === "not-connected") {
     return (
-      <div className="nx-seo-dnote warn">
-        <Icon name="warn" />
-        <div className="t">
-          <b>
-            {item.name} is built in code and doesn't call the SEO function yet —
-            ask a developer to add one line.
-          </b>{" "}
-          What you set here is kept, and reaches the page once that line is in.
-          <div className="acts">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => copyNote(item)}
-            >
-              Copy a note for a developer
-            </Button>
-          </div>
+      <Note tone="warning">
+        <b className="font-semibold">
+          {item.name} is built in code and doesn't call the SEO function yet —
+          ask a developer to add one line.
+        </b>{" "}
+        What you set here is kept, and reaches the page once that line is in.
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <RowButton onClick={() => copyNote(item)}>
+            Copy a note for a developer
+          </RowButton>
         </div>
-      </div>
+      </Note>
     );
   }
   if (item.source === "dynamic") {
     return (
-      <div className="nx-seo-dnote">
-        <Icon name="info" />
-        <div className="t">
-          Declared by <code>{item.from}</code>. What you set here applies to{" "}
-          {item.path} only.
-        </div>
-      </div>
+      <Note icon={<Info className="size-4" />}>
+        Declared by <Code>{item.from}</Code>. What you set here applies to{" "}
+        {item.path} only.
+      </Note>
     );
   }
   return (
-    <div className="nx-seo-dnote ok">
-      <Icon name="check" />
-      <div className="t">
-        Connected: <code>{item.from}</code> calls the SEO function, so what you
-        set here reaches the page.
-      </div>
-    </div>
+    <Note tone="success" icon={<Check className="size-4" />}>
+      Connected: <Code>{item.from}</Code> calls the SEO function, so what you
+      set here reaches the page.
+    </Note>
   );
 }
 
-/** What the preview shows, as the panel stands. */
-interface Shown {
-  item: SiteAddress;
-  siteName: string;
-  address: string;
-  title: string;
-  description: string;
-  hidden: boolean;
-  imageUrl: string | undefined;
-  /** Where the image shown comes from: chosen here, or automatic. */
-  imageFrom: "chosen" | "code" | "site";
-}
-
-/** The page in Google's results, faded where it is hidden from search. */
-function GoogleResult({ shown }: { shown: Shown }): JSX.Element {
-  const result = (
-    <div className="nx-seo-serp">
-      <div className="site">
-        <span className="fav" aria-hidden="true">
-          {shown.siteName.slice(0, 1).toUpperCase()}
-        </span>
-        <div>
-          <div className="sname">{shown.siteName}</div>
-          <div className="surl">{resultAddress(shown.address)}</div>
-        </div>
-      </div>
-      <div className="stitle">{cut(shown.title, 61)}</div>
-      <div className="sdesc">{cut(shown.description, 160)}</div>
-    </div>
-  );
-  if (!shown.hidden) return result;
-  return (
-    <div className="nx-seo-pv-hidden">
-      {result}
-      <div className="over">
-        <span>Hidden from search</span>
-      </div>
-    </div>
-  );
-}
-
-/** What the card says of the image it shows. */
-const IMAGE_HELP: Record<Shown["imageFrom"], string> = {
+/** What the Advanced share image row says of the image the page shows. */
+const IMAGE_HELP = {
   chosen: "Uses the share image chosen for this address.",
   code: "Uses the share image the route's code sets.",
-  site: "Uses the site's default share image.",
-};
+  site: "The site's default share image.",
+} as const;
 
-/** The card a link to the page makes when shared. */
-function SharedCard({ shown }: { shown: Shown }): JSX.Element {
-  const domain = hostOf(shown.address) ?? shown.address;
-  const help =
-    shown.imageUrl === undefined
-      ? "No share image yet: choose one under Advanced, or set the site's default in SEO settings."
-      : IMAGE_HELP[shown.imageFrom];
-  return (
-    <>
-      <div className="nx-seo-card">
-        <div className="img">
-          {shown.imageUrl === undefined ? (
-            <div className="art">
-              <small>{domain}</small>
-              <strong>{shown.item.name}</strong>
-              <small>{shown.siteName}</small>
-            </div>
-          ) : (
-            <img src={shown.imageUrl} alt="" />
-          )}
-        </div>
-        <div className="meta">
-          <div className="dom">{domain}</div>
-          <div className="ct">{shown.title}</div>
-          <div className="cd">{shown.description}</div>
-        </div>
-      </div>
-      <p className="nx-seo-help nx-seo-card-help">{help}</p>
-    </>
-  );
-}
-
-/** How the page looks in Google's results and when shared, as typed. */
-function Preview({ shown }: { shown: Shown }): JSX.Element {
-  const [view, setView] = useState<"google" | "share">("google");
-  const tab = (name: "google" | "share", label: string) => (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={view === name}
-      onClick={() => setView(name)}
-    >
-      {label}
-    </button>
-  );
-  return (
-    <div className="nx-seo-pv">
-      <div className="nx-seo-pv-head">
-        <span className="lbl">Preview · updates as you type</span>
-        <div className="nx-seo-seg" role="tablist" aria-label="Preview">
-          {tab("google", "Google")}
-          {tab("share", "When shared")}
-        </div>
-      </div>
-      <div className="nx-seo-pv-body">
-        {view === "google" ? (
-          <GoogleResult shown={shown} />
-        ) : (
-          <SharedCard shown={shown} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** A title or description, with its count, help and source. */
-function TextField({
+/** The share image chosen for the address, or the one the page falls back to. */
+function ShareImageRow({
   item,
-  field,
   value,
-  shownLength,
-  placeholder,
   onChange,
-  inputRef,
 }: {
   item: SiteAddress;
-  field: "title" | "description";
-  value: string;
-  shownLength: number;
-  placeholder: string;
-  onChange: (value: string) => void;
-  inputRef?: Ref<HTMLInputElement>;
-}): JSX.Element {
-  const id = `nx-seo-pages-${field}`;
-  const isTitle = field === "title";
-  return (
-    <div className="nx-seo-sf">
-      <div className="nx-seo-sf-head">
-        <label htmlFor={id}>
-          {isTitle ? "Title on Google" : "Description on Google"}
-        </label>
-        <Count length={shownLength} max={isTitle ? 60 : 160} />
-      </div>
-      <p className="nx-seo-help">
-        {isTitle
-          ? "The blue link people click in Google's results."
-          : "The grey text under the link."}
-      </p>
-      {isTitle ? (
-        <input
-          ref={inputRef}
-          id={id}
-          className="nx-seo-inp"
-          maxLength={LONGEST_SEO_TEXT}
-          placeholder={placeholder}
-          value={value}
-          onChange={event => onChange(event.target.value)}
-        />
-      ) : (
-        <textarea
-          id={id}
-          className="nx-seo-inp"
-          rows={3}
-          maxLength={LONGEST_SEO_TEXT}
-          placeholder={placeholder}
-          value={value}
-          onChange={event => onChange(event.target.value)}
-        />
-      )}
-      <Source
-        item={item}
-        field={field}
-        typed={value.trim() !== ""}
-        onAutomatic={() => onChange("")}
-      />
-    </div>
-  );
-}
-
-/** The share image chosen for the address, or the site's default. */
-function ShareImageRow({
-  value,
-  onChange,
-}: {
   value: string | null;
   onChange: (value: string | null) => void;
 }): JSX.Element {
   const [picking, setPicking] = useState(false);
   const chosen = useMediaItem(value ?? undefined).data;
+  const fallback = item.seo?.automatic.image?.from === "code" ? "code" : "site";
   return (
-    <div className="nx-seo-arow">
-      <div>
-        <div className="lab">Share image</div>
-        <p className="nx-seo-help">
-          {value === null
-            ? "The site's default share image."
-            : mediaSummary(chosen)}
-        </p>
-      </div>
-      <div className="nx-seo-row">
-        {value === null ? null : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => onChange(null)}
-          >
-            Remove
-          </Button>
-        )}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => setPicking(true)}
-        >
-          {value === null ? "Choose an image" : "Replace"}
-        </Button>
-      </div>
+    <Row
+      label="Share image"
+      help={
+        value === null
+          ? IMAGE_HELP[fallback]
+          : `${IMAGE_HELP.chosen} ${mediaSummary(chosen)}`
+      }
+      control={
+        <div className="flex flex-wrap justify-end gap-1.5">
+          {value === null ? null : (
+            <RowButton onClick={() => onChange(null)}>Remove</RowButton>
+          )}
+          <RowButton onClick={() => setPicking(true)}>
+            {value === null ? "Choose an image" : "Replace"}
+          </RowButton>
+        </div>
+      }
+    >
       <MediaPickerDialog
         mode="single"
         open={picking}
@@ -430,7 +238,7 @@ function ShareImageRow({
           setPicking(false);
         }}
       />
-    </div>
+    </Row>
   );
 }
 
@@ -465,61 +273,41 @@ function Advanced({
   change: (next: Partial<Draft>) => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
+  const hide = "Hide this page from search";
   return (
-    <div className="nx-seo-adv">
-      <button
-        type="button"
-        className="nx-seo-adv-toggle"
-        aria-expanded={open}
-        aria-controls="nx-seo-pages-adv"
-        onClick={() => setOpen(!open)}
-      >
-        <b>Advanced</b>
-        <span className="sum">
-          Hiding from search, official address, share image
-        </span>
-        <span className="chev">
-          <Chevron />
-        </span>
-      </button>
-      <div id="nx-seo-pages-adv" hidden={!open}>
-        <div className="nx-seo-arow">
-          <div>
-            <div className="lab">Hide this page from search</div>
-            <p className="nx-seo-help">
-              Search engines won't list it, and it leaves the sitemap.
-            </p>
-          </div>
-          <button
-            type="button"
-            className="nx-seo-sw"
-            role="switch"
-            aria-checked={draft.hidden}
-            aria-label="Hide this page from search"
-            onClick={() => change({ hidden: !draft.hidden })}
+    <AdvancedFrame
+      summary="Hiding from search, official address, share image"
+      open={open}
+      onOpenChange={setOpen}
+    >
+      <Row
+        label={hide}
+        help="Search engines won't list it, and it leaves the sitemap."
+        control={
+          <Switch
+            aria-label={hide}
+            checked={draft.hidden}
+            onCheckedChange={checked => change({ hidden: checked })}
           />
-        </div>
-        <div className="nx-seo-arow">
-          <div>
-            <div className="lab">Official address</div>
-            <p className="nx-seo-help">
-              The one address search engines should credit for this page.
-            </p>
-          </div>
-          <span />
-          <div className="full">
-            <div className="nx-seo-src">
-              <span className="nx-seo-chip">Automatic</span>
-              <span className="mono">{item.canonical ?? address}</span>
-            </div>
-          </div>
-        </div>
-        <ShareImageRow
-          value={draft.image}
-          onChange={image => change({ image })}
-        />
-      </div>
-    </div>
+        }
+      />
+      <Row
+        label="Official address"
+        help="The one address search engines should credit for this page."
+      >
+        <SourceRow>
+          <Chip>Automatic</Chip>
+          <span className="font-mono text-xs text-foreground [overflow-wrap:anywhere]">
+            {item.canonical ?? address}
+          </span>
+        </SourceRow>
+      </Row>
+      <ShareImageRow
+        item={item}
+        value={draft.image}
+        onChange={image => change({ image })}
+      />
+    </AdvancedFrame>
   );
 }
 
@@ -546,38 +334,72 @@ function automaticOf(item: SiteAddress): {
   };
 }
 
-/** Text typed, or the automatic value where none is. */
-const orAutomatic = (typed: string, automatic: string) =>
-  typed.trim() === "" ? automatic : typed;
+/**
+ * The value used for a title or description: what is typed, else the
+ * automatic one, else the page's own name where one stands in, else none.
+ * Blank text is no value.
+ */
+function usedText(
+  typed: string,
+  automatic: AutomaticValue | undefined,
+  named?: string
+): Sourced<string> | undefined {
+  if (typed.trim() !== "") return { value: typed, from: "page" };
+  if (automatic !== undefined && automatic.value.trim() !== "") {
+    return { value: automatic.value, from: automatic.from };
+  }
+  return named === undefined ? undefined : { value: named, from: "content" };
+}
 
 /**
- * What the preview shows for `draft`: the image chosen, or the site's
- * default while none is.
+ * The page's answer as the panel stands, for the preview: what is typed on
+ * top of the automatic values, the image chosen or the one it falls back
+ * to, and hidden from search where it is switched so.
  */
-function shownOf(
+function previewAnswer(
   item: SiteAddress,
-  host: string,
+  address: string,
   draft: Draft,
-  chosenUrl: string | undefined
-): Shown {
-  const automatic = automaticOf(item);
-  // With no image chosen, the one the page falls back to: its route's or
-  // the site's default.
-  const fallback = item.seo?.automatic.image?.url;
+  chosen: { url: string; width?: number; height?: number } | undefined
+): SeoAnswer {
+  const automatic = item.seo?.automatic;
+  const title = usedText(draft.title, automatic?.title, item.name);
+  const description = usedText(draft.description, automatic?.description, "");
+  const image = shownImage(draft, automatic?.image, chosen);
   return {
-    item,
-    siteName: item.seo?.siteName ?? host,
-    address: item.canonical ?? `https://${host}${item.path}`,
-    title: orAutomatic(draft.title, automatic.title),
-    description: orAutomatic(draft.description, automatic.description),
-    hidden: draft.hidden,
-    imageUrl: draft.image === null ? fallback : chosenUrl,
-    imageFrom:
-      draft.image !== null
-        ? "chosen"
-        : item.seo?.automatic.image?.from === "code"
-          ? "code"
-          : "site",
+    ...(title === undefined ? {} : { title, socialTitle: title }),
+    ...(description === undefined
+      ? {}
+      : { description, socialDescription: description }),
+    ...(image === undefined ? {} : { image: { value: image, from: "page" } }),
+    canonical: { value: address, from: "address" },
+    robots: {
+      value: { index: !draft.hidden, follow: true },
+      from: draft.hidden ? "page" : "site",
+    },
+  };
+}
+
+/** The image the preview shows: the one chosen, else the one the page falls back to. */
+function shownImage(
+  draft: Draft,
+  fallback: { url: string; width?: number; height?: number } | undefined,
+  chosen: { url: string; width?: number; height?: number } | undefined
+): { url: string; width?: number; height?: number } | undefined {
+  if (draft.image !== null) return chosen;
+  return fallback === undefined ? undefined : withSize(fallback);
+}
+
+/** An image with only the sizes it has. */
+function withSize(image: {
+  url: string;
+  width?: number | undefined;
+  height?: number | undefined;
+}): { url: string; width?: number; height?: number } {
+  return {
+    url: image.url,
+    ...(image.width === undefined ? {} : { width: image.width }),
+    ...(image.height === undefined ? {} : { height: image.height }),
   };
 }
 
@@ -586,6 +408,20 @@ function savedMessage(item: SiteAddress): string {
   return item.standing === "not-connected"
     ? `Saved for ${item.path}. It reaches the page once the route calls the SEO function.`
     : `Saved for ${item.path}. The page uses it from the next visit.`;
+}
+
+/** A chosen media item's address and size, where it has been read. */
+function chosenImage(
+  media:
+    | { url?: string | null; width?: number | null; height?: number | null }
+    | undefined
+): { url: string; width?: number; height?: number } | undefined {
+  if (media?.url === undefined || media.url === null) return undefined;
+  return withSize({
+    url: media.url,
+    width: media.width ?? undefined,
+    height: media.height ?? undefined,
+  });
 }
 
 /** The draft of one page's SEO, what it shows, and its save. */
@@ -601,7 +437,7 @@ function useCodePageDraft(
     path: CODE_PAGE_SEO_ROUTE_PATH,
     invalidates: [ADDRESSES_ROUTE_PATH],
   });
-  const shown = shownOf(item, host, draft, chosen?.url ?? undefined);
+  const address = item.canonical ?? `https://${host}${item.path}`;
   const submit = async () => {
     const saved = await save.write({ path: item.path, ...draft });
     if (saved === undefined) return;
@@ -613,8 +449,12 @@ function useCodePageDraft(
     draft,
     change,
     automatic: automaticOf(item),
-    shown,
-    address: shown.address,
+    answer: previewAnswer(item, address, draft, chosenImage(chosen)),
+    site: {
+      ...(item.seo?.siteName === undefined ? {} : { name: item.seo.siteName }),
+      origin: `https://${host}`,
+    },
+    address,
     save,
     submit,
   };
@@ -637,7 +477,7 @@ export function CodePagePanel({
   host: string;
   onClose: () => void;
 }): JSX.Element {
-  const { draft, change, automatic, shown, address, save, submit } =
+  const { draft, change, automatic, answer, site, address, save, submit } =
     useCodePageDraft(item, host, onClose);
   const titleField = useRef<HTMLInputElement>(null);
   const panel = useRef<HTMLElement>(null);
@@ -651,6 +491,9 @@ export function CodePagePanel({
   useEffect(() => {
     titleField.current?.focus();
   }, []);
+  // Nothing is edited while a save is on its way, so what it sends is what
+  // the panel holds when it closes.
+  const writable = !save.pending;
   return (
     <aside
       ref={panel}
@@ -682,26 +525,49 @@ export function CodePagePanel({
       </div>
       <div className="nx-seo-db">
         <ConnectionNote item={item} />
-        <Preview shown={shown} />
-        {/* Nothing is edited while a save is on its way, so what it sends
-            is what the panel holds when it closes. */}
+        <PreviewCard answer={answer} site={site} status="ready" />
         <fieldset className="nx-seo-fields" disabled={save.pending}>
-          <TextField
-            item={item}
-            field="title"
+          <SeoTextField
+            label="Title on Google"
+            help="The blue link people click in Google's results."
             value={draft.title}
-            shownLength={shown.title.length}
             placeholder={automatic.title}
-            onChange={title => change({ title })}
+            count={characters(answer.title?.value ?? "")}
+            limit={TITLE_LIMIT}
+            maxLength={LONGEST_SEO_TEXT}
+            writable={writable}
             inputRef={titleField}
+            onChange={title => change({ title: title ?? "" })}
+            source={id => (
+              <Source
+                id={id}
+                item={item}
+                field="title"
+                typed={draft.title.trim() !== ""}
+                onAutomatic={() => change({ title: "" })}
+              />
+            )}
           />
-          <TextField
-            item={item}
-            field="description"
+          <SeoTextField
+            multiline
+            label="Description on Google"
+            help="The grey text under the link."
             value={draft.description}
-            shownLength={shown.description.length}
             placeholder={automatic.description}
-            onChange={description => change({ description })}
+            count={characters(answer.description?.value ?? "")}
+            limit={DESCRIPTION_LIMIT}
+            maxLength={LONGEST_SEO_TEXT}
+            writable={writable}
+            onChange={description => change({ description: description ?? "" })}
+            source={id => (
+              <Source
+                id={id}
+                item={item}
+                field="description"
+                typed={draft.description.trim() !== ""}
+                onAutomatic={() => change({ description: "" })}
+              />
+            )}
           />
           <Advanced
             item={item}

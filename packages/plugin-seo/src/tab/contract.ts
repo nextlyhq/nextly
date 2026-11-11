@@ -54,6 +54,12 @@ export interface SeoTabContext {
     /** The origin addresses are shown under, such as `https://acme.com`. */
     origin: string;
   };
+  /**
+   * The page's own address as its language serves it, root-relative or on
+   * the language's own domain: on a site that puts the language in every
+   * address, with it. None where the page has no address of its own.
+   */
+  served?: string;
   /** The content type's name for one of its pages, such as "Blog post". */
   typeLabel: string;
   /** What each of the document's fields a value came from is called. */

@@ -167,7 +167,9 @@ an address on another site is used only once marked confirmed.
 The count beside the tab's label is the number of problems the page's answer shows: a
 title longer than Google shows, a description that is too long, a title or a
 description that no level supplies, and each detail the page's structured data type
-lacks.
+lacks. The title and description are checked by the same rule the
+[problem list](#problems) uses, lengths counted in characters, so the tab and the list
+always agree; a page hidden from search has no title or description problem in either.
 
 The tab's values come from the same answer the page's head is built from, worked out by
 the plugin's `POST /resolve` route for the document as it is typed. The route answers
@@ -871,8 +873,8 @@ shared, grouped by kind, each with a button that goes straight to its fix: the p
 its content, the SEO settings, the media library, or a note to copy for a developer where the fix
 is in code. There is no score, and nothing on the list stops anyone publishing.
 
-Each public page of the collections the plugin extends is checked, in every language it is
-published in and at its address there, as its head would be served, for:
+Each public page of the collections and Singles the plugin extends is checked, in every language
+it is published in and at its address there, as its head would be served, for:
 
 - no title or description from any level (a field left empty is never reported where a pattern,
   the page's content or the site's defaults supply a value);
@@ -891,9 +893,18 @@ whole is checked for a missing production address, a collection with no public a
 redirect whose To address redirects again, and a page left out of the sitemap because another page
 holds its address.
 
-The list is for anyone who may read one of the content types the plugin extends, and shows each
-person the problems of the pages they may read. A redirect that takes more than one hop is listed
-only for someone holding `manage-seo`, who may see the redirects.
+The list is for anyone who may read one of the content types the plugin extends, a Single among
+them, and shows each person the problems of the pages they may read. A redirect that takes more
+than one hop is listed only for someone holding `manage-seo`, who may see the redirects.
+
+### On the dashboard
+
+The **SEO issues** card draws the list by kind, one bar for each kind of problem, and the
+**Needs attention** card has one **SEO problems** line counting the whole list, linked to it. Both
+read the list the person looking may read, from the same kept results, so their numbers are the
+list's. The card is offered to someone who may read every collection the plugin extends, the line
+to someone who may read one of them. A dashboard card can't ask for `manage-seo`, so neither counts
+a redirect that takes more than one hop: those are on the list itself.
 
 ### When the list is checked
 
@@ -936,8 +947,9 @@ beside the route, a `noindex` sent in a header, or a firewall that turned a craw
 Where LinkedIn received something different, the explanation links its Post Inspector,
 which refreshes the card LinkedIn keeps for about a week.
 
-Open it from a page's SEO tab, or from the menu, where it checks the site's first listed
-page. Any address on the site can be typed in. What Nextly holds is the head the plugin
+Open it from a page's SEO tab, which names the page at the address its language serves it at
+(with the language in it, on a site that puts the language in every address), or from the menu,
+where it checks the site's first listed page. Any address on the site can be typed in. What Nextly holds is the head the plugin
 answers for the published page at that address, shown only to someone who may read that
 page's content type. Running a check, and the screen itself, need `check-seo`, since a check has
 the server fetch the site's pages.
