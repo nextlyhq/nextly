@@ -255,7 +255,7 @@ test("the preview is an interactive simulation with real confirmation", async ({
   // trusting the toggle state.
   const desktopWidth = (await emailInput.boundingBox())?.width ?? 0;
   expect(desktopWidth).toBeGreaterThan(0);
-  await page.getByRole("tab", { name: "Mobile" }).click();
+  await page.getByRole("button", { name: "Phone" }).click();
   // boundingBox() returns null while the pane is detached mid-transition; a
   // null-to-zero fallback would let that transient state pass the narrower
   // check, so only a real, positive measurement may satisfy the poll.
