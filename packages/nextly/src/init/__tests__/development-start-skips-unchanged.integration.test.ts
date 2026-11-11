@@ -30,6 +30,20 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// The collections each development start's drift check is asked to compare,
+// recorded on the way through: the check itself runs as it would.
+const driftChecked = vi.hoisted(() => [] as string[][]);
+vi.mock("../drift-check", async original => {
+  const actual = await original<typeof import("../drift-check")>();
+  return {
+    ...actual,
+    runDriftCheck: (args: Parameters<typeof actual.runDriftCheck>[0]) => {
+      driftChecked.push(args.collections.map(collection => collection.slug));
+      return actual.runDriftCheck(args);
+    },
+  };
+});
+
 import { createScratchDatabase } from "../../__tests__/helpers/fresh-database";
 import {
   recordStatements,
@@ -271,8 +285,11 @@ describe.each(getConfiguredTestDialects())(
       const calls = await recordStart(adapterFor, entities(5));
 
       const seen = new Set(calls.flatMap(call => [...named(call)]));
-      expect(seen.has("p1x")).toBe(true);
       expect([...seen].filter(slug => slug !== "p1x")).toEqual([]);
+      // The start does not take it for unchanged: the drift check compares its
+      // table again, as it would after an HMR apply the configuration has
+      // since been reverted from.
+      expect(driftChecked.at(-1)).toEqual(["p1x"]);
     }, 300_000);
 
     it("checks a drifted entity again at every start, and no other", async () => {
