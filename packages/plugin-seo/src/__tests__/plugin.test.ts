@@ -102,6 +102,12 @@ describe("seoPlugin", () => {
     expect(plugin.contributes?.routes).toBeUndefined();
   });
 
+  it("rejects a sitemap file size smaller than an empty file", () => {
+    expect(() =>
+      seoPlugin({ collections: ["pages"], sitemap: { maxBytesPerFile: 100 } })
+    ).toThrow(/maxBytesPerFile must be at least/);
+  });
+
   it.each([0, -1, 1.5, Number.NaN])(
     "rejects a sitemap file size of %s",
     value => {

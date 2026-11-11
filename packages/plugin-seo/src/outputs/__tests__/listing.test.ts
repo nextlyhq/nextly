@@ -41,11 +41,23 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   }),
 }));
 
+/** The addresses each batch's holders were read for at once. */
+const readTogether: string[][] = [];
+
 // Who holds a path, read from the fake record below as the record is read.
 vi.mock("../../address-record/participant", async importOriginal => ({
   ...(await importOriginal<
     typeof import("../../address-record/participant")
   >()),
+  withAddressHolders: async (
+    _ctx: PluginContext,
+    _locale: string,
+    paths: readonly string[],
+    work: () => Promise<unknown>
+  ) => {
+    readTogether.push([...paths]);
+    return work();
+  },
   addressHolders: async (ctx: PluginContext, path: string, locale: string) => {
     const { data } = await ctx.services.ownCollections.listEntries("", {
       where: {
@@ -303,5 +315,26 @@ describe("the pages the site lists", () => {
     } finally {
       supplied.onlyInALanguage = false;
     }
+  });
+
+  it("reads who holds each page's address once for the whole batch", async () => {
+    readTogether.length = 0;
+    for (const id of ["1", "2"]) {
+      answers.set(id, {
+        robots: listed,
+        canonical: { value: id === "1" ? "/about" : "/team", from: "address" },
+      });
+    }
+    await listPages(
+      context(
+        [
+          { id: "1", slug: "about" },
+          { id: "2", slug: "team" },
+        ],
+        [holds("1", "/about"), holds("2", "/team")]
+      ),
+      { origin: SITE }
+    );
+    expect(readTogether).toEqual([["/about", "/team"]]);
   });
 });

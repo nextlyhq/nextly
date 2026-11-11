@@ -43,6 +43,9 @@ const encoder = new TextEncoder();
 const byteLength = (text: string) => encoder.encode(text).length;
 const WRAPPER_BYTES = byteLength(URLSET_OPEN) + byteLength(URLSET_CLOSE);
 
+/** The size of a sitemap file listing nothing: the least a file may be held to. */
+export const EMPTY_SITEMAP_BYTES: number = WRAPPER_BYTES;
+
 /** One page's `<url>` line, ending in the newline that follows it. */
 function urlLine(page: SitemapPage): string {
   const lastmod =
@@ -68,6 +71,13 @@ export function sitemapFiles(
   pages: readonly SitemapPage[],
   limits: SitemapLimits = SITEMAP_LIMITS
 ): string[] {
+  // Even a file listing nothing is its wrapper, so a smaller size can never
+  // be kept to.
+  if (limits.bytes < WRAPPER_BYTES) {
+    throw new Error(
+      `sitemap: a file must be allowed at least ${WRAPPER_BYTES} bytes, got: ${limits.bytes}`
+    );
+  }
   const files: string[][] = [[]];
   let size = WRAPPER_BYTES;
   for (const page of pages) {

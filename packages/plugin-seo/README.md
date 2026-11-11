@@ -163,7 +163,7 @@ import type { ListedPagesService } from "@nextlyhq/plugin-seo";
 export default definePlugin({
   name: "acme-page-list",
   version: "1.0.0",
-  nextly: ">=0.0.2",
+  nextly: ">=0.0.2-alpha.74",
   contributes: {
     routes: [
       {

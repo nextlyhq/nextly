@@ -130,4 +130,14 @@ describe("a sitemap index", () => {
     });
     expect(files.flatMap(locs)).toEqual(["https://example.com/a"]);
   });
+
+  it("refuses a size no file could keep to, empty or not", () => {
+    const [empty = ""] = sitemapFiles([]);
+    const tooSmall = { urls: 10, bytes: bytes(empty) - 1 };
+    expect(() => sitemapFiles([], tooSmall)).toThrow(/at least/);
+    expect(() => sitemapFiles([page("/a")], tooSmall)).toThrow(/at least/);
+    expect(sitemapFiles([], { urls: 10, bytes: bytes(empty) })).toEqual([
+      empty,
+    ]);
+  });
 });

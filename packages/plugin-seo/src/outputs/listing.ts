@@ -19,6 +19,7 @@ import {
   NextlyError,
   publicAddressOf,
   type AddressHolder,
+  type PublicAddress,
   type PluginContext,
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
@@ -27,6 +28,7 @@ import {
   addressHolders,
   recordSlug,
   rowOf,
+  withAddressHolders,
 } from "../address-record/participant";
 import type { SeoAnswer } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
@@ -293,26 +295,54 @@ export async function listPages(
   ctx: PluginContext,
   options: ListingOptions
 ): Promise<{ pages: ListedPage[]; problems: ListingProblem[] }> {
-  const pages: ListedPage[] = [];
-  const problems: ListingProblem[] = [];
+  const found = { pages: [] as ListedPage[], problems: [] as ListingProblem[] };
+  const language = await recordLanguage(ctx);
   for await (const batch of candidates(ctx, options)) {
-    const held = await heldPaths(
-      ctx,
-      batch[0]?.holder.collection ?? "",
-      batch.map(candidate => candidate.holder.id)
-    );
-    for (const candidate of batch) {
-      const outcome = await listed(ctx, candidate, options);
+    await listBatch(ctx, batch, { ...options, language }, found);
+  }
+  return found;
+}
+
+/**
+ * One read's pages, listed into `found`: the record read once for the whole
+ * batch, both for what each page holds and for who holds each page's own
+ * address, which the answer of each page asks.
+ */
+async function listBatch(
+  ctx: PluginContext,
+  batch: readonly Candidate[],
+  options: ListingOptions & { language: string },
+  found: { pages: ListedPage[]; problems: ListingProblem[] }
+): Promise<void> {
+  // Asked in the language the record keeps it in, so the address compared
+  // with the record is the one the record was made from.
+  const owns = await Promise.all(
+    batch.map(candidate =>
+      publicAddressOf(candidate.type, candidate.document, options.language)
+    )
+  );
+  const held = await heldPaths(
+    ctx,
+    batch[0]?.holder.collection ?? "",
+    batch.map(candidate => candidate.holder.id)
+  );
+  const paths = owns.flatMap(own =>
+    own.status === "resolved" ? [own.path] : []
+  );
+  await withAddressHolders(ctx, options.language, paths, async () => {
+    for (const [at, candidate] of batch.entries()) {
+      const own = owns[at];
+      const outcome =
+        own === undefined ? null : await listed(ctx, candidate, own, options);
       if (outcome === null) continue;
       const { holder, path } = "lost" in outcome ? outcome.lost : outcome.page;
       if ("page" in outcome && held.get(holder.id)?.has(path) === true) {
-        pages.push(outcome.page);
+        found.pages.push(outcome.page);
       } else {
-        problems.push(await problemOf(ctx, holder, path));
+        found.problems.push(await problemOf(ctx, holder, path));
       }
     }
-  }
-  return { pages, problems };
+  });
 }
 
 /** The page's own image as an absolute address, not the site's default. */
@@ -323,28 +353,20 @@ function ownImage(answer: SeoAnswer, origin: string): string[] {
 }
 
 /**
- * Where `candidate` is listed, from its answer: at its canonical as the
- * answer gives it, where that is its own address. A canonical typed to
+ * Where a page whose own address is `own` is listed, from its answer: at its
+ * canonical as the answer gives it, where that is its own address. A canonical typed to
  * another page is that page's to list. Null where the page is hidden, has no
  * declared address, or names an address past the protocol's length;
  * `lost` where its type declares it an address but its answer has no
  * canonical, so another page holds it.
  */
 async function listedAt(
-  candidate: Candidate,
   answer: SeoAnswer,
   origin: string,
   locale: string | undefined,
-  language: string
+  own: PublicAddress
 ): Promise<{ loc: string; path: string } | { lost: string } | null> {
   if (!answer.robots.value.index) return null;
-  // Asked in the language the record keeps it in, so the address compared
-  // with the record is the one the record was made from.
-  const own = await publicAddressOf(
-    candidate.type,
-    candidate.document,
-    language
-  );
   if (own.status !== "resolved") return null;
   if (answer.canonical === undefined) return { lost: own.path };
   const loc = absolute(answer.canonical.value, origin);
@@ -369,6 +391,7 @@ async function listedAt(
 async function listed(
   ctx: PluginContext,
   candidate: Candidate,
+  own: PublicAddress,
   options: ListingOptions
 ): Promise<
   | { page: ListedPage }
@@ -393,13 +416,7 @@ async function listed(
     },
     options.readRules
   );
-  const at = await listedAt(
-    candidate,
-    answer,
-    options.origin,
-    locale,
-    await recordLanguage(ctx)
-  );
+  const at = await listedAt(answer, options.origin, locale, own);
   if (at === null) return null;
   if ("lost" in at) return { lost: { holder, path: at.lost } };
   const lastModified = toLastModified(document.updatedAt);

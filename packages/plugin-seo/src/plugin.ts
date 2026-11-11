@@ -27,16 +27,24 @@ import {
 import { defaultSeoFields } from "./fields";
 import { listPages, type ListedPagesService } from "./outputs/listing";
 import type { AiCrawlerChoice } from "./outputs/robots";
-import { rootFileRoutes, sitemapResponse } from "./outputs/root-routes";
-import { SITEMAP_LIMITS, type SitemapLimits } from "./outputs/sitemap-files";
+import {
+  rootFileRoutes,
+  sitemapResponse,
+  type RootFilesConfig,
+} from "./outputs/root-routes";
+import {
+  EMPTY_SITEMAP_BYTES,
+  SITEMAP_LIMITS,
+  type SitemapLimits,
+} from "./outputs/sitemap-files";
 import { NO_RULES } from "./resolver/page-levels";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
-import { decideStanding, stagingGuard } from "./staging/guard";
 import {
   resolveBaseOrigin,
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
+import { decideStanding, stagingGuard } from "./staging/guard";
 import { withStructuredData } from "./structured-data/provider";
 import {
   rulesFromOptions,
@@ -159,35 +167,41 @@ export interface SeoPluginOptions {
   structuredData?: StructuredDataOptions;
 }
 
-/** A page-size option, a positive whole number no larger than the protocol allows. */
+/**
+ * A file-size option: a positive whole number, at least `least`, no larger
+ * than the protocol allows.
+ */
 function fileLimit(
   name: string,
   value: number | undefined,
-  protocol: number
+  limits: { protocol: number; least: number }
 ): number {
-  if (value === undefined) return protocol;
+  if (value === undefined) return limits.protocol;
   if (!Number.isInteger(value) || value < 1) {
     throw new Error(
       `seoPlugin: sitemap.${name} must be a positive whole number, got: ${value}`
     );
   }
-  return Math.min(value, protocol);
+  if (value < limits.least) {
+    throw new Error(
+      `seoPlugin: sitemap.${name} must be at least ${limits.least}, the size of an empty file, got: ${value}`
+    );
+  }
+  return Math.min(value, limits.protocol);
 }
 
 /** The limits one sitemap file is held to. */
 function sitemapLimits(sitemap: SeoPluginOptions["sitemap"]): SitemapLimits {
   const options = typeof sitemap === "object" ? sitemap : {};
   return {
-    urls: fileLimit(
-      "maxUrlsPerFile",
-      options.maxUrlsPerFile,
-      SITEMAP_LIMITS.urls
-    ),
-    bytes: fileLimit(
-      "maxBytesPerFile",
-      options.maxBytesPerFile,
-      SITEMAP_LIMITS.bytes
-    ),
+    urls: fileLimit("maxUrlsPerFile", options.maxUrlsPerFile, {
+      protocol: SITEMAP_LIMITS.urls,
+      least: 1,
+    }),
+    bytes: fileLimit("maxBytesPerFile", options.maxBytesPerFile, {
+      protocol: SITEMAP_LIMITS.bytes,
+      least: EMPTY_SITEMAP_BYTES,
+    }),
   };
 }
 
@@ -226,6 +240,44 @@ function rulesReader(hidden: readonly string[] | undefined): ReadRules {
   return () => Promise.resolve(rules);
 }
 
+/** What the sitemap is served with, or nothing where it is turned off. */
+function sitemapConfig(
+  options: SeoPluginOptions,
+  collections: readonly string[] | undefined
+): RootFilesConfig["sitemap"] {
+  if (options.sitemap === false) return undefined;
+  return {
+    limits: sitemapLimits(options.sitemap),
+    ...(collections === undefined ? {} : { collections }),
+  };
+}
+
+/**
+ * What the site's root files are served with. A configured baseUrl must be an
+ * absolute http(s) origin, or every listed address is invalid: checked at
+ * construction so a typo fails at boot, and only where the sitemap, which
+ * robots.txt names by it, is served.
+ */
+function rootFilesConfig(
+  options: SeoPluginOptions,
+  readRules: ReadRules,
+  collections: readonly string[] | undefined
+): RootFilesConfig {
+  const sitemap = sitemapConfig(options, collections);
+  const origin =
+    sitemap !== undefined && options.baseUrl !== undefined
+      ? resolveBaseOrigin(options.baseUrl)
+      : undefined;
+  return {
+    ...(origin === undefined ? {} : { origin }),
+    readRules,
+    ...(sitemap === undefined ? {} : { sitemap }),
+    ...(options.robots === false
+      ? {}
+      : { robots: { aiCrawlers: options.aiCrawlers ?? "all" } }),
+  };
+}
+
 /**
  * The routes serving the site's sitemap and robots.txt at its root, and the
  * sitemap again at the plugin's own address, where sites served it from
@@ -236,29 +288,9 @@ function siteFileRoutes(
   readRules: ReadRules,
   collections: readonly string[] | undefined
 ): PluginRoute[] {
-  const sitemapEnabled = options.sitemap !== false;
-  // A configured baseUrl must be an absolute http(s) ORIGIN, or every listed
-  // address is invalid; checked at construction so a typo fails at boot, and
-  // only where the sitemap, which robots.txt names by it, is served.
-  const origin =
-    sitemapEnabled && options.baseUrl !== undefined
-      ? resolveBaseOrigin(options.baseUrl)
-      : undefined;
-  const sitemap = sitemapEnabled
-    ? {
-        limits: sitemapLimits(options.sitemap),
-        ...(collections === undefined ? {} : { collections }),
-      }
-    : undefined;
-  const config = {
-    ...(origin === undefined ? {} : { origin }),
-    readRules,
-    ...(sitemap === undefined ? {} : { sitemap }),
-    ...(options.robots === false
-      ? {}
-      : { robots: { aiCrawlers: options.aiCrawlers ?? "all" } }),
-  };
+  const config = rootFilesConfig(options, readRules, collections);
   const routes = rootFileRoutes(config);
+  const { sitemap } = config;
   if (sitemap !== undefined) {
     routes.push({
       method: "GET",
