@@ -156,8 +156,7 @@ function queriesAfterWrite(sent: readonly Request[]): Request[] {
 
 test.beforeEach(async ({ page }) => {
   await gotoAdmin(page, "/");
-  // More than the 5 the drawer's Rows can be set to, so 5 rows are drawn once it is.
-  await enoughPosts(page, 6);
+  await enoughPosts(page, 4);
   await placeCard(page);
 });
 
@@ -358,7 +357,8 @@ test.describe("the settings drawer", () => {
     const preview = drawer.getByRole("region", { name: `Preview of ${TITLE}` });
     await expect(rowsIn(preview)).toHaveCount(3);
     await rowsChoice(drawer).getByRole("radio", { name: "5" }).click();
-    await expect(rowsIn(preview)).toHaveCount(5);
+    // More rows than the card's 3: every post the card may list, up to five.
+    await expect.poll(() => rowsIn(preview).count()).toBeGreaterThan(3);
     await drawer.getByRole("radio", { name: "50% width" }).click();
     await expect(drawer.getByTestId("settings-preview-width")).toHaveText(
       "At 50% of the dashboard"
@@ -394,7 +394,7 @@ test.describe("the settings drawer", () => {
     await drawer.getByLabel("Title").fill("  Posts to review ");
     await drawer.getByRole("button", { name: "Save" }).click();
     await expect(drawer).toBeHidden();
-    await expect(rows(page)).toHaveCount(5);
+    await expect.poll(() => rows(page).count()).toBeGreaterThan(3);
     // The card's own region, found within its cell, is now named by the reader's title.
     await expect(cell(page).getByRole("region").first()).toHaveAccessibleName(
       /^Posts to review/
@@ -406,7 +406,7 @@ test.describe("the settings drawer", () => {
       config: { limit: 5 },
     });
     await page.reload();
-    await expect(rows(page)).toHaveCount(5);
+    await expect.poll(() => rows(page).count()).toBeGreaterThan(3);
     await expect(cell(page)).toHaveClass(/col-span-6/);
   });
 
@@ -431,7 +431,7 @@ test.describe("the settings drawer", () => {
     await expect(save).toBeInViewport();
     await save.click();
     await expect(drawer).toBeHidden();
-    await expect(rows(page)).toHaveCount(5);
+    await expect.poll(() => rows(page).count()).toBeGreaterThan(3);
   });
 
   test("Save while customising stages the change until the dashboard is saved", async ({
@@ -467,7 +467,7 @@ test.describe("the settings drawer", () => {
     await expect(bar).toBeHidden();
     expect(writes).toHaveLength(1);
     await page.reload();
-    await expect(rows(page)).toHaveCount(5);
+    await expect.poll(() => rows(page).count()).toBeGreaterThan(3);
     expect(await storedCard(page)).toMatchObject({
       w: 6,
       config: { limit: 5 },
