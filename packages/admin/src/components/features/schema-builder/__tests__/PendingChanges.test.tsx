@@ -432,13 +432,14 @@ describe("pending changes in the outline", () => {
 
   it("a deleted row offers no place to add, inside it or before it", () => {
     render(<LayoutHarness />, { wrapper: Providers });
-    const place = (name: string) => screen.queryByRole("button", { name });
+    // By the id each place carries: "add-inside-<label>", "add-before-<label>".
+    const place = (id: string) => screen.queryByTestId(id);
     // Offered while the group is there.
-    expect(place("Add a field inside Address")).not.toBeNull();
-    expect(place("Add a field before City")).not.toBeNull();
+    expect(place("add-inside-Address")).not.toBeNull();
+    expect(place("add-before-City")).not.toBeNull();
     act(() => builder.handleFieldDelete(field("address").id));
-    expect(place("Add a field inside Address")).toBeNull();
-    expect(place("Add a field before Address")).toBeNull();
-    expect(place("Add a field before City")).toBeNull();
+    expect(place("add-inside-Address")).toBeNull();
+    expect(place("add-before-Address")).toBeNull();
+    expect(place("add-before-City")).toBeNull();
   });
 });
