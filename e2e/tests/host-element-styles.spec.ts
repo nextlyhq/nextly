@@ -106,7 +106,7 @@ async function dashboardStyles(page: Page): Promise<Styles> {
   await expect(cardTitles(page).first()).toBeVisible({ timeout: 30_000 });
   // The admin's own main, by its id: a site page left mounted (hidden) beside
   // the admin has a `main` of its own, whose paragraph is the site's.
-  const main = page.locator("#nextly-main-content");
+  const main = page.locator("#nextly-main-content:visible");
   const styles: Styles = {
     heading: await stylesOf(main.getByRole("heading", { level: 1 })),
     paragraph: await stylesOf(main.locator("p").first()),

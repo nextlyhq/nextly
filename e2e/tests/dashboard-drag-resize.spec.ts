@@ -14,7 +14,7 @@
  */
 import { expect, type Locator, type Page, type Route } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
 import { resetToDefault } from "./support/dashboard-layout";
@@ -274,7 +274,9 @@ test("a dragged card moves the others aside across a row and down a row, and lan
   await expect(page.getByTestId("widget-grid-live")).toHaveText(
     new RegExp(`moved from 1 to 4 of ${after.length}\\.`)
   );
-  await expect(page.getByTestId("widget-drag-ghost")).toHaveCount(0);
+  await expect(
+    includingHidden(page).getByTestId("widget-drag-ghost")
+  ).toHaveCount(0);
   await expect(page.getByTestId("dashboard-edit-save")).toBeEnabled();
 });
 
@@ -345,7 +347,9 @@ test("a 50% card's edge snaps it to 33%, showing the width while held", async ({
   await expect(page.getByTestId("dashboard-edit-save")).toBeDisabled();
 
   await page.mouse.up();
-  await expect(page.getByTestId("widget-resize-width")).toHaveCount(0);
+  await expect(
+    includingHidden(page).getByTestId("widget-resize-width")
+  ).toHaveCount(0);
   await expect(card.getByTestId("card-size-label")).toContainText("33%");
   await expect(page.getByTestId("widget-grid-live")).not.toBeEmpty();
   await expect(page.getByTestId("dashboard-edit-save")).toBeEnabled();
@@ -363,7 +367,9 @@ test("Escape while a card's edge is held puts it back at the width it had", asyn
   await expect(page.getByTestId("widget-resize-width")).toHaveText("33%");
   await page.keyboard.press("Escape");
 
-  await expect(page.getByTestId("widget-resize-width")).toHaveCount(0);
+  await expect(
+    includingHidden(page).getByTestId("widget-resize-width")
+  ).toHaveCount(0);
   await expect.poll(async () => (await laidOut(card)).width).toBe(before.width);
   // Released after the Escape: nothing is staged.
   await page.mouse.up();
@@ -445,7 +451,9 @@ test("a card bounded 5 to 5 offers no edge, and a drag at its edge changes nothi
   await page.mouse.move(box.x + box.width, y);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width + 300, y, { steps: 10 });
-  await expect(page.getByTestId("widget-resize-width")).toHaveCount(0);
+  await expect(
+    includingHidden(page).getByTestId("widget-resize-width")
+  ).toHaveCount(0);
   await page.mouse.up();
 
   expect((await laidOut(card)).width).toBe(before.width);

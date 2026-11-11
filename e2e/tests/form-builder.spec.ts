@@ -7,7 +7,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 /** Adds a field through the picker: its type, found by search, and a label. */
@@ -173,7 +173,9 @@ test("seeds a default notification, edits it in place, and guards referenced fie
   // send with the starter message rather than waiting for one.
   await openPage(page, "Notifications");
   await expect(page.getByText("Admin notification")).toBeVisible();
-  await expect(page.getByText("No template — will not send")).toHaveCount(0);
+  await expect(
+    includingHidden(page).getByText("No template — will not send")
+  ).toHaveCount(0);
 
   // Edit in place: the row expands into an editor on the page, not a panel
   // over it. Scoped to that region rather than to the page so a control with
