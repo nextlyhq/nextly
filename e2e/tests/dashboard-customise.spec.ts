@@ -25,6 +25,12 @@ test.describe.configure({ lock: [LOCK.dashboard] });
 
 const CELLS = '[data-testid^="widget-cell-"]';
 
+/**
+ * A card menu's last item, which takes the card off the dashboard: "Remove", or "Hide setup" on
+ * the setup card, which shows to the suite's super-admin until setup is done.
+ */
+const REMOVE = /^(Remove|Hide setup)$/;
+
 /** The dashboard's address, with or without the trailing slash. */
 const DASHBOARD_PATH = /\/admin\/?$/;
 
@@ -376,7 +382,7 @@ test("the add panel adds three cards in one visit, each said and ringed, and clo
       .getByRole("button", { name: /^Card actions for / })
       .first()
       .click();
-    await page.getByRole("menuitem", { name: "Remove" }).click();
+    await page.getByRole("menuitem", { name: REMOVE }).click();
   }
   const before = await page.locator(CELLS).count();
 
@@ -424,7 +430,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
         .getByRole("button", { name: /^Card actions for / })
         .first()
         .click();
-      await page.getByRole("menuitem", { name: "Remove" }).click();
+      await page.getByRole("menuitem", { name: REMOVE }).click();
       const panel = await openAddPanel(page);
       if (viewport.width < 640) {
         // Full width on a phone.
@@ -661,7 +667,7 @@ test.describe("on a phone, with touch", () => {
 
     // Remove, then add one back from the panel, which takes the whole width.
     await menu(0).tap();
-    await page.getByRole("menuitem", { name: "Remove" }).tap();
+    await page.getByRole("menuitem", { name: REMOVE }).tap();
     await bar(page).getByRole("button", { name: "Add widget" }).tap();
     const panel = page.getByRole("dialog", { name: "Add widget" });
     expect((await panel.boundingBox())?.width).toBe(390);
