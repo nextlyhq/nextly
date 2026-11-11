@@ -156,14 +156,27 @@ export function resolveDeclaredIndexName<
 }
 
 /**
+ * A table's indexes by the key the diff pairs them on (`indexKey`), each read against the table's
+ * own column types. The one place that pairing is made: the diff plans from it, and the push asks
+ * it which live indexes stand in for declared ones, so the two can never disagree about a match.
+ */
+export function keyedIndexes(
+  indexes: readonly IndexSpec[],
+  columns: readonly ColumnSpec[]
+): Map<string, IndexSpec> {
+  const context = textColumnsOf(columns);
+  return new Map(indexes.map(index => [indexKey(index, context), index]));
+}
+
+/**
  * The live indexes the diff counts as declared ones under another name: on a table in both
- * snapshots, a live index whose key (`indexKey`: columns, uniqueness, predicate, expression)
- * equals a desired index's, while its name is not that index's.
+ * snapshots, a live index paired with a desired one (`keyedIndexes`) while its name is not that
+ * index's.
  *
  * The diff plans nothing for such an index, since it already reads as the declared one, so it is
  * the only thing holding that index's guarantee: a unique one is the field's uniqueness. Anything
  * that removes it must be a planned `drop_index`, never a side effect, or the declared index is
- * left missing with nothing to put it back. An index whose key no desired index has is not
+ * left missing with nothing to put it back. An index no desired index is paired with is not
  * returned: whether such a one goes is the diff's to decide.
  */
 export function liveIndexesStandingInForDeclared(
@@ -174,19 +187,16 @@ export function liveIndexesStandingInForDeclared(
   const found: { tableName: string; indexName: string }[] = [];
   for (const table of desired) {
     const liveTable = liveByName.get(table.name);
-    if (liveTable === undefined) continue;
-    // Each side read against its own column types, as the diff reads them.
-    const declared = new Map(
-      (table.indexes ?? []).map(index => [
-        indexKey(index, textColumnsOf(table.columns)),
-        index.name,
-      ])
-    );
-    for (const index of liveTable.indexes ?? []) {
-      const declaredName = declared.get(
-        indexKey(index, textColumnsOf(liveTable.columns))
-      );
-      if (declaredName !== undefined && declaredName !== index.name) {
+    if (liveTable?.indexes === undefined || table.indexes === undefined) {
+      continue;
+    }
+    const declared = keyedIndexes(table.indexes, table.columns);
+    for (const [key, index] of keyedIndexes(
+      liveTable.indexes,
+      liveTable.columns
+    )) {
+      const declaredIndex = declared.get(key);
+      if (declaredIndex !== undefined && declaredIndex.name !== index.name) {
         found.push({ tableName: table.name, indexName: index.name });
       }
     }
