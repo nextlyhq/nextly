@@ -17,6 +17,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   useMediaItem: vi.fn(() => ({ data: undefined })),
   MediaPickerDialog: () => null,
   toastMutationResult: vi.fn(),
+  usePluginClientConfig: vi.fn(() => undefined),
 }));
 
 import {

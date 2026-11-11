@@ -8,17 +8,27 @@ import {
   apiErrorMessage,
   Button,
   toastMutationResult,
+  usePluginClientConfig,
   usePluginRoute,
   useSingleDocument,
   useUpdateSingleDocument,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+} from "react";
 
 import {
+  AI_CRAWLER_CHOICES,
   CONTENT_TYPES_ROUTE_PATH,
   SEO_PLUGIN_NAME,
   SETTINGS_DOCUMENT_ROUTE_PATH,
   SETUP_STEPS,
+  type AiCrawlerChoice,
   type SettingsDocumentBody,
   type SeoContentType,
 } from "../settings/contract";
@@ -26,6 +36,7 @@ import {
 import {
   changesOf,
   draftOf,
+  type SettingsDefaults,
   type SettingsDraft,
   type StoredSettings,
 } from "./settings-draft";
@@ -131,6 +142,22 @@ export function SeoSettingsPage(): JSX.Element {
   );
 }
 
+/**
+ * What the plugin's own options answer while the settings hold nothing, as
+ * the plugin publishes them to the admin.
+ */
+function useSettingsDefaults(): SettingsDefaults {
+  const config = usePluginClientConfig(SEO_PLUGIN_NAME);
+  const aiCrawlers = config?.aiCrawlers;
+  return useMemo(
+    () =>
+      (AI_CRAWLER_CHOICES as readonly unknown[]).includes(aiCrawlers)
+        ? { aiCrawlers: aiCrawlers as AiCrawlerChoice }
+        : {},
+    [aiCrawlers]
+  );
+}
+
 /** Whether a save answered with the stored document, version and all. */
 function isStoredDocument(value: unknown): value is StoredSettings {
   return (
@@ -144,19 +171,22 @@ function isStoredDocument(value: unknown): value is StoredSettings {
 function useSettingsSave(
   slug: string,
   initial: StoredSettings,
-  reread: () => Promise<StoredSettings | undefined>
+  reread: () => Promise<StoredSettings | undefined>,
+  defaults: SettingsDefaults
 ) {
   const update = useUpdateSingleDocument(slug);
   // The settings as last read or saved, which the draft is compared with.
   const [stored, setStored] = useState(initial);
-  const [draft, setDraft] = useState<SettingsDraft>(() => draftOf(initial));
+  const [draft, setDraft] = useState<SettingsDraft>(() =>
+    draftOf(initial, defaults)
+  );
   const [failure, setFailure] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   /** Saves `next`, and reports whether it was stored. */
   const save = useCallback(
     async (next: SettingsDraft): Promise<boolean> => {
-      const sent = changesOf(stored, next);
+      const sent = changesOf(stored, next, defaults);
       setDraft(next);
       if (sent === null) return true;
       setSaving(true);
@@ -171,7 +201,9 @@ function useSettingsSave(
         setStored(fresh);
         // Edits made while the save was on its way are kept: only a draft
         // nobody touched since is replaced by what was stored.
-        setDraft(current => (current === next ? draftOf(fresh) : current));
+        setDraft(current =>
+          current === next ? draftOf(fresh, defaults) : current
+        );
         return true;
       } catch (error) {
         setFailure(
@@ -182,7 +214,7 @@ function useSettingsSave(
         setSaving(false);
       }
     },
-    [stored, update, reread]
+    [stored, update, reread, defaults]
   );
 
   return { stored, draft, setDraft, save, saving, failure };
@@ -372,18 +404,20 @@ function SettingsScreen({
   typesFailed: boolean;
   reread: () => Promise<StoredSettings | undefined>;
 }): JSX.Element {
+  const defaults = useSettingsDefaults();
   const { stored, draft, setDraft, save, saving, failure } = useSettingsSave(
     slug,
     initial,
-    reread
+    reread,
+    defaults
   );
   const [tab, setTab] = useState<TabId>(tabInAddress);
   const [editing, setEditing] = useState<string | null>(null);
   const finished = draft.setupStep >= SETUP_STEPS;
   const [setupOpen, setSetupOpen] = useState(
-    () => !finished && !draftOf(initial).setupDismissed
+    () => !finished && !draftOf(initial, defaults).setupDismissed
   );
-  const changes = changesOf(stored, draft);
+  const changes = changesOf(stored, draft, defaults);
   const problem = draftProblem(draft, types);
   useLeaveWarning(changes !== null);
 

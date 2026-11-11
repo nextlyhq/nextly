@@ -16,7 +16,12 @@ import { shareImageProblems } from "../problems";
 vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk")>()),
   publicAddressOf: async () => ({ status: "resolved", path: "/blog/harbour" }),
+  // The SEO settings as stored: a test that saves some sets them here.
+  getCachedNextly: async () => ({ findSingle: async () => savedSettings }),
 }));
+
+/** The SEO settings a test has saved. */
+let savedSettings: Record<string, unknown> = {};
 
 /**
  * A plugin context whose media library holds `media`, on a site whose
@@ -106,6 +111,23 @@ describe("shareImageSizeProblem", () => {
 });
 
 describe("shareImageProblems", () => {
+  it("reads the site's default share image from the SEO settings when given no rules", async () => {
+    savedSettings = { image: "small" };
+    try {
+      const problems = await shareImageProblems(
+        context(LIBRARY),
+        post({ title: "Harbour" })
+      );
+      expect(problems).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ detail: "size", from: "site" }),
+        ])
+      );
+    } finally {
+      savedSettings = {};
+    }
+  });
+
   it("names a page's own undersized share image, fixed by making one", async () => {
     const problems = await shareImageProblems(
       context(LIBRARY),

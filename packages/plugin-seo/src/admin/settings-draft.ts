@@ -90,8 +90,17 @@ function patternsOf(value: unknown): SettingsDraft["patterns"] {
   return patterns;
 }
 
-/** The form's values for the stored settings. */
-export function draftOf(stored: StoredSettings): SettingsDraft {
+/** What the plugin's own options answer while the settings hold nothing. */
+export interface SettingsDefaults {
+  /** The plugin's `aiCrawlers` option: what robots.txt asks until the site chooses. */
+  aiCrawlers?: AiCrawlerChoice;
+}
+
+/** The form's values for the stored settings, `defaults` where nothing is stored. */
+export function draftOf(
+  stored: StoredSettings,
+  defaults: SettingsDefaults = {}
+): SettingsDraft {
   return {
     siteName: text(stored.siteName),
     productionAddresses: Array.isArray(stored.productionAddresses)
@@ -103,7 +112,13 @@ export function draftOf(stored: StoredSettings): SettingsDraft {
     description: text(stored.description),
     image: mediaId(stored.image),
     siteKind: oneOf(SITE_KINDS, stored.siteKind) ?? null,
-    aiCrawlers: oneOf(AI_CRAWLER_CHOICES, stored.aiCrawlers) ?? "all",
+    // The choice in force: the site's own, else the plugin's, so the screen
+    // shows what robots.txt asks and picking "all" over a stricter option is
+    // a change that saves.
+    aiCrawlers:
+      oneOf(AI_CRAWLER_CHOICES, stored.aiCrawlers) ??
+      defaults.aiCrawlers ??
+      "all",
     brandName: text(stored.brandName),
     brandOtherNames: text(stored.brandOtherNames),
     logo: mediaId(stored.logo),
@@ -145,9 +160,10 @@ const same = (a: unknown, b: unknown): boolean =>
  */
 export function changesOf(
   stored: StoredSettings,
-  draft: SettingsDraft
+  draft: SettingsDraft,
+  defaults: SettingsDefaults = {}
 ): Record<string, unknown> | null {
-  const before = storedForm(draftOf(stored));
+  const before = storedForm(draftOf(stored, defaults));
   const after = storedForm(draft);
   const changes: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(after)) {

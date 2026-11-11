@@ -428,8 +428,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     proxy: [stagingGuard(readRules)],
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
-    // The SEO settings screen, for whoever may read the settings.
+    // The SEO settings screen, for whoever may read the settings, told what
+    // robots.txt asks AI tools until the site chooses: not a secret, it is
+    // what the site's own robots.txt says.
     admin: {
+      clientConfig: { aiCrawlers: options.aiCrawlers ?? "all" },
       menu: [
         {
           label: "Settings",

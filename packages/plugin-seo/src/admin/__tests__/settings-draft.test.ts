@@ -91,6 +91,27 @@ describe("the form's values, from the stored settings", () => {
   });
 });
 
+describe("the AI tools choice before the site has made one", () => {
+  const empty = { id: "s1", updatedAt: "" };
+
+  it("shows the plugin's own choice, and saves nothing while it stands", () => {
+    const draft = draftOf(empty, { aiCrawlers: "block" });
+    expect(draft.aiCrawlers).toBe("block");
+    expect(changesOf(empty, draft, { aiCrawlers: "block" })).toBeNull();
+  });
+
+  it("saves allowing all once a person picks it over the plugin's choice", () => {
+    const draft = {
+      ...draftOf(empty, { aiCrawlers: "block" }),
+      aiCrawlers: "all" as const,
+    };
+    expect(changesOf(empty, draft, { aiCrawlers: "block" })).toEqual({
+      aiCrawlers: "all",
+      _overwrite: true,
+    });
+  });
+});
+
 describe("what a save sends", () => {
   it("sends only what changed, with the version it was read at", () => {
     const draft: SettingsDraft = { ...draftOf(stored), siteName: "Rext" };
