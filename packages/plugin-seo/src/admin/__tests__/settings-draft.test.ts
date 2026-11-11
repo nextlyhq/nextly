@@ -357,6 +357,25 @@ describe("a content type's structured data", () => {
     ]);
   });
 
+  it("names a detail mapped to a field the type no longer has, keeping a path into one it has", () => {
+    const stale = withDetailField(
+      draftOf(stored),
+      "posts",
+      "article",
+      "author",
+      "removed"
+    );
+    expect(missingDetails(stale, withFields, "article")).toEqual(["author"]);
+    const path = withDetailField(
+      draftOf(stored),
+      "posts",
+      "article",
+      "author",
+      "byline.name"
+    );
+    expect(missingDetails(path, withFields, "article")).toEqual([]);
+  });
+
   it("shows the plugin's own choice until the site chooses, and saves only what differs from it", () => {
     const defaults = {
       structuredData: {

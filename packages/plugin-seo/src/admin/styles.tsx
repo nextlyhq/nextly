@@ -64,6 +64,9 @@ const CSS = `
 .nx-seo-tbl td{padding:10px 12px;border-bottom:1px solid var(--nx-border-subtle);vertical-align:top;font-size:13px}
 .nx-seo-tbl tr:last-child td{border-bottom:0}
 .nx-seo-tname b{font-weight:600;display:block}
+.nx-seo-off td{opacity:.6}
+.nx-seo-off .nx-seo-tname small{white-space:normal}
+.nx-seo-eg{color:var(--nx-muted-foreground);font-size:12px}
 .nx-seo-tname small{display:block;color:var(--nx-muted-foreground);font-size:12px;white-space:nowrap}
 .nx-seo-code{font-family:var(--seo-mono);font-size:12px;background:var(--nx-muted);padding:2px 6px;border-radius:4px;overflow-wrap:anywhere}
 .nx-seo-notpublic{color:var(--nx-warning-text);font-weight:600;display:inline-flex;gap:6px;align-items:center}

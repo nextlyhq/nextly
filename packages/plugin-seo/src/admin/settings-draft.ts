@@ -32,6 +32,7 @@ import {
 } from "../structured-data/catalog";
 import type {
   DetailMapping,
+  DetailSource,
   StructuredDataTypeRule,
 } from "../structured-data/rules";
 
@@ -318,11 +319,29 @@ export function missingDetails(
 ): StructuredDataDetail[] {
   const mapping = mappingOf(draft, type.key, structuredType);
   const named = new Set(type.mappableFields.map(field => tokenKey(field.name)));
-  return STRUCTURED_DATA_TYPES[structuredType].needs.filter(
-    detail =>
-      mapping[detail] === undefined &&
+  return STRUCTURED_DATA_TYPES[structuredType].needs.filter(detail => {
+    const source = mapping[detail];
+    if (source !== undefined) return !holdsField(type, source);
+    return (
       FROM_THE_PAGE[detail] === undefined &&
       !DETAIL_GUESSES[detail].some(guess => named.has(tokenKey(guess)))
+    );
+  });
+}
+
+/**
+ * Whether a mapped source still reads something: a fixed value, a field the
+ * type has, or a path into one (`author.name`). A field since removed reads
+ * nothing, so its detail is missing until another is chosen.
+ */
+export function holdsField(
+  type: SeoContentType,
+  source: DetailSource
+): boolean {
+  if (typeof source !== "string") return true;
+  const root = source.split(".")[0];
+  return type.mappableFields.some(
+    field => field.name === source || field.name === root
   );
 }
 

@@ -94,3 +94,25 @@ export interface SeoContentType {
   /** Whether its pages have a public address yet. */
   public: boolean;
 }
+
+/**
+ * One of the site's own content types the plugin does not add SEO to, which
+ * the screen lists greyed, since the switch is set in the site's code.
+ */
+export interface SwitchedOffType {
+  key: string;
+  label: string;
+  /** How many entries of the type the reader may read. */
+  count?: number;
+  seo: false;
+}
+
+/** What the content types route lists: each type with SEO, then those without. */
+export type ListedContentType = SeoContentType | SwitchedOffType;
+
+/** Whether a listed type is one the plugin does not add SEO to. */
+export function isSwitchedOff(
+  type: ListedContentType
+): type is SwitchedOffType {
+  return "seo" in type && type.seo === false;
+}

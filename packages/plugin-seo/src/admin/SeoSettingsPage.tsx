@@ -30,7 +30,10 @@ import {
   SETUP_STEPS,
   type AiCrawlerChoice,
   type SettingsDocumentBody,
+  isSwitchedOff,
+  type ListedContentType,
   type SeoContentType,
+  type SwitchedOffType,
 } from "../settings/contract";
 
 import { ContentTypesTab } from "./content-types";
@@ -74,7 +77,21 @@ function showTabInAddress(tab: TabId): void {
 
 /** The list the content types route answers with. */
 interface ContentTypesBody {
-  items: SeoContentType[];
+  items: ListedContentType[];
+}
+
+/** The types with SEO, which every tab works on, and those without. */
+function splitTypes(items: readonly ListedContentType[] = []): {
+  types: SeoContentType[];
+  switchedOff: SwitchedOffType[];
+} {
+  const types: SeoContentType[] = [];
+  const switchedOff: SwitchedOffType[] = [];
+  for (const item of items) {
+    if (isSwitchedOff(item)) switchedOff.push(item);
+    else types.push(item);
+  }
+  return { types, switchedOff };
 }
 
 /** The SEO settings screen, as the admin mounts it. */
@@ -111,7 +128,7 @@ export function SeoSettingsPage(): JSX.Element {
         <SettingsScreen
           slug={slug}
           stored={settings.data}
-          types={types.data?.items ?? []}
+          {...splitTypes(types.data?.items)}
           typesFailed={types.error !== null}
           reread={async () => {
             // Only a read that succeeded is an answer: a failed one still
@@ -319,6 +336,7 @@ function SettingsPanel({
   tab,
   tabProps,
   types,
+  switchedOff,
   typesFailed,
   editing,
   setEditing,
@@ -326,6 +344,7 @@ function SettingsPanel({
   tab: TabId;
   tabProps: TabProps;
   types: readonly SeoContentType[];
+  switchedOff: readonly SwitchedOffType[];
   typesFailed: boolean;
   editing: string | null;
   setEditing: (key: string | null) => void;
@@ -346,6 +365,7 @@ function SettingsPanel({
       <ContentTypesTab
         {...tabProps}
         types={types}
+        switchedOff={switchedOff}
         editing={editing}
         setEditing={setEditing}
       />
@@ -407,12 +427,14 @@ function SettingsScreen({
   slug,
   stored: initial,
   types,
+  switchedOff,
   typesFailed,
   reread,
 }: {
   slug: string;
   stored: StoredSettings;
   types: readonly SeoContentType[];
+  switchedOff: readonly SwitchedOffType[];
   typesFailed: boolean;
   reread: () => Promise<StoredSettings | undefined>;
 }): JSX.Element {
@@ -474,6 +496,7 @@ function SettingsScreen({
         tab={tab}
         tabProps={tabProps}
         types={types}
+        switchedOff={switchedOff}
         typesFailed={typesFailed}
         editing={editing}
         setEditing={setEditing}

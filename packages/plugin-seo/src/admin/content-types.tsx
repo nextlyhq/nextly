@@ -9,7 +9,11 @@
 import { Button, Switch } from "@nextlyhq/plugin-sdk/admin";
 import { useId, useState, type JSX } from "react";
 
-import type { SeoContentType } from "../settings/contract";
+import type {
+  MappableField,
+  SeoContentType,
+  SwitchedOffType,
+} from "../settings/contract";
 import { tokenKey } from "../settings/patterns";
 import {
   DETAIL_GUESSES,
@@ -24,6 +28,7 @@ import type { DetailSource } from "../structured-data/rules";
 
 import {
   FROM_THE_PAGE,
+  holdsField,
   isHidden,
   mappingOf,
   missingDetails,
@@ -60,8 +65,12 @@ function TypeAddress({ type }: { type: SeoContentType }): JSX.Element {
       </>
     );
   }
+  // One entry's address, shown as an example of where the type's pages live.
   return type.example?.address ? (
-    <span className="nx-seo-code">{type.example.address}</span>
+    <>
+      <span className="nx-seo-eg">e.g.</span>{" "}
+      <span className="nx-seo-code">{type.example.address}</span>
+    </>
   ) : (
     <span className="nx-seo-help">Set in code</span>
   );
@@ -140,31 +149,112 @@ function StructuredDataCell({
 function guessedField(
   type: SeoContentType,
   detail: StructuredDataDetail
-): string | undefined {
+): MappableField | undefined {
   const guesses = new Set(DETAIL_GUESSES[detail].map(tokenKey));
-  return type.mappableFields.find(field => guesses.has(tokenKey(field.name)))
-    ?.label;
+  return type.mappableFields.find(field => guesses.has(tokenKey(field.name)));
+}
+
+/** Each field's label in a choice, with its name where two share a label. */
+function optionLabels(fields: readonly MappableField[]): Map<string, string> {
+  const uses = new Map<string, number>();
+  for (const field of fields) {
+    uses.set(field.label, (uses.get(field.label) ?? 0) + 1);
+  }
+  return new Map(
+    fields.map(field => [
+      field.name,
+      (uses.get(field.label) ?? 0) > 1
+        ? `${field.label} (${field.name})`
+        : field.label,
+    ])
+  );
 }
 
 /** A fixed value the site's code gives a detail, in the field choice. */
 const FIXED = "=fixed";
 
-/** What a detail is read from until a field is chosen, as the choice says it. */
-function unchosenLabel(
+/** What a detail's row says under its choice. */
+function detailHelp(
   type: SeoContentType,
-  detail: StructuredDataDetail
-): { option: string; help?: string } {
-  const fromPage = FROM_THE_PAGE[detail];
-  if (fromPage !== undefined) {
-    return {
-      option: fromPage,
-      help: `from each page's ${fromPage.replace(/^The page's /, "")}`,
-    };
+  detail: StructuredDataDetail,
+  source: DetailSource | undefined,
+  shown: MappableField | undefined,
+  needed: string
+): string {
+  if (typeof source === "object") return "set in the site's code";
+  if (source !== undefined && !holdsField(type, source)) {
+    return "That field is gone: choose another";
   }
+  if (shown !== undefined) return `from each entry's ${shown.label}`;
+  const fromPage = FROM_THE_PAGE[detail];
+  return fromPage === undefined
+    ? needed
+    : `from each page's ${fromPage.replace(/^The page's /, "")}`;
+}
+
+/** What a detail's choice shows: the value chosen and the options round it. */
+interface DetailChoice {
+  value: string;
+  /** The field found by its name, which choosing again leaves found so. */
+  guess?: MappableField;
+  fixed?: string;
+  /** A field chosen once that the type no longer has. */
+  gone?: string;
+  /** A path into one of the type's fields that no option names. */
+  path?: string;
+}
+
+/** The choice for a detail read from `source`, or found by its name. */
+function detailChoice(
+  type: SeoContentType,
+  detail: StructuredDataDetail,
+  source: DetailSource | undefined
+): DetailChoice {
   const guess = guessedField(type, detail);
-  return guess === undefined
-    ? { option: "Not chosen yet" }
-    : { option: `${guess}, by its name`, help: `from each entry's ${guess}` };
+  const base = guess === undefined ? {} : { guess };
+  if (typeof source === "object") {
+    return { ...base, value: FIXED, fixed: source.value };
+  }
+  if (source === undefined) return { ...base, value: guess?.name ?? "" };
+  if (!holdsField(type, source))
+    return { ...base, value: source, gone: source };
+  return type.mappableFields.some(field => field.name === source)
+    ? { ...base, value: source }
+    : { ...base, value: source, path: source };
+}
+
+/** The options of a detail's choice. */
+function DetailOptions({
+  type,
+  detail,
+  choice,
+}: {
+  type: SeoContentType;
+  detail: StructuredDataDetail;
+  choice: DetailChoice;
+}): JSX.Element {
+  const labels = optionLabels(type.mappableFields);
+  return (
+    <>
+      {choice.guess === undefined ? (
+        <option value="">{FROM_THE_PAGE[detail] ?? "Not chosen yet"}</option>
+      ) : null}
+      {choice.fixed === undefined ? null : (
+        <option value={FIXED}>{`Always "${choice.fixed}"`}</option>
+      )}
+      {choice.gone === undefined ? null : (
+        <option value={choice.gone}>{`${choice.gone}, not found`}</option>
+      )}
+      {choice.path === undefined ? null : (
+        <option value={choice.path}>{choice.path}</option>
+      )}
+      {type.mappableFields.map(each => (
+        <option key={each.name} value={each.name}>
+          {labels.get(each.name)}
+        </option>
+      ))}
+    </>
+  );
 }
 
 /** One detail's row: the field it is read from, and where that leaves it. */
@@ -173,6 +263,7 @@ function DetailLine({
   detail,
   source,
   lacking,
+  required,
   typeLabel,
   choose,
 }: {
@@ -180,19 +271,17 @@ function DetailLine({
   detail: StructuredDataDetail;
   source: DetailSource | undefined;
   lacking: boolean;
+  required: boolean;
   typeLabel: string;
   choose: (field: string) => void;
 }): JSX.Element {
-  const fixed = typeof source === "object" ? source.value : undefined;
-  const field =
-    typeof source === "string" ? source : fixed === undefined ? "" : FIXED;
-  const chosenLabel = type.mappableFields.find(
-    each => each.name === field
-  )?.label;
-  const unchosen = unchosenLabel(type, detail);
-  let help = unchosen.help ?? `Google needs this for ${typeLabel}`;
-  if (chosenLabel !== undefined) help = `from each entry's ${chosenLabel}`;
-  else if (fixed !== undefined) help = "set in the site's code";
+  // Until one is chosen, the field the markup finds by its name is shown as
+  // chosen; choosing it again leaves it found by its name.
+  const choice = detailChoice(type, detail, source);
+  const shown = type.mappableFields.find(field => field.name === choice.value);
+  const needed = required
+    ? `Google needs this for ${typeLabel}`
+    : `Optional for ${typeLabel}`;
   return (
     <div className="nx-seo-mapline">
       <span className="nx-seo-label">{DETAIL_LABELS[detail]}</span>
@@ -200,22 +289,17 @@ function DetailLine({
         className="nx-seo-select"
         aria-label={`Field that holds ${DETAIL_LABELS[detail]}`}
         aria-invalid={lacking}
-        value={field}
+        value={choice.value}
         onChange={event => {
-          if (event.target.value !== FIXED) choose(event.target.value);
+          const next = event.target.value;
+          if (next !== FIXED) choose(next === choice.guess?.name ? "" : next);
         }}
       >
-        <option value="">{unchosen.option}</option>
-        {fixed === undefined ? null : (
-          <option value={FIXED}>{`Always "${fixed}"`}</option>
-        )}
-        {type.mappableFields.map(each => (
-          <option key={each.name} value={each.name}>
-            {each.label}
-          </option>
-        ))}
+        <DetailOptions type={type} detail={detail} choice={choice} />
       </select>
-      <span className="nx-seo-help">{help}</span>
+      <span className="nx-seo-help">
+        {detailHelp(type, detail, source, shown, needed)}
+      </span>
     </div>
   );
 }
@@ -237,7 +321,7 @@ function DetailsEditor({
   const id = useId();
   const mapping = mappingOf(draft, type.key, structuredType);
   const missing = missingDetails(draft, type, structuredType);
-  const label = STRUCTURED_DATA_TYPES[structuredType].label;
+  const { label, needs } = STRUCTURED_DATA_TYPES[structuredType];
   const isDefault = structuredTypeOf(draft, type.key) === structuredType;
   return (
     <div className="nx-seo-pedit">
@@ -266,31 +350,34 @@ function DetailsEditor({
         </span>
       </div>
       <div className="nx-seo-mapgrid">
-        {STRUCTURED_DATA_TYPES[structuredType].needs.map(detail => (
-          <DetailLine
-            key={detail}
-            type={type}
-            detail={detail}
-            source={mapping[detail]}
-            lacking={missing.includes(detail)}
-            typeLabel={label}
-            choose={field =>
-              change(current =>
-                withDetailField(
-                  current,
-                  type.key,
-                  structuredType,
-                  detail,
-                  field
+        {[...needs, ...STRUCTURED_DATA_TYPES[structuredType].uses].map(
+          detail => (
+            <DetailLine
+              key={detail}
+              type={type}
+              detail={detail}
+              source={mapping[detail]}
+              lacking={missing.includes(detail)}
+              required={needs.includes(detail)}
+              typeLabel={label}
+              choose={field =>
+                change(current =>
+                  withDetailField(
+                    current,
+                    type.key,
+                    structuredType,
+                    detail,
+                    field
+                  )
                 )
-              )
-            }
-          />
-        ))}
+              }
+            />
+          )
+        )}
       </div>
       <p className="nx-seo-help">
         {missing.length > 0
-          ? `Until every detail has a field, ${label} details are left out of these pages and listed in Problems.`
+          ? `Until every needed detail has a field, ${label} details are left out of these pages and listed in Problems.`
           : "All set. Only details visible on the page are used."}{" "}
         If no field fits, a developer can add one.
       </p>
@@ -309,9 +396,46 @@ function EntryCount({
 }: {
   count: number | undefined;
 }): JSX.Element | null {
-  if (count === undefined) return null;
-  if (count === 0) return <small>No entries yet</small>;
-  return <small>{`${count} ${count === 1 ? "entry" : "entries"}`}</small>;
+  const text = countText(count);
+  return text === undefined ? null : <small>{text}</small>;
+}
+
+/** A type's entry count in words, where the reader may count them. */
+function countText(count: number | undefined): string | undefined {
+  if (count === undefined) return undefined;
+  if (count === 0) return "No entries yet";
+  return `${count} ${count === 1 ? "entry" : "entries"}`;
+}
+
+/** A type the site's code gives no SEO: greyed, with nothing to set. */
+function SwitchedOffRow({ type }: { type: SwitchedOffType }): JSX.Element {
+  const count = countText(type.count);
+  return (
+    <tr className="nx-seo-off">
+      <td className="nx-seo-switchcell">
+        <Switch
+          checked={false}
+          disabled
+          aria-label={`SEO for ${type.label}`}
+          title="Set in the site's configuration by a developer"
+        />
+      </td>
+      <td className="nx-seo-tname">
+        <b>{type.label}</b>
+        <small>
+          {count === undefined
+            ? "SEO switched off in code"
+            : `${count} · SEO switched off in code`}
+        </small>
+      </td>
+      <td data-label="Public address">
+        <span className="nx-seo-help">No public pages</span>
+      </td>
+      <td aria-hidden="true" />
+      <td aria-hidden="true" />
+      <td aria-hidden="true" />
+    </tr>
+  );
 }
 
 /** A type's title pattern as a chip that opens its editor, with any problem under it. */
@@ -448,10 +572,13 @@ export function ContentTypesTab({
   draft,
   change,
   types,
+  switchedOff = [],
   editing,
   setEditing,
 }: TabProps & {
   types: readonly SeoContentType[];
+  /** The site's other types, which the site's code gives no SEO. */
+  switchedOff?: readonly SwitchedOffType[];
   /** The type whose title pattern is open, kept by the page across saves. */
   editing: string | null;
   setEditing: (key: string | null) => void;
@@ -499,6 +626,9 @@ export function ContentTypesTab({
                 open={open}
                 setOpen={setOpen}
               />
+            ))}
+            {switchedOff.map(type => (
+              <SwitchedOffRow key={type.key} type={type} />
             ))}
           </tbody>
         </table>

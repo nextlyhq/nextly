@@ -49,6 +49,8 @@ const POSTS: SeoContentType = {
     { name: "byline", label: "Byline" },
     { name: "publishedAt", label: "Published at" },
     { name: "price", label: "Price" },
+    // Two fields labelled alike are told apart by their names.
+    { name: "credit", label: "Byline" },
   ],
   public: true,
 };
@@ -95,7 +97,18 @@ function serving(
       ({
         data: request.path.endsWith("/document")
           ? { single }
-          : { items: [POSTS, CASES] },
+          : {
+              items: [
+                POSTS,
+                CASES,
+                {
+                  key: "testimonials",
+                  label: "Testimonials",
+                  count: 40,
+                  seo: false,
+                },
+              ],
+            },
         pending: false,
         error: null,
         refetch: () => {},
@@ -516,6 +529,9 @@ describe("the content types table", () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
     expect(screen.getByText("19 entries")).toBeTruthy();
+    // One entry's address is an example of where the type's pages live.
+    expect(screen.getAllByText("e.g.")).toHaveLength(1);
+    expect(screen.getByText("/blog/surfer-seo-vs-rext-ai")).toBeTruthy();
 
     const seo = screen.getByRole("switch", { name: "SEO for Blog posts" });
     expect(seo.getAttribute("aria-checked")).toBe("true");
@@ -528,6 +544,34 @@ describe("the content types table", () => {
     await settle();
 
     expect(sent).toEqual([{ hiddenTypes: ["posts"], _rev: "5" }]);
+  });
+
+  it("lists a type with SEO switched off in code, greyed and with nothing to set", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+
+    const seo = screen.getByRole("switch", { name: "SEO for Testimonials" });
+    expect(seo.getAttribute("aria-checked")).toBe("false");
+    expect(seo).toHaveProperty("disabled", true);
+    expect(
+      screen.getByText("40 entries · SEO switched off in code")
+    ).toBeTruthy();
+    expect(screen.getByText("No public pages")).toBeTruthy();
+    expect(
+      screen.queryByRole("switch", {
+        name: "Hide all Testimonials from search",
+      })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("combobox", {
+        name: "Structured data for Testimonials",
+      })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Edit the title pattern for Testimonials",
+      })
+    ).toBeNull();
   });
 
   it("keeps the types the plugin hides hidden when the site hides another", async () => {
@@ -594,6 +638,24 @@ describe("the content types table", () => {
     }
   });
 
+  it("offers the details a type may use as well as those it needs, counting only the needed as missing", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Structured data for Blog posts" }),
+      { target: { value: "product" } }
+    );
+    // The price is found by its name; nothing holds the availability.
+    expect(screen.getByText("· 1 missing")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+    expect(
+      screen.getByRole("combobox", { name: "Field that holds currency" })
+    ).toBeTruthy();
+    expect(screen.getByText("Optional for Product")).toBeTruthy();
+    expect(screen.getByText("Google needs this for Product")).toBeTruthy();
+  });
+
   it("chooses a type's structured data, maps the details it lacks, and saves both", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
@@ -610,6 +672,14 @@ describe("the content types table", () => {
     expect(
       screen.getByText("on Blog posts (this type's default)")
     ).toBeTruthy();
+    // A field found by its name is shown as that field.
+    const date = screen.getByRole("combobox", {
+      name: "Field that holds date published",
+    }) as HTMLSelectElement;
+    expect(date.selectedOptions[0]?.textContent).toBe("Published at");
+    expect(
+      [...date.options].map(option => option.textContent).filter(Boolean)
+    ).toContain("Byline (credit)");
     fireEvent.change(
       screen.getByRole("combobox", { name: "Field that holds author" }),
       { target: { value: "byline" } }

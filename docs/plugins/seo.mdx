@@ -398,11 +398,16 @@ newest page updates as you type.
 
 ### Hiding a type, and its structured data
 
+The table lists every content type the plugin adds SEO to, with one entry's address as an example
+of where its pages live, and after them, greyed, the site's other types: SEO is switched on or off
+for a type in the site's code, so the switch there can't be changed.
+
 **Hide whole group** keeps every page of a content type out of search, whatever each page says, and
 out of the sitemap. The **Structured data** column chooses what the type's pages are described as;
 **Automatic** describes a page with an author and a date as an Article, and any other as a Web page.
 For a type that needs details, such as an Article's author, **Map details** chooses the field each
-detail is read from. A detail left unchosen is read from a field named like it, the image from the
+detail is read from, including a field inside a group (`event.startsAt`), and the optional details
+the type can also use. A detail left unchosen is read from a field named like it, the image from the
 page's share image, and a type missing a detail is left out of the page's markup and listed in
 Problems.
 

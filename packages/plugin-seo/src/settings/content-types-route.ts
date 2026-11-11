@@ -27,7 +27,9 @@ import {
   type MappableField,
   type PatternExample,
   type PatternField,
+  type ListedContentType,
   type SeoContentType,
+  type SwitchedOffType,
 } from "./contract";
 import { patternFields } from "./pattern-fields";
 import { TITLE_FIELDS } from "./patterns";
@@ -49,24 +51,60 @@ function exampleOf(
   return { ...(title === undefined ? {} : { title }), values };
 }
 
+/** A field's label as the admin shows it. */
+const labelOfField = (field: Record<string, unknown>, name: string): string =>
+  textOf(field.label) ?? humanizeFieldName(name);
+
 /**
  * The type's own fields a structured data detail may be read from: every
  * field the entry itself holds but its SEO group, labelled as the admin
- * labels it.
+ * labels it, and each field inside a named group by its path
+ * (`event.startsAt`), which a detail reads as it reads any other.
  */
 function mappableFieldsOf(
-  declared: readonly Record<string, unknown>[]
+  declared: readonly Record<string, unknown>[],
+  within?: MappableField
 ): MappableField[] {
   const fields: MappableField[] = [];
   for (const field of declared) {
-    const { name } = field;
-    if (typeof name !== "string" || name === "" || name === "seo") continue;
-    fields.push({
-      name,
-      label: textOf(field.label) ?? humanizeFieldName(name),
-    });
+    const own = mappableField(field, within);
+    if (own === undefined) continue;
+    fields.push(own);
+    if (field.type === "group") {
+      fields.push(...mappableFieldsOf(entryFields(field.fields), own));
+    }
   }
   return fields;
+}
+
+/** One field as a mapping choice, inside `within` where it is in a group. */
+function mappableField(
+  field: Record<string, unknown>,
+  within: MappableField | undefined
+): MappableField | undefined {
+  const { name } = field;
+  if (typeof name !== "string" || name === "") return undefined;
+  if (within === undefined) {
+    return name === "seo"
+      ? undefined
+      : { name, label: labelOfField(field, name) };
+  }
+  return {
+    name: `${within.name}.${name}`,
+    label: `${within.label} › ${labelOfField(field, name)}`,
+  };
+}
+
+/**
+ * The fields an entry holds at one level, through groups with no name that
+ * only lay fields out, as core reads them.
+ */
+function entryFields(fields: unknown): Record<string, unknown>[] {
+  const found: Record<string, unknown>[] = [];
+  for (const field of addressableFields(fields)) {
+    if (isRecord(field)) found.push(field);
+  }
+  return found;
 }
 
 /** The label the admin's lists use for a collection. */
@@ -128,12 +166,7 @@ async function contentTypeOf(
 ): Promise<SeoContentType> {
   const meta: unknown = await ctx.services.collections.getCollection(slug, {});
   const record = isRecord(meta) ? meta : {};
-  // Every field the entry itself holds, through groups with no name that
-  // only lay fields out, as core reads them.
-  const declared: Record<string, unknown>[] = [];
-  for (const field of addressableFields(record.fields)) {
-    if (isRecord(field)) declared.push(field);
-  }
+  const declared = entryFields(record.fields);
   const fields = patternFields(
     declared.map(field => ({
       name: typeof field.name === "string" ? field.name : undefined,
@@ -168,7 +201,57 @@ async function contentTypeOf(
   };
 }
 
-/** The route that lists `collections`, the types the plugin adds SEO to. */
+/**
+ * A listed collection and its slug where it is the site's own, declared in code or
+ * made in the Schema Builder; nothing for a plugin's or the system's.
+ */
+function siteOwn(
+  record: unknown
+): { slug: string; row: Record<string, unknown> } | undefined {
+  if (!isRecord(record)) return undefined;
+  if (record.source !== "code" && record.source !== "ui") return undefined;
+  const slug = textOf(record.slug) ?? textOf(record.name);
+  return slug === undefined ? undefined : { slug, row: record };
+}
+
+/** How many collections one listing reads while finding the site's own. */
+const LISTING_PAGE = 100;
+
+/**
+ * The site's own collections, declared in code or made in the Schema
+ * Builder, that the plugin does not add SEO to: never a plugin's own or the
+ * system's, which have no SEO switch to show. Sorted by slug.
+ */
+async function switchedOff(
+  ctx: PluginRouteContext,
+  withSeo: ReadonlySet<string>
+): Promise<SwitchedOffType[]> {
+  const found: SwitchedOffType[] = [];
+  for (let page = 1; ; page += 1) {
+    const listed = await ctx.services.collections.listCollections(
+      { page, limit: LISTING_PAGE, sortBy: "slug", sortOrder: "asc" },
+      {}
+    );
+    for (const record of listed.data) {
+      const own = siteOwn(record);
+      if (own === undefined || withSeo.has(own.slug)) continue;
+      const { slug, row } = own;
+      const { count } = await readableEntries(ctx, slug);
+      found.push({
+        key: slug,
+        label: labelOf(slug, row),
+        ...(count === undefined ? {} : { count }),
+        seo: false,
+      });
+    }
+    if (!listed.pagination.hasMore) return found;
+  }
+}
+
+/**
+ * The route that lists `collections`, the types the plugin adds SEO to, and
+ * after them the site's other types, marked as having none.
+ */
 export function contentTypesRoute(collections: readonly string[]): PluginRoute {
   return {
     method: "GET",
@@ -181,10 +264,11 @@ export function contentTypesRoute(collections: readonly string[]): PluginRoute {
           .filter(type => type.kind === "collection")
           .map(type => type.slug)
       );
-      const items: SeoContentType[] = [];
+      const items: ListedContentType[] = [];
       for (const slug of collections) {
         items.push(await contentTypeOf(ctx, slug, withoutAddress));
       }
+      items.push(...(await switchedOff(ctx, new Set(collections))));
       return respondList(items, {
         total: items.length,
         page: 1,

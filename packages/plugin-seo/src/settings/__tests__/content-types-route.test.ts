@@ -29,7 +29,17 @@ function context(): PluginRouteContext {
               label: "Credits",
               fields: [{ name: "byline", type: "text", label: "Byline" }],
             },
+            {
+              name: "event",
+              type: "group",
+              label: "Event",
+              fields: [{ name: "startsAt", type: "date", label: "Starts at" }],
+            },
           ],
+        }),
+        listCollections: async () => ({
+          data: [],
+          pagination: { total: 0, limit: 100, offset: 0, hasMore: false },
         }),
         listEntries: async () => ({
           data: [{ title: "A", byline: "Ada" }],
@@ -51,6 +61,9 @@ describe("the content types route", () => {
     expect(body.items[0]?.mappableFields).toEqual([
       { name: "title", label: "Title" },
       { name: "byline", label: "Byline" },
+      // A named group, and each field in it by its path.
+      { name: "event", label: "Event" },
+      { name: "event.startsAt", label: "Event › Starts at" },
     ]);
     expect(body.items[0]?.fields).toEqual([
       { name: "byline", token: "Byline" },
