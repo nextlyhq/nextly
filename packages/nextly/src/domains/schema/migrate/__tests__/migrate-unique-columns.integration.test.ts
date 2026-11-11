@@ -925,5 +925,32 @@ describe.each(LOCK_DIALECTS)(
 
       expect(await notesPersonIsUniquePerLanguage()).toBe(false);
     }, 120_000);
+
+    it("refuses a file that renames a table and then makes its column unique over repeats, before the rename runs", async () => {
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+      const renamed = "dc_members";
+      writeFileAs(NAME, [
+        `ALTER TABLE ${q(PROFILES)} RENAME TO ${q(renamed)}`,
+        createIndexSql(
+          renamed,
+          {
+            name: uniqueIndexNameForColumn(renamed, "person"),
+            columns: ["person"],
+            unique: true,
+          },
+          dialect,
+          q
+        ),
+      ]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toContain(
+        `${FILE} was not applied. Collection 'profiles': field 'person' cannot become unique while 1 value repeats: "ada" (2 entries)`
+      );
+      // Nothing ran: the table keeps its name.
+      expect(await personIsUnique()).toBe(false);
+      expect(await ledger()).toEqual([]);
+    }, 120_000);
   }
 );

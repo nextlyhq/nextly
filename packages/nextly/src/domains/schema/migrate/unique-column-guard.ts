@@ -45,8 +45,10 @@ import { readRequiredColumnOwners } from "./required-column-guard";
 import {
   indexesDroppedBy,
   tablesChangedIn,
+  renamesIn,
   tablesDroppedBy,
   uniqueIndexesCreatedBy,
+  type StatementRename,
 } from "./statement-targets";
 
 /** The values a refusal lists for each column; the rest are counted, and all of them logged. */
@@ -290,6 +292,63 @@ function writtenBefore(
 }
 
 /**
+ * Where a target's values are before the file runs: its table and column traced back through the
+ * file's own earlier renames (`renamesIn`), so an index made on a table or column the file renames
+ * first is judged on the values that will be under it. Undefined where an earlier statement may
+ * rename the table but is not read, a rename beside another clause say: then only the target's
+ * own statement can judge it.
+ */
+function liveOrigin(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  target: UniqueTarget
+): UniqueTarget | undefined {
+  let place = { table: target.table, column: target.column };
+  for (let at = target.at - 1; at >= 0; at -= 1) {
+    const renames = renamesIn(statements[at], dialect);
+    if (renames !== undefined) {
+      place = beforeRenames(renames, place);
+    } else if (mayRenameUnread(statements[at], dialect, place.table)) {
+      return undefined;
+    }
+  }
+  return { ...place, at: target.at };
+}
+
+/**
+ * A table and column as they were before one statement's renames, undone in reverse, so a column
+ * renamed on a table the same statement renames is matched under the name the statement found the
+ * table by.
+ */
+function beforeRenames(
+  renames: readonly StatementRename[],
+  place: { table: string; column: string }
+): { table: string; column: string } {
+  let { table, column } = place;
+  for (const rename of [...renames].reverse()) {
+    if (rename.kind === "table" && rename.to === table) table = rename.from;
+    const columnRenamed =
+      rename.kind === "column" &&
+      rename.table === table &&
+      rename.to === column;
+    if (columnRenamed) column = rename.from;
+  }
+  return { table, column };
+}
+
+/** Whether a statement not read as renames alone may still rename `table`. */
+function mayRenameUnread(
+  statement: string,
+  dialect: SupportedDialect,
+  table: string
+): boolean {
+  return (
+    /\bRENAME\b/i.test(statement) &&
+    (tablesChangedIn(statement, dialect)?.includes(table) ?? true)
+  );
+}
+
+/**
  * One unique index's column judged as the database stands: undefined where the table or column
  * is not there, a unique index already holds it, or nothing repeats. A table the registry names
  * is named by its entity and field, any other (a plugin's, an extension's) by its table and
@@ -343,8 +402,9 @@ async function judgeUniqueTarget(
  * Refuse, before any of its statements runs, a migration file that makes a column unique while
  * the column's entries repeat a value. Each single-column unique index the file creates
  * (`uniqueIndexesCreatedBy`) is judged over a column the table already has and no unique index
- * holds, except one whose table an earlier statement of the file writes: that one is judged at
- * its statement (`uniqueIndexCheckpoint`), over the values those writes leave.
+ * holds, under the names the file's earlier renames start from (`liveOrigin`). One whose table an
+ * earlier statement of the file writes, or may rename without being read, is judged at its
+ * statement instead (`uniqueIndexCheckpoint`), over the values the statements before it leave.
  *
  * @param statements the file's statements, as the runner splits them
  * @param source the file's name, which the refusal names
@@ -358,7 +418,10 @@ export async function refuseUniqueIndexesOverRepeats(
   const refused: UniqueColumnRepeats[] = [];
   for (const target of uniqueTargets(statements, dialect)) {
     if (writtenBefore(statements, dialect, target.table, target.at)) continue;
-    const found = await judgeUniqueTarget(db, dialect, target);
+    // Judged where its values are now, under the names the file's earlier renames start from.
+    const origin = liveOrigin(statements, dialect, target);
+    if (origin === undefined) continue;
+    const found = await judgeUniqueTarget(db, dialect, origin);
     if (found !== undefined) refused.push(found);
   }
   if (refused.length > 0) throw uniqueColumnRepeatsError(refused, source);
@@ -376,8 +439,10 @@ export function uniqueIndexCheckpoint(
   dialect: SupportedDialect,
   unit: MigrationUnit
 ): ((db: unknown, index: number) => Promise<void>) | undefined {
-  const atStatement = uniqueTargets(statements, dialect).filter(target =>
-    writtenBefore(statements, dialect, target.table, target.at)
+  const atStatement = uniqueTargets(statements, dialect).filter(
+    target =>
+      writtenBefore(statements, dialect, target.table, target.at) ||
+      liveOrigin(statements, dialect, target) === undefined
   );
   if (atStatement.length === 0) return undefined;
   return async (db, index) => {
