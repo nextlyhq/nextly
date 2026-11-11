@@ -1,0 +1,92 @@
+/**
+ * A required field added to a Single that already holds its row fills that row and leaves its
+ * column with no default, on every dialect; a field's own default is no column default either.
+ *
+ * A Single's field defaults are the application's, applied when its document is written, so the
+ * column carries none: the table then reads as the schema a migration is written from describes
+ * it. The row added before the field existed still has to get a value for a NOT NULL column, so
+ * the add fills it first.
+ */
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
+import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
+import {
+  createTestNextly,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import { readTableDefinition } from "../../schema/__tests__/helpers/table-definition";
+import type { SingleEntryService } from "../services/single-entry-service";
+
+const TITLE = { name: "title", type: "text" };
+
+describeEachDialect("a field added to a Single that holds its row", dialect => {
+  let current: TestNextly;
+
+  beforeEach(async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    current = await createTestNextly({ dialect, collections: [] });
+  });
+
+  afterEach(async () => {
+    await current.destroy();
+    vi.unstubAllEnvs();
+  });
+
+  const exec = <T>(statement: string): Promise<T[]> =>
+    (
+      current.adapter as unknown as {
+        executeQuery<R>(sql: string): Promise<R[]>;
+      }
+    ).executeQuery<T>(statement);
+  const column = async (name: string) =>
+    (
+      await readTableDefinition(
+        statement => exec(statement),
+        dialect,
+        "single_hero"
+      )
+    ).columns.find(c => c.name === name);
+
+  async function heroWithItsRow(): Promise<void> {
+    await dispatchSingles(
+      "createSingle",
+      {},
+      { slug: "hero", label: "Hero", fields: [TITLE] }
+    );
+    const singles: SingleEntryService =
+      current.getService("singleEntryService");
+    const written = await singles.update(
+      "hero",
+      { title: "Kept", _overwrite: true },
+      { overrideAccess: true }
+    );
+    expect(written.success, JSON.stringify(written)).toBe(true);
+  }
+
+  const save = (fields: unknown[]) =>
+    dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields });
+
+  it("fills the row for a required field, which is then NOT NULL with no default", async () => {
+    await heroWithItsRow();
+
+    await save([TITLE, { name: "rank", type: "number", required: true }]);
+
+    const rank = await column("rank");
+    expect(rank?.nullable).toBe(false);
+    expect(rank?.default ?? null).toBeNull();
+    const [row] = await exec<{ rank: number | string }>(
+      `SELECT ${dialect === "mysql" ? "`rank`" : '"rank"'} AS rank FROM ${dialect === "mysql" ? "`single_hero`" : '"single_hero"'}`
+    );
+    expect(Number(row?.rank)).toBe(0);
+    expect((await column("title"))?.name).toBe("title");
+  });
+
+  it("gives a field's own default to no column", async () => {
+    await heroWithItsRow();
+
+    await save([TITLE, { name: "tagline", type: "text", default: "hello" }]);
+
+    expect((await column("tagline"))?.default ?? null).toBeNull();
+  });
+});

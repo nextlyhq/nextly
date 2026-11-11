@@ -1095,6 +1095,47 @@ export class DynamicCollectionSchemaService {
     );
   }
 
+  /**
+   * Whether a field's default is written onto its column. Not for a Single's table: a Single's
+   * field defaults are the application's, applied when its document is written, as a collection's
+   * are wherever a Builder save is written as a migration, and as the schema a migration is
+   * written from describes the column. A collection's table made here, where no such writer is
+   * set up, keeps them as it always has.
+   */
+  private fieldDefaultsAreColumns(isSingle: boolean | undefined): boolean {
+    return isSingle !== true;
+  }
+
+  /**
+   * A required column added to a table holding rows, filled with `fill` and left with no default.
+   * PostgreSQL and MySQL take the value as the column's default for the one statement that adds
+   * it, then drop the default. SQLite can drop no default, so there the column is added open,
+   * filled, and handed to the caller's rebuild to be made NOT NULL (`onSqliteNullability`).
+   */
+  private fillThenDropDefault(
+    tableName: string,
+    columnName: string,
+    type: string,
+    fill: string,
+    onSqliteNullability:
+      | ((column: string, required: boolean) => void)
+      | undefined
+  ): string[] {
+    const table = this.quoteIdentifier(tableName);
+    const column = this.quoteIdentifier(columnName);
+    if (this.dialect === "sqlite") {
+      onSqliteNullability?.(columnName, true);
+      return [
+        `ALTER TABLE ${table} ADD COLUMN ${column} ${type};`,
+        `UPDATE ${table} SET ${column} = ${fill};`,
+      ];
+    }
+    return [
+      `ALTER TABLE ${table} ADD COLUMN ${column} ${type} NOT NULL DEFAULT ${fill};`,
+      `ALTER TABLE ${table} ALTER COLUMN ${column} DROP DEFAULT;`,
+    ];
+  }
+
   private requiredColumnBackfill(field: FieldDefinition): string | null {
     const literal =
       field.default !== undefined
@@ -1195,6 +1236,8 @@ export class DynamicCollectionSchemaService {
   ): string {
     // Refuse an unusable decimal shape before any of it becomes SQL.
     this.assertDecimalDimensions(fields);
+    // A Single's field defaults are the application's (`fieldDefaultsAreColumns`).
+    const columnDefaults = this.fieldDefaultsAreColumns(_options?.isSingle);
 
     const constraints: string[] = [];
     const checks: string[] = [];
@@ -1239,7 +1282,7 @@ export class DynamicCollectionSchemaService {
             : "";
 
         const defaultVal =
-          f.default !== undefined && f.default !== null
+          columnDefaults && f.default !== undefined && f.default !== null
             ? `DEFAULT ${this.formatDefaultValue(f.default, f.type)}`
             : "";
 
@@ -1596,10 +1639,13 @@ ${allColumnDefs.join(",\n")}
        * from its slug, as before any collection could be renamed.
        */
       targetTables?: CollectionTables;
+      /** The table is a Single's, whose field defaults are the application's (`fieldDefaultsAreColumns`). */
+      isSingle?: boolean;
     }
   ): string {
     // The added columns become SQL here too, so the same refusal applies.
     this.assertDecimalDimensions(newFields);
+    const columnDefaults = this.fieldDefaultsAreColumns(options?.isSingle);
 
     // A precondition, so it runs before a single statement is written. Making a
     // column NOT NULL while a row still holds a null is refused by the server,
@@ -1779,9 +1825,14 @@ ${allColumnDefs.join(",\n")}
         // accepted by all three. With rows, the value has to come from the author, so the
         // edit is refused and names the order that works.
         let defaultVal = "";
-        if (field.required || field.default !== undefined) {
+        // A Single's existing row is filled with the same value, given once and then taken away
+        // (`fillThenDropDefault`); a field's own default is never kept on its column.
+        let fillThenDrop: string | null = null;
+        if (field.required || (columnDefaults && field.default !== undefined)) {
           const backfill = this.requiredColumnBackfill(field);
-          if (backfill !== null) {
+          if (backfill !== null && !columnDefaults && field.required) {
+            fillThenDrop = backfill;
+          } else if (backfill !== null) {
             defaultVal = `DEFAULT ${backfill}`;
           } else if (field.required && options?.tableHasRows !== false) {
             throw NextlyError.validation({
@@ -1810,9 +1861,21 @@ ${allColumnDefs.join(",\n")}
         if (field.unique && !this.uniquenessCanBeAnIndex(type)) {
           throw this.uniquenessNotEnforceable(tableName, field);
         }
-        statements.push(
-          `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
-        );
+        if (fillThenDrop !== null) {
+          statements.push(
+            ...this.fillThenDropDefault(
+              tableName,
+              addColName,
+              type,
+              fillThenDrop,
+              options?.onSqliteNullability
+            )
+          );
+        } else {
+          statements.push(
+            `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
+          );
+        }
 
         // SQLite doesn't support adding constraints separately via ALTER TABLE
         // Foreign keys and unique constraints must be defined at table creation
@@ -2059,7 +2122,8 @@ ${allColumnDefs.join(",\n")}
         previous,
         field,
         options?.foreignKeysByColumn,
-        options?.targetTables
+        options?.targetTables,
+        columnDefaults
       );
       (change.emitAfterColumnWork
         ? fkActionsAfterColumns
@@ -2190,7 +2254,13 @@ ${allColumnDefs.join(",\n")}
                     field
                   ));
               statements.push(
-                this.modifyColumnSql(tableName, alterCol, field, restated)
+                this.modifyColumnSql(
+                  tableName,
+                  alterCol,
+                  field,
+                  restated,
+                  columnDefaults
+                )
               );
             }
           } else if (!columnChanged) {
@@ -2331,7 +2401,8 @@ ${allColumnDefs.join(",\n")}
     oldField: FieldDefinition,
     newField: FieldDefinition,
     liveForeignKeys?: ReadonlyMap<string, readonly string[]>,
-    targetTables?: CollectionTables
+    targetTables?: CollectionTables,
+    columnDefaults = true
   ): ReferentialActionChange {
     if (newField.type !== "relationship") return NO_REFERENTIAL_ACTION_CHANGE;
     const target = newField.options?.target;
@@ -2479,7 +2550,12 @@ ${allColumnDefs.join(",\n")}
     const columnPassStatesNullability = oldField.required !== newField.required;
     if (installsSetNull && !columnPassStatesNullability) {
       statements.unshift(
-        this.relaxColumnForSetNull(tableName, columnName, newField)
+        this.relaxColumnForSetNull(
+          tableName,
+          columnName,
+          newField,
+          columnDefaults
+        )
       );
     }
 
@@ -2500,7 +2576,8 @@ ${allColumnDefs.join(",\n")}
   private relaxColumnForSetNull(
     tableName: string,
     columnName: string,
-    field: FieldDefinition
+    field: FieldDefinition,
+    columnDefaults = true
   ): string {
     if (this.dialect === "mysql") {
       // The type asked for is THIS generator's — the one that created the
@@ -2517,7 +2594,8 @@ ${allColumnDefs.join(",\n")}
           field.options,
           field.validation,
           field
-        )
+        ),
+        columnDefaults
       );
     }
     return `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(columnName)} DROP NOT NULL;`;
@@ -2537,11 +2615,12 @@ ${allColumnDefs.join(",\n")}
     tableName: string,
     columnName: string,
     field: FieldDefinition,
-    type: string
+    type: string,
+    columnDefaults = true
   ): string {
     const nullability = field.required ? " NOT NULL" : " NULL";
     const defaultClause =
-      field.default !== undefined && field.default !== null
+      columnDefaults && field.default !== undefined && field.default !== null
         ? ` DEFAULT ${this.formatDefaultValue(field.default, field.type)}`
         : "";
     return `ALTER TABLE ${this.quoteIdentifier(tableName)} MODIFY COLUMN ${this.quoteIdentifier(columnName)} ${type}${nullability}${defaultClause};`;

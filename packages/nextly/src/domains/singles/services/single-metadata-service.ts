@@ -1146,6 +1146,8 @@ export class SingleMetadataService {
         alterInput.oldFields,
         deferred.newFields,
         {
+          // A Single's field defaults are the application's, not its columns'.
+          isSingle: true,
           wasStatus,
           hasStatus,
           tableHasRows: liveFacts.tableHasRows,
@@ -1399,6 +1401,8 @@ export class SingleMetadataService {
         from,
         to,
         {
+          // A Single's field defaults are the application's, not its columns'.
+          isSingle: true,
           wasStatus: hasStatus,
           hasStatus,
           // The type the diff BEFORE this one writes, not the live table's: MySQL restates a
