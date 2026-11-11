@@ -22,17 +22,28 @@ export interface RequestLanguage {
   fromSegment: boolean;
 }
 
+/** Waits for Nextly to start, as a route reading through it does. */
+async function startedNextly(): Promise<unknown> {
+  // Loaded when first asked: the start imports the routing modules, so a
+  // static import here would be a cycle.
+  const { requireNextlyOnceStarted } = await import(
+    "../../direct-api/nextly"
+  );
+  return requireNextlyOnceStarted();
+}
+
 /**
  * The language of a request whose route params carry `segment` (the value of
  * `[locale]`, or undefined where the route has no such segment), or `null`
  * where the segment names none of the site's languages, which the route
  * answers as not found. The site's languages are read after `boot`, since a
- * route's reader may start Nextly on its first read.
+ * route's reader may start Nextly on its first read; without one, once
+ * Nextly has started.
  */
 export async function requestLanguage(
   segment: unknown,
   configured: string | undefined,
-  boot: () => Promise<unknown>
+  boot: () => Promise<unknown> = startedNextly
 ): Promise<RequestLanguage | null> {
   if (segment === undefined) {
     return {
