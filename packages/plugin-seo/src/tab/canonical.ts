@@ -106,7 +106,7 @@ function incomplete(): CanonicalCheck {
 
 /** What the `seo` group stores for a typed address. */
 export interface StoredCanonical {
-  /** The address, trimmed; nothing where it cannot be used at all. */
+  /** The address, trimmed; nothing where it cannot be used yet. */
   canonical: string | null;
   /**
    * Whether the person confirmed the page lives on another site, which the
@@ -117,9 +117,10 @@ export interface StoredCanonical {
 }
 
 /**
- * What the `seo` group stores for the typed address. An address on another
- * site is stored as typed, and used only once `confirmedElsewhere` is set
- * with it, so the automatic address stays in use until the person confirms.
+ * What the `seo` group stores for the typed address: an address on the site
+ * as typed, and one on another site only once the person confirms the page
+ * lives there, marked so. Until then nothing is stored, so neither the
+ * preview nor the page's head uses it, and the automatic address stays.
  */
 export function storedCanonical(
   raw: string,
@@ -130,11 +131,8 @@ export function storedCanonical(
   if (check.kind === "same") {
     return { canonical: raw.trim(), canonicalElsewhere: null };
   }
-  if (check.kind === "elsewhere") {
-    return {
-      canonical: raw.trim(),
-      canonicalElsewhere: confirmedElsewhere ? true : null,
-    };
+  if (check.kind === "elsewhere" && confirmedElsewhere) {
+    return { canonical: raw.trim(), canonicalElsewhere: true };
   }
   return { canonical: null, canonicalElsewhere: null };
 }

@@ -6,9 +6,9 @@
  *
  * @module admin/advanced
  */
-import { Button, Checkbox, Input, Switch } from "@nextlyhq/ui";
+import { Button, Checkbox, Input, Switch, Textarea } from "@nextlyhq/ui";
 import { ChevronDown, TriangleAlert } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { SeoAnswer } from "../resolver/order";
 import { checkCanonical, storedCanonical } from "../tab/canonical";
@@ -90,6 +90,33 @@ export function AdvancedSection(props: AdvancedProps): ReactNode {
     </section>
   );
 }
+
+/**
+ * Calls `reset` when the stored values (`stored`, as one key) change by
+ * anything but the row's own writes, such as the document being read again
+ * or switched to another language, so the row shows what the document holds.
+ * Returns the function the row tells the key its own write leaves.
+ */
+function useOutsideChange(
+  stored: string,
+  reset: () => void
+): (written: string) => void {
+  const expected = useRef(stored);
+  const latestReset = useRef(reset);
+  latestReset.current = reset;
+  useEffect(() => {
+    if (stored === expected.current) return;
+    expected.current = stored;
+    latestReset.current();
+  }, [stored]);
+  return written => {
+    expected.current = written;
+  };
+}
+
+/** Stored values as one key, an absent value read as none. */
+const keyOf = (...stored: unknown[]): string =>
+  JSON.stringify(stored.map(value => value ?? null));
 
 /** One row of the section: its label and sentence, a control, and below. */
 function Row({
@@ -184,8 +211,18 @@ function OfficialAddressRow({
   );
   const id = useId();
   const hosts = context?.site.hosts ?? [];
+  const wrote = useOutsideChange(
+    keyOf(values.canonical, values.canonicalElsewhere),
+    () => {
+      const held = typedText(values.canonical);
+      setText(held);
+      setEditing(held !== "");
+      setConfirmed(values.canonicalElsewhere === true);
+    }
+  );
   const write = (next: string, elsewhere: boolean) => {
     const stored = storedCanonical(next, hosts, elsewhere);
+    wrote(keyOf(stored.canonical, stored.canonicalElsewhere));
     onSet("canonical", stored.canonical);
     onSet("canonicalElsewhere", stored.canonicalElsewhere);
   };
@@ -202,8 +239,7 @@ function OfficialAddressRow({
               setEditing(false);
               setText("");
               setConfirmed(false);
-              onSet("canonical", null);
-              onSet("canonicalElsewhere", null);
+              write("", false);
             }}
           >
             Go back to automatic
@@ -346,9 +382,22 @@ function SharedTitleRow({
   writable,
   onSet,
 }: AdvancedProps): ReactNode {
-  const [on, setOn] = useState(
-    isTyped(values.socialTitle) || isTyped(values.socialDescription)
+  const typedNow = () =>
+    isTyped(values.socialTitle) || isTyped(values.socialDescription);
+  const [on, setOn] = useState(typedNow);
+  const wrote = useOutsideChange(
+    keyOf(values.socialTitle, values.socialDescription),
+    () => setOn(typedNow())
   );
+  const write = (field: "socialTitle" | "socialDescription", next: string) => {
+    const value = next === "" ? null : next;
+    wrote(
+      field === "socialTitle"
+        ? keyOf(value, values.socialDescription)
+        : keyOf(values.socialTitle, value)
+    );
+    onSet(field, value);
+  };
   const label = "Different title when shared";
   const typed = typedText(values.socialTitle);
   return (
@@ -362,10 +411,10 @@ function SharedTitleRow({
           disabled={!writable}
           onCheckedChange={checked => {
             setOn(checked);
-            if (!checked) {
-              onSet("socialTitle", null);
-              onSet("socialDescription", null);
-            }
+            if (checked) return;
+            wrote(keyOf(null, null));
+            onSet("socialTitle", null);
+            onSet("socialDescription", null);
           }}
         />
       }
@@ -378,12 +427,7 @@ function SharedTitleRow({
             placeholder={answer?.title?.value ?? ""}
             value={typed}
             disabled={!writable}
-            onChange={event =>
-              onSet(
-                "socialTitle",
-                event.target.value === "" ? null : event.target.value
-              )
-            }
+            onChange={event => write("socialTitle", event.target.value)}
           />
           <SourceRow>
             {isTyped(typed) ? (
@@ -392,6 +436,24 @@ function SharedTitleRow({
               <>
                 <Chip>Automatic</Chip>
                 <span>same as the Google title</span>
+              </>
+            )}
+          </SourceRow>
+          <Textarea
+            rows={2}
+            aria-label="Description when shared"
+            placeholder={answer?.description?.value ?? ""}
+            value={typedText(values.socialDescription)}
+            disabled={!writable}
+            onChange={event => write("socialDescription", event.target.value)}
+          />
+          <SourceRow>
+            {isTyped(values.socialDescription) ? (
+              <Chip kind="typed">Typed for this page</Chip>
+            ) : (
+              <>
+                <Chip>Automatic</Chip>
+                <span>same as the Google description</span>
               </>
             )}
           </SourceRow>

@@ -52,9 +52,12 @@ const CONTEXT: SeoTabContext = {
 /** The panel over values it keeps, as the tab keeps them in the form. */
 function Harness({
   initial = {},
+  reloaded,
   onWrite,
 }: {
   initial?: SeoPanelValues;
+  /** Values the form is reset to from outside, as a reload does. */
+  reloaded?: SeoPanelValues;
   onWrite?: (field: string, value: unknown) => void;
 }): ReactNode {
   const [values, setValues] = useState<SeoPanelValues>(initial);
@@ -63,19 +66,26 @@ function Harness({
     [values]
   );
   return (
-    <SeoPanel
-      context={CONTEXT}
-      status="ready"
-      answers={answers}
-      problems={answers === undefined ? [] : seoProblems(answers.answer)}
-      values={values}
-      chosenImage={undefined}
-      writable
-      onSet={(field, next) => {
-        onWrite?.(field, next);
-        setValues(was => ({ ...was, [field]: next }));
-      }}
-    />
+    <>
+      {reloaded === undefined ? null : (
+        <button type="button" onClick={() => setValues(reloaded)}>
+          Reload
+        </button>
+      )}
+      <SeoPanel
+        context={CONTEXT}
+        status="ready"
+        answers={answers}
+        problems={answers === undefined ? [] : seoProblems(answers.answer)}
+        values={values}
+        chosenImage={undefined}
+        writable
+        onSet={(field, next) => {
+          onWrite?.(field, next);
+          setValues(was => ({ ...was, [field]: next }));
+        }}
+      />
+    </>
   );
 }
 
@@ -198,7 +208,14 @@ describe("Advanced", () => {
     const note = screen.getByText(/That address is on another site/)
       .parentElement as HTMLElement;
     expect(note).toHaveTextContent("medium.com");
-    expect(writes.at(-1)).toEqual(["canonicalElsewhere", null]);
+    // Nothing stored yet: the page keeps its own address.
+    expect(writes.slice(-2)).toEqual([
+      ["canonical", null],
+      ["canonicalElsewhere", null],
+    ]);
+    expect(screen.getByTestId("seo-search-result")).toHaveTextContent(
+      "https://rext.ai › blog › surfer-seo-vs-rext-ai"
+    );
     expect(
       screen.getByText(
         "Until you tick this, the automatic address stays in use."
@@ -218,6 +235,42 @@ describe("Advanced", () => {
       ["canonical", null],
       ["canonicalElsewhere", null],
     ]);
+  });
+
+  it("shows the address the document holds after it is read again", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        initial={{ canonical: "https://rext.ai/blog/first" }}
+        reloaded={{
+          canonical: "https://medium.com/p/2",
+          canonicalElsewhere: true,
+        }}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    expect(screen.getByLabelText("Official address")).toHaveValue(
+      "https://rext.ai/blog/first"
+    );
+    await user.click(screen.getByRole("button", { name: "Reload" }));
+    expect(screen.getByLabelText("Official address")).toHaveValue(
+      "https://medium.com/p/2"
+    );
+    expect(screen.getByRole("checkbox")).toBeChecked();
+  });
+
+  it("edits the shared description beside the shared title", async () => {
+    const user = userEvent.setup();
+    const writes: [string, unknown][] = [];
+    render(<Harness onWrite={(f, v) => writes.push([f, v])} />);
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(
+      screen.getByRole("switch", { name: "Different title when shared" })
+    );
+    await user.type(screen.getByLabelText("Description when shared"), "Card");
+    expect(writes.at(-1)).toEqual(["socialDescription", "Card"]);
+    await user.click(screen.getByRole("tab", { name: "When shared" }));
+    expect(screen.getByTestId("seo-share-card")).toHaveTextContent("Card");
   });
 
   it("says why a typed address cannot be used", async () => {

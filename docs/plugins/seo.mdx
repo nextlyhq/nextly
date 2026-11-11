@@ -145,7 +145,7 @@ The tab shows, in order:
   (its title, its excerpt), or the site's defaults. Typing marks it **Typed for this
   page**, with one action, **Go back to automatic**, that empties it again.
 - **Advanced**, closed until opened: hiding the page from search, its official address
-  (the canonical), a different title when shared, and the share image.
+  (the canonical), a different title and description when shared, and the share image.
 
 The official address is the page's own public address. **Use another address** takes an
 address on the same site as typed; one on another site is used only once the person
@@ -166,7 +166,8 @@ adds it to your app's generated component map, as it does every component a plug
 declares.
 
 The tab edits the fields the plugin ships. A `fields` option whose group has fields the tab
-does not edit (a focus keyword, say) keeps the whole group among the page's own fields
+does not edit (a focus keyword, say), or a field it cannot honour as declared (read-only,
+disabled, hidden or shown under a condition), keeps the whole group among the page's own fields
 instead, where each one can still be edited, and no tab is drawn.
 
 ## Configuration

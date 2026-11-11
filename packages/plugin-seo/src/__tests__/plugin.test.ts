@@ -244,6 +244,25 @@ describe("the SEO tab and fields of a project's own", () => {
     expect(plugin.contributes?.admin).toBeUndefined();
   });
 
+  it("leaves a group whose fields say they may not be edited among the page's fields", () => {
+    for (const admin of [
+      { readOnly: true },
+      { disabled: true },
+      { hidden: true },
+      { condition: { field: "metaTitle", equals: "x" } },
+    ]) {
+      const plugin = seoPlugin({
+        collections: ["pages"],
+        sitemap: false,
+        fields: [
+          text({ name: "metaTitle", admin }),
+          text({ name: "metaDescription" }),
+        ],
+      });
+      expect(plugin.contributes?.admin, JSON.stringify(admin)).toBeUndefined();
+    }
+  });
+
   it("draws the tab for a group of fields it edits, fewer than the defaults", () => {
     const plugin = seoPlugin({
       collections: ["pages"],

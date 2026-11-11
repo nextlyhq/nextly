@@ -174,13 +174,15 @@ describe("a typed official address", () => {
     );
   });
 
-  it("is stored as typed, marked elsewhere only once the person confirms it", () => {
+  it("is stored as typed on the site, and elsewhere only once confirmed", () => {
     expect(storedCanonical(" https://acme.com/post ", SITE, false)).toEqual({
       canonical: "https://acme.com/post",
       canonicalElsewhere: null,
     });
+    // Not stored until confirmed, so neither the preview nor the page's
+    // head uses it meanwhile.
     expect(storedCanonical("https://other.org/post", SITE, false)).toEqual({
-      canonical: "https://other.org/post",
+      canonical: null,
       canonicalElsewhere: null,
     });
     expect(storedCanonical("https://other.org/post", SITE, true)).toEqual({

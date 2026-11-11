@@ -20,15 +20,35 @@ export const SEO_TAB_COMPONENT = "@nextlyhq/plugin-seo/admin#SeoTab";
 const LABEL = "SEO";
 
 /**
+ * Whether a field's own admin options limit how it is edited: read-only,
+ * disabled, hidden, or shown only under a condition. The tab edits every
+ * field it draws, so a group with one of those stays among the page's own
+ * fields, where the form honours them.
+ */
+function isGated(admin: unknown): boolean {
+  if (typeof admin !== "object" || admin === null) return false;
+  const options = admin as Record<string, unknown>;
+  return (
+    Boolean(options.readOnly) ||
+    Boolean(options.disabled) ||
+    Boolean(options.hidden) ||
+    options.condition !== undefined
+  );
+}
+
+/**
  * Whether the tab can edit every field of a group: it edits the fields the
  * plugin ships, so a group of other fields, such as one with a focus keyword
  * added, stays among the page's own fields, where each can be edited.
  */
-export function tabEditsGroup(fields: readonly { name?: unknown }[]): boolean {
+export function tabEditsGroup(
+  fields: readonly { name?: unknown; admin?: unknown }[]
+): boolean {
   const names = fields.map(field => field.name);
   return (
     names.includes("metaTitle") &&
     names.includes("metaDescription") &&
+    fields.every(field => !isGated(field.admin)) &&
     names.every(
       name =>
         typeof name === "string" &&
