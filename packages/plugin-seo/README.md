@@ -89,6 +89,16 @@ export async function generateMetadata({ params }) {
 
 Set `metadataBase` once in your root layout so a relative `canonical` resolves to an absolute URL. Pass `languages` (locale → URL) to emit `alternates.languages` (hreflang) for a localized page. `buildMetadata` lives in `nextly/runtime` (Next-only), so it stays out of the agnostic plugin.
 
+## SEO settings
+
+The plugin adds an **SEO** item to the admin, whose Settings page holds the rules for the whole
+site: its name and production address, a default description and share image, a title pattern
+per content type (such as `{Title} | {Site name}`, set by clicking the type's variables, with a
+live preview), and one record of brand facts. The first visit asks three short questions before
+the page opens. Every page's head reads these settings where the page sets nothing, and each save
+reaches pages without a redeploy. Server code reads them with `readSeoRules(ctx)` and
+`readBrandFacts(ctx)`.
+
 ## Sitemap
 
 The plugin serves a sitemap of your **published** entries — one `<url>` per entry across the named collections — at a public HTTP route under Nextly's dynamic handler. In an app scaffolded by `create-nextly-app` (handler at `app/admin/api`), that is:

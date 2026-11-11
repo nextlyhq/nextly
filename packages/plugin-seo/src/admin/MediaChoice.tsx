@@ -86,7 +86,11 @@ export function MediaChoice({
             size="sm"
             onClick={() => setOpen(true)}
           >
-            {value === null ? `Choose ${label.toLowerCase()}` : "Replace"}
+            {value === null
+              ? shape === "square"
+                ? "Upload logo"
+                : "Upload image"
+              : "Replace"}
           </Button>
         </div>
       </div>

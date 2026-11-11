@@ -328,6 +328,70 @@ rather than a second implementation: `generateSitemap`, `buildSitemapUrls`,
 `serializeSitemap`, `defaultUrlForEntry` and `escapeXml`, with the `SitemapUrl`,
 `SitemapOptions`, `SitemapServices` and `UrlForEntry` types.
 
+## The SEO settings
+
+The plugin adds an **SEO** item to the admin's rail. Its **Settings** page holds the rules for the
+whole site; a page's own values always win over them.
+
+The first time someone opens it, three short questions come first: the site's name and production
+address, what kind of site it is and what AI tools may do, and a logo with a default share image.
+Each answer is saved as they move on, and closing the questions part-way keeps what was answered,
+with a line on the page to finish later. Every answer stays editable on the tabs:
+
+| Tab           | What it holds                                                                                                  |
+| ------------- | -------------------------------------------------------------------------------------------------------------- |
+| General       | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, the default share image and description |
+| Content types | Each content type with SEO, whether it has a public address yet, and its title pattern                        |
+| Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                         |
+| Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none |
+
+Opening the page needs `read-seo-settings`, and saving needs `update-seo-settings`. Both are
+seeded with the plugin's `seo-settings` Single, which holds the settings.
+
+### Title patterns
+
+A content type's titles are made from its pattern wherever a page has no title typed. Every type
+starts with `{Title} | {Site name}`, using the separator chosen on General. Click a pattern to
+change it: the variables the type offers can be clicked in, and an example title from the type's
+newest page updates as you type.
+
+- `{Title}` is the page's own title, `{Site name}` the site's name, and any other variable one of
+  the type's own text or number fields, such as `{Category}`.
+- A pattern naming a variable the type has no field for is refused before it can be saved.
+- A pattern whose variables a page has no value for gives way to the next source in the order
+  below, rather than leaving a gap in the title.
+- The site's name is never added right after a title that already ends with it: with the pattern
+  `{Title} | {Site name}`, a title typed as `Pricing | Acme` stays `Pricing | Acme`.
+
+**Reset to default** returns a type to the site's default pattern.
+
+### Changes reach pages without a redeploy
+
+Every save of the settings expires the cached heads built from them, so the next request for any
+page reads the new rules. The settings are one set for every language of a translated site.
+
+### Reading the settings in code
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { readBrandFacts, readSeoRules } from "@nextlyhq/plugin-seo";
+
+export const brandCard = definePlugin({
+  name: "@acme/brand-card",
+  version: "1.0.0",
+  async init(ctx) {
+    const rules = await readSeoRules(ctx);
+    const brand = await readBrandFacts(ctx);
+    ctx.logger.info(`${rules.siteName ?? "No name yet"}: ${brand.profiles.length} profiles`);
+  },
+});
+```
+
+`readSeoRules` answers the site's name, default description and share image, production addresses,
+the default pattern and each type's own patterns. `readBrandFacts` answers the brand's names, logo,
+social profiles and kind of site. Each reads the settings once; a read cached by your own code
+should carry `seoSettingsCacheTags()`, which every save expires.
+
 ## Turning the fields into tags
 
 With the plugin installed, every page served by a content route or a Single route gets its head
