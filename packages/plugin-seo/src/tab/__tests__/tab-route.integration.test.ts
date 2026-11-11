@@ -213,10 +213,29 @@ describe.each(getConfiguredTestDialects())(
       expect(answer.fields).toContain("structuredDataType");
       expect(answer.structuredData?.chosen).toBe("automatic");
       expect(answer.structuredData?.offered.length).toBeGreaterThan(1);
-      expect(answer.site).toEqual({
-        origin: "https://admin.example",
-        hosts: ["admin.example"],
-      });
+      // No production address is known, so the admin's own origin.
+      expect(answer.site).toEqual({ origin: "https://admin.example" });
+    });
+
+    it("shows the page under the site's production address where one is known", async () => {
+      const before = process.env.NEXTLY_PRODUCTION_ADDRESSES;
+      process.env.NEXTLY_PRODUCTION_ADDRESSES = "https://rext.ai";
+      try {
+        const response = await resolve(editor, {
+          kind: "collection",
+          slug: "posts",
+          document: TYPED_POST,
+        });
+        const answer = (await response.json()) as SeoTabContext;
+        expect(answer.site.origin).toBe("https://rext.ai");
+        expect(answer.levels.site.productionAddresses).toEqual([
+          "https://rext.ai",
+        ]);
+      } finally {
+        if (before === undefined)
+          delete process.env.NEXTLY_PRODUCTION_ADDRESSES;
+        else process.env.NEXTLY_PRODUCTION_ADDRESSES = before;
+      }
     });
 
     it("gives the tab the page's own answer once what was typed is put on top", async () => {

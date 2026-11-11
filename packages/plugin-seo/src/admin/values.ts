@@ -42,6 +42,15 @@ export interface ChosenImage {
   mimeType?: string;
 }
 
+/** The id a stored share image names: an id, or a read media document's. */
+export function imageIdOf(value: unknown): string | undefined {
+  if (typeof value === "string" && value !== "") return value;
+  if (typeof value === "object" && value !== null && "id" in value) {
+    return typeof value.id === "string" ? value.id : undefined;
+  }
+  return undefined;
+}
+
 /** The page's answer, and what it would be with nothing typed. */
 export interface PanelAnswers {
   answer: SeoAnswer;

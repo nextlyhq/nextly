@@ -54,9 +54,10 @@ export interface AdvancedProps {
   shownImageFile?: ChosenImage | undefined;
   /**
    * Makes a share image of the right size from the picture shown and sets it
-   * as the page's; answers whether it did. Absent where none can be made.
+   * as the page's; answers the made image's id, or none where it did not.
+   * Absent where none can be made.
    */
-  onMakeShareImage?: (() => Promise<boolean>) | undefined;
+  onMakeShareImage?: (() => Promise<string | undefined>) | undefined;
   /** Opens the page's own content at one of its fields. */
   onGoToField?: ((field: string) => void) | undefined;
 }
@@ -228,25 +229,33 @@ function StructuredDataRow({
       labelId={`${id}-label`}
       help="Tells Google what kind of page this is, so it can show details like the author and date. Only types Google still shows are offered."
       control={
-        <select
-          aria-labelledby={`${id}-label`}
-          value={chosen}
-          disabled={!writable}
-          onChange={event =>
-            onSet(
-              "structuredDataType",
-              event.target.value === "" ? null : event.target.value
-            )
-          }
-          className="h-9 min-w-[210px] cursor-pointer rounded-md border border-input bg-background px-3 text-sm text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <option value="">{structured.automatic.label} · automatic</option>
-          {structured.offered.map(type => (
-            <option key={type.key} value={type.key}>
-              {type.label}
-            </option>
-          ))}
-        </select>
+        // Drawn as the row's buttons are, with a caret of its own in place
+        // of the browser's.
+        <span className="relative inline-flex">
+          <select
+            aria-labelledby={`${id}-label`}
+            value={chosen}
+            disabled={!writable}
+            onChange={event =>
+              onSet(
+                "structuredDataType",
+                event.target.value === "" ? null : event.target.value
+              )
+            }
+            className="h-7 min-w-[210px] cursor-pointer appearance-none rounded-md border border-border bg-background pl-2.5 pr-7 text-xs font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <option value="">{structured.automatic.label} · automatic</option>
+            {structured.offered.map(type => (
+              <option key={type.key} value={type.key}>
+                {type.label}
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            aria-hidden="true"
+            className="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+          />
+        </span>
       }
     >
       {structured.problems.length > 0 ? (
@@ -314,11 +323,11 @@ const keyOf = (...stored: unknown[]): string =>
  */
 function confirmedElsewhere(
   values: SeoPanelValues,
-  hosts: readonly string[]
+  origins: readonly string[]
 ): boolean {
   if (values.canonicalElsewhere === true) return true;
   return (
-    checkCanonical(typedText(values.canonical), hosts).kind === "elsewhere"
+    checkCanonical(typedText(values.canonical), origins).kind === "elsewhere"
   );
 }
 
@@ -370,11 +379,12 @@ function OfficialAddressRow({
   onSet,
 }: AdvancedProps): ReactNode {
   const typed = typedText(values.canonical);
-  const hosts = context?.site.hosts ?? [];
+  // The site's production addresses, as the resolver judges a typed address.
+  const origins = context?.levels.site.productionAddresses ?? [];
   const [editing, setEditing] = useState(typed !== "");
   const [text, setText] = useState(typed);
   const [confirmed, setConfirmed] = useState(() =>
-    confirmedElsewhere(values, hosts)
+    confirmedElsewhere(values, origins)
   );
   const id = useId();
   const wrote = useOutsideChange(
@@ -383,11 +393,11 @@ function OfficialAddressRow({
       const held = typedText(values.canonical);
       setText(held);
       setEditing(held !== "");
-      setConfirmed(confirmedElsewhere(values, hosts));
+      setConfirmed(confirmedElsewhere(values, origins));
     }
   );
   const write = (next: string, elsewhere: boolean) => {
-    const stored = storedCanonical(next, hosts, elsewhere);
+    const stored = storedCanonical(next, origins, elsewhere);
     wrote(keyOf(stored.canonical, stored.canonicalElsewhere));
     onSet("canonical", stored.canonical);
     onSet("canonicalElsewhere", stored.canonicalElsewhere);
@@ -427,7 +437,7 @@ function OfficialAddressRow({
             autoFocus
             aria-label="Official address"
             aria-describedby={`${id}-check`}
-            aria-invalid={checkCanonical(text, hosts).kind === "bad"}
+            aria-invalid={checkCanonical(text, origins).kind === "bad"}
             placeholder="https://"
             value={text}
             disabled={!writable}
@@ -441,7 +451,7 @@ function OfficialAddressRow({
           <div id={`${id}-check`}>
             <AddressCheck
               text={text}
-              hosts={hosts}
+              origins={origins}
               confirmed={confirmed}
               disabled={!writable}
               onConfirm={next => {
@@ -479,18 +489,18 @@ function OfficialAddressRow({
 /** What a typed address will do, or why it cannot be used. */
 function AddressCheck({
   text,
-  hosts,
+  origins,
   confirmed,
   disabled,
   onConfirm,
 }: {
   text: string;
-  hosts: readonly string[];
+  origins: readonly string[];
   confirmed: boolean;
   disabled: boolean;
   onConfirm: (confirmed: boolean) => void;
 }): ReactNode {
-  const check = checkCanonical(text, hosts);
+  const check = checkCanonical(text, origins);
   const help = "m-0 text-[12.5px] leading-[1.45] text-muted-foreground";
   if (check.kind === "empty") {
     return (

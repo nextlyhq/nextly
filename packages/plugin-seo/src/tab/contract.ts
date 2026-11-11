@@ -53,8 +53,6 @@ export interface SeoTabContext {
     name?: string;
     /** The origin addresses are shown under, such as `https://acme.com`. */
     origin: string;
-    /** Every host the site is served from, lower case, for the address check. */
-    hosts: string[];
   };
   /** The content type's name for one of its pages, such as "Blog post". */
   typeLabel: string;

@@ -106,4 +106,26 @@ describe("what the SEO tab asks its route", () => {
     expect(result.current.context).toBeUndefined();
     expect(result.current.status).toBe("loading");
   });
+
+  it("reads a language's levels again when it comes back to one before another's were read", async () => {
+    route.value = { levels: {}, typeLabel: "Post" };
+    const document = { title: "P" };
+    const { result, rerender } = renderHook(
+      ({ target }) => useSeoTabContext(target, document),
+      { initialProps: { target: TARGET } }
+    );
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(sent).toHaveLength(1);
+
+    // To Spanish and back before Spanish is asked about: the first
+    // language's levels were let go, so they are read again.
+    rerender({ target: { ...TARGET, locale: "es" } });
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    rerender({ target: TARGET });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.body).toMatchObject({ locale: null });
+    expect(result.current.status).toBe("ready");
+    expect(result.current.context).toEqual(route.value);
+  });
 });

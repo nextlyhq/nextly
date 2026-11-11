@@ -29,6 +29,7 @@ import {
 import { z } from "nextly/zod";
 
 import type { Levels } from "../resolver/order";
+import { productionAddressesOf } from "../canonical";
 import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import type { ReadSocialCardRules } from "../social/card";
@@ -229,19 +230,16 @@ function siteOf(
   baseUrl: string | undefined,
   req: Request
 ): SeoTabContext["site"] {
-  const origins = [
-    ...(rules.productionAddresses ?? []).map(originOf),
-    originOf(baseUrl),
-    originOf(req.url),
-  ].filter((origin): origin is string => origin !== undefined);
-  const origin = origins[0] ?? new URL(req.url).origin;
-  const hosts = [
-    ...new Set(origins.map(each => new URL(each).hostname.toLowerCase())),
-  ];
+  // Where search engines see the site: its first production address, the
+  // environment's winning as the resolver's do; else the origin the plugin
+  // was configured with, else the one the admin is on.
+  const origin =
+    productionAddressesOf(rules.productionAddresses)[0] ??
+    originOf(baseUrl) ??
+    new URL(req.url).origin;
   return {
     ...(rules.siteName === undefined ? {} : { name: rules.siteName }),
     origin,
-    hosts,
   };
 }
 

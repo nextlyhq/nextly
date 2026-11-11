@@ -16,7 +16,7 @@ import { thingsToFix } from "../tab/problems";
 import type { AdvancedProps } from "./advanced";
 import { AutomaticSource, Chip, LinkAction, Note, SourceRow } from "./parts";
 import { Row, RowButton } from "./rows";
-import type { ChosenImage } from "./values";
+import { imageIdOf, type ChosenImage } from "./values";
 
 /** A file's size as a person reads it: `212 KB`. */
 function bytesText(bytes: number): string {
@@ -162,14 +162,15 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
     onChooseImage,
     onMakeShareImage,
   } = props;
-  // Made in this visit: what the row says once the copy is the page's image.
-  const [made, setMade] = useState(false);
+  // The copy made in this visit; the row says so while it is the page's image.
+  const [madeId, setMadeId] = useState<string | undefined>(undefined);
   const chosen = values.ogImage !== null && values.ogImage !== undefined;
+  const made = madeId !== undefined && madeId === imageIdOf(values.ogImage);
   const shown = shownImage(props, chosen);
   const make =
     onMakeShareImage &&
     (() => {
-      void onMakeShareImage().then(setMade);
+      void onMakeShareImage().then(setMadeId);
     });
   return (
     <Row
@@ -203,15 +204,12 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
               image={answer?.image}
               names={names}
               writable={writable}
-              onAutomatic={() => {
-                setMade(false);
-                onSet("ogImage", null);
-              }}
+              onAutomatic={() => onSet("ogImage", null)}
             />
           </SourceRow>
         </div>
       </div>
-      {made && chosen ? (
+      {made ? (
         <Note icon={<CircleCheck className="size-4 text-success-text" />}>
           Made a 1200 × 630 copy for sharing. The picture on the page is
           unchanged.

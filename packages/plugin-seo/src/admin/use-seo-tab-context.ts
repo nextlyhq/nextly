@@ -24,7 +24,7 @@ export interface SeoTabDocument {
   kind: "collection" | "single";
   slug: string;
   locale: string | null;
-  /** The saved entry's id; none while it is being created, or for a Single. */
+  /** The saved document's id; none while an entry is being created. */
   id: string | null;
 }
 
@@ -60,6 +60,12 @@ export function useSeoTabContext(
     setShownFor(targetKey);
     setState({ context: undefined, status: "loading" });
   }
+
+  // The levels shown were let go with the last target, so what was asked for
+  // it no longer stands for an answer on screen: coming back asks again.
+  useEffect(() => {
+    asked.current = null;
+  }, [targetKey]);
 
   useEffect(() => {
     if (kind === undefined || slug === undefined) return undefined;

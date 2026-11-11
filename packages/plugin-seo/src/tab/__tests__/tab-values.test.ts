@@ -138,7 +138,8 @@ describe("the problems an answer shows", () => {
 });
 
 describe("a typed official address", () => {
-  const SITE = ["acme.com", "www.acme.com"];
+  // The site's production addresses, as the resolver compares them.
+  const SITE = ["https://acme.com", "https://www.acme.com"];
 
   it.each([
     ["", { kind: "empty" }],
@@ -150,6 +151,9 @@ describe("a typed official address", () => {
       "https://news.example.org/post",
       { kind: "elsewhere", host: "news.example.org" },
     ],
+    // The same host on another scheme is another origin, as the resolver
+    // reads it, so it is not on the site.
+    ["http://acme.com/post", { kind: "elsewhere", host: "acme.com" }],
   ] as const)("reads %j as %j", (typed, expected) => {
     expect(checkCanonical(typed, SITE)).toEqual(expected);
   });
@@ -171,10 +175,17 @@ describe("a typed official address", () => {
     expect(check.kind === "bad" ? check.message : "").toContain(reason);
   });
 
-  it("accepts a host the site is served from although it has no dot", () => {
-    expect(checkCanonical("http://localhost:3000/post", ["localhost"])).toEqual(
-      { kind: "same" }
-    );
+  it("accepts an origin the site is served from although it has no dot", () => {
+    expect(
+      checkCanonical("http://localhost:3000/post", ["http://localhost:3000"])
+    ).toEqual({ kind: "same" });
+  });
+
+  it("reads every whole address as elsewhere while no production address is known", () => {
+    expect(checkCanonical("https://acme.com/post", [])).toEqual({
+      kind: "elsewhere",
+      host: "acme.com",
+    });
   });
 
   it("is stored as typed on the site, and elsewhere only once confirmed", () => {

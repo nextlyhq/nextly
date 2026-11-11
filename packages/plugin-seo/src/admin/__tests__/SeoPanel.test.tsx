@@ -42,13 +42,13 @@ const LEVELS: Levels = {
       field: "excerpt",
     },
   },
-  site: { title: "Rext AI" },
+  site: { title: "Rext AI", productionAddresses: ["https://rext.ai"] },
   address: "/blog/surfer-seo-vs-rext-ai",
 };
 
 const CONTEXT: SeoTabContext = {
   levels: LEVELS,
-  site: { name: "Rext AI", origin: "https://rext.ai", hosts: ["rext.ai"] },
+  site: { name: "Rext AI", origin: "https://rext.ai" },
   typeLabel: "Blog post",
   fieldLabels: { title: "Title", excerpt: "Excerpt" },
   fields: [
@@ -91,7 +91,8 @@ function Harness({
   onMakeShareImage,
   onGoToField,
 }: {
-  onMakeShareImage?: () => Promise<boolean>;
+  /** Makes a share image; the harness sets the id it answers as the page's. */
+  onMakeShareImage?: () => Promise<string | undefined>;
   onGoToField?: (field: string) => void;
   context?: SeoTabContext;
   documentKey?: string;
@@ -130,7 +131,14 @@ function Harness({
         writable
         {...(documentKey === undefined ? {} : { documentKey })}
         {...(errors === undefined ? {} : { errors })}
-        onMakeShareImage={onMakeShareImage}
+        onMakeShareImage={
+          onMakeShareImage &&
+          (async () => {
+            const id = await onMakeShareImage();
+            if (id !== undefined) setValues(was => ({ ...was, ogImage: id }));
+            return id;
+          })
+        }
         onGoToField={onGoToField}
         onSet={(field, next) => {
           onWrite?.(field, next);
@@ -436,7 +444,7 @@ describe("Advanced", () => {
         context={imaged}
         onMakeShareImage={() => {
           made += 1;
-          return Promise.resolve(false);
+          return Promise.resolve(undefined);
         }}
       />
     );
@@ -455,6 +463,49 @@ describe("Advanced", () => {
       screen.getByRole("button", { name: "Make a share image" })
     );
     expect(made).toBe(1);
+  });
+
+  it("says a share image was made only while it is the page's image", async () => {
+    const user = userEvent.setup();
+    const imaged: SeoTabContext = {
+      ...CONTEXT,
+      levels: {
+        ...LEVELS,
+        content: {
+          ...LEVELS.content,
+          image: {
+            value: { url: "/media/cover.webp", width: 800, height: 600 },
+            field: "coverImage",
+          },
+        },
+      },
+      shareImage: {
+        problems: [
+          { message: "800 × 600, LinkedIn will crop it", fix: "make" },
+        ],
+      },
+    };
+    render(
+      <Harness
+        context={imaged}
+        reloaded={{ ogImage: "chosen-2" }}
+        onMakeShareImage={() => Promise.resolve("made-1")}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(
+      screen.getByRole("button", { name: "Make a share image" })
+    );
+    expect(await screen.findByText(/Made a 1200 × 630 copy/)).toBeVisible();
+    expect(screen.getByText("Made for this page")).toBeVisible();
+
+    // Another image chosen: it was not made here, and its problems show.
+    await user.click(screen.getByRole("button", { name: "Reload" }));
+    expect(screen.queryByText(/Made a 1200 × 630 copy/)).toBeNull();
+    expect(screen.getByText("Chosen for this page")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Make a share image" })
+    ).toBeVisible();
   });
 
   it("says a page hidden with its whole type stays hidden, and locks its switch", async () => {
@@ -479,6 +530,33 @@ describe("Advanced", () => {
     expect(
       screen.getByText(/On for every blog post page, so this switch/)
     ).toBeVisible();
+  });
+
+  it("judges a typed address against the site's production addresses", async () => {
+    const user = userEvent.setup();
+    const writes: [string, unknown][] = [];
+    render(<Harness onWrite={(f, v) => writes.push([f, v])} />);
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(
+      screen.getByRole("button", { name: "Use another address" })
+    );
+    // On the production address: stored at once, nothing to confirm.
+    await user.type(
+      screen.getByLabelText("Official address"),
+      "https://rext.ai/blog/first"
+    );
+    expect(screen.queryByText(/That address is on another site/)).toBeNull();
+    expect(writes.slice(-2)).toEqual([
+      ["canonical", "https://rext.ai/blog/first"],
+      ["canonicalElsewhere", null],
+    ]);
+    // The same host without https is another origin, so it is asked about.
+    await user.clear(screen.getByLabelText("Official address"));
+    await user.type(
+      screen.getByLabelText("Official address"),
+      "http://rext.ai/blog/first"
+    );
+    expect(screen.getByText(/That address is on another site/)).toBeVisible();
   });
 
   it("says why a typed address cannot be used", async () => {

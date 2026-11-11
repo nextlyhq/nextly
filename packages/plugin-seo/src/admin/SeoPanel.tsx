@@ -67,7 +67,7 @@ export interface SeoPanelProps {
   /** The file of the share image shown while none is chosen, where read. */
   shownImageFile?: ChosenImage | undefined;
   /** Makes a share image of the right size; answers whether it did. */
-  onMakeShareImage?: (() => Promise<boolean>) | undefined;
+  onMakeShareImage?: (() => Promise<string | undefined>) | undefined;
   /** Opens the page's own content at one of its fields. */
   onGoToField?: ((field: string) => void) | undefined;
   /** Whether Advanced starts open. Closed on a real page. */

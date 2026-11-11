@@ -13,26 +13,23 @@
 import {
   MediaPickerDialog,
   navigateTo,
-  writePluginRoute,
   useDocumentField,
-  useDocumentLocale,
-  useMediaItem,
   type DocumentTabProps,
 } from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useFormState, useWatch } from "react-hook-form";
 
-import { SHARE_IMAGE_ROUTE_PATH } from "../social/contract";
-import { SEO_PLUGIN_NAME, type SeoTabContext } from "../tab/contract";
+import type { SeoTabContext } from "../tab/contract";
 import { problemsBadge, seoProblems, type SeoProblem } from "../tab/problems";
 import { SEO_GROUP } from "../tab/typed";
 
 import { SeoPanel } from "./SeoPanel";
+import { useShareImages } from "./share-images";
 import { publishSeoStatus, statusKeyOf } from "./status";
-import { useSeoTabContext, type SeoTabDocument } from "./use-seo-tab-context";
+import { useTabDocument } from "./tab-document";
+import { useSeoTabContext } from "./use-seo-tab-context";
 import {
   panelAnswers,
-  type ChosenImage,
   type PanelAnswers,
   type SeoPanelField,
   type SeoPanelValues,
@@ -41,124 +38,11 @@ import {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** Which document the tab is on, from its place's context. */
-function documentOf(
-  context: DocumentTabProps["context"],
-  locale: string | null
-): SeoTabDocument | null {
-  if ("single" in context) {
-    return { kind: "single", slug: context.single, locale, id: null };
-  }
-  if ("collection" in context) {
-    return {
-      kind: "collection",
-      slug: context.collection,
-      locale,
-      id: context.entryId,
-    };
-  }
-  return null;
-}
-
-/** Which document and language the tab shows, as one key. */
-function documentKeyOf(
-  target: SeoTabDocument,
-  context: DocumentTabProps["context"]
-): string {
-  const entryId = "entryId" in context ? context.entryId : null;
-  return [target.kind, target.slug, entryId, target.locale].join(":");
-}
-
-/** The id a stored share image names: an id, or a read media document's. */
-function imageIdOf(value: unknown): string | undefined {
-  if (typeof value === "string" && value !== "") return value;
-  if (isRecord(value) && typeof value.id === "string") return value.id;
-  return undefined;
-}
-
-/** A media document as the panel shows a chosen share image. */
-function chosenImageOf(
-  media: ReturnType<typeof useMediaItem>["data"]
-): ChosenImage | undefined {
-  if (media === undefined) return undefined;
-  return {
-    url: media.url,
-    filename: media.originalFilename || media.filename,
-    ...(typeof media.width === "number" ? { width: media.width } : {}),
-    ...(typeof media.height === "number" ? { height: media.height } : {}),
-    ...(media.altText ? { alt: media.altText } : {}),
-    bytes: media.size,
-    mimeType: media.mimeType,
-  };
-}
-
-/**
- * The share image made from the page's picture, set as the page's own:
- * answers whether it was, false where the person may not add to the media
- * library or the copy could not be made.
- */
-async function madeShareImage(
-  mediaId: string,
-  set: ((next: unknown) => boolean) | undefined
-): Promise<boolean> {
-  try {
-    const made = await writePluginRoute<{ item?: { id?: unknown } }>({
-      plugin: SEO_PLUGIN_NAME,
-      path: SHARE_IMAGE_ROUTE_PATH,
-      body: { media: mediaId },
-    });
-    const id = made?.item?.id;
-    return typeof id === "string" && set?.(id) === true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * The page's share images: the one chosen for it, the page's own picture the
- * automatic one is, and the action that makes a copy of the right size from
- * whichever is shown, where there is one to make it from.
- */
-function useShareImages(
-  document: Readonly<Record<string, unknown>>,
-  values: SeoPanelValues,
-  levels: SeoTabContext | undefined,
-  set: ((next: unknown) => boolean) | undefined
-): {
-  imageId: string | undefined;
-  chosenImage: ChosenImage | undefined;
-  contentImage: ChosenImage | undefined;
-  make: (() => Promise<boolean>) | undefined;
-} {
-  const imageId = imageIdOf(values.ogImage);
-  const chosenImage = useChosenImage(imageId);
-  const contentField = levels?.levels.content.image?.field;
-  const contentImageId =
-    contentField === undefined ? undefined : imageIdOf(document[contentField]);
-  const contentImage = useChosenImage(contentImageId);
-  const source = imageId ?? contentImageId;
-  return {
-    imageId,
-    chosenImage,
-    contentImage,
-    make: source === undefined ? undefined : () => madeShareImage(source, set),
-  };
-}
-
 /** Opens the page's own content, where a field the page lacks is filled in. */
 function goToContent(): void {
   const url = new URL(window.location.href);
   url.searchParams.delete("tab");
   navigateTo(`${url.pathname}${url.search}${url.hash}`);
-}
-
-/** The chosen share image, read from the media library by its id. */
-function useChosenImage(imageId: string | undefined): ChosenImage | undefined {
-  const media = useMediaItem(imageId);
-  return useMemo(
-    () => (imageId === undefined ? undefined : chosenImageOf(media.data)),
-    [imageId, media.data]
-  );
 }
 
 /**
@@ -244,22 +128,49 @@ function useSeoErrors(
   return refused;
 }
 
+/** The media library, opened to choose the page's share image. */
+function ShareImagePicker({
+  open,
+  imageId,
+  onOpenChange,
+  onChoose,
+}: {
+  open: boolean;
+  imageId: string | undefined;
+  onOpenChange: (open: boolean) => void;
+  onChoose: (id: string) => void;
+}): ReactNode {
+  return (
+    <MediaPickerDialog
+      mode="single"
+      accept="image/*"
+      open={open}
+      onOpenChange={onOpenChange}
+      {...(imageId === undefined
+        ? {}
+        : { initialSelectedIds: new Set([imageId]) })}
+      onSelect={chosen => {
+        const first = chosen[0];
+        if (first !== undefined) onChoose(first.id);
+        onOpenChange(false);
+      }}
+    />
+  );
+}
+
 export function SeoTab({
   context,
   control,
   documentLock,
+  entry,
   setBadge,
 }: DocumentTabProps): ReactNode {
-  const locale = useDocumentLocale();
   // The whole document as typed: any of its fields can feed an automatic
   // value (a title, an excerpt, a pattern's field, its address).
   const document = useWatch({ control }) as Record<string, unknown>;
   const fields = useSeoFields();
   const errors = useSeoErrors(control);
-  const target = useMemo(
-    () => documentOf(context, locale?.code ?? null),
-    [context, locale?.code]
-  );
+  const { target, documentKey } = useTabDocument(context, entry);
   const { context: levels, status } = useSeoTabContext(target, document);
   const [choosing, setChoosing] = useState(false);
 
@@ -267,7 +178,13 @@ export function SeoTab({
     const seo = document[SEO_GROUP];
     return isRecord(seo) ? seo : {};
   }, [document]);
-  const images = useShareImages(document, values, levels, fields.ogImage?.set);
+  const images = useShareImages(
+    document,
+    values,
+    levels,
+    documentKey,
+    fields.ogImage?.set
+  );
   const { imageId, chosenImage } = images;
   const answers = useMemo(
     () => panelAnswers(levels, values, chosenImage),
@@ -293,25 +210,17 @@ export function SeoTab({
         onSet={(field, next) => {
           fields[field]?.set(next);
         }}
-        documentKey={documentKeyOf(target, context)}
+        documentKey={documentKey}
         onChooseImage={() => setChoosing(true)}
         shownImageFile={images.contentImage}
         onMakeShareImage={images.make}
         onGoToField={goToContent}
       />
-      <MediaPickerDialog
-        mode="single"
-        accept="image/*"
+      <ShareImagePicker
         open={choosing}
+        imageId={imageId}
         onOpenChange={setChoosing}
-        {...(imageId === undefined
-          ? {}
-          : { initialSelectedIds: new Set([imageId]) })}
-        onSelect={chosen => {
-          const first = chosen[0];
-          if (first !== undefined) fields.ogImage?.set(first.id);
-          setChoosing(false);
-        }}
+        onChoose={id => fields.ogImage?.set(id)}
       />
     </>
   );

@@ -12,6 +12,7 @@
  * @module tab/canonical
  */
 import { usableCanonical } from "../canonical";
+import { originOf } from "../origin";
 
 /** What a typed address is. */
 export type CanonicalCheck =
@@ -54,34 +55,37 @@ function urlOf(typed: string): URL | undefined {
   }
 }
 
-/** Where a whole address points, against the hosts the site is served from. */
+/** Where a whole address points, against the site's production origins. */
 function placeOf(
   url: URL,
   typed: string,
-  siteHosts: readonly string[]
+  siteOrigins: readonly string[]
 ): CanonicalCheck {
   const host = url.hostname.toLowerCase();
   if (host === "") return incomplete();
   if (url.username !== "" || url.password !== "") {
     return bad("Remove the sign-in details from the address.");
   }
-  const onSite = siteHosts.includes(host);
+  // On the site where its origin is one of the site's production addresses,
+  // compared as the resolver compares them: scheme, host and port.
+  const own = siteOrigins.flatMap(origin => originOf(origin) ?? []);
+  const onSite = own.includes(url.origin);
   if (!onSite && (!host.includes(".") || host.endsWith("."))) {
-    return bad(
-      `The address is missing the site's name, like ${siteHosts[0] ?? "example.com"}.`
-    );
+    const example = own[0] === undefined ? "example.com" : new URL(own[0]).host;
+    return bad(`The address is missing the site's name, like ${example}.`);
   }
   if (usableCanonical(typed) === undefined) return incomplete();
   return onSite ? { kind: "same" } : { kind: "elsewhere", host };
 }
 
 /**
- * The typed address read against the hosts the site is served from
- * (`siteHosts`, lower case, with no port).
+ * The typed address read against the site's production origins
+ * (`siteOrigins`, its production addresses: none while none is known, when
+ * every whole address is read as elsewhere, as the resolver reads it).
  */
 export function checkCanonical(
   raw: string,
-  siteHosts: readonly string[]
+  siteOrigins: readonly string[]
 ): CanonicalCheck {
   const typed = raw.trim();
   if (typed === "") return { kind: "empty" };
@@ -97,7 +101,7 @@ export function checkCanonical(
   const problem = spellingProblem(typed);
   if (problem !== undefined) return problem;
   const url = urlOf(typed);
-  return url === undefined ? incomplete() : placeOf(url, typed, siteHosts);
+  return url === undefined ? incomplete() : placeOf(url, typed, siteOrigins);
 }
 
 /** The refusal for something that is not a whole address. */
@@ -127,10 +131,10 @@ export interface StoredCanonical {
  */
 export function storedCanonical(
   raw: string,
-  siteHosts: readonly string[],
+  siteOrigins: readonly string[],
   confirmedElsewhere: boolean
 ): StoredCanonical {
-  const check = checkCanonical(raw, siteHosts);
+  const check = checkCanonical(raw, siteOrigins);
   if (check.kind === "same") {
     return { canonical: raw.trim(), canonicalElsewhere: null };
   }
