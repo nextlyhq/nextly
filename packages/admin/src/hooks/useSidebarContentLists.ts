@@ -150,6 +150,9 @@ export function useSidebarSingleList({
     // but a search that matched nothing may only say so once this is true: the
     // match may be on a page still on its way, or on one that failed.
     isComplete: enabled && !isLoading && !hasNextPage,
+    // Whether every page is in this tab's cache, asked for by this reader or
+    // another: what the device remembers of the list waits for this.
+    hasArrived: singlesPages !== undefined && !hasNextPage,
     isPinned: pins.isPinned,
     togglePin: pins.togglePin,
   };

@@ -1,6 +1,13 @@
-import { takeStartupResponse } from "./startup-request";
+import {
+  isRememberedSchemaPath,
+  noteRememberedSchemaVersion,
+  recallSchema,
+  rememberSchema,
+} from "../device-memory/device-memory";
+
 import { parseApiError } from "./parseApiError";
 import { authFetch } from "./refreshInterceptor";
+import { takeStartupResponse } from "./startup-request";
 
 // Schema version tracking for cross-flow notification.
 // When the server bumps the schema version (e.g., code-first change),
@@ -89,6 +96,66 @@ export function noteSchemaVersion(res: Response): void {
     );
   }
   window.__nextlySchemaVersion = version;
+  // The device memory is labelled with the schema version: a move discards
+  // what was kept under the old one.
+  noteRememberedSchemaVersion(String(version));
+}
+
+/** Whether `init` sends a GET, the only request an earlier answer can stand for. */
+function isGetRequest(init: RequestInit): boolean {
+  return (init.method ?? "GET").toUpperCase() === "GET";
+}
+
+/**
+ * The response to `path`: the startup request's answer where it already
+ * answered this GET, once, as the response its own request would have had;
+ * otherwise the server's. A schema read whose answer this device kept asks
+ * whether it changed (`If-None-Match` with the kept tag), and an "unchanged"
+ * (304) is answered with the kept body: the tag is a hash of the body the
+ * server would send, so it is exactly that answer.
+ */
+async function respond(
+  path: string,
+  fetchOptions: RequestInit,
+  isProtected: boolean
+): Promise<Response> {
+  const isGet = isGetRequest(fetchOptions);
+  const fromStartup = isGet ? await takeStartupResponse(path) : undefined;
+  if (fromStartup !== undefined) return fromStartup;
+  const kept = isGet ? recallSchema(path) : undefined;
+  if (kept !== undefined) {
+    fetchOptions.headers = {
+      ...(fetchOptions.headers as Record<string, string>),
+      "If-None-Match": kept.etag,
+    };
+  }
+  const fullUrl = `${BASE_URL}${path}`;
+  const res = isProtected
+    ? await authFetch(fullUrl, fetchOptions)
+    : await fetch(fullUrl, fetchOptions);
+  if (res.status !== 304 || kept === undefined) return res;
+  // The kept body as the answer it stands for, with the server's headers (its
+  // schema version and the tag among them).
+  const headers = new Headers(res.headers);
+  headers.set("content-type", "application/json");
+  return new Response(JSON.stringify(kept.body), { status: 200, headers });
+}
+
+/**
+ * Keep a schema read's answer with its tag, so the next read of it, in this
+ * tab or a later one, can be answered "unchanged". Any other answer, or one
+ * without a tag, is not kept.
+ */
+function keepSchemaAnswer(
+  path: string,
+  init: RequestInit,
+  res: Response,
+  json: object
+): void {
+  const etag = res.headers.get("etag");
+  if (etag && isGetRequest(init) && isRememberedSchemaPath(path)) {
+    rememberSchema(path, etag, json);
+  }
 }
 
 /** Distinguishes "the body could not be parsed" from a body that IS `null`. */
@@ -99,7 +166,6 @@ export async function fetcher<T = unknown>(
   options: RequestInit = {},
   isProtected = false
 ): Promise<T> {
-  const fullUrl = `${BASE_URL}${path}`;
   // Headers MERGED after the rest of the options rather than replaced by them:
   // spread last, a caller's `headers` dropped the JSON content type, so a write
   // that added one header sent its JSON body as `text/plain`.
@@ -113,17 +179,7 @@ export async function fetcher<T = unknown>(
     },
   };
 
-  // A GET the startup request already answered takes that answer, once, as the
-  // response its own request would have had; anything else goes to the server.
-  const fromStartup =
-    (fetchOptions.method ?? "GET").toUpperCase() === "GET"
-      ? await takeStartupResponse(path)
-      : undefined;
-  const res =
-    fromStartup ??
-    (isProtected
-      ? await authFetch(fullUrl, fetchOptions)
-      : await fetch(fullUrl, fetchOptions));
+  const res = await respond(path, fetchOptions, isProtected);
 
   noteSchemaVersion(res);
 
@@ -173,6 +229,8 @@ export async function fetcher<T = unknown>(
   if (typeof json !== "object") {
     return undefined as T;
   }
+
+  keepSchemaAnswer(path, fetchOptions, res, json);
 
   // Server returns canonical shapes directly (no `{ data }` wrapper).
   // Callers type the generic with the canonical envelope

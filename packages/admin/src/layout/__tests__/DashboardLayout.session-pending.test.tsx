@@ -51,7 +51,9 @@ const { ScreenOutlineFor } = await import(
 const { RoutedPathnameContext } = await import(
   "@admin/context/RoutedPathnameContext"
 );
-const { SIGNED_IN_HERE_KEY } = await import("@admin/lib/auth/signed-in-here");
+const { SIGNED_IN_HERE_KEY } = await import(
+  "@admin/lib/device-memory/device-memory"
+);
 const { DashboardLayout } = await import("../DashboardLayout");
 
 const screenMounted = vi.fn();

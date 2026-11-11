@@ -2,23 +2,30 @@
 
 /**
  * The sidebar while the session is still being checked: the rail with its
- * logo, neutral shapes where its entries and its account foot will be, and the
- * route's panel, open with neutral rows where it will open. Nothing in it
- * reads the reader's data, which no screen may show before the server has
+ * logo, its entries and the route's panel as this device remembered them
+ * (names and links only), or neutral shapes in their places where it
+ * remembers none, and a neutral shape for the account foot. Nothing in it
+ * reads data from the server, which no screen may show before the server has
  * confirmed who they are; the real sidebar replaces it in the same places.
  *
  * @module components/layout/sidebar/DualSidebarOutline
  */
 
-import type { JSX } from "react";
+import { useState, type JSX } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useMediaContext } from "@admin/context/providers/MediaProvider";
 import { useRoutedPathname } from "@admin/context/RoutedPathnameContext";
+import { recallMenu } from "@admin/lib/device-memory/device-memory";
 
-import { sectionShown } from "./lib/content-rail";
+import { railItemOf, sectionShown } from "./lib/content-rail";
 import { resolveActiveSection } from "./lib/resolve-section";
 import { RailColumn, RailFootGhost, RailGhostItems } from "./RailColumn";
+import {
+  RememberedContentBody,
+  RememberedRailEntries,
+  remembersContent,
+} from "./RememberedMenu";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
 
@@ -45,6 +52,9 @@ export function DualSidebarOutline({
       showBuilder,
     }) ?? "dashboard";
   const shown = sectionShown(section, CONTENT_UNKNOWN);
+  // The menu as this device last saw it, read once: the server's answer
+  // replaces the whole outline, not this.
+  const [menu] = useState(recallMenu);
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -52,8 +62,12 @@ export function DualSidebarOutline({
         settled={false}
         foot={<RailFootGhost className="mt-4 shrink-0" />}
       >
-        {/* As many shapes as the rail has entries before any is ruled out. */}
-        <RailGhostItems count={getFilteredMenuItems(showBuilder).length} />
+        {menu === undefined ? (
+          // As many shapes as the rail has entries before any is ruled out.
+          <RailGhostItems count={getFilteredMenuItems(showBuilder).length} />
+        ) : (
+          <RememberedRailEntries menu={menu} selected={railItemOf(shown)} />
+        )}
       </RailColumn>
       <SubSidebarPanel
         isMobile={isMobile}
@@ -61,6 +75,15 @@ export function DualSidebarOutline({
         visibleMenuItemIds={[]}
         isFolderTreeVisible={isFolderTreeVisible}
         standaloneLabel=""
+        outlineBody={
+          remembersContent(menu, shown) && menu !== undefined ? (
+            <RememberedContentBody
+              menu={menu}
+              part={shown}
+              pathname={pathname}
+            />
+          ) : undefined
+        }
       />
     </div>
   );

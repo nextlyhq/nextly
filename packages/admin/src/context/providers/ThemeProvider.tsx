@@ -13,6 +13,8 @@ import {
   type JSX,
 } from "react";
 
+import { rememberingIsOff } from "@admin/lib/device-memory/device-memory";
+
 /**
  * The admin's theme: light, dark, or the system's setting, saved per browser.
  *
@@ -170,6 +172,13 @@ function readSaved(storageKey: string): string | null {
 }
 
 function save(storageKey: string, theme: string): void {
+  // Where the site turned remembering off, the choice applies in this tab
+  // alone, as when storage refuses it, and nothing is kept on the device.
+  if (rememberingIsOff()) {
+    unsaved.set(storageKey, theme);
+    for (const listener of listeners) listener();
+    return;
+  }
   try {
     window.localStorage.setItem(storageKey, theme);
     unsaved.delete(storageKey);

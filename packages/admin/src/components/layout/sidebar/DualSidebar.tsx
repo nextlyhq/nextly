@@ -1,12 +1,10 @@
 "use client";
 
-import { Tooltip, TooltipContent, TooltipTrigger } from "@nextlyhq/ui";
 import type React from "react";
 import { useCallback, useState, useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Database } from "@admin/components/icons";
-import { Link } from "@admin/components/ui/link";
 import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
 import {
   useBranding,
@@ -34,7 +32,6 @@ import { resolveCollectionPlacement } from "@admin/lib/plugins/collection-placem
 import { resolveVisibleMenuItems } from "@admin/lib/plugins/menu";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
-import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
@@ -62,6 +59,7 @@ import {
   placeStandalonePlugins,
   standaloneEntryId,
 } from "./lib/place-standalone-plugins";
+import { KeepSidebarMenu } from "./lib/remembered-menu";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
@@ -73,7 +71,7 @@ import {
 } from "./lib/settled-rail";
 import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
 import { RailAccount } from "./RailAccount";
-import { RAIL_FOCUS_RING, RailColumn, RailGhostItems } from "./RailColumn";
+import { RailColumn, RailEntry, RailGhostItems } from "./RailColumn";
 import type {
   MainMenuCategory,
   MainMenuItem,
@@ -121,6 +119,24 @@ function railSections(answers: RailSectionAnswers): RailSections {
     // Only a site with two or more locales has anything to translate.
     translations: isMultilingual(answers.branding?.locales),
   };
+}
+
+/**
+ * Whether a rail entry navigates (a link) rather than only opening its panel
+ * (a button). On mobile a category normally stays put and opens the panel
+ * instead of navigating. With the panel SUPPRESSED there is no panel to open,
+ * so staying put would do nothing at all and the drawer would stop navigating:
+ * the tap would only move a selection nobody can see.
+ */
+function railEntryNavigates(entry: {
+  href: string;
+  isMobile: boolean;
+  opensPanel: boolean;
+  panelReleased: boolean;
+}): boolean {
+  const staysOnPage =
+    entry.isMobile && entry.opensPanel && !entry.panelReleased;
+  return entry.href !== "#" && !staysOnPage;
 }
 
 interface DualSidebarProps {
@@ -522,6 +538,16 @@ export function DualSidebar({
 
   return (
     <div className="flex h-full overflow-hidden">
+      {/* The navigation as this reader sees it, kept on the device once every
+          answer the rail draws from is in, so the next fresh tab draws it
+          before the server answers. */}
+      <KeepSidebarMenu
+        settled={rail.settled}
+        items={rail.items}
+        hrefOf={resolveItemHref}
+        standalonePlugins={visibleStandalonePlugins}
+        parts={contentAvailable}
+      />
       {/* 1. Icon Sidebar (Main Menu) */}
       <RailColumn
         settled={rail.settled}
@@ -530,79 +556,22 @@ export function DualSidebar({
         foot={<RailAccount className="mt-4 shrink-0" />}
       >
         {rail.items.map(item => {
-          const Icon = item.icon;
-          const isSelected = railItemOf(shownMain) === item.id;
           const href = resolveItemHref(item);
-          /*
-           * On mobile a category normally stays put and opens the panel
-           * instead of navigating. With the panel SUPPRESSED there is no
-           * panel to open, so staying put does nothing at all and the drawer
-           * stops navigating — the tap only moves a selection nobody can see.
-           */
-          const stayOnPageMobile =
-            isMobile &&
-            hasSubSidebarCategory(item.id) &&
-            !suppressedChrome.has("subSidebar");
-          const renderAsLink = href !== "#" && !stayOnPageMobile;
-
-          // Unselected items use muted foreground so the resting icon meets contrast; a faint primary alpha did not.
-          const className = cn(
-            "flex shrink-0 items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative",
-            RAIL_FOCUS_RING,
-            isSelected
-              ? // `sidebar-accent` rather than `muted`: it is the surface
-                // `sidebar-accent-foreground` is declared against. Pairing
-                // the sidebar's ink with a surface from another scale is a
-                // combination no theme declares, so the contrast suite --
-                // which asserts each token against its declared partner --
-                // never checks it, and it goes unreadable in any theme that
-                // does not happen to survive the mismatch.
-                "bg-sidebar-accent text-sidebar-accent-foreground"
-              : "text-muted-foreground hover-unified"
-          );
-
-          const iconContent = (
-            <>
-              <Icon className="h-5 w-5" />
-            </>
-          );
-
           return (
-            <Tooltip key={item.id} delayDuration={0}>
-              <TooltipTrigger asChild>
-                {renderAsLink ? (
-                  <Link
-                    href={href}
-                    onClick={() => selectRailItem(item.id)}
-                    className={className}
-                    data-active={isSelected}
-                    // Named for assistive technology: it draws an icon alone, and its tooltip
-                    // is shown on hover and does not name the control.
-                    aria-label={item.label}
-                  >
-                    {iconContent}
-                  </Link>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => selectRailItem(item.id)}
-                    className={className}
-                    data-active={isSelected}
-                    // Named as the link beside it is: an icon alone, with a tooltip that does
-                    // not name the control.
-                    aria-label={item.label}
-                  >
-                    {iconContent}
-                  </button>
-                )}
-              </TooltipTrigger>
-              <TooltipContent
-                side="right"
-                className="bg-primary border-border text-primary-foreground"
-              >
-                {item.label}
-              </TooltipContent>
-            </Tooltip>
+            <RailEntry
+              key={item.id}
+              label={item.label}
+              icon={item.icon}
+              href={href}
+              selected={railItemOf(shownMain) === item.id}
+              asLink={railEntryNavigates({
+                href,
+                isMobile: Boolean(isMobile),
+                opensPanel: hasSubSidebarCategory(item.id),
+                panelReleased: suppressedChrome.has("subSidebar"),
+              })}
+              onSelect={() => selectRailItem(item.id)}
+            />
           );
         })}
         {/* While the answers that decide the rest are out, neutral shapes
