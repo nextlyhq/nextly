@@ -23,14 +23,11 @@
  * refresh holds trivially there, while the leak check holds as it does in
  * production.
  *
- * Each change is made once the page is served from Next.js's store. A render
- * stores the page after its response is sent, and the store the playground
- * runs on (Next.js's own) judges a stored page by when it was stored, not by
- * when its render read the content. A change landing between the two would
- * leave a page drawn from what was there before it standing as fresh. That
- * window is the store's, not the tags', and Nextly's own cache handlers
- * (which `create-nextly-app` installs) close it by judging a stored page by
- * when its render began.
+ * Each change is made straight after a render, while that render may still be
+ * storing the page: a render stores it after its response is sent. The
+ * playground runs on Nextly's cache handlers, as an app `create-nextly-app`
+ * makes does, and they judge a stored page by when its render began, so a
+ * change landing before the page is stored still expires it.
  */
 import { expect, type APIRequestContext } from "@playwright/test";
 
@@ -38,9 +35,6 @@ import { LOCK } from "./support/locks";
 import { fileAccount, test } from "./support/test";
 
 test.describe.configure({ mode: "serial", lock: [LOCK.homepage] });
-
-/** Whether the suite runs against a production build rather than `next dev`. */
-const PRODUCTION = process.env.E2E_SERVER === "production";
 
 const API = "/admin/api";
 const PAGES = `${API}/collections/block-pages/entries`;
@@ -185,24 +179,6 @@ test("a named query's page refreshes when a collection or a Single it reads chan
 
     const served = async () =>
       await (await visitor.get(`/blocks/${PAGE_SLUG}`)).text();
-    // The page as Next.js serves it from its store, holding `text`. A dev
-    // server stores nothing, so there every render is the page as it is.
-    const stored = async (text: string) => {
-      if (!PRODUCTION) return;
-      await expect
-        .poll(
-          async () => {
-            const response = await visitor.get(`/blocks/${PAGE_SLUG}`);
-            const html = await response.text();
-            return (
-              response.headers()["x-nextjs-cache"] === "HIT" &&
-              html.includes(text)
-            );
-          },
-          { timeout: 30_000 }
-        )
-        .toBe(true);
-    };
 
     // Warmed, so what follows is the page as it is served from the cache.
     await expect.poll(served, { timeout: 30_000 }).toContain(STORY_BEFORE);
@@ -225,12 +201,10 @@ test("a named query's page refreshes when a collection or a Single it reads chan
     expect(payload).not.toContain(SENTINEL);
 
     // 1a. A collection the query reads, which is not the one it lists.
-    await stored(STORY_BEFORE);
     await changed(signedIn, `${STORIES}/${story}`, { title: STORY_AFTER });
     await expect.poll(served, { timeout: 30_000 }).toContain(STORY_AFTER);
 
     // 1b. A Single the query reads.
-    await stored(STORY_AFTER);
     await changed(signedIn, HOMEPAGE, { title: HEADLINE_AFTER });
     await expect.poll(served, { timeout: 30_000 }).toContain(HEADLINE_AFTER);
 
