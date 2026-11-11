@@ -1,6 +1,5 @@
 ---
 "nextly": patch
-"@nextlyhq/plugin-accounts": patch
 "create-nextly-app": patch
 "@nextlyhq/admin": patch
 "@nextlyhq/admin-css": patch
@@ -14,6 +13,7 @@
 "@nextlyhq/storage-s3": patch
 "@nextlyhq/storage-uploadthing": patch
 "@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-accounts": patch
 "@nextlyhq/plugin-commerce": patch
 "@nextlyhq/plugin-form-builder": patch
 "@nextlyhq/plugin-mcp": patch
@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-"+ New" is at the top of the admin's icon rail, under the logo, on wide layouts: one searchable list of every type you may create. Where you may create nothing, it is not drawn, and the rail's entries wait for that answer so none of them moves.
+The admin's icon rail does not show a "+ New" button: its entries are drawn as soon as their own answers are in, without waiting on what the reader may create.
