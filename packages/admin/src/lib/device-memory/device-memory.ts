@@ -70,10 +70,24 @@ const SIGN_OUT_CHANNEL = "nextly:admin:device-memory";
 const ADMIN_KEY_PREFIXES = ["nextly:", "nextly-"] as const;
 const ADMIN_KEYS = new Set(["builder.showSystemInternals"]);
 
+/**
+ * Keys outside the admin's own spelling that hold an interface preference
+ * all the same, registered by whatever keeps one there (the theme, under the
+ * key its host chose), so forgetting the person and the off switch reach
+ * them too.
+ */
+const registeredKeys = new Set<string>();
+
+/** Treat `key` as one of the admin's own interface preferences. */
+export function registerPreferenceKey(key: string): void {
+  registeredKeys.add(key);
+}
+
 /** Whether `key` is one of the admin's own storage keys. */
 function isAdminStorageKey(key: string): boolean {
   return (
     ADMIN_KEYS.has(key) ||
+    registeredKeys.has(key) ||
     ADMIN_KEY_PREFIXES.some(prefix => key.startsWith(prefix))
   );
 }
@@ -542,15 +556,6 @@ export function forgetTabPreference(key: string): void {
   } catch {
     // Refused: nothing could have been kept there either.
   }
-}
-
-/**
- * Whether the site turned remembering off: for a writer that keeps a
- * preference under a key of its host's choosing (the theme), which must not
- * keep it either.
- */
-export function rememberingIsOff(): boolean {
-  return state.remembering === "off";
 }
 
 // ---------------------------------------------------------------------------

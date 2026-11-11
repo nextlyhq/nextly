@@ -13,7 +13,11 @@ import {
   type JSX,
 } from "react";
 
-import { rememberingIsOff } from "@admin/lib/device-memory/device-memory";
+import {
+  recallPreference,
+  registerPreferenceKey,
+  rememberPreference,
+} from "@admin/lib/device-memory/device-memory";
 
 /**
  * The admin's theme: light, dark, or the system's setting, saved per browser.
@@ -161,30 +165,25 @@ function subscribe(listener: () => void): () => void {
  */
 const unsaved = new Map<string, string>();
 
+/**
+ * The theme saved under `storageKey`, read through the device memory, which
+ * holds the key as one of the person's interface preferences, whatever its
+ * spelling: forgotten with them on sign-out and by the site's off switch.
+ */
 function readSaved(storageKey: string): string | null {
   const kept = unsaved.get(storageKey);
   if (kept !== undefined) return kept;
-  try {
-    return window.localStorage.getItem(storageKey);
-  } catch {
-    return null;
-  }
+  registerPreferenceKey(storageKey);
+  return recallPreference(storageKey);
 }
 
 function save(storageKey: string, theme: string): void {
-  // Where the site turned remembering off, the choice applies in this tab
-  // alone, as when storage refuses it, and nothing is kept on the device.
-  if (rememberingIsOff()) {
-    unsaved.set(storageKey, theme);
-    for (const listener of listeners) listener();
-    return;
-  }
-  try {
-    window.localStorage.setItem(storageKey, theme);
-    unsaved.delete(storageKey);
-  } catch {
-    unsaved.set(storageKey, theme);
-  }
+  registerPreferenceKey(storageKey);
+  // Kept by the device memory; where it keeps nothing (the site turned
+  // remembering off, or storage refused), the choice applies in this tab
+  // alone until the page reloads.
+  if (rememberPreference(storageKey, theme)) unsaved.delete(storageKey);
+  else unsaved.set(storageKey, theme);
   for (const listener of listeners) listener();
 }
 
