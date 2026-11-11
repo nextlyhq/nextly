@@ -177,6 +177,8 @@ describe.each(getConfiguredTestDialects())(
             publicAddress: "/{slug}",
           }),
         ],
+        // Seeds the plugin's own permissions, such as `manage-seo`.
+        seedPublic: true,
       });
       await lastCatchUp();
       await current.nextly.create({
@@ -374,12 +376,16 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
-    it("saves only a page built in code, and only for whoever may change the SEO settings", async () => {
+    it("saves only a page built in code, and only for whoever manages the site's SEO", async () => {
       const t = await boot();
       const owner = await personWith(t, "owner", "all");
+      // The SEO settings' own permissions open nothing here: the pages are
+      // site-wide SEO, which `manage-seo` alone decides.
       const reader = await personWith(t, "reader", [
         `read-${SEO_SETTINGS_SLUG}`,
+        `update-${SEO_SETTINGS_SLUG}`,
       ]);
+      const manager = await personWith(t, "manager", ["manage-seo"]);
 
       // An entry's SEO is set on the entry; an address no route serves has
       // none to set.
@@ -387,7 +393,11 @@ describe.each(getConfiguredTestDialects())(
       expect(await save(owner, typed("/nowhere", { title: "No" }))).toBe(400);
       expect(await save(owner, { path: "/pricing" })).toBe(400);
       expect(await save(reader, typed("/pricing", { title: "No" }))).toBe(403);
-      expect((await addressesFor(reader)).status).toBe(200);
+      expect((await addressesFor(reader)).status).toBe(403);
+      expect((await addressesFor(manager)).status).toBe(200);
+      expect(await save(manager, typed("/contact", { title: "Yes" }))).toBe(
+        200
+      );
 
       expect(
         (await seoMetadata("/pricing", { metadata: { title: "Pricing" } }))

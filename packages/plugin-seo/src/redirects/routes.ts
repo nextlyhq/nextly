@@ -20,10 +20,11 @@ import {
 import { z } from "zod";
 
 import { recordSlug, rowOf } from "../address-record/participant";
-import { NOT_FOUND_SLUG, notFoundSlug } from "../not-found/collection";
+import { notFoundSlug } from "../not-found/collection";
 import { closestPageIn, type LivePage } from "../not-found/suggest";
+import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 
-import { REDIRECTS_SLUG, redirectsSlug } from "./collection";
+import { redirectsSlug } from "./collection";
 import type { NotFoundView, RedirectView } from "./contract";
 import { importRedirects, readImportFile } from "./import";
 import { keptFrom, originBeside, servedOf } from "./served";
@@ -383,9 +384,9 @@ async function importFile(
     apply: body.apply,
     origin: new URL(req.url).origin,
     addedBy: nameOf(ctx),
-    // The route asks only to add redirects: replacing one is changing it,
-    // which PATCH asks to be allowed, so a file may do it only for the same.
-    mayReplace: (await ctx.caller?.can("update", redirectsSlug(ctx))) ?? false,
+    // Whoever may import may change a redirect too: both are site-wide SEO,
+    // which the route has already asked.
+    mayReplace: true,
   });
   const saved = result.rows.filter(
     row => row.kind !== "same" && row.kind !== "refused"
@@ -397,52 +398,34 @@ async function importFile(
 }
 
 /**
- * The routes the redirects screen reads and writes through, each asking for
- * its collection's permission under the name an installation gives it.
+ * The routes the redirects screen reads and writes through, each for
+ * someone holding `manage-seo`. The plugin keeps the redirects and the
+ * not-found log itself, writing as the system, and their own collections
+ * answer no one through the API, so site-wide SEO is the one permission
+ * that decides who reads and changes them.
  */
 export function redirectRoutes(): PluginRoute[] {
-  return [
+  const routes: PluginRoute[] = [
     {
       method: "GET",
       path: "/redirects",
-      requiredPermission: ({ collection }) =>
-        collection(REDIRECTS_SLUG, "read"),
       handler: (_req, ctx) => listRedirects(ctx),
     },
-    {
-      method: "POST",
-      path: "/redirects",
-      requiredPermission: ({ collection }) =>
-        collection(REDIRECTS_SLUG, "create"),
-      handler: addRedirect,
-    },
-    {
-      method: "PATCH",
-      path: "/redirects/:id",
-      requiredPermission: ({ collection }) =>
-        collection(REDIRECTS_SLUG, "update"),
-      handler: editRedirect,
-    },
+    { method: "POST", path: "/redirects", handler: addRedirect },
+    { method: "PATCH", path: "/redirects/:id", handler: editRedirect },
     {
       method: "DELETE",
       path: "/redirects/:id",
-      requiredPermission: ({ collection }) =>
-        collection(REDIRECTS_SLUG, "delete"),
       handler: (_req, ctx) => deleteRedirect(ctx),
     },
-    {
-      method: "POST",
-      path: "/redirects/import",
-      requiredPermission: ({ collection }) =>
-        collection(REDIRECTS_SLUG, "create"),
-      handler: importFile,
-    },
+    { method: "POST", path: "/redirects/import", handler: importFile },
     {
       method: "GET",
       path: "/not-found",
-      requiredPermission: ({ collection }) =>
-        collection(NOT_FOUND_SLUG, "read"),
       handler: (_req, ctx) => listNotFound(ctx),
     },
   ];
+  return routes.map(route =>
+    siteWide({ ...route, requiredPermission: MANAGE_SEO_PERMISSION })
+  );
 }

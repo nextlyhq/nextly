@@ -211,8 +211,12 @@ export function SeoTab({
   useStatusLine(context, answers, problems.length, levels?.typeLabel);
 
   if (target === null) return null;
+  // Read-only while the document is held, and for someone who may not
+  // change this page's SEO, whose save would keep the stored SEO.
   const writable =
-    !documentLock.readOnly && fields.metaTitle?.writable !== false;
+    !documentLock.readOnly &&
+    fields.metaTitle?.writable !== false &&
+    levels?.mayChange !== false;
   return (
     <>
       <SeoPanel

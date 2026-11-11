@@ -14,10 +14,14 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
 
 import { contentTypesRoute } from "../content-types-route";
 
-/** A reader's context whose one collection keeps `byline` in a group with no name. */
+/**
+ * A context for someone holding site-wide SEO, whose one collection keeps
+ * `byline` in a group with no name.
+ */
 function context(): PluginRouteContext {
   return {
     user: { id: "u1" },
+    caller: { can: async () => true },
     services: {
       collections: {
         getCollection: async () => ({

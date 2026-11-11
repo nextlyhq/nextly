@@ -8,7 +8,8 @@
  * site's own pages (`addresses`), and every fetch is held to the same rule
  * hop by hop (`fetch`). What Nextly holds is the page's head as the plugin
  * answers it, read from the published page the address record says holds
- * the address, and only for a caller who may read that page's type.
+ * the address, and only for a caller who may read that page's type. Both
+ * routes are for someone holding `check-seo`.
  *
  * @module received/route
  */
@@ -30,6 +31,7 @@ import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import { originOf } from "../origin";
 import { listPages } from "../outputs/listing";
+import { CHECK_SEO_PERMISSION } from "../permissions";
 import type { SeoLevel, Sourced } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import { publishedWhere } from "../sitemap";
@@ -372,12 +374,16 @@ async function check(
   };
 }
 
-/** The screen's routes: the pages it offers, and the check. */
+/**
+ * The screen's routes: the pages it offers, and the check. Both for someone
+ * holding `check-seo`, since a check has the server fetch the site's pages.
+ */
 export function receivedRoutes(setup: ReceivedSetup): PluginRoute[] {
   return [
     {
       method: "GET",
       path: RECEIVED_PAGES_ROUTE_PATH,
+      requiredPermission: CHECK_SEO_PERMISSION,
       handler: async (_req, ctx) => {
         signedIn(ctx);
         const origins = await originsOf(ctx, setup);
@@ -403,6 +409,7 @@ export function receivedRoutes(setup: ReceivedSetup): PluginRoute[] {
     {
       method: "POST",
       path: RECEIVED_ROUTE_PATH,
+      requiredPermission: CHECK_SEO_PERMISSION,
       handler: async (req, ctx) => {
         signedIn(ctx);
         const { address } = await checkBody(req);

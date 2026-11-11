@@ -167,6 +167,8 @@ describe.each(getConfiguredTestDialects())(
         ...(dialect === "sqlite" ? {} : { dialect }),
         // The site is configured on this machine, so the check may reach it.
         plugins: [seoPlugin({ collections: ["posts"], baseUrl: origin })],
+        // The boot's seeding, so the plugin's own `check-seo` exists to grant.
+        seedPublic: true,
         collections: [
           defineCollection({
             slug: "posts",
@@ -217,10 +219,14 @@ describe.each(getConfiguredTestDialects())(
         },
       });
       const seeded = await direct.permissions.find({ limit: 500 });
-      const readPosts = seeded.items.find(item => item.slug === "read-posts");
-      if (readPosts === undefined) throw new Error("read-posts is not seeded");
+      // A reader of posts who may run the check.
+      const ids = ["read-posts", "check-seo"].map(slug => {
+        const found = seeded.items.find(item => item.slug === slug);
+        if (found === undefined) throw new Error(`${slug} is not seeded`);
+        return found.id;
+      });
       const role = await direct.roles.create({
-        data: { name: "Reader", slug: "reader", permissionIds: [readPosts.id] },
+        data: { name: "Reader", slug: "reader", permissionIds: ids },
       });
       const keys = t.getService("apiKeyService") as unknown as ApiKeys;
       reader = (

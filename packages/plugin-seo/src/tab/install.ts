@@ -29,6 +29,8 @@ export function seoTabParts(setup: {
   readStructuredDataRules: ReadStructuredDataRules;
   /** Where the social card reads its rules from. */
   readSocialCardRules: ReadSocialCardRules;
+  /** Whether a page's SEO has a permission of its own. */
+  pagePermissions: boolean;
 }): Pick<PluginContributions, "admin"> & {
   routes: NonNullable<PluginContributions["routes"]>;
 } {
@@ -54,6 +56,7 @@ export function seoTabParts(setup: {
         readRules: setup.readRules,
         readStructuredDataRules: setup.readStructuredDataRules,
         readSocialCardRules: setup.readSocialCardRules,
+        pagePermissions: setup.pagePermissions,
         ...(baseUrl === undefined ? {} : { baseUrl }),
       }),
     ],

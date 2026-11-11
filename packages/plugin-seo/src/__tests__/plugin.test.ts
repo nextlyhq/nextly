@@ -109,7 +109,7 @@ describe("seoPlugin", () => {
     ]);
   });
 
-  it("lists the site's addresses to readers of the SEO settings, and saves a page's SEO only for those who may change them", () => {
+  it("lists the site's addresses and saves a page's SEO only for those who manage the site's SEO", () => {
     const routes = seoPlugin({ collections: ["pages"] }).contributes?.routes;
     const permissionOf = (method: string, path: string) => {
       const found = routes?.find(
@@ -123,8 +123,8 @@ describe("seoPlugin", () => {
       };
       return typeof found === "function" ? found(scope) : found;
     };
-    expect(permissionOf("GET", "/pages")).toBe("read-seo-settings");
-    expect(permissionOf("POST", "/pages/seo")).toBe("update-seo-settings");
+    expect(permissionOf("GET", "/pages")).toBe("manage-seo");
+    expect(permissionOf("POST", "/pages/seo")).toBe("manage-seo");
   });
 
   it("offers making a share image to a person who may add to the media library", () => {
@@ -139,14 +139,8 @@ describe("seoPlugin", () => {
     expect(route?.public).toBeUndefined();
   });
 
-  it("asks for the redirects' and not-found log's permissions under the names an installation gives them", () => {
+  it("asks site-wide SEO for the redirects' and not-found log's routes, whatever an installation names those stores", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
-    const renamed = {
-      plugin: "@nextlyhq/plugin-seo",
-      collection: (slug: string, action: string) =>
-        `${action}-site_${slug.slice("nx_seo_".length)}`,
-      single: (slug: string, action: string) => `${action}-${slug}`,
-    };
 
     const asked = (plugin.contributes?.routes ?? [])
       .filter(
@@ -155,18 +149,16 @@ describe("seoPlugin", () => {
       .map(({ method, path, requiredPermission }) => [
         method,
         path,
-        typeof requiredPermission === "function"
-          ? requiredPermission(renamed)
-          : requiredPermission,
+        requiredPermission,
       ]);
 
     expect(asked).toEqual([
-      ["GET", "/redirects", "read-site_redirects"],
-      ["POST", "/redirects", "create-site_redirects"],
-      ["PATCH", "/redirects/:id", "update-site_redirects"],
-      ["DELETE", "/redirects/:id", "delete-site_redirects"],
-      ["POST", "/redirects/import", "create-site_redirects"],
-      ["GET", "/not-found", "read-site_not_found"],
+      ["GET", "/redirects", "manage-seo"],
+      ["POST", "/redirects", "manage-seo"],
+      ["PATCH", "/redirects/:id", "manage-seo"],
+      ["DELETE", "/redirects/:id", "manage-seo"],
+      ["POST", "/redirects/import", "manage-seo"],
+      ["GET", "/not-found", "manage-seo"],
     ]);
   });
 

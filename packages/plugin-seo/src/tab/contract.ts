@@ -60,6 +60,13 @@ export interface SeoTabContext {
   fieldLabels: Record<string, string>;
   /** The `seo` group's fields, so the tab offers a control for each alone. */
   fields: string[];
+  /**
+   * Whether the person may change this page's SEO, where the site gives it
+   * a permission of its own; true where it does not, since then the page's
+   * own update decides. A save by someone who may not keeps the stored SEO,
+   * so the tab shows it read-only.
+   */
+  mayChange: boolean;
   /** The page's structured data, where the group holds its type. */
   structuredData?: TabStructuredData;
   /** What keeps the page's share image from showing well on a card. */

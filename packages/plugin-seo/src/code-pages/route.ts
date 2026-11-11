@@ -1,7 +1,7 @@
 /**
  * The Pages and addresses screen's routes: every public address the site
- * knows of, for whoever may read the SEO settings, and the save of a page
- * with no entry's SEO, for whoever may change them.
+ * knows of, and the save of a page with no entry's SEO, both site-wide SEO
+ * for whoever holds `manage-seo`.
  *
  * @module code-pages/route
  */
@@ -15,8 +15,8 @@ import {
 import { z } from "zod";
 
 import { addressHolders } from "../address-record/participant";
+import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 import type { ReadRules } from "../resolver/provider";
-import { SEO_SETTINGS_SLUG } from "../settings/contract";
 
 import { siteAddresses } from "./addresses";
 import { codePagesSlug } from "./collection";
@@ -53,10 +53,11 @@ function originFor(req: Request, config: CodePageRoutesConfig): string {
 
 /** The route that lists every public address the site knows of. */
 function addressesRoute(config: CodePageRoutesConfig): PluginRoute {
-  return {
+  // Site-wide SEO, which the plugin keeps itself: `manage-seo` alone.
+  return siteWide({
     method: "GET",
     path: ADDRESSES_ROUTE_PATH,
-    requiredPermission: ({ single }) => single(SEO_SETTINGS_SLUG, "read"),
+    requiredPermission: MANAGE_SEO_PERMISSION,
     handler: async (req, ctx) => {
       const items = await siteAddresses(ctx, {
         origin: originFor(req, config),
@@ -72,7 +73,7 @@ function addressesRoute(config: CodePageRoutesConfig): PluginRoute {
         hasPrev: false,
       });
     },
-  };
+  });
 }
 
 /** The save the request asks for, refused where it is not one. */
@@ -106,10 +107,12 @@ async function isCodePage(
 
 /** The route that saves the SEO of a page with no entry. */
 function saveRoute(config: CodePageRoutesConfig): PluginRoute {
-  return {
+  // The SEO of an address with no entry is site-wide SEO, kept by the
+  // plugin itself: `manage-seo` alone, asked before anything is read.
+  return siteWide({
     method: "POST",
     path: CODE_PAGE_SEO_ROUTE_PATH,
-    requiredPermission: ({ single }) => single(SEO_SETTINGS_SLUG, "update"),
+    requiredPermission: MANAGE_SEO_PERMISSION,
     handler: async (req, ctx) => {
       const input = await requested(req);
       const path = codeAddressOf(input.path);
@@ -129,7 +132,7 @@ function saveRoute(config: CodePageRoutesConfig): PluginRoute {
       });
       return respondMutation(`Saved the SEO for ${path}.`, { path });
     },
-  };
+  });
 }
 
 /** The routes the Pages and addresses screen reads and saves through. */
