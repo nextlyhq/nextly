@@ -13,11 +13,18 @@
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
+import { useEffect, useState } from "react";
 
 import {
   EntryForm,
+  UnsavedChangesGuard,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
+import {
+  UnsavedWorkProvider,
+  useUnsavedWork,
+} from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
 import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
 import {
@@ -37,6 +44,9 @@ import {
   getComponent,
   type CustomEditViewProps,
 } from "@admin/lib/plugins/component-registry";
+import { editViewHasPages } from "@admin/lib/plugins/document-view-registry";
+import { cn } from "@admin/lib/utils";
+import { getCollectionFields } from "@admin/types/collection";
 
 // ============================================================================
 // Types
@@ -83,22 +93,25 @@ function CreateEntryBreadcrumbs({
  */
 function CreateEntryPageSkeleton() {
   return (
-    <PageContainer width="full">
+    <PageContainer type="editor">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading collection...
       </div>
 
-      {/* Cancels the page's vertical inset only.
-          The horizontal half would pull this skeleton past the measured
-          column, and the editor that replaces it would then jump 64px
-          narrower. */}
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-var(--admin-bar-height))] items-stretch lg:-my-8">
+      {/* An Editor page has no padding, as the editor that replaces this
+          does: its banners and panel start directly under the bar. */}
+      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-var(--admin-bar-height))] items-stretch">
         {/* Main Content */}
         {/* `min-w-0` as the editor that replaces this carries it: without it
             this pane will not shrink and pushes the rail past the column. */}
         <div
-          className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6 mx-auto w-full"
+          className={cn(
+            "flex-1 min-w-0 space-y-6 pt-6 lg:pt-8 mx-auto w-full",
+            // The editor's field column inset, so nothing moves sideways when
+            // the editor replaces this.
+            DOCUMENT_COLUMN_INSET
+          )}
           // The form that replaces this bounds its FIELD column, not the
           // page, so a skeleton bounded at the page moves every field
           // sideways the moment data arrives.
@@ -151,6 +164,27 @@ export default function CreateEntryPage({
 
   // Fetch enriched collection schema (component fields are populated)
   const { data: collection, isLoading, error } = useCollectionSchema(slug);
+
+  /*
+   * What a custom edit view says it holds unsaved, as on the edit page: the
+   * view replaces the form, so this page guards leaving for it. Hooks, so
+   * above the returns below.
+   */
+  const customViewUnsaved = useUnsavedWork();
+  /*
+   * The document a custom editor with pages of its own just created. Its
+   * editor carries on at the new document's own address. Moved there on the
+   * render AFTER the guard is told to stand down: the view clears its unsaved
+   * work as it reports success, but the guard only hears that on its next
+   * render, and a move made in the same breath would be asked about.
+   */
+  const [createdId, setCreatedId] = useState<string>();
+  useEffect(() => {
+    if (createdId === undefined || slug === undefined) return;
+    navigateTo(
+      buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id: createdId })
+    );
+  }, [createdId, slug]);
 
   /**
    * The page's measure, on every branch.
@@ -257,8 +291,17 @@ export default function CreateEntryPage({
     ? getComponent<CustomEditViewProps>(customEditViewPath)
     : undefined;
 
+  // A custom edit view with pages of its own is a whole editor, which carries
+  // on at the document it created; any other view returns to the list.
+  const customViewHasPages = editViewHasPages(slug, customEditViewPath);
+
   // Shared callbacks
-  const handleSuccess = () => {
+  const handleSuccess = (entry?: Record<string, unknown>) => {
+    const id = entry?.id;
+    if (customViewHasPages && typeof id === "string" && id !== "") {
+      setCreatedId(id);
+      return;
+    }
     // Navigate to entry list page after successful creation
     navigateTo(buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }));
   };
@@ -282,6 +325,7 @@ export default function CreateEntryPage({
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
         <MeasuredPageFrame
+          contentCarriesMeasure={customViewHasPages}
           breadcrumbs={
             <CreateEntryBreadcrumbs
               collectionSlug={slug}
@@ -297,7 +341,17 @@ export default function CreateEntryPage({
               auto-placed into a gutter. The registry imposes no root-element
               contract, so the page provides the box. */}
           <div>
-            <CustomEditView {...customViewProps} />
+            {/* The view reports its unsaved work here, and leaving asks first
+                while it holds any. */}
+            <UnsavedWorkProvider report={customViewUnsaved.report}>
+              <UnsavedChangesGuard
+                isDirty={customViewUnsaved.anyUnsaved}
+                disabled={createdId !== undefined}
+                fields={getCollectionFields(collection)}
+              >
+                <CustomEditView {...customViewProps} />
+              </UnsavedChangesGuard>
+            </UnsavedWorkProvider>
           </div>
         </MeasuredPageFrame>
       </QueryErrorBoundary>

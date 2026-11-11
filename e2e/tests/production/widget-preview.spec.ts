@@ -27,15 +27,17 @@ test.describe("the widget preview page on a production build", () => {
     page,
   }) => {
     await signIn(page);
-    // Customise mode, where a development server draws the link beside its
-    // other actions, draws none.
+    // Customise mode draws no link to the page.
     await page
       .getByTestId("dashboard-edit-begin")
       .filter({ visible: true })
       .click();
     await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
     await expect(
-      includingHidden(page).getByTestId("widget-previews-link")
+      includingHidden(page).getByText("Preview widgets")
+    ).toHaveCount(0);
+    await expect(
+      includingHidden(page).locator('a[href*="widget-previews"]')
     ).toHaveCount(0);
     await page
       .getByTestId("dashboard-edit-cancel")

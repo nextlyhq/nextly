@@ -18,7 +18,7 @@ import type { NextlyServiceConfig } from "../../di/register";
 import { NextlyError } from "../../errors/nextly-error";
 import { getFilterRegistry } from "../../filters";
 import { FilterSeams } from "../../filters/seams";
-import { getCachedNextly } from "../../init";
+import type { Nextly } from "../../init/nextly-instance";
 import type { CollectionRegistryService } from "../collections/services/collection-registry-service";
 import type { SingleRegistryService } from "../singles/services/single-registry-service";
 
@@ -28,6 +28,16 @@ import {
   publicAddressProblem,
   type PublicAddressKind,
 } from "./public-address-template";
+
+/**
+ * The running Nextly, started first if it is not yet. The boot entry is
+ * loaded here, at the call, so the plugin context that imports this module
+ * does not load the whole boot with it.
+ */
+export async function startedNextly(): Promise<Nextly> {
+  const { getCachedNextly } = await import("../../init");
+  return getCachedNextly();
+}
 
 /** @experimental A content type, by kind and slug. */
 export interface PublicAddressType {
@@ -185,7 +195,7 @@ export async function publicAddressOf(
   entry?: Readonly<Record<string, unknown>>,
   locale?: string
 ): Promise<PublicAddress> {
-  await getCachedNextly();
+  await startedNextly();
   return addressFrom(type, await declaredFor(type, locale), entry);
 }
 
@@ -236,7 +246,7 @@ export async function typesWithoutAddress(): Promise<PublicAddressType[]> {
 export async function siteTypes(): Promise<
   { type: PublicAddressType; row: TypeRecord }[]
 > {
-  await getCachedNextly();
+  await startedNextly();
   const collections = container.get<CollectionRegistryService>(
     "collectionRegistryService"
   );

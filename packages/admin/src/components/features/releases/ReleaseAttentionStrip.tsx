@@ -61,7 +61,7 @@ export function ReleaseAttentionStrip({
     // The border at full strength: faded, it fell below the 3:1 a boundary needs against the page.
     <section
       aria-labelledby="release-attention-strip"
-      className="mb-6 rounded-md border border-destructive bg-destructive/5 px-4 py-3"
+      className="mb-6 rounded-md border border-danger-border bg-danger-surface px-4 py-3"
     >
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
         <h2
