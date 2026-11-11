@@ -12,6 +12,7 @@
 import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type React from "react";
 
+import { GreetingActionProvider } from "@admin/components/features/dashboard/GreetingAction";
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
 import { WidgetGrid } from "@admin/components/features/widgets/WidgetGrid";
 import { AlertCircle } from "@admin/components/icons";
@@ -89,7 +90,7 @@ const DashboardPage: React.FC = () => {
   return (
     <ErrorBoundary fallback={DashboardErrorFallback}>
       <PageContainer>
-        {/* The greeting's own bottom margin is the space above the cards, as
+        {/* The greeting row's own bottom margin is the space above the cards, as
             the approved design draws it. No padding of its own above or
             below: the page container's is every admin page's, so the greeting
             starts where other pages' headings do. */}
@@ -112,7 +113,11 @@ const DashboardPage: React.FC = () => {
               the resource sections competes with getting an editor to their
               content without answering a question they actually have. The
               component still ships and is cheap to restore, as a widget now. */}
-          <DashboardPlace />
+          {/* Above both the greeting and the grid: the grid draws its cog
+              into the greeting row's place. */}
+          <GreetingActionProvider>
+            <DashboardPlace />
+          </GreetingActionProvider>
         </div>
       </PageContainer>
     </ErrorBoundary>

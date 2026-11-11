@@ -107,8 +107,10 @@ export interface PluginPublicAddresses {
     transaction: PluginCollectionTransaction
   ): Promise<{ refused: RefusedAddressUpdate[] }>;
   /**
-   * One page of a type's documents, oldest first, each with every address it
-   * holds now; `next` is the cursor of the following page.
+   * One page of a type's documents, in id order, each with every address it
+   * holds now and when it was made; `next` is the cursor of the following
+   * page. Paged by id, so documents deleted or made meanwhile never move one
+   * not yet read behind the cursor.
    *
    * Waits for the boot to finish, so call it from work `init` or `onReady`
    * starts without awaiting: awaited inside them, which the boot waits for,
