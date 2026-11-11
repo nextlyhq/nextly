@@ -10,23 +10,32 @@
  */
 import { createHash } from "node:crypto";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
+import { container } from "../../di";
+import { whenServicesRegistered } from "../../di/service-access";
 import { getCachedNextly } from "../../init";
+import { PAGINATION_DEFAULTS } from "../../types/pagination";
 
 import {
   addressLanguages,
   heldIn,
+  readEveryLanguage,
   type LanguageVersion,
 } from "./held-addresses";
 import type { HeldAddressUpdate } from "./participants";
 import {
   declaredFor,
   siteTypes,
-  typeRecordOn,
   type PublicAddressType,
 } from "./public-address";
 
-/** The largest page {@link heldPage} hands back. */
-const MAX_PAGE = 500;
+/**
+ * The largest page {@link heldPage} hands back: one under the query's own
+ * ceiling, so the extra row it reads to see whether another page follows is
+ * never clamped away.
+ */
+const MAX_PAGE = PAGINATION_DEFAULTS.maxLimit - 1;
 const DEFAULT_PAGE = 100;
 
 /** The position after a page, as an opaque cursor. */
@@ -46,7 +55,10 @@ function labelOf(document: Readonly<Record<string, unknown>>) {
   return typeof title === "string" && title !== "" ? { label: title } : {};
 }
 
-/** A Single's one update: its fixed address, in every language while published. */
+/**
+ * A Single's one update: its fixed address in each language it is published
+ * in, read as a save reads it, on a transaction of its own.
+ */
 async function singleHeld(
   type: PublicAddressType
 ): Promise<HeldAddressUpdate[]> {
@@ -55,22 +67,25 @@ async function singleHeld(
     slug: type.slug,
   } as never)) as Record<string, unknown> | null;
   if (single === null) return [];
-  const lifecycle = (await typeRecordOn(type))?.status === true;
-  const version: LanguageVersion = {
-    published: !lifecycle || single.status === "published",
-    document: single,
-  };
-  const perLanguage = new Map(
-    addressLanguages().map(language => [language, version])
-  );
+  const id = String(single.id);
+  const holds = await container
+    .get<DrizzleAdapter>("adapter")
+    .transaction(async tx =>
+      heldIn(
+        type,
+        await readEveryLanguage(tx, {
+          collection: `single:${type.slug}`,
+          id,
+          data: single,
+          operation: "update",
+        }),
+        tx
+      )
+    );
   return [
     {
-      holder: {
-        collection: `single:${type.slug}`,
-        id: String(single.id),
-        ...labelOf(single),
-      },
-      holds: await heldIn(type, perLanguage),
+      holder: { collection: `single:${type.slug}`, id, ...labelOf(single) },
+      holds,
     },
   ];
 }
@@ -86,6 +101,8 @@ export async function heldPage(args: {
   after?: string;
   limit?: number;
 }): Promise<{ items: HeldAddressUpdate[]; next?: string }> {
+  // Started during the boot, not awaited, this waits for the boot to finish.
+  await whenServicesRegistered();
   const { type } = args;
   const offset = offsetOf(args.after);
   if (type.kind === "single") {
@@ -153,6 +170,7 @@ export async function heldPage(args: {
  * and not otherwise.
  */
 export async function addressFingerprint(): Promise<string> {
+  await whenServicesRegistered();
   const languages = addressLanguages();
   const parts: string[] = [`languages:${languages.join(",")}`];
   for (const { type, row } of await siteTypes()) {

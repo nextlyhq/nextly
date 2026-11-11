@@ -350,7 +350,7 @@ import {
 import { languageChangeContentCache } from "./registrations/language-change-content-cache";
 // Looking a service up needs only the container, so it lives apart from
 // this file and its every registration.
-import { getService } from "./service-access";
+import { announceServicesRegistered, getService } from "./service-access";
 
 // ============================================================
 // Configuration Interface
@@ -1337,6 +1337,9 @@ async function registerServicesOnce(
   // settled or refused, never pending.
 
   globalForReg.__nextly_isRegistered = true;
+  // Work a plugin started during the boot without awaiting it (an address
+  // catch-up, say) waits for this moment rather than failing before it.
+  announceServicesRegistered();
 
   // Re-point the handler store at the TRANSFORMED plugin list, and only now.
   //

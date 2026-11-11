@@ -24,6 +24,8 @@ import {
   type ParticipantRunner,
 } from "../participants";
 
+import { heldPage } from "../held-listing";
+
 import { memoryParticipant, type Holding } from "./memory-participant";
 
 let current: TestNextly | undefined;
@@ -43,12 +45,19 @@ function join<T extends { runner: ParticipantRunner }>(participant: T): T {
 
 async function boot(
   dialect: TestDialect,
-  localized = false
+  localized = false,
+  fallback = true
 ): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
     ...(localized
-      ? { localization: { locales: ["en", "fr"], defaultLocale: "en" } }
+      ? {
+          localization: {
+            locales: ["en", "fr"],
+            defaultLocale: "en",
+            fallback,
+          },
+        }
       : {}),
     collections: [
       defineCollection({
@@ -90,6 +99,17 @@ async function boot(
         : []),
     ],
     singles: [
+      ...(localized
+        ? [
+            defineSingle({
+              slug: "contact",
+              localized: true,
+              status: true,
+              fields: [text({ name: "headline" })],
+              publicAddress: "/contact",
+            }),
+          ]
+        : []),
       defineSingle({
         slug: "about",
         fields: [text({ name: "headline" })],
@@ -316,6 +336,89 @@ describe.each(getConfiguredTestDialects())(
 describe.each(getConfiguredTestDialects())(
   "a translated entry's addresses (%s)",
   dialect => {
+    it("holds no address in a language whose slug is untranslated, without fallback", async () => {
+      const t = await boot(dialect, true, false);
+      const record = join(memoryParticipant());
+      const article = await create(
+        t,
+        "articles",
+        { title: "Hello", slug: "hello", status: "published" },
+        "en"
+      );
+      await update(
+        t,
+        "articles",
+        article,
+        { slug: "", status: "published" },
+        { locale: "fr" }
+      );
+
+      // An English save: French still has no slug of its own to be served at.
+      await update(
+        t,
+        "articles",
+        article,
+        { title: "Hello again" },
+        {
+          locale: "en",
+        }
+      );
+
+      expect(record.held()).toEqual({
+        "en|/articles/hello": `articles:${article}`,
+      });
+    });
+
+    it("keeps a translated Single's published language while another is saved as a draft", async () => {
+      const t = await boot(dialect, true);
+      const record = join(memoryParticipant());
+      await t.nextly.updateSingle({
+        slug: "contact",
+        locale: "en",
+        data: {
+          headline: "Write to us",
+          status: "published",
+          _overwrite: true,
+        },
+      } as never);
+
+      await t.nextly.updateSingle({
+        slug: "contact",
+        locale: "fr",
+        data: { headline: "Écrivez-nous", status: "draft", _overwrite: true },
+      } as never);
+
+      expect(
+        Object.keys(record.held()).filter(k => k.endsWith("/contact"))
+      ).toEqual(["en|/contact"]);
+    });
+
+    it("lists a translated Single in only its published languages", async () => {
+      const t = await boot(dialect, true);
+      await t.nextly.updateSingle({
+        slug: "contact",
+        locale: "en",
+        data: {
+          headline: "Write to us",
+          status: "published",
+          _overwrite: true,
+        },
+      } as never);
+      await t.nextly.updateSingle({
+        slug: "contact",
+        locale: "fr",
+        data: { headline: "Écrivez-nous", status: "draft", _overwrite: true },
+      } as never);
+
+      const { items } = await heldPage({
+        type: { kind: "single", slug: "contact" },
+      });
+
+      expect(items.map(item => item.holds)).toEqual([
+        [{ locale: "en", path: "/contact" }],
+      ]);
+    });
+
     it("keeps a published language's address while another language is saved as a draft", async () => {
       const t = await boot(dialect, true);
       const record = join(memoryParticipant());

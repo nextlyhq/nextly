@@ -214,6 +214,29 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("move is refused once its transaction has ended", async () => {
+      const { record, participant } = asPluginParticipant();
+      const { ctx } = await boot(dialect, participant);
+      let kept: Parameters<typeof ctx.publicAddresses.move>[1] | undefined;
+      await ctx.services.collections.withTransaction(async tx => {
+        kept = tx;
+      });
+      if (kept === undefined) throw new Error("no transaction was handed over");
+
+      await expect(
+        ctx.publicAddresses.move(
+          [
+            {
+              holder: { collection: "pages", id: "late" },
+              holds: [{ locale: "en", path: "/late" }],
+            },
+          ],
+          kept
+        )
+      ).rejects.toThrow();
+      expect(record.held()).toEqual({});
+    });
+
     it("held pages through a type oldest first, each once", async () => {
       const { t, ctx } = await boot(dialect);
       const ids = [
@@ -266,6 +289,40 @@ describe.each(getConfiguredTestDialects())(
 
       expect(same).toBe(before);
       expect(moved).not.toBe(before);
+    });
+
+    it("a catch-up started in onReady, not awaited, finishes once the boot has", async () => {
+      const started: { done?: Promise<[string, number]> } = {};
+      const plugin = definePlugin({
+        name: "@test/address-catch-up",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        onReady(ctx) {
+          started.done = Promise.all([
+            ctx.publicAddresses.fingerprint(),
+            ctx.publicAddresses
+              .held({ type: { kind: "collection", slug: "posts" } })
+              .then(page => page.items.length),
+          ]);
+        },
+      });
+      current = await createTestNextly({
+        dialect,
+        plugins: [plugin],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+
+      const [fingerprint, count] = await (started.done ??
+        Promise.reject(new Error("onReady never ran")));
+      expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
+      expect(count).toBe(0);
     });
 
     it("withdraw stops the asking", async () => {

@@ -91,6 +91,10 @@ export interface PluginPublicAddresses {
   /**
    * One page of a type's documents, oldest first, each with every address it
    * holds now; `next` is the cursor of the following page.
+   *
+   * Waits for the boot to finish, so call it from work `init` or `onReady`
+   * starts without awaiting: awaited inside them, which the boot waits for,
+   * it would never finish. `fingerprint` is the same.
    */
   held(args: {
     type: PublicAddressType;
@@ -143,28 +147,43 @@ export function pluginPublicAddresses(
       removeParticipant(runnerOf(participant));
     },
     async move(updates, transaction) {
-      const { tx } = transactionOf(transaction);
-      const refused: RefusedAddressUpdate[] = [];
-      let standing = [...updates];
-      // Asked again until nothing more is refused: an update judged against a
-      // batch in which another lets an address go must not stand once that
-      // other is refused and keeps it.
-      for (;;) {
-        const refusedNow: RefusedAddressUpdate[] = [];
-        for (const update of standing) {
-          const clash = await firstHolder(update, standing, tx);
-          if (clash !== null) refusedNow.push({ update, ...clash });
-        }
-        if (refusedNow.length === 0) break;
-        refused.push(...refusedNow);
-        standing = standing.filter(
-          update => !refusedNow.some(r => r.update === update)
-        );
-      }
-      if (standing.length > 0) await recordEverywhere(standing, tx);
-      return { refused };
+      const { tx, scope } = transactionOf(transaction);
+      // Refused once the transaction has ended, and held open until the whole
+      // move settles, as every method taking this token is: a participant's
+      // writes must never run after the caller's transaction is gone.
+      scope.assertOpen();
+      return scope.track(settleMoves(updates, tx));
     },
     held: args => heldPage(args),
     fingerprint: () => addressFingerprint(),
   };
+}
+
+/**
+ * Ask every participant about each of `updates`, the whole batch in view, and
+ * record the ones nobody refused, returning the refused.
+ */
+async function settleMoves(
+  updates: readonly HeldAddressUpdate[],
+  tx: TransactionContext
+): Promise<{ refused: RefusedAddressUpdate[] }> {
+  const refused: RefusedAddressUpdate[] = [];
+  let standing = [...updates];
+  // Asked again until nothing more is refused: an update judged against a
+  // batch in which another lets an address go must not stand once that
+  // other is refused and keeps it.
+  for (;;) {
+    const refusedNow: RefusedAddressUpdate[] = [];
+    for (const update of standing) {
+      const clash = await firstHolder(update, standing, tx);
+      if (clash !== null) refusedNow.push({ update, ...clash });
+    }
+    if (refusedNow.length === 0) break;
+    refused.push(...refusedNow);
+    standing = standing.filter(
+      update => !refusedNow.some(r => r.update === update)
+    );
+  }
+  if (standing.length > 0) await recordEverywhere(standing, tx);
+  return { refused };
 }

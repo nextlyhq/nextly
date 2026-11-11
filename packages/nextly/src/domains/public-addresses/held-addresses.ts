@@ -15,11 +15,23 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { container } from "../../di";
 import type { InTransactionWrite } from "../../hooks/types";
 import type { CollectionService } from "../collections/services/collection-service";
-import { readCompanionLocaleStatusAll } from "../i18n/companion-join";
+import {
+  readCompanionLocaleStatusAll,
+  resolveLocalizedValue,
+} from "../i18n/companion-join";
 import { appLocalization } from "../i18n/configured-locales";
+import { resolveLocaleChain } from "../i18n/resolve-locale";
 import { cachedCompanionReadiness } from "../i18n/runtime/companion-readiness";
 import { languageIsLive } from "../i18n/runtime/language-lifecycle";
-import type { CompanionSchema } from "../i18n/runtime/companion-io";
+import {
+  buildCompanionSchema,
+  type CompanionSchema,
+} from "../i18n/runtime/companion-io";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../i18n/per-language-storage";
+import type { SingleRegistryService } from "../singles/services/single-registry-service";
 import { readCompanionValuesByLocale } from "../singles/services/single-webhook-doc";
 
 import type { HeldAddress } from "./participants";
@@ -57,7 +69,12 @@ export function typeOfWrite(collection: string): PublicAddressType {
     : { kind: "collection", slug: collection };
 }
 
-/** Each translated field's value in each language, by field name. */
+/**
+ * Each translated field's value in each language, by field name, as a read in
+ * that language resolves it: along the language's fallback chain where the
+ * site falls back, else its own value alone, so a field untranslated there is
+ * null rather than the saved language's value.
+ */
 async function translations(
   tx: TransactionContext,
   companion: CompanionSchema,
@@ -71,17 +88,49 @@ async function translations(
     id,
     languages
   );
+  const localization = appLocalization();
   const byName = new Map<string, Record<string, unknown>>();
-  for (const [language, values] of byColumn) {
+  for (const language of languages) {
+    const chain = resolveLocaleChain(localization, language, undefined) ?? [
+      language,
+    ];
     const named: Record<string, unknown> = {};
     for (const field of companion.localizedFields) {
-      const value = values[field.column];
-      // An untranslated field reads as null; the shared value stands then.
-      if (value !== undefined && value !== null) named[field.name] = value;
+      const perLocale = Object.fromEntries(
+        chain.map(code => [code, byColumn.get(code)?.[field.column]])
+      );
+      named[field.name] = resolveLocalizedValue(perLocale, chain);
     }
     byName.set(language, named);
   }
   return byName;
+}
+
+/**
+ * The translations table of `type`, or null for a type that keeps no values
+ * per language: a collection's from its file manager, a Single's built from
+ * its registry row as every other reader of a Single's companion does.
+ */
+async function companionOf(
+  type: PublicAddressType,
+  executor: unknown
+): Promise<CompanionSchema | null> {
+  if (type.kind === "collection") {
+    return container
+      .get<CollectionService>("collectionService")
+      .companionSchemaOf(type.slug, executor);
+  }
+  const row = await container
+    .get<SingleRegistryService>("singleRegistryService")
+    .getSingleBySlug(type.slug, executor);
+  if (!row || !storesPerLanguage(row)) return null;
+  return buildCompanionSchema({
+    slug: type.slug,
+    tableName: row.tableName,
+    fields: row.fields as Parameters<typeof buildCompanionSchema>[0]["fields"],
+    dialect: container.get<DrizzleAdapter>("adapter").dialect,
+    status: publishesPerLanguage(row),
+  });
 }
 
 /**
@@ -148,8 +197,8 @@ export function publishedIn(
  * there and whether it is published there. A delete leaves nothing.
  *
  * At most three reads, all on `tx`: the translations, and, where the type
- * publishes per language, each language's status and the main row's. A Single's address names no
- * field, and is held in every language while the Single is published.
+ * publishes per language, each language's status and the main row's. A Single, whose
+ * address names no field, is read the same way.
  */
 export async function readEveryLanguage(
   tx: TransactionContext,
@@ -164,12 +213,7 @@ export async function readEveryLanguage(
   const shared = write.data as Record<string, unknown>;
   const languages = addressLanguages();
 
-  const companion =
-    type.kind === "collection"
-      ? await container
-          .get<CollectionService>("collectionService")
-          .companionSchemaOf(type.slug, executor)
-      : null;
+  const companion = await companionOf(type, executor);
   const translated = companion
     ? await translations(tx, companion, write.id, languages)
     : undefined;

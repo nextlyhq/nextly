@@ -558,6 +558,9 @@ export type { PublicAddress, PublicAddressType } from "nextly";
  * refuses the save where one does, and otherwise tells every participant what
  * the document holds. Core keeps no record of its own.
  *
+ * Intended to become stable: experimental until the SEO plugin and Page
+ * Builder both ship on it, then changed only with a major version.
+ *
  * @experimental
  */
 export type {

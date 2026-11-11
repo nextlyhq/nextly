@@ -70,7 +70,40 @@ Every participant is asked about each update with the whole batch in view, and t
 
 ## Catching up at start
 
-A participant installed on a site that already has content starts with an empty record, and a deploy can move addresses without any save. Bring the record up to date at start:
+A participant installed on a site that already has content starts with an empty record, and a deploy can move addresses without any save. Bring the record up to date at start, from work your `init` or `onReady` starts but does not await: `held` and `fingerprint` wait for the boot to finish, and the boot waits for those hooks, so awaiting them there never finishes.
+
+```ts
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+
+async function catchUp(ctx: PluginContext): Promise<void> {
+  const fingerprint = await ctx.publicAddresses.fingerprint();
+  // Compare `fingerprint` with the one you stored at the last catch-up; when
+  // it differs, walk each type with `held` and record what it returns.
+  const first = await ctx.publicAddresses.held({
+    type: { kind: "collection", slug: "posts" },
+  });
+  for (const item of first.items) {
+    // Record `item.holds` for `item.holder` in your own store.
+  }
+  ctx.logger.info("address catch-up", {
+    fingerprint,
+    documents: first.items.length,
+  });
+}
+
+export const withCatchUp = definePlugin({
+  name: "acme-addresses",
+  version: "1.0.0",
+  nextly: ">=0.0.2",
+  init(ctx) {
+    ctx.publicAddresses.participate(participant);
+    // Started, not awaited: it runs once the boot has finished.
+    void catchUp(ctx).catch(error =>
+      ctx.logger.error("address catch-up failed", { error })
+    );
+  },
+});
+```
 
 - `ctx.publicAddresses.fingerprint()` changes whenever an address template or the language list does. Store it, and catch up when it differs.
 - `ctx.publicAddresses.held({ type, after, limit })` pages through one type's documents oldest first, each with every address it holds now. Pass the returned `next` as `after` for the following page.

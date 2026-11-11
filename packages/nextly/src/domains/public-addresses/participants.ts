@@ -14,6 +14,7 @@
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../errors/nextly-error";
+import { getActiveHookRegistry } from "../../hooks/hook-registry";
 import type { HookOwner } from "../../hooks/types";
 
 /**
@@ -133,6 +134,19 @@ export function onParticipantsChange(
   };
 }
 
+/**
+ * The participants to ask now: every one but those whose plugin a config
+ * reload switched off. The hook registry suspends that plugin's owner rather
+ * than tearing it down, so its registration stays and resumes when it is
+ * switched back on.
+ */
+function active(): ParticipantRunner[] {
+  const suspended = new Set(getActiveHookRegistry().getSuspendedOwners());
+  return participants
+    .filter(entry => !suspended.has(entry.owner))
+    .map(entry => entry.runner);
+}
+
 function sameHolder(a: AddressHolder, b: AddressHolder): boolean {
   return a.collection === b.collection && a.id === b.id;
 }
@@ -149,7 +163,7 @@ export async function firstHolder(
   tx: TransactionContext
 ): Promise<{ address: HeldAddress; heldBy: AddressHolder } | null> {
   // Taken once, so a participant added meanwhile is asked on the next write.
-  const asked = participants.map(entry => entry.runner);
+  const asked = active();
   let clash: { address: HeldAddress; heldBy: AddressHolder } | null = null;
   for (const runner of asked) {
     for (const address of update.holds) {
@@ -171,7 +185,7 @@ export async function recordEverywhere(
   batch: readonly HeldAddressUpdate[],
   tx: TransactionContext
 ): Promise<void> {
-  const told = participants.map(entry => entry.runner);
+  const told = active();
   for (const runner of told) await runner.record(batch, tx);
 }
 

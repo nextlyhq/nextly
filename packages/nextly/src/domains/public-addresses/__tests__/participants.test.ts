@@ -166,3 +166,31 @@ describe("one list per process", () => {
     expect(second.hasParticipants()).toBe(false);
   });
 });
+
+describe("a plugin a reload switched off", () => {
+  it("is neither asked nor told while its owner is suspended", async () => {
+    const { getActiveHookRegistry } = await import(
+      "../../../hooks/hook-registry"
+    );
+    const registry = getActiveHookRegistry();
+    const before = registry.getSuspendedOwners();
+    const off = fake(new Map([["en|/blog/hello", page]]));
+    const on = fake();
+    addParticipant(off.runner, "plugin:off");
+    added.push(off.runner);
+    join(on.runner);
+    registry.setSuspendedOwners(["plugin:off"]);
+    const update = { holder: post, holds: [en] };
+
+    try {
+      expect(await firstHolder(update, [update], tx)).toBeNull();
+      await recordEverywhere([update], tx);
+    } finally {
+      registry.setSuspendedOwners(before);
+    }
+
+    expect(off.asked).toEqual([]);
+    expect(off.recorded).toEqual([]);
+    expect(on.recorded).toEqual([[update]]);
+  });
+});
