@@ -146,9 +146,9 @@ async function formOf(
 }
 
 /**
- * Refuse a new submission to a form past its closing time, or one that would
- * take it past its limit. A form with neither is read once, unlocked, and
- * left alone.
+ * Refuse a new submission to a form past its closing time, one that would
+ * take it past its limit, or one whose one-response key is not the one the
+ * form's committed settings give it.
  */
 async function holdFormClosing(
   deps: HoldDeps,
@@ -158,16 +158,15 @@ async function holdFormClosing(
   const submission = newSubmission(write);
   if (submission === undefined) return;
   const { formId } = submission;
-  const stored = await formOf(deps.own, write, slugs, formId, "none");
-  if (pastClosingTime(stored.settings, new Date())) {
-    throw closedRefusal(stored.form, { formId, closedBy: "date" });
-  }
-  const limited =
-    submission.takesAPlace && stored.settings.submissionLimit !== undefined;
-  if (!limited && !keyInPlay(stored.settings, write.data)) return;
-  // Turns, one form at a time: the next submission to this form, and a
-  // change to its settings, wait here. Read again under the lock.
+  // Turns, one form at a time: the next submission to this form, and a save
+  // of its settings, wait here, so this one is judged by the settings as
+  // committed. Taken for every form, not only one that compares responses
+  // as last committed: a save that starts comparing them may be in flight,
+  // and a submission that read past it unlocked would be stored with no key.
   const locked = await formOf(deps.own, write, slugs, formId, "update");
+  if (pastClosingTime(locked.settings, new Date())) {
+    throw closedRefusal(locked.form, { formId, closedBy: "date" });
+  }
   if (submission.takesAPlace) {
     await holdLimit(deps.own, write, slugs, formId, locked);
   }
@@ -196,16 +195,6 @@ async function holdLimit(
   if (pagination.total > limit) {
     throw closedRefusal(form, { formId, closedBy: "limit", limit });
   }
-}
-
-/**
- * Whether one response per person bears on this submission: the form
- * compares responses, or the submission was given a key under a setting the
- * form may since have left.
- */
-function keyInPlay(settings: { oneResponse?: string }, row: unknown): boolean {
-  const key = (row as { responseKey?: unknown } | undefined)?.responseKey;
-  return (settings.oneResponse ?? "off") !== "off" || (key ?? null) !== null;
 }
 
 /**
@@ -431,7 +420,9 @@ function releasedKeyOf(
 ): { key: string; formId: string; ipAddress: unknown } | undefined {
   const before = heldBefore(write);
   const key = before?.responseKey;
-  if (typeof key !== "string" || stillHeld(write, key)) return undefined;
+  if (typeof key !== "string" || stillHeld(write, key, before)) {
+    return undefined;
+  }
   const formId = formIdOf(before?.form);
   return formId === undefined
     ? undefined
@@ -451,10 +442,22 @@ function heldBefore(
     | undefined;
 }
 
-/** Whether an update left the submission holding `key`. */
-function stillHeld(write: InTransactionContext, key: string): boolean {
-  const after = write.data as { responseKey?: unknown } | undefined;
-  return write.operation === "update" && after?.responseKey === key;
+/** Whether an update left the submission holding `key` on the same form. */
+function stillHeld(
+  write: InTransactionContext,
+  key: string,
+  before: { form?: unknown } | undefined
+): boolean {
+  const after = write.data as
+    | { responseKey?: unknown; form?: unknown }
+    | undefined;
+  // A move to another form leaves this one even when the key reads the same
+  // there: keys are compared per form.
+  return (
+    write.operation === "update" &&
+    after?.responseKey === key &&
+    formIdOf(after?.form) === formIdOf(before?.form)
+  );
 }
 
 /**

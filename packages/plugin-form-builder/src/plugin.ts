@@ -1151,11 +1151,13 @@ function stampRequestAddress(
  */
 function pluginKeyWrite(
   operation: string | undefined,
-  row: Record<string, unknown>
+  row: Record<string, unknown>,
+  stored: Record<string, unknown> | undefined
 ): boolean {
   const key = submissionMarks(row)?.setKey;
   if (operation !== "update" || key === undefined) return false;
-  row.responseKey = key;
+  // Spam holds no key, whatever was decided before it was marked.
+  row.responseKey = stored?.status === "spam" ? null : key;
   return true;
 }
 
@@ -1174,7 +1176,9 @@ export async function prepareSubmissionForWrite(
   };
   const submission = ctx.data;
   if (!submission || typeof submission !== "object") return ctx.data;
-  if (pluginKeyWrite(ctx.operation, submission)) return submission;
+  if (pluginKeyWrite(ctx.operation, submission, ctx.originalData)) {
+    return submission;
+  }
   // A submission's one-response key is the plugin's to write, never a
   // caller's: one posting a key could take a value's place before its owner.
   delete submission.responseKey;

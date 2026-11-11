@@ -230,8 +230,8 @@ type InTransactionWrite = Parameters<
 /**
  * Give a form's earlier submissions keys for its new version inside the
  * save that changed it, when the save decided they fit
- * (`stampOneResponseVersion` recorded the keys as made). Oldest first, the
- * earliest of several with one value keeping it. The save holds the form's
+ * (`stampOneResponseVersion` recorded the keys as made). Read whole first,
+ * then keyed oldest first, the earliest of several with one value keeping it. The save holds the form's
  * row, so no submission to the form is stored meanwhile, and the save
  * answers with every key in place and no later write to the form.
  */
@@ -250,24 +250,26 @@ export async function rebuildInSave(
   if (version === (before.oneResponseVersion ?? 0)) return;
   if (after.oneResponseKeyedVersion !== version) return;
   if (after.oneResponse !== "ip" && after.oneResponse !== "email") return;
+  const rows = await snapshotOf(
+    async where =>
+      (
+        await deps.own.listEntriesInTransaction(
+          write.transaction,
+          deps.submissionsSlug,
+          {
+            where,
+            sort: { field: "id", direction: "asc" },
+            pagination: { limit: PAGE },
+            depth: 0,
+          },
+          { lock: "none" }
+        )
+      ).data,
+    { form: { equals: write.id }, status: { not_equals: "spam" } }
+  );
   const held = new Set<string>();
-  for (let page = 1; ; page++) {
-    const { data } = await deps.own.listEntriesInTransaction(
-      write.transaction,
-      deps.submissionsSlug,
-      {
-        where: { form: { equals: write.id }, status: { not_equals: "spam" } },
-        sort: { field: "createdAt", direction: "asc" },
-        pagination: { limit: PAGE, page },
-        depth: 0,
-      },
-      { lock: "none" }
-    );
-    const rows = data as Row[];
-    for (const row of rows) {
-      await keyInSave(deps, write, after, held, row);
-    }
-    if (rows.length < PAGE) return;
+  for (const row of rows) {
+    await keyInSave(deps, write, after, held, row);
   }
 }
 
@@ -319,9 +321,8 @@ type Row = Record<string, unknown>;
 
 /**
  * Give every form whose keys are behind its earlier submissions' keys, until
- * `deadline`. A form is marked up to date only after a pass in which every
- * submission took its key, with none to look at again and no row gone or
- * added, so one changed while the sweep ran is not taken as done.
+ * `deadline`. A form is marked up to date only after a pass over all its
+ * submissions in which every one took its key, with none to look at again.
  */
 export async function rebuildResponseKeys(
   deps: RebuildDeps,
@@ -384,13 +385,13 @@ async function rebuildForm(
 }
 
 /**
- * One pass over a form's non-spam submissions, oldest first. Rows stored
- * after the pass began are left out (`passCutoff`): they were keyed for the
- * current version when they were stored, and leaving them out keeps a busy
- * form's count steady. The count of those rows is taken before and after, so
- * a submission deleted or marked spam during the pass, which moves the rows
- * after it back a place, sends the sweep round again; so does a row whose
- * write was refused as edited since, or as holding a value taken since.
+ * One pass over a form's non-spam submissions, oldest first. The rows are
+ * read first, whole (`snapshotOf`), then keyed in order: a submission deleted
+ * or restored while the pass runs cannot move another out of a page it reads.
+ * Rows stored after the pass began are left out (`passCutoff`): they were
+ * keyed for the current version when they were stored. A row whose write was
+ * refused, as edited since or as holding a value taken since, sends the
+ * sweep round again.
  */
 async function rebuildPass(
   deps: RebuildDeps,
@@ -398,43 +399,26 @@ async function rebuildPass(
   settings: FormSettings,
   deadline: Date
 ): Promise<"done" | "again" | "stop"> {
-  const where = {
-    form: { equals: formId },
-    status: { not_equals: "spam" },
-    createdAt: { less_than_equal: passCutoff() },
-  };
-  const count = () =>
-    deps.collections.count(deps.submissionsSlug, { where }, { as: "system" });
-  const before = await count();
-  let retries = 0;
-  for (let page = 1; ; page++) {
-    const { data } = await deps.collections.listEntries(
-      deps.submissionsSlug,
-      {
-        where,
-        sort: { field: "createdAt", direction: "asc" },
-        pagination: { limit: PAGE, page },
-        depth: 0,
-      },
-      { as: "system" }
-    );
-    const rows = data as Row[];
-    const keyed = await keyRows(deps, formId, settings, rows, deadline);
-    if (keyed === "stop") return "stop";
-    retries += keyed;
-    if (rows.length < PAGE) break;
-  }
-  return retries === 0 && (await count()) === before ? "done" : "again";
-}
-
-/** Key one page of rows: how many must be looked at again, or `stop`. */
-async function keyRows(
-  deps: RebuildDeps,
-  formId: string,
-  settings: FormSettings,
-  rows: Row[],
-  deadline: Date
-): Promise<number | "stop"> {
+  const rows = await snapshotOf(
+    async where =>
+      (
+        await deps.collections.listEntries(
+          deps.submissionsSlug,
+          {
+            where,
+            sort: { field: "id", direction: "asc" },
+            pagination: { limit: PAGE },
+            depth: 0,
+          },
+          { as: "system" }
+        )
+      ).data,
+    {
+      form: { equals: formId },
+      status: { not_equals: "spam" },
+      createdAt: { less_than_equal: passCutoff() },
+    }
+  );
   let retries = 0;
   for (const row of rows) {
     if (pastDeadline(deadline)) return "stop";
@@ -442,7 +426,35 @@ async function keyRows(
     if (outcome === "stale-form") return "stop";
     if (outcome === "retry") retries += 1;
   }
-  return retries;
+  return retries === 0 ? "done" : "again";
+}
+
+/**
+ * Every row `where` matches, oldest first. Read a page at a time by id, each
+ * page after the last id read: ids are unique and fixed, so a row deleted or
+ * added meanwhile never moves one that is there throughout out of reach, as
+ * a page by position would. Then put in the order they were stored.
+ */
+async function snapshotOf(
+  page: (where: Record<string, unknown>) => Promise<Row[]>,
+  where: Record<string, unknown>
+): Promise<Row[]> {
+  const rows: Row[] = [];
+  for (let after: string | undefined; ; ) {
+    const read = await page(
+      after === undefined ? where : { ...where, id: { greater_than: after } }
+    );
+    rows.push(...read);
+    if (read.length < PAGE) break;
+    after = String(read[read.length - 1]?.id);
+  }
+  return rows.sort(storedFirst);
+}
+
+/** Older first, by when each was stored; ties by id, the same every time. */
+function storedFirst(a: Row, b: Row): number {
+  const at = (row: Row) => new Date(row.createdAt as string | Date).getTime();
+  return at(a) - at(b) || (String(a.id) < String(b.id) ? -1 : 1);
 }
 
 /**

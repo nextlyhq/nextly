@@ -194,46 +194,105 @@ describe("a key's version", () => {
   });
 });
 
-describe("a sweep resuming over keys it made", () => {
-  it("asks nothing about rows holding their own key, and finishes in one pass", async () => {
-    const digests = () => ({
+/** Fake services over `rows`: a list that pages by id as the store does. */
+function fakeDeps(
+  rows: Record<string, unknown>[],
+  settings: Record<string, unknown>,
+  /** Run once, after the first page of submissions is read. */
+  afterFirstPage?: () => void
+) {
+  let pagesRead = 0;
+  const listEntries = vi.fn(
+    async (
+      slug: string,
+      options: {
+        where?: { id?: { greater_than?: string } };
+        pagination?: { page?: number };
+      }
+    ) => {
+      if (slug === "forms") {
+        return { data: [{ id: "f1", _rev: "3", settings }] };
+      }
+      // By id after a cursor, or by position: both, as the store answers.
+      const after = options.where?.id?.greater_than;
+      const skip = ((options.pagination?.page ?? 1) - 1) * 100;
+      const page = rows
+        .filter(row => after === undefined || String(row.id) > after)
+        .sort((a, b) => (String(a.id) < String(b.id) ? -1 : 1))
+        .slice(skip, skip + 100);
+      pagesRead += 1;
+      if (pagesRead === 1) afterFirstPage?.();
+      return { data: page };
+    }
+  );
+  const count = vi.fn(async () => 0);
+  const updateEntry = vi.fn(async () => ({}));
+  const deps = {
+    collections: { listEntries, count, updateEntry },
+    digests: () => ({
       digest: async (purpose: string, value: string) => `${purpose}-${value}`,
       prepare: async () => undefined,
+    }),
+    formsSlug: "forms",
+    submissionsSlug: "form-submissions",
+  } as unknown as RebuildDeps;
+  return { deps, listEntries, count, updateEntry };
+}
+
+const behind = {
+  oneResponse: "ip",
+  oneResponseVersion: 2,
+  oneResponseKeyedVersion: 1,
+};
+const later = () => new Date(Date.now() + 60_000);
+/** A stored submission from its own address, `n` seconds into the day. */
+const row = (n: number, responseKey?: string) => ({
+  id: `s${String(n).padStart(4, "0")}`,
+  _rev: "1",
+  createdAt: new Date(Date.UTC(2026, 10, 1, 0, 0, n)).toISOString(),
+  ipAddress: `198.51.100.${n % 250}-${n}`,
+  ...(responseKey === undefined ? {} : { responseKey }),
+});
+
+describe("a sweep over a form's earlier submissions", () => {
+  it("asks nothing about rows holding their own key, and finishes in one pass", async () => {
+    const rows = [1, 2].map(n => {
+      const each = row(n);
+      return { ...each, responseKey: `v2:ip-${each.ipAddress}` };
     });
-    const settings = {
-      oneResponse: "ip",
-      oneResponseVersion: 2,
-      oneResponseKeyedVersion: 1,
-    };
-    // Every row already holds the key of its own address for version 2.
-    const rows = ["198.51.100.1", "198.51.100.2"].map((ip, n) => ({
-      id: `s${n}`,
-      _rev: "1",
-      ipAddress: ip,
-      responseKey: `v2:ip-${ip}`,
-    }));
-    const listEntries = vi.fn(async (slug: string) => ({
-      data: slug === "forms" ? [{ id: "f1", _rev: "3", settings }] : rows,
-    }));
-    const count = vi.fn(async () => rows.length);
-    const updateEntry = vi.fn(async () => ({}));
-    const deps = {
-      collections: { listEntries, count, updateEntry },
-      digests,
-      formsSlug: "forms",
-      submissionsSlug: "form-submissions",
-    } as unknown as RebuildDeps;
+    const { deps, count, updateEntry, listEntries } = fakeDeps(rows, behind);
 
-    await rebuildResponseKeys(deps, new Date(Date.now() + 60_000));
+    await rebuildResponseKeys(deps, later());
 
-    // Only the pass's own before-and-after counts: no question per row.
-    expect(count).toHaveBeenCalledTimes(2);
-    const submissionReads = listEntries.mock.calls.filter(
-      ([slug]) => slug === "form-submissions"
-    );
-    expect(submissionReads).toHaveLength(1);
+    // No question per row, and no counts.
+    expect(count).not.toHaveBeenCalled();
+    expect(
+      listEntries.mock.calls.filter(([slug]) => slug === "form-submissions")
+    ).toHaveLength(1);
     // Nothing to write to the rows; the form is recorded as up to date.
     expect(updateEntry).toHaveBeenCalledTimes(1);
     expect(updateEntry.mock.calls[0]?.[0]).toBe("forms");
+  });
+
+  it("keys every row although others are deleted and restored while it reads", async () => {
+    // Two pages of keyless rows. After the first page is read, a row on it
+    // is deleted and a spam row restored: a page by position would skip one.
+    const rows = Array.from({ length: 201 }, (_, n) => row(n + 1));
+    const { deps, updateEntry } = fakeDeps(rows, behind, () => {
+      rows.splice(4, 1);
+      rows.push(row(500));
+    });
+
+    await rebuildResponseKeys(deps, later());
+
+    const keyed = new Set(
+      updateEntry.mock.calls
+        .filter(([slug]) => slug === "form-submissions")
+        .map(([, id]) => id)
+    );
+    // Every row there before the reads began and still there is keyed.
+    for (const each of rows.filter(r => r.id !== "s0500")) {
+      expect(keyed.has(each.id)).toBe(true);
+    }
   });
 });

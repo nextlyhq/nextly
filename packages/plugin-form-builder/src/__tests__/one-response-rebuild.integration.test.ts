@@ -540,6 +540,75 @@ describe.each(getConfiguredTestDialects())(
       ).toMatchObject({ outcome: "duplicate" });
     });
 
+    it("hands the key on when its holder moves to a form at the same version", async () => {
+      const { nextly, submit, rows, holder, waiting } = await adaTwice();
+      // Another form, comparing email at the same version, 1.
+      const other = await nextly.create({
+        collection: "forms",
+        data: {
+          name: "Other",
+          slug: "other",
+          status: "published",
+          fields: FIELDS,
+          settings: { oneResponse: "off" },
+        },
+      });
+      const otherId = String(other.item.id);
+      const read = (await nextly.findByID({
+        collection: "forms",
+        id: otherId,
+      })) as { settings: Record<string, unknown> };
+      await nextly.update({
+        collection: "forms",
+        id: otherId,
+        data: {
+          settings: {
+            ...read.settings,
+            oneResponse: "email",
+            oneResponseField: "email",
+          },
+          _overwrite: true,
+        },
+      });
+      await nextly.update({
+        collection: "form-submissions",
+        id: holder.id,
+        data: { form: otherId, _overwrite: true },
+      });
+      expect(
+        (await rows()).find(row => row.id === waiting.id)?.responseKey
+      ).toBe(holder.responseKey);
+      expect(await submit({ email: "ada@example.com" })).toMatchObject({
+        outcome: "duplicate",
+      });
+    });
+
+    it("judges a submission sent while the setting is saved by the saved setting", async () => {
+      const { submit, saveSettings, rows, gate } = await boot({
+        oneResponse: "off",
+      });
+      expect((await submit({ email: "ada@example.com" })).success).toBe(true);
+      // The save keys ada's earlier response inside its own transaction,
+      // and is held there, holding the form.
+      gate.hold();
+      const saving = saveSettings({
+        oneResponse: "email",
+        oneResponseField: "email",
+      });
+      await gate.reached();
+      const sent = submit({ email: "ADA@example.com" });
+      // Give the submission time to be stored if nothing held it.
+      await new Promise(resolve => setTimeout(resolve, 500));
+      gate.open();
+      await saving;
+      expect(await sent).toMatchObject({ success: false });
+      const ada = (await rows()).filter(
+        row => String(row.data.email).toLowerCase() === "ada@example.com"
+      );
+      expect(ada).toHaveLength(1);
+      expect(ada[0]?.responseKey).toMatch(/^v1:/);
+    });
+
     it("frees the value when no other response holds it", async () => {
       const { nextly, submit, saveSettings, rows } = await boot({
         oneResponse: "off",
