@@ -725,6 +725,66 @@ describe.each(LOCK_DIALECTS)(
       expect(await columnsOf(NOTES)).toEqual(["heading", "headline", "id"]);
     });
 
+    // A plugin may change a table it contributes to, which a run's adoption target carries beside
+    // the plugin's own tables (`moduleTargetTables`): a module renaming a column it contributed,
+    // with a later module bringing the old name back, is one a run may adopt.
+    it("does not refuse a plugin's rename of a contributed column a run would adopt", async () => {
+      const notes = (...names: string[]) => ({
+        tables: [
+          {
+            name: NOTES,
+            columns: names.map(name => ({
+              name,
+              type: "text",
+              nullable: true,
+            })),
+          },
+        ],
+      });
+      const sides = (shape: unknown) =>
+        ({ postgresql: shape, mysql: shape, sqlite: shape }) as never;
+      const nothing = sides({ tables: [] });
+      const module = (name: string, up: string[], contributed: unknown) => {
+        const content: MigrationContent = {
+          name,
+          schemaVersion: 1,
+          dialects: {
+            postgresql: { up, down: [] },
+            mysql: { up, down: [] },
+            sqlite: { up, down: [] },
+          },
+          snapshot: nothing,
+          before: nothing,
+          contributed: sides(contributed),
+        };
+        return { ...content, checksum: migrationChecksum(content) };
+      };
+
+      await expect(
+        pendingPluginDeletions(
+          [
+            {
+              pluginName: "rtx",
+              pluginVersion: "1.0.0",
+              migrations: [
+                module(
+                  "20261111_000007_rename_contributed",
+                  [renameColumn("heading", "headline")],
+                  notes("id", "headline")
+                ),
+                module(
+                  "20261111_000008_contributed_again",
+                  [`ALTER TABLE ${q(NOTES)} ADD COLUMN ${q("heading")} text`],
+                  notes("id", "heading", "headline")
+                ),
+              ],
+            },
+          ],
+          { adapter: adapter as never, db: adapter.getDrizzle(), dialect }
+        )
+      ).resolves.toBeDefined();
+    });
+
     // SQLite keeps a trigger's name apart from a table's.
     it.runIf(dialect === "sqlite")(
       "runs a table rename onto a trigger's name",

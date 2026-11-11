@@ -109,6 +109,7 @@ import {
 import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import {
   appliedPluginShas,
+  moduleTargetTables,
   pendingPluginModules,
   pluginMigrationArgs,
   previewPluginMigrations,
@@ -2459,17 +2460,16 @@ function pluginModuleUnits(
   return pending.map(({ filename, migration }) => {
     const statements = pluginModuleStatements(migration, dialect, "up");
     // Where a run may find the database already standing and adopt the module without running
-    // it: its snapshot and each later pending module's of the same plugin, within the step or
-    // past it. Read only by the rename check (`refuseRenamesOntoTakenTargets`); the runner
+    // it: the tables it leaves behind (`moduleTargetTables`, its own and those it contributes to)
+    // and each later pending module's of the same plugin, within the step or past it. Read only by the rename check (`refuseRenamesOntoTakenTargets`); the runner
     // decides adoption itself.
     const at = allPending.findIndex(later => later.migration === migration);
     const adoptableAt = allPending
       .slice(at)
       .filter(later => pluginOf(later.migration) === pluginOf(migration))
-      .flatMap(later => {
-        const snapshot = later.migration.snapshot[dialect];
-        return snapshot === undefined ? [] : [snapshot];
-      });
+      .map(later => ({
+        tables: moduleTargetTables(later.migration, dialect),
+      }));
     return {
       label: filename,
       text: statements.join("\n;\n"),
