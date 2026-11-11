@@ -1,13 +1,16 @@
 // Why: BuilderToolbar lock contract -- breadcrumb + name on the left,
-// kind-aware action cluster on the right. PR D simplifications:
-// - No icon tile, no source badge, no Hooks button, no unsaved-count
-//   badge. Save schema disabled when nothing dirty and when locked.
+// kind-aware action cluster on the right: the number of unsaved changes
+// with Undo, Redo and Discard all, then Add field, Settings and Save.
+// - No icon tile, no source badge, no Hooks button. Save schema disabled
+//   when nothing is unsaved and when locked.
 // - Locked state surfaces via the disabled buttons' tooltip text.
 import { fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
+
+import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 
 import { BuilderToolbar } from "../BuilderToolbar";
 import type { BuilderConfig } from "../builder-config";
@@ -26,6 +29,17 @@ const componentConfig: BuilderConfig = {
   toolbar: { previewSchemaChange: false },
 };
 
+/** Nothing pending: no changes, nothing to undo or redo. */
+const noPending: BuilderPendingChanges = {
+  changes: [],
+  marks: new Map(),
+  canUndo: false,
+  canRedo: false,
+  undo: () => null,
+  redo: () => null,
+  discardAll: () => {},
+};
+
 describe("BuilderToolbar", () => {
   it("renders breadcrumb, name, Settings, Save for collections", () => {
     render(
@@ -33,6 +47,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={0}
+        pending={noPending}
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
@@ -46,21 +61,26 @@ describe("BuilderToolbar", () => {
     expect(screen.getByRole("button", { name: /save/i })).toBeInTheDocument();
   });
 
-  it("does not render an unsaved badge (removed in PR D)", () => {
+  // The number of unsaved changes is shown at all times, beside the Undo,
+  // Redo and Discard all that act on them.
+  it("shows how many changes are unsaved, with Undo, Redo and Discard all", () => {
     render(
       <BuilderToolbar
         config={collectionConfig}
         name="Posts"
         unsavedCount={3}
+        pending={{ ...noPending, canUndo: true }}
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
       />
     );
-    // No "3 unsaved" text or "unsaved" word visible. The Save
-    // button being enabled is the only unsaved signal.
-    expect(screen.queryByText(/unsaved/i)).toBeNull();
-    expect(screen.queryByLabelText(/unsaved changes/i)).toBeNull();
+    expect(screen.getByText("3 unsaved changes")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Redo" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Discard all changes" })
+    ).toBeEnabled();
   });
 
   it("does not render a source badge anymore (removed in PR D)", () => {
@@ -69,6 +89,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={0}
+        pending={noPending}
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
@@ -84,6 +105,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={0}
+        pending={noPending}
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
@@ -100,6 +122,7 @@ describe("BuilderToolbar", () => {
         config={componentConfig}
         name="Hero"
         unsavedCount={0}
+        pending={noPending}
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
@@ -124,6 +147,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={0}
+        pending={noPending}
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
@@ -143,6 +167,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={2}
+        pending={noPending}
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
@@ -158,6 +183,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={0}
+        pending={noPending}
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
@@ -174,6 +200,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={0}
+        pending={noPending}
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
@@ -189,6 +216,7 @@ describe("BuilderToolbar", () => {
         name="Posts"
         locked
         unsavedCount={0}
+        pending={noPending}
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
@@ -210,6 +238,7 @@ describe("BuilderToolbar", () => {
         config={collectionConfig}
         name="Posts"
         unsavedCount={2}
+        pending={noPending}
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
         onSave={onSave}
