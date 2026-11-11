@@ -13,6 +13,7 @@
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
+import { useEffect, useState } from "react";
 
 import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
@@ -20,12 +21,18 @@ import {
   DocumentLockBanner,
   EntryForm,
   getCollectionFields as getEntryFormFields,
+  UnsavedChangesGuard,
   useDocumentLockSurface,
   type DocumentViewMount,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
+import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
+import {
+  UnsavedWorkProvider,
+  useUnsavedWork,
+} from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
 import {
   isRemovedFromCode,
   removedEntityHasNoTable,
@@ -63,7 +70,12 @@ import {
   getComponent,
   type CustomEditViewProps,
 } from "@admin/lib/plugins/component-registry";
-import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
+import {
+  documentViewMissing,
+  editViewHasPages,
+  editViewPage,
+} from "@admin/lib/plugins/document-view-registry";
+import { cn } from "@admin/lib/utils";
 import { entryKeys } from "@admin/services/entryApi";
 import { getCollectionFields } from "@admin/types/collection";
 
@@ -118,22 +130,25 @@ function EditEntryBreadcrumbs({
  */
 function EditEntryPageSkeleton() {
   return (
-    <PageContainer width="full">
+    <PageContainer type="editor">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading entry...
       </div>
 
-      {/* Cancels the page's vertical inset only.
-          The horizontal half would pull this skeleton past the measured
-          column, and the editor that replaces it would then jump 64px
-          narrower. */}
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-var(--admin-bar-height))] items-stretch lg:-my-8">
+      {/* An Editor page has no padding, as the editor that replaces this
+          does: its banners and panel start directly under the bar. */}
+      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-var(--admin-bar-height))] items-stretch">
         {/* Main Content */}
         {/* `min-w-0` as the editor that replaces this carries it: without it
             this pane will not shrink and pushes the rail past the column. */}
         <div
-          className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6 mx-auto w-full"
+          className={cn(
+            "flex-1 min-w-0 space-y-6 pt-6 lg:pt-8 mx-auto w-full",
+            // The editor's field column inset, so nothing moves sideways when
+            // the editor replaces this.
+            DOCUMENT_COLUMN_INSET
+          )}
           // The editor that replaces this bounds its FIELD column, not the
           // page, so a skeleton bounded at the page moves every field
           // sideways the moment data arrives.
@@ -249,12 +264,6 @@ export default function EditEntryPage({
 }: EditEntryPageProps): React.ReactElement {
   const slug = params?.slug;
   const id = params?.id;
-  /*
-   * The plugin view this address names, if any. While one is routed this page
-   * is that view's host: the custom edit view and the edit form's injection
-   * slots belong to the edit screen, which this is not.
-   */
-  const documentView = entryDocumentView(params);
 
   // Active content language for this editor. `undefined` = the app's default locale
   // (the backend resolves it). Switching triggers a refetch (useEntry is keyed by locale) and
@@ -408,9 +417,22 @@ export default function EditEntryPage({
   // reason the hooks above give: whether a custom view renders decides whether
   // THIS page claims the document, and a hook cannot be asked that after a
   // return. The registration hook has run, so the registry can answer.
-  const customEditViewPath = documentView
-    ? undefined
-    : collection?.admin?.components?.views?.Edit?.Component;
+  const registeredEditView =
+    collection?.admin?.components?.views?.Edit?.Component;
+  /*
+   * The page of the collection's own edit view this address names, if any: a
+   * view declared on the slug that draws the edit view itself. The edit view
+   * draws it, so it is not a document view of its own.
+   */
+  const editPage = editViewPage(slug, params?.view, registeredEditView);
+  /*
+   * The plugin view this address names, if any. While one is routed this page
+   * is that view's host: the custom edit view and the edit form's injection
+   * slots belong to the edit screen, which this is not.
+   */
+  const documentView =
+    editPage === undefined ? entryDocumentView(params) : undefined;
+  const customEditViewPath = documentView ? undefined : registeredEditView;
   const CustomEditView = customEditViewPath
     ? getComponent<CustomEditViewProps>(customEditViewPath)
     : undefined;
@@ -439,6 +461,24 @@ export default function EditEntryPage({
   // custom view and the edit slots are handed their writes held, as a
   // reader's are, whoever opens it.
   const removedFromCode = isRemovedFromCode(collection);
+  /*
+   * What a custom edit view says it holds unsaved, through the same
+   * `useReportUnsavedWork` a field of the default form reports through. The
+   * view replaces the form, so this page guards leaving for it, as the form
+   * guards leaving for the default editor. A hook, so above the returns.
+   */
+  const customViewUnsaved = useUnsavedWork();
+  /*
+   * Set once a custom edit view has deleted its document. The guard stands
+   * down (nothing is left to save) and the page returns to the list on the
+   * next render, after the guard has heard it: a move made in the same breath
+   * as the delete would still be asked about.
+   */
+  const [customViewDeleted, setCustomViewDeleted] = useState(false);
+  useEffect(() => {
+    if (!customViewDeleted || slug === undefined) return;
+    navigateTo(buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }));
+  }, [customViewDeleted, slug]);
   const customViewReader = customViewAnswer === "refused" || removedFromCode;
   const customViewWritesHeld =
     !editsOffered(customViewAnswer) || removedFromCode;
@@ -657,7 +697,7 @@ export default function EditEntryPage({
       isCreating: false,
       initialData: apiEntryData,
       onSuccess: handleSuccess,
-      onDelete: handleDelete,
+      onDelete: () => setCustomViewDeleted(true),
       onCancel: handleCancel,
       // The banner above says in words that changes cannot be saved while a
       // colleague holds this. Passing the same decision the banner was derived
@@ -669,11 +709,18 @@ export default function EditEntryPage({
         // withheld too, and so does one waiting on a language's answer.
         actionsDisabled: customViewLock.actionsDisabled || customViewWritesHeld,
       },
+      // Which of the view's own pages this address names; absent on the edit
+      // address. The same element is drawn for every page, so the view stays
+      // mounted, with what it holds, while the address moves between them.
+      ...(editPage === undefined ? {} : { view: editPage }),
     };
 
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
         <MeasuredPageFrame
+          // A view with pages of its own is a whole editor, with its own header
+          // and tabs, and lays out its own columns as the default editor does.
+          contentCarriesMeasure={editViewHasPages(slug, customEditViewPath)}
           breadcrumbs={
             <EditEntryBreadcrumbs
               collectionSlug={slug}
@@ -703,19 +750,33 @@ export default function EditEntryPage({
             onRequestAccess={customViewLock.requestAccess}
             onRetry={customViewLock.retryLoad}
           />
-          {/* Boxed for the same reason the injection slots are: under the
-              measured frame this is a direct child of a CSS grid, and the rule
-              that puts a child in the content column can only place a
-              generated element box. A view rooted in bare text, or in an
-              element with `display: contents`, produces none and is
-              auto-placed into a gutter. The registry imposes no root-element
-              contract, so the page provides the box. Keyed on the loads of
-              the latest version, since a view may read `initialData` once, as
-              it mounts: one that gains the document starts again from the
-              copy just loaded rather than unlocking over the one before. */}
-          <div key={customViewLock.reloads}>
-            <PluginSlot path={customEditViewPath} props={customViewProps} />
-          </div>
+          {/* The view reports its unsaved work here, and leaving the document
+              with any asks first. Moving between the view's own pages stays
+              on the document, so it is not asked about. Around the box rather
+              than inside it: neither draws a box of its own, and the guard
+              outlives a reload of the view, which retracts its report. */}
+          <UnsavedWorkProvider report={customViewUnsaved.report}>
+            <UnsavedChangesGuard
+              isDirty={customViewUnsaved.anyUnsaved}
+              disabled={customViewDeleted}
+              fields={getCollectionFields(collection)}
+            >
+              {/* Boxed for the same reason the injection slots are: under the
+                  measured frame this is a direct child of a CSS grid, and the
+                  rule that puts a child in the content column can only place a
+                  generated element box. A view rooted in bare text, or in an
+                  element with `display: contents`, produces none and is
+                  auto-placed into a gutter. The registry imposes no
+                  root-element contract, so the page provides the box. Keyed on
+                  the loads of the latest version, since a view may read
+                  `initialData` once, as it mounts: one that gains the document
+                  starts again from the copy just loaded rather than unlocking
+                  over the one before. */}
+              <div key={customViewLock.reloads}>
+                <PluginSlot path={customEditViewPath} props={customViewProps} />
+              </div>
+            </UnsavedChangesGuard>
+          </UnsavedWorkProvider>
         </MeasuredPageFrame>
       </QueryErrorBoundary>
     );

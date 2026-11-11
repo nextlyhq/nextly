@@ -1,7 +1,8 @@
 /**
- * The Count card at each width, drawn from the data its `load` answers: the
- * number alone when small, the published and draft split when medium, the
- * trend and its change when large, each part only where its data is there,
+ * The Count card drawn from the data its `load` answers: what it counts, the
+ * number written whole at a quarter and at half of the dashboard, from 0 to
+ * tens of thousands, then the one line under it (the change this week, the
+ * trend, the split by status, or nothing), for a collection and for Users;
  * and "not available" for a card set to no collection.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
@@ -9,26 +10,20 @@ import type { CountWidgetData } from "nextly/core-widget-data";
 import { describe, expect, it } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
-import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 
 import { CardTierContext } from "../widgets/frame/tier";
 
 import { CountCard } from "./CountCard";
 
-const DATA: CountWidgetData = {
-  total: 10,
-  split: { published: 7, draft: 3 },
-  trend: {
-    points: [
-      { start: "2026-10-21T00:00:00.000Z", count: 2 },
-      { start: "2026-10-22T00:00:00.000Z", count: 5 },
-    ],
-    prior: 4,
-  },
-};
+/** A quarter of the dashboard (3 of 12 columns) and half of it (6), with the tier each is drawn at. */
+const WIDTHS: readonly { name: string; w: number; tier: SizeTier }[] = [
+  { name: "25%", w: 3, tier: "small" },
+  { name: "50%", w: 6, tier: "medium" },
+];
 
 function drawAt(
-  tier: SizeTier,
+  { w, tier }: { w: number; tier: SizeTier },
   data: CountWidgetData,
   settings: Record<string, unknown> = { collection: "posts" }
 ) {
@@ -39,7 +34,7 @@ function drawAt(
           widgetId="core/count"
           placementId="core/count:posts"
           settings={settings}
-          size={{ w: 4, h: 2, tier }}
+          size={{ w, h: 2, tier }}
           data={data}
           refreshing={false}
           retry={() => undefined}
@@ -49,79 +44,138 @@ function drawAt(
   );
 }
 
-describe("the Count card", () => {
-  it("is the number alone when small", () => {
-    drawAt("small", DATA);
-    expect(screen.getByLabelText("Entries in posts: 10")).toBeInTheDocument();
-    expect(screen.queryByTestId("count-split")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("count-trend")).not.toBeInTheDocument();
-  });
+const QUARTER = WIDTHS[0]!;
 
-  it("adds the split when medium, each part linking to its list", () => {
-    drawAt("medium", DATA);
-    expect(screen.getByLabelText("Published: 7")).toHaveAttribute(
-      "href",
-      "/admin/collections/posts?status=published"
-    );
-    expect(screen.getByLabelText("Draft: 3")).toBeInTheDocument();
-    expect(screen.queryByTestId("count-trend")).not.toBeInTheDocument();
-  });
+describe.each(WIDTHS)("the Count card at $name", width => {
+  it.each([
+    [0, "0", 0, "No change this week"],
+    [3, "3", 1, "+1 this week"],
+    [24, "24", 3, "+3 this week"],
+    [12480, "12,480", 1204, "+1,204 this week"],
+  ])(
+    "draws %i as its label, the number written whole, then the change this week",
+    (total, written, change, line) => {
+      drawAt(width, { total, counted: "all", line: "change", change });
+      const card = screen.getByTestId("count-card");
+      expect(within(card).getByTestId("count-label")).toHaveTextContent(
+        "Entries"
+      );
+      // 🔴 Never "12.5k" in a quarter-width card: the number is the card.
+      const number = within(card).getByRole("link", {
+        name: `Entries in posts: ${written}`,
+      });
+      expect(number.textContent).toBe(written);
+      expect(number).toHaveClass("text-[30px]", "whitespace-nowrap");
+      expect(number).toHaveAttribute("href", "/admin/collections/posts");
+      expect(within(card).getByTestId("count-change")).toHaveTextContent(line);
+      // One line: nothing else under the number.
+      expect(screen.queryByTestId("count-trend")).toBeNull();
+      expect(screen.queryByTestId("count-split")).toBeNull();
+    }
+  );
 
-  it("adds what scheduled releases will publish when medium", () => {
-    drawAt("medium", { ...DATA, scheduled: 2 });
-    expect(
-      screen.getByRole("link", { name: "Scheduled: 2" })
-    ).toBeInTheDocument();
-  });
-
-  it("leaves the scheduled row out when its load left the figure out", () => {
-    drawAt("medium", DATA);
-    expect(screen.queryByText("Scheduled")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Draft: 3" })).toBeInTheDocument();
-  });
-
-  it("adds the trend and its change when large", () => {
-    drawAt("large", DATA);
+  it("draws the trend line beside the number, over the last 8 weeks", () => {
+    drawAt(width, {
+      total: 12480,
+      counted: "all",
+      line: "trend",
+      trend: [11000, 11200, 11500, 11500, 11800, 12000, 12100, 12300, 12480],
+    });
+    expect(screen.getByTestId("count-trend-line")).toBeInTheDocument();
     expect(screen.getByTestId("count-trend")).toHaveTextContent(
-      "7 created in the last 30 days, 3 more than the 30 before."
+      "Last 8 weeks: from 11,000 to 12,480"
+    );
+    expect(screen.getByText("12,480")).toBeInTheDocument();
+  });
+});
+
+describe("the Count card", () => {
+  it("names the drafts it counts, and links them to that list", () => {
+    drawAt(QUARTER, { total: 3, counted: "draft", line: "change", change: 0 });
+    expect(screen.getByTestId("count-label")).toHaveTextContent("Drafts");
+    expect(
+      screen.getByRole("link", { name: "Drafts in posts: 3" })
+    ).toHaveAttribute("href", "/admin/collections/posts?status=draft");
+    expect(screen.getByTestId("count-change")).toHaveTextContent(
+      "No change this week"
     );
   });
 
-  it("offers the trend's days as a table from View as table, and closes it on Escape", () => {
-    drawAt("large", DATA);
-    const trend = screen.getByTestId("count-trend");
-    const button = within(trend).getByRole("button", { name: "View as table" });
-    expect(button).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(button);
-    const table = within(trend).getByTestId("chart-disclosed-table");
-    // One row a day, each with the count the chart draws for it.
-    expect(
-      within(table)
-        .getAllByRole("row")
-        .slice(1)
-        .map(row =>
-          within(row)
-            .getAllByRole("cell")
-            .map(cell => cell.textContent)
-        )
-    ).toEqual([
-      ["Oct 21", "2"],
-      ["Oct 22", "5"],
-    ]);
-    button.focus();
-    fireEvent.keyDown(button, { key: "Escape" });
-    expect(within(trend).queryByTestId("chart-disclosed-table")).toBeNull();
-    expect(document.activeElement).toBe(button);
+  it("counts people for Users, linking to the users list", () => {
+    drawAt(
+      QUARTER,
+      { total: 24, counted: "people", line: "change", change: 2 },
+      { collection: "users" }
+    );
+    expect(screen.getByTestId("count-label")).toHaveTextContent("People");
+    expect(screen.getByRole("link", { name: "People: 24" })).toHaveAttribute(
+      "href",
+      "/admin/users"
+    );
+    expect(screen.getByTestId("count-change")).toHaveTextContent(
+      "+2 this week"
+    );
   });
 
-  it("draws the number at the large tier without a trend its data does not hold", () => {
-    drawAt("large", { total: DATA.total, split: DATA.split });
-    expect(screen.getByLabelText("Entries in posts: 10")).toBeInTheDocument();
-    expect(screen.queryByTestId("count-trend")).not.toBeInTheDocument();
+  it("splits by status: a bar, and a legend whose every part links to its list", () => {
+    drawAt(QUARTER, {
+      total: 128,
+      counted: "all",
+      line: "split",
+      split: { published: 104, draft: 24, scheduled: 3 },
+    });
+    const split = screen.getByTestId("count-split");
+    expect(
+      within(split)
+        .getAllByRole("link")
+        .map(link => [link.textContent, link.getAttribute("href")])
+    ).toEqual([
+      ["104 published", "/admin/collections/posts?status=published"],
+      ["24 draft", "/admin/collections/posts?status=draft"],
+      [
+        "3 scheduled",
+        expect.stringMatching(/^\/admin\/collections\/posts\?where=/),
+      ],
+    ]);
+    // 🔴 Scheduled entries are already published or drafts: a third segment would weigh them
+    // twice, so the bar is the two statuses that make up the number alone.
+    const bar = screen.getByTestId("count-split-bar");
+    expect(
+      Array.from(bar.querySelectorAll("span")).map(segment => [
+        segment.dataset.part,
+        segment.style.flexGrow,
+      ])
+    ).toEqual([
+      ["published", "104"],
+      ["draft", "24"],
+    ]);
+  });
+
+  it("leaves scheduled out of the split where none is scheduled or it was not read", () => {
+    drawAt(QUARTER, {
+      total: 10,
+      counted: "all",
+      line: "split",
+      split: { published: 7, draft: 3 },
+    });
+    expect(screen.queryByText(/scheduled/)).toBeNull();
+    expect(
+      within(screen.getByTestId("count-split")).getAllByRole("link")
+    ).toHaveLength(2);
+  });
+
+  it("draws the number alone when it shows nothing under it", () => {
+    drawAt(QUARTER, { total: 7, counted: "all", line: "none" });
+    expect(
+      screen.getByRole("link", { name: "Entries in posts: 7" })
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("count-change")).toBeNull();
+    expect(screen.queryByTestId("count-trend")).toBeNull();
+    expect(screen.queryByTestId("count-split")).toBeNull();
   });
 
   it("says it is not available when it is set to no collection", () => {
-    drawAt("medium", DATA, {});
+    drawAt(QUARTER, { total: 7, counted: "all", line: "none" }, {});
     expect(screen.getByTestId("card-unavailable")).toBeInTheDocument();
   });
 });

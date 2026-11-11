@@ -1,5 +1,6 @@
 /**
- * The small parts a list row is built from, beyond its text: a leading chip and a status pill.
+ * The small parts a list row is built from, beyond its text: a leading chip, a status pill and a
+ * status chip.
  *
  * One look for each, so every list card's rows read alike: the chip is a square of the muted
  * surface holding a letter or a number (a collection's initial, a date), and the pill is a
@@ -11,6 +12,7 @@
 
 import type { JSX, ReactNode } from "react";
 
+import { Badge } from "@admin/components/ui";
 import { cn } from "@admin/lib/utils";
 
 /**
@@ -20,9 +22,9 @@ export type StatusTone = "neutral" | "good" | "warn" | "bad";
 
 const TONE_CLASS: Readonly<Record<StatusTone, string>> = {
   neutral: "bg-muted text-foreground",
-  good: "bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100",
-  warn: "bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100",
-  bad: "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100",
+  good: "bg-success-surface text-success-text",
+  warn: "bg-warning-surface text-warning-text",
+  bad: "bg-danger-surface text-danger-text",
 };
 
 /** A status as a row's trailing slot draws it: a rounded label in its tone. */
@@ -44,6 +46,55 @@ export function StatusPill({
     >
       {children}
     </span>
+  );
+}
+
+/** Each tone as the kit's status chip draws it; a neutral one draws its own quiet dot. */
+const CHIP_VARIANT = {
+  good: "success",
+  warn: "warning",
+  bad: "destructive",
+} as const;
+
+/**
+ * A status as a quiet chip: the card's surface, a hairline edge, ordinary text, and a dot in the
+ * status's colour before its word (the kit's `Badge`). The word carries the status; the dot only
+ * marks it, so colour is never the only signal. A neutral status (a draft) is marked by a muted
+ * dot.
+ */
+export function StatusChip({
+  tone = "neutral",
+  children,
+}: {
+  tone?: StatusTone;
+  children: ReactNode;
+}): JSX.Element {
+  if (tone === "neutral") {
+    return (
+      <Badge
+        variant="outline"
+        data-testid="status-chip"
+        data-tone={tone}
+        className="shrink-0 whitespace-nowrap rounded-md bg-card px-2 text-foreground dark:text-foreground"
+      >
+        <span
+          aria-hidden="true"
+          data-slot="badge-dot"
+          className="size-1.5 shrink-0 rounded-full bg-muted-foreground"
+        />
+        {children}
+      </Badge>
+    );
+  }
+  return (
+    <Badge
+      variant={CHIP_VARIANT[tone]}
+      data-testid="status-chip"
+      data-tone={tone}
+      className="shrink-0 whitespace-nowrap rounded-md px-2"
+    >
+      {children}
+    </Badge>
   );
 }
 

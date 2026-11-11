@@ -323,9 +323,10 @@ export async function teardownEntityComponentData(
 
   const tablesTouched = new Set<string>();
   const skippedTables = new Set<string>();
-  // Resolvability is a property of the table, so it is established once; whether such a
-  // table is SAFE to skip depends on the frontier and is re-checked at every level.
+  // Resolvability is a property of the table, so it is established once, either way; whether an
+  // unresolvable table is SAFE to skip depends on the frontier and is re-checked at every level.
   const unresolvable = new Set<string>();
+  const resolvable = new Set<string>();
   let instancesDeleted = 0;
   // The entity's own table owns every instance pointing at it, hence `ids: null`.
   let frontier: Frontier[] = [{ table: parentTable, ids: null }];
@@ -337,10 +338,15 @@ export async function teardownEntityComponentData(
   while (frontier.length > 0) {
     const nextFrontier: Frontier[] = [];
 
+    // Every component table, at every level: a row's parent is where it was written, which a
+    // definition as it stands now cannot vouch for — one that has since stopped placing a field
+    // group leaves that field group's rows stored beneath its own. Each read is a lookup on the
+    // parent index.
     for (const componentTable of componentTables) {
       if (
-        unresolvable.has(componentTable) ||
-        !(await isResolvable(adapter, componentTable))
+        !resolvable.has(componentTable) &&
+        (unresolvable.has(componentTable) ||
+          !(await isResolvable(adapter, componentTable)))
       ) {
         unresolvable.add(componentTable);
         // Skipping is only safe when the table holds nothing owned by THIS level. An
@@ -354,6 +360,7 @@ export async function teardownEntityComponentData(
         skippedTables.add(componentTable);
         continue;
       }
+      resolvable.add(componentTable);
 
       for (const parent of frontier) {
         // Match on parent id as well as parent table for nested levels — without it the

@@ -9,7 +9,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 /** The three lists, by their admin path and the site table's name. */
 const LISTS = [
@@ -60,7 +60,9 @@ test.describe("the Builder's lists", () => {
       section.getByText("pages", { exact: true }).first()
     ).toBeVisible();
     // Its source is the plugin's name, never "Unknown"; nothing to select.
-    await expect(page.getByText("Unknown", { exact: true })).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByText("Unknown", { exact: true })
+    ).toHaveCount(0);
     await expect(section.getByRole("checkbox")).toHaveCount(0);
 
     // Read-only: its actions open it and its entries, and never delete it.
