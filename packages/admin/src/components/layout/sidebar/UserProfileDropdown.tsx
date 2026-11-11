@@ -31,10 +31,7 @@ import { useInterfaceLanguages, useT } from "@admin/lib/i18n/I18nProvider";
 import { languageName } from "@admin/lib/i18n/language-name";
 import { navigateTo } from "@admin/lib/navigation";
 
-import {
-  helpGroupShown,
-  type PluginUserMenuEntry,
-} from "../header/header-visibility";
+import type { PluginUserMenuEntry } from "../header/header-visibility";
 
 import {
   PluginMenuActionDialog,
@@ -104,7 +101,8 @@ function HelpAndCommunity({
   onPluginAction: (item: PluginUserMenuEntry) => void;
 }): JSX.Element | null {
   const links = HELP_LINKS.filter(link => !hidden.has(link.id));
-  if (!helpGroupShown(hidden, pluginItems.length)) return null;
+  // Drawn while it has something to show: a help link left, or a plugin's item.
+  if (links.length === 0 && pluginItems.length === 0) return null;
   return (
     <>
       <DropdownMenuLabel className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">

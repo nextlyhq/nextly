@@ -117,21 +117,6 @@ export function pluginUserMenuItems(
     .map(({ entry }) => entry);
 }
 
-/**
- * Whether the person's menu draws its "Help and community" group: while a
- * built-in help link is left, or a plugin put an item there. A plugin hiding
- * the built-in links hides only those.
- */
-export function helpGroupShown(
-  hidden: ReadonlySet<string>,
-  pluginItemCount: number
-): boolean {
-  const builtInLeft = ALL_BUTTONS.some(
-    id => id !== "notifications" && !hidden.has(id)
-  );
-  return builtInLeft || pluginItemCount > 0;
-}
-
 /** Which of the answers the header's account controls wait on are still unanswered. */
 export interface HeaderAnswersPending {
   /** The workspace answer: the plugins (what they hide and add) and whether the builder runs. */

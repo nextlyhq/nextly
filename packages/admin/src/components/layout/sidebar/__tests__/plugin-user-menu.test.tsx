@@ -135,6 +135,28 @@ describe("a plugin's item in the person's menu", () => {
     expect(itemNames()).toEqual(["Support desk", "My Account", "Sign out"]);
   });
 
+  it("draws no group, and no empty heading, when every built-in link is hidden and no plugin adds one", async () => {
+    const user = userEvent.setup();
+    renderMenu([], new Set(["docs", "github", "discord"]));
+    await user.click(trigger());
+    expect(screen.queryByText("Help and community")).toBeNull();
+    expect(itemNames()).toEqual(["My Account", "Sign out"]);
+  });
+
+  it("draws the built-in links left and the plugin's item under one heading", async () => {
+    const user = userEvent.setup();
+    renderMenu([SUPPORT], new Set(["github"]));
+    await user.click(trigger());
+    expect(screen.getAllByText("Help and community")).toHaveLength(1);
+    expect(itemNames()).toEqual([
+      "Documentation",
+      "Discord",
+      "Support desk",
+      "My Account",
+      "Sign out",
+    ]);
+  });
+
   it("reaches the item from the keyboard, and Enter on a link navigates in place and closes the menu", async () => {
     const user = userEvent.setup();
     renderMenu([SUPPORT]);

@@ -8,7 +8,6 @@ import type {
 import {
   computeHiddenHeaderButtons,
   headerControlsSettled,
-  helpGroupShown,
   pluginHeaderItems,
   pluginItemPlace,
   pluginUserMenuItems,
@@ -191,14 +190,5 @@ describe("where a plugin's own item is drawn", () => {
         "rail-foot"
       ).map(item => item.name)
     ).toEqual(["@acme/m", "@acme/z", "@acme/a"]);
-  });
-
-  it("keeps the help group for a plugin's item when the built-in links are hidden", () => {
-    const allHidden = computeHiddenHeaderButtons([
-      plugin("@acme/quiet", { hideDefaults: true }),
-    ]);
-    expect(helpGroupShown(allHidden, 0)).toBe(false);
-    expect(helpGroupShown(allHidden, 1)).toBe(true);
-    expect(helpGroupShown(new Set(["docs", "github"]), 0)).toBe(true);
   });
 });
