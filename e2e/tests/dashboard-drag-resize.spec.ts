@@ -45,6 +45,34 @@ async function customize(page: Page): Promise<void> {
   ).toBeVisible();
   await page.getByTestId("dashboard-edit-begin").click();
   await expect(page.getByTestId("widget-drag-handle").first()).toBeVisible();
+  await settled(page);
+}
+
+/**
+ * Waits until the cards have stopped moving, read twice in a row half a second apart: a card that
+ * grows as its data arrives moves the ones after it, and a pointer aimed at a card measured before
+ * then would land somewhere else.
+ */
+async function settled(page: Page): Promise<void> {
+  let last = "";
+  await expect
+    .poll(
+      async () => {
+        const now = JSON.stringify(
+          await page.locator(CELLS).evaluateAll(cells =>
+            cells.map(cell => {
+              const r = cell.getBoundingClientRect();
+              return [r.x, r.y, r.width, r.height];
+            })
+          )
+        );
+        const same = now === last;
+        last = now;
+        return same;
+      },
+      { intervals: [500] }
+    )
+    .toBe(true);
 }
 
 /** The cards in the order the page draws them: by row, then left to right. */
