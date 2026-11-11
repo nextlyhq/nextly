@@ -43,12 +43,18 @@ const POSTS: SeoContentType = {
     values: { category: "Comparisons" },
     address: "/blog/surfer-seo-vs-rext-ai",
   },
+  mappableFields: [
+    { name: "byline", label: "Byline" },
+    { name: "publishedAt", label: "Published at" },
+    { name: "price", label: "Price" },
+  ],
   public: true,
 };
 const CASES: SeoContentType = {
   key: "cases",
   label: "Case studies",
   fields: [],
+  mappableFields: [],
   public: false,
 };
 
@@ -497,6 +503,65 @@ describe("saving", () => {
     expect(sent).toEqual([
       { siteName: "Acme Ltd", _rev: "1" },
       { description: "Things.", _rev: "2" },
+    ]);
+  });
+});
+
+describe("the content types table", () => {
+  const SET_UP = { _rev: "5", siteName: "Rext AI", setupStep: 3 };
+
+  it("shows each type's SEO as set in code, and hides a whole type from search", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+
+    const seo = screen.getByRole("switch", { name: "SEO for Blog posts" });
+    expect(seo.getAttribute("aria-checked")).toBe("true");
+    expect(seo).toHaveProperty("disabled", true);
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Hide all Blog posts from search" })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    expect(sent).toEqual([{ hiddenTypes: ["posts"], _rev: "5" }]);
+  });
+
+  it("chooses a type's structured data, maps the details it lacks, and saves both", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Structured data for Blog posts" }),
+      { target: { value: "article" } }
+    );
+    // The date is found by its field's name; nothing holds the author or the image.
+    expect(screen.getByText("· 2 missing")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+    expect(
+      screen.getByText("on Blog posts (this type's default)")
+    ).toBeTruthy();
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Field that holds author" }),
+      { target: { value: "byline" } }
+    );
+    expect(screen.getByText("from each entry's Byline")).toBeTruthy();
+    expect(screen.getByText("· 1 missing")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    expect(sent).toEqual([
+      {
+        structuredData: {
+          posts: {
+            type: "article",
+            details: { article: { author: "byline" } },
+          },
+        },
+        _rev: "5",
+      },
     ]);
   });
 });

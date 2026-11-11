@@ -6,6 +6,7 @@
  * @module settings/content-types-route
  */
 import {
+  humanizeFieldName,
   NextlyError,
   publicAddressOf,
   respondDoc,
@@ -22,6 +23,7 @@ import {
   SEO_SETTINGS_SLUG,
   SETTINGS_DOCUMENT_ROUTE_PATH,
   type SettingsDocumentBody,
+  type MappableField,
   type PatternExample,
   type PatternField,
   type SeoContentType,
@@ -44,6 +46,26 @@ function exampleOf(
     else if (textOf(value) !== undefined) values[name] = String(value);
   }
   return { ...(title === undefined ? {} : { title }), values };
+}
+
+/**
+ * The type's own fields a structured data detail may be read from: every
+ * named field at the top of an entry but its SEO group, labelled as the
+ * admin labels it.
+ */
+function mappableFieldsOf(
+  declared: readonly Record<string, unknown>[]
+): MappableField[] {
+  const fields: MappableField[] = [];
+  for (const field of declared) {
+    const { name } = field;
+    if (typeof name !== "string" || name === "" || name === "seo") continue;
+    fields.push({
+      name,
+      label: textOf(field.label) ?? humanizeFieldName(name),
+    });
+  }
+  return fields;
 }
 
 /** The label the admin's lists use for a collection. */
@@ -94,15 +116,17 @@ async function contentTypeOf(
 ): Promise<SeoContentType> {
   const meta: unknown = await ctx.services.collections.getCollection(slug, {});
   const record = isRecord(meta) ? meta : {};
+  const declared = Array.isArray(record.fields)
+    ? record.fields.filter(isRecord)
+    : [];
   const fields = patternFields(
-    Array.isArray(record.fields)
-      ? record.fields.filter(isRecord).map(field => ({
-          name: typeof field.name === "string" ? field.name : undefined,
-          type: typeof field.type === "string" ? field.type : "",
-          label: field.label,
-        }))
-      : []
+    declared.map(field => ({
+      name: typeof field.name === "string" ? field.name : undefined,
+      type: typeof field.type === "string" ? field.type : "",
+      label: field.label,
+    }))
   );
+  const mappableFields = mappableFieldsOf(declared);
   const isPublic = !withoutAddress.has(slug);
   // An example only from what the reader may read of the type's entries: the
   // settings permission alone must not show them a page's title.
@@ -122,6 +146,7 @@ async function contentTypeOf(
     key: slug,
     label: labelOf(slug, record),
     fields,
+    mappableFields,
     ...(example === undefined ? {} : { example }),
     public: isPublic,
   };

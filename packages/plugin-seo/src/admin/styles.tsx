@@ -72,6 +72,15 @@ const CSS = `
 .nx-seo-pattern[aria-expanded="true"]{border-color:var(--nx-foreground)}
 .nx-seo-pattern small{font-family:inherit;font-size:12px;color:var(--nx-muted-foreground)}
 .nx-seo-editrow td{background:var(--nx-muted)}
+.nx-seo-switchcell{width:56px}
+.nx-seo-select{height:34px;width:100%;max-width:220px;border:1px solid var(--nx-input);border-radius:8px;padding:0 8px;background:var(--nx-background);color:var(--nx-foreground);font:inherit;font-size:13px}
+.nx-seo-select[aria-invalid="true"]{border-color:var(--nx-warning-border)}
+.nx-seo-select-fit{width:auto}
+.nx-seo-sdstate{margin-top:4px;font-size:12px}
+.nx-seo-sdstate .nx-seo-linkbtn,.nx-seo-sdstate .nx-seo-help,.nx-seo-sdstate .nx-seo-warnc{font-size:12px}
+.nx-seo-mapfor{align-items:center;gap:8px}
+.nx-seo-mapgrid{display:grid;gap:6px}
+.nx-seo-mapline{display:grid;grid-template-columns:150px minmax(0,240px) 1fr;gap:6px 10px;align-items:center}
 .nx-seo-pedit{display:grid;gap:10px;max-width:760px}
 .nx-seo-vars{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .nx-seo-var{border:1px solid var(--nx-border);background:var(--nx-card);color:var(--nx-foreground);border-radius:6px;padding:3px 8px;font-family:var(--seo-mono);font-size:12px;cursor:pointer}
@@ -134,6 +143,9 @@ const CSS = `
 .nx-seo-profile{grid-template-columns:minmax(0,1fr) auto}
 .nx-seo-profile .nx-seo-net{grid-column:1/-1}
 .nx-seo-dialog{width:calc(100% - 32px)!important}
+.nx-seo-types .nx-seo-switchcell{display:none}
+.nx-seo-mapline{grid-template-columns:minmax(0,1fr)}
+.nx-seo-select{max-width:none}
 }
 `;
 

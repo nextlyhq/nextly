@@ -168,6 +168,13 @@ describe.each(getConfiguredTestDialects())(
             { name: "category", token: "Category" },
             { name: "excerpt", token: "Excerpt" },
           ],
+          // Every field a structured data detail may be read from.
+          mappableFields: [
+            { name: "title", label: "Title" },
+            { name: "slug", label: "Slug" },
+            { name: "category", label: "Category" },
+            { name: "excerpt", label: "Excerpt" },
+          ],
           example: {
             title: "Surfer SEO vs Rext AI",
             values: {
@@ -185,6 +192,12 @@ describe.each(getConfiguredTestDialects())(
           key: CASES,
           label: "Case studies",
           fields: [{ name: "slug", token: "Slug" }],
+          // The title and slug every collection carries come first.
+          mappableFields: [
+            { name: "title", label: "Title" },
+            { name: "slug", label: "Slug" },
+            { name: "name", label: "Name" },
+          ],
           public: false,
         },
       ]);

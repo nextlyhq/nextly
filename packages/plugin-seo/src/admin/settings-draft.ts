@@ -20,9 +20,20 @@ import {
   defaultTitlePattern,
   fillPattern,
   SEPARATORS,
+  tokenKey,
   unknownTokens,
   type Separator,
 } from "../settings/patterns";
+import {
+  DETAIL_GUESSES,
+  STRUCTURED_DATA_TYPES,
+  type StructuredDataDetail,
+  type StructuredDataTypeKey,
+} from "../structured-data/catalog";
+import type {
+  DetailMapping,
+  StructuredDataTypeRule,
+} from "../structured-data/rules";
 
 /** One of the brand's official accounts, as the form holds it. */
 export interface ProfileDraft {
@@ -47,6 +58,10 @@ export interface SettingsDraft {
   patterns: Record<string, { title?: string; description?: string }>;
   setupStep: number;
   setupDismissed: boolean;
+  /** The content types hidden from search as a whole, by key. */
+  hiddenTypes: string[];
+  /** Each content type's structured data choice and detail mapping, by key. */
+  structuredData: Record<string, StructuredDataTypeRule>;
 }
 
 /** The stored Single as the admin reads it. */
@@ -94,6 +109,8 @@ function patternsOf(value: unknown): SettingsDraft["patterns"] {
 export interface SettingsDefaults {
   /** The plugin's `aiCrawlers` option: what robots.txt asks until the site chooses. */
   aiCrawlers?: AiCrawlerChoice;
+  /** The plugin's `hiddenTypes` option: what is hidden until the site chooses. */
+  hiddenTypes?: readonly string[];
 }
 
 /** The form's values for the stored settings, `defaults` where nothing is stored. */
@@ -126,7 +143,127 @@ export function draftOf(
     patterns: patternsOf(stored.patterns),
     setupStep: typeof stored.setupStep === "number" ? stored.setupStep : 0,
     setupDismissed: stored.setupDismissed === true,
+    // The types hidden in force: the site's own list, else the plugin's, so
+    // showing one the plugin hides is a change that saves.
+    hiddenTypes: Array.isArray(stored.hiddenTypes)
+      ? stored.hiddenTypes.filter(
+          (key): key is string => typeof key === "string"
+        )
+      : [...(defaults.hiddenTypes ?? [])],
+    structuredData: structuredDataOf(stored.structuredData),
   };
+}
+
+/** Each type's stored structured data choice, as far as the form edits it. */
+function structuredDataOf(
+  value: unknown
+): Record<string, StructuredDataTypeRule> {
+  if (!isRecord(value)) return {};
+  const rules: Record<string, StructuredDataTypeRule> = {};
+  for (const [key, rule] of Object.entries(value)) {
+    if (isRecord(rule)) rules[key] = rule;
+  }
+  return rules;
+}
+
+/** Whether every page of the type `key` is hidden from search. */
+export function isHidden(draft: SettingsDraft, key: string): boolean {
+  return draft.hiddenTypes.includes(key);
+}
+
+/** `draft` with the type `key` hidden from search as a whole, or shown. */
+export function withHidden(
+  draft: SettingsDraft,
+  key: string,
+  hidden: boolean
+): SettingsDraft {
+  const others = draft.hiddenTypes.filter(each => each !== key);
+  return { ...draft, hiddenTypes: hidden ? [...others, key] : others };
+}
+
+/** The structured data type the type `key` chose, or none: automatic. */
+export function structuredTypeOf(
+  draft: SettingsDraft,
+  key: string
+): StructuredDataTypeKey | undefined {
+  return draft.structuredData[key]?.type;
+}
+
+/** `draft` with only the type `key`'s rule changed, an empty rule removed. */
+function withRule(
+  draft: SettingsDraft,
+  key: string,
+  rule: StructuredDataTypeRule
+): SettingsDraft {
+  const structuredData = { ...draft.structuredData };
+  const empty =
+    rule.type === undefined && Object.keys(rule.details ?? {}).length === 0;
+  if (empty) delete structuredData[key];
+  else structuredData[key] = rule;
+  return { ...draft, structuredData };
+}
+
+/** `draft` with the type `key` described as `type`, or automatically. */
+export function withStructuredType(
+  draft: SettingsDraft,
+  key: string,
+  type: StructuredDataTypeKey | undefined
+): SettingsDraft {
+  const { type: _previous, ...rest } = draft.structuredData[key] ?? {};
+  return withRule(draft, key, type === undefined ? rest : { ...rest, type });
+}
+
+/** The fields the type `key` reads each detail of `type` from. */
+export function mappingOf(
+  draft: SettingsDraft,
+  key: string,
+  type: StructuredDataTypeKey
+): DetailMapping {
+  return draft.structuredData[key]?.details?.[type] ?? {};
+}
+
+/** `draft` with `detail` of `type` read from `field`, or from nothing chosen. */
+export function withDetailField(
+  draft: SettingsDraft,
+  key: string,
+  type: StructuredDataTypeKey,
+  detail: StructuredDataDetail,
+  field: string
+): SettingsDraft {
+  const rule = draft.structuredData[key] ?? {};
+  const { [detail]: _previous, ...mapping } = mappingOf(draft, key, type);
+  const nextMapping: DetailMapping =
+    field === "" ? mapping : { ...mapping, [detail]: field };
+  const details = { ...rule.details };
+  if (Object.keys(nextMapping).length === 0) delete details[type];
+  else details[type] = nextMapping;
+  const { details: _details, ...withoutDetails } = rule;
+  return withRule(
+    draft,
+    key,
+    Object.keys(details).length === 0
+      ? withoutDetails
+      : { ...withoutDetails, details }
+  );
+}
+
+/**
+ * The details `type` needs that the content type has no field for yet:
+ * neither mapped nor held by a field named like the detail, which is where
+ * the page's markup looks when nothing is mapped.
+ */
+export function missingDetails(
+  draft: SettingsDraft,
+  type: SeoContentType,
+  structuredType: StructuredDataTypeKey
+): StructuredDataDetail[] {
+  const mapping = mappingOf(draft, type.key, structuredType);
+  const named = new Set(type.mappableFields.map(field => tokenKey(field.name)));
+  return STRUCTURED_DATA_TYPES[structuredType].needs.filter(
+    detail =>
+      mapping[detail] === undefined &&
+      !DETAIL_GUESSES[detail].some(guess => named.has(tokenKey(guess)))
+  );
 }
 
 /**

@@ -33,6 +33,7 @@ import {
   type SeoContentType,
 } from "../settings/contract";
 
+import { ContentTypesTab } from "./content-types";
 import {
   changesOf,
   draftOf,
@@ -44,7 +45,6 @@ import { SetupDialog } from "./SetupDialog";
 import { ROOT, SeoStyles } from "./styles";
 import {
   BrandTab,
-  ContentTypesTab,
   CrawlersTab,
   draftProblem,
   GeneralTab,

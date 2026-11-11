@@ -4,6 +4,13 @@ import type { SeoContentType } from "../../settings/contract";
 import {
   attentionItems,
   changesOf,
+  isHidden,
+  mappingOf,
+  missingDetails,
+  structuredTypeOf,
+  withDetailField,
+  withHidden,
+  withStructuredType,
   draftOf,
   networkOf,
   patternOf,
@@ -43,6 +50,7 @@ const posts: SeoContentType = {
     title: "Surfer SEO vs Rext AI",
     values: { category: "Comparisons" },
   },
+  mappableFields: [],
   public: true,
 };
 
@@ -68,6 +76,8 @@ describe("the form's values, from the stored settings", () => {
       patterns: { posts: { title: "{Title} | {Site name}" } },
       setupStep: 1,
       setupDismissed: false,
+      hiddenTypes: [],
+      structuredData: {},
     });
   });
 
@@ -87,6 +97,8 @@ describe("the form's values, from the stored settings", () => {
       patterns: {},
       setupStep: 0,
       setupDismissed: false,
+      hiddenTypes: [],
+      structuredData: {},
     });
   });
 });
@@ -291,5 +303,75 @@ describe("what setup ends on", () => {
         [posts]
       )
     ).toEqual([]);
+  });
+});
+
+describe("hiding a whole content type", () => {
+  const empty = { id: "s1", updatedAt: "" };
+
+  it("shows the plugin's own hidden types until the site chooses, and saves the whole list once changed", () => {
+    const draft = draftOf(empty, { hiddenTypes: ["tags"] });
+    expect(isHidden(draft, "tags")).toBe(true);
+    expect(changesOf(empty, draft, { hiddenTypes: ["tags"] })).toBeNull();
+
+    const shown = withHidden(draft, "tags", false);
+    const hidden = withHidden(shown, "posts", true);
+    expect(changesOf(empty, hidden, { hiddenTypes: ["tags"] })).toEqual({
+      hiddenTypes: ["posts"],
+      _overwrite: true,
+    });
+  });
+});
+
+describe("a content type's structured data", () => {
+  const withFields: SeoContentType = {
+    ...posts,
+    mappableFields: [
+      { name: "byline", label: "Byline" },
+      { name: "publishedAt", label: "Published at" },
+      { name: "cover", label: "Cover" },
+    ],
+  };
+
+  it("is automatic until a type is chosen, and saves the choice", () => {
+    const draft = draftOf(stored);
+    expect(structuredTypeOf(draft, "posts")).toBeUndefined();
+
+    const chosen = withStructuredType(draft, "posts", "article");
+    expect(structuredTypeOf(chosen, "posts")).toBe("article");
+    expect(changesOf(stored, chosen)).toEqual({
+      structuredData: { posts: { type: "article" } },
+      _rev: "4",
+    });
+    expect(
+      structuredTypeOf(withStructuredType(chosen, "posts", undefined), "posts")
+    ).toBeUndefined();
+  });
+
+  it("names the details no field holds yet, counting a field named like one as holding it", () => {
+    // `publishedAt` is named like the date published, so it is found; nothing
+    // is named like the author or the image.
+    expect(missingDetails(draftOf(stored), withFields, "article")).toEqual([
+      "author",
+      "image",
+    ]);
+  });
+
+  it("saves the field a detail is read from, and forgets it when unchosen", () => {
+    const mapped = withDetailField(
+      draftOf(stored),
+      "posts",
+      "article",
+      "author",
+      "byline"
+    );
+    expect(mappingOf(mapped, "posts", "article")).toEqual({ author: "byline" });
+    expect(missingDetails(mapped, withFields, "article")).toEqual(["image"]);
+    expect(changesOf(stored, mapped)).toEqual({
+      structuredData: { posts: { details: { article: { author: "byline" } } } },
+      _rev: "4",
+    });
+    const unmapped = withDetailField(mapped, "posts", "article", "author", "");
+    expect(mappingOf(unmapped, "posts", "article")).toEqual({});
   });
 });

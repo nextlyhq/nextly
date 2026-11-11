@@ -62,6 +62,12 @@ export interface PatternField {
   token: string;
 }
 
+/** A field a structured data detail may be read from, as the screen names it. */
+export interface MappableField {
+  name: string;
+  label: string;
+}
+
 /** A page of a type a pattern is previewed with: its title and fields. */
 export interface PatternExample {
   /** The page's title, which `{Title}` stands for. */
@@ -81,6 +87,8 @@ export interface SeoContentType {
   fields: PatternField[];
   /** The newest page of the type, where the reader may see one. */
   example?: PatternExample;
+  /** The type's own fields a structured data detail may be read from. */
+  mappableFields: MappableField[];
   /** Whether its pages have a public address yet. */
   public: boolean;
 }
