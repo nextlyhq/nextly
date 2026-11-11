@@ -39,6 +39,7 @@ import {
   isTabId,
   TABS,
   type TabId,
+  type TabProps,
 } from "./tabs";
 
 /** The tab the screen opens on: the one people use most. */
@@ -104,43 +105,17 @@ export function SeoSettingsPage(): JSX.Element {
   );
 }
 
-/** The screen once the settings are read. */
-function SettingsScreen({
-  stored: initial,
-  types,
-  typesFailed,
-  reread,
-}: {
-  stored: StoredSettings;
-  types: readonly SeoContentType[];
-  typesFailed: boolean;
-  reread: () => Promise<StoredSettings | undefined>;
-}): JSX.Element {
+/** The draft, the settings it is compared with, and how a save goes. */
+function useSettingsSave(
+  initial: StoredSettings,
+  reread: () => Promise<StoredSettings | undefined>
+) {
   const update = useUpdateSingleDocument(SEO_SETTINGS_SLUG);
   // The settings as last read or saved, which the draft is compared with.
   const [stored, setStored] = useState(initial);
   const [draft, setDraft] = useState<SettingsDraft>(() => draftOf(initial));
-  const [tab, setTab] = useState<TabId>(tabInAddress);
-  const [editing, setEditing] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const finished = draft.setupStep >= SETUP_STEPS;
-  const [setupOpen, setSetupOpen] = useState(
-    () => !finished && !draftOf(initial).setupDismissed
-  );
-  const tabRefs = useRef<Partial<Record<TabId, HTMLButtonElement | null>>>({});
-
-  const changes = changesOf(stored, draft);
-  const problem = draftProblem(draft, types);
-  const notPublic = types.filter(type => !type.public).length;
-
-  // Leaving with unsaved changes asks first.
-  useEffect(() => {
-    if (changes === null) return undefined;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [changes]);
 
   /** Saves `next`, and reports whether it was stored. */
   const save = useCallback(
@@ -170,29 +145,187 @@ function SettingsScreen({
     [stored, update, reread]
   );
 
+  return { stored, draft, setDraft, save, saving, failure };
+}
+
+/** Leaving the page with unsaved changes asks first. */
+function useLeaveWarning(unsaved: boolean): void {
+  useEffect(() => {
+    if (!unsaved) return undefined;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved]);
+}
+
+/** The line that offers setup again until it is finished. */
+function SetupBanner({
+  stepsDone,
+  reopen,
+}: {
+  stepsDone: number;
+  reopen: () => void;
+}): JSX.Element {
+  return (
+    <div className="nx-seo-banner" role="status">
+      <span>
+        <b>Finish setting up SEO.</b> {Math.min(stepsDone, SETUP_STEPS)} of{" "}
+        {SETUP_STEPS} steps done. Your answers so far are saved.
+      </span>
+      <Button type="button" size="sm" onClick={reopen}>
+        Finish setup
+      </Button>
+    </div>
+  );
+}
+
+/** The tab list, its arrow keys moving between tabs. */
+function SettingsTabList({
+  tab,
+  choose,
+  notPublic,
+}: {
+  tab: TabId;
+  choose: (tab: TabId) => void;
+  notPublic: number;
+}): JSX.Element {
+  const refs = useRef<Partial<Record<TabId, HTMLButtonElement | null>>>({});
+  const move = (index: number, key: string) => {
+    const step = key === "ArrowRight" ? 1 : key === "ArrowLeft" ? -1 : 0;
+    if (step === 0) return;
+    const next = TABS[(index + step + TABS.length) % TABS.length].id;
+    choose(next);
+    refs.current[next]?.focus();
+  };
+  return (
+    <div className="nx-seo-tabs" role="tablist" aria-label="SEO settings">
+      {TABS.map((each, index) => (
+        <button
+          key={each.id}
+          ref={element => {
+            refs.current[each.id] = element;
+          }}
+          type="button"
+          role="tab"
+          id={`nx-seo-tab-${each.id}`}
+          className="nx-seo-tab"
+          aria-selected={tab === each.id}
+          aria-controls="nx-seo-panel"
+          tabIndex={tab === each.id ? 0 : -1}
+          onClick={() => choose(each.id)}
+          onKeyDown={event => move(index, event.key)}
+        >
+          {each.label}
+          {each.id === "types" && notPublic > 0 ? (
+            <span
+              className="nx-seo-cnt"
+              title={`${notPublic} content type${notPublic === 1 ? " has" : "s have"} no public address`}
+            >
+              {notPublic}
+            </span>
+          ) : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** The open tab's content. */
+function SettingsPanel({
+  tab,
+  tabProps,
+  types,
+  typesFailed,
+  editing,
+  setEditing,
+}: {
+  tab: TabId;
+  tabProps: TabProps;
+  types: readonly SeoContentType[];
+  typesFailed: boolean;
+  editing: string | null;
+  setEditing: (key: string | null) => void;
+}): JSX.Element {
+  const current = TABS.find(each => each.id === tab) ?? TABS[1];
+  let content: JSX.Element;
+  if (tab === "general") content = <GeneralTab {...tabProps} />;
+  else if (tab === "brand") content = <BrandTab {...tabProps} />;
+  else if (tab === "crawlers") content = <CrawlersTab {...tabProps} />;
+  else if (typesFailed) {
+    content = (
+      <p className="nx-seo-alert" role="alert">
+        The content types could not be read. Reload the page to try again.
+      </p>
+    );
+  } else {
+    content = (
+      <ContentTypesTab
+        {...tabProps}
+        types={types}
+        editing={editing}
+        setEditing={setEditing}
+      />
+    );
+  }
+  return (
+    <section
+      className="nx-seo-body"
+      role="tabpanel"
+      id="nx-seo-panel"
+      aria-labelledby={`nx-seo-tab-${current.id}`}
+    >
+      <p className="nx-seo-lead">{current.lead}</p>
+      {content}
+    </section>
+  );
+}
+
+/** The screen once the settings are read. */
+function SettingsScreen({
+  stored: initial,
+  types,
+  typesFailed,
+  reread,
+}: {
+  stored: StoredSettings;
+  types: readonly SeoContentType[];
+  typesFailed: boolean;
+  reread: () => Promise<StoredSettings | undefined>;
+}): JSX.Element {
+  const { stored, draft, setDraft, save, saving, failure } = useSettingsSave(
+    initial,
+    reread
+  );
+  const [tab, setTab] = useState<TabId>(tabInAddress);
+  const [editing, setEditing] = useState<string | null>(null);
+  const finished = draft.setupStep >= SETUP_STEPS;
+  const [setupOpen, setSetupOpen] = useState(
+    () => !finished && !draftOf(initial).setupDismissed
+  );
+  const changes = changesOf(stored, draft);
+  const problem = draftProblem(draft, types);
+  useLeaveWarning(changes !== null);
+
   const choose = (next: TabId) => {
     setTab(next);
     showTabInAddress(next);
   };
-  const current = TABS.find(each => each.id === tab) ?? TABS[1];
-  const tabProps = {
-    draft,
-    change: (next: (d: SettingsDraft) => SettingsDraft) => setDraft(next),
+  const tabProps: TabProps = { draft, change: next => setDraft(next) };
+  const saveChanges = () => {
+    void save(draft).then(saved => {
+      if (!saved) return;
+      setEditing(null);
+      toastMutationResult("SEO settings saved", undefined);
+    });
   };
 
   return (
     <>
       {!finished && !setupOpen ? (
-        <div className="nx-seo-banner" role="status">
-          <span>
-            <b>Finish setting up SEO.</b>{" "}
-            {Math.min(draft.setupStep, SETUP_STEPS)} of {SETUP_STEPS} steps
-            done. Your answers so far are saved.
-          </span>
-          <Button type="button" size="sm" onClick={() => setSetupOpen(true)}>
-            Finish setup
-          </Button>
-        </div>
+        <SetupBanner
+          stepsDone={draft.setupStep}
+          reopen={() => setSetupOpen(true)}
+        />
       ) : null}
       <header className="nx-seo-head">
         <div>
@@ -206,13 +339,7 @@ function SettingsScreen({
           <Button
             type="button"
             disabled={changes === null || problem !== null || saving}
-            onClick={() => {
-              void save(draft).then(saved => {
-                if (!saved) return;
-                setEditing(null);
-                toastMutationResult("SEO settings saved", undefined);
-              });
-            }}
+            onClick={saveChanges}
           >
             {saving ? "Saving…" : "Save changes"}
           </Button>
@@ -223,71 +350,19 @@ function SettingsScreen({
           Not saved. {failure}
         </p>
       )}
-      <div className="nx-seo-tabs" role="tablist" aria-label="SEO settings">
-        {TABS.map((each, index) => (
-          <button
-            key={each.id}
-            ref={element => {
-              tabRefs.current[each.id] = element;
-            }}
-            type="button"
-            role="tab"
-            id={`nx-seo-tab-${each.id}`}
-            className="nx-seo-tab"
-            aria-selected={tab === each.id}
-            aria-controls="nx-seo-panel"
-            tabIndex={tab === each.id ? 0 : -1}
-            onClick={() => choose(each.id)}
-            onKeyDown={event => {
-              const step =
-                event.key === "ArrowRight"
-                  ? 1
-                  : event.key === "ArrowLeft"
-                    ? -1
-                    : 0;
-              if (step === 0) return;
-              const next = TABS[(index + step + TABS.length) % TABS.length].id;
-              choose(next);
-              tabRefs.current[next]?.focus();
-            }}
-          >
-            {each.label}
-            {each.id === "types" && notPublic > 0 ? (
-              <span
-                className="nx-seo-cnt"
-                title={`${notPublic} content type${notPublic === 1 ? " has" : "s have"} no public address`}
-              >
-                {notPublic}
-              </span>
-            ) : null}
-          </button>
-        ))}
-      </div>
-      <section
-        className="nx-seo-body"
-        role="tabpanel"
-        id="nx-seo-panel"
-        aria-labelledby={`nx-seo-tab-${current.id}`}
-      >
-        <p className="nx-seo-lead">{current.lead}</p>
-        {tab === "general" ? <GeneralTab {...tabProps} /> : null}
-        {tab === "types" ? (
-          typesFailed ? (
-            <p className="nx-seo-alert" role="alert">
-              The content types could not be read. Reload the page to try again.
-            </p>
-          ) : (
-            <ContentTypesTab
-              {...tabProps}
-              types={types}
-              editing={editing}
-              setEditing={setEditing}
-            />
-          )
-        ) : null}
-        {tab === "brand" ? <BrandTab {...tabProps} /> : null}
-        {tab === "crawlers" ? <CrawlersTab {...tabProps} /> : null}
-      </section>
+      <SettingsTabList
+        tab={tab}
+        choose={choose}
+        notPublic={types.filter(type => !type.public).length}
+      />
+      <SettingsPanel
+        tab={tab}
+        tabProps={tabProps}
+        types={types}
+        typesFailed={typesFailed}
+        editing={editing}
+        setEditing={setEditing}
+      />
       {setupOpen ? (
         <SetupDialog
           open

@@ -13,6 +13,8 @@ import {
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { isRecord, textOf } from "../plain-values";
+
 import {
   CONTENT_TYPES_ROUTE_PATH,
   SEO_SETTINGS_SLUG,
@@ -23,14 +25,8 @@ import {
 import { patternFields } from "./pattern-fields";
 import { TITLE_FIELDS } from "./patterns";
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const textOf = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim() !== "" ? value : undefined;
-
 /** The example a stored page gives for `fields`. */
-export function exampleOf(
+function exampleOf(
   document: Readonly<Record<string, unknown>>,
   fields: readonly PatternField[]
 ): PatternExample {

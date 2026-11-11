@@ -14,6 +14,50 @@ import { useId, useState, type JSX } from "react";
 
 import { Icon } from "./styles";
 
+/** The chosen image, small, with its file name and size; or what it is for. */
+function MediaSummary({
+  value,
+  shape,
+  emptyHelp,
+  chosenHelp,
+}: {
+  value: string | null;
+  shape: "wide" | "square";
+  emptyHelp: string;
+  chosenHelp?: string;
+}): JSX.Element {
+  const item = useMediaItem(value ?? undefined);
+  const media = value === null ? undefined : item.data;
+  const size =
+    media?.width && media.height ? `${media.width} × ${media.height}` : null;
+  const name = media?.originalFilename ?? media?.filename ?? "Loading…";
+  return (
+    <>
+      <div
+        className={shape === "square" ? "nx-seo-thumb square" : "nx-seo-thumb"}
+      >
+        {media?.url ? (
+          <img src={media.thumbnailUrl ?? media.url} alt="" />
+        ) : (
+          <Icon name="image" />
+        )}
+      </div>
+      <div className="nx-seo-upl-text">
+        {value === null ? (
+          <p className="nx-seo-help">{emptyHelp}</p>
+        ) : (
+          <>
+            <span>{name}</span>
+            <span className="nx-seo-help">
+              {[size, chosenHelp].filter(Boolean).join(" · ")}
+            </span>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
 /** A media item's id, chosen in the media library, or none. */
 export function MediaChoice({
   label,
@@ -35,40 +79,18 @@ export function MediaChoice({
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   const labelId = useId();
-  const item = useMediaItem(value ?? undefined);
-  const media = value === null ? undefined : item.data;
-  const size =
-    media?.width && media.height ? `${media.width} × ${media.height}` : null;
-  const thumbClass =
-    shape === "square" ? "nx-seo-thumb square" : "nx-seo-thumb";
-
   return (
     <div className="nx-seo-field" role="group" aria-labelledby={labelId}>
       <span className="nx-seo-label" id={labelId}>
         {label}
       </span>
       <div className="nx-seo-upl">
-        <div className={thumbClass}>
-          {media?.url ? (
-            <img src={media.thumbnailUrl ?? media.url} alt="" />
-          ) : (
-            <Icon name="image" />
-          )}
-        </div>
-        <div className="nx-seo-upl-text">
-          {value === null ? (
-            <p className="nx-seo-help">{emptyHelp}</p>
-          ) : (
-            <>
-              <span>
-                {media?.originalFilename ?? media?.filename ?? "Loading…"}
-              </span>
-              <span className="nx-seo-help">
-                {[size, chosenHelp].filter(Boolean).join(" · ")}
-              </span>
-            </>
-          )}
-        </div>
+        <MediaSummary
+          value={value}
+          shape={shape}
+          emptyHelp={emptyHelp}
+          {...(chosenHelp === undefined ? {} : { chosenHelp })}
+        />
         <div className="nx-seo-upl-acts">
           {value !== null ? (
             <Button

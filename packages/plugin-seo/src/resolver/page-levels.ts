@@ -18,6 +18,7 @@ import {
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
 
+import { isRecord, textOf } from "../plain-values";
 import { fillPattern } from "../settings/patterns";
 import type { SeoRules } from "../settings/rules";
 
@@ -35,6 +36,7 @@ export const NO_RULES: SiteRules = {
   productionAddresses: [],
   defaultPatterns: {},
   patterns: {},
+  aiCrawlers: "all",
 };
 
 /**
@@ -46,12 +48,6 @@ const CONTENT_FIELDS = {
   description: ["excerpt", "summary", "description", "subtitle"],
   image: ["coverImage", "cover", "featuredImage", "heroImage", "image"],
 } as const;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const textOf = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim() !== "" ? value : undefined;
 
 /** `values` without the keys whose value is undefined. */
 function defined<T extends Record<string, unknown>>(values: T): Partial<T> {

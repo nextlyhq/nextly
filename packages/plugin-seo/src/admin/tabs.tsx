@@ -380,6 +380,83 @@ function PatternEditor({
   );
 }
 
+/** Where a type's pages live: their address, or that they have none yet. */
+function TypeAddress({ type }: { type: SeoContentType }): JSX.Element {
+  if (!type.public) {
+    return (
+      <>
+        <span className="nx-seo-notpublic">
+          <Icon name="warn" /> Not public yet
+        </span>
+        <p className="nx-seo-help">A developer sets where these pages live.</p>
+      </>
+    );
+  }
+  return type.example?.address ? (
+    <span className="nx-seo-code">{type.example.address}</span>
+  ) : (
+    <span className="nx-seo-help">Set in code</span>
+  );
+}
+
+/** One content type's row, and its pattern editor under it while open. */
+function TypeRows({
+  type,
+  draft,
+  change,
+  open,
+  setEditing,
+}: TabProps & {
+  type: SeoContentType;
+  open: boolean;
+  setEditing: (key: string | null) => void;
+}): JSX.Element {
+  const { pattern, own } = patternOf(draft, type.key);
+  const problem = open ? null : patternProblem(pattern, type);
+  return (
+    <>
+      <tr>
+        <td className="nx-seo-tname">
+          <b>{type.label}</b>
+          <small>
+            {type.example?.title
+              ? `Newest: ${type.example.title}`
+              : "No pages yet"}
+          </small>
+        </td>
+        <td data-label="Public address">
+          <TypeAddress type={type} />
+        </td>
+        <td data-label="Title pattern">
+          <button
+            type="button"
+            className="nx-seo-pattern"
+            aria-expanded={open}
+            aria-label={`Edit the title pattern for ${type.label}`}
+            onClick={() => setEditing(open ? null : type.key)}
+          >
+            {pattern}
+            {own ? null : <small>default</small>}
+          </button>
+          {problem === null ? null : <p className="nx-seo-error">{problem}</p>}
+        </td>
+      </tr>
+      {open ? (
+        <tr className="nx-seo-editrow">
+          <td colSpan={3}>
+            <PatternEditor
+              type={type}
+              draft={draft}
+              change={change}
+              onDone={() => setEditing(null)}
+            />
+          </td>
+        </tr>
+      ) : null}
+    </>
+  );
+}
+
 /** Where each kind of page lives and how its titles are made. */
 export function ContentTypesTab({
   draft,
@@ -412,73 +489,16 @@ export function ContentTypesTab({
             </tr>
           </thead>
           <tbody>
-            {types.flatMap(type => {
-              const { pattern, own } = patternOf(draft, type.key);
-              const open = editing === type.key;
-              const problem = patternProblem(pattern, type);
-              const rows = [
-                <tr key={type.key}>
-                  <td className="nx-seo-tname">
-                    <b>{type.label}</b>
-                    {type.example?.title ? (
-                      <small>Newest: {type.example.title}</small>
-                    ) : (
-                      <small>No pages yet</small>
-                    )}
-                  </td>
-                  <td data-label="Public address">
-                    {type.public ? (
-                      type.example?.address ? (
-                        <span className="nx-seo-code">
-                          {type.example.address}
-                        </span>
-                      ) : (
-                        <span className="nx-seo-help">Set in code</span>
-                      )
-                    ) : (
-                      <>
-                        <span className="nx-seo-notpublic">
-                          <Icon name="warn" /> Not public yet
-                        </span>
-                        <p className="nx-seo-help">
-                          A developer sets where these pages live.
-                        </p>
-                      </>
-                    )}
-                  </td>
-                  <td data-label="Title pattern">
-                    <button
-                      type="button"
-                      className="nx-seo-pattern"
-                      aria-expanded={open}
-                      aria-label={`Edit the title pattern for ${type.label}`}
-                      onClick={() => setEditing(open ? null : type.key)}
-                    >
-                      {pattern}
-                      {own ? null : <small>default</small>}
-                    </button>
-                    {problem !== null && !open ? (
-                      <p className="nx-seo-error">{problem}</p>
-                    ) : null}
-                  </td>
-                </tr>,
-              ];
-              if (open) {
-                rows.push(
-                  <tr key={`${type.key}-edit`} className="nx-seo-editrow">
-                    <td colSpan={3}>
-                      <PatternEditor
-                        type={type}
-                        draft={draft}
-                        change={change}
-                        onDone={() => setEditing(null)}
-                      />
-                    </td>
-                  </tr>
-                );
-              }
-              return rows;
-            })}
+            {types.map(type => (
+              <TypeRows
+                key={type.key}
+                type={type}
+                draft={draft}
+                change={change}
+                open={editing === type.key}
+                setEditing={setEditing}
+              />
+            ))}
           </tbody>
         </table>
       </div>

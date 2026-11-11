@@ -15,6 +15,7 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { isRecord, textOf } from "../plain-values";
 import { imageOf } from "../resolver/page-levels";
 
 import {
@@ -53,6 +54,8 @@ export interface SeoRules {
   defaultPatterns: TypePatterns;
   /** Per content type: the collection slug, or `single:<slug>` for a Single. */
   patterns: Record<string, TypePatterns>;
+  /** What AI tools are asked to do with the site's pages: `all` by default. */
+  aiCrawlers: AiCrawlerChoice;
 }
 
 /** One of the brand's official accounts. */
@@ -73,10 +76,10 @@ export interface BrandFacts {
 }
 
 /** The SEO settings as stored, as far as the readers below take them. */
-export type SeoSettingsDocument = Readonly<Record<string, unknown>>;
+type SeoSettingsDocument = Readonly<Record<string, unknown>>;
 
-const textOf = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+/** A stored text value, trimmed, where it is not blank. */
+const trimmed = (value: unknown): string | undefined => textOf(value)?.trim();
 
 const oneOf = <T extends string>(
   values: readonly T[],
@@ -85,12 +88,12 @@ const oneOf = <T extends string>(
   (values as readonly unknown[]).includes(value) ? (value as T) : undefined;
 
 /** The separator the site chose, or the default. */
-export function separatorOf(document: SeoSettingsDocument): Separator {
+function separatorOf(document: SeoSettingsDocument): Separator {
   return oneOf(SEPARATORS, document.separator) ?? "|";
 }
 
 /** What AI tools are asked to do: all are allowed until the site says otherwise. */
-export function aiCrawlersOf(document: SeoSettingsDocument): AiCrawlerChoice {
+function aiCrawlersOf(document: SeoSettingsDocument): AiCrawlerChoice {
   return oneOf(AI_CRAWLER_CHOICES, document.aiCrawlers) ?? "all";
 }
 
@@ -119,8 +122,8 @@ function patternsOf(
     ) ?? {};
   const patterns: Record<string, TypePatterns> = {};
   for (const [type, parts] of Object.entries(stored)) {
-    const title = textOf(parts.title);
-    const description = textOf(parts.description);
+    const title = trimmed(parts.title);
+    const description = trimmed(parts.description);
     if (title === undefined && description === undefined) continue;
     patterns[type] = {
       ...(title === undefined ? {} : { title }),
@@ -131,17 +134,15 @@ function patternsOf(
 }
 
 /** Finds the share image a stored media value names. */
-export type ImageOf = (
-  value: unknown
-) => Promise<PageMetadataImage | undefined>;
+type ImageOf = (value: unknown) => Promise<PageMetadataImage | undefined>;
 
 /** The rules a stored settings document gives. */
-export async function rulesOf(
+async function rulesOf(
   document: SeoSettingsDocument,
   imageOf: ImageOf
 ): Promise<SeoRules> {
-  const siteName = textOf(document.siteName);
-  const description = textOf(document.description);
+  const siteName = trimmed(document.siteName);
+  const description = trimmed(document.description);
   const image = await imageOf(document.image);
   return {
     ...(siteName === undefined ? {} : { siteName }),
@@ -153,19 +154,20 @@ export async function rulesOf(
         productionAddressesProblem
       ) ?? [],
     defaultPatterns: { title: defaultTitlePattern(separatorOf(document)) },
+    aiCrawlers: aiCrawlersOf(document),
     patterns: patternsOf(document),
   };
 }
 
 /** The brand facts a stored settings document gives. */
-export async function brandOf(
+async function brandOf(
   document: SeoSettingsDocument,
   imageOf: ImageOf
 ): Promise<BrandFacts> {
-  const name = textOf(document.brandName);
+  const name = trimmed(document.brandName);
   const logo = await imageOf(document.logo);
   const siteKind = oneOf(SITE_KINDS, document.siteKind);
-  const otherNames = (textOf(document.brandOtherNames) ?? "")
+  const otherNames = (trimmed(document.brandOtherNames) ?? "")
     .split(",")
     .map(other => other.trim())
     .filter(other => other !== "");
@@ -182,9 +184,6 @@ export async function brandOf(
   };
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
 /** Images read as the resolver reads a page's: from the media library. */
 const mediaImages =
   (ctx: PluginContext): ImageOf =>
@@ -195,7 +194,7 @@ const mediaImages =
  * The stored SEO settings in `locale`, as the system: the published values,
  * since they decide what the live site serves. Empty before anyone saves.
  */
-export async function readSeoSettingsDocument(
+async function readSeoSettingsDocument(
   ctx: Pick<PluginContext, "self">,
   locale?: string
 ): Promise<SeoSettingsDocument> {

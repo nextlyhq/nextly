@@ -5,28 +5,30 @@
  *
  * @module settings/stored-values
  */
+import { isRecord } from "../plain-values";
 
 /** Why a stored set of patterns is not one; null when it is. */
 export function patternsProblem(value: unknown): string | null {
   if (value === null || value === undefined) return null;
-  if (typeof value !== "object" || Array.isArray(value)) {
-    return "Title patterns must be kept by content type.";
-  }
+  if (!isRecord(value)) return "Title patterns must be kept by content type.";
   for (const [type, patterns] of Object.entries(value)) {
-    if (
-      typeof patterns !== "object" ||
-      patterns === null ||
-      Array.isArray(patterns)
-    ) {
-      return `The patterns for ${type} must be a title and a description.`;
+    const problem = typePatternsProblem(type, patterns);
+    if (problem !== null) return problem;
+  }
+  return null;
+}
+
+/** Why one type's stored patterns are not a title and a description; null when they are. */
+function typePatternsProblem(type: string, patterns: unknown): string | null {
+  if (!isRecord(patterns)) {
+    return `The patterns for ${type} must be a title and a description.`;
+  }
+  for (const [part, pattern] of Object.entries(patterns)) {
+    if (part !== "title" && part !== "description") {
+      return `${type} has a pattern for ${part}; only a title and a description have one.`;
     }
-    for (const [part, pattern] of Object.entries(patterns)) {
-      if (part !== "title" && part !== "description") {
-        return `${type} has a pattern for ${part}; only a title and a description have one.`;
-      }
-      if (typeof pattern !== "string") {
-        return `The ${part} pattern for ${type} must be text.`;
-      }
+    if (typeof pattern !== "string") {
+      return `The ${part} pattern for ${type} must be text.`;
     }
   }
   return null;

@@ -8,6 +8,7 @@
  *
  * @module admin/settings-draft
  */
+import { isRecord } from "../plain-values";
 import {
   AI_CRAWLER_CHOICES,
   SITE_KINDS,
@@ -50,9 +51,6 @@ export interface SettingsDraft {
 
 /** The stored Single as the admin reads it. */
 export type StoredSettings = Readonly<Record<string, unknown>>;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const text = (value: unknown): string =>
   typeof value === "string" ? value : "";
@@ -255,4 +253,55 @@ export function networkOf(url: string): string {
   }
   const known = NETWORKS.find(([pattern]) => pattern.test(host));
   return known === undefined ? host.replace(/^www\./, "") : known[1];
+}
+
+/** One thing first-time setup ends on, and the tab where it is fixed. */
+export interface AttentionItem {
+  text: string;
+  fix: string;
+  tab: "general" | "types" | "brand";
+}
+
+/** What a logo and share image still missing are, said as one item. */
+function imagesItem(draft: SettingsDraft): AttentionItem | null {
+  if (draft.logo !== null && draft.image !== null) return null;
+  if (draft.logo === null && draft.image === null) {
+    return {
+      text: "No logo or share image yet",
+      fix: "Add a logo",
+      tab: "brand",
+    };
+  }
+  return draft.logo === null
+    ? { text: "No logo yet", fix: "Add a logo", tab: "brand" }
+    : { text: "No share image yet", fix: "Add a share image", tab: "general" };
+}
+
+/**
+ * What needs attention first once setup is answered: a missing production
+ * address, each content type with no public address, and a missing logo or
+ * share image, each with the tab it is fixed on.
+ */
+export function attentionItems(
+  draft: SettingsDraft,
+  types: readonly SeoContentType[]
+): AttentionItem[] {
+  const items: AttentionItem[] = [];
+  if (!draft.productionAddresses.some(address => address.trim() !== "")) {
+    items.push({
+      text: "No production address is saved",
+      fix: "Set the address",
+      tab: "general",
+    });
+  }
+  for (const type of types.filter(each => !each.public)) {
+    items.push({
+      text: `${type.label} have no public address`,
+      fix: "See content types",
+      tab: "types",
+    });
+  }
+  const images = imagesItem(draft);
+  if (images !== null) items.push(images);
+  return items;
 }

@@ -98,6 +98,7 @@ describe.each(getConfiguredTestDialects())(
         productionAddresses: [],
         defaultPatterns: { title: "{Title} | {Site name}" },
         patterns: {},
+        aiCrawlers: "all",
       });
       expect(await readBrandFacts(ctx)).toEqual({
         otherNames: [],
@@ -139,6 +140,7 @@ describe.each(getConfiguredTestDialects())(
             },
           ],
           siteKind: "company",
+          aiCrawlers: "search",
         },
       });
 
@@ -157,6 +159,7 @@ describe.each(getConfiguredTestDialects())(
           seot_posts: { title: "{Title} — Blog — {Site name}" },
           "single:home": { description: "{Site name} home" },
         },
+        aiCrawlers: "search",
       });
 
       expect(await readBrandFacts(ctx)).toEqual({

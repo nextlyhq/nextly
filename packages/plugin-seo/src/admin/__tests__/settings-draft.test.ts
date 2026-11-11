@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SeoContentType } from "../../settings/contract";
 import {
+  attentionItems,
   changesOf,
   draftOf,
   networkOf,
@@ -198,5 +199,58 @@ describe("a social profile's network", () => {
     ["not an address", ""],
   ])("is read from %s", (url, network) => {
     expect(networkOf(url)).toBe(network);
+  });
+});
+
+describe("what setup ends on", () => {
+  const empty = draftOf({ id: "s1", updatedAt: "" });
+
+  it("names a missing address, each type with no address, and missing images", () => {
+    expect(
+      attentionItems(empty, [
+        posts,
+        { ...posts, key: "cases", label: "Case studies", public: false },
+      ])
+    ).toEqual([
+      {
+        text: "No production address is saved",
+        fix: "Set the address",
+        tab: "general",
+      },
+      {
+        text: "Case studies have no public address",
+        fix: "See content types",
+        tab: "types",
+      },
+      { text: "No logo or share image yet", fix: "Add a logo", tab: "brand" },
+    ]);
+  });
+
+  it("names only the image still missing", () => {
+    const withLogo = {
+      ...empty,
+      productionAddresses: ["https://acme.com"],
+      logo: "m1",
+    };
+    expect(attentionItems(withLogo, [posts])).toEqual([
+      { text: "No share image yet", fix: "Add a share image", tab: "general" },
+    ]);
+    expect(
+      attentionItems({ ...withLogo, logo: null, image: "m2" }, [posts])
+    ).toEqual([{ text: "No logo yet", fix: "Add a logo", tab: "brand" }]);
+  });
+
+  it("is empty for a site with everything set", () => {
+    expect(
+      attentionItems(
+        {
+          ...empty,
+          productionAddresses: ["https://acme.com"],
+          logo: "m1",
+          image: "m2",
+        },
+        [posts]
+      )
+    ).toEqual([]);
   });
 });

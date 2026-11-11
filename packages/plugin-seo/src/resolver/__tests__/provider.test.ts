@@ -89,6 +89,7 @@ const RULES: SiteRules = {
   productionAddresses: [],
   defaultPatterns: {},
   patterns: { posts: { title: "{Title} | {Site name}" } },
+  aiCrawlers: "all",
 };
 
 describe("one answer for each kind of page", () => {

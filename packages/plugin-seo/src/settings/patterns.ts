@@ -10,6 +10,8 @@
  *
  * @module settings/patterns
  */
+import { textOf } from "../plain-values";
+
 import type { PatternField } from "./contract";
 
 /** The page's own title. */
@@ -42,7 +44,7 @@ export function tokenKey(name: string): string {
 }
 
 /** Every variable in `pattern`, as written, in order. */
-export function patternTokens(pattern: string): string[] {
+function patternTokens(pattern: string): string[] {
   return [...pattern.matchAll(/\{([^{}]+)\}/g)].map(match => match[1].trim());
 }
 
@@ -66,10 +68,6 @@ export function unknownTokens(
   }
   return unknown;
 }
-
-/** A value as text a title can use: non-blank text, else nothing. */
-const textOfValue = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim() !== "" ? value : undefined;
 
 /** Whether `title` already ends with the brand `siteName`, as a whole name. */
 function endsWithBrand(title: string, siteName: string): boolean {
@@ -134,7 +132,7 @@ export function fillPattern(
     const value =
       key === "title"
         ? values.title
-        : (textOfValue(fields.get(key)) ??
+        : (textOf(fields.get(key)) ??
           (typeof fields.get(key) === "number"
             ? String(fields.get(key))
             : undefined));
@@ -142,7 +140,7 @@ export function fillPattern(
     return value ?? "";
   });
   if (missing || values.siteName === undefined) {
-    return missing ? undefined : textOfValue(filled.trim());
+    return missing ? undefined : textOf(filled.trim());
   }
-  return textOfValue(withSiteName(filled, values.siteName).trim());
+  return textOf(withSiteName(filled, values.siteName).trim());
 }

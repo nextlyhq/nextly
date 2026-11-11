@@ -26,7 +26,7 @@ import {
   SITE_KIND_CHOICES,
 } from "./choices";
 import { MediaChoice } from "./MediaChoice";
-import type { SettingsDraft } from "./settings-draft";
+import { attentionItems, type SettingsDraft } from "./settings-draft";
 import { Icon, ROOT } from "./styles";
 import type { TabId, TabProps } from "./tabs";
 
@@ -189,35 +189,7 @@ function AttentionList({
   types: readonly SeoContentType[];
   close: (tab?: TabId) => void;
 }): JSX.Element {
-  const items: { text: string; fix: string; tab: TabId }[] = [];
-  if (!draft.productionAddresses.some(address => address.trim() !== "")) {
-    items.push({
-      text: "No production address is saved",
-      fix: "Set the address",
-      tab: "general",
-    });
-  }
-  for (const type of types) {
-    if (!type.public) {
-      items.push({
-        text: `${type.label} have no public address`,
-        fix: "See content types",
-        tab: "types",
-      });
-    }
-  }
-  if (draft.logo === null || draft.image === null) {
-    items.push({
-      text:
-        draft.logo === null && draft.image === null
-          ? "No logo or share image yet"
-          : draft.logo === null
-            ? "No logo yet"
-            : "No share image yet",
-      fix: draft.logo === null ? "Add a logo" : "Add a share image",
-      tab: draft.logo === null ? "brand" : "general",
-    });
-  }
+  const items = attentionItems(draft, types);
   if (items.length === 0) {
     return (
       <div className="nx-seo-minilist">
@@ -249,6 +221,93 @@ function AttentionList({
         </div>
       ))}
     </div>
+  );
+}
+
+/** The questions of `step`, or what needs attention at the end. */
+function StepBody({
+  step,
+  draft,
+  change,
+  types,
+  close,
+}: TabProps & {
+  step: Step;
+  types: readonly SeoContentType[];
+  close: (tab?: TabId) => void;
+}): JSX.Element {
+  if (step === 1) return <NameStep draft={draft} change={change} />;
+  if (step === 2) return <KindStep draft={draft} change={change} />;
+  if (step === 3) return <ImagesStep draft={draft} change={change} />;
+  return (
+    <>
+      <AttentionList draft={draft} types={types} close={close} />
+      <p className="nx-seo-help">Nothing here stops you publishing.</p>
+    </>
+  );
+}
+
+/** The dialog's buttons: back and on through the steps, or out at the end. */
+function StepFooter({
+  step,
+  saving,
+  blocked,
+  setStep,
+  advance,
+  close,
+}: {
+  step: Step;
+  saving: boolean;
+  blocked: boolean;
+  setStep: (step: Step) => void;
+  advance: (from: 1 | 2 | 3) => void;
+  close: (tab?: TabId) => void;
+}): JSX.Element {
+  if (step === "done") {
+    return (
+      <>
+        <Button type="button" variant="ghost" onClick={() => setStep(1)}>
+          Start again
+        </Button>
+        <Button type="button" onClick={() => close()}>
+          Go to SEO settings
+        </Button>
+      </>
+    );
+  }
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        disabled={step === 1 || saving}
+        onClick={() => setStep(step === 3 ? 2 : 1)}
+      >
+        Back
+      </Button>
+      <span className="nx-seo-help">
+        Step {step} of {SETUP_STEPS}
+      </span>
+      <div className="nx-seo-row">
+        {step === 3 ? (
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={saving}
+            onClick={() => advance(3)}
+          >
+            Skip for now
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          disabled={saving || blocked}
+          onClick={() => advance(step)}
+        >
+          {saving ? "Saving…" : step === 3 ? "Finish" : "Next"}
+        </Button>
+      </div>
+    </>
   );
 }
 
@@ -317,60 +376,23 @@ export function SetupDialog({
           </div>
         )}
         <div className="nx-seo-dlg-body">
-          {step === 1 ? <NameStep draft={draft} change={change} /> : null}
-          {step === 2 ? <KindStep draft={draft} change={change} /> : null}
-          {step === 3 ? <ImagesStep draft={draft} change={change} /> : null}
-          {step === "done" ? (
-            <>
-              <AttentionList draft={draft} types={types} close={close} />
-              <p className="nx-seo-help">Nothing here stops you publishing.</p>
-            </>
-          ) : null}
+          <StepBody
+            step={step}
+            draft={draft}
+            change={change}
+            types={types}
+            close={close}
+          />
         </div>
         <div className="nx-seo-dlg-foot">
-          {step === "done" ? (
-            <>
-              <Button type="button" variant="ghost" onClick={() => setStep(1)}>
-                Start again
-              </Button>
-              <Button type="button" onClick={() => close()}>
-                Go to SEO settings
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={step === 1 || saving}
-                onClick={() => setStep(step === 3 ? 2 : 1)}
-              >
-                Back
-              </Button>
-              <span className="nx-seo-help">
-                Step {step} of {SETUP_STEPS}
-              </span>
-              <div className="nx-seo-row">
-                {step === 3 ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    disabled={saving}
-                    onClick={() => void advance(3)}
-                  >
-                    Skip for now
-                  </Button>
-                ) : null}
-                <Button
-                  type="button"
-                  disabled={saving || blocked}
-                  onClick={() => void advance(step)}
-                >
-                  {saving ? "Saving…" : step === 3 ? "Finish" : "Next"}
-                </Button>
-              </div>
-            </>
-          )}
+          <StepFooter
+            step={step}
+            saving={saving}
+            blocked={blocked}
+            setStep={setStep}
+            advance={from => void advance(from)}
+            close={close}
+          />
         </div>
       </DialogContent>
     </Dialog>
