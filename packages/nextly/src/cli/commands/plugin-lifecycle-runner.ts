@@ -909,7 +909,10 @@ async function connect(options: RunnerOptions, context: CommandContext) {
           seedAccessOnCommandConnection(
             drizzleAdapter,
             { config: installing, configPath },
-            context.logger
+            context.logger,
+            // The plugin being installed, whatever its record says until this
+            // transaction writes it: a reinstall declares it again.
+            { pluginsAsGiven: true }
           )
         );
       };

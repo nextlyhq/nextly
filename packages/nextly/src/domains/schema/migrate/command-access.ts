@@ -28,6 +28,8 @@ import { describeError } from "../../../errors/describe-error";
 import { NextlyError } from "../../../errors/nextly-error";
 import { seedPermissionsRolesAndPresets } from "../../../init/seed-permissions";
 import { getCoreVersion } from "../../../plugins/core-version";
+import type { PluginDefinition } from "../../../plugins/plugin-context";
+import { SCHEMA_OWNERS_TABLE } from "../../../schemas/schema-owners";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import { PermissionSeedService } from "../../auth/services/permission-seed-service";
 import { withPresetGrantsRecorded } from "../../meta/preset-grants-release";
@@ -35,6 +37,9 @@ import {
   buildWorkflowRegistry,
   publishWorkflows,
 } from "../../workflows/registry";
+import { SchemaEventsRepository } from "../events/schema-events-repository";
+import { readPluginLifecycle } from "../ownership/plugin-lifecycle-state";
+import { SchemaOwnersRepository } from "../ownership/schema-owners-repository";
 
 /** The logger the services a write goes through are handed. */
 interface ServiceLogger {
@@ -78,6 +83,46 @@ async function onCommandConnection<T>(
   );
 }
 
+/** The ledger table the plugins' lifecycle records are kept in. */
+const LIFECYCLE_RECORDS_TABLE = "nextly_schema_events";
+
+/**
+ * The configured plugins whose permissions and roles a run declares: each one
+ * recorded installed, and each with no lifecycle record. One recorded
+ * uninstalled, kept data or not, or whose uninstall began, is left out: its
+ * uninstall marked its permissions orphaned, and only its install declares
+ * them again, so a run with it still listed leaves the marks and the grants as
+ * they are. Read by the reader a production start judges the plugins with
+ * (`readPluginLifecycle`).
+ *
+ * A plugin with no record is declared as before: a site set up before the
+ * records were written, or one whose plugin is configured and not installed
+ * yet, as on a new site, whose first `nextly migrate` comes before any install
+ * can. Declaring only adds, and its permissions have no mark to clear. A
+ * database without the ledger or the owner registry holds no record.
+ */
+async function pluginsDeclared(
+  adapter: DrizzleAdapter,
+  plugins: readonly PluginDefinition[]
+): Promise<PluginDefinition[]> {
+  if (plugins.length === 0) return [];
+  const [ledger, owners] = await Promise.all([
+    adapter.tableExists(LIFECYCLE_RECORDS_TABLE),
+    adapter.tableExists(SCHEMA_OWNERS_TABLE),
+  ]);
+  if (!ledger || !owners) return [...plugins];
+  const db = adapter.getDrizzle();
+  const dialect = adapter.getCapabilities().dialect;
+  const states = await readPluginLifecycle(
+    new SchemaEventsRepository(db, dialect),
+    await new SchemaOwnersRepository(db, dialect).read()
+  );
+  return plugins.filter(plugin => {
+    const state = states.get(plugin.name)?.state;
+    return state === undefined || state === "installed";
+  });
+}
+
 /**
  * Phase 4 of `nextly migrate`, and the access a plugin's install writes: the
  * permissions, declared roles and preset grants
@@ -96,11 +141,17 @@ async function onCommandConnection<T>(
  * transaction, and a release older than the one recorded leaves them as they
  * are and says so (`withPresetGrantsRecorded`); the rest of the phase runs
  * either way.
+ *
+ * The configured plugins declared are those `pluginsDeclared` names, so a
+ * plugin recorded uninstalled keeps its marks. A plugin's install passes
+ * `pluginsAsGiven`: it declares the plugin it is installing, whose record it
+ * writes in the same transaction, and a reinstall is what clears the marks.
  */
 export async function seedAccessOnCommandConnection(
   pooled: DrizzleAdapter,
   configResult: { config: SanitizedNextlyConfig; configPath?: string | null },
-  logger: Logger
+  logger: Logger,
+  options: { pluginsAsGiven?: boolean } = {}
 ): Promise<void> {
   // Each seeder's progress is detail here; its warnings and errors are the operator's.
   const seedLogger: ServiceLogger = {
@@ -134,10 +185,17 @@ export async function seedAccessOnCommandConnection(
       // too, so they, the release record and the announcements commit with
       // the registry write or not at all.
       const release = getCoreVersion();
+      const declaring =
+        options.pluginsAsGiven === true
+          ? config
+          : {
+              ...config,
+              plugins: await pluginsDeclared(adapter, config.plugins ?? []),
+            };
       const { leftTo } = await withPresetGrantsRecorded(release, () =>
         seedPermissionsRolesAndPresets({
           adapter,
-          config,
+          config: declaring,
           logger: seedLogger,
         })
       );

@@ -32,6 +32,9 @@
  *   records itself; an older release's `nextly migrate` then leaves them. One
  *   stopped just before the record leaves every grant and the record as they
  *   were. An uninstall sets no preset grant and records no release.
+ * - A `nextly migrate` with an uninstalled plugin still configured leaves its
+ *   permission orphaned and its grants as they were, while it still adds an
+ *   installed plugin's new permission and a never-installed plugin's.
  * - In production, an older release's install and uninstall are refused
  *   before anything is written, naming the recorded release; the recorded
  *   release's succeed. In development an older release's install goes on.
@@ -206,6 +209,29 @@ const DIGEST = definePlugin({
   },
 });
 const DIGEST_PERMISSION = "send-pla-digest";
+
+/** The other plugin's next release, which declares one permission more. */
+const DIGEST_NEXT = definePlugin({
+  name: "@test/pla-digest",
+  version: "1.1.0",
+  nextly: "*",
+  contributes: {
+    permissions: [
+      { action: "send", resource: "pla-digest", label: "Send" },
+      { action: "schedule", resource: "pla-digest", label: "Schedule" },
+    ],
+  },
+});
+
+/** A plugin configured and never installed: no lifecycle record names it. */
+const NEVER = definePlugin({
+  name: "@test/pla-never",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    permissions: [{ action: "watch", resource: "pla-never", label: "Watch" }],
+  },
+});
 
 /** The app, with the plugins listed beside it. */
 function configWith(...plugins: (typeof FEEDS)[]): unknown {
@@ -771,6 +797,47 @@ describe.each(getConfiguredTestDialects())(
       expect(await grantRows()).toEqual(rows);
       expect(await recorded()).toBe(OLD);
     }, 240_000);
+
+    it.each([false, true])(
+      "leaves an uninstalled plugin's permission orphaned with its grants when nextly migrate runs with it still configured (keepData: %s), and adds the other plugins'",
+      async keepData => {
+        await migrateCreate();
+        await migrate(NEW);
+        await install(FEEDS.name);
+        await install(DIGEST.name);
+        await uninstall(FEEDS.name, keepData);
+        expect(await permission(FEEDS_PERMISSION)).toEqual({
+          owner: FEEDS.name,
+          orphaned: true,
+        });
+        const ofFeeds = (rows: string[]) =>
+          rows.filter(row => row.endsWith(` ${FEEDS_PERMISSION}`));
+        const feedsGrants = ofFeeds(await grantRows());
+        expect(feedsGrants.length).toBeGreaterThan(0);
+
+        // The uninstalled plugin is still listed, beside the installed one's
+        // next release and a plugin never installed.
+        await migrate(NEW, configWith(FEEDS, DIGEST_NEXT, NEVER));
+
+        expect(await permission(FEEDS_PERMISSION)).toEqual({
+          owner: FEEDS.name,
+          orphaned: true,
+        });
+        const rows = await grantRows();
+        expect(ofFeeds(rows)).toEqual(feedsGrants);
+        // The controls: the run did seed the configured plugins it should.
+        expect(await permission("schedule-pla-digest")).toEqual({
+          owner: DIGEST.name,
+          orphaned: false,
+        });
+        expect(held(rows, "admin")).toContain("schedule-pla-digest");
+        expect(await permission("watch-pla-never")).toEqual({
+          owner: NEVER.name,
+          orphaned: false,
+        });
+      },
+      240_000
+    );
 
     it("refuses an older release's install and uninstall in production, naming the recorded release, and the recorded release's succeed", async () => {
       await migrateCreate();
