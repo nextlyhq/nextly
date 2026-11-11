@@ -112,6 +112,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       defineCollection({
         slug: "regional",
         localized: true,
+        // Kept with working drafts, which a restore writes.
+        status: true,
         versions: true,
         hooks: { afterRead: [closedRegion] },
         fields: [
