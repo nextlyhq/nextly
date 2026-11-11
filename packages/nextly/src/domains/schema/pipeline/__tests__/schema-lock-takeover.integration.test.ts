@@ -359,13 +359,31 @@ describe.each(LOCK_DIALECTS)(
       paused.kill("SIGSTOP");
       await sleep(PAST_THE_LEASE_MS);
 
-      expect((await takeOver()).ran).toBe(true);
+      if (dialect === "mysql") {
+        // The paused holder's connection still holds the named lock taken beside the row, which
+        // MySQL ties to that connection: the second run waits and changes nothing.
+        await expect(takeOver()).rejects.toMatchObject({
+          code: "NEXTLY_MIGRATE_LOCK_BUSY",
+        });
+      } else {
+        expect((await takeOver()).ran).toBe(true);
+      }
 
-      // Resumed and asked for its next statement, it finds the lock gone and sends nothing.
       paused.kill("SIGCONT");
       paused.send("second");
       await paused.exited;
       holder = undefined;
+      if (dialect === "mysql") {
+        // No other run could take the lock, so nothing changed beside it: resumed, the holder
+        // confirms its lease again and finishes its file.
+        expect(paused.lines()).toContain("second");
+        expect(await tablesWithPrefix(adapter, PAIR)).toEqual([
+          `${PAIR}_one`,
+          `${PAIR}_two`,
+        ]);
+        return;
+      }
+      // Resumed and asked for its next statement, it finds the lock taken and sends nothing.
       expect(paused.lines()).not.toContain("second");
       expect(await tablesWithPrefix(adapter, PAIR)).toEqual([
         `${PAIR}_one`,
