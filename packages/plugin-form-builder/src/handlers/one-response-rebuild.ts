@@ -97,12 +97,17 @@ function settingsObjectOf(value: unknown): Record<string, unknown> | undefined {
  * count again, or none.
  *
  * A save that changes the mode or the Email field moves the version on by
- * one. Its keys are then behind, unless the new mode compares nothing an
- * earlier submission stored (several responses allowed, or one per browser,
- * whose earlier tokens were never kept): those count from now on, so they
- * are up to date at once.
+ * one. Its keys are up to date at once when the new mode compares nothing
+ * an earlier submission stored (several responses allowed, or one per
+ * browser, whose earlier tokens were never kept), or when the form has few
+ * enough submissions for the save to key them itself (`rebuildInSave`);
+ * otherwise they are behind until the sweep has made them.
  */
-export function stampOneResponseVersion(context: unknown): void {
+export async function stampOneResponseVersion(
+  context: unknown,
+  /** Whether the form's earlier submissions can be keyed inside the save. */
+  fitsInSave: (formId: string) => Promise<boolean>
+): Promise<void> {
   const ctx = context as {
     operation?: string;
     data?: Record<string, unknown>;
@@ -125,12 +130,19 @@ export function stampOneResponseVersion(context: unknown): void {
     oneResponseIdentityOf(normalizeFormSettings(incoming));
   const version = (stored.oneResponseVersion ?? 0) + (changed ? 1 : 0);
   next.oneResponseVersion = version;
+  // The form's id as stored: a string, or a number on an integer-keyed table.
+  const storedId = ctx.originalData?.id;
+  const formId =
+    typeof storedId === "string" || typeof storedId === "number"
+      ? String(storedId)
+      : undefined;
   const keyed = keyedVersionAfterSave({
     stored,
     changed,
     version,
     mode: normalizeFormSettings(incoming).oneResponse,
     finished: (ctx.data as KeyedFormMark)[FORM_KEYED]?.version,
+    inSave: changed && formId !== undefined && (await fitsInSave(formId)),
   });
   if (keyed !== undefined) next.oneResponseKeyedVersion = keyed;
   ctx.data.settings = next;
@@ -143,10 +155,13 @@ function keyedVersionAfterSave(input: {
   version: number;
   mode: FormSettings["oneResponse"];
   finished: number | undefined;
+  /** Whether the save itself gives the earlier submissions their keys. */
+  inSave: boolean;
 }): number | undefined {
   const { stored, changed, version } = input;
   if (changed) {
-    return input.mode === "ip" || input.mode === "email"
+    const compared = input.mode === "ip" || input.mode === "email";
+    return compared && !input.inSave
       ? (stored.oneResponseKeyedVersion ?? stored.oneResponseVersion ?? 0)
       : version;
   }
@@ -156,13 +171,16 @@ function keyedVersionAfterSave(input: {
 }
 
 /**
- * After a save leaves the form's keys behind, start the sweep once the save
- * has committed, so a small form is brought up to date before the save
- * answers. `run` is bounded; what it leaves, the job runner finishes.
+ * After a save leaves the form's keys behind (a form too large to key inside
+ * the save), start the sweep once the save has committed. Not awaited: the
+ * save answers with the form as it committed, and the sweep's own write of
+ * the form, when it finishes, comes after. What one run leaves, the job
+ * runner finishes.
  */
 export async function rebuildAfterSave(
   context: unknown,
-  run: () => Promise<unknown>
+  run: () => Promise<unknown>,
+  warn: (message: string, context: Record<string, unknown>) => void
 ): Promise<void> {
   const ctx = context as {
     data?: Record<string, unknown>;
@@ -172,7 +190,108 @@ export async function rebuildAfterSave(
     settingsObjectOf(ctx.data?.settings) ?? {}
   );
   if (!keysBehind(settings) || !ctx.afterCommit) return;
-  await ctx.afterCommit(run);
+  await ctx.afterCommit(() => {
+    run().catch((error: unknown) =>
+      warn("The one-response key sweep failed; the job runner retries it.", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    );
+  });
+}
+
+/** The plugin's one-response options, with their defaults. */
+export function oneResponseOptions(
+  options: { keysInSave?: number } | undefined
+): { keysInSave: number } {
+  const keysInSave = options?.keysInSave;
+  return {
+    keysInSave:
+      typeof keysInSave === "number" && keysInSave >= 0
+        ? Math.floor(keysInSave)
+        : KEYS_IN_SAVE,
+  };
+}
+
+/** Earlier submissions a form may have for the save itself to key them. */
+const KEYS_IN_SAVE = 200;
+
+/** What keying inside the save reads and writes with. */
+export interface InSaveDeps {
+  own: PluginContext["services"]["ownCollections"];
+  collections: PluginContext["services"]["collections"];
+  digests: () => PluginContext["security"]["digests"];
+  submissionsSlug: string;
+}
+
+type InTransactionWrite = Parameters<
+  Parameters<PluginContext["hooks"]["onInTransaction"]>[1]
+>[0];
+
+/**
+ * Give a form's earlier submissions keys for its new version inside the
+ * save that changed it, when the save decided they fit
+ * (`stampOneResponseVersion` recorded the keys as made). Oldest first, the
+ * earliest of several with one value keeping it. The save holds the form's
+ * row, so no submission to the form is stored meanwhile, and the save
+ * answers with every key in place and no later write to the form.
+ */
+export async function rebuildInSave(
+  deps: InSaveDeps,
+  write: InTransactionWrite
+): Promise<void> {
+  if (write.operation !== "update") return;
+  const after = normalizeFormSettings(
+    settingsObjectOf((write.data as Row | undefined)?.settings) ?? {}
+  );
+  const before = normalizeFormSettings(
+    settingsObjectOf((write.originalData as Row | undefined)?.settings) ?? {}
+  );
+  const version = after.oneResponseVersion ?? 0;
+  if (version === (before.oneResponseVersion ?? 0)) return;
+  if (after.oneResponseKeyedVersion !== version) return;
+  if (after.oneResponse !== "ip" && after.oneResponse !== "email") return;
+  const held = new Set<string>();
+  for (let page = 1; ; page++) {
+    const { data } = await deps.own.listEntriesInTransaction(
+      write.transaction,
+      deps.submissionsSlug,
+      {
+        where: { form: { equals: write.id }, status: { not_equals: "spam" } },
+        sort: { field: "createdAt", direction: "asc" },
+        pagination: { limit: PAGE, page },
+        depth: 0,
+      },
+      { lock: "none" }
+    );
+    const rows = data as Row[];
+    for (const row of rows) {
+      await keyInSave(deps, write, after, held, row);
+    }
+    if (rows.length < PAGE) return;
+  }
+}
+
+/** One row keyed inside the save: its value's key unless held already. */
+async function keyInSave(
+  deps: InSaveDeps,
+  write: InTransactionWrite,
+  settings: FormSettings,
+  held: Set<string>,
+  row: Row
+): Promise<void> {
+  const own = await responseKeyOf(deps.digests, settings, row);
+  const target = own === null || held.has(own) ? null : own;
+  if (target !== null) held.add(target);
+  if ((row.responseKey ?? null) === target) return;
+  await deps.collections.updateEntryInTransaction(
+    write.transaction,
+    deps.submissionsSlug,
+    String(row.id),
+    asPluginSubmission(
+      { responseKey: target, _overwrite: true },
+      { keepAsEvidence: false, setKey: target }
+    )
+  );
 }
 
 /** The sweep's job, run by `run` until the deadline the runner gives it. */
@@ -337,26 +456,26 @@ async function keyRow(
   row: Row
 ): Promise<"unchanged" | "written" | "retry" | "stale-form"> {
   const target = await targetKeyOf(deps, formId, settings, row);
-  if (target === "holder") return "unchanged";
+  if (target === undefined) return "unchanged";
   if ((row.responseKey ?? null) === target) return "unchanged";
   return writeKey(deps, row, target);
 }
 
 /**
- * The key a row should hold: its own value's, or none where another
- * submission holds that value; `holder` when it holds its own already.
+ * The key a row should hold: its own value's, or none (null) where another
+ * submission holds that value; undefined when it holds its own already.
  */
 async function targetKeyOf(
   deps: RebuildDeps,
   formId: string,
   settings: FormSettings,
   row: Row
-): Promise<string | null | "holder"> {
+): Promise<string | null | undefined> {
   const own = await responseKeyOf(deps.digests, settings, row);
   if (own === null) return null;
   // Holding its own value's key already: the holder, with nothing to ask.
   // Most rows of a sweep that resumes are these, so they cost no query.
-  if (row.responseKey === own) return "holder";
+  if (row.responseKey === own) return undefined;
   return (await heldByAnother(deps, formId, row, own)) ? null : own;
 }
 

@@ -263,7 +263,8 @@ export async function responseKeyAfterUpdate(input: {
     return browserKeyAfterUpdate(
       patch,
       stored,
-      input.settings.oneResponseVersion
+      input.settings.oneResponseVersion,
+      input.moved
     );
   }
   // What the update leaves out is as stored; what it clears (null) is gone.
@@ -298,19 +299,35 @@ export async function responseKeyAfterUpdate(input: {
  * A submission's browser key after an update. The token is not stored, so
  * the key cannot be made again: the submission keeps the browser key it
  * holds until it is marked spam, which gives the browser its place back, and
- * one restored from spam stays without one. Answers edited or the
- * submission moved to another form taking one per browser keep it, since it
- * is the same browser's response; the unique index refuses a move onto a form
- * where that browser has responded already.
+ * one restored from spam stays without one. Answers edited keep it, and a
+ * submission moved to another form taking one per browser takes it there,
+ * for that form's version, since it is the same browser's response; the
+ * unique index refuses a move onto a form where that browser has responded.
  */
 function browserKeyAfterUpdate(
   patch: KeyedSubmission,
   stored: (KeyedSubmission & { responseKey?: unknown }) | undefined,
-  version: number | undefined
+  version: number | undefined,
+  moved: boolean
 ): string | null {
   const status = patch.status === undefined ? stored?.status : patch.status;
   if (status === "spam") return null;
-  // A key from an earlier version compares with nothing now: not kept.
   const key = stored?.responseKey;
+  // Moved to another form: the same browser, so the same token's digest,
+  // spelled for the destination's version, where the unique index judges it.
+  if (moved) return browserKeyFor(key, version);
+  // A key from an earlier version compares with nothing now: not kept.
   return isBrowserKey(key, version) ? key : null;
+}
+
+/** A browser key of any version, spelled for `version`; none for any other key. */
+function browserKeyFor(
+  key: unknown,
+  version: number | undefined
+): string | null {
+  if (typeof key !== "string") return null;
+  const match = /^(?:v\d+:)?browser:([0-9a-f]+)$/.exec(key);
+  return match
+    ? `${keyPrefixOf(version)}${BROWSER_KEY_PREFIX}${match[1]}`
+    : null;
 }

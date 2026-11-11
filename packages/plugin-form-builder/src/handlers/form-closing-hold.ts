@@ -54,6 +54,7 @@ import {
   keyVersionOf,
   responseKeyOf,
 } from "./one-response";
+import { asPluginSubmission } from "./prepare-submission";
 
 /** The mark on a refusal for a closed form, for the caller to recognise it. */
 const FORM_CLOSED = "form-builder:form-closed";
@@ -69,6 +70,7 @@ type Digests = PluginContext["security"]["digests"];
 interface HoldDeps {
   own: OwnCollections;
   digests: Digests;
+  collections: PluginContext["services"]["collections"];
 }
 
 /** The mark on a refusal for a setting changed while the write was in flight. */
@@ -378,6 +380,134 @@ function sameValue(write: InTransactionContext): boolean {
   );
 }
 
+/**
+ * When the submission holding a one-response key stops holding it (deleted,
+ * marked spam, or edited or moved to another value), the earliest other
+ * non-spam submission of the form with the same value takes the key, in the
+ * same transaction. Without it, a keyless duplicate (one stored before the
+ * form compared that value, or kept as evidence and restored) would leave
+ * the value free, and a person who had responded could respond again.
+ *
+ * Under the form's lock, so a new submission with that value waits and then
+ * meets the key. A key made for a version the form has left is not handed
+ * on: nothing compares it. One per browser hands nothing on, since no
+ * earlier submission kept its browser's token.
+ */
+async function handOffKey(
+  deps: HoldDeps,
+  write: InTransactionContext,
+  slugs: FormLimitSlugs
+): Promise<void> {
+  const released = releasedKeyOf(write);
+  if (released === undefined) return;
+  const { key, formId, ipAddress } = released;
+  const { settings } = await formOf(deps.own, write, slugs, formId, "update");
+  if (keyVersionOf(key) !== (settings.oneResponseVersion ?? 0)) return;
+  const next = await nextHolderOf(deps, write, slugs, {
+    formId,
+    settings,
+    key,
+    ipAddress,
+  });
+  if (next === undefined) return;
+  await deps.collections.updateEntryInTransaction(
+    write.transaction,
+    slugs.submissions,
+    next,
+    asPluginSubmission(
+      { responseKey: key, _overwrite: true },
+      { keepAsEvidence: false, setKey: key }
+    )
+  );
+}
+
+/**
+ * The key a write took from the submission that held it, with that
+ * submission's form and address as they were: undefined when it still holds
+ * it, or held none.
+ */
+function releasedKeyOf(
+  write: InTransactionContext
+): { key: string; formId: string; ipAddress: unknown } | undefined {
+  const before = heldBefore(write);
+  const key = before?.responseKey;
+  if (typeof key !== "string" || stillHeld(write, key)) return undefined;
+  const formId = formIdOf(before?.form);
+  return formId === undefined
+    ? undefined
+    : { key, formId, ipAddress: before?.ipAddress };
+}
+
+/**
+ * The submission as it was before a write: a delete describes it as it was,
+ * an update by its original; a create had none.
+ */
+function heldBefore(
+  write: InTransactionContext
+): { responseKey?: unknown; form?: unknown; ipAddress?: unknown } | undefined {
+  if (write.operation === "create") return undefined;
+  return (write.operation === "delete" ? write.data : write.originalData) as
+    | { responseKey?: unknown; form?: unknown; ipAddress?: unknown }
+    | undefined;
+}
+
+/** Whether an update left the submission holding `key`. */
+function stillHeld(write: InTransactionContext, key: string): boolean {
+  const after = write.data as { responseKey?: unknown } | undefined;
+  return write.operation === "update" && after?.responseKey === key;
+}
+
+/**
+ * The earliest non-spam submission of the form, other than the one writing,
+ * that holds no key and whose value gives `key`. One per network reads only
+ * the submissions from the same address; one per email reads the keyless
+ * ones a page at a time.
+ */
+async function nextHolderOf(
+  deps: HoldDeps,
+  write: InTransactionContext,
+  slugs: FormLimitSlugs,
+  wanted: {
+    formId: string;
+    settings: Awaited<ReturnType<typeof formOf>>["settings"];
+    key: string;
+    ipAddress: unknown;
+  }
+): Promise<string | undefined> {
+  const { settings } = wanted;
+  if (settings.oneResponse !== "ip" && settings.oneResponse !== "email") {
+    return undefined;
+  }
+  const where: Record<string, unknown> = {
+    form: { equals: wanted.formId },
+    status: { not_equals: "spam" },
+    id: { not_equals: write.id },
+    responseKey: { exists: false },
+  };
+  if (settings.oneResponse === "ip") {
+    if (typeof wanted.ipAddress !== "string") return undefined;
+    where.ipAddress = { equals: wanted.ipAddress };
+  }
+  for (let page = 1; ; page++) {
+    const { data } = await deps.own.listEntriesInTransaction(
+      write.transaction,
+      slugs.submissions,
+      {
+        where,
+        sort: { field: "createdAt", direction: "asc" },
+        pagination: { limit: COMPARE_PAGE, page },
+        depth: 0,
+      },
+      { lock: "none" }
+    );
+    for (const row of data as (KeyedSubmission & { id?: unknown })[]) {
+      const key = await responseKeyOf(() => deps.digests, settings, row);
+      if (key === wanted.key) return String(row.id);
+    }
+    if (data.length < COMPARE_PAGE) return undefined;
+  }
+}
+
 /** Hold every form's closing on the submissions this plugin stores. */
 export function registerFormClosing(
   ctx: Pick<PluginContext, "hooks" | "services" | "security">,
@@ -386,10 +516,12 @@ export function registerFormClosing(
   const deps: HoldDeps = {
     own: ctx.services.ownCollections,
     digests: ctx.security.digests,
+    collections: ctx.services.collections,
   };
   ctx.hooks.onInTransaction(slugs.submissions, async write => {
     await holdFormClosing(deps, write, slugs);
     await holdKeyWrite(deps, write, slugs);
+    await handOffKey(deps, write, slugs);
   });
 }
 

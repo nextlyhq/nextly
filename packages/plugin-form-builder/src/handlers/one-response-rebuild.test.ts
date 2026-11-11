@@ -15,27 +15,35 @@ import {
 
 const FORM_KEYED = Symbol.for("nextly.plugin-form-builder.form-keyed");
 
-/** Stamp a save of `settings` over `stored`, and answer the settings saved. */
-function save(
+/**
+ * Stamp a save of `settings` over `stored`, and answer the settings saved.
+ * `fits`: whether the form is small enough for the save to key it.
+ */
+async function save(
   settings: Record<string, unknown> | undefined,
   stored?: Record<string, unknown>,
-  finished?: number
-): Record<string, unknown> | undefined {
+  finished?: number,
+  fits = false
+): Promise<Record<string, unknown> | undefined> {
   const data: Record<string | symbol, unknown> =
     settings === undefined ? { name: "Meetup" } : { settings };
   if (finished !== undefined) data[FORM_KEYED] = { version: finished };
-  stampOneResponseVersion({
-    operation: stored === undefined ? "create" : "update",
-    data,
-    originalData: stored === undefined ? undefined : { settings: stored },
-  });
+  await stampOneResponseVersion(
+    {
+      operation: stored === undefined ? "create" : "update",
+      data,
+      originalData:
+        stored === undefined ? undefined : { id: "f1", settings: stored },
+    },
+    async () => fits
+  );
   return data.settings as Record<string, unknown> | undefined;
 }
 
 describe("the version a form save leaves", () => {
-  it("starts a new form at version 0, whatever the payload says", () => {
+  it("starts a new form at version 0, whatever the payload says", async () => {
     expect(
-      save({
+      await save({
         oneResponse: "email",
         oneResponseVersion: 9,
         oneResponseKeyedVersion: 3,
@@ -43,14 +51,14 @@ describe("the version a form save leaves", () => {
     ).toEqual({ oneResponse: "email", oneResponseVersion: 0 });
   });
 
-  it("keeps the stored version through a save that changes nothing it compares", () => {
+  it("keeps the stored version through a save that changes nothing it compares", async () => {
     const stored = {
       oneResponse: "ip",
       oneResponseVersion: 2,
       oneResponseKeyedVersion: 2,
     };
     expect(
-      save(
+      await save(
         {
           oneResponse: "ip",
           submitButtonText: "Go",
@@ -62,15 +70,15 @@ describe("the version a form save leaves", () => {
     ).toMatchObject({ oneResponseVersion: 2, oneResponseKeyedVersion: 2 });
   });
 
-  it("moves on and leaves keys behind when the mode changes to one that compares earlier answers", () => {
+  it("moves on and leaves keys behind when the mode changes to one that compares earlier answers", async () => {
     expect(
-      save(
+      await save(
         { oneResponse: "email", oneResponseField: "email" },
         { oneResponse: "off" }
       )
     ).toMatchObject({ oneResponseVersion: 1, oneResponseKeyedVersion: 0 });
     expect(
-      save(
+      await save(
         { oneResponse: "ip" },
         {
           oneResponse: "email",
@@ -82,9 +90,9 @@ describe("the version a form save leaves", () => {
     ).toMatchObject({ oneResponseVersion: 5, oneResponseKeyedVersion: 3 });
   });
 
-  it("moves on when one per email reads another field", () => {
+  it("moves on when one per email reads another field", async () => {
     expect(
-      save(
+      await save(
         { oneResponse: "email", oneResponseField: "work" },
         {
           oneResponse: "email",
@@ -96,10 +104,21 @@ describe("the version a form save leaves", () => {
     ).toMatchObject({ oneResponseVersion: 2, oneResponseKeyedVersion: 1 });
   });
 
-  it("is up to date at once for a mode that compares nothing stored", () => {
+  it("is up to date at once when the save itself keys the earlier submissions", async () => {
+    expect(
+      await save(
+        { oneResponse: "email", oneResponseField: "email" },
+        { oneResponse: "off" },
+        undefined,
+        true
+      )
+    ).toMatchObject({ oneResponseVersion: 1, oneResponseKeyedVersion: 1 });
+  });
+
+  it("is up to date at once for a mode that compares nothing stored", async () => {
     for (const oneResponse of ["off", "browser"]) {
       expect(
-        save(
+        await save(
           { oneResponse },
           {
             oneResponse: "ip",
@@ -111,7 +130,7 @@ describe("the version a form save leaves", () => {
     }
   });
 
-  it("takes the keys as made only from the sweep's own write, for the current version", () => {
+  it("takes the keys as made only from the sweep's own write, for the current version", async () => {
     const stored = {
       oneResponse: "email",
       oneResponseField: "email",
@@ -119,18 +138,20 @@ describe("the version a form save leaves", () => {
       oneResponseKeyedVersion: 2,
     };
     const same = { oneResponse: "email", oneResponseField: "email" };
-    expect(save(same, stored, 3)).toMatchObject({
+    expect(await save(same, stored, 3)).toMatchObject({
       oneResponseKeyedVersion: 3,
     });
     // A sweep finishing a version the form has left changes nothing.
-    expect(save(same, stored, 2)).toMatchObject({
+    expect(await save(same, stored, 2)).toMatchObject({
       oneResponseKeyedVersion: 2,
     });
-    expect(save(same, stored)).toMatchObject({ oneResponseKeyedVersion: 2 });
+    expect(await save(same, stored)).toMatchObject({
+      oneResponseKeyedVersion: 2,
+    });
   });
 
-  it("leaves a save that does not write settings alone", () => {
-    expect(save(undefined, { oneResponse: "ip" })).toBeUndefined();
+  it("leaves a save that does not write settings alone", async () => {
+    expect(await save(undefined, { oneResponse: "ip" })).toBeUndefined();
   });
 });
 
@@ -161,7 +182,7 @@ describe("a key's version", () => {
     ).toBe(`v2:browser:browser-${"t".repeat(20)}`);
   });
 
-  it("is behind only when the keys were made for an earlier version", () => {
+  it("is behind only when the keys were made for an earlier version", async () => {
     expect(
       keysBehind({ oneResponseVersion: 2, oneResponseKeyedVersion: 1 })
     ).toBe(true);

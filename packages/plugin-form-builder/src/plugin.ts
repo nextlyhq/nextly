@@ -48,8 +48,10 @@ import {
   touchesResponseKey,
 } from "./handlers/one-response";
 import {
+  oneResponseOptions,
   REBUILD_KEYS_JOB,
   REBUILD_ON_SAVE_MS,
+  rebuildInSave,
   type RebuildDeps,
   rebuildAfterSave,
   rebuildKeysJob,
@@ -160,6 +162,8 @@ function resolveConfig(
       defaultToEmail: options.notifications?.defaultToEmail,
       enabled: options.notifications?.enabled ?? true,
     },
+
+    oneResponse: oneResponseOptions(options.oneResponse),
 
     spamProtection: {
       honeypot: options.spamProtection?.honeypot ?? true,
@@ -700,15 +704,38 @@ export function formBuilder(
         formsSlug,
         submissionsSlug: submissionSlug,
       };
-      nextly.hooks.on("beforeChange", formsSlug, (context: unknown) => {
-        stampOneResponseVersion(context);
+      nextly.hooks.on("beforeChange", formsSlug, async (context: unknown) => {
+        await stampOneResponseVersion(context, async formId =>
+          keysFitInSave(
+            nextly,
+            submissionSlug,
+            formId,
+            resolvedConfig.oneResponse.keysInSave
+          )
+        );
         return (context as { data?: unknown }).data;
       });
+      // A form small enough is given its keys inside the save's own
+      // transaction; a larger one by the sweep, started once the save commits.
+      nextly.hooks.onInTransaction(formsSlug, write =>
+        rebuildInSave(
+          {
+            own: nextly.services.ownCollections,
+            collections: nextly.services.collections,
+            digests: () => nextly.security.digests,
+            submissionsSlug: submissionSlug,
+          },
+          write
+        )
+      );
       nextly.hooks.on("afterUpdate", formsSlug, (context: unknown) =>
-        rebuildAfterSave(context, () =>
-          nextly.services.jobs.runSweepNow(REBUILD_KEYS_JOB, {
-            maxDurationMs: REBUILD_ON_SAVE_MS,
-          })
+        rebuildAfterSave(
+          context,
+          () =>
+            nextly.services.jobs.runSweepNow(REBUILD_KEYS_JOB, {
+              maxDurationMs: REBUILD_ON_SAVE_MS,
+            }),
+          (message, context) => nextly.logger.warn?.(message, context)
         )
       );
 
@@ -1082,6 +1109,25 @@ function updateNeedsChecking(
     submission.status !== undefined &&
     submission.status !== "spam"
   );
+}
+
+/**
+ * Whether a form has few enough non-spam submissions for a change of its
+ * one-response setting to give them keys inside the save.
+ */
+async function keysFitInSave(
+  nextly: NextlyInstance,
+  submissionsSlug: string,
+  formId: string,
+  limit: number
+): Promise<boolean> {
+  const count = await nextly.services.collections.count(
+    submissionsSlug,
+    { where: { form: { equals: formId }, status: { not_equals: "spam" } } },
+    // Elevated: every submission counts, whoever is saving the form.
+    { as: "system" }
+  );
+  return count <= limit;
 }
 
 /**
