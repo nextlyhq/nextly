@@ -134,7 +134,8 @@ function list(node: Node): string {
       const own = childrenOf(item).filter(child => child.type !== "list");
       const nested = childrenOf(item)
         .filter(child => child.type === "list")
-        .map(child => prefixed(list(child), "  "));
+        // Indented past the marker and its space, so it stays in this item.
+        .map(child => prefixed(list(child), " ".repeat(marker.length + 1)));
       return [`${marker} ${inline(own)}`, ...nested].join("\n");
     })
     .join("\n");

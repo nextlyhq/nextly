@@ -165,6 +165,28 @@ describe("rich text as Markdown", () => {
     expect(markdownOfRichText(value)).toBe("````md\n```js\nx\n```\n````");
   });
 
+  it("indents a list inside a numbered step by the step's marker, so it stays inside it", () => {
+    const value = rich({
+      type: "list",
+      listType: "number",
+      start: 9,
+      children: [
+        {
+          type: "listitem",
+          children: [
+            text_("Parent"),
+            {
+              type: "list",
+              listType: "bullet",
+              children: [{ type: "listitem", children: [text_("Child")] }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(markdownOfRichText(value)).toBe("9. Parent\n   - Child");
+  });
+
   it("writes a video's caption, the words it shows", () => {
     const value = rich({
       type: "video",
