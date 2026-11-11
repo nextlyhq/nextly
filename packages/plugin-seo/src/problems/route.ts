@@ -33,20 +33,25 @@ import {
   type Reader,
 } from "./check";
 import { PROBLEMS_CHECK_ROUTE_PATH, PROBLEMS_ROUTE_PATH } from "./contract";
+import { pageTypeOf, singleKey } from "./page-types";
 
 /**
- * The types the caller may read, of those SEO is added to; refused where
- * there is no caller or they may read none of them.
+ * The types the caller may read, of those SEO is added to, by the key their
+ * pages are kept under (a Single's `single:<slug>`); refused where there is
+ * no caller or they may read none of them.
  */
 async function readableTypes(
   ctx: PluginRouteContext,
-  targets: readonly string[]
+  checks: ProblemChecks
 ): Promise<Set<string>> {
   const caller = ctx.caller;
   if (ctx.user === null || caller === null) throw NextlyError.authRequired();
   const readable = new Set<string>();
-  for (const slug of targets) {
+  for (const slug of checks.targets) {
     if (await caller.can("read", slug)) readable.add(slug);
+  }
+  for (const slug of checks.singles) {
+    if (await caller.can("read", slug)) readable.add(singleKey(slug));
   }
   if (readable.size === 0) throw NextlyError.forbidden();
   return readable;
@@ -72,7 +77,8 @@ function idsByType(
  * Which pages the caller may read, asked of the collections themselves as
  * the caller, so a read rule that admits only some entries (the caller's
  * own, say) decides, as it does for every other read. A type the caller may
- * not read at all is not asked about.
+ * not read at all is not asked about, and a Single's page is theirs where
+ * they may read the Single.
  */
 async function readerOf(
   ctx: PluginRouteContext,
@@ -89,6 +95,11 @@ async function readerOf(
     const allowed = new Set<string>();
     for (const [type, ids] of idsByType(refs)) {
       if (!types.has(type)) continue;
+      // A Single's one page is read by whoever may read the Single.
+      if (pageTypeOf(type).kind === "single") {
+        for (const id of ids) allowed.add(pageRefKey({ type, id }));
+        continue;
+      }
       for (let at = 0; at < ids.length; at += ID_CHUNK) {
         const chunk = ids.slice(at, at + ID_CHUNK);
         const { data } = await ctx.services.collections.listEntries(
@@ -126,7 +137,7 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
       path: PROBLEMS_ROUTE_PATH,
       noStore: true,
       handler: async (_req, ctx) => {
-        const readable = await readableTypes(ctx, checks.targets);
+        const readable = await readableTypes(ctx, checks);
         return respondDoc(
           await problemList(ctx, checks, await readerOf(ctx, readable))
         );
@@ -137,7 +148,7 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
       path: PROBLEMS_CHECK_ROUTE_PATH,
       handler: async (_req, ctx) => {
         // Asked before the check, which reads and writes as the system.
-        const readable = await readableTypes(ctx, checks.targets);
+        const readable = await readableTypes(ctx, checks);
         // While the address record catches up, or after a catch-up that
         // failed, a page may not hold its address yet and would be checked
         // as not public: the person is asked to try again, as the sitemap

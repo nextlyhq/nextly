@@ -503,6 +503,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // worked out by, so the list and the page never disagree.
   const problemChecks = {
     targets,
+    singles: singleTargets,
     readers: {
       readRules,
       readStructuredDataRules: structuredDataFromSettings(
