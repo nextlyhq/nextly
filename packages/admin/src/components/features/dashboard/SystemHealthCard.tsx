@@ -280,33 +280,36 @@ function SystemDetails({
   const runtime = runtimeDetails(data);
   const plugins = pluginDetails(data);
   const reportRef = useRef<HTMLPreElement>(null);
-  const { selectPending } = diagnostics;
-  const text = diagnostics.report.text;
-  // A refused copy opens Details with the report selected and focused, so
-  // Ctrl+C or ⌘C copies it.
+  const { selectPending, selectRequest } = diagnostics;
+  // A copy refused from Details' own button, with Details already open: the
+  // report is selected again where it stands. Opening Details is handled
+  // where the drawer gives its first focus, below.
+  const wasOpen = useRef(open);
   useEffect(() => {
-    if (!open || !selectPending.current || text === undefined) return;
+    const alreadyOpen = wasOpen.current;
+    wasOpen.current = open;
+    if (!open || !alreadyOpen || !selectPending.current) return;
     const pre = reportRef.current;
     if (pre === null) return;
     selectPending.current = false;
-    pre.focus({ preventScroll: true });
-    pre.scrollIntoView({ block: "nearest" });
-    const range = document.createRange();
-    range.selectNodeContents(pre);
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-  }, [open, text, selectPending]);
+    selectContents(pre);
+  }, [open, selectRequest, selectPending]);
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
         className="flex w-full flex-col gap-0 overflow-hidden p-0 sm:w-[440px] sm:max-w-[440px]"
         data-testid="system-health-details"
-        // Opened to show a refused report, focus goes to the report rather
-        // than the close button, so the selection is what a copy takes.
+        // Opened to show a refused report: the report is selected and takes
+        // the focus the close button would, so Ctrl+C or ⌘C copies it. Done
+        // here because the drawer's content is mounted by now.
         onOpenAutoFocus={event => {
-          if (selectPending.current) event.preventDefault();
+          if (!selectPending.current) return;
+          selectPending.current = false;
+          const pre = reportRef.current;
+          if (pre === null) return;
+          event.preventDefault();
+          selectContents(pre);
         }}
       >
         <div className="flex shrink-0 items-center gap-2.5 border-b border-border py-3 pr-3 pl-5">
@@ -370,6 +373,17 @@ function SystemDetails({
       </SheetContent>
     </Sheet>
   );
+}
+
+/** Focuses `element` and selects all its text. */
+function selectContents(element: HTMLElement): void {
+  element.focus({ preventScroll: true });
+  element.scrollIntoView?.({ block: "nearest" });
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
 }
 
 /**

@@ -99,6 +99,15 @@ export function recordServerError(
   }
 }
 
+/** Records `request` as a server error when its answer's `status` is one (5xx). */
+export function recordIfServerError(
+  request: object,
+  status: number,
+  now: number = Date.now()
+): void {
+  if (status >= 500) recordServerError(request, now);
+}
+
 /** The server errors answered in the 24 hours before `now`. */
 export function serverErrorsInLastDay(
   now: number = Date.now()

@@ -43,7 +43,7 @@ interface CountingAdapter {
 }
 
 /** The answer: the report, exactly as it is copied. */
-export interface DiagnosticsAnswer {
+interface DiagnosticsAnswer {
   report: string;
 }
 

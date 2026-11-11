@@ -94,7 +94,9 @@ export async function copyReport(
   } catch (refusal) {
     // A browser that throws rather than rejects (an item type it does not
     // take) has refused the write all the same.
-    started = Promise.reject(refusal);
+    started = Promise.reject(
+      refusal instanceof Error ? refusal : new Error(String(refusal))
+    );
   }
   const write = started.then(
     () => "copied" as const,

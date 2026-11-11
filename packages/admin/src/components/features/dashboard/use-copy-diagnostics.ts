@@ -41,6 +41,8 @@ export interface CopyDiagnostics {
    * the clipboard refused it, and cleared by the one who selects it.
    */
   selectPending: MutableRefObject<boolean>;
+  /** Counts the refusals, so a Details already open selects the report again. */
+  selectRequest: number;
 }
 
 /**
@@ -54,6 +56,7 @@ export function useCopyDiagnostics(showRefused: () => void): CopyDiagnostics {
   });
   const [copying, setCopying] = useState(false);
   const selectPending = useRef(false);
+  const [selectRequest, setSelectRequest] = useState(0);
   // Only the latest read's answer is kept: an earlier one that arrives later
   // would show a report older than the one already shown.
   const latest = useRef(0);
@@ -84,6 +87,7 @@ export function useCopyDiagnostics(showRefused: () => void): CopyDiagnostics {
         toast.success(COPIED_MESSAGE);
       } else {
         selectPending.current = true;
+        setSelectRequest(count => count + 1);
         showRefused();
         toast.info(REFUSED_MESSAGE, { duration: REFUSED_TOAST_MS });
       }
@@ -95,5 +99,5 @@ export function useCopyDiagnostics(showRefused: () => void): CopyDiagnostics {
     }
   }, [load, showRefused]);
 
-  return { report, load, copy, copying, selectPending };
+  return { report, load, copy, copying, selectPending, selectRequest };
 }

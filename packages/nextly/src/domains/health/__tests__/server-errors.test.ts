@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   forgetServerErrors,
+  recordIfServerError,
   recordServerError,
   SERVER_ERRORS_KEPT,
   serverErrorsInLastDay,
@@ -43,6 +44,16 @@ describe("server errors in the last day", () => {
     recordServerError(request, T0);
     recordServerError(request, T0);
     recordServerError(new Request("http://localhost/api/media"), T0);
+    expect(serverErrorsInLastDay(T0).count).toBe(2);
+  });
+
+  it("counts a 5xx answer, and never a refusal or a success", () => {
+    for (const status of [200, 204, 400, 401, 403, 404, 429, 499]) {
+      recordIfServerError(new Request("http://localhost/api/x"), status, T0);
+    }
+    expect(serverErrorsInLastDay(T0).count).toBe(0);
+    recordIfServerError(new Request("http://localhost/api/x"), 500, T0);
+    recordIfServerError(new Request("http://localhost/api/x"), 503, T0);
     expect(serverErrorsInLastDay(T0).count).toBe(2);
   });
 
