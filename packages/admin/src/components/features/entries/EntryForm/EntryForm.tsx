@@ -1607,6 +1607,7 @@ export function EntryForm({
                                     form={form}
                                     documentLock={pluginLock}
                                     fieldNames={fieldNames}
+                                    viewingPastVersion={viewingVersion !== null}
                                   >
                                     {/* The title first and largest, then the slug
                                   on the line under it. The slug is a write,

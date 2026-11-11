@@ -1915,6 +1915,7 @@ export function SingleForm({
                                       removedFromCode,
                                     })}
                                     fieldNames={fieldNames}
+                                    viewingPastVersion={viewingVersion !== null}
                                   >
                                     {/* The title, fixed by the Single's config and
                                   so read-only. No slug line: a Single's slug

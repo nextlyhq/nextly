@@ -43,13 +43,14 @@ function deliver(fields: string[] | undefined): void {
   } as AdminContributionsMeta;
 }
 
-function page(fieldNames?: readonly string[]) {
+function page(fieldNames?: readonly string[], withheld?: boolean) {
   return render(
     <PlaceTabs
       place="collection.edit"
       context={{ userId: "u1", collection: "posts", entryId: "e1" }}
       contentLabel="Content"
       {...(fieldNames === undefined ? {} : { fieldNames })}
+      {...(withheld === undefined ? {} : { withheld })}
     >
       <p>content</p>
     </PlaceTabs>
@@ -76,6 +77,13 @@ describe("a tab that edits fields of the document", () => {
     deliver(["seo"]);
     page();
     expect(screen.queryByRole("tab", { name: "SEO" })).toBeNull();
+  });
+
+  it("draws no contributed tab while the page withholds them, as for a past version", () => {
+    deliver(undefined);
+    page(["title"], true);
+    expect(screen.queryByRole("tab", { name: "SEO" })).toBeNull();
+    expect(screen.getByText("content")).toBeVisible();
   });
 
   it("leaves a tab that names no fields to the place's other rules", () => {

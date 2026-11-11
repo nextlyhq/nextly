@@ -115,6 +115,13 @@ export interface PlaceTabsProps<P extends AdminPlaceId> extends PlaceProps<P> {
    * them, and nowhere when this is left out.
    */
   fieldNames?: readonly string[];
+  /**
+   * Draw the page's own content alone, with no contributed tab, while it
+   * shows something a tab does not read, such as a past version of an edit
+   * page's document: a tab reads the live document, and would show today's
+   * values under the past version's banner.
+   */
+  withheld?: boolean;
   /** Told the tab the reader opens, by the same values `openTab` takes. */
   onOpenTabChange?: (tab: string | null) => void;
   /**
@@ -209,21 +216,22 @@ function useShownTab(
 }
 
 /**
- * The tabs delivered to the place, none while the page's context is `null`:
+ * The tabs delivered to the place that fit the page, none while the page's
+ * context is `null` or the page withholds them:
  * nothing contributed is drawn until the page knows its ids.
  */
 function useDeliveredTabs<P extends AdminPlaceId>(
   place: P,
   context: PlaceProps<P>["context"],
   entry: PlaceProps<P>["entry"],
-  fieldNames: readonly string[] | undefined
+  page: { fieldNames?: readonly string[]; withheld?: boolean | undefined }
 ) {
   const delivered = usePlaceContributions(place, "tab", { context, entry });
-  if (context === null) return [];
+  if (context === null || page.withheld === true) return [];
   return delivered.flatMap(item =>
     "builtIn" in item ||
     item.kind !== "tab" ||
-    !tabFitsDocument(item, fieldNames)
+    !tabFitsDocument(item, page.fieldNames)
       ? []
       : [item]
   );
@@ -256,29 +264,30 @@ export function PlaceTabs<P extends AdminPlaceId>({
   onOpenTabChange,
   onShownTabChange,
   fieldNames,
+  withheld,
   children,
 }: PlaceTabsProps<P>): ReactNode {
-  const tabs = useDeliveredTabs(place, context, entry, fieldNames);
+  const tabs = useDeliveredTabs(place, context, entry, {
+    fieldNames,
+    withheld,
+  });
   const { shown, choose } = useShownTab(
     tabs.map(tab => tab.id),
     openTab,
     onOpenTabChange
   );
   useShownTabReport(shown, onShownTabChange);
+  const handed = handedTo(tabProps, context, entry);
   return (
     <>
-      {context === null || tabs.length === 0 ? null : (
+      {handed === undefined || tabs.length === 0 ? null : (
         <PlaceTabStrip<P>
           tabs={tabs}
           shown={shown}
           choose={choose}
           contentLabel={contentLabel}
           className={className}
-          handed={{
-            ...tabProps,
-            context,
-            ...(entry === undefined ? {} : { entry }),
-          }}
+          handed={handed}
         />
       )}
       <Activity mode={shown === CONTENT_TAB ? "visible" : "hidden"}>
@@ -286,6 +295,21 @@ export function PlaceTabs<P extends AdminPlaceId>({
       </Activity>
     </>
   );
+}
+
+/**
+ * What every contributed tab is handed besides its own `setBadge`, or
+ * nothing while the page does not know its ids.
+ */
+function handedTo<P extends AdminPlaceId>(
+  tabProps: Readonly<Record<string, unknown>> | undefined,
+  context: PlaceProps<P>["context"],
+  entry: PlaceProps<P>["entry"]
+):
+  | (Omit<PlaceTabProps<P>, "setBadge"> & Readonly<Record<string, unknown>>)
+  | undefined {
+  if (context === null) return undefined;
+  return { ...tabProps, context, ...(entry === undefined ? {} : { entry }) };
 }
 
 /**

@@ -1,8 +1,9 @@
 /**
  * The page's levels, read from the plugin's route as the author types: once
  * as the tab opens, then again a moment after the document stops changing.
- * What is typed in the `seo` group is left out of the request, since the tab
- * puts it on top itself, so typing there asks the server nothing.
+ * The whole document is sent, the tab's own values included: the route
+ * leaves those out of the automatic levels itself, and the page's structured
+ * data reads them (an article is described with its chosen share image).
  *
  * @module admin/use-seo-tab-context
  */
@@ -14,7 +15,6 @@ import {
   SEO_RESOLVE_PATH,
   type SeoTabContext,
 } from "../tab/contract";
-import { withoutTyped } from "../tab/typed";
 
 /** How long the document stays unchanged before the levels are read again. */
 const SETTLE_MS = 300;
@@ -49,7 +49,7 @@ export function useSeoTabContext(
 
   useEffect(() => {
     if (kind === undefined || slug === undefined) return undefined;
-    const body = { kind, slug, locale, document: withoutTyped(document) };
+    const body = { kind, slug, locale, document };
     const key = JSON.stringify(body);
     if (key === asked.current) return undefined;
     const controller = new AbortController();

@@ -1127,7 +1127,9 @@ A tab on an edit page may take over fields of the document with `fields`
 fields in the tab instead of among its own content, and draws the tab only on a
 document that has every one of them. Their values stay in the document's form,
 so Save and Publish store them, and any surface that reads the document reads
-them as before. A contribution to a Single's edit page may name the Singles it
+them as before. While a past version of the document is on screen, the page
+draws its own content alone and no contributed tab, since a tab reads the live
+document. A contribution to a Single's edit page may name the Singles it
 is for with `singles`, as one on a collection's page names its `collections`:
 
 ```ts
