@@ -72,7 +72,7 @@ function setupReads(): SetupCardReads {
   return reads;
 }
 
-/** A new project, part way through, for the preview page. */
+/** A new project, part way through, for the preview board. */
 const PART_WAY: SetupCardData = {
   setup: {
     known: true,
@@ -97,7 +97,7 @@ const PART_WAY: SetupCardData = {
   allSet: false,
 };
 
-/** Every step done, the once the card says so, for the preview page. */
+/** Every step done, the once the card says so, for the preview board. */
 const ALL_SET: SetupCardData = {
   setup: {
     known: true,
@@ -118,7 +118,8 @@ export const setupWidget = defineWidget({
   title: "Set up your project",
   description:
     "The setup steps left on a new project, detected from its data. For super-admins, until setup is done.",
-  icon: "ListChecks",
+  // Drawn beside its name in the add panel: a name the admin's icon set holds.
+  icon: "Flag",
   // Half the row by default, beside Needs attention, and never narrower: below
   // half a step's buttons no longer fit beside its hint. Up to the whole row.
   // The card is as tall as its checklist, whatever its rows say.

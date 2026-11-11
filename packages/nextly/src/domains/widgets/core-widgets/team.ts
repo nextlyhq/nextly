@@ -20,6 +20,8 @@ import { readCoreList } from "./system-read";
 
 export const teamWidget = defineWidget({
   id: CORE_WIDGET_ID.team,
+  // Drawn beside its name in the add panel.
+  icon: "Users",
   title: "Team",
   // Tier-neutral: a small card draws the people alone, and a reader may see only one count.
   description: "Your project's team at a glance.",

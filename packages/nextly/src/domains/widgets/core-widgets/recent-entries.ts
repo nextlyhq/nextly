@@ -53,6 +53,8 @@ const RECENT_ENTRIES_SETTINGS = {
 
 export const recentEntriesWidget = defineWidget({
   id: CORE_WIDGET_ID.recentEntries,
+  // Drawn beside its name in the add panel.
+  icon: "List",
   title: "Recent entries",
   description:
     "A collection's entries changed most recently, each linking to its entry.",

@@ -58,6 +58,8 @@ export function provideAttentionDigest(read: CardDigestRead): void {
 
 export const needsAttentionWidget = defineWidget({
   id: CORE_WIDGET_ID.needsAttention,
+  // Drawn beside its name in the add panel.
+  icon: "AlertCircle",
   title: "Needs your attention",
   description:
     "Open work waiting for you: releases that stopped or are overdue, and items your plugins add.",

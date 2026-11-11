@@ -21,6 +21,8 @@ import { NOTE_TEXT } from "./shared";
 
 export const noteWidget = defineWidget({
   id: CORE_WIDGET_ID.note,
+  // Drawn beside its name in the add panel.
+  icon: "Pencil",
   title: "Note",
   description: "A note of your own, in Markdown, that only you see.",
   // Any width from a quarter, and as tall as its reader's text wants.
@@ -43,7 +45,7 @@ export const noteWidget = defineWidget({
     message: "Nothing written yet.",
     action: { label: "Write a note", opens: "settings" },
   },
-  // A made-up note, for the add gallery's tile and the preview page.
+  // A made-up note, for the preview board.
   preview: [
     {
       name: "A short note",

@@ -32,7 +32,7 @@ const BREAKDOWN_SETTINGS = {
   groupBy: COLLECTION_GROUP_BY,
 };
 
-/** Made-up entries by status, for the add gallery's tile and the preview page. */
+/** Made-up entries by status, for the preview board. */
 const SAMPLE_BREAKDOWN: BreakdownWidgetData = {
   buckets: [
     { value: "published", count: 86 },
@@ -53,6 +53,8 @@ const SAMPLE_BREAKDOWN: BreakdownWidgetData = {
 
 export const breakdownWidget = defineWidget({
   id: CORE_WIDGET_ID.breakdown,
+  // Drawn beside its name in the add panel.
+  icon: "Columns",
   title: "Breakdown",
   description:
     "How a collection's entries divide: by status, or by a field with choices.",

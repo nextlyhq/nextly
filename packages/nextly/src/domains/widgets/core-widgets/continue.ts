@@ -22,6 +22,8 @@ import { readCoreList } from "./system-read";
 
 export const continueWidget = defineWidget({
   id: CORE_WIDGET_ID.continue,
+  // Drawn beside its name in the add panel.
+  icon: "History",
   title: "Continue where you left off",
   description:
     "Your pinned entries and your latest saves, or what other people saved, one row per entry.",

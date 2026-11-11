@@ -71,8 +71,8 @@ function whereFor(
 }
 
 /**
- * A collection of sample size, for the add gallery's tile and the preview
- * page: plainly made up, never read from anything.
+ * A collection of sample size, for the preview board: plainly made up, never
+ * read from anything.
  */
 const SAMPLE_COUNT: CountWidgetData = {
   total: 128,
@@ -81,6 +81,8 @@ const SAMPLE_COUNT: CountWidgetData = {
 
 export const countWidget = defineWidget({
   id: CORE_WIDGET_ID.count,
+  // Drawn beside its name in the add panel.
+  icon: "Hash",
   title: "Count",
   description:
     "How many entries a collection holds, published and draft, and how that is changing.",
