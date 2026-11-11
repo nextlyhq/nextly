@@ -102,9 +102,10 @@ export function touchesResponseKey(patch: KeyedSubmission): boolean {
  * A submission's key after an update, made from the stored row with the
  * update applied: none once it is spam; its own again when restored from
  * spam, unless another submission has since taken that value, when it keeps
- * none and the value stays with that one; and a new one when its answer or
+ * none and the value stays with that one; a new one when its answer or
  * address changed, which the unique index refuses if another submission
- * holds it already, so an edit cannot give two submissions one value.
+ * holds it already, so an edit cannot give two submissions one value; and,
+ * when the value is unchanged, what it held.
  */
 export async function responseKeyAfterUpdate(input: {
   digests: () => Digests;
@@ -120,15 +121,21 @@ export async function responseKeyAfterUpdate(input: {
     data: patch.data ?? stored?.data,
     ipAddress: patch.ipAddress ?? stored?.ipAddress,
   });
-  if (key === null || key === stored?.responseKey) return key;
-  // Restored from spam with the same value it was stored with (an update
-  // carries the whole payload, so the value is compared, not its presence).
-  const restoring =
-    stored?.status === "spam" &&
-    key ===
-      (await responseKeyOf(input.digests, input.settings, {
-        data: stored.data,
-        ipAddress: stored.ipAddress,
-      }));
-  return restoring && (await input.heldElsewhere(key)) ? null : key;
+  if (key === null) return null;
+  const storedValue = await responseKeyOf(input.digests, input.settings, {
+    data: stored?.data,
+    ipAddress: stored?.ipAddress,
+  });
+  // Edited to another value: that value's key, which the unique index
+  // refuses if another submission holds it.
+  if (key !== storedValue) return key;
+  // Restored from spam with the value it was stored with: its key back,
+  // unless another submission has taken that value since.
+  if (stored?.status === "spam") {
+    return (await input.heldElsewhere(key)) ? null : key;
+  }
+  // The same value, not spam before or after: whatever it held, a key or,
+  // restored while its value was taken, none, so a later status change or an
+  // edit of another answer never collides.
+  return typeof stored?.responseKey === "string" ? stored.responseKey : null;
 }

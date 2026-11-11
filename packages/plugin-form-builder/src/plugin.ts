@@ -1114,6 +1114,13 @@ export async function prepareSubmissionForWrite(
   if (ctx.operation !== "create" && submission.data === undefined) {
     stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
   }
+  if (ctx.operation === "create" && ctx.req?.http) {
+    // A request's address as the server judged it, never one the caller
+    // posted: the collection grants public create, and a posted address
+    // would choose the network one response per person compares. A create
+    // no request produced (an import) keeps the address it was given.
+    ctx.data.ipAddress = ctx.req.http.ip ?? null;
+  }
   if (ctx.operation === "create") {
     // Made from what is stored, after the spam verdict: spam takes no key.
     ctx.data.responseKey = await responseKeyOf(

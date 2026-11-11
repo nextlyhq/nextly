@@ -275,6 +275,13 @@ describe.each(getConfiguredTestDialects())(
       const restored = (await stored(nextly)).find(row => row.id === first!.id);
       expect(restored?.status).toBe("new");
       expect(restored?.responseKey ?? null).toBeNull();
+
+      // Its value still held by the other, it stays keyless through later
+      // changes that leave its value alone.
+      await markAs(first!.id, "read");
+      const read = (await stored(nextly)).find(row => row.id === first!.id);
+      expect(read?.status).toBe("read");
+      expect(read?.responseKey ?? null).toBeNull();
     });
 
     it("lets a person respond again once their submission is marked spam", async () => {
