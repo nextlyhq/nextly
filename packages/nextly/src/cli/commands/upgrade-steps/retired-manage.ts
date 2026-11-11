@@ -17,11 +17,11 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { Container, container } from "../../../di/container";
 import { rolesHoldingRetiredManage } from "../../../domains/auth/retired-manage";
 import { afterGrantsChanged } from "../../../domains/auth/services/role-grants-changed";
 import { RolePermissionService } from "../../../domains/auth/services/role-permission-service";
 import { consoleLogger } from "../../../services/shared";
+import { withAdapterLent } from "../../utils/with-adapter-lent";
 import type { UpgradeStepContext } from "../upgrade-step";
 
 const adapterOf = (context: UpgradeStepContext) =>
@@ -65,29 +65,4 @@ export async function convertRoles(
     );
   }
   return converted;
-}
-
-/**
- * Runs `run` with the command's own connection lent to the service container,
- * and takes it back after.
- *
- * Retiring a role's cached answers reaches the database through the container:
- * it empties the stored answers and publishes the shared role version every
- * running instance watches. `nextly upgrade` starts no Nextly in its process,
- * so nothing registered an adapter there, the retirement failed, and running
- * instances went on answering from the grants before. A process that did
- * register one keeps it: `restore` lends only a name not already registered.
- */
-async function withAdapterLent<T>(
-  adapter: DrizzleAdapter,
-  run: () => Promise<T>
-): Promise<T> {
-  const lent = container.restore(
-    new Container().register("adapter", () => adapter)
-  );
-  try {
-    return await run();
-  } finally {
-    container.withdraw(lent);
-  }
 }

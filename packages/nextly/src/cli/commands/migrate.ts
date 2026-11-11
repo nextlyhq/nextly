@@ -36,7 +36,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
-import { Container, container } from "../../di/container";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-plain-passwords";
 import {
@@ -217,6 +216,7 @@ import {
   type DeclaredNames,
 } from "../utils/migration-discovery";
 import { installRegistryResolver } from "../utils/registry-resolver";
+import { withAdapterLent } from "../utils/with-adapter-lent";
 
 import {
   plainTextPasswordCleanup,
@@ -739,25 +739,17 @@ export async function runMigrate(
 
 /**
  * Phase 4 of `nextly migrate`: the permissions, declared roles and preset grants
- * (`seedPermissionsRolesAndPresets`), on the command's own connection.
- *
- * A permission or grant written here retires the answers every running instance
- * has cached, and that reaches the database through the service container, which
- * a command starts with nothing in. So the command's adapter is lent to the
- * container for the step and withdrawn after; a process that already registered
- * one (a server, a test that booted an instance) keeps its own, since `restore`
- * lends only a name not yet registered.
+ * (`seedPermissionsRolesAndPresets`), on the command's own connection, lent to
+ * the service container for the step (`withAdapterLent`) so that what it writes
+ * retires the answers every running instance has cached.
  */
 async function seedAccessOnCommandConnection(
   adapter: DrizzleAdapter,
   config: SanitizedNextlyConfig,
   logger: Logger
 ): Promise<void> {
-  const lent = container.restore(
-    new Container().register("adapter", () => adapter)
-  );
-  try {
-    await seedPermissionsRolesAndPresets({
+  await withAdapterLent(adapter, () =>
+    seedPermissionsRolesAndPresets({
       adapter,
       config,
       // Each seeder's progress is detail here; its warnings and errors are the operator's.
@@ -767,10 +759,8 @@ async function seedAccessOnCommandConnection(
         warn: message => logger.warn(message),
         error: message => logger.error(message),
       },
-    });
-  } finally {
-    container.withdraw(lent);
-  }
+    })
+  );
 }
 
 /**
