@@ -9,6 +9,7 @@ import type { ResolvedFormBuilderConfig } from "../types";
 
 import {
   botCheckHosts,
+  judgeBotCheck,
   botCheckOptions,
   botProviderOf,
   botTokensOf,
@@ -227,5 +228,45 @@ describe("the start-up warning", () => {
       provider: "recaptcha",
       forms: 2,
     });
+  });
+});
+
+describe("a check missing a key", () => {
+  it("is not run without a site key a visitor's widget could use", async () => {
+    const verdict = await judgeBotCheck({
+      settings: { botCheck: "turnstile" },
+      spam: spam({ turnstile: { enabled: false, secretKey: "secret" } }),
+      tokens: {},
+      ip: undefined,
+      fetch: provider({ success: false }).fetch,
+      warn: () => undefined,
+    });
+    // Unchecked rather than flagged: no visitor could have sent a token.
+    expect(verdict).toBeUndefined();
+  });
+
+  it("is run with a form's own legacy reCAPTCHA site key", async () => {
+    const verdict = await judgeBotCheck({
+      settings: { botCheck: "recaptcha", captchaSiteKey: "legacy" },
+      spam: spam({ recaptcha: { enabled: false, secretKey: "secret" } }),
+      tokens: {},
+      ip: undefined,
+      fetch: provider({ success: true, score: 0.9 }).fetch,
+      warn: () => undefined,
+    });
+    expect(verdict).toEqual({ isSpam: true, reason: "recaptcha" });
+  });
+
+  it("is named in the start-up warning", async () => {
+    const warn = vi.fn();
+    await warnUncheckedBotChecks({
+      spam: spam({ turnstile: { enabled: true, secretKey: "secret" } }),
+      forms: async () => [],
+      readSettings: () => ({}),
+      warn,
+    });
+    expect(warn.mock.calls[0]?.[0]).toMatch(
+      /spamProtection\.turnstile\.siteKey/
+    );
   });
 });

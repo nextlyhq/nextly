@@ -30,11 +30,11 @@ import {
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
 
-import { botTokensOf } from "./bot-check";
+import { botTokensOf, judgeBotCheck } from "./bot-check";
 import { heldRefusal, SETTINGS_CHANGED } from "./form-closing-hold";
 import { ALREADY_RESPONDED } from "./one-response";
 import { asPluginSubmission, prepareSubmission } from "./prepare-submission";
-import { checkSpam } from "./spam-detection";
+import { checkSpam, type SpamCheckResult } from "./spam-detection";
 
 // ============================================================
 // Types
@@ -193,6 +193,99 @@ export interface SubmitFormResult {
    * message cannot be used to tell an accepted submission from a flagged one.
    */
   successMessage?: string;
+}
+
+/**
+ * A submission's spam verdict and its prepared data: the honeypot first,
+ * BEFORE validation, so a bot that trips the trap while also failing
+ * validation still receives the same fake success as any other bot; then the
+ * form's bot check for one that would otherwise be refused as invalid.
+ */
+async function judgeAndPrepare(input: {
+  data: Record<string, unknown>;
+  form: FormDocument;
+  settings: ReturnType<typeof normalizeFormSettings>;
+  pluginConfig: ResolvedFormBuilderConfig;
+  pluginContext: PluginContext;
+  ipAddress: string | undefined;
+  formSlug: string;
+}): Promise<{
+  spamResult: SpamCheckResult;
+  prepared: ReturnType<typeof prepareSubmission>;
+}> {
+  const { data, form, settings, pluginConfig, pluginContext, formSlug } = input;
+  const { logger } = pluginContext;
+  // 3. Spam detection — BEFORE validation, so a bot that trips the trap
+  // while also failing validation still receives the same fake success as
+  // any other bot instead of a distinguishable validation error.
+  // Honeypot fields are by definition NOT declared form fields, so the
+  // probe is the raw payload minus the declared schema — a declared field
+  // (e.g. a real "website" input) must never trip the trap.
+  const declaredFieldNames = new Set(form.fields.map(field => field.name));
+  const undeclaredData = Object.fromEntries(
+    Object.entries(data).filter(([key]) => !declaredFieldNames.has(key))
+  );
+
+  // The honeypot only, and only to decide whether to validate. It is a pure
+  // read of the payload, so running it here and again at the write seam
+  // costs nothing and cannot disagree. The RATE LIMIT is not asked here: it
+  // counts, and a check with a side effect run twice counts one submission
+  // twice. The seam owns that one, and owns the verdict written to the row.
+  let spamResult: SpamCheckResult = await checkSpam({
+    data: undeclaredData,
+    formSlug,
+    config: {
+      // Per-form overrides win where set; blank inherits the plugin config.
+      honeypot:
+        settings.honeypotEnabled ?? pluginConfig.spamProtection.honeypot,
+    },
+  });
+
+  let isContentSpam = spamResult.isSpam;
+
+  // 4. Transform + validate. Content spam skips validation entirely — it
+  // is stored for review exactly as the bot shaped it (declared fields
+  // only, sanitized), and requiring validity would drop the evidence.
+  if (isContentSpam) {
+    logger.info?.("Spam submission detected — storing flagged", {
+      formSlug,
+      reason: spamResult.reason,
+      ipAddress: input.ipAddress,
+    });
+  }
+
+  let prepared = prepareSubmission({
+    data,
+    fields: form.fields,
+    validate: !isContentSpam,
+  });
+
+  // An invalid submission meets its form's bot check here, before it is
+  // refused, so it is judged as one written any other way: a failing or
+  // missing token keeps it as spam evidence rather than answering the bot
+  // with validation errors. Checked once: kept as evidence, the seam does
+  // not check it again, and a passing token is spent on a refusal.
+  if (prepared.validationErrors && !isContentSpam) {
+    const bot = await judgeBotCheck({
+      settings,
+      spam: pluginConfig.spamProtection,
+      tokens: botTokensOf(data),
+      ip: input.ipAddress,
+      fetch: pluginContext.fetch,
+      warn: (message, warnContext) => logger.warn?.(message, warnContext),
+    });
+    if (bot) {
+      spamResult = bot;
+      isContentSpam = true;
+      prepared = prepareSubmission({
+        data,
+        fields: form.fields,
+        validate: false,
+      });
+    }
+  }
+
+  return { spamResult, prepared };
 }
 
 /**
@@ -364,50 +457,17 @@ export async function submitForm(
       }
     }
 
-    // 3. Spam detection — BEFORE validation, so a bot that trips the trap
-    // while also failing validation still receives the same fake success as
-    // any other bot instead of a distinguishable validation error.
-    // Honeypot fields are by definition NOT declared form fields, so the
-    // probe is the raw payload minus the declared schema — a declared field
-    // (e.g. a real "website" input) must never trip the trap.
-    const declaredFieldNames = new Set(form.fields.map(field => field.name));
-    const undeclaredData = Object.fromEntries(
-      Object.entries(data).filter(([key]) => !declaredFieldNames.has(key))
-    );
-
-    // The honeypot only, and only to decide whether to validate. It is a pure
-    // read of the payload, so running it here and again at the write seam
-    // costs nothing and cannot disagree. The RATE LIMIT is not asked here: it
-    // counts, and a check with a side effect run twice counts one submission
-    // twice. The seam owns that one, and owns the verdict written to the row.
-    const spamResult = await checkSpam({
-      data: undeclaredData,
-      formSlug,
-      config: {
-        // Per-form overrides win where set; blank inherits the plugin config.
-        honeypot:
-          settings.honeypotEnabled ?? pluginConfig.spamProtection.honeypot,
-      },
-    });
-
-    const isContentSpam = spamResult.isSpam;
-
-    // 4. Transform + validate. Content spam skips validation entirely — it
-    // is stored for review exactly as the bot shaped it (declared fields
-    // only, sanitized), and requiring validity would drop the evidence.
-    if (isContentSpam) {
-      logger.info?.("Spam submission detected — storing flagged", {
-        formSlug,
-        reason: spamResult.reason,
-        ipAddress: metadata?.ipAddress,
-      });
-    }
-
-    const prepared = prepareSubmission({
+    // 3. Spam detection, then 4. transform and validate (`judgeAndPrepare`).
+    const { spamResult, prepared } = await judgeAndPrepare({
       data,
-      fields: form.fields,
-      validate: !isContentSpam,
+      form,
+      settings,
+      pluginConfig,
+      pluginContext,
+      ipAddress: metadata?.ipAddress,
+      formSlug,
     });
+    const isContentSpam = spamResult.isSpam;
 
     if (prepared.validationErrors) {
       logger.debug?.("Form validation failed", {

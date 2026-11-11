@@ -298,6 +298,26 @@ describe("spam protection", () => {
     ).not.toHaveAttribute("aria-disabled", "true");
   });
 
+  it("refuses a check with a secret but no site key a visitor's widget could use", async () => {
+    const { user } = view(
+      {},
+      {
+        ...SPAM,
+        botChecks: {
+          recaptcha: { secret: true, siteKey: false },
+          turnstile: { secret: true, siteKey: true },
+        },
+      }
+    );
+    await user.click(screen.getByRole("combobox", { name: "Bot check" }));
+    expect(
+      await screen.findByRole("option", { name: "reCAPTCHA (needs keys)" })
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByRole("option", { name: "Turnstile" })
+    ).not.toHaveAttribute("aria-disabled", "true");
+  });
+
   it("says a form's check without a secret accepts submissions unchecked, naming the option", async () => {
     view({ settings: { botCheck: "turnstile" } });
     expect(
@@ -306,6 +326,7 @@ describe("spam protection", () => {
     expect(
       screen.getByText("spamProtection.turnstile.secretKey")
     ).toBeVisible();
+    expect(screen.getByText("spamProtection.turnstile.siteKey")).toBeVisible();
   });
 
   it("asks to move a form's own reCAPTCHA site key into the plugin's options", async () => {

@@ -80,6 +80,22 @@ function siteKeyOf(
   return provider === "recaptcha" ? settings.captchaSiteKey : undefined;
 }
 
+/**
+ * `provider`'s keys for a form, when both are known: the secret to verify
+ * with and a site key for the visitor's widget. A check missing either is
+ * not run: without a site key no visitor could produce a token, and every
+ * real submission would be flagged.
+ */
+function readyKeys(
+  provider: BotProvider,
+  spam: SpamProtection,
+  settings: { captchaSiteKey?: string }
+): { secret: string; siteKey: string } | undefined {
+  const secret = secretOf(provider, spam);
+  const siteKey = siteKeyOf(provider, spam, settings);
+  return secret && siteKey ? { secret, siteKey } : undefined;
+}
+
 const RECAPTCHA_ANSWER = z.object({
   success: z.boolean(),
   score: z.number().optional(),
@@ -200,24 +216,25 @@ export function botTokensOf(payload: Record<string, unknown>): BotTokens {
 
 /**
  * A request-made submission's bot check: none when its form's check is off,
- * or names a provider with no secret (accepted unchecked, as warned at start
- * and in Settings); a spam verdict when the token fails or is missing.
+ * or names a provider missing its secret or site key (accepted unchecked, as
+ * warned at start and in Settings); a spam verdict when the token fails or
+ * is missing.
  */
 export async function judgeBotCheck(input: {
-  botCheck: BotCheckMode | undefined;
+  settings: { botCheck?: BotCheckMode; captchaSiteKey?: string };
   spam: SpamProtection;
   tokens: BotTokens;
   ip: string | undefined;
   fetch: VerifyFetch | undefined;
   warn: (message: string, context: Record<string, unknown>) => void;
 }): Promise<{ isSpam: true; reason: BotProvider } | undefined> {
-  const provider = botProviderOf(input.botCheck, input.spam);
+  const provider = botProviderOf(input.settings.botCheck, input.spam);
   if (provider === undefined) return undefined;
-  const secret = secretOf(provider, input.spam);
-  if (secret === undefined) return undefined;
+  const keys = readyKeys(provider, input.spam, input.settings);
+  if (keys === undefined) return undefined;
   const verdict = await judgeBotToken({
     provider,
-    secret,
+    secret: keys.secret,
     token: input.tokens[provider],
     ...(input.ip ? { ip: input.ip } : {}),
     scoreThreshold: input.spam.recaptcha?.scoreThreshold,
@@ -234,14 +251,17 @@ export async function judgeBotCheck(input: {
 
 /**
  * Warn, once at start, for each bot check that is in use (the site default,
- * or named by a form) but has no secret, naming the option to set: those
+ * or named by a form) without both of its keys, naming the options: those
  * forms' submissions are accepted unchecked until it is. Reads at most the
  * first 500 forms; a failure to read them is not a reason to stop the start.
  */
 export async function warnUncheckedBotChecks(input: {
   spam: SpamProtection;
   forms: () => Promise<readonly object[]>;
-  readSettings: (stored: unknown) => { botCheck?: BotCheckMode };
+  readSettings: (stored: unknown) => {
+    botCheck?: BotCheckMode;
+    captchaSiteKey?: string;
+  };
   warn: (message: string, context: Record<string, unknown>) => void;
 }): Promise<void> {
   let forms: readonly object[] = [];
@@ -252,21 +272,21 @@ export async function warnUncheckedBotChecks(input: {
   }
   const counts = new Map<BotProvider, number>();
   for (const form of forms) {
-    const provider = botProviderOf(
-      input.readSettings((form as { settings?: unknown }).settings).botCheck,
-      input.spam
+    const settings = input.readSettings(
+      (form as { settings?: unknown }).settings
     );
-    if (provider && secretOf(provider, input.spam) === undefined) {
+    const provider = botProviderOf(settings.botCheck, input.spam);
+    if (provider && readyKeys(provider, input.spam, settings) === undefined) {
       counts.set(provider, (counts.get(provider) ?? 0) + 1);
     }
   }
   const siteDefault = botProviderOf("default", input.spam);
-  if (siteDefault && secretOf(siteDefault, input.spam) === undefined) {
+  if (siteDefault && readyKeys(siteDefault, input.spam, {}) === undefined) {
     counts.set(siteDefault, counts.get(siteDefault) ?? 0);
   }
   for (const [provider, forms] of counts) {
     input.warn(
-      `Form Builder: the ${provider === "recaptcha" ? "reCAPTCHA" : "Turnstile"} bot check is in use but has no secret key, so its submissions are accepted unchecked. Set spamProtection.${provider}.secretKey in the plugin's options.`,
+      `Form Builder: the ${provider === "recaptcha" ? "reCAPTCHA" : "Turnstile"} bot check is in use without both of its keys, so its submissions are accepted unchecked. Set spamProtection.${provider}.secretKey and spamProtection.${provider}.siteKey in the plugin's options.`,
       { provider, forms }
     );
   }
@@ -307,11 +327,9 @@ export function publicBotCheck(
 ): { provider: BotProvider; siteKey: string; field: string } | undefined {
   const settings = normalizeFormSettings(storedSettings);
   const provider = botProviderOf(settings.botCheck, spam);
-  if (provider === undefined || secretOf(provider, spam) === undefined) {
-    return undefined;
-  }
-  const siteKey = siteKeyOf(provider, spam, settings);
-  return siteKey
-    ? { provider, siteKey, field: TOKEN_FIELDS[provider] }
+  if (provider === undefined) return undefined;
+  const keys = readyKeys(provider, spam, settings);
+  return keys
+    ? { provider, siteKey: keys.siteKey, field: TOKEN_FIELDS[provider] }
     : undefined;
 }

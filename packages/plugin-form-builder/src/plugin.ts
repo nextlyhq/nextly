@@ -1333,7 +1333,7 @@ async function judgeSubmission(
   // spam whatever its token says, and a token is spent once verified.
   if (marks?.keepAsEvidence === true) return undefined;
   return judgeBotCheck({
-    botCheck: normalizeFormSettings(form.settings).botCheck,
+    settings: normalizeFormSettings(form.settings),
     spam: config.spamProtection,
     // Handed over by the plugin's own handler, which keeps only the form's
     // fields in the row; read off the payload at every other door.

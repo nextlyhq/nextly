@@ -62,12 +62,26 @@ function providerOf(
   return undefined;
 }
 
-/** Whether `provider`'s secret is known to be missing, not merely unknown. */
-function missingSecret(
+/**
+ * The keys `provider` lacks for this form, when the plugin's options are
+ * known: the secret to verify with, and a site key for the visitor's widget,
+ * where a form's own legacy reCAPTCHA site key counts. A check missing
+ * either is not run, so it cannot be newly chosen.
+ */
+function missingKeys(
   provider: BotProvider,
-  defaults: BotCheckSiteDefaults | null
-): boolean {
-  return defaults?.botChecks?.[provider].secret === false;
+  defaults: BotCheckSiteDefaults | null,
+  settings: { captchaSiteKey?: string }
+): ("secretKey" | "siteKey")[] {
+  const keys = defaults?.botChecks?.[provider];
+  if (!keys) return [];
+  const siteKey =
+    keys.siteKey ||
+    (provider === "recaptcha" && Boolean(settings.captchaSiteKey));
+  return [
+    ...(keys.secret ? [] : ["secretKey" as const]),
+    ...(siteKey ? [] : ["siteKey" as const]),
+  ];
 }
 
 export function BotCheckRow({
@@ -114,9 +128,12 @@ export function BotCheckRow({
               <SelectItem
                 key={option}
                 value={option}
-                disabled={missingSecret(option, defaults) && choice !== option}
+                disabled={
+                  missingKeys(option, defaults, settings).length > 0 &&
+                  choice !== option
+                }
               >
-                {missingSecret(option, defaults)
+                {missingKeys(option, defaults, settings).length > 0
                   ? `${NAMES[option]} (needs keys)`
                   : NAMES[option]}
               </SelectItem>
@@ -140,7 +157,8 @@ export function BotCheckNotices({
     defaults
   );
   if (provider === undefined) return null;
-  const unchecked = missingSecret(provider, defaults);
+  const missing = missingKeys(provider, defaults, settings);
+  const unchecked = missing.length > 0;
   const ownSiteKey =
     provider === "recaptcha" &&
     Boolean(settings.captchaSiteKey) &&
@@ -151,10 +169,15 @@ export function BotCheckNotices({
       {unchecked ? (
         <Alert variant="warning">
           <AlertDescription>
-            This form’s bot check is {NAMES[provider]}, but the plugin has no{" "}
-            {NAMES[provider]} secret key, so submissions are accepted unchecked.
-            Set <code>spamProtection.{provider}.secretKey</code> in the plugin’s
-            options.
+            This form’s bot check is {NAMES[provider]}, but the plugin’s options
+            are missing its{" "}
+            {missing.map((key, index) => (
+              <span key={key}>
+                {index > 0 ? " and " : ""}
+                <code>{`spamProtection.${provider}.${key}`}</code>
+              </span>
+            ))}
+            , so submissions are accepted unchecked.
           </AlertDescription>
         </Alert>
       ) : null}

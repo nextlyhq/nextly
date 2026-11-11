@@ -59,7 +59,10 @@ describe.each(getConfiguredTestDialects())("bot checks (%s)", dialect => {
         name: "Contact",
         slug: "contact",
         status: "published",
-        fields: [{ type: "text", name: "message", label: "Message" }],
+        fields: [
+          { type: "text", name: "message", label: "Message" },
+          { type: "email", name: "email", label: "Email" },
+        ],
         settings: { honeypotEnabled: false, ...settings },
       },
     });
@@ -71,10 +74,9 @@ describe.each(getConfiguredTestDialects())("bot checks (%s)", dialect => {
           limit: 100,
         })
       ).items as { id: string; status: string; spamReason: string | null }[];
-    /** Submit through the public route, answering the row it stored. */
-    const submit = async (data: Record<string, unknown>) => {
-      const before = new Set((await rows()).map(row => row.id));
-      const res = await handlers.POST(
+    /** Post through the public route. */
+    const post = (data: Record<string, unknown>) =>
+      handlers.POST(
         new Request("http://localhost/api/forms/contact/submit", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -82,7 +84,10 @@ describe.each(getConfiguredTestDialects())("bot checks (%s)", dialect => {
         }),
         params("forms", "contact", "submit")
       );
-      expect(res.status).toBe(201);
+    /** Submit through the public route, answering the row it stored. */
+    const submit = async (data: Record<string, unknown>) => {
+      const before = new Set((await rows()).map(row => row.id));
+      expect((await post(data)).status).toBe(201);
       return (await rows()).find(row => !before.has(row.id));
     };
     const read = async () =>
@@ -92,7 +97,7 @@ describe.each(getConfiguredTestDialects())("bot checks (%s)", dialect => {
           params("forms", "contact")
         )
       ).json()) as Record<string, unknown>;
-    return { submit, read };
+    return { submit, read, post, rows };
   }
 
   it("accepts a submission whose reCAPTCHA token passes, and flags one that fails", async () => {
@@ -162,6 +167,38 @@ describe.each(getConfiguredTestDialects())("bot checks (%s)", dialect => {
       });
     }
   );
+
+  it("judges an invalid submission's token before refusing it", async () => {
+    const { submit, post, rows } = await boot(
+      { turnstile: { enabled: false, ...KEYS } },
+      { botCheck: "turnstile" }
+    );
+    // A failing token: kept as spam evidence, answered as a success.
+    answer.value = { success: false };
+    expect(
+      await submit({ email: "not-an-email", "cf-turnstile-response": "bad" })
+    ).toMatchObject({ status: "spam", spamReason: "turnstile" });
+
+    // A passing token: the visitor is told what to fix, and nothing is kept.
+    answer.value = { success: true };
+    const before = (await rows()).length;
+    const res = await post({
+      email: "not-an-email",
+      "cf-turnstile-response": "good",
+    });
+    expect(res.status).toBe(400);
+    expect(await rows()).toHaveLength(before);
+  });
+
+  it("accepts submissions unchecked when the check has a secret but no site key", async () => {
+    const { submit, read } = await boot(
+      { turnstile: { enabled: false, secretKey: "secret-key" } },
+      { botCheck: "turnstile" }
+    );
+    answer.value = { success: false };
+    expect(await submit({})).toMatchObject({ status: "new" });
+    expect(await read()).not.toHaveProperty("botCheck");
+  });
 
   it("accepts submissions unchecked when the form's check has no secret", async () => {
     const { submit, read } = await boot(
