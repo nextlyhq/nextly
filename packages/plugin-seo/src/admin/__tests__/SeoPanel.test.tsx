@@ -516,6 +516,37 @@ describe("Advanced", () => {
     expect(made).toBe(1);
   });
 
+  it("says how the share image fits the shared card, and marks where it is cut", async () => {
+    const user = userEvent.setup();
+    const withImage = (width: number, height: number): SeoTabContext => ({
+      ...CONTEXT,
+      levels: {
+        ...LEVELS,
+        content: {
+          ...LEVELS.content,
+          image: {
+            value: { url: "/media/cover.webp", width, height },
+            field: "coverImage",
+          },
+        },
+      },
+    });
+    const { unmount } = render(<Harness context={withImage(800, 600)} />);
+    await user.click(screen.getByRole("tab", { name: "When shared" }));
+    expect(screen.getByTestId("seo-share-fit")).toHaveTextContent(
+      "This 800 × 600 image is cut at the top and bottom to fit. Fix it under Advanced, Share image."
+    );
+    expect(screen.getByTestId("seo-share-crop")).toBeInTheDocument();
+    unmount();
+
+    render(<Harness context={withImage(1200, 630)} />);
+    await user.click(screen.getByRole("tab", { name: "When shared" }));
+    expect(screen.getByTestId("seo-share-fit")).toHaveTextContent(
+      "The image is 1200 × 630, the size every network shows in full."
+    );
+    expect(screen.queryByTestId("seo-share-crop")).toBeNull();
+  });
+
   it("says a share image was made only while it is the page's image", async () => {
     const user = userEvent.setup();
     const imaged: SeoTabContext = {
@@ -530,6 +561,7 @@ describe("Advanced", () => {
           },
         },
       },
+      fieldLabels: { ...CONTEXT.fieldLabels, coverImage: "Cover image" },
       shareImage: {
         problems: [
           { message: "800 × 600, LinkedIn will crop it", fix: "make" },
@@ -547,8 +579,16 @@ describe("Advanced", () => {
     await user.click(
       screen.getByRole("button", { name: "Make a share image" })
     );
-    expect(await screen.findByText(/Made a 1200 × 630 copy/)).toBeVisible();
+    // Made from the page's cover image: the row names it, and says the
+    // picture on the page is left as it was.
+    expect(await screen.findByTestId("seo-share-made")).toHaveTextContent(
+      "Made a 1200 × 630 copy for sharing. The cover image on the page is unchanged."
+    );
     expect(screen.getByText("Made for this page")).toBeVisible();
+    expect(screen.getByText("from the cover image")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Go back to automatic" })
+    ).toBeVisible();
 
     // Another image chosen: it was not made here, and its problems show.
     await user.click(screen.getByRole("button", { name: "Reload" }));

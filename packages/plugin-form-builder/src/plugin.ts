@@ -32,8 +32,17 @@ import {
 import { submissionAnswers } from "./emails/answers";
 import { formsEmailTemplates } from "./emails/starter-messages";
 import { addressedFormPages, FORM_EDITOR_VIEW } from "./form-pages";
+import {
+  botCheckDefaults,
+  botCheckHosts,
+  botCheckOptions,
+  botTokensOf,
+  judgeBotCheck,
+  warnUncheckedBotChecks,
+} from "./handlers/bot-check";
 import { registerFormClosing } from "./handlers/form-closing-hold";
 import {
+  browserTokenOf,
   responseKeyAfterUpdate,
   responseKeyOf,
   touchesResponseKey,
@@ -145,7 +154,7 @@ function resolveConfig(
 
     spamProtection: {
       honeypot: options.spamProtection?.honeypot ?? true,
-      recaptcha: options.spamProtection?.recaptcha ?? { enabled: false },
+      ...botCheckOptions(options.spamProtection),
       rateLimit: {
         maxSubmissions: options.spamProtection?.rateLimit?.maxSubmissions ?? 10,
         windowMs: options.spamProtection?.rateLimit?.windowMs ?? 60_000,
@@ -229,10 +238,16 @@ export function formBuilder(
     () => installedSubmissionsSlug
   );
 
+  // The bot-check providers the plugin verifies tokens with: declared only
+  // for a provider whose secret is set, so a site using neither gives the
+  // plugin no network access.
+  const outbound = botCheckHosts(resolvedConfig.spamProtection);
+
   const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
     version: PLUGIN_VERSION,
     nextly: ">=0.0.2-alpha.21",
+    ...(outbound.length > 0 ? { capabilities: { net: { outbound } } } : {}),
     // Identity metadata for the admin plugins page, mirroring package.json.
     author: "Nextly",
     homepage: "https://nextlyhq.com",
@@ -435,6 +450,7 @@ export function formBuilder(
                   honeypot: resolvedConfig.spamProtection.honeypot,
                   recaptchaEnabled:
                     resolvedConfig.spamProtection.recaptcha?.enabled ?? false,
+                  ...botCheckDefaults(resolvedConfig.spamProtection),
                 },
                 // Runtime-resolved collection slugs (through ctx.self, so a
                 // framework .rename() is honored too) — admin components
@@ -639,6 +655,20 @@ export function formBuilder(
           ctx.data.editedBy = ctx.user?.id ?? null;
         }
         return ctx.data;
+      });
+
+      // A bot check in use with no secret accepts submissions unchecked:
+      // said once at start, naming the option, without holding the start up.
+      void warnUncheckedBotChecks({
+        spam: resolvedConfig.spamProtection,
+        forms: async () =>
+          (
+            await nextly.services.ownCollections.listEntries(formsSlug, {
+              pagination: { limit: 500 },
+            })
+          ).data ?? [],
+        readSettings: normalizeFormSettings,
+        warn: (message, context) => nextly.logger.warn?.(message, context),
       });
 
       // Each form's closing time and limit, held inside the transaction that
@@ -1065,7 +1095,7 @@ export async function prepareSubmissionForWrite(
   // server that is importing ten thousand rows as one.
   const spam =
     ctx.operation === "create" && ctx.req?.http
-      ? await judgeSubmission(incoming, form, ctx.req.http, nextly)
+      ? await judgeSubmission(incoming, form, ctx.req.http, nextly, marks)
       : undefined;
 
   if (spam?.reason === "rate_limit") {
@@ -1123,15 +1153,42 @@ export async function prepareSubmissionForWrite(
   }
   if (ctx.operation === "create") {
     // Made from what is stored, after the spam verdict: spam takes no key.
+    // The browser token is the one answer the row does not keep, so it comes
+    // from the handler that read it, or the payload at every other door.
+    const settings = normalizeFormSettings(form.settings);
+    const browserToken = marks?.browserToken ?? browserTokenOf(incoming);
     ctx.data.responseKey = await responseKeyOf(
       () => nextly.security.digests,
-      normalizeFormSettings(form.settings),
-      ctx.data
+      settings,
+      { ...ctx.data, browserToken }
     );
+    warnTokenless(settings, browserToken, ctx, formId, nextly);
   } else {
     await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);
   }
   return ctx.data;
+}
+
+/**
+ * Say so when a visitor's submission reaches a form taking one response per
+ * browser without the browser's token: it is accepted, as a browser that
+ * cleared its data is, and nothing stops that visitor sending another. Left
+ * silent, a site whose form script does not send the token would never learn
+ * the setting has no effect.
+ */
+function warnTokenless(
+  settings: { oneResponse?: string },
+  browserToken: string | undefined,
+  ctx: { req?: { http?: unknown }; data?: Record<string, unknown> },
+  formId: string,
+  nextly: NextlyInstance
+): void {
+  if (settings.oneResponse !== "browser" || browserToken !== undefined) return;
+  if (!ctx.req?.http || ctx.data?.status === "spam") return;
+  nextly.logger.warn?.(
+    "A submission to a form taking one response per browser came without the browser's token, so it is accepted without a check. The form's script sends it as the `nextly-browser-token` answer.",
+    { formId }
+  );
 }
 
 /**
@@ -1270,7 +1327,8 @@ async function judgeSubmission(
   payload: Record<string, unknown>,
   form: Record<string, unknown>,
   http: { ip: string | null; method: string },
-  nextly: NextlyInstance
+  nextly: NextlyInstance,
+  marks: SubmissionOriginMarks | undefined
 ): Promise<SpamCheckResult | undefined> {
   const config = getFormBuilderConfig(nextly);
   if (!config) return undefined;
@@ -1295,10 +1353,27 @@ async function judgeSubmission(
     formSlug: rateLimitKeyFor(form),
     config: {
       honeypot: settings.honeypotEnabled ?? config.spamProtection.honeypot,
-      rateLimit: config.spamProtection.rateLimit,
+      // Counted once: not again when the handler counted it already.
+      rateLimit:
+        marks?.rateCounted === true
+          ? undefined
+          : config.spamProtection.rateLimit,
     },
   });
-  return verdict.isSpam ? verdict : undefined;
+  if (verdict.isSpam) return verdict;
+  // A submission the handler already flagged is not checked again: it is
+  // spam whatever its token says, and a token is spent once verified.
+  if (marks?.keepAsEvidence === true) return undefined;
+  return judgeBotCheck({
+    settings: normalizeFormSettings(form.settings),
+    spam: config.spamProtection,
+    // Handed over by the plugin's own handler, which keeps only the form's
+    // fields in the row; read off the payload at every other door.
+    tokens: marks?.botTokens ?? botTokensOf(payload),
+    ip: http.ip ?? undefined,
+    fetch: nextly.fetch,
+    warn: (message, context) => nextly.logger.warn?.(message, context),
+  });
 }
 
 /**

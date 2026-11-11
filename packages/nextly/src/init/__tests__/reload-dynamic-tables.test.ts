@@ -267,7 +267,8 @@ describe("reloadDynamicTables", () => {
     loadDynamicTables.mockResolvedValue(ok());
     registerComponentSchemas.mockResolvedValue(2);
 
-    await reloadDynamicTables("[t]");
+    // Every entity and group registered: answered as loaded.
+    await expect(reloadDynamicTables("[t]")).resolves.toBe(true);
 
     expect(registerComponentSchemas).toHaveBeenCalledTimes(1);
   });
@@ -281,7 +282,9 @@ describe("reloadDynamicTables", () => {
     loadDynamicTables.mockResolvedValue(ok());
     registerComponentSchemas.mockRejectedValue(new Error("comp registry gone"));
 
-    await expect(reloadDynamicTables("[t]")).resolves.toBeUndefined();
+    // Answered rather than thrown: incomplete, so a caller that must not act
+    // on a partial reload can tell.
+    await expect(reloadDynamicTables("[t]")).resolves.toBe(false);
     expect(warn.mock.calls.flat().join(" ")).toMatch(/field groups/);
   });
 
@@ -289,7 +292,8 @@ describe("reloadDynamicTables", () => {
     containerGet.mockImplementation((name: string) =>
       name === "adapter" ? {} : undefined
     );
-    await expect(reloadDynamicTables("[t]")).resolves.toBeUndefined();
+    // Answered as not loaded, rather than thrown.
+    await expect(reloadDynamicTables("[t]")).resolves.toBe(false);
     // And it stopped rather than reading with a registry it could not write to.
     expect(loadDynamicTables).not.toHaveBeenCalled();
   });

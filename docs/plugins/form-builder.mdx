@@ -322,8 +322,7 @@ if (result.success) {
 ### Where the IP has to come from
 
 `submitForm` keys two protections on `metadata.ipAddress`: the per-IP rate limit,
-and the one-submission-per-visitor check when `allowMultipleSubmissions` is off. It
-also stores the value on the submission.
+and one response per network (below). It also stores the value on the submission.
 
 That makes the header a control input, not a log field. `x-forwarded-for` is
 client-supplied on a direct request and on any proxy that forwards it verbatim, so
@@ -356,6 +355,60 @@ so until you set it and list your proxies the resolver returns `null` and the ra
 limit does not run. And `getTrustedClientIp` ships from `nextly`, not from
 `@nextlyhq/plugin-sdk`, so a distributed plugin cannot reach it through the surface
 it is supposed to depend on. An application that hosts its own route, as below, can.
+
+### One response per person
+
+A form's Settings can limit each person to one response. The server compares a keyed one-way digest of what tells people apart, never the value itself, and a unique index refuses a second submission with the same digest when it is stored, so two sent at once cannot both get in.
+
+| Setting (`settings.oneResponse`) | Compares | Notes |
+| --- | --- | --- |
+| `off` | nothing | The default: anyone may respond again. |
+| `ip` | the network address | People sharing an office or home network count as one. Needs the trusted IP above. |
+| `browser` | a token the visitor's browser keeps | Counted from when it is chosen. Someone who clears their browser's data, or uses another browser, can respond again. |
+
+A second response is refused: `submitForm` answers `outcome: "duplicate"`, and the built-in route answers `409` with the message "You have already submitted this form." A submission marked spam gives its place back.
+
+**One per browser needs your form's script.** For a form that compares browsers, the public read of the form (`GET /api/forms/:slug`) says where the token goes:
+
+```json
+{
+  "oneResponse": { "by": "browser", "field": "nextly-browser-token" }
+}
+```
+
+Keep one random token per form in the visitor's browser, and send it inside `data` under that field:
+
+```ts
+// One token per form, so a browser's responses to two forms cannot be linked.
+function browserToken(formSlug: string): string | undefined {
+  const name = `nextly-browser-token:${formSlug}`;
+  try {
+    const kept = window.localStorage.getItem(name);
+    if (kept) return kept;
+    const made = crypto.randomUUID();
+    window.localStorage.setItem(name, made);
+    return made;
+  } catch {
+    // Storage blocked: send no token.
+    return undefined;
+  }
+}
+
+async function send(formSlug: string, answers: Record<string, unknown>) {
+  const token = browserToken(formSlug);
+  return fetch(`/api/forms/${formSlug}/submit`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      data: token ? { ...answers, "nextly-browser-token": token } : answers,
+    }),
+  });
+}
+```
+
+The token must be 16 to 128 letters, digits, `-` or `_` (`crypto.randomUUID()` is one). It is never stored with the submission. A submission that comes without a token, or with a malformed one, is accepted without the check, as a browser that cleared its data would be, and the server logs a warning so a form whose script does not send it is noticed.
+
+If a form's setting changes while a submission is on its way, the submission is refused with "This form's settings changed while your response was being sent. Please send it again." and is judged by the new setting when it is sent again.
 
 ### Validation
 
@@ -460,7 +513,7 @@ const fb = formBuilder({
 
 ## Spam Protection
 
-Three layers of protection are available, all enabled by default (except reCAPTCHA).
+Three layers of protection: a honeypot and a rate limit, both on by default, and a bot check (Google reCAPTCHA v3 or Cloudflare Turnstile) once you configure its keys.
 
 ### Honeypot Fields
 
@@ -483,27 +536,57 @@ spamProtection: {
 
 The rate limit uses the deployment's shared rate-limit store, `rateLimit.store` in `defineConfig`, which falls back to memory. With several instances and no shared store, each instance counts on its own.
 
-### reCAPTCHA v3
+### Bot checks: reCAPTCHA and Turnstile
 
-Configuration is available for Google reCAPTCHA v3. Set the site key and secret key globally or per form.
+A bot check runs in the visitor's browser and gives the form a token, which the server verifies with the provider before the submission is accepted:
 
-<Callout type="warn">
-  **Not enforced yet.** The settings below are accepted and stored, and nothing
-  verifies a token against Google: submissions are accepted whether the token is
-  valid, invalid or absent. Turning it on protects nothing today. The honeypot
-  and the rate limit above are enforced.
-</Callout>
+- **Google reCAPTCHA v3** scores each visitor in the background, with no puzzle to solve. A score below `scoreThreshold` (default `0.5`) fails.
+- **Cloudflare Turnstile** checks each visitor in the background and rarely shows a puzzle.
+
+Set each provider's keys in the plugin's options. `enabled` makes a provider the site default, which forms use unless their Settings choose another check or Off (reCAPTCHA wins when both are enabled):
 
 ```typescript
 spamProtection: {
   recaptcha: {
     enabled: true,
-    siteKey: 'your-site-key',
-    secretKey: 'your-secret-key',
+    siteKey: 'your-recaptcha-site-key',
+    secretKey: 'your-recaptcha-secret-key',
     scoreThreshold: 0.5,
+  },
+  turnstile: {
+    enabled: false,
+    siteKey: 'your-turnstile-site-key',
+    secretKey: 'your-turnstile-secret-key',
   },
 }
 ```
+
+Setting a provider's `secretKey` also declares its verification host in the plugin's outbound allowlist (`www.google.com` or `challenges.cloudflare.com`). A site using neither gives the plugin no network access.
+
+**Rendering the widget.** For a form whose check is on, the public read of the form (`GET /api/forms/:slug`) includes what the widget needs:
+
+```json
+{
+  "botCheck": {
+    "provider": "turnstile",
+    "siteKey": "…",
+    "field": "cf-turnstile-response"
+  }
+}
+```
+
+Render the provider's widget with that site key, and send its token inside `data` under `field`: `g-recaptcha-response` for reCAPTCHA or `cf-turnstile-response` for Turnstile, the names each provider's widget writes by default. It is never stored with the submission.
+
+**What happens to a submission:**
+
+- **Token passes:** accepted as usual.
+- **Token fails or is missing:** stored flagged as spam (reason `recaptcha` or `turnstile`), as a honeypot hit is, so a false positive stays reviewable and the bot still sees a success.
+- **Provider unreachable or answers something unexpected:** accepted unchecked and logged, so an outage does not send every real submission to spam.
+- **Check on but the provider has no `secretKey`:** accepted unchecked, as before checks were verified. The server logs a warning at start naming the option to set, Settings says so on the form, and a check without its keys cannot be newly chosen in Settings.
+
+The check is verified where every submission is stored, so it applies to the built-in route, `submitForm`, `nextly.forms.submit()` with a request, and the generic collection create. A server-side call with no request (an import) is not checked.
+
+**Forms saved before this change** keep their protection. A form whose reCAPTCHA setting was left to the plugin follows the site default, one with reCAPTCHA on uses reCAPTCHA, and one with it off has no check. A form that stored its own reCAPTCHA site key keeps using it until the plugin's options give one, and its Settings ask to move it there.
 
 ## Conditional Logic
 

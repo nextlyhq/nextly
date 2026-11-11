@@ -35,6 +35,8 @@ import type { ServiceDispatcher } from "../services/dispatcher";
 import { consoleLogger } from "../shared/types";
 import { getImageProcessor } from "../storage/image-processor";
 
+import { servedSchemaVersion } from "./schema-version";
+
 // Lazy-initialized shared dispatcher instance
 // This ensures the DI container has been set up before creating the dispatcher
 let _dispatcher: ServiceDispatcher | null = null;
@@ -429,6 +431,12 @@ export async function ensureServicesInitialized(): Promise<void> {
   // not start dispatching until that settles. Resolves immediately when no boot
   // opened the gate.
   await awaitBootMigrations();
+
+  // Last, once this process serves: its definitions follow the stored schema
+  // version, so a schema change another server copy (or a migration) made is
+  // loaded here before the request is served. Reads nothing while the last
+  // read is fresh (`route-handler/schema-version`).
+  await servedSchemaVersion();
 }
 
 // The in-flight recovery/registration pass concurrent callers await.

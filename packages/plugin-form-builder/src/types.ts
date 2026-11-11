@@ -429,14 +429,29 @@ export interface FormBuilderPluginOptions {
     honeypot?: boolean;
 
     /**
-     * Enable reCAPTCHA v3.
-     * @default false
+     * Google reCAPTCHA v3: a score for each visitor, in the background.
+     * `enabled` makes it the site default for forms whose bot check is "Site
+     * default". The token is verified on the server with `secretKey`; the
+     * visitor's form renders the widget with `siteKey`.
+     * @default { enabled: false }
      */
     recaptcha?: {
       enabled: boolean;
       siteKey?: string;
       secretKey?: string;
-      scoreThreshold?: number; // 0.0 - 1.0
+      /** Below this score (0.0 to 1.0) a visitor is a bot. @default 0.5 */
+      scoreThreshold?: number;
+    };
+
+    /**
+     * Cloudflare Turnstile: a check in the background that rarely shows a
+     * puzzle. `enabled` makes it the site default when reCAPTCHA's is not.
+     * @default { enabled: false }
+     */
+    turnstile?: {
+      enabled: boolean;
+      siteKey?: string;
+      secretKey?: string;
     };
 
     /**
@@ -1225,6 +1240,11 @@ export interface ResolvedFormBuilderConfig {
       siteKey?: string;
       secretKey?: string;
       scoreThreshold?: number;
+    };
+    turnstile?: {
+      enabled: boolean;
+      siteKey?: string;
+      secretKey?: string;
     };
     rateLimit?: {
       maxSubmissions: number;

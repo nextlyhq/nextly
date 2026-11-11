@@ -4,6 +4,8 @@
  * stored, the stored row keeps only a keyed digest, spam takes no place, a
  * caller cannot choose a row's key, and a form that took one submission per
  * network before the upgrade still refuses a network that submitted then.
+ * One per browser compares the token the visitor's browser sends, keeps the
+ * token out of the row, and refuses a key whose mode changed in flight.
  */
 import { definePlugin, type PluginContext } from "@nextlyhq/plugin-sdk";
 import {
@@ -11,13 +13,20 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
+import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { SETTINGS_CHANGED } from "../handlers/form-closing-hold";
+import { BROWSER_TOKEN_FIELD } from "../handlers/one-response";
 import { submitForm } from "../handlers/submit-form";
 import { formBuilder } from "../plugin";
 
-/** The live plugin context, captured by a plugin booted beside the forms. */
-function contextProbe(name: string) {
+/**
+ * The live plugin context, captured by a plugin booted beside the forms; and,
+ * when given `afterKeyed`, a step run on each submission after the forms
+ * plugin's own write hook (registered before this one) has keyed it.
+ */
+function contextProbe(name: string, afterKeyed?: () => Promise<void>) {
   let captured: PluginContext | undefined;
   const plugin = definePlugin({
     name,
@@ -25,6 +34,12 @@ function contextProbe(name: string) {
     nextly: ">=0.0.0",
     init: context => {
       captured = context;
+      if (afterKeyed) {
+        context.hooks.on("beforeChange", "form-submissions", async hook => {
+          await afterKeyed();
+          return (hook as { data?: unknown }).data;
+        });
+      }
     },
   });
   return {
@@ -35,6 +50,18 @@ function contextProbe(name: string) {
     },
   };
 }
+
+const params = (...segments: string[]) => ({
+  params: Promise.resolve({ params: segments }),
+});
+
+const TOKEN = "3b241101-e2bb-4255-8caf-4136c566a962";
+const OTHER_TOKEN = "9f0c5a52-6d1e-4c43-b7a8-21d0c3b9e8f1";
+/** Answers as a browser taking part in one per browser sends them. */
+const fromBrowser = (token: string, email = "a@b.co") => ({
+  email,
+  [BROWSER_TOKEN_FIELD]: token,
+});
 
 const FIELDS = [
   { type: "text", name: "name", label: "Name" },
@@ -50,14 +77,20 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    async function boot(settings: Record<string, unknown>) {
+    async function boot(
+      settings: Record<string, unknown>,
+      /** Runs on each submission after the plugin has keyed it. */
+      afterKeyed?: () => Promise<void>
+    ) {
       const fb = formBuilder({
         spamProtection: { honeypot: true, recaptcha: { enabled: false } },
       });
-      const probe = contextProbe("@test/fb-one-response");
+      const probe = contextProbe("@test/fb-one-response", afterKeyed);
       current = await createTestNextly({
         dialect,
         plugins: [fb.plugin, probe.plugin],
+        // The Public role as an install seeds it, for the public routes.
+        seedPublic: true,
       });
       const form = await current.nextly.create({
         collection: "forms",
@@ -356,6 +389,161 @@ describe.each(getConfiguredTestDialects())(
       expect(marked?.responseKey ?? null).toBeNull();
 
       expect((await submit({ email: "ada@example.com" })).success).toBe(true);
+    });
+
+    it("refuses a second response from the same browser, keeping no token", async () => {
+      const { nextly, submit } = await boot({ oneResponse: "browser" });
+      expect((await submit(fromBrowser(TOKEN))).success).toBe(true);
+      // Another address, the same browser: still the same person.
+      expect(await submit(fromBrowser(TOKEN, "someone@else.co"))).toMatchObject(
+        { success: false, outcome: "duplicate" }
+      );
+      expect((await submit(fromBrowser(OTHER_TOKEN))).success).toBe(true);
+
+      const rows = await stored(nextly);
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        // A keyed digest marked as a browser's; the token itself is kept
+        // nowhere in the row.
+        expect(row.responseKey).toMatch(/^browser:[0-9a-f]{64}$/);
+        expect(JSON.stringify(row)).not.toContain(TOKEN);
+        expect(JSON.stringify(row)).not.toContain(OTHER_TOKEN);
+        expect(row.data).not.toHaveProperty(BROWSER_TOKEN_FIELD);
+      }
+    });
+
+    it("tells a visitor's form where to send its token, and refuses it twice through the route", async () => {
+      const { nextly } = await boot({ oneResponse: "browser" });
+      const handlers = createDynamicHandlers();
+      const read = (await (
+        await handlers.GET(
+          new Request("http://localhost/api/forms/meetup"),
+          params("forms", "meetup")
+        )
+      ).json()) as Record<string, unknown>;
+      expect(read).toMatchObject({
+        oneResponse: { by: "browser", field: BROWSER_TOKEN_FIELD },
+      });
+      const post = () =>
+        handlers.POST(
+          new Request("http://localhost/api/forms/meetup/submit", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ data: fromBrowser(TOKEN) }),
+          }),
+          params("forms", "meetup", "submit")
+        );
+      expect((await post()).status).toBe(201);
+      expect((await post()).status).toBe(409);
+      expect(await stored(nextly)).toHaveLength(1);
+    });
+
+    it("says nothing of a browser token on a form that does not compare browsers", async () => {
+      await boot({ oneResponse: "ip" });
+      const read = (await (
+        await createDynamicHandlers().GET(
+          new Request("http://localhost/api/forms/meetup"),
+          params("forms", "meetup")
+        )
+      ).json()) as Record<string, unknown>;
+      expect(read).not.toHaveProperty("oneResponse");
+    });
+
+    it("stores exactly one of several sent at once from the same browser", async () => {
+      const { nextly, submit } = await boot({ oneResponse: "browser" });
+      const results = await Promise.all(
+        Array.from({ length: 5 }, (_, n) =>
+          submit(fromBrowser(TOKEN, `p${n}@b.co`))
+        )
+      );
+      expect(results.filter(result => result.success)).toHaveLength(1);
+      expect(await stored(nextly)).toHaveLength(1);
+    });
+
+    it("accepts a browser that sends no token, without a key", async () => {
+      const { nextly, submit } = await boot({ oneResponse: "browser" });
+      expect((await submit({ email: "a@b.co" })).success).toBe(true);
+      expect(
+        (await submit({ email: "a@b.co", [BROWSER_TOKEN_FIELD]: "bad" }))
+          .success
+      ).toBe(true);
+      const rows = await stored(nextly);
+      expect(rows.map(row => row.responseKey ?? null)).toEqual([null, null]);
+    });
+
+    it("keeps a browser's key through a staff edit, and frees it once marked spam", async () => {
+      const { nextly, submit } = await boot({ oneResponse: "browser" });
+      expect((await submit(fromBrowser(TOKEN))).success).toBe(true);
+      const [first] = await stored(nextly);
+      const key = first!.responseKey;
+
+      await nextly.update({
+        collection: "form-submissions",
+        id: first!.id,
+        data: { status: "read", _overwrite: true },
+      });
+      await nextly.update({
+        collection: "form-submissions",
+        id: first!.id,
+        data: { data: { email: "c@d.co" }, _overwrite: true },
+      });
+      expect((await stored(nextly))[0]?.responseKey).toBe(key);
+      expect(await submit(fromBrowser(TOKEN))).toMatchObject({
+        outcome: "duplicate",
+      });
+
+      await nextly.update({
+        collection: "form-submissions",
+        id: first!.id,
+        data: { status: "spam", _overwrite: true },
+      });
+      expect((await stored(nextly))[0]?.responseKey ?? null).toBeNull();
+      expect((await submit(fromBrowser(TOKEN))).success).toBe(true);
+    });
+
+    it("keys a browser token sent to the collection's own create too", async () => {
+      const { nextly, formId } = await boot({ oneResponse: "browser" });
+      const create = () =>
+        nextly.create({
+          collection: "form-submissions",
+          data: { form: formId, data: fromBrowser(TOKEN) },
+        });
+      await create();
+      await expect(create()).rejects.toThrow();
+      expect(await stored(nextly)).toHaveLength(1);
+    });
+
+    it("refuses a browser's key once the form compares networks instead", async () => {
+      let formId = "";
+      let change = false;
+      const {
+        nextly,
+        submit,
+        formId: id,
+      } = await boot({ oneResponse: "browser" }, async () => {
+        if (!change) return;
+        change = false;
+        // The form's mode changes after the submission was keyed and
+        // before it is stored.
+        await current!.nextly.update({
+          collection: "forms",
+          id: formId,
+          data: { settings: { oneResponse: "ip" }, _overwrite: true },
+        });
+      });
+      formId = id;
+      change = true;
+      expect(await submit(fromBrowser(TOKEN), "203.0.113.9")).toMatchObject({
+        success: false,
+        error: SETTINGS_CHANGED,
+      });
+      expect(await stored(nextly)).toHaveLength(0);
+      // Sent again, it is judged by the network, as the form now compares.
+      expect((await submit(fromBrowser(TOKEN), "203.0.113.9")).success).toBe(
+        true
+      );
+      const [row] = await stored(nextly);
+      expect(row?.responseKey).toMatch(/^[0-9a-f]{64}$/);
     });
   }
 );

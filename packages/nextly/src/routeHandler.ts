@@ -94,6 +94,7 @@ import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // hand-rolled `{ data: <payload> }` envelope.
 import {
   SKIP_DATE_FORMATTING_HEADER,
+  applySessionCacheHeaders,
   withSessionCacheHeaders,
   respondData,
   respondMutation,
@@ -218,8 +219,12 @@ import {
 } from "./route-handler";
 import { handleDevSchemaRequest } from "./route-handler/dev-schema-handler";
 import {
+  answerConditional,
+  markConditional,
+} from "./route-handler/metadata-etag";
+import {
   bumpSchemaVersion,
-  getSchemaVersionHeader,
+  servedSchemaVersion,
 } from "./route-handler/schema-version";
 import { handleStartupRequest } from "./route-handler/startup-request";
 import { handleWebhookRequest } from "./route-handler/webhook-dispatch";
@@ -243,8 +248,8 @@ import {
 // Schema Version Header
 // ============================================================================
 
-// The schema version counter lives in `route-handler/schema-version`, so the
-// collection dispatcher bumps it after a schema apply without loading this
+// The schema version this copy serves lives in `route-handler/schema-version`,
+// so the collection dispatcher marks a schema apply without loading this
 // module. Re-exported here for `nextly/runtime`.
 export { bumpSchemaVersion };
 
@@ -266,6 +271,34 @@ export { bumpSchemaVersion };
  * whereas a path can be matched by a plugin route that happens to end in the
  * same segment and should keep its ordinary formatting.
  */
+
+/**
+ * The response marked private to its caller where the request was signed in
+ * (it carried a session cookie or an `Authorization` header) or the response
+ * signs one in (it sets a cookie): `private, no-store` and `Vary` on the
+ * credentials, through the one definition every private answer uses.
+ *
+ * At the boundary every verb passes, rather than per route, so a route added
+ * later, a plugin's route asking for `public` caching, or a refusal, cannot
+ * reach a signed-in caller as something a shared cache may keep and replay
+ * to the next person. A request with no credential is left as its route
+ * answered it: a visitor's public read may be cached.
+ *
+ * Rebuilt over copied headers, since a handler may return a response whose
+ * headers cannot be changed.
+ */
+function privateToSignedIn(req: Request, response: Response): Response {
+  if (carriesNoCredential(req) && !response.headers.has("set-cookie")) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  applySessionCacheHeaders(headers);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
 /**
  * The response without the control headers a handler used to talk to this
@@ -1847,7 +1880,9 @@ async function serveServiceRequest(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  const schemaVersion = getSchemaVersionHeader();
+  // Asked after the dispatch, so a schema apply this request made is the
+  // version its response carries.
+  const schemaVersion = await servedSchemaVersion();
   if (schemaVersion !== undefined) {
     headers["X-Nextly-Schema-Version"] = String(schemaVersion);
   }
@@ -1939,6 +1974,9 @@ async function serveServiceRequest(
     if (schemaVersion !== undefined) {
       response.headers.set("X-Nextly-Schema-Version", String(schemaVersion));
     }
+    // A metadata read's answer, tagged by its body at the boundary, which
+    // answers "unchanged" to a caller already holding it.
+    markConditional(service, method, response);
     return response;
   }
 
@@ -1950,10 +1988,13 @@ async function serveServiceRequest(
   if (result.meta !== undefined) {
     successBody.meta = result.meta;
   }
-  return new Response(JSON.stringify(successBody), {
+  const legacy = new Response(JSON.stringify(successBody), {
     status: result.status,
     headers,
   });
+  // As on the migrated path above.
+  markConditional(service, method, legacy);
+  return legacy;
 }
 
 // ============================================================================
@@ -2896,7 +2937,13 @@ export function createDynamicHandlers(options?: {
       identifiedResponse,
       req
     );
-    const corsResponse = cors.applyHeaders(req, formattedResponse);
+    // Tagged once the body is final, after the formatting above, so the tag
+    // is of the bytes the caller receives.
+    const answered = await answerConditional(req, formattedResponse);
+    const corsResponse = cors.applyHeaders(
+      req,
+      privateToSignedIn(req, answered)
+    );
     return applySecurityHeaders(corsResponse);
   }
 

@@ -563,6 +563,21 @@ export type {
   TopBarPlaceProps,
 } from "./components/layout/header/TopBarPlaces";
 /**
+ * A page's frame by its type and its header, forwarded so `plugin-sdk/admin`
+ * can reach them: a plugin's page is drawn from the pieces core's pages are.
+ * Both carry `@experimental` in `ui` and keep it here.
+ */
+/** @experimental */
+export { PageFrame, PageHeader, PageTab, PageTabs } from "@nextlyhq/ui";
+/** @experimental */
+export type {
+  PageFrameProps,
+  PageHeaderProps,
+  PageTabProps,
+  PageTabsProps,
+  PageType,
+} from "@nextlyhq/ui";
+/**
  * An admin place's renderer and its tab strip, for `plugin-sdk/admin`: a
  * plugin's own page draws the contributions sent to a place it declared with
  * the parts core's pages use.

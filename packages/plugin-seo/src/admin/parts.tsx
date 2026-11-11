@@ -173,13 +173,26 @@ function sourceWords(
   return SITE_DEFAULT[value];
 }
 
-/** A boxed note: a plain one, or a warning. */
+/** A note's frame and icon colour for each tone. */
+const NOTE_TONES = {
+  plain: { box: "border-border bg-muted", icon: "text-muted-foreground" },
+  warning: {
+    box: "border-warning-border bg-warning-surface",
+    icon: "text-warning-text",
+  },
+  success: {
+    box: "border-success-border bg-success-surface",
+    icon: "text-success-text",
+  },
+} as const;
+
+/** A boxed note: a plain one, a warning, or the word that something worked. */
 export function Note({
   tone = "plain",
   icon,
   children,
 }: {
-  tone?: "plain" | "warning";
+  tone?: "plain" | "warning" | "success";
   icon?: ReactNode;
   children: ReactNode;
 }): ReactNode {
@@ -187,17 +200,12 @@ export function Note({
     <div
       className={cx(
         "flex items-start gap-2.5 rounded-md border px-3 py-2.5 text-[13px] leading-[1.45] text-foreground",
-        tone === "warning"
-          ? "border-warning-border bg-warning-surface"
-          : "border-border bg-muted"
+        NOTE_TONES[tone].box
       )}
     >
       <span
         aria-hidden="true"
-        className={cx(
-          "mt-px flex-none",
-          tone === "warning" ? "text-warning-text" : "text-muted-foreground"
-        )}
+        className={cx("mt-px flex-none", NOTE_TONES[tone].icon)}
       >
         {icon ?? <TriangleAlert className="size-4" />}
       </span>

@@ -92,6 +92,9 @@ describe("seoPlugin", () => {
       ["GET", "/received/pages", undefined, undefined],
       ["POST", "/received", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
+      // The problem list, read and checked again by a signed-in reader.
+      ["GET", "/problems", undefined, undefined],
+      ["POST", "/problems/check", undefined, undefined],
     ]);
   });
 
@@ -117,6 +120,8 @@ describe("seoPlugin", () => {
       "/received/pages",
       "/received",
       "/resolve",
+      "/problems",
+      "/problems/check",
     ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
@@ -135,6 +140,8 @@ describe("seoPlugin", () => {
       "/received/pages",
       "/received",
       "/resolve",
+      "/problems",
+      "/problems/check",
     ]);
   });
 
