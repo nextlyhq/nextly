@@ -419,7 +419,12 @@ function FormEditor({
 
   // ── Delete ────────────────────────────────────────────────────────────────
   const handleDelete = useCallback(async () => {
-    if (entryId === undefined) return;
+    // The commit is where the refusal lives, as for Save: a colleague who
+    // took the form while the question was open holds it now, and the claim
+    // is advisory on the server, so nothing else would stop the delete.
+    if (entryId === undefined || documentLock?.actionsDisabled === true) {
+      return;
+    }
     const response = await fetch(
       `/admin/api/collections/${collectionSlug}/entries/${entryId}`,
       { method: "DELETE", credentials: "include" }
@@ -441,7 +446,15 @@ function FormEditor({
     });
     toast.success("Form deleted");
     onDelete?.();
-  }, [entryId, collectionSlug, markAsSaved, queryClient, onDelete]);
+  }, [
+    entryId,
+    collectionSlug,
+    markAsSaved,
+    queryClient,
+    onDelete,
+    // Read inside, so a claim taken while the dialog is open is the one read.
+    documentLock?.actionsDisabled,
+  ]);
 
   // ── Tabs ──────────────────────────────────────────────────────────────────
   const saved = !isCreating && entryId !== undefined;
@@ -580,6 +593,7 @@ function FormEditor({
             <AlertDialogCancel>Keep the form</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
+              disabled={holdsWrites || readOnly}
               onClick={() => {
                 void handleDelete();
               }}

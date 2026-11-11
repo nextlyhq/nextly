@@ -38,6 +38,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@nextlyhq/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Columns3, Download } from "lucide-react";
 import {
   type JSX,
@@ -50,6 +51,7 @@ import {
 
 import type { FormField } from "../../../types";
 import { formatExportValue } from "../../../utils/export-formats";
+import { SUBMISSION_COUNT_KEY } from "../editor/useSubmissionCount";
 
 import { SubmissionSheet } from "./SubmissionSheet";
 
@@ -411,6 +413,9 @@ export function SubmissionsView({
   }, [selectedForm, formNameById, hiddenFieldColumns]);
 
   // --- actions ---------------------------------------------------------------
+  // The form's submission count, beside the list in the form editor's bar and
+  // tab, is read again after any change here.
+  const queryClient = useQueryClient();
   // The rows as last read, for the version a change sends.
   const rowsNow = useRef(rows);
   rowsNow.current = rows;
@@ -443,8 +448,10 @@ export function SubmissionsView({
         throw new Error(`Update failed (${res.status})`);
       }
       await fetchRows();
+      // A status changed: the form's count leaves spam out, so it moves too.
+      void queryClient.invalidateQueries({ queryKey: SUBMISSION_COUNT_KEY });
     },
-    [submissionsSlug, fetchRows]
+    [submissionsSlug, fetchRows, queryClient]
   );
 
   const deleteSubmission = useCallback(
@@ -456,8 +463,9 @@ export function SubmissionsView({
       if (!res.ok) throw new Error(`Delete failed (${res.status})`);
       setOpenId(null);
       await fetchRows();
+      void queryClient.invalidateQueries({ queryKey: SUBMISSION_COUNT_KEY });
     },
-    [submissionsSlug, fetchRows]
+    [submissionsSlug, fetchRows, queryClient]
   );
 
   const rowActions = useCallback(

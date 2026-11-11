@@ -14,6 +14,7 @@ import {
   beginSaving,
   emptyHistory,
   markSaved,
+  rebaseEntries,
   recordChange,
   undoChange,
   type ChangeHistory,
@@ -32,6 +33,8 @@ export interface ChangeHistoryHandle<Doc> {
   beginSave: () => void;
   /** The save that began has stored the form. */
   markSaved: () => void;
+  /** Pass every kept record through `rebase` (see `rebaseEntries`). */
+  rebase: (rebase: (record: Doc) => Doc) => void;
 }
 
 /**
@@ -87,5 +90,17 @@ export function useChangeHistory<Doc>(
     saveMark.current = undefined;
   }, [settle]);
 
-  return { changeCount, current, record, undo, beginSave, markSaved: saved };
+  const rebase = useCallback((each: (record: Doc) => Doc) => {
+    history.current = rebaseEntries(history.current, each);
+  }, []);
+
+  return {
+    changeCount,
+    current,
+    record,
+    undo,
+    beginSave,
+    markSaved: saved,
+    rebase,
+  };
 }

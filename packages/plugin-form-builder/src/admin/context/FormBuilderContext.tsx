@@ -254,6 +254,25 @@ function formDataKey(
     : null;
 }
 
+/**
+ * `record` with every field of it the server now stores counted as stored:
+ * which fields are stored is the server's to say, not an edit's to undo.
+ */
+function withStoredFields(
+  record: FormDocument,
+  stored: ReadonlySet<string>
+): FormDocument {
+  const named = record.fields
+    .map(field => field.name)
+    .filter(name => stored.has(name) && !record.savedFieldNames.has(name));
+  return named.length === 0
+    ? record
+    : {
+        ...record,
+        savedFieldNames: new Set([...record.savedFieldNames, ...named]),
+      };
+}
+
 /** The open field's name, while that field is still among `fields`. */
 function keptSelection(
   selected: string | null,
@@ -499,6 +518,7 @@ export function FormBuilderProvider({
     current: currentDocument,
     markSaved: markAsSaved,
     beginSave: historyBeginSave,
+    rebase: rebaseHistory,
   } = useChangeHistory(formDocument, restore);
 
   // Actions
@@ -737,11 +757,19 @@ export function FormBuilderProvider({
 
   const isDirty = changeCount > 0;
 
-  const markFieldsSaved = useCallback((names: readonly string[]) => {
-    // What was saved is what the stored form now holds.
-    const vacated = vacatedRef.current;
-    setSavedFieldNames(new Set(names.filter(name => !vacated.has(name))));
-  }, []);
+  const markFieldsSaved = useCallback(
+    (names: readonly string[]) => {
+      // What was saved is what the stored form now holds.
+      const vacated = vacatedRef.current;
+      const stored = new Set(names.filter(name => !vacated.has(name)));
+      setSavedFieldNames(stored);
+      // A change kept after the save (made while it ran) holds the stored
+      // set from before it, so taking that change back would forget what the
+      // save stored and unfix a stored field's type.
+      rebaseHistory(record => withStoredFields(record, stored));
+    },
+    [rebaseHistory]
+  );
 
   // Memoized context value
   const value = useMemo<FormBuilderInternalValue>(

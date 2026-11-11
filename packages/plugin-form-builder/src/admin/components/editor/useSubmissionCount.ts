@@ -5,7 +5,7 @@
  *
  * @module admin/components/editor/useSubmissionCount
  */
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 /**
  * The entries query that counts one form's submissions. Spam is left out, as
@@ -35,6 +35,29 @@ function totalOf(body: unknown): number | undefined {
 }
 
 /**
+ * Where every form's submission count is cached. A change to a submission
+ * (a delete, a status) invalidates it, so the count read beside the list is
+ * the list's own answer, not one taken once as the editor opened.
+ */
+export const SUBMISSION_COUNT_KEY = [
+  "plugin-form-builder",
+  "submission-count",
+] as const;
+
+/** Reads one form's count; a failed read is an error, so none is shown. */
+async function readCount(
+  submissionsSlug: string,
+  formId: string
+): Promise<number | null> {
+  const response = await fetch(
+    `/admin/api/collections/${encodeURIComponent(submissionsSlug)}/entries?${submissionCountQuery(formId)}`,
+    { credentials: "include" }
+  );
+  if (!response.ok) throw new Error(`count ${response.status}`);
+  return totalOf(await response.json()) ?? null;
+}
+
+/**
  * The number of submissions `formId` has in `submissionsSlug`, or `undefined`
  * while it is unknown: not saved yet, still loading, or the read failed. The
  * bar then draws no count rather than a wrong one.
@@ -43,38 +66,12 @@ export function useSubmissionCount(
   formId: string | undefined,
   submissionsSlug: string | undefined
 ): number | undefined {
-  const [count, setCount] = useState<{ key: string; total: number }>();
-  const key =
-    formId === undefined || submissionsSlug === undefined
-      ? undefined
-      : `${submissionsSlug}/${formId}`;
-
-  useEffect(() => {
-    if (
-      formId === undefined ||
-      submissionsSlug === undefined ||
-      key === undefined
-    ) {
-      return;
-    }
-    let cancelled = false;
-    void fetch(
-      `/admin/api/collections/${encodeURIComponent(submissionsSlug)}/entries?${submissionCountQuery(formId)}`,
-      { credentials: "include" }
-    )
-      .then(response => (response.ok ? response.json() : undefined))
-      .then((body: unknown) => {
-        const total = totalOf(body);
-        if (!cancelled && total !== undefined) setCount({ key, total });
-      })
-      .catch(() => {
-        // The count is a convenience: without it the bar shows none.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [formId, submissionsSlug, key]);
-
-  // Only the answer for the form on screen, never one left from another.
-  return count !== undefined && count.key === key ? count.total : undefined;
+  const { data } = useQuery({
+    queryKey: [...SUBMISSION_COUNT_KEY, submissionsSlug, formId],
+    enabled: formId !== undefined && submissionsSlug !== undefined,
+    queryFn: () => readCount(submissionsSlug ?? "", formId ?? ""),
+    // The count is a convenience: a failed read shows none, without retries.
+    retry: false,
+  });
+  return data ?? undefined;
 }

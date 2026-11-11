@@ -115,3 +115,15 @@ export function beginSaving<Doc>(history: ChangeHistory<Doc>): {
     mark: history.entries.length,
   };
 }
+
+/**
+ * The history with every kept record passed through `rebase`: for a fact the
+ * records hold but an edit does not decide, such as which fields the server
+ * now stores, so that taking an edit back never takes that fact back too.
+ */
+export function rebaseEntries<Doc>(
+  history: ChangeHistory<Doc>,
+  rebase: (record: Doc) => Doc
+): ChangeHistory<Doc> {
+  return { ...history, entries: history.entries.map(rebase) };
+}

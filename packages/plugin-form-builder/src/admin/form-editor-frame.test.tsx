@@ -10,6 +10,7 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -19,6 +20,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { SUBMISSION_COUNT_KEY } from "./components/editor/useSubmissionCount";
 import { FormBuilderView, type FormBuilderViewProps } from "./FormBuilderView";
 
 beforeAll(() => {
@@ -31,6 +33,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  submissionTotal = 12;
 });
 
 const answer = (status: number, body: unknown) =>
@@ -40,6 +43,9 @@ const answer = (status: number, body: unknown) =>
       headers: { "content-type": "application/json" },
     })
   );
+
+/** How many submissions the server says the form has. */
+let submissionTotal = 12;
 
 /**
  * The admin's answers: the builder's configuration, the form's submissions
@@ -56,16 +62,19 @@ function server(...saves: (() => Promise<Response>)[]) {
       });
     }
     if (url.includes("/form-submissions/entries")) {
-      return answer(200, { items: [], meta: { total: 12 } });
+      return answer(200, { items: [], meta: { total: submissionTotal } });
     }
     return answer(200, {});
   });
 }
 
-function view(props: Partial<FormBuilderViewProps> = {}) {
+function view(
+  props: Partial<FormBuilderViewProps> = {},
+  client: QueryClient = new QueryClient()
+) {
   const user = userEvent.setup();
   render(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={client}>
       <FormBuilderView
         entryId="form-1"
         collectionSlug="forms"
@@ -145,6 +154,23 @@ describe("the form editor's bar", () => {
     expect(
       await within(bar()).findByRole("link", { name: "12 submissions" })
     ).toHaveAttribute("href", "/admin/collections/forms/form-1/submissions");
+  });
+
+  it("reads the count again when a submission changes", async () => {
+    vi.stubGlobal("fetch", server());
+    const client = new QueryClient();
+    view({}, client);
+    await within(bar()).findByRole("link", { name: "12 submissions" });
+
+    // A submission is deleted from the list, which says so through the key.
+    submissionTotal = 11;
+    await act(() =>
+      client.invalidateQueries({ queryKey: SUBMISSION_COUNT_KEY })
+    );
+
+    expect(
+      await within(bar()).findByRole("link", { name: "11 submissions" })
+    ).toBeVisible();
   });
 
   it("offers Save only with something to save", async () => {
