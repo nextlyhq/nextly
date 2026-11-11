@@ -19,12 +19,12 @@ import {
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
 import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
+import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
 import {
   CONTENT_MEASURE_LENGTH,
   CONTENT_PAGE_MEASURE,
 } from "@admin/components/layout/content-measure";
-import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
