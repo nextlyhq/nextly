@@ -28,16 +28,7 @@ function StatusItem({
     <div className="flex items-center justify-between p-3 rounded-md hover:bg-primary/[0.03] transition-all duration-500 group/item  border border-border border-transparent hover:border-border">
       <div className="flex items-center gap-3.5">
         <div
-          /*
-           * The ring is a fixed decorative halo rather than a tint of `color`.
-           * It was `ringColor: `${color}20``, which never rendered: `ringColor`
-           * is not a CSS property — Tailwind's ring colour comes from
-           * `--tw-ring-color` — and the value was invalid regardless, because
-           * appending `20` to a `var()` is not the hex-alpha it looks like. Both
-           * halves failed silently, so the halo has always drawn in the default
-           * ring colour. Stated as a class the theme can move.
-           */
-          className="h-2 w-2 rounded-full ring-4 ring-primary/20 ring-offset-2 ring-offset-transparent transition-all duration-500 group-hover/item:scale-125"
+          className="h-2 w-2 rounded-full transition-transform duration-500 group-hover/item:scale-125"
           style={{ backgroundColor: color }}
         />
         <span className="text-xs font-bold text-muted-foreground group-hover/item:text-foreground transition-colors tracking-tight">
@@ -70,13 +61,13 @@ function LoadingSkeleton() {
 
 /**
  * The colours of the Published and Draft marks, one value for the ring's
- * segment and the legend's dot alike. Published is the brand's chart slot, not
- * `--nx-primary`: a brand's primary is the colour it gave, while
- * `--nx-chart-1` is that colour held to 3:1 on the card in each mode, which a
- * mark drawn on the card needs to be seen.
+ * segment and the legend's dot alike: each status's own colour, as every
+ * status on the dashboard is drawn. Published is the success status's solid,
+ * held to 3:1 on the page in each mode; a draft marks nothing to act on, so it
+ * is drawn in the muted ink.
  */
-const PUBLISHED_MARK = "var(--nx-chart-1)";
-const DRAFT_MARK = "var(--nx-chart-4)";
+const PUBLISHED_MARK = "var(--nx-success-solid)";
+const DRAFT_MARK = "var(--nx-muted-foreground)";
 
 export const ContentStatusWidget: React.FC = () => {
   const { data, isLoading, error } = useDashboardStats();
@@ -88,8 +79,6 @@ export const ContentStatusWidget: React.FC = () => {
   const publishedPct = total > 0 ? Math.round((published / total) * 100) : 0;
   const draftPct = total > 0 ? Math.round((draft / total) * 100) : 0;
 
-  // Both swatches come from the chart ramp, so a rebrand moves the chart with
-  // the rest of the admin; the draft segment uses its amber slot.
   const segments = [
     { label: "Published", value: published, color: PUBLISHED_MARK },
     { label: "Draft", value: draft, color: DRAFT_MARK },
@@ -112,8 +101,8 @@ export const ContentStatusWidget: React.FC = () => {
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-3 py-10 text-xs font-bold uppercase tracking-widest text-danger-text justify-center bg-danger-surface rounded-md">
-            <AlertCircle className="h-4 w-4" />
+          <div className="flex items-center justify-center gap-3 rounded-md border border-danger-border bg-danger-surface py-10 text-xs font-bold uppercase tracking-widest text-foreground">
+            <AlertCircle aria-hidden="true" className="h-4 w-4 text-danger-text" />
             <span>Health synchronization failed</span>
           </div>
         ) : total === 0 ? (
