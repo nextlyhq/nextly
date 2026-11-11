@@ -219,6 +219,7 @@ import {
   bumpSchemaVersion,
   getSchemaVersionHeader,
 } from "./route-handler/schema-version";
+import { handleStartupRequest } from "./route-handler/startup-request";
 import { handleWebhookRequest } from "./route-handler/webhook-dispatch";
 import { registerNextCacheRevalidator } from "./runtime/cache/register";
 import type { CollectionsHandler } from "./services/collections-handler";
@@ -2554,7 +2555,7 @@ async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
 // CRUD Handler Wrappers
 // ============================================================================
 
-async function handleGet(req: Request, params: string[]) {
+async function handleGet(req: Request, params: string[]): Promise<Response> {
   // Matched before the bare `admin-meta` branch, which would otherwise answer
   // for every path beneath it and serve the public payload from the
   // authenticated route's URL.
@@ -2892,23 +2893,38 @@ export function createDynamicHandlers(options?: {
     return applySecurityHeaders(corsResponse);
   }
 
-  return {
-    GET: async (
-      req: Request,
-      ctx: { params: Promise<{ params?: string[] }> }
-    ) => {
-      const resolvedParams = await ctx.params;
-      const paramsList = resolvedParams.params || [];
+  const GET = async (
+    req: Request,
+    ctx: { params: Promise<{ params?: string[] }> }
+  ): Promise<Response> => {
+    const resolvedParams = await ctx.params;
+    const paramsList = resolvedParams.params || [];
+    // The admin's startup request: several of its own GETs answered at once,
+    // each sent through this whole GET (security, limits, its own route and
+    // checks, date formatting), exactly as the admin sending it would be.
+    if (paramsList.length === 1 && paramsList[0] === "startup") {
       return withSecurity(
         req,
         limitBeforeRouting(paramsList, "GET", true),
-        async () => {
-          if (isAuthRoute(paramsList))
-            return handleAuthRequest(req, paramsList, "GET");
-          return handleGet(req, paramsList);
-        }
+        () =>
+          handleStartupRequest(req, (sub, subParams) =>
+            GET(sub, { params: Promise.resolve({ params: subParams }) })
+          )
       );
-    },
+    }
+    return withSecurity(
+      req,
+      limitBeforeRouting(paramsList, "GET", true),
+      async () => {
+        if (isAuthRoute(paramsList))
+          return handleAuthRequest(req, paramsList, "GET");
+        return handleGet(req, paramsList);
+      }
+    );
+  };
+
+  return {
+    GET,
     POST: async (
       req: Request,
       ctx: { params: Promise<{ params?: string[] }> }

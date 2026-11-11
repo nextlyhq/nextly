@@ -1,5 +1,6 @@
 import { BASE_URL } from "../api/fetcher";
 import { authFetch } from "../api/refreshInterceptor";
+import { takeStartupResponse } from "../api/startup-request";
 
 // ─── In-memory session cache ───────────────────────────────────────────────
 // Shared across all callers (React Query, imperative checks, etc.)
@@ -45,6 +46,15 @@ function isSignedOutStatus(status: number): boolean {
   return status === 401 || status === 403;
 }
 
+/**
+ * Whether a refusal says the access token has expired, which a refresh can
+ * answer, rather than that nobody is signed in.
+ */
+function isExpiredToken(body: unknown): boolean {
+  const code = (body as { error?: { code?: unknown } } | null)?.error?.code;
+  return code === "TOKEN_EXPIRED";
+}
+
 let cachedSession: Session | null = null;
 let cacheTimestamp = 0;
 const SESSION_CACHE_TTL = 5 * 60 * 1000; // 5 minutes (matches React Query staleTime)
@@ -68,13 +78,24 @@ export async function getSession(): Promise<Session | null> {
 
   let response: Response;
   try {
-    response = await authFetch(`${BASE_URL}/auth/session`, {
-      method: "GET",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    // From the startup request when it carries the answer: a session, or the
+    // plain "signed out". An expired token is left to the request below, whose
+    // own handling refreshes it.
+    const fromStartup = await takeStartupResponse(
+      "/auth/session",
+      part =>
+        (part.status >= 200 && part.status < 300) ||
+        (isSignedOutStatus(part.status) && !isExpiredToken(part.body))
+    );
+    response =
+      fromStartup ??
+      (await authFetch(`${BASE_URL}/auth/session`, {
+        method: "GET",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }));
   } catch {
     throw new SessionUnavailableError(null);
   }
