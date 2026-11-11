@@ -1,18 +1,153 @@
-import type { JSX } from "react";
+"use client";
 
+/**
+ * The Builder's pending changes, in its toolbar: how many there are, shown at
+ * all times, Undo and Redo, and Discard all.
+ *
+ * Undo and Redo also answer to the platform's keys (Ctrl or Cmd with Z, and
+ * Shift as well, or Y, to redo), but never while a text input has focus,
+ * where those keys undo the text being typed. Each undo or redo is announced
+ * in a live region mounted from the start, saying what it did. Discard all
+ * asks first, naming how many changes go.
+ *
+ * A read-only entity has no edits to count or take back, so it shows none of
+ * this.
+ */
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  Button,
+} from "@nextlyhq/ui";
+import { type JSX, useState } from "react";
+
+import { Redo, Undo } from "@admin/components/icons";
 import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
+import { useKeyboardShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 
 type Props = {
   pending: BuilderPendingChanges;
+  /** The number of pending changes, the entity's settings included. */
   count: number;
   locked?: boolean;
 };
 
-export function PendingChangesControls(_props: Props): JSX.Element {
+/** "No unsaved changes", "1 unsaved change", "3 unsaved changes". */
+function countWords(count: number): string {
+  if (count === 0) return "No unsaved changes";
+  return `${count} unsaved ${count === 1 ? "change" : "changes"}`;
+}
+
+/** "1 change", "3 changes": how many a discard throws away. */
+function changesWords(count: number): string {
+  return `${count} ${count === 1 ? "change" : "changes"}`;
+}
+
+export function PendingChangesControls({
+  pending,
+  count,
+  locked = false,
+}: Props): JSX.Element | null {
+  const [announcement, setAnnouncement] = useState("");
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+
+  const undo = () => {
+    const said = pending.undo();
+    if (said) setAnnouncement(said);
+  };
+  const redo = () => {
+    const said = pending.redo();
+    if (said) setAnnouncement(said);
+  };
+
+  // Not while typing: inside a text input these keys undo the text, which is
+  // what a person typing expects them to do.
+  useKeyboardShortcuts(
+    [
+      { key: "z", ctrl: true, action: undo, description: "Undo" },
+      { key: "z", ctrl: true, shift: true, action: redo, description: "Redo" },
+      { key: "y", ctrl: true, action: redo, description: "Redo" },
+    ],
+    { name: "builder-pending-changes", enabled: !locked }
+  );
+
+  if (locked) return null;
+
   return (
-    <>
-      <span data-testid="pending-changes-count" />
-      <div role="status" />
-    </>
+    <div className="flex items-center gap-2">
+      <span
+        data-testid="pending-changes-count"
+        className="text-xs text-muted-foreground whitespace-nowrap"
+      >
+        {countWords(count)}
+      </span>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Undo"
+        title="Undo"
+        disabled={!pending.canUndo}
+        onClick={undo}
+      >
+        <Undo className="h-4 w-4" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Redo"
+        title="Redo"
+        disabled={!pending.canRedo}
+        onClick={redo}
+      >
+        <Redo className="h-4 w-4" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        aria-label="Discard all changes"
+        disabled={count === 0}
+        onClick={() => setConfirmingDiscard(true)}
+      >
+        <span className="hidden sm:inline">Discard all</span>
+        <span className="sm:hidden">Discard</span>
+      </Button>
+
+      <AlertDialog open={confirmingDiscard} onOpenChange={setConfirmingDiscard}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard {changesWords(count)}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Every change since the last save goes, and the fields and settings
+              return to how they were saved. Nothing has reached the database,
+              so nothing stored is lost.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                setConfirmingDiscard(false);
+                pending.discardAll();
+                setAnnouncement(`Discarded ${changesWords(count)}`);
+              }}
+            >
+              Discard {changesWords(count)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Mounted from the start, and only its text changes: several screen
+          readers skip a live region inserted together with its message. */}
+      <div role="status" aria-live="polite" className="sr-only">
+        {announcement}
+      </div>
+    </div>
   );
 }

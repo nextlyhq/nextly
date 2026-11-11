@@ -192,7 +192,7 @@ function insideOf(
 }
 
 const describe = (field: BuilderField) => ({
-  label: field.label ?? field.name ?? "",
+  label: field.label ?? "",
   name: field.name ?? "",
   type: field.type,
 });
@@ -279,19 +279,21 @@ function insideWords(change: PendingChange): string {
 
 /** One pending change in plain words, as an announcement reads it. */
 export function describeChange(change: PendingChange): string {
+  // A field just added has neither label nor name until one is typed.
+  const what = change.label || change.name || "a new field";
   switch (change.kind) {
     case "added":
-      return `added ${change.label}${insideWords(change)}`;
+      return `added ${what}${insideWords(change)}`;
     case "deleted":
-      return `deleted ${change.label}${insideWords(change)}`;
+      return `deleted ${what}${insideWords(change)}`;
     case "moved":
-      return `moved ${change.label}`;
+      return `moved ${what}`;
     case "renamed":
       return `renamed ${change.previousName ?? ""} to ${change.name}`;
     case "typeChanged":
-      return `changed the type of ${change.label}`;
+      return `changed the type of ${what}`;
     case "settings":
-      return `changed ${change.label}`;
+      return `changed ${what}`;
   }
 }
 

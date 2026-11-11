@@ -114,8 +114,7 @@ function field(name: string): BuilderField {
   return found;
 }
 
-const names = () =>
-  builder.fields.filter(f => !f.isSystem).map(f => f.name);
+const names = () => builder.fields.filter(f => !f.isSystem).map(f => f.name);
 
 const countText = () => screen.getByTestId("pending-changes-count").textContent;
 const announced = () => screen.getByRole("status").textContent;
@@ -126,9 +125,7 @@ describe("pending changes controls", () => {
     expect(countText()).toBe("No unsaved changes");
     act(() => builder.handleFieldUpdate({ ...field("headline"), label: "A" }));
     expect(countText()).toBe("1 unsaved change");
-    act(() =>
-      setSettings({ ...settingsOf(entity), singularName: "Article" })
-    );
+    act(() => setSettings({ ...settingsOf(entity), singularName: "Article" }));
     expect(countText()).toBe("2 unsaved changes");
   });
 
@@ -153,19 +150,24 @@ describe("pending changes controls", () => {
       kind: "an add",
       edit: () => builder.handleFieldAdd("text"),
       says: "added a new field",
-      check: undone =>
-        expect(names()).toHaveLength(undone ? 3 : 4),
+      check: undone => expect(names()).toHaveLength(undone ? 3 : 4),
     },
     {
       kind: "a move",
+      // Past two fields in one step. Swapping two neighbours leaves the same
+      // fields whichever of them moved, and changes are read from the fields
+      // alone, so that would not say which one did.
       edit: () =>
-        builder.setFields(prev =>
-          moveWithinContainer(prev, field("summary").id, -1)
-        ),
-      says: "moved Summary",
+        builder.setFields(prev => {
+          const id = field("headline").id;
+          return moveWithinContainer(moveWithinContainer(prev, id, 1), id, 1);
+        }),
+      says: "moved Headline",
       check: undone =>
-        expect(names().slice(0, 2)).toEqual(
-          undone ? ["headline", "summary"] : ["summary", "headline"]
+        expect(names()).toEqual(
+          undone
+            ? ["headline", "summary", "address"]
+            : ["summary", "address", "headline"]
         ),
     },
     {
@@ -204,8 +206,7 @@ describe("pending changes controls", () => {
           return [...prev, copy];
         }),
       says: "added Address copy and 3 fields inside",
-      check: undone =>
-        expect(names().includes("address_copy")).toBe(!undone),
+      check: undone => expect(names().includes("address_copy")).toBe(!undone),
     },
     {
       kind: "a delete",
@@ -259,18 +260,22 @@ describe("pending changes controls", () => {
     const user = setup();
     act(() => builder.handleFieldUpdate({ ...field("headline"), label: "A" }));
     act(() => builder.handleFieldAdd("text"));
-    act(() =>
-      setSettings({ ...settingsOf(entity), singularName: "Article" })
+    act(() => setSettings({ ...settingsOf(entity), singularName: "Article" }));
+    await user.click(
+      screen.getByRole("button", { name: "Discard all changes" })
     );
-    await user.click(screen.getByRole("button", { name: "Discard all changes" }));
     const dialog = screen.getByRole("alertdialog");
     expect(
       within(dialog).getByRole("heading", { name: "Discard 3 changes?" })
     ).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Keep editing" })
+    );
     expect(countText()).toBe("3 unsaved changes");
 
-    await user.click(screen.getByRole("button", { name: "Discard all changes" }));
+    await user.click(
+      screen.getByRole("button", { name: "Discard all changes" })
+    );
     await user.click(
       within(screen.getByRole("alertdialog")).getByRole("button", {
         name: "Discard 3 changes",
