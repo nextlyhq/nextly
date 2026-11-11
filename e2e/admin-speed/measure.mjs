@@ -48,6 +48,7 @@ import {
   dropServerDatabase,
   recreateServerDatabase,
 } from "../support/server-database.mjs";
+import { sharedCacheMayKeep } from "../support/shared-cache.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..", "..");
@@ -304,13 +305,9 @@ async function pageServed(log) {
   const [a, b] = [await first.text(), await second.text()];
   // Long enough for anything the page set off to reach the database.
   await sleep(1000);
-  const directives = (first.headers.get("cache-control") ?? "")
-    .split(",")
-    .map(directive => directive.trim().split("=")[0].toLowerCase());
   return {
     sameBytes: a === b,
-    keepable:
-      !directives.includes("private") && !directives.includes("no-store"),
+    keepable: sharedCacheMayKeep(first.headers.get("cache-control")),
     statements: readLog(log).length - before,
   };
 }

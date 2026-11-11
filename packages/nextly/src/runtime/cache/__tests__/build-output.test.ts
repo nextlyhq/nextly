@@ -56,6 +56,27 @@ describe("a miss in a new process", () => {
     expect(built.read).toHaveBeenCalledTimes(1);
   });
 
+  it("never replaces a page stored while the build's copy was being read", async () => {
+    let finishRead: (entry: unknown) => void = () => {};
+    built.read.mockReturnValue(
+      new Promise(resolve => {
+        finishRead = resolve;
+      })
+    );
+    const handler = new IncrementalHandler({ fs, serverDistDir: "/app/.next" });
+    const fresh = { ...PAGE, html: "<p>admin, regenerated</p>" };
+
+    // One request waits on the disk while another stores a fresher render.
+    const pending = handler.get("/admin", { kind: "APP_PAGE" });
+    await handler.set("/admin", fresh, {});
+    finishRead({ lastModified: BUILT_AT, value: PAGE });
+
+    expect((await pending)?.value).toEqual(fresh);
+    expect((await handler.get("/admin", { kind: "APP_PAGE" }))?.value).toEqual(
+      fresh
+    );
+  });
+
   it("is a miss still when the build wrote nothing for the key", async () => {
     built.read.mockResolvedValue(null);
     const handler = new IncrementalHandler({ fs, serverDistDir: "/app/.next" });

@@ -12,6 +12,8 @@
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
+import { sharedCacheMayKeep } from "../support/shared-cache.mjs";
+
 import { gotoAdmin } from "./support/admin";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { waitForShellAnswers } from "./support/shell-geometry";
@@ -63,19 +65,15 @@ let firstAdminPage: string | undefined;
 
 /**
  * The admin page, as the server sends it to this person: the same bytes as
- * everyone else's, and, from a production server, with cache headers that let
- * a shared cache keep it. The dev server renders every page afresh and sends
+ * everyone else's, and, from a production server, with cache headers that give
+ * a shared cache a lifetime to keep it for. The dev server renders every page afresh and sends
  * `no-store`, so it is held to answering only.
  */
 async function expectTheSamePrebuiltPage(page: Page): Promise<void> {
   const response = await page.request.get("/admin");
   expect(response.status()).toBe(200);
   if (process.env.E2E_SERVER !== "production") return;
-  const directives = (response.headers()["cache-control"] ?? "")
-    .split(",")
-    .map(directive => directive.trim().split("=")[0].toLowerCase());
-  expect(directives).not.toContain("private");
-  expect(directives).not.toContain("no-store");
+  expect(sharedCacheMayKeep(response.headers()["cache-control"])).toBe(true);
   const body = await response.text();
   firstAdminPage ??= body;
   expect(body).toBe(firstAdminPage);

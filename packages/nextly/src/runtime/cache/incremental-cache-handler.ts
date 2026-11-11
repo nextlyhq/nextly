@@ -212,6 +212,10 @@ export default class NextlyIncrementalCacheHandler {
       ctx
     );
     if (!built) return undefined;
+    // A page stored while the disk was read is newer than the build's copy
+    // (a regeneration another request finished first), so it stands.
+    const storedMeanwhile = entries().get(key);
+    if (storedMeanwhile !== undefined) return storedMeanwhile;
     const entry: StoredEntry = {
       value: built.value,
       lastModified: built.lastModified,

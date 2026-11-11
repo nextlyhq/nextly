@@ -38,7 +38,7 @@ interface FileSystemCacheLike {
 }
 
 /** Where Next.js keeps its file-system cache handler. */
-export const NEXT_FILE_SYSTEM_CACHE =
+const NEXT_FILE_SYSTEM_CACHE =
   "next/dist/server/lib/incremental-cache/file-system-cache.js";
 
 /** The kinds of entry the build writes to disk: pages and route responses. */
