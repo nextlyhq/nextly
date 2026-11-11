@@ -746,24 +746,21 @@ describe("removing a card", () => {
     ]);
   });
 
-  it("lists removed cards first in the panel, and Add back restores one in place", async () => {
+  it("puts a removed one-card widget back in place from its Add, with no list of removed cards", async () => {
     renderGrid();
     const user = await beginEditing();
     await choose(user, "Widget core/a", "Remove");
 
     const panel = await openAddPanel(user);
-    const headings = within(panel)
-      .getAllByRole("heading", { level: 3 })
-      .map(heading => heading.textContent);
-    expect(headings[0]).toBe("Removed 1");
+    expect(within(panel).queryAllByRole("heading", { level: 3 })).toEqual([]);
     await user.click(
-      within(panel).getByRole("button", { name: "Add back Widget core/a" })
+      within(panel).getByRole("button", { name: "Add Widget core/a" })
     );
 
     expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
     // The panel says it, since a modal sheet hides the grid's own region.
     expect(within(panel).getByTestId("add-panel-live")).toHaveTextContent(
-      "Added back Widget core/a."
+      "Added Widget core/a."
     );
     // Putting back the card the notice offered to undo answers the notice.
     expect(screen.queryByTestId("removal-notice")).toBeNull();
@@ -865,13 +862,11 @@ describe("adding a widget", () => {
 
     await openAddPanel(user);
     await user.click(screen.getByRole("button", { name: "Add Widget core/d" }));
-    await user.click(
-      screen.getByRole("button", { name: "Add another Widget core/d" })
-    );
+    await user.click(screen.getByRole("button", { name: "Add Widget core/d" }));
     expect(screen.getAllByTestId("widget-cell-core/d")).toHaveLength(2);
-    expect(screen.getByTestId("add-panel-tile-core/d")).toHaveTextContent(
-      "2 on your dashboard"
-    );
+    expect(
+      screen.getByRole("button", { name: "Add Widget core/d" })
+    ).toBeEnabled();
 
     await closeAddPanel(user);
     await user.click(screen.getByTestId("dashboard-edit-save"));
@@ -1715,10 +1710,10 @@ describe("an arrangement with nothing left on it", () => {
     await user.click(screen.getByTestId("dashboard-edit-begin"));
     const panel = await openAddPanel(user);
     expect(
-      within(panel).getByRole("button", { name: "Add back Widget core/a" })
+      within(panel).getByRole("button", { name: "Add Widget core/a" })
     ).toBeInTheDocument();
     await user.click(
-      within(panel).getByRole("button", { name: "Add back Widget core/b" })
+      within(panel).getByRole("button", { name: "Add Widget core/b" })
     );
     expect(drawnOrder()).toEqual(["core/b"]);
   });

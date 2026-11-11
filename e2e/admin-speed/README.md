@@ -46,11 +46,15 @@ fixed.
 - **Below its pin**: the change made it cheaper. Lower the pin with
   `--update-pins` (run on all three dialects) so the gain is kept.
 - **Admin page first byte above its limit**: on the PostgreSQL start with every
-  round trip delayed, the admin page answered more than ten seconds after the
-  server began listening (a start that holds the page takes about a hundred).
-  The page needs no database, so something made it wait for the start: a
-  `register()` that waits for Nextly to start, or the page itself reading the
-  database before it sends its first byte.
+  round trip delayed, the admin page answered more than a second after the
+  server's first answer to a page that needs nothing (or more than ten seconds
+  after it began listening; a start that holds the page takes about a hundred).
+  The page is prebuilt and needs no database, so something made it wait: a
+  `register()` that waits for Nextly to start, or the admin route doing work for
+  each request again.
+- **Admin page sent different pages, or forbids keeping it**: two fetches of
+  `/admin` with no session, once the start is quiet, must get the same bytes and
+  headers a shared cache may keep. The admin route is no longer prebuilt.
 
 Each screen is loaded five times, and its requests are pinned by kind (method
 and path, with ids made generic), each kind counting the fewest times any of
