@@ -2194,6 +2194,9 @@ async function addMissingCompanionColumns(
       },
     });
   }
+  // What the reconcile reports, kept apart from the create's: the create's failure has already been
+  // thrown above, so a check of it here would always read nothing.
+  let reconcileFailure: unknown;
   const inStep = await reconcileCompanionColumns(
     ctx.adapter,
     {
@@ -2205,12 +2208,12 @@ async function addMissingCompanionColumns(
       status: entity.status,
     },
     error => {
-      failure = error;
+      reconcileFailure = error;
     }
   );
   if (inStep) return;
   throw NextlyError.internal({
-    ...(failure instanceof Error ? { cause: failure } : {}),
+    ...(reconcileFailure instanceof Error ? { cause: reconcileFailure } : {}),
     logContext: {
       reason: "builder-companion-columns-failed",
       slug: entity.slug,

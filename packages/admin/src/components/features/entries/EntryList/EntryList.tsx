@@ -755,7 +755,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   return (
     <div>
       {/* Breadcrumbs */}
-      <div className="mb-6">
+      <div className="mb-6 empty:hidden">
         <Breadcrumbs
           items={[
             { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },

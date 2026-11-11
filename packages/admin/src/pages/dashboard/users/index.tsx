@@ -40,7 +40,7 @@ const UsersPage: React.FC = () => {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <div>
-          <div className="mb-6">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="list" />
           </div>
 

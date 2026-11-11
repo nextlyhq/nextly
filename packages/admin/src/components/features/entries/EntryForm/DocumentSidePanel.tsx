@@ -53,7 +53,7 @@ const QUIET_SCROLL =
  * and a panel held to it would cut its own sections off.
  */
 const FLOATING_HEIGHT =
-  "max-h-[calc(var(--editor-scrollport,calc(100vh-4rem))-var(--document-bar-height,3.25rem))]";
+  "max-h-[calc(var(--editor-scrollport,calc(100vh-var(--admin-bar-height)))-var(--document-bar-height,3.25rem))]";
 
 export interface DocumentSidePanelProps {
   mode: DocumentPanelMode;
