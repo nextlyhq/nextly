@@ -62,6 +62,11 @@ entry.seo?.canonical;
 entry.seo?.noindex;
 ```
 
+**Each language has its own.** On a collection or Single whose content is translated, the
+`seo` group is kept per language, as its translated fields are: a German title, description
+or canonical never replaces the English one. On a type that is not translated, it holds one
+value.
+
 **Read the group defensively.** Adding the plugin to a collection that already has rows
 adds a nullable column, and those existing rows carry `null` until they are next saved. A
 bulk insert can omit it too, because that path does not apply nested defaults. So
@@ -189,7 +194,7 @@ instead, where each one can still be edited, and no tab is drawn.
 | `sitemap`        | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                   |
 | `robots`         | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                   |
 | `aiCrawlers`     | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                          |
-| `hiddenTypes`    | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some           |
+| `hiddenTypes`    | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some            |
 | `structuredData` | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields |
 | `socialCard`     | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                |
 | `urlFor`         | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                |
@@ -243,8 +248,9 @@ export default defineConfig({
 });
 ```
 
-On a site with several languages, each page is listed at the address its default language
-is served at, such as `/en/blog/hello`, as its canonical names it.
+On a site with several languages, each page is listed once in every language it is
+published in, at the address that language serves it at, such as `/en/blog/hello` and
+`/de/blog/hallo`, each with its [language links](#languages).
 
 While the address record catches up at start, the sitemap answers `503` with
 `Retry-After: 120` and `cache-control: no-store`, so no crawler or cache keeps a list that
@@ -253,6 +259,8 @@ leaves out pages whose addresses are not recorded yet.
 Each entry carries:
 
 - `<loc>`, the page's absolute address, made from `baseUrl`;
+- on a page published in more than one language, an `<xhtml:link rel="alternate">` for
+  each of its languages, itself included, and `x-default`, the same links as its head;
 - `<lastmod>`, when the published page last changed. Saving a working draft leaves it as
   it was;
 - the page's main image as an `<image:image>`: its share image, or the cover image its
@@ -347,7 +355,8 @@ caches one host's answer and serves it for another. **Set `baseUrl` for a cachea
 
 Other code can read what the sitemap lists, and the pages left out because another page
 holds their address, through the plugin's `listedPages` service. Its `list(origin)` answers
-`{ pages, problems }`.
+`{ pages, problems }`. Each page and each problem names its `language`, and a page published
+in more than one language carries its language links as `alternates`.
 
 ### Before the sitemap reached the root
 
@@ -366,6 +375,41 @@ instead.
 builds a sitemap from its own route. They are deprecated, and list pages by the old rules:
 they do not read each page's answer.
 
+## Languages
+
+On a site with [several languages](/docs/localization), each page's head links to the page in
+every other language it is published in, and the sitemap lists the same links:
+
+```html
+<link rel="canonical" href="/de/ueber" />
+<link rel="alternate" hreflang="en" href="/en/about" />
+<link rel="alternate" hreflang="de" href="/de/ueber" />
+<link rel="alternate" hreflang="x-default" href="/en/about" />
+```
+
+- **Only where the page is published.** A language the page has no published version in is
+  not linked: one it was never translated into, where each language is published on its
+  own, or one whose translation is still a draft. Publishing the translation adds the link to
+  every version of the page, and withdrawing it takes it away.
+- **Every version names every other, itself included,** each at that version's own canonical,
+  formed by the site's [language rule](/docs/localization#each-languages-address): under a
+  prefix, or on the language's own domain. A version hidden from search, or one whose
+  canonical names another page, is linked from none, and a page in one language has no
+  links at all.
+- **`x-default`** names the site's default language's version, where the page is published
+  in it.
+- **Codes search engines accept.** A link names a language by its ISO 639-1 code, with an
+  ISO 15924 script and an ISO 3166-1 region where the site's language has one, such as `de`,
+  `pt-BR` or `zh-Hant-TW`. A language spelled another way is mapped: `pt_BR` to `pt-BR`,
+  `deu` to `de`, `en-UK` to `en-GB`. One with no such code, such as `es-419`, is left out of
+  every link, and so is a second language that maps to a code another already has.
+
+On a site whose languages are on their own domains, each domain's sitemap lists its own
+language's pages, with links to the others on theirs.
+
+Other code can read a page's links, and the languages left out for their code, with
+`pageLanguageLinks(ctx, input)`, and check a language with `hreflangOf(code)`.
+
 ## The SEO settings
 
 The plugin adds an **SEO** item to the admin's rail. Its **Settings** page holds the rules for the
@@ -376,12 +420,12 @@ address, what kind of site it is and what AI tools may do, and a logo with a def
 Each answer is saved as they move on, and closing the questions part-way keeps what was answered,
 with a line on the page to finish later. Every answer stays editable on the tabs:
 
-| Tab           | What it holds                                                                                                  |
-| ------------- | -------------------------------------------------------------------------------------------------------------- |
+| Tab           | What it holds                                                                                                                                                                     |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | General       | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, the default share image and description |
-| Content types | Each content type with SEO, whether it has a public address yet, and its title pattern                        |
-| Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                         |
-| Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none |
+| Content types | Each content type with SEO, whether it has a public address yet, and its title pattern                                                                                            |
+| Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                                                                                             |
+| Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none                                                                      |
 
 The production addresses saved on General are the ones the page's canonical, the sitemap,
 robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over

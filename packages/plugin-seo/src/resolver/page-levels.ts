@@ -71,7 +71,7 @@ function defined<T extends Record<string, unknown>>(values: T): Partial<T> {
 }
 
 /** The type a page belongs to, and its key in the SEO settings. */
-function typeOf(input: PageMetadataInput): {
+export function typeOf(input: PageMetadataInput): {
   type: PublicAddressType;
   key: string;
   document: Readonly<Record<string, unknown>>;
@@ -170,6 +170,15 @@ export async function addressOf(
   return `${origin}${laterListPage(path, served) ?? path}`;
 }
 
+/**
+ * A document's id as the address record keys its holder: its text, or empty
+ * where it has none a record could name.
+ */
+export function idOf(document: Readonly<Record<string, unknown>>): string {
+  const { id } = document;
+  return typeof id === "string" || typeof id === "number" ? String(id) : "";
+}
+
 /** Whether the record says a page other than this one holds `path`. */
 async function heldByAnother(
   ctx: PluginContext,
@@ -179,11 +188,7 @@ async function heldByAnother(
   locale: string | undefined
 ): Promise<boolean> {
   const holders = await addressHolders(ctx, path, locale);
-  // An id is text or a number; anything else names no record.
-  const id =
-    typeof document.id === "string" || typeof document.id === "number"
-      ? String(document.id)
-      : "";
+  const id = idOf(document);
   return (
     holders.length > 0 &&
     !holders.some(holder => holder.collection === key && holder.id === id)
