@@ -192,7 +192,8 @@ const analytics = z.object({
   rows: z
     .array(
       z.object({
-        keys: z.array(z.string()),
+        // Absent on a total, which is asked for by no dimension.
+        keys: z.array(z.string()).optional(),
         clicks: z.number(),
         impressions: z.number(),
       })
@@ -249,7 +250,7 @@ export async function countBy(
     analytics
   );
   return (answer.rows ?? []).map(row => ({
-    key: row.keys[0] ?? "",
+    key: row.keys?.[0] ?? "",
     clicks: row.clicks,
     impressions: row.impressions,
   }));

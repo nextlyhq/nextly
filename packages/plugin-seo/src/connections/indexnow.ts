@@ -23,8 +23,9 @@ import { randomBytes } from "node:crypto";
 import type { PluginContext, PluginProxyHandler } from "@nextlyhq/plugin-sdk";
 
 import {
-  onAddressesMoved,
+  ADDRESSES_MOVED,
   type AddressMove,
+  type AddressesMoved,
 } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import { heldLanguages, servedAt } from "../languages/versions";
@@ -327,11 +328,12 @@ export function watchForIndexNow(
       if (id !== undefined && !draft) queue.notePage(slug, id);
     });
   }
-  const stop = onAddressesMoved(moves => queue.noteMoves(moves));
-  return async () => {
-    stop();
-    await queue.close();
-  };
+  // Announced once each save commits, so a save undone is never noted.
+  ctx.events.on(ADDRESSES_MOVED, event => {
+    const { moves } = (event.payload ?? {}) as Partial<AddressesMoved>;
+    if (Array.isArray(moves)) queue.noteMoves(moves);
+  });
+  return () => queue.close();
 }
 
 /**

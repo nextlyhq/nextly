@@ -20,10 +20,11 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import type {
-  PluginContext,
-  PluginDefinition,
-  PluginRouteContext,
+import {
+  definePlugin,
+  type PluginContext,
+  type PluginDefinition,
+  type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
@@ -84,6 +85,7 @@ const CLIENT = { clientId: "acme-client.apps", clientSecret: "client-shh" };
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  refusing.saves = false;
   indexNow.release();
   await current?.destroy();
   current = undefined;
@@ -93,6 +95,24 @@ afterEach(async () => {
 
 let plugin: PluginDefinition;
 
+/** Makes a save fail after the SEO plugin has recorded its addresses. */
+const refusing = { saves: false };
+
+/** Another plugin keeping addresses, which refuses a save when told to. */
+const laterParticipant: PluginDefinition = definePlugin({
+  name: "@test/refusing-participant",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init(ctx) {
+    ctx.publicAddresses.participate({
+      holderOf: async () => null,
+      record: async () => {
+        if (refusing.saves) throw new Error("this save is refused");
+      },
+    });
+  },
+});
+
 async function boot(dialect: TestDialect) {
   plugin = seoPlugin({
     collections: ["pages", "guides"],
@@ -101,7 +121,8 @@ async function boot(dialect: TestDialect) {
   });
   current = await createTestNextly({
     dialect,
-    plugins: [plugin],
+    // The SEO plugin first, so the refusing one records after it.
+    plugins: [plugin, laterParticipant],
     collections: [
       defineCollection({
         slug: "pages",
@@ -144,6 +165,8 @@ async function publish(t: TestNextly, slug: string): Promise<string> {
 
 /** Every address IndexNow was told about since the last look, sorted. */
 async function told(): Promise<string[]> {
+  // Saves announce their addresses once they commit, on the event bus.
+  await current?.events.settle();
   await flushIndexNow();
   const urls = indexNow.notices.flatMap(notice => notice.urlList).sort();
   indexNow.notices.length = 0;
@@ -227,9 +250,9 @@ function analyticsAnswer(google: Google, body: string): Response {
   // No dimension: the property's totals, which count every page.
   if (dimensions.length === 0) {
     return json({
+      // As Google answers it: no keys, since no dimension was asked for.
       rows: [
         {
-          keys: [],
           clicks: 4821,
           impressions: 90210,
           ctr: 0.053,
@@ -483,6 +506,7 @@ describe.each(getConfiguredTestDialects())(
 
         // The key served at the root is the one each notice named.
         await publish(t, "about");
+        await t.events.settle();
         await flushIndexNow();
         const last = indexNow.notices.at(-1);
         const key = last?.key ?? "";
@@ -528,11 +552,22 @@ describe.each(getConfiguredTestDialects())(
         expect(await told()).toEqual([]);
       });
 
+      it("tells no one of a save that was undone", async () => {
+        const { t } = await boot(dialect);
+        await settings(t, { indexNow: true });
+        refusing.saves = true;
+        await expect(publish(t, "pricing")).rejects.toThrow();
+        refusing.saves = false;
+
+        expect(await told()).toEqual([]);
+      });
+
       it("never holds up a save, even while the endpoint is slow", async () => {
         const { t } = await boot(dialect);
         await settings(t, { indexNow: true });
         indexNow.answer = "held";
         await publish(t, "pricing");
+        await t.events.settle();
         const sending = flushIndexNow();
         // The endpoint has not answered, and saves and pages go on.
         const started = Date.now();
@@ -557,6 +592,7 @@ describe.each(getConfiguredTestDialects())(
           await settings(t, { indexNow: true });
           indexNow.answer = answer;
           await publish(t, "pricing");
+          await t.events.settle();
           await flushIndexNow();
 
           expect((await tab(seo)).body.indexNow.last?.result).toBe(result);
@@ -575,6 +611,7 @@ describe.each(getConfiguredTestDialects())(
           // A notice that goes through clears the problem.
           indexNow.answer = 200;
           await publish(t, "about");
+          await t.events.settle();
           await flushIndexNow();
           expect(await connectionProblems(seo)).toEqual([]);
         }

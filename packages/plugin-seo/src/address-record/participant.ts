@@ -30,6 +30,7 @@ import {
 import { redirectsSlug } from "../redirects/collection";
 import { movedRedirect } from "../redirects/moves";
 import { dropReplacedRedirect, putRedirect } from "../redirects/store";
+import { SEO_ADMIN_SLUG } from "../settings/contract";
 
 import {
   claimKey,
@@ -326,32 +327,34 @@ export interface AddressMove {
   holds: readonly HeldAddress[];
 }
 
-/** Told each page's addresses once a batch is recorded. */
-type MovesListener = (moves: readonly AddressMove[]) => void;
-
-const movesListeners = new Set<MovesListener>();
-
 /**
- * Tell `listener` each page's addresses whenever a batch of saves is
- * recorded: every page, never a redirect. Called inside the save's
- * transaction, so the listener must only take note, quickly and without
- * throwing, and act later; the save may still be undone. Answers the call
- * that stops telling it.
+ * The event the record announces each page's addresses on, once a batch of
+ * saves it recorded has committed: every page, never a redirect. Never for
+ * a save that was undone, since the event waits for the save's transaction.
  */
-export function onAddressesMoved(listener: MovesListener): () => void {
-  movesListeners.add(listener);
-  return () => movesListeners.delete(listener);
+export const ADDRESSES_MOVED: string = `${SEO_ADMIN_SLUG}.addresses-moved`;
+
+/** The payload `ADDRESSES_MOVED` carries. */
+export interface AddressesMoved {
+  moves: readonly AddressMove[];
 }
 
-/** Every listener told, none of them able to fail the save. */
-function tellMoves(moves: readonly AddressMove[]): void {
+/**
+ * Announce `moves` once the save that recorded them commits. Announcing
+ * never fails the save: whatever goes wrong only costs the announcement.
+ */
+function announceMoves(
+  ctx: PluginContext,
+  moves: readonly AddressMove[]
+): void {
   if (moves.length === 0) return;
-  for (const listener of movesListeners) {
-    try {
-      listener(moves);
-    } catch {
-      // A listener only takes note; whatever it failed at, the save stands.
-    }
+  try {
+    const payload: AddressesMoved = { moves };
+    ctx.events.emit(ADDRESSES_MOVED, payload);
+  } catch (error) {
+    ctx.logger.warn("The SEO plugin could not announce moved addresses", {
+      error,
+    });
   }
 }
 
@@ -650,7 +653,8 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
           await redirectReleased(transaction, update, released);
         }
       }
-      tellMoves(
+      announceMoves(
+        ctx,
         batch
           .filter(update => !isRedirect(update.holder))
           .map(update => ({
