@@ -1154,9 +1154,10 @@ describe("a conflict", () => {
     await choose(user, "Widget core/a", "Move later");
     await user.click(screen.getByTestId("dashboard-edit-save"));
 
-    expect(
-      await screen.findByTestId("dashboard-edit-conflict")
-    ).toHaveTextContent("Your dashboard changed somewhere else");
+    const notice = await screen.findByTestId("dashboard-edit-conflict");
+    expect(notice).toHaveTextContent("Your dashboard changed somewhere else");
+    // A warning alert: the warning status's surface and border, never a muted tint.
+    expect(notice).toHaveClass("bg-warning-surface", "border-warning-border");
     expect(drawnOrder()).toEqual(["core/b", "core/a", "core/c"]);
   });
 

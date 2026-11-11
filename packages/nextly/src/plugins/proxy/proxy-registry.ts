@@ -95,6 +95,8 @@ export function registerProxyHandlers(
  */
 const shared = globalThis as unknown as {
   __nextly_proxyHandlers?: RegisteredProxyHandler[];
+  /** Whether a start's plugins are all ready, since the last clear. */
+  __nextly_proxyHandlersReady?: boolean;
 };
 shared.__nextly_proxyHandlers ??= [];
 const registered = shared.__nextly_proxyHandlers;
@@ -102,6 +104,7 @@ const registered = shared.__nextly_proxyHandlers;
 /** Forget every handler, as each boot does before registering its own. */
 export function clearProxyHandlers(): void {
   registered.length = 0;
+  shared.__nextly_proxyHandlersReady = false;
 }
 
 /** Register a collected handler with its plugin's context. */
@@ -110,6 +113,22 @@ export function registerProxyHandler(
   ctx: PluginContext
 ): void {
   registered.push({ ...collected, ctx });
+}
+
+/**
+ * Mark the registered handlers ready to run: called once every plugin's
+ * `onReady` has finished, so no handler runs before its plugin is ready.
+ */
+export function markProxyHandlersReady(): void {
+  shared.__nextly_proxyHandlersReady = true;
+}
+
+/**
+ * Whether a start has made its handlers ready, none at all included, so the
+ * Proxy can tell "no handler" from "not started yet" without waiting.
+ */
+export function proxyHandlersReady(): boolean {
+  return shared.__nextly_proxyHandlersReady === true;
 }
 
 /** Whether any plugin contributes a handler, so a site with none does no work. */

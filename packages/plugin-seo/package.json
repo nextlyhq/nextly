@@ -31,6 +31,9 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest"
   },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
   "peerDependencies": {
     "@nextlyhq/admin": "0.0.2-alpha.74",
     "@nextlyhq/plugin-sdk": "workspace:*",
@@ -38,7 +41,8 @@
     "lucide-react": ">=0.400.0",
     "nextly": "0.0.2-alpha.74",
     "react": "^19.3.0",
-    "react-hook-form": "^7.66.0"
+    "react-hook-form": "^7.66.0",
+    "sharp": "^0.35.5"
   },
   "peerDependenciesMeta": {
     "@nextlyhq/admin": {
@@ -54,6 +58,9 @@
       "optional": true
     },
     "react-hook-form": {
+      "optional": true
+    },
+    "sharp": {
       "optional": true
     }
   },
@@ -73,6 +80,7 @@
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-hook-form": "^7.66.0",
+    "sharp": "^0.35.5",
     "tsdown": "^0.23.1",
     "typescript": "7.0.2",
     "vitest": "^5.0.5"

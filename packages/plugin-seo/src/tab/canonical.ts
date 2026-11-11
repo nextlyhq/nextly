@@ -11,7 +11,7 @@
  *
  * @module tab/canonical
  */
-import { usableCanonical } from "../resolver/order";
+import { usableCanonical } from "../canonical";
 
 /** What a typed address is. */
 export type CanonicalCheck =

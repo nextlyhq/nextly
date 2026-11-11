@@ -1,6 +1,6 @@
 ---
 title: SEO
-description: An SEO tab and field group on the collections and Singles you name, and a sitemap of published content served over plain HTTP.
+description: An SEO tab and field group on the collections and Singles you name, every page's head, and the site's sitemap and robots.txt.
 ---
 
 > **Alpha (`0.x`): pin your versions.**
@@ -8,8 +8,8 @@ description: An SEO tab and field group on the collections and Singles you name,
 > The stability boundary is `@nextlyhq/plugin-sdk` (see [API stability](/docs/plugins/stability)). This package's own exports, `seoPlugin`, its option types and the sitemap generators below, are **not** covered by that guarantee and are alpha. Pin your versions and read the release notes before upgrading.
 
 The SEO plugin adds one field group to the collections and Singles you name, an SEO tab
-that edits it on their pages in the admin, and serves a sitemap of their published
-entries.
+that edits it on their pages in the admin, answers every page's head, and serves the
+site's sitemap and robots.txt.
 
 It is framework-agnostic and has no `next` dependency, so it works the same in an
 integrated site, a headless project and an admin-only install.
@@ -78,6 +78,7 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 | `socialDescription`  | textarea | The description a shared link's card uses, where it should differ from `metaDescription`                                                                        |
 | `ogImage`            | upload   | Relates to `media`. The social preview image                                                                                                                    |
 | `canonical`          | text     | A per-page canonical URL                                                                                                                                        |
+| `canonicalElsewhere` | checkbox | Says the page first appeared on another site, so a `canonical` there is used                                                                                    |
 | `noindex`            | checkbox | Defaults to `false`. Drops the entry from this plugin's sitemap. The `robots` directive that actually tells a crawler comes from `buildMetadata`, which is core |
 | `structuredDataType` | text     | The [structured data type](#structured-data) this page is described as, where it differs from its content type's. Empty uses the content type's                 |
 
@@ -95,7 +96,7 @@ from `buildMetadata`.
 
 </Callout>
 
-All eight are optional. `canonical` and `noindex` ship by default rather than being left for
+All nine are optional. `canonical` and `noindex` ship by default rather than being left for
 you to add, because a canonical URL and a search opt-out are baseline controls rather than
 advanced ones.
 
@@ -176,116 +177,107 @@ instead, where each one can still be edited, and no tab is drawn.
 
 ## Configuration
 
-| Option           | Type                                                 | Default                | What it does                                                                             |
-| ---------------- | ---------------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------- |
-| `collections`    | `string[]`                                           | required               | The collections that get the `seo` group                                                 |
-| `singles`        | `string[]`                                           | none                   | The Singles that get the `seo` group, such as a homepage                                 |
-| `fields`         | `FieldConfig[]`                                      | the eight above        | The fields placed inside the group                                                       |
-| `baseUrl`        | `string`                                             | the request origin     | Absolute origin for `<loc>` in the sitemap                                               |
-| `basePath`       | `string`, or a function, or absent                   | `/<collection>`        | Where each collection's route is mounted                                                 |
-| `urlFor`         | `(entry, collection) => string \| null \| undefined` | `/<collection>/<slug>` | Builds a whole entry path. Returning `null` or `undefined` drops that entry              |
-| `sitemap`        | `boolean` or `{ collections }`                       | `true`                 | Controls the public sitemap route                                                        |
-| `structuredData` | `{ brand, types }`                                   | none                   | Brand facts, and each content type's [structured data](#structured-data) type and fields |
+| Option           | Type                                                             | Default            | What it does                                                                             |
+| ---------------- | ---------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------- |
+| `collections`    | `string[]`                                                       | required           | The collections that get the `seo` group                                                 |
+| `singles`        | `string[]`                                                       | none               | The Singles that get the `seo` group, such as a homepage                                 |
+| `fields`         | `FieldConfig[]`                                                  | the nine above     | The fields placed inside the group                                                       |
+| `baseUrl`        | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name          |
+| `sitemap`        | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                   |
+| `robots`         | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                   |
+| `aiCrawlers`     | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers                                                         |
+| `hiddenTypes`    | `string[]`                                                       | none               | Content types hidden from search as a whole                                              |
+| `structuredData` | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields |
+| `socialCard`     | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                |
+| `urlFor`         | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                |
+| `basePath`       | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                  |
 
-## The sitemap
+## The sitemap and robots.txt
 
-The plugin mounts one public route. Plugin routes are namespaced under
-`/plugins/<plugin-name>` **relative to wherever the dynamic handler is mounted**, and the
-scaffolded app mounts it at `src/app/admin/api/[[...params]]/route.ts`, so in a default
-project the sitemap is served at:
+The plugin serves the site's `/sitemap.xml` and `/robots.txt` at the root. `withNextly()`
+rewrites both addresses to Nextly's API handler, where the plugin answers them, so there is
+no route file to write. A site that ships its own `public/robots.txt`, `app/robots.ts`,
+`public/sitemap.xml` or `app/sitemap.ts`, or rewrites one of them itself, keeps serving its
+own: see [Answering a file at the site root](/docs/plugins/routes#answering-a-file-at-the-site-root).
 
+### What the sitemap lists
+
+Every published page of each content type that declares a public address, Singles
+included, at that address. The homepage is listed like any other page: a Single or an entry
+whose address is `/`.
+
+Whether a page is listed is decided from the same answer its head is built from, so the two
+never disagree. A page is listed when all of these hold:
+
+- it is published. A working draft changes nothing listed until it is published;
+- it is not hidden from search, on its own (`seo.noindex`) or with its whole type
+  (`hiddenTypes`). Hiding it takes it out of the sitemap in the same change that serves it
+  `noindex`;
+- its canonical is its own address. A page whose canonical points to another page, on the
+  site or off it, is that page's to list;
+- the page holds its address. Where a deploy leaves two pages declaring one address, the
+  page that held it keeps it, and the other is left out until it is given another.
+
+A content type that declares no public address has no page in the sitemap, and nothing is
+guessed for it. Declare one with `publicAddress` on the collection or Single:
+
+```ts
+import { defineCollection, defineConfig, text } from "nextly";
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+
+export default defineConfig({
+  collections: [
+    defineCollection({
+      slug: "posts",
+      status: true,
+      fields: [text({ name: "title" }), text({ name: "slug" })],
+      publicAddress: "/blog/{slug}",
+    }),
+  ],
+  plugins: [
+    seoPlugin({ collections: ["posts"], baseUrl: "https://example.com" }),
+  ],
+});
 ```
-GET /admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml
-```
 
-`/api/plugins/...` returns 404 unless the project has deliberately added a second
-catch-all there. Check where your own `createDynamicHandlers` route file sits if the URL
-above does not resolve.
+On a site with several languages, each page is listed at the address its default language
+is served at, such as `/en/blog/hello`, as its canonical names it.
 
-It lists entries from the configured collections, generated per request. There is no
-`next` dependency involved, which is what lets a headless consumer with no
-`app/sitemap.ts` read it.
+While the address record catches up at start, the sitemap answers `503` with
+`Retry-After: 120` and `cache-control: no-store`, so no crawler or cache keeps a list that
+leaves out pages whose addresses are not recorded yet.
 
-**"Published" means the built-in lifecycle, and only that.** The `status: published`
-filter is applied to a collection that declares `status: true`, read from the collection
-itself. A collection without that lifecycle has no unpublished state as far as the
-platform is concerned, so **every row is listed**, including rows you consider drafts via
-an ordinary field you happen to have named `status`. Filtering on a same-named custom
-field would be the plugin guessing at your semantics. If you keep drafts that way, exclude
-that collection from the sitemap.
+Each entry carries:
 
-**One document, and the protocol bounds it.** The builder stops once it has emitted
-**50,000 URLs**, or sooner if the serialized document would pass **50 MB**, because a
-single `<urlset>` past either is invalid. It stops rather than failing, so a site above
-those limits gets a sitemap that is quietly short with no error to say so.
+- `<loc>`, the page's absolute address, made from `baseUrl`;
+- `<lastmod>`, when the published page last changed. Saving a working draft leaves it as
+  it was;
+- the page's main image as an `<image:image>`: its share image, or the cover image its
+  content offers, as the page's head uses it. The site's default share image, which every
+  page shares, is not listed.
 
-Both limits are **on the whole document**, not per collection. Collections are walked in
-the order you configure them, so a first collection large enough to reach the cap means
-the later ones contribute nothing at all and never say so.
+**Large sites get a sitemap index.** One file holds at most 50,000 addresses and 50 MB.
+Past either, `/sitemap.xml` answers a sitemap index naming each file as
+`/sitemap.xml?page=1`, `/sitemap.xml?page=2` and so on. `sitemap.maxUrlsPerFile` and
+`sitemap.maxBytesPerFile` make the files smaller; they never make them larger than the
+protocol allows.
 
 <Callout type="warn">
-**The cap counts URLs emitted, not rows read, and the route is not rate limited.**
+**The sitemap is public and reads as the system.** It lists every published page's address
+in the types it covers, bypassing per-collection read access. Declaring a public address
+states that a type's pages are public. To keep a type's pages out, hide the type
+(`hiddenTypes`), or list only some collections with `sitemap: { collections: [...] }`.
 
-Those two facts are worse together than apart. Every exclusion is a skip that keeps
-paging: an entry with `seo.noindex`, an unusable slug, an off-origin `canonical`, or a
-location over 2,048 characters is dropped without counting toward the 50,000.
-
-The builder still stops the moment it holds 50,000 acceptable URLs, so a large collection
-that mostly yields valid entries is not read in full. The expensive case is a configured
-set that cannot reach the cap: if it produces fewer than 50,000 URLs and stays under
-50 MB, then every row of every collection is read on **every request**, however many rows
-that is.
-
-Nextly's REST rate limit bounds how often one client can ask: each anonymous request
-spends its address's read budget (100 a minute by default), or, with no resolvable
-address, a ceiling shared by all such requests. It bounds the repeats, not what each one
-costs. With no `baseUrl` set the response is `no-store`, so nothing in front absorbs the
-repeats either.
-
-Three things that each help, in the order they are worth doing:
-
-1. **Set `baseUrl`**, so the document is cacheable at all.
-2. **Cache the route that generates the document**, at
-   `/admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml`. Caching only `/sitemap.xml`
-   works when that address rewrites or proxies. Behind a redirect the crawler follows on
-   to the plugin route, so it is that route's cache, not the one in front of
-   `/sitemap.xml`, that decides whether the origin rebuilds.
-3. **Pass a `skip`** to the rate limiter that does not exempt this path.
+It is built from the database on every request. Set `baseUrl` so the answer can be cached,
+and cache `/sitemap.xml` in front of the site on a large one.
 
 </Callout>
 
-<Callout type="warn">
-**These exports cannot shard, so do not reach for them from `generateSitemaps()`.**
-`SitemapOptions` takes `collections`, `baseUrl`, `urlFor`, `basePath`, `pageSize` and
-`maxBytes`. There is no offset, cursor or predicate, and `buildSitemapUrls` always starts
-at the first page and returns at the global cap, so calling it once per shard yields the
-same first 50,000 URLs every time.
+### Hiding a whole type
 
-Until a shard-aware option exists, a corpus past the cap needs a sitemap index built from
-your own queries, splitting the work by something you control: one document per
-collection, per locale, or per date range, each within the cap.
-
-</Callout>
-
-<Callout type="warn">
-**The sitemap is public and reads as the system.** It enumerates every published entry's
-URL in the collections it covers, bypassing per-collection read access, because that is
-what a sitemap is for. Any collection whose entries should not be publicly enumerable
-(owner-scoped, role-gated, or internal) must be kept out of it. Narrow the list with
-`sitemap: { collections: [...] }`, or turn the route off with `sitemap: false`.
-
-A collection can carry SEO fields without appearing in the sitemap. The two lists are
-separate for exactly this reason.
-
-</Callout>
-
-### Getting the URLs right
-
-The one part of an entry's URL the plugin cannot work out is where the route is mounted:
-that is decided by where the route file sits in your app directory, which is invisible from
-here. Everything after the prefix is derived from the route's own slug handling.
-
-So declare the mount, and let the rest be derived:
+`hiddenTypes` hides every page of a content type from search, such as tag or author
+listing pages. Each is served `noindex` and left out of the sitemap, whatever the page's own
+setting. Remove the type from the list and each page returns to its own setting.
 
 ```ts
 import { defineConfig } from "nextly";
@@ -294,94 +286,82 @@ import { seoPlugin } from "@nextlyhq/plugin-seo";
 export default defineConfig({
   plugins: [
     seoPlugin({
-      collections: ["pages", "posts"],
-      baseUrl: "https://example.com",
-      // Pages render at /about, not /pages/about. Posts are mounted at /blog.
-      basePath: collection => (collection === "pages" ? "" : "/blog"),
+      collections: ["posts", "tags"],
+      hiddenTypes: ["tags"],
     }),
   ],
 });
 ```
 
-Returning `null` from `basePath` excludes that whole collection from the sitemap.
-`urlFor` has the same escape one level down: it receives the entry and its collection, and
-returning `null` or `undefined` drops that single entry, which is how an entry with no
-stable public URL stays out.
+A Single is named `single:<slug>`.
 
-`urlFor` builds the whole path instead, and takes precedence over `basePath`:
+### robots.txt and AI crawlers
 
-```ts
-import { defineConfig } from "nextly";
-import { seoPlugin } from "@nextlyhq/plugin-seo";
+`/robots.txt` lets search engines read every page but the admin and the API, the same paths
+`nextlyRobots` keeps out (both read `FRAMEWORK_CRAWL_EXCLUSIONS` from `nextly`), and names
+the sitemap by its absolute address:
 
-export default defineConfig({
-  plugins: [
-    seoPlugin({
-      collections: ["posts"],
-      baseUrl: "https://example.com",
-      urlFor: entry => `/blog/${String(entry.slug)}`,
-    }),
-  ],
-});
+```txt
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /admin$
+Disallow: /admin?
+Disallow: /api/
+Disallow: /api$
+Disallow: /api?
+
+Sitemap: https://example.com/sitemap.xml
 ```
 
-Prefer `basePath` where only the prefix differs. A hand-built path has to reproduce
-correctly what the route already answers for nested, encoded and unservable slugs, and
-`basePath` keeps that half derived.
+`aiCrawlers` decides what AI tools are asked:
 
-**`seo.canonical` has the last word, after `urlFor` has run.** A stored canonical is
-resolved against the site origin, and then:
+| Choice     | What it asks                                                                                                                                                                           |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"all"`    | Nothing: every AI tool may read your pages, for AI search answers and for training. The default                                                                                        |
+| `"search"` | Tools that collect pages to train AI models, such as `GPTBot`, `ClaudeBot`, `CCBot` and `Google-Extended`, are asked not to. Tools that answer questions may still read and cite pages |
+| `"block"`  | Every known AI tool is asked to stay away                                                                                                                                              |
 
-| The canonical is                                      | What the sitemap does              |
-| ----------------------------------------------------- | ---------------------------------- |
-| Same origin (`/about` or `https://example.com/about`) | **Replaces** the generated `<loc>` |
-| A different origin                                    | **Drops the entry** entirely       |
-| A non-http scheme, or carrying credentials            | Ignored, generated URL kept        |
-| Unparseable                                           | Ignored, generated URL kept        |
+These are requests. Well-behaved tools follow them; some ignore them. Asking Google not to
+use your pages for AI training (`Google-Extended`) also limits what Gemini can use from
+them. Google Search and Bing are not affected by any choice.
 
-So an entry can vanish from the sitemap, or appear at a path your `urlFor` never returned,
-because of a value an editor typed into a field. That is the intended meaning of a
-canonical, and it is worth knowing before debugging the callback.
+### The site's address, and why it affects caching
 
-Two things `basePath` does not do. It does not claim the mount's own root is served: an
-entry with an empty slug is skipped whatever the prefix says, because whether that root
-routes depends on the route file rather than on the prefix. List a homepage with `urlFor`.
-And it is ignored entirely when `urlFor` is supplied, which already owns the whole path.
+Both files name the site by one of its production addresses, read as the page's head reads
+them: `NEXTLY_PRODUCTION_ADDRESSES` first, the one a request reached where it is among them.
+Without one, `baseUrl` is used: an absolute `http(s)` origin with no path, query, fragment
+or credentials. An invalid value throws when the plugin is constructed, so a typo fails at
+boot. A page whose canonical is on another of the site's addresses is listed in that
+address's sitemap.
 
-### baseUrl, and why it affects caching
+Without either, each request's own origin is used. That is right for a single-origin deployment,
+and wrong behind a proxy that rewrites the host. Because a request's host is whatever its
+sender says, both files are then served with `cache-control: no-store`, so nothing in front
+caches one host's answer and serves it for another. **Set `baseUrl` for a cacheable sitemap.**
 
-`baseUrl` must be an absolute `http(s)` origin: no path, query, fragment or credentials. An
-invalid value throws when the plugin is constructed rather than when the route is first
-called, so a typo fails at boot.
+### Reading the listed pages
 
-Leaving it out is correct for a single-origin deployment: the route derives the origin from
-the incoming request. Behind a proxy that rewrites the host it is wrong, and the URLs point
-at the internal host.
+Other code can read what the sitemap lists, and the pages left out because another page
+holds their address, through the plugin's `listedPages` service. Its `list(origin)` answers
+`{ pages, problems }`.
 
-Because a request-derived origin comes from a spoofable `Host` header, a sitemap built that
-way is served with `cache-control: no-store`, so an intermediary cannot cache one host's
-document and serve it for another. **Configure `baseUrl` if you want a cacheable sitemap.**
+### Before the sitemap reached the root
 
-### Advertising it to crawlers
+The sitemap is still served at its earlier address,
+`/admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml`, with the same pages. Where it is an
+index, the files it names are at that same address (`?page=<n>`), so it works without the
+root rewrite.
 
-The mounted path is not where a crawler looks, so expose it at `/sitemap.xml` and name
-that in `robots.txt`.
+`urlFor` and `basePath` no longer shape it. A sitemap that guessed a page's address could
+name one the page is not served at, and disagree with the page's own canonical. The plugin
+logs a warning at start while either is set. Declare `publicAddress` on each public type
+instead.
 
-**A rewrite and a redirect both work for the crawler, but they cache in different
-places.** A rewrite or proxy is served under `/sitemap.xml`, so a cache in front of that
-address holds the answer. A redirect sends the crawler on to the plugin route, so it is
-that route's own cache that decides whether the origin rebuilds. Either is fine; what is
-not fine is caching one address and generating at the other.
-
-Core ships `nextlySitemap` and `nextlyRobots` for a Next.js app; see
-[Routing and SEO](/docs/guides/routing-and-seo#nextlysitemap-and-nextlyrobots).
-
-### Building a sitemap yourself
-
-The generator is exported, so a project that wants its own route can use the same code
-rather than a second implementation: `generateSitemap`, `buildSitemapUrls`,
-`serializeSitemap`, `defaultUrlForEntry` and `escapeXml`, with the `SitemapUrl`,
-`SitemapOptions`, `SitemapServices` and `UrlForEntry` types.
+`generateSitemap`, `buildSitemapUrls`, `serializeSitemap`, `defaultUrlForEntry` and
+`escapeXml` are still exported and still read `urlFor` and `basePath`, for a project that
+builds a sitemap from its own route. They are deprecated, and list pages by the old rules:
+they do not read each page's answer.
 
 ## Turning the fields into tags
 
@@ -405,14 +385,85 @@ gap. What a person typed always wins, so a route's code fills only what nobody t
 - **Visibility** is never code's to decide: a page is listed unless `noindex` is set on it.
 - **The canonical** is the page's own declared address, in the language it was read in, formed by
   the site's [language rule](/docs/localization#each-languages-address). A page whose type
-  declares no address gets no canonical rather than a guessed one. A canonical typed in the `seo`
-  group overrides it.
+  declares no address gets no canonical rather than a guessed one, and so does a page whose
+  address another page holds: it lost the address in a clash, and gets one back when it is given a
+  new address. A canonical typed in the `seo` group overrides it only where search engines can
+  follow it (a path from the site's root, or an `http(s)` address) and only on the site's own
+  production addresses, unless `canonicalElsewhere` says the page first appeared on another site.
 - **The share image** may be stored as a media id: the plugin looks it up, so a page read at
   `depth: 0` keeps its image.
+
+## Keeping copies out of search
+
+A preview, a staging copy or a production build served from another host must never compete with
+the real site. With the plugin installed, the site's Proxy sends `X-Robots-Tag: noindex` with
+every response from any host but the site's production addresses, prerendered pages included.
+Wire the Proxy once, in `proxy.ts`, as [Proxy handlers](/docs/plugins/proxy) shows.
+
+Name the production addresses in the environment, as bare origins, comma-separated:
+
+```bash
+NEXTLY_PRODUCTION_ADDRESSES=https://example.com,https://example.de
+```
+
+The environment wins over the SEO settings, so a deploy can't be indexed by mistake while its
+settings are being changed. With no address known, the plugin decides once, the first time it
+starts on a site:
+
+- **A site with no pages yet** is kept out of search everywhere until it has an address.
+- **A site that already has pages** stays listable, and its missing address is listed as a
+  problem to fix. Dropping a live site out of search is the worse error.
 
 Without the plugin, `buildMetadata` from `nextly/runtime` still turns the `seo` group into a
 Next.js `Metadata` object by hand. The `buildMetadata` section of
 [Routing and SEO](/docs/guides/routing-and-seo) covers it.
+
+## Social cards
+
+When someone shares a page on LinkedIn, X, Slack, Facebook or WhatsApp, the network shows a card
+built from the page's head. The plugin states everything the card reads:
+
+- the title and description, the social ones where a page has them, else the page's own;
+- the **share image** at its full address, with its width, height and alt text. The media library
+  stores an upload with a path from the site's root (`/uploads/cover.jpg`), which a network cannot
+  load, so the plugin states it on `baseUrl`, else the first of the site's production addresses,
+  else the origin of the page's canonical where that is absolute;
+- the **site's name**, from `socialCard.siteName`;
+- the page's **language**: the one the route read it in, or else `socialCard.language`, or else
+  the site's default language (English on a site that declares no languages), written as Open
+  Graph writes it (`en-US` becomes `en_US`).
+
+```ts
+seoPlugin({
+  collections: ["posts"],
+  baseUrl: "https://example.com",
+  socialCard: { siteName: "Acme", language: "en-US" },
+});
+```
+
+The image's alt text is the media item's own, so give share images alt text in the media library.
+
+### Share images of the right size
+
+Networks show a share image in full at 1200 × 630. A picture narrower than 1200 pixels, or whose
+width is not between 1.8 and 2.0 times its height, is cropped or shrunk. `shareImageProblems(ctx,
+input)` says so for a page, such as `800 × 600, LinkedIn will crop it`, and says where it is fixed:
+by making a share image, in the route's code where the route set the picture, or in the settings
+where the site's address is missing. `shareImageSizeProblem({ width, height })` answers the same
+for one picture.
+
+Making a share image is one action. The plugin's `POST /share-image` route
+(`/admin/api/plugins/@nextlyhq/plugin-seo/share-image` in a scaffolded project), sent
+`{ "media": "<media id>" }`, makes a copy of the picture at exactly 1200 × 630, cut around the
+picture's focal point and enlarged where it is smaller, as a JPEG under 600 KB. It adds the copy to
+the media library, in the same folder and with the same alt text, and answers it as
+`{ message, item }`; set the item as the page's `seo.ogImage` to use it. The picture itself, and every page that shows it, are unchanged.
+
+The route is for a signed-in person who may add to the media library (`create-media`) and read it
+(`read-media`). It reads the picture from where the site serves its uploads, on `baseUrl` where it
+is set. A picture that storage will not serve to an anonymous reader is refused, since no network
+could load it either. It needs the `sharp` image library, which the media library uses to read image sizes:
+install it with `npm install sharp`.
 
 ## Structured data
 

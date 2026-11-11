@@ -4,6 +4,7 @@ import type { SanitizedNextlyConfig } from "../../collections/config/define-conf
 import type { PluginContext } from "../../plugins/plugin-context";
 import {
   clearProxyHandlers,
+  markProxyHandlersReady,
   registerProxyHandler,
 } from "../../plugins/proxy/proxy-registry";
 import type { ProxyAnswer } from "../../plugins/proxy/proxy-types";
@@ -25,11 +26,13 @@ function fakeNext() {
   return { deps, calls };
 }
 
+/** A handler answering `answer`, registered and ready, as a finished start leaves it. */
 function answering(answer: ProxyAnswer | undefined): void {
   registerProxyHandler(
     { pluginName: "p", handler: { name: "h", handle: () => answer } },
     ctx
   );
+  markProxyHandlersReady();
 }
 
 const request = () =>
@@ -48,13 +51,26 @@ describe("the site's Proxy", () => {
   });
 
   it("lets the request through where Nextly cannot start", async () => {
-    answering({ response: new Response("never") });
+    // A start that fails never registers the handlers.
     const { deps } = fakeNext();
     deps.start = async () => {
       throw new Error("no database");
     };
 
     expect(await createNextlyProxy(config, deps)(request())).toBeUndefined();
+  });
+
+  it("never holds a request for a start still under way, and begins one", async () => {
+    // Nothing registered yet: the start that registers the handlers runs.
+    const { deps, calls } = fakeNext();
+    const start = vi.fn(() => new Promise<never>(() => {}));
+    deps.start = start;
+
+    // Settles though the start never does: the page is served at once, and
+    // the handlers apply from the first request after the start finishes.
+    expect(await createNextlyProxy(config, deps)(request())).toBeUndefined();
+    expect(start).toHaveBeenCalledWith(config);
+    expect(calls).toEqual([]);
   });
 
   it("answers with a handler's response, carrying every handler's headers", async () => {

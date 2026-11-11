@@ -96,10 +96,11 @@ window's: from 640 to 1,023 pixels a card of 6 columns or fewer is drawn at 6 an
 12, and below 640 pixels a card of 3 columns (25%) or fewer is drawn at half the width, so two
 share a row, and every other card at the full width. A reader can arrange the
 dashboard at every width.
-Where it shows more than one column, a card is dragged by its handle, with the pointer or the
-keyboard, and a line shows where it will land; below 640 pixels, where every card is full width,
-cards are moved, resized and removed from their menu instead. The arrangement applies at every
-width.
+Where it shows more than one column, a card is dragged by its handle with the pointer: a dashed
+outline the size of the card shows where it will land, and the other cards move aside. From the
+keyboard, a card's ⋯ menu moves it with Move earlier and Move later. Below 640 pixels, where every
+card is full width, cards are moved, resized and removed from their menu instead. The arrangement
+applies at every width.
 
 ## Loaded as the viewer
 
@@ -315,6 +316,42 @@ The editor is registered like the widget's own component, from your admin entry,
 component map holds it to the setting's value: an editor written for another setting's value
 fails to compile. Startup refuses an `editor` that names no component, and one component used both
 as a widget's view and as a setting's editor.
+
+## Statuses in your own component
+
+Core's cards draw every status the same way, in light and dark, and a widget drawn by its own
+component reads best beside them when it does too. The admin has four statuses, `success`,
+`warning`, `danger` and `info`, each with four tokens: `--nx-<status>-surface`, `-border`,
+`-text` and `-solid`.
+
+- **A status label** (Published, Draft, Failed) is a quiet chip: the card's surface, ordinary
+  text, and a small dot in the status's colour before the word. Draw it with the kit's status
+  chip, `Badge` from `@nextlyhq/ui`, with `variant="success"`, `"warning"`, `"destructive"` or
+  `"info"`; a status that marks nothing to act on, such as a draft, takes the plain
+  `variant="outline"`. The word carries the status, so colour is never the only signal.
+- **A dot, an icon, a progress bar or a chart mark** is drawn in the status's `-solid` colour,
+  which keeps 3:1 against the page in both themes. The kit's `Widget.BarChart` already draws a
+  chart of statuses this way.
+- **A warning or a failure that needs reading** sits on the status's `-surface` with its
+  `-border`, and its icon in `-text`.
+
+```tsx
+import { Badge } from "@nextlyhq/ui";
+
+export function ReportStatus({ failed }: { failed: boolean }) {
+  return failed ? (
+    <Badge variant="destructive">Failed</Badge>
+  ) : (
+    <Badge variant="success">Sent</Badge>
+  );
+}
+```
+
+Use the tokens through `var()` or the token utilities in your plugin's own stylesheet (see
+[Styling your admin UI](/docs/plugins/admin-ui#styling-your-admin-ui)). Avoid the numbered
+status shades (`bg-success-100`, `text-warning-700`) and opacity mixes (`bg-destructive/10`):
+they are pale tints that read differently in each theme, and they are deprecated. Core leaves a
+widget's own markup as it is, so this is a recommendation, not a check.
 
 ## Testing a widget
 

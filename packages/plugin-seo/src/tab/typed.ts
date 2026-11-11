@@ -64,6 +64,7 @@ export function typedPageLevel(
     if (typeof text === "string" && text.trim() !== "") level[value] = text;
   }
   if (image !== undefined && image.url.trim() !== "") level.image = image;
+  if (typed.canonicalElsewhere === true) level.canonicalElsewhere = true;
   if (typed.noindex === true) level.hidden = true;
   return level;
 }

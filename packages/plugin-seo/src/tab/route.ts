@@ -30,6 +30,7 @@ import { z } from "nextly/zod";
 
 import type { Levels } from "../resolver/order";
 import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
+import type { ReadRules } from "../resolver/provider";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
 
 import {
@@ -40,20 +41,8 @@ import {
 import { tabStructuredData } from "./structured";
 import { withoutTyped } from "./typed";
 
-/** The site's rules, with the addresses it is served from in production. */
-export interface TabRules extends SiteRules {
-  /** Origins such as `https://acme.com`, the main one first. */
-  productionAddresses?: readonly string[];
-}
-
-/** Where the route reads the site's rules from, in a language. */
-export type ReadTabRules = (
-  ctx: PluginContext,
-  locale: string | undefined
-) => Promise<TabRules>;
-
 /** No settings yet: the site's rules are empty. */
-const noTabRules: ReadTabRules = () => Promise.resolve(NO_RULES);
+const noRules: ReadRules = () => Promise.resolve(NO_RULES);
 
 /** The request: the document as typed, and which document it is. */
 const RESOLVE_BODY = z.object({
@@ -75,7 +64,8 @@ export interface SeoTabRouteSetup {
   baseUrl?: string;
   /** The `seo` group's fields, by name. */
   fields: readonly string[];
-  readRules?: ReadTabRules;
+  /** Where the page's head reads the site's rules from. */
+  readRules?: ReadRules;
   /** Where structured data reads its rules from. */
   readStructuredDataRules?: ReadStructuredDataRules;
 }
@@ -224,7 +214,7 @@ function originOf(address: string | undefined): string | undefined {
  * origin the plugin was configured with, else the one the admin is on.
  */
 function siteOf(
-  rules: TabRules,
+  rules: SiteRules,
   baseUrl: string | undefined,
   req: Request
 ): SeoTabContext["site"] {
@@ -250,7 +240,7 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
-  const readRules = setup.readRules ?? noTabRules;
+  const readRules = setup.readRules ?? noRules;
   return {
     method: "POST",
     path: SEO_RESOLVE_PATH,

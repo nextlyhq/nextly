@@ -8,6 +8,7 @@
  */
 import type { FieldConfig, PluginContributions } from "@nextlyhq/plugin-sdk";
 
+import type { ReadRules } from "../resolver/provider";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
 
 import { seoTabContributions, tabEditsGroup } from "./contributions";
@@ -21,6 +22,8 @@ export function seoTabParts(setup: {
   fields: readonly FieldConfig[];
   /** The origin the plugin was configured with, where it was. */
   baseUrl: string | undefined;
+  /** Where the page's head reads the site's rules from. */
+  readRules: ReadRules;
   /** Where structured data reads its rules from. */
   readStructuredDataRules: ReadStructuredDataRules;
 }): Pick<PluginContributions, "admin"> & {
@@ -45,6 +48,7 @@ export function seoTabParts(setup: {
         collections,
         singles,
         fields: names,
+        readRules: setup.readRules,
         readStructuredDataRules: setup.readStructuredDataRules,
         ...(baseUrl === undefined ? {} : { baseUrl }),
       }),
