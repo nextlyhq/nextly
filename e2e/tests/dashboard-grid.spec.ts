@@ -504,7 +504,14 @@ test("never resizes a card past its widget's maximum, from the settings drawer o
   const gap = expectedColumnGap(area);
   const box = await cell.boundingBox();
   expect(box?.width).toBeCloseTo(((area + gap) * bounds.max.w) / 12 - gap, 0);
-  await page.getByRole("button", { name: "Cancel" }).click();
+  // Cancel asks before discarding a width that changed; the answer is to discard.
+  await page.getByTestId("dashboard-edit-cancel").click();
+  const ask = page.getByTestId("dashboard-leave-ask");
+  await expect(ask.or(page.getByTestId("dashboard-edit-begin"))).toBeVisible();
+  if ((await ask.count()) > 0) {
+    await ask.getByRole("button", { name: "Discard changes" }).click();
+  }
+  await expect(page.getByTestId("dashboard-edit-begin")).toBeVisible();
 
   // 🔴 A size past the maximum written straight to the layout is refused, or drawn at the
   // maximum; either way the card is never drawn wider than it. A stored `h` past the maximum
