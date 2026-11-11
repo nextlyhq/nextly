@@ -164,8 +164,71 @@ export const nextlyHtmlLimitedBots: RegExp = new RegExp(
  * export default withNextly(nextConfig);
  * ```
  */
+/**
+ * The files a site serves at its root that plugins may answer for: the
+ * crawler files every site has a place for. A plugin route mounted at the
+ * root (`mount: "root"`) answers one of them behind the API handler.
+ */
+const ROOT_FILES = ["/robots.txt", "/sitemap.xml", "/llms.txt"] as const;
+
+/** Options for {@link withNextly}. */
+export interface WithNextlyOptions {
+  /**
+   * Where the app mounts Nextly's API handler. Defaults to `/admin/api`, the
+   * scaffolded `app/admin/api/[[...params]]` route.
+   */
+  apiRoute?: string;
+  /** More root files, beyond robots.txt, sitemap.xml and llms.txt, that a plugin answers. */
+  rootFiles?: readonly string[];
+}
+
+type Rewrite = Record<string, unknown>;
+interface RewritePhases {
+  beforeFiles: Rewrite[];
+  afterFiles: Rewrite[];
+  fallback: Rewrite[];
+}
+
+/**
+ * The site's own rewrites, with each root file rewritten to the API handler
+ * after them. `afterFiles` is checked once the site's own pages, route files
+ * (`app/robots.ts`) and `public/` files have been, so a site that serves a
+ * root file itself keeps serving it, and a plugin answers only where the site
+ * does not. Rewritten to the handler, never past it, so no core route is
+ * exposed at the root.
+ */
+function withRootFileRewrites(
+  own: (() => unknown) | undefined,
+  options: WithNextlyOptions
+): () => Promise<RewritePhases> {
+  const apiRoute = (options.apiRoute ?? "/admin/api").replace(/\/+$/, "");
+  const files = [...new Set([...ROOT_FILES, ...(options.rootFiles ?? [])])];
+  const rootRewrites = files.map(file => ({
+    source: file,
+    destination: `${apiRoute}${file}`,
+  }));
+  return async () => {
+    const theirs = own ? await own() : undefined;
+    if (Array.isArray(theirs)) {
+      // A plain list is Next's `afterFiles`.
+      return {
+        beforeFiles: [],
+        afterFiles: [...(theirs as Rewrite[]), ...rootRewrites],
+        fallback: [],
+      };
+    }
+    const phases = (theirs ?? {}) as Partial<RewritePhases>;
+    return {
+      beforeFiles: phases.beforeFiles ?? [],
+      afterFiles: [...(phases.afterFiles ?? []), ...rootRewrites],
+      fallback: phases.fallback ?? [],
+    };
+  };
+}
+
 export function withNextly<T extends Record<string, unknown>>(
-  nextConfig: T
+  nextConfig: T,
+  options: WithNextlyOptions = {}
 ): T {
   // Read while Next.js loads the config, before anything builds or serves.
   // Only here does Nextly see `partialPrefetching`: Next.js passes it to no
@@ -213,6 +276,10 @@ export function withNextly<T extends Record<string, unknown>>(
     // The app's own list stands where it set one; otherwise Nextly's, so the
     // crawlers it names read each page's whole head in the first HTML.
     htmlLimitedBots: nextConfig.htmlLimitedBots ?? nextlyHtmlLimitedBots,
+    rewrites: withRootFileRewrites(
+      nextConfig.rewrites as (() => unknown) | undefined,
+      options
+    ),
   };
 }
 
