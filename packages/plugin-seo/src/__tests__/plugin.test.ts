@@ -82,6 +82,8 @@ describe("seoPlugin", () => {
     ).toEqual([
       ["GET", "/sitemap.xml", "root", true],
       ["GET", "/robots.txt", "root", true],
+      // Registered always; it answers once switched on in the settings.
+      ["GET", "/llms.txt", "root", true],
       ["GET", "/sitemap.xml", undefined, true],
       ["POST", "/share-image", undefined, undefined],
       // The settings screen's reads, for a signed-in reader of the settings.
@@ -152,6 +154,7 @@ describe("seoPlugin", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
       "/robots.txt",
+      "/llms.txt",
       "/share-image",
       "/settings/content-types",
       "/settings/document",
@@ -178,6 +181,8 @@ describe("seoPlugin", () => {
       robots: false,
     });
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
+      // Switched on and off in the settings, not by these options.
+      "/llms.txt",
       "/share-image",
       "/settings/content-types",
       "/settings/document",

@@ -63,6 +63,10 @@ export interface SettingsDraft {
   hiddenTypes: string[];
   /** Each content type's structured data choice and detail mapping, by key. */
   structuredData: Record<string, StructuredDataTypeRule>;
+  /** Whether `/llms.txt` is served. */
+  llmsTxt: boolean;
+  /** Whether each listed page has a plain-text copy. */
+  plainTextCopies: boolean;
 }
 
 /** The stored Single as the admin reads it. */
@@ -162,6 +166,9 @@ export function draftOf(
       ...defaults.structuredData,
       ...structuredDataOf(stored.structuredData),
     },
+    // Off unless stored as switched on.
+    llmsTxt: stored.llmsTxt === true,
+    plainTextCopies: stored.plainTextCopies === true,
   };
 }
 

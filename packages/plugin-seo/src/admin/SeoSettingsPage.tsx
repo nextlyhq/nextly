@@ -1,5 +1,5 @@
 /**
- * The SEO settings screen: rules for the whole site, under four tabs, saved
+ * The SEO settings screen: rules for the whole site, under five tabs, saved
  * together; and, the first time it opens, the three-step setup over it.
  *
  * @module admin/SeoSettingsPage
@@ -36,6 +36,7 @@ import {
   type SwitchedOffType,
 } from "../settings/contract";
 
+import { ConnectionsTab } from "./connections";
 import { ContentTypesTab } from "./content-types";
 import {
   changesOf,
@@ -347,6 +348,7 @@ function SettingsPanel({
   if (tab === "general") content = <GeneralTab {...tabProps} />;
   else if (tab === "brand") content = <BrandTab {...tabProps} />;
   else if (tab === "crawlers") content = <CrawlersTab {...tabProps} />;
+  else if (tab === "connections") content = <ConnectionsTab {...tabProps} />;
   else if (typesFailed) {
     content = (
       <p className="nx-seo-alert" role="alert">

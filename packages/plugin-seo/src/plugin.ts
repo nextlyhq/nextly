@@ -30,6 +30,7 @@ import { defaultSeoFields } from "./fields";
 import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
 import { keepSeoContext } from "./not-found/report";
+import { plainCopyProxyHandler } from "./outputs/ai-outputs";
 import { listPages, type ListedPagesService } from "./outputs/listing";
 import type { AiCrawlerChoice } from "./outputs/robots";
 import {
@@ -324,6 +325,20 @@ function sitemapConfig(
 }
 
 /**
+ * The configured origin, `{ origin }`, where the sitemap is served and a
+ * baseUrl is set; nothing otherwise, so a baseUrl is checked only where the
+ * sitemap, which robots.txt names by it, is served.
+ */
+function configuredOrigin(
+  options: SeoPluginOptions,
+  sitemap: RootFilesConfig["sitemap"]
+): { origin?: string } {
+  return sitemap !== undefined && options.baseUrl !== undefined
+    ? { origin: resolveBaseOrigin(options.baseUrl) }
+    : {};
+}
+
+/**
  * What the site's root files are served with. A configured baseUrl must be an
  * absolute http(s) origin, or every listed address is invalid: checked at
  * construction so a typo fails at boot, and only where the sitemap, which
@@ -335,12 +350,8 @@ function rootFilesConfig(
   collections: readonly string[] | undefined
 ): RootFilesConfig {
   const sitemap = sitemapConfig(options, collections);
-  const origin =
-    sitemap !== undefined && options.baseUrl !== undefined
-      ? resolveBaseOrigin(options.baseUrl)
-      : undefined;
   return {
-    ...(origin === undefined ? {} : { origin }),
+    ...configuredOrigin(options, sitemap),
     readRules,
     ...(sitemap === undefined ? {} : { sitemap }),
     ...(options.robots === false
@@ -498,7 +509,17 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Every host but the site's production addresses is kept out of search,
     // and redirects answer before the page is served. Only a redirect
     // answers, so the order changes nothing a visitor gets.
-    proxy: [stagingGuard(readRules), redirectsProxyHandler()],
+    // A page's plain-text copy, once switched on, is answered here too, at
+    // the copy's own address only.
+    proxy: [
+      stagingGuard(readRules),
+      redirectsProxyHandler(),
+      plainCopyProxyHandler({
+        readRules,
+        ...configuredOrigin(options, sitemapConfig(options, sitemapSubset)),
+        ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
+      }),
+    ],
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
