@@ -44,6 +44,7 @@ import {
 import { productionAddressesOf, typedCanonical } from "../canonical";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
+import { keptFrom, originBeside } from "../redirects/served";
 import { putRedirect } from "../redirects/store";
 import { resolveOrder } from "../resolver/order";
 import type { SiteRules } from "../resolver/page-levels";
@@ -127,10 +128,16 @@ export interface PlannedPage {
 
 /** One redirect the import adds. */
 export interface PlannedRedirect {
+  /** The language it is kept in. */
+  locale: string;
+  /** Its addresses as kept: without the language's own prefix or domain. */
   source: string;
   target: string;
   permanent: boolean;
 }
+
+/** A redirect a record asks for, before it is placed in a language. */
+type AskedRedirect = Omit<PlannedRedirect, "locale">;
 
 /** An import worked out. */
 export interface ImportPlan {
@@ -443,6 +450,22 @@ function automaticFor(
     ?.value;
 }
 
+/**
+ * Whether a shared title or description falls back to a title or
+ * description the person may not read: what it would show automatically
+ * then can't be known from what they read, so it is never left automatic.
+ */
+function fallsBackUnseen(
+  at: Deciding,
+  place: Exclude<(typeof TEXT_PLACES)[number], "canonical">
+): boolean {
+  if (place === "socialTitle") return at.unreadable.has(STORED.title);
+  if (place === "socialDescription") {
+    return at.unreadable.has(STORED.description);
+  }
+  return false;
+}
+
 /** Write `value` into `place`, unless it is typed already or is automatic. */
 function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
   const raw = at.record.values[place];
@@ -467,7 +490,8 @@ function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
   const automatic =
     place === "canonical"
       ? ownAddress(value, at.page, at.origins)
-      : same(value, automaticFor(place, at.page, at.decision.writes));
+      : !fallsBackUnseen(at, place) &&
+        same(value, automaticFor(place, at.page, at.decision.writes));
   if (automatic) {
     at.tally.same++;
     return;
@@ -596,7 +620,6 @@ function tidyOwn(page: ReadPage, tally: Tally): Decision {
  */
 async function refusedRedirects(
   ctx: PluginContext,
-  locale: string,
   redirects: readonly PlannedRedirect[]
 ): Promise<Map<PlannedRedirect, string>> {
   const refused = new Map<PlannedRedirect, string>();
@@ -610,7 +633,7 @@ async function refusedRedirects(
     await ctx.services.collections.withTransaction(async transaction => {
       for (const redirect of redirects) {
         const outcome = await putRedirect(ctx, transaction, {
-          locale,
+          locale: redirect.locale,
           source: redirect.source,
           target: redirect.target,
           permanent: redirect.permanent,
@@ -677,7 +700,7 @@ interface Skipped {
 /** Every record matched and decided: the pages' changes and the redirects. */
 interface Matched {
   planned: PlannedPage[];
-  redirects: PlannedRedirect[];
+  redirects: AskedRedirect[];
   skipped: Skipped;
 }
 
@@ -688,7 +711,7 @@ interface Matched {
 function redirectOf(
   record: ImportedRecord,
   skipped: Skipped
-): PlannedRedirect | undefined {
+): AskedRedirect | undefined {
   if (record.redirect === undefined) return undefined;
   const { source } = record.redirect;
   if (source === undefined) {
@@ -715,7 +738,7 @@ function matchRecords(
     redirectsWithoutAddress: 0,
   };
   const planned = new Map<string, PlannedPage>();
-  const redirects: PlannedRedirect[] = [];
+  const redirects: AskedRedirect[] = [];
   for (const record of records) {
     const page = find(record);
     // A redirect from the record's own address is tried by the redirect
@@ -883,6 +906,51 @@ async function unreadableFields(
   return found;
 }
 
+/** The origin a path from the root is read on where the site names none. */
+const SITE_ORIGIN = "https://site.invalid";
+
+/**
+ * Each redirect placed in the language its From address is in, both its
+ * addresses kept as the redirect rules keep them, without the language's
+ * own prefix or domain: read as a visitor's address on the site, the way
+ * the redirects screen's import reads them. One sending a visitor to
+ * another language is left out and said so.
+ */
+async function placeRedirects(
+  ctx: PluginContext,
+  asked: readonly AskedRedirect[],
+  origin: string,
+  defaultLanguage: string
+): Promise<{ redirects: PlannedRedirect[]; warnings: string[] }> {
+  const redirects: PlannedRedirect[] = [];
+  const warnings: string[] = [];
+  for (const redirect of asked) {
+    const from = await keptFrom(ctx, redirect.source, origin);
+    const to = await keptFrom(
+      ctx,
+      redirect.target,
+      originBeside(redirect.source, origin)
+    );
+    if (
+      from.locale !== undefined &&
+      to.locale !== undefined &&
+      to.locale !== from.locale
+    ) {
+      warnings.push(
+        `The redirect from ${redirect.source} is left out: it sends a visitor to another language.`
+      );
+      continue;
+    }
+    redirects.push({
+      locale: from.locale ?? defaultLanguage,
+      source: from.path,
+      target: to.locale === undefined ? redirect.target : to.path,
+      permanent: redirect.permanent,
+    });
+  }
+  return { redirects, warnings };
+}
+
 /** The import worked out, changing nothing. */
 export async function planImport(
   ctx: PluginRouteContext,
@@ -964,15 +1032,18 @@ export async function planImport(
       `${count(drafted.length, "page")} would change, but ${either(drafted.length, "its type keeps", "their types keep")} drafts, so ${either(drafted.length, "its", "their")} SEO is changed in ${either(drafted.length, "its", "each page's")} own editor and ${either(drafted.length, "it is", "they are")} left out: ${someOf(drafted)}.`
     );
   }
-  const refused = await refusedRedirects(
+  const placed = await placeRedirects(
     ctx,
-    defaultLanguage,
-    matched.redirects
+    matched.redirects,
+    origins[0] ?? SITE_ORIGIN,
+    defaultLanguage
   );
+  warnings.push(...placed.warnings);
+  const refused = await refusedRedirects(ctx, placed.redirects);
   for (const [redirect, why] of refused) {
     warnings.push(`The redirect from ${redirect.source} is left out: ${why}`);
   }
-  const kept = matched.redirects.filter(redirect => !refused.has(redirect));
+  const kept = placed.redirects.filter(redirect => !refused.has(redirect));
   return {
     pages: changing,
     redirects: kept,
@@ -1040,7 +1111,7 @@ async function writeAll(
   }
   for (const redirect of plan.redirects) {
     const outcome = await putRedirect(ctx, transaction, {
-      locale: plan.locale,
+      locale: redirect.locale,
       source: redirect.source,
       target: redirect.target,
       permanent: redirect.permanent,

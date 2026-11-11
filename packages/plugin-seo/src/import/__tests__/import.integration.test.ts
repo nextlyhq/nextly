@@ -1025,6 +1025,7 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "metaTitle", access: { read: () => false } }),
               textarea({ name: "metaDescription" }),
+              text({ name: "socialTitle" }),
             ],
           }),
         ],
@@ -1088,12 +1089,22 @@ describe.each(getConfiguredTestDialects())(
         title: "Surfer",
         slug: "surfer",
         seo: { metaTitle: "Typed, and hidden" },
-        metaData: { seoTitle: "From the group", seoDescription: "Described" },
+        // The shared title is the page's own title, which the hidden typed
+        // title replaces when shared: kept, since that is not what shows.
+        metaData: {
+          seoTitle: "From the group",
+          seoDescription: "Described",
+          ogTitle: "Surfer",
+        },
       });
       const source: ImportSource = {
         kind: "group",
         field: "metaData",
-        map: { seoTitle: "title", seoDescription: "description" },
+        map: {
+          seoTitle: "title",
+          seoDescription: "description",
+          ogTitle: "socialTitle",
+        },
       };
       const dry = await dryRun(key, source);
       expect(dry).toMatchObject({ pages: 1, kept: 1 });
@@ -1102,7 +1113,86 @@ describe.each(getConfiguredTestDialects())(
       expect((await seoBySlug(t, "posts")).surfer).toMatchObject({
         metaTitle: "Typed, and hidden",
         metaDescription: "Described",
+        socialTitle: "Surfer",
       });
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "the SEO import on a site whose languages are prefixed (%s)",
+  dialect => {
+    it("keeps each redirect in its From address's language, without the prefix", async () => {
+      const t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        plugins: [seoPlugin({ collections: ["posts"], sitemap: false })],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+      current = t;
+      const owner = await t.nextly.users.create({
+        data: {
+          email: "owner@example.com",
+          password: "Password123!",
+          name: "Owner",
+          isActive: true,
+        },
+      });
+      const keys = t.getService("apiKeyService") as unknown as {
+        createApiKey(
+          userId: string,
+          input: { name: string; tokenType: string; expiresIn: string }
+        ): Promise<{ key: string }>;
+      };
+      const { key } = await keys.createApiKey(String(owner.item.id), {
+        name: "owner key",
+        tokenType: "full-access",
+        expiresIn: "unlimited",
+      });
+      const csv = [
+        "slug,url,seo_title,redirect_to,redirect_type",
+        "alt,https://old.example/de/alt/,,/de/neu,301",
+        "old,https://old.example/en/old/,,/en/new,301",
+        "across,https://old.example/en/across/,,/de/drueben,301",
+      ].join("\n");
+      const source: ImportSource = {
+        kind: "rankMath",
+        fileName: "r.csv",
+        text: csv,
+      };
+      const dry = await dryRun(key, source);
+      expect(dry.redirects).toBe(2);
+      expect(dry.warnings.join(" ")).toContain(
+        "The redirect from /en/across is left out: it sends a visitor to another language."
+      );
+      const applied = await apply(key, source, dry.plan);
+      expect(applied.status, await applied.clone().text()).toBe(200);
+      const { items } = await t.nextly.find({
+        collection: REDIRECTS_SLUG,
+        limit: 10,
+        overrideAccess: true,
+      });
+      expect(items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            locale: "de",
+            source: "/alt",
+            target: "/neu",
+          }),
+          expect.objectContaining({
+            locale: "en",
+            source: "/old",
+            target: "/new",
+          }),
+        ])
+      );
+      expect(items).toHaveLength(2);
     });
   }
 );
