@@ -65,9 +65,23 @@ Without a content route, `buildMetadata` from `nextly/runtime` turns the `seo` g
 
 ```ts
 // app/blog/[slug]/page.tsx
-import { buildMetadata } from "nextly/runtime";
+import { buildMetadata, type MetadataEntry } from "nextly/runtime";
 
-export async function generateMetadata({ params }) {
+// Your own read of one post by its slug, with the fields used below.
+declare function getPostBySlug(slug: string): Promise<
+  | (MetadataEntry & {
+      title: string;
+      excerpt?: string;
+      publishedAt?: string | null;
+    })
+  | null
+>;
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
   const { slug } = await params;
   const post = await getPostBySlug(slug);
   if (!post) return {};
