@@ -25,6 +25,9 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
+import { watchSaves } from "./problems/hooks";
+import { problemRoutes } from "./problems/route";
+import { problemsCollection } from "./problems/store";
 import { noRules, seoPageMetadata } from "./resolver/provider";
 import {
   generateSitemap,
@@ -229,15 +232,27 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options.socialCard
   );
 
-  // The sitemap where it is on, and the action that makes a share image of
-  // the right size; both added below.
+  // What the problem list checks, read with the rules every page's head is
+  // worked out by, so the list and the page never disagree.
+  const problemChecks = {
+    targets,
+    readers: {
+      readRules: noRules,
+      readStructuredDataRules,
+      readSocialCardRules,
+    },
+  };
+
+  // The sitemap where it is on, the action that makes a share image of the
+  // right size, and the problem list's; added below.
   const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
-    // The record that keeps each public address to one page.
-    collections: [addressRecordCollection()],
+    // The record that keeps each public address to one page, and what the
+    // problem list's checks found.
+    collections: [addressRecordCollection(), problemsCollection()],
     // Every page's head, worked out by the one order of who wins, its
     // social card completed, and its structured data, worked out from that
     // same answer.
@@ -310,7 +325,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       },
     });
   }
-  routes.push(shareImageRoute(options.baseUrl));
+  routes.push(shareImageRoute(options.baseUrl), ...problemRoutes(problemChecks));
 
   return definePlugin({
     name: "@nextlyhq/plugin-seo",
@@ -355,6 +370,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // asked on every save, and told what each document holds after it.
       ctx.publicAddresses.participate(addressRecord(ctx));
       releaseOnCollectionDelete(ctx);
+      // Each saved page checked again for the problem list.
+      watchSaves(ctx, problemChecks);
     },
     onReady(ctx) {
       // Started, not awaited: it waits for the boot to finish, and brings the
