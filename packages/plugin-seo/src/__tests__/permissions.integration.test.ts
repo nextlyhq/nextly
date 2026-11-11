@@ -249,6 +249,7 @@ describe.each(getConfiguredTestDialects())(
       await as("siteSeo", ["manage-seo", ...SETTINGS, "read-posts"]);
       await as("storesOnly", [...SETTINGS, ...STORES, "read-posts"]);
       await as("manageOnly", ["manage-seo"]);
+      await as("settingsOnly", ["update-settings", "read-settings"]);
       await as("checker", ["check-seo"]);
       await as("media", ["create-media", "read-media"]);
       await as("addsMedia", ["create-media"]);
@@ -591,6 +592,17 @@ describe.each(getConfiguredTestDialects())(
           expect((await route(method, path, null)).status).toBe(401);
         }
       );
+
+      it("keeps the plugin's own settings, where connections are kept, to manage-seo", async () => {
+        const path = `plugins-settings/${PLUGIN}`;
+        const body = { indexNowLast: null };
+        expect(
+          (await request("PATCH", path, people.settingsOnly!, body)).status
+        ).toBe(403);
+        expect(
+          (await request("PATCH", path, people.manageOnly!, body)).status
+        ).toBe(200);
+      });
 
       it("never answers a credential, even to someone holding it", async () => {
         const { body } = await route("GET", "/connections", people.siteSeo!);

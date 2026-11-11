@@ -640,6 +640,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // The optional connections' own state, their credentials sealed: core
     // encrypts each secret path and never returns it to the admin.
     settings: connectionSettings,
+    // Changed only by whoever manages site-wide SEO, through core's own
+    // settings route as through the plugin's.
+    settingsPermission: MANAGE_SEO_PERMISSION,
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
@@ -718,7 +721,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   }
 
   routes.push(
-        // The Connections tab's reads, and Search Console's sign-in.
+    // The Connections tab's reads, and Search Console's sign-in.
     ...searchConsoleRoutes({ readRules, client: googleClient, ...siteOrigin }),
     ...siteFileRoutes(options, readRules, sitemapSubset, codeRoutes),
     shareImageRoute(options.baseUrl),

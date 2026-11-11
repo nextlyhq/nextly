@@ -185,10 +185,19 @@ function indexNowQueue(
   /** The noted addresses, with each saved page's read from the record. */
   async function addressesOf(taken: ReturnType<typeof take>): Promise<Noted[]> {
     const noted = [...taken.noted];
+    // One read of the record per collection, for all its saved pages.
+    const byCollection = new Map<string, string[]>();
     for (const { collection, id } of taken.saved) {
-      const held = await heldLanguages(ctx, collection, [id]);
-      for (const [locale, paths] of held.get(id) ?? []) {
-        for (const path of paths) noted.push({ locale, path });
+      const ids = byCollection.get(collection) ?? [];
+      ids.push(id);
+      byCollection.set(collection, ids);
+    }
+    for (const [collection, ids] of byCollection) {
+      const held = await heldLanguages(ctx, collection, ids);
+      for (const languages of held.values()) {
+        for (const [locale, paths] of languages) {
+          for (const path of paths) noted.push({ locale, path });
+        }
       }
     }
     return noted;
@@ -309,7 +318,12 @@ export function watchForIndexNow(
   for (const slug of targets) {
     ctx.hooks.on("afterUpdate", slug, (context: { data?: unknown }) => {
       const id = idOf(context);
-      const draft = isRecord(context.data) && context.data.status === "draft";
+      // A draft, or a working draft of a published page (which keeps the
+      // live page's status), changes nothing a visitor sees.
+      const draft =
+        isRecord(context.data) &&
+        (context.data.status === "draft" ||
+          context.data._isWorkingDraft === true);
       if (id !== undefined && !draft) queue.notePage(slug, id);
     });
   }

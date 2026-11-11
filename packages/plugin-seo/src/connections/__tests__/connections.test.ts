@@ -72,6 +72,25 @@ describe("the Search Console property that is the site", () => {
     );
   });
 
+  it("is the closest parent domain property for a site on a subdomain", () => {
+    expect(
+      propertyFor(
+        [
+          "sc-domain:example.com",
+          "sc-domain:blog.example.com.evil",
+          "sc-domain:ample.com",
+        ],
+        ["https://news.blog.example.com"]
+      )
+    ).toBe("sc-domain:example.com");
+    expect(
+      propertyFor(
+        ["sc-domain:example.com", "sc-domain:blog.example.com"],
+        ["https://news.blog.example.com"]
+      )
+    ).toBe("sc-domain:blog.example.com");
+  });
+
   it("is none where the account has nothing for the site", () => {
     expect(
       propertyFor(properties, ["https://elsewhere.example"])

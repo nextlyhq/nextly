@@ -56,6 +56,7 @@ import {
   listProperties,
   renewAccess,
   revokeAccess,
+  totalClicks,
   SEARCH_CONSOLE_SCOPES,
   type GoogleClient,
 } from "./search-console-send";
@@ -146,10 +147,13 @@ export function propertyFor(
     const prefix = `${new URL(origin).origin}/`;
     if (properties.includes(prefix)) return prefix;
   }
+  // A domain property covers its subdomains: the closest one, label by label.
   for (const origin of origins) {
-    const host = new URL(origin).hostname.replace(/^www\./, "");
-    const domain = `sc-domain:${host}`;
-    if (properties.includes(domain)) return domain;
+    const labels = new URL(origin).hostname.split(".");
+    for (let at = 0; at < labels.length - 1; at++) {
+      const domain = `sc-domain:${labels.slice(at).join(".")}`;
+      if (properties.includes(domain)) return domain;
+    }
   }
   return undefined;
 }
@@ -386,7 +390,8 @@ async function report(
     await writeConnections(ctx, { searchConsoleFailed: null });
     return {
       ...range,
-      clicks: pages.reduce((sum, row) => sum + row.clicks, 0),
+      // The property's own total: the pages above are only the most visited.
+      clicks: await totalClicks(fetch, access, property, range),
       pages: pages.slice(0, REPORT_ROWS).map(row => ({
         page: row.key,
         clicks: row.clicks,

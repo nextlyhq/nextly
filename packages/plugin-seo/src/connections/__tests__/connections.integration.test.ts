@@ -95,7 +95,7 @@ let plugin: PluginDefinition;
 
 async function boot(dialect: TestDialect) {
   plugin = seoPlugin({
-    collections: ["pages"],
+    collections: ["pages", "guides"],
     baseUrl: SITE,
     searchConsole: CLIENT,
   });
@@ -109,6 +109,15 @@ async function boot(dialect: TestDialect) {
         access: { read: () => true },
         fields: [text({ name: "title" }), text({ name: "slug" })],
         publicAddress: "/{slug}",
+      }),
+      // Edits to a published page are held as a working draft.
+      defineCollection({
+        slug: "guides",
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true },
+        fields: [text({ name: "title" }), text({ name: "slug" })],
+        publicAddress: "/guides/{slug}",
       }),
     ],
   });
@@ -214,7 +223,22 @@ function tokenAnswer(google: Google, body: string): Response {
 function analyticsAnswer(google: Google, body: string): Response {
   const status = google.failing.analytics;
   if (status !== undefined) return json({ error: {} }, status);
-  const { dimensions } = JSON.parse(body) as { dimensions: string[] };
+  const { dimensions = [] } = JSON.parse(body) as { dimensions?: string[] };
+  // No dimension: the property's totals, which count every page.
+  if (dimensions.length === 0) {
+    return json({
+      rows: [
+        {
+          keys: [],
+          clicks: 4821,
+          impressions: 90210,
+          ctr: 0.053,
+          position: 9.1,
+        },
+      ],
+      responseAggregationType: "byProperty",
+    });
+  }
   const row = (key: string, clicks: number, impressions: number) => ({
     keys: [key],
     clicks,
@@ -486,6 +510,24 @@ describe.each(getConfiguredTestDialects())(
         expect((await ask(`/${key}.txt`)).body).toBe("the page");
       });
 
+      it("tells no one of a working draft, which changes nothing a visitor sees", async () => {
+        const { t } = await boot(dialect);
+        await settings(t, { indexNow: true });
+        const created = await t.nextly.create({
+          collection: "guides",
+          data: { title: "Start", slug: "start", status: "published" },
+        });
+        expect(await told()).toEqual([`${SITE}/guides/start`]);
+
+        await t.nextly.update({
+          collection: "guides",
+          id: String(created.item.id),
+          data: { title: "Start here", _overwrite: true },
+          draft: true,
+        });
+        expect(await told()).toEqual([]);
+      });
+
       it("never holds up a save, even while the endpoint is slow", async () => {
         const { t } = await boot(dialect);
         await settings(t, { indexNow: true });
@@ -610,7 +652,8 @@ describe.each(getConfiguredTestDialects())(
           "/connections/search-console/report"
         );
         const body = report.json as SearchConsoleReportBody;
-        expect(body.clicks).toBe(150);
+        // The property's total, not the sum of the pages listed.
+        expect(body.clicks).toBe(4821);
         expect(body.queries.map(row => [row.query, row.clicks])).toEqual([
           ["acme rockets", 80],
           ["rocket pricing", 40],

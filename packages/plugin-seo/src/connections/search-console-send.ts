@@ -200,6 +200,23 @@ const analytics = z.object({
     .optional(),
 });
 
+/** A property's clicks between two days, every page counted. */
+export async function totalClicks(
+  fetch: OutboundFetch,
+  access: string,
+  property: string,
+  range: { from: string; to: string }
+): Promise<number> {
+  const answer = await ask(
+    fetch,
+    "the total counts",
+    `${WEBMASTERS}/sites/${encodeURIComponent(property)}/searchAnalytics/query`,
+    bearer(access, { startDate: range.from, endDate: range.to }),
+    analytics
+  );
+  return answer.rows?.[0]?.clicks ?? 0;
+}
+
 /** One row of counts, by what it was counted by. */
 export interface CountedRow {
   key: string;
