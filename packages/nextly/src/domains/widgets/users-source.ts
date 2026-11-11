@@ -119,6 +119,31 @@ async function joinedSeries(
   };
 }
 
+/** Every account, for a count that names no range. */
+async function everyAccount(query: WidgetQuery): Promise<WidgetResult> {
+  if (query.range !== undefined || query.dateField !== undefined) {
+    failUnavailableSourceOrOp(
+      `${USERS_SOURCE_ID}: a count of every account takes no range`
+    );
+  }
+  return { op: "count", total: await getService("adapter").count(USERS_TABLE) };
+}
+
+/** The accounts made in each interval of the query's range, placed by `createdAt`. */
+function accountsMade(query: WidgetQuery, now: Date): Promise<WidgetResult> {
+  if (!isTimeseriesRange(query.range)) {
+    throw NextlyError.invalidInput({
+      message: `${USERS_SOURCE_ID} draws a series over a range: 7d, 30d, 90d or 12m.`,
+    });
+  }
+  if (query.dateField !== undefined && query.dateField !== "createdAt") {
+    failUnavailableSourceOrOp(
+      `${USERS_SOURCE_ID}: accounts are placed by createdAt alone`
+    );
+  }
+  return joinedSeries(query.range, now);
+}
+
 /** Answer one query of `system:users`, for a reader who may read users. */
 async function resolveUsers(
   query: WidgetQuery,
@@ -135,29 +160,9 @@ async function resolveUsers(
     failUnavailableSourceOrOp(`${USERS_SOURCE_ID}: not this reader's source`);
   }
   opts?.signal?.throwIfAborted();
-  if (query.op === "count") {
-    if (query.range !== undefined || query.dateField !== undefined) {
-      failUnavailableSourceOrOp(
-        `${USERS_SOURCE_ID}: a count of every account takes no range`
-      );
-    }
-    return {
-      op: "count",
-      total: await getService("adapter").count(USERS_TABLE),
-    };
-  }
+  if (query.op === "count") return everyAccount(query);
   if (query.op === "timeseries") {
-    if (!isTimeseriesRange(query.range)) {
-      throw NextlyError.invalidInput({
-        message: `${USERS_SOURCE_ID} draws a series over a range: 7d, 30d, 90d or 12m.`,
-      });
-    }
-    if (query.dateField !== undefined && query.dateField !== "createdAt") {
-      failUnavailableSourceOrOp(
-        `${USERS_SOURCE_ID}: accounts are placed by createdAt alone`
-      );
-    }
-    return joinedSeries(query.range, opts?.now ?? new Date());
+    return accountsMade(query, opts?.now ?? new Date());
   }
   return failUnavailableSourceOrOp(
     `${USERS_SOURCE_ID}: answers count and timeseries`

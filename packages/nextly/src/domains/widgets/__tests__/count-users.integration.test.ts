@@ -222,6 +222,32 @@ describe.each(getConfiguredTestDialects())(
       expect((await layout(peopleReader)).placements).toContainEqual(people);
     });
 
+    it("lets a reader who may read users but no collection add a Count set to Users, and nothing else that reads one", async () => {
+      const usersOnly = await account("cu-users-only@example.com");
+      await grantTo(handle, usersOnly, "read", ["users"]);
+      const nobody = await account("cu-nobody@example.com");
+      const add = async (userId: string, config: Record<string, unknown>) => {
+        const seen = await layout(userId);
+        return call(userId, "PUT", ["dashboard", "layout"], {
+          placements: [...seen.placements, card("added", config)],
+          version: seen.version,
+          scope: seen.scope,
+        });
+      };
+      // 🔴 Counted as a collection card, the one Count this reader may have
+      // would be refused for want of a collection.
+      expect((await add(usersOnly, { collection: "users" })).status).toBe(200);
+      expect((await layout(usersOnly)).placements).toContainEqual(
+        card("added", { collection: "users" })
+      );
+      // The must-differ halves: set to a collection, it still needs one they
+      // can read; and a reader who may read neither is refused it.
+      const other = await account("cu-users-only-2@example.com");
+      await grantTo(handle, other, "read", ["users"]);
+      expect((await add(other, { collection: POSTS })).status).toBe(400);
+      expect((await add(nobody, { collection: "users" })).status).toBe(400);
+    });
+
     it("withholds a stored card set to Users from a reader who may not read users, and keeps it in the row", async () => {
       const own = [
         card("posts", { collection: POSTS }),

@@ -902,19 +902,22 @@ function refuseUnreadableCollections(
 /**
  * Refuses a card the write adds that reads a collection, from a reader who may read none that the
  * dashboard shows (`addedCardWithoutCollection`): the add panel offers none to them, so one here
- * was sent around it.
+ * was sent around it. A Count set to Users, from a reader who may read users, reads no collection
+ * and is kept.
  */
 function refuseCollectionCardWithNone(
   submitted: readonly WidgetPlacement[],
   shown: readonly WidgetPlacement[],
   widgets: readonly CanonicalWidget[],
-  readable: ReadonlySet<string>
+  readable: ReadonlySet<string>,
+  readsUsers: boolean
 ): void {
   const added = addedCardWithoutCollection(
     submitted,
     collectionWidgets(widgets),
     new Set(shown.map(placement => placement.id)),
-    publishableContentSources(readable).length > 0
+    publishableContentSources(readable).length > 0,
+    readsUsers
   );
   if (added === undefined) return;
   throw NextlyError.validation({
@@ -1368,7 +1371,8 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     submitted,
     shown,
     view.widgets,
-    view.audience.readableCollections
+    view.audience.readableCollections,
+    view.audience.readsUsers
   );
   refuseExtraCards(submitted, shown, sizesOf(view.widgets));
   refuseOverlongText(submitted, shown, view.widgets);

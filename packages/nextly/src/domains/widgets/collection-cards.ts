@@ -99,19 +99,34 @@ export function unreadableCollectionCard(
  * could only ever be drawn as not available. The add panel offers none to this reader, and the
  * layout write refuses one sent anyway. Only a card new to the reader's arrangement (`shownIds`)
  * is judged: one they already held is carried as it is, whichever collections they may read now.
+ * A card set to Users on a setting that offers them, from a reader who may read users
+ * (`readsUsers`), reads the people rather than a collection, and is not one.
  */
 export function addedCardWithoutCollection(
   submitted: readonly WidgetPlacement[],
   widgets: ReadonlyMap<string, AnyWidgetSetting>,
   shownIds: ReadonlySet<string>,
-  readsAnyCollection: boolean
+  readsAnyCollection: boolean,
+  readsUsers = false
 ): WidgetPlacement | undefined {
   if (readsAnyCollection) return undefined;
-  return submitted.find(
-    placement =>
-      !shownIds.has(placement.id) &&
-      !placement.removed &&
-      widgets.has(placement.widgetId)
+  return submitted.find(placement => {
+    if (shownIds.has(placement.id) || placement.removed) return false;
+    const setting = widgets.get(placement.widgetId);
+    if (setting === undefined) return false;
+    return !(readsUsers && setToUsers(setting, placement));
+  });
+}
+
+/** Whether a card is set to Users on a Collection setting that offers them. */
+function setToUsers(
+  setting: AnyWidgetSetting,
+  placement: WidgetPlacement
+): boolean {
+  return (
+    offersUsers(setting) &&
+    resolveWidgetSettings([setting], placement.config)[setting.name] ===
+      COUNT_USERS_SOURCE
   );
 }
 
