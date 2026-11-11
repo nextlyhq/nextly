@@ -29,6 +29,7 @@ import { destinationOf, pathOf } from "../redirects/addresses";
 import { redirectsSlug } from "../redirects/collection";
 import { redirectMeeting } from "../redirects/meeting";
 import { redirectOf, type StoredRedirect } from "../redirects/store";
+import { designLevelOf } from "../resolver/design-level";
 import { addressOf } from "../resolver/page-levels";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import type { ReadSocialCardRules } from "../social/card";
@@ -220,10 +221,17 @@ async function examine(
   if (ownAddress === undefined) return undefined;
 
   const { readers } = checks;
+  const source: PageMetadataInput["source"] = {
+    kind: "entry",
+    collection: type,
+    entry,
+  };
   const input: PageMetadataInput = {
-    source: { kind: "entry", collection: type, entry },
+    source,
     code: {},
-    derived: {},
+    // The design drawing the page, as its route would hand it, so a title
+    // or description only the design sets is not listed as missing.
+    derived: await designLevelOf(ctx, source, locale),
     ...(locale === undefined ? {} : { locale }),
   };
   const answer = await resolveSeo(ctx, input, readers.readRules);

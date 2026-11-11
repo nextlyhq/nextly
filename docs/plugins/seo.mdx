@@ -533,6 +533,11 @@ the first of these that has one:
 | 5     | The page's own content: its `title`, `excerpt` or `summary`, and a cover image | title, description, share image             |
 | 6     | The site's defaults                                                            | title, description, share image             |
 
+Level 3 is what the design drawing the page sets: a page's own blocks, or the template or own
+design an entry is drawn with, its SEO settings first. A route hands it as it serves the page; the
+SEO tab, the problem list and the check of what search engines received ask the Page Builder for
+it, where it is installed, so they show the value the page is served with.
+
 A level with nothing for a value, or only blank text, gives way to the next, so a page is never
 served an empty title. A pattern whose tokens have no value gives way too, rather than leaving a
 gap. What a person typed always wins, so a route's code fills only what nobody typed.
@@ -861,9 +866,10 @@ readers. It is served at
 `/admin/api/plugins/@nextlyhq/plugin-seo/problems/check` (`POST`), for a signed-in person.
 
 The check reads the values the plugin keeps: the page's own, its content type's pattern, its
-content and the site's defaults. A title, description or share image that only the route's code
-or a Page Builder design sets is not seen, so such a page is listed as missing it; typing the value
-on the page's SEO tab settles it either way.
+content and the site's defaults, and, where the Page Builder is installed, what the design drawing
+the page sets, worked out as the page's route works it out. A title, description or share image
+that only the route's code sets is not seen, so such a page is listed as missing it; typing the
+value on the page's SEO tab settles it either way.
 
 Not checked yet: whether a response is small enough for every value to fall within its first
 2 MB, and whether a page built in code calls the plugin's metadata function. Both need the page
