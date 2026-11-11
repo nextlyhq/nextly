@@ -20,6 +20,7 @@ import { useMemo } from "react";
 
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { findFieldById } from "@admin/lib/builder";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
@@ -32,7 +33,6 @@ import {
   type LoadedFieldGroup,
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
-import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 import {
   fieldsWithDeleted,
   markPending,

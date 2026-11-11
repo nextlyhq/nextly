@@ -19,7 +19,6 @@ import type { FieldDefinition } from "@admin/types/collection";
 import { fieldLocalized } from "../field-localized";
 import type { FieldPlacement } from "../field-placement";
 import { convertToBuilderField } from "../field-transformers";
-
 import type { RowMark } from "../pending-changes";
 
 import { fillBlocks, type BlockCatalog } from "./block-rows";

@@ -28,7 +28,7 @@ export function createHistory<T>(initial: T, limit = 200): BuilderHistory<T> {
 
 /** The state shown. */
 export function currentState<T>(history: BuilderHistory<T>): T {
-  return history.states[history.index] as T;
+  return history.states[history.index];
 }
 
 /**

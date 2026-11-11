@@ -96,6 +96,29 @@ function inOrder(fields: readonly BuilderField[]): BuilderField[] {
 }
 
 /**
+ * At [i][j], how long the longest run of ids common to `before` from i and
+ * `after` from j is, keeping their order. A plain dynamic programme: sibling
+ * lists are short.
+ */
+function commonRunLengths(
+  before: readonly string[],
+  after: readonly string[]
+): number[][] {
+  const table = before.map(() => after.map(() => 0));
+  const at = (i: number, j: number) => table[i]?.[j] ?? 0;
+  for (let i = before.length - 1; i >= 0; i -= 1) {
+    const row = table[i] ?? [];
+    for (let j = after.length - 1; j >= 0; j -= 1) {
+      row[j] =
+        before[i] === after[j]
+          ? 1 + at(i + 1, j + 1)
+          : Math.max(at(i + 1, j), at(i, j + 1));
+    }
+  }
+  return table;
+}
+
+/**
  * The ids, among `ids`, that keep their order from `before` to `after`: the
  * longest common subsequence. The rest are the ones that moved, so a field
  * dragged past others is the one move, not a move of each it passed.
@@ -104,25 +127,16 @@ function keptInOrder(
   before: readonly string[],
   after: readonly string[]
 ): Set<string> {
-  // A plain dynamic programme: sibling lists are short.
-  const lengths = before.map(() => after.map(() => 0));
-  for (let i = before.length - 1; i >= 0; i -= 1) {
-    for (let j = after.length - 1; j >= 0; j -= 1) {
-      lengths[i]![j] =
-        before[i] === after[j]
-          ? 1 + (lengths[i + 1]?.[j + 1] ?? 0)
-          : Math.max(lengths[i + 1]?.[j] ?? 0, lengths[i]?.[j + 1] ?? 0);
-    }
-  }
+  const table = commonRunLengths(before, after);
+  const at = (i: number, j: number) => table[i]?.[j] ?? 0;
   const kept = new Set<string>();
-  let i = 0;
-  let j = 0;
-  while (i < before.length && j < after.length) {
-    if (before[i] === after[j]) {
-      kept.add(before[i]!);
+  for (let i = 0, j = 0; i < before.length && j < after.length; ) {
+    const id = before[i];
+    if (id !== undefined && id === after[j]) {
+      kept.add(id);
       i += 1;
       j += 1;
-    } else if ((lengths[i + 1]?.[j] ?? 0) >= (lengths[i]?.[j + 1] ?? 0)) {
+    } else if (at(i + 1, j) >= at(i, j + 1)) {
       i += 1;
     } else {
       j += 1;
@@ -197,6 +211,59 @@ const describe = (field: BuilderField) => ({
   type: field.type,
 });
 
+/** Two definitions side by side: where each field sits in each. */
+interface Comparison {
+  before: Map<string, Placement>;
+  after: Map<string, Placement>;
+  /** Present now and not before. */
+  added: (id: string) => boolean;
+  /** Present before and not now. */
+  deleted: (id: string) => boolean;
+}
+
+function compareFields(
+  baseline: readonly BuilderField[],
+  current: readonly BuilderField[]
+): Comparison {
+  const before = placementsOf(baseline);
+  const after = placementsOf(current);
+  return {
+    before,
+    after,
+    added: id => after.has(id) && !before.has(id),
+    deleted: id => before.has(id) && !after.has(id),
+  };
+}
+
+/** A change of `kind` to `field`, with what the kind adds. */
+function changeOf(
+  kind: PendingChangeKind,
+  field: BuilderField,
+  extra: Partial<PendingChange> = {}
+): PendingChange {
+  return { kind, fieldId: field.id, ...describe(field), ...extra };
+}
+
+/** What changed in a field that was saved and is still here. */
+function changesOfKept(
+  field: BuilderField,
+  was: BuilderField,
+  moved: boolean
+): PendingChange[] {
+  const changes: PendingChange[] = [];
+  if (moved) changes.push(changeOf("moved", field));
+  if ((was.name ?? "") !== (field.name ?? "")) {
+    changes.push(changeOf("renamed", field, { previousName: was.name ?? "" }));
+  }
+  if (was.type !== field.type) {
+    changes.push(changeOf("typeChanged", field, { previousType: was.type }));
+  }
+  if (settingsSignatureOf(was) !== settingsSignatureOf(field)) {
+    changes.push(changeOf("settings", field));
+  }
+  return changes;
+}
+
 /**
  * The pending changes from `baseline` to `current`: in the order of the
  * definition now, each deleted field after them in its saved order.
@@ -205,10 +272,7 @@ export function pendingChanges(
   baseline: readonly BuilderField[],
   current: readonly BuilderField[]
 ): PendingChange[] {
-  const before = placementsOf(baseline);
-  const after = placementsOf(current);
-  const added = (id: string) => after.has(id) && !before.has(id);
-  const deleted = (id: string) => before.has(id) && !after.has(id);
+  const { before, after, added, deleted } = compareFields(baseline, current);
   const baselineOrder = inOrder(baseline);
   const currentOrder = inOrder(current);
   const movedInPlace = movedWithinParents(
@@ -221,52 +285,21 @@ export function pendingChanges(
   const changes: PendingChange[] = [];
   for (const field of currentOrder) {
     const was = before.get(field.id)?.field;
-    if (was === undefined) {
+    if (was !== undefined) {
+      const moved =
+        before.get(field.id)?.parentId !== after.get(field.id)?.parentId ||
+        movedInPlace.has(field.id);
+      changes.push(...changesOfKept(field, was, moved));
+    } else if (!underAny(field.id, after, added)) {
       // A field added inside an added field comes with it.
-      if (underAny(field.id, after, added)) continue;
-      changes.push({
-        kind: "added",
-        fieldId: field.id,
-        ...describe(field),
-        ...insideOf(field, added),
-      });
-      continue;
-    }
-    if (
-      before.get(field.id)?.parentId !== after.get(field.id)?.parentId ||
-      movedInPlace.has(field.id)
-    ) {
-      changes.push({ kind: "moved", fieldId: field.id, ...describe(field) });
-    }
-    if ((was.name ?? "") !== (field.name ?? "")) {
-      changes.push({
-        kind: "renamed",
-        fieldId: field.id,
-        ...describe(field),
-        previousName: was.name ?? "",
-      });
-    }
-    if (was.type !== field.type) {
-      changes.push({
-        kind: "typeChanged",
-        fieldId: field.id,
-        ...describe(field),
-        previousType: was.type,
-      });
-    }
-    if (settingsSignatureOf(was) !== settingsSignatureOf(field)) {
-      changes.push({ kind: "settings", fieldId: field.id, ...describe(field) });
+      changes.push(changeOf("added", field, insideOf(field, added)));
     }
   }
   for (const field of baselineOrder) {
     // A field deleted inside a deleted field goes with it.
-    if (!deleted(field.id) || underAny(field.id, before, deleted)) continue;
-    changes.push({
-      kind: "deleted",
-      fieldId: field.id,
-      ...describe(field),
-      ...insideOf(field, deleted),
-    });
+    if (deleted(field.id) && !underAny(field.id, before, deleted)) {
+      changes.push(changeOf("deleted", field, insideOf(field, deleted)));
+    }
   }
   return changes;
 }
@@ -277,24 +310,25 @@ function insideWords(change: PendingChange): string {
   return ` and ${change.inside} ${change.inside === 1 ? "field" : "fields"} inside`;
 }
 
+/** Each kind of change in plain words, given what the field is called. */
+const CHANGE_WORDS: Record<
+  PendingChangeKind,
+  (what: string, change: PendingChange) => string
+> = {
+  added: (what, change) => `added ${what}${insideWords(change)}`,
+  deleted: (what, change) => `deleted ${what}${insideWords(change)}`,
+  moved: what => `moved ${what}`,
+  renamed: (_what, change) =>
+    `renamed ${change.previousName ?? ""} to ${change.name}`,
+  typeChanged: what => `changed the type of ${what}`,
+  settings: what => `changed ${what}`,
+};
+
 /** One pending change in plain words, as an announcement reads it. */
-export function describeChange(change: PendingChange): string {
+function describeChange(change: PendingChange): string {
   // A field just added has neither label nor name until one is typed.
   const what = change.label || change.name || "a new field";
-  switch (change.kind) {
-    case "added":
-      return `added ${what}${insideWords(change)}`;
-    case "deleted":
-      return `deleted ${what}${insideWords(change)}`;
-    case "moved":
-      return `moved ${what}`;
-    case "renamed":
-      return `renamed ${change.previousName ?? ""} to ${change.name}`;
-    case "typeChanged":
-      return `changed the type of ${what}`;
-    case "settings":
-      return `changed ${what}`;
-  }
+  return CHANGE_WORDS[change.kind](what, change);
 }
 
 /**
@@ -322,8 +356,7 @@ export function rowMarks(
   const marks = new Map<string, Set<RowMark>>();
   const mark = (id: string, rowMark: RowMark) =>
     marks.set(id, new Set([...(marks.get(id) ?? []), rowMark]));
-  const before = placementsOf(baseline);
-  const after = placementsOf(current);
+  const { before, after, added, deleted } = compareFields(baseline, current);
   // Only the fields that came or went with the container: a saved field
   // moved into a new one is marked moved, not new.
   const markAll = (
@@ -334,8 +367,6 @@ export function rowMarks(
     if (belongs(field.id)) mark(field.id, rowMark);
     for (const child of field.fields ?? []) markAll(child, rowMark, belongs);
   };
-  const added = (id: string) => after.has(id) && !before.has(id);
-  const deleted = (id: string) => before.has(id) && !after.has(id);
   for (const change of pendingChanges(baseline, current)) {
     if (change.kind === "added") {
       const field = after.get(change.fieldId)?.field;
