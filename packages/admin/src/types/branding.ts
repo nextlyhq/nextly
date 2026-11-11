@@ -1,4 +1,5 @@
 import type {
+  DeliveredAdminContribution,
   OverridableDocumentAction,
   PluginDocumentActionOverride,
   AdminContributionsMeta,
@@ -8,6 +9,25 @@ import type {
 import type { PluginFieldTypeMeta } from "nextly/field-catalog";
 // The widget as the workspace payload serves it, a type only.
 import type { PublishedWidget } from "nextly/widget-result";
+
+/** What a declared action does: open a plugin component, or call its route. */
+export type DeclaredActionMeta = Extract<
+  DeliveredAdminContribution,
+  { kind: "rowAction" }
+>["action"];
+
+/**
+ * A plugin's person's-menu item as delivered: a label, an icon, and a link or
+ * an action, with the id its action's route is called with.
+ */
+export type PluginUserMenuItemMeta = {
+  id: string;
+  label: string;
+  icon: string;
+} & (
+  | { to: string; action?: undefined }
+  | { action: DeclaredActionMeta; to?: undefined }
+);
 
 export interface ResolvedBrandingColors {
   primary?: string;
@@ -179,11 +199,20 @@ export interface PluginMetadata {
    * asks for, which the settings page asks for too.
    */
   settings?: { component: string; permission?: string };
-  /** Admin header-slot component contributed via `contributes.admin.headerSlot`. */
+  /**
+   * Admin header-slot component contributed via `contributes.admin.headerSlot`,
+   * mirrored for a slot at the bar's right end only.
+   */
   headerSlot?: string;
-  /** Header customization contributed via `contributes.admin.header`. */
+  /**
+   * Header customization contributed via `contributes.admin.header`. `place`
+   * is absent for the bar's right end; `slot` is drawn at the bar or the
+   * rail's foot, `item` in the person's menu.
+   */
   header?: {
     slot?: string;
+    place?: "rail-foot" | "menu";
+    item?: PluginUserMenuItemMeta;
     hideDefaults?: boolean;
     hide?: Array<"github" | "discord" | "docs" | "notifications">;
   };
