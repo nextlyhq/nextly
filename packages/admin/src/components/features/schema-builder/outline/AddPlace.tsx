@@ -40,6 +40,43 @@ function editableContainer(row: VisibleRow): boolean {
   );
 }
 
+/** The place at the end of an open, editable container. */
+function insidePlace(container: VisibleRow): AddPlaceItem {
+  return {
+    kind: "inside",
+    key: `inside:${container.node.id}`,
+    id: container.node.id,
+    parentId: container.node.id,
+    level: container.level + 1,
+    label: container.node.field.label || container.node.field.name,
+  };
+}
+
+/**
+ * The place before `row`, between it and the row above it in its container,
+ * or null where none is offered: above the first row, inside a read-only
+ * container, and beside a read-only row on either side.
+ */
+function beforePlace(
+  row: VisibleRow,
+  above: VisibleRow | undefined,
+  parent: VisibleRow | undefined
+): AddPlaceItem | null {
+  const editable = row.node.own && row.node.readOnly === null;
+  const parentEditable = parent ? editableContainer(parent) : true;
+  if (!above || above.node.readOnly !== null || !editable || !parentEditable) {
+    return null;
+  }
+  return {
+    kind: "before",
+    key: `before:${row.node.id}`,
+    id: row.node.id,
+    parentId: row.node.parentId,
+    level: row.level,
+    label: row.node.field.label || row.node.field.name,
+  };
+}
+
 /**
  * The rows with the places a field can be added among them, in order. With
  * `enabled` false (a read-only entity, or while finding) only the rows.
@@ -51,58 +88,28 @@ export function withAddPlaces(
   if (!enabled) return rows.map(row => ({ kind: "row", row }));
   const byId = new Map(rows.map(row => [row.node.id, row]));
   const items: OutlineItem[] = [];
+  // Open editable containers, innermost last: each gets its end place once
+  // the rows inside it are drawn.
   const open: VisibleRow[] = [];
-
-  const inside = (container: VisibleRow): AddPlaceItem => ({
-    kind: "inside",
-    key: `inside:${container.node.id}`,
-    id: container.node.id,
-    parentId: container.node.id,
-    level: container.level + 1,
-    label: container.node.field.label || container.node.field.name,
-  });
-  // Close every open container the next row is not inside.
   const closeTo = (level: number) => {
-    while (open.length > 0 && (open[open.length - 1]?.level ?? 0) >= level) {
-      const container = open.pop();
-      if (container) items.push(inside(container));
+    while ((open[open.length - 1]?.level ?? 0) >= level && open.length > 0) {
+      items.push(insidePlace(open.pop() as VisibleRow));
     }
   };
-
-  // The row drawn last in each container, so the "+" between two rows knows
-  // the row above it.
+  // The row drawn last in each container: the row above the next one there.
   const lastIn = new Map<string, VisibleRow>();
 
   for (const row of rows) {
     closeTo(row.level);
-    const parent = row.node.parentId ? byId.get(row.node.parentId) : undefined;
-    const parentEditable = parent ? editableContainer(parent) : true;
     const container = row.node.parentId ?? "";
-    const above = lastIn.get(container);
+    const parent = row.node.parentId ? byId.get(row.node.parentId) : undefined;
+    const place = beforePlace(row, lastIn.get(container), parent);
     lastIn.set(container, row);
-    // Not beside a read-only row either: a "+" between one and the next would
-    // be an entry beside it.
-    if (
-      above !== undefined &&
-      above.node.readOnly === null &&
-      row.node.own &&
-      row.node.readOnly === null &&
-      parentEditable
-    ) {
-      items.push({
-        kind: "before",
-        key: `before:${row.node.id}`,
-        id: row.node.id,
-        parentId: row.node.parentId,
-        level: row.level,
-        label: row.node.field.label || row.node.field.name,
-      });
-    }
+    if (place) items.push(place);
     items.push({ kind: "row", row });
-    if (editableContainer(row)) {
-      if (row.expanded) open.push(row);
-      else if (row.node.children.length === 0) items.push(inside(row));
-    }
+    if (!editableContainer(row)) continue;
+    if (row.expanded) open.push(row);
+    else if (row.node.children.length === 0) items.push(insidePlace(row));
   }
   closeTo(0);
   return items;

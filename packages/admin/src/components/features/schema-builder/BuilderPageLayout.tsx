@@ -21,13 +21,11 @@ import { useMemo } from "react";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
-import { useOutlineFieldGroups } from "@admin/hooks/useOutlineFieldGroups";
 import { findFieldById } from "@admin/lib/builder";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
 import { moveWithinContainer } from "@admin/lib/builder/builder-rows";
 import { builderFieldErrors } from "@admin/lib/builder/field-validators";
 import {
-  buildOutline,
   flattenOutline,
   nodePlacement,
   type LoadedFieldGroup,
@@ -43,6 +41,7 @@ import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 import { BuilderToolbar } from "./BuilderToolbar";
 import { FormPreview } from "./outline/FormPreview";
 import { Outline, type OutlineCallbacks } from "./outline/Outline";
+import { useBuilderOutline } from "./outline/useBuilderOutline";
 import type { BuilderFieldsApi } from "./types";
 
 type Props = {
@@ -78,34 +77,24 @@ type Props = {
   children?: ReactNode;
 };
 
-export function BuilderPageLayout({
-  config,
-  builder,
-  entitySlug,
-  name,
-  locked,
-  configPath,
-  unsavedCount,
-  savedFieldIds,
-  onSave,
-  settings,
-  onSettingsChange,
-  active,
-  onActiveChange,
-  onDuplicateField,
-  onRowDragEnd,
-  beforeFieldList,
-  isSaving,
-  savingLabel,
-  children,
-}: Props): JSX.Element {
-  // The outline, built once here, is what both the outline and the settings
-  // panel read: which rows exist, and which of them cannot change.
-  const fieldGroups = useOutlineFieldGroups(builder.fields);
-  const outline = useMemo(
-    () => buildOutline(builder.fields, { entityReadOnly: locked, fieldGroups }),
-    [builder.fields, locked, fieldGroups]
-  );
+export function BuilderPageLayout(props: Props): JSX.Element {
+  // Only what the frame itself draws is named here; the outline and the panel
+  // take the rest through the workspace.
+  const {
+    config,
+    builder,
+    name,
+    locked,
+    unsavedCount,
+    onSave,
+    settings,
+    onSettingsChange,
+    active,
+    onActiveChange,
+    isSaving,
+    savingLabel,
+    children,
+  } = props;
   return (
     <div className="flex flex-col min-h-screen bg-background">
       <BuilderToolbar
@@ -117,32 +106,7 @@ export function BuilderPageLayout({
         onOpenSettings={() => onActiveChange({ kind: "settings" })}
         onSave={onSave}
       />
-      {/* The list and, while a field is edited, its settings side by side. */}
-      <div className="flex flex-1 items-start">
-        <FieldListRegion
-          config={config}
-          builder={builder}
-          entitySlug={entitySlug}
-          outline={outline}
-          fieldGroups={fieldGroups}
-          locked={locked}
-          configPath={configPath}
-          beforeFieldList={beforeFieldList}
-          active={active}
-          onActiveChange={onActiveChange}
-          onDuplicateField={onDuplicateField}
-          onRowDragEnd={onRowDragEnd}
-        />
-        <EditedFieldSettings
-          active={active}
-          onActiveChange={onActiveChange}
-          config={config}
-          builder={builder}
-          outline={outline}
-          savedFieldIds={savedFieldIds}
-          locked={locked}
-        />
-      </div>
+      <BuilderWorkspace {...props} />
 
       <BuilderOverlays
         active={active}
@@ -164,6 +128,38 @@ export function BuilderPageLayout({
       <div aria-live="polite" className="sr-only">
         {isSaving ? savingLabel : ""}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The outline and, while a field is edited, its settings, side by side. The
+ * outline is built once here, so the two read the same rows.
+ */
+function BuilderWorkspace(
+  props: Pick<
+    Props,
+    | "config"
+    | "builder"
+    | "entitySlug"
+    | "locked"
+    | "configPath"
+    | "beforeFieldList"
+    | "active"
+    | "onActiveChange"
+    | "onDuplicateField"
+    | "onRowDragEnd"
+    | "savedFieldIds"
+  >
+): JSX.Element {
+  const { outline, fieldGroups } = useBuilderOutline(
+    props.builder.fields,
+    props.locked
+  );
+  return (
+    <div className="flex flex-1 items-start">
+      <FieldListRegion {...props} outline={outline} fieldGroups={fieldGroups} />
+      <EditedFieldSettings {...props} outline={outline} />
     </div>
   );
 }

@@ -13,11 +13,8 @@ export {
   convertToBuilderField,
 } from "./field-transformers";
 
-export { builderFieldErrors, validateBuilderFields } from "./field-validators";
-export type {
-  BuilderFieldError,
-  FieldBuilderValidationResult,
-} from "./field-validators";
+export { validateBuilderFields } from "./field-validators";
+export type { FieldBuilderValidationResult } from "./field-validators";
 
 export { nestedFieldPriorityCollision } from "./dnd-collision";
 

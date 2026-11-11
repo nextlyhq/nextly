@@ -18,11 +18,14 @@ import { memo } from "react";
 import { ChevronDown, ChevronRight } from "@admin/components/icons";
 import {
   describeReadOnly,
+  type OutlineNode,
   type VisibleRow,
 } from "@admin/lib/builder/outline/outline-model";
 import { cn } from "@admin/lib/utils";
 
-import { OutlineRowMenu, type OutlineActions } from "./OutlineRowMenu";
+import type { OutlineActions } from "./outline-types";
+import { OutlineRowMenu } from "./OutlineRowMenu";
+import { ROW_ID_PREFIX } from "./useTreeKeyDown";
 
 /** The width of one level of indent, in pixels. */
 const INDENT = 20;
@@ -68,30 +71,172 @@ function Badge({
   );
 }
 
-function OutlineRowView({
+/** What a blocks field accepts, in words; null for any other field. */
+function blocksNote(node: OutlineNode): string | null {
+  if (node.container !== "blocks" || !node.blocks) return null;
+  return node.blocks.accepted === "all"
+    ? "Blocks: every block accepted"
+    : `Blocks: ${node.blocks.accepted} accepted`;
+}
+
+/** The badges a row carries, in a fixed order; told in words, not colour. */
+function RowBadges({
+  node,
+  error,
+}: {
+  node: OutlineNode;
+  error: string | undefined;
+}): JSX.Element {
+  const { field } = node;
+  const marks: { show: unknown; text: string }[] = [
+    { show: field.validation?.required, text: "Required" },
+    { show: field.advanced?.localized, text: "Translatable" },
+    { show: field.admin?.hidden, text: "Hidden" },
+    { show: field.admin?.condition, text: "Has a condition" },
+    {
+      show: node.readOnly,
+      text: node.readOnly ? `Locked · ${describeReadOnly(node.readOnly)}` : "",
+    },
+    { show: node.container === "field-group", text: "Shared" },
+  ];
+  return (
+    <span className="ml-auto flex flex-wrap items-center justify-end gap-1">
+      {marks
+        .filter(mark => Boolean(mark.show))
+        .map(mark => (
+          <Badge key={mark.text}>{mark.text}</Badge>
+        ))}
+      {error && (
+        <Badge tone="danger">
+          <span title={error}>Has an error</span>
+        </Badge>
+      )}
+    </span>
+  );
+}
+
+/** The chevron that folds a container; nothing for a row that holds none. */
+function FoldChevron({
+  expanded,
+  onToggle,
+}: {
+  expanded: boolean | undefined;
+  onToggle: () => void;
+}): JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      onClick={event => {
+        // Folding is the chevron's only job: it neither selects the row nor
+        // opens the panel.
+        event.stopPropagation();
+        onToggle();
+      }}
+      className="flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground"
+    >
+      {expanded === true && <ChevronDown className="h-4 w-4" />}
+      {expanded === false && <ChevronRight className="h-4 w-4" />}
+    </span>
+  );
+}
+
+/** The handle a pointer drags a field by; nothing to the keyboard. */
+function DragHandle({
+  draggable,
+  sortable,
+}: {
+  draggable: boolean;
+  sortable: ReturnType<typeof useSortable>;
+}): JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      ref={sortable.setActivatorNodeRef}
+      {...(draggable ? sortable.listeners : {})}
+      className={cn(
+        "flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground",
+        draggable ? "cursor-grab" : "invisible"
+      )}
+    >
+      ⋮⋮
+    </span>
+  );
+}
+
+/** The row as a tree item: text and badges only, no control inside it. */
+function RowItem({
   row,
   typeName,
   error,
   selected,
   tabStop,
-  draggable,
   onSelect,
   onToggle,
   registerRow,
-  menuOpen,
-  actions,
-}: Props): JSX.Element {
-  const { node, level, posinset, setsize, expanded, match } = row;
+}: Pick<
+  Props,
+  | "row"
+  | "typeName"
+  | "error"
+  | "selected"
+  | "tabStop"
+  | "onSelect"
+  | "onToggle"
+  | "registerRow"
+>): JSX.Element {
+  const { node, level, expanded, match } = row;
   const { field } = node;
-  const sortable = useSortable({ id: node.id, disabled: !draggable });
+  const what = blocksNote(node);
+  return (
+    <div
+      role="treeitem"
+      ref={element => registerRow(node.id, element)}
+      id={`${ROW_ID_PREFIX}${node.id}`}
+      data-testid={`field-row-${field.name}`}
+      data-path={node.path}
+      aria-level={level}
+      aria-posinset={row.posinset}
+      aria-setsize={row.setsize}
+      aria-expanded={expanded}
+      aria-selected={selected}
+      tabIndex={tabStop ? 0 : -1}
+      onClick={() => onSelect(node.id)}
+      className={cn(
+        "flex min-h-9 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md border border-transparent py-1 pr-2 outline-none",
+        "focus-visible:ring-2 focus-visible:ring-ring",
+        "hover:bg-accent/50",
+        // Selected is told by a thick bar at its start as well as the fill,
+        // so it does not rest on colour alone. A hidden row is told by its
+        // Hidden badge, not by fading it, which would take its text below the
+        // contrast it needs.
+        selected && "border-l-4 border-l-primary bg-accent"
+      )}
+      style={{ paddingLeft: (level - 1) * INDENT + 4 }}
+    >
+      <FoldChevron expanded={expanded} onToggle={() => onToggle(node.path)} />
+      <span
+        className={cn(
+          "truncate font-medium",
+          match && "underline decoration-2 underline-offset-4"
+        )}
+      >
+        {field.label || field.name || "Untitled field"}
+      </span>
+      <span className="shrink-0 text-xs text-muted-foreground">{typeName}</span>
+      {field.name && (
+        <code className="shrink-0 text-xs text-muted-foreground">
+          {field.name}
+        </code>
+      )}
+      {what && <span className="text-xs text-muted-foreground">{what}</span>}
+      <RowBadges node={node} error={error} />
+    </div>
+  );
+}
 
-  const what =
-    node.container === "blocks" && node.blocks
-      ? node.blocks.accepted === "all"
-        ? "Blocks: every block accepted"
-        : `Blocks: ${node.blocks.accepted} accepted`
-      : null;
-
+function OutlineRowView(props: Props): JSX.Element {
+  const { row, draggable, menuOpen, actions } = props;
+  const sortable = useSortable({ id: row.node.id, disabled: !draggable });
   return (
     <div
       role="none"
@@ -105,92 +250,9 @@ function OutlineRowView({
         sortable.isDragging && "opacity-60"
       )}
     >
-      <span
-        aria-hidden="true"
-        ref={sortable.setActivatorNodeRef}
-        {...(draggable ? sortable.listeners : {})}
-        className={cn(
-          "flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground",
-          draggable ? "cursor-grab" : "invisible"
-        )}
-      >
-        ⋮⋮
-      </span>
-      <div
-        role="treeitem"
-        ref={element => registerRow(node.id, element)}
-        id={`outline-row-${node.id}`}
-        data-testid={`field-row-${field.name}`}
-        data-path={node.path}
-        aria-level={level}
-        aria-posinset={posinset}
-        aria-setsize={setsize}
-        aria-expanded={expanded}
-        aria-selected={selected}
-        tabIndex={tabStop ? 0 : -1}
-        onClick={() => onSelect(node.id)}
-        className={cn(
-          "flex min-h-9 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md border border-transparent py-1 pr-2 outline-none",
-          "focus-visible:ring-2 focus-visible:ring-ring",
-          "hover:bg-accent/50",
-          // Selected is told by a thick bar at its start as well as the fill,
-          // so it does not rest on colour alone.
-          // A hidden row is told by its Hidden badge, not by fading it,
-          // which would take its text below the contrast it needs.
-          selected && "border-l-4 border-l-primary bg-accent"
-        )}
-        style={{ paddingLeft: (level - 1) * INDENT + 4 }}
-      >
-        <span
-          aria-hidden="true"
-          onClick={event => {
-            // Folding is the chevron's only job: it neither selects the row
-            // nor opens the panel.
-            event.stopPropagation();
-            onToggle(node.path);
-          }}
-          className="flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground"
-        >
-          {expanded === undefined ? null : expanded ? (
-            <ChevronDown className="h-4 w-4" />
-          ) : (
-            <ChevronRight className="h-4 w-4" />
-          )}
-        </span>
-        <span
-          className={cn(
-            "truncate font-medium",
-            match && "underline decoration-2 underline-offset-4"
-          )}
-        >
-          {field.label || field.name || "Untitled field"}
-        </span>
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {typeName}
-        </span>
-        {field.name && (
-          <code className="shrink-0 text-xs text-muted-foreground">
-            {field.name}
-          </code>
-        )}
-        {what && <span className="text-xs text-muted-foreground">{what}</span>}
-        <span className="ml-auto flex flex-wrap items-center justify-end gap-1">
-          {field.validation?.required && <Badge>Required</Badge>}
-          {field.advanced?.localized && <Badge>Translatable</Badge>}
-          {field.admin?.hidden && <Badge>Hidden</Badge>}
-          {field.admin?.condition && <Badge>Has a condition</Badge>}
-          {node.readOnly && (
-            <Badge>Locked · {describeReadOnly(node.readOnly)}</Badge>
-          )}
-          {node.container === "field-group" && <Badge>Shared</Badge>}
-          {error && (
-            <Badge tone="danger">
-              <span title={error}>Has an error</span>
-            </Badge>
-          )}
-        </span>
-      </div>
-      <OutlineRowMenu node={node} open={menuOpen} actions={actions} />
+      <DragHandle draggable={draggable} sortable={sortable} />
+      <RowItem {...props} />
+      <OutlineRowMenu node={row.node} open={menuOpen} actions={actions} />
     </div>
   );
 }

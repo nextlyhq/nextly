@@ -127,6 +127,55 @@ type Props = {
   onOpenFieldGroup?: (slug: string) => void;
 };
 
+/**
+ * The outline's own read-only rule, as the panel asks it: the answer the
+ * outline gave, when it gave one, else the same rule over the field's place.
+ * A field owned by code or a plugin, one inside an owned container, one of a
+ * field group's fields, or any field of a code-first entity is shown with
+ * every setting and none changeable.
+ */
+function readOnlyReasonOf(
+  placement: FieldPlacement,
+  given: ReadOnlyReason | null | undefined,
+  entityReadOnly: boolean
+): ReadOnlyReason | null {
+  if (given !== undefined) return given;
+  return placementReadOnlyReason(
+    placement.field,
+    placement.ancestors,
+    entityReadOnly
+  );
+}
+
+/**
+ * Where a read-only field is defined, and for a field group's field, the way
+ * to the editor where it can be changed.
+ */
+function DefinedAt({
+  reason,
+  onOpenFieldGroup,
+}: {
+  reason: ReadOnlyReason | null;
+  onOpenFieldGroup: ((slug: string) => void) | undefined;
+}): JSX.Element | null {
+  if (!reason) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-sm text-muted-foreground">
+      <span>{describeReadOnly(reason)}.</span>
+      {reason.kind === "field-group" && onOpenFieldGroup && (
+        <Button
+          type="button"
+          variant="link"
+          className="h-auto p-0"
+          onClick={() => onOpenFieldGroup(reason.slug)}
+        >
+          Open the field group {reason.label}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export function BuilderFieldSettings({
   kind,
   fields,
@@ -146,33 +195,13 @@ export function BuilderFieldSettings({
   if (!placement) return null;
 
   const { field, ancestors, siblings } = placement;
-  // The outline's own read-only rule: a field owned by code or a plugin, one
-  // inside an owned container, one of a field group's fields, or any field of
-  // a code-first entity is shown with every setting and none changeable.
-  const reason =
-    readOnlyReason !== undefined
-      ? readOnlyReason
-      : placementReadOnlyReason(field, ancestors, readOnly);
+  const reason = readOnlyReasonOf(placement, readOnlyReason, readOnly);
   const fieldReadOnly = reason !== null;
   const canDelete = !fieldReadOnly && field.isSystem !== true;
   const fieldTitle = field.label || "Untitled field";
 
-  // Where a read-only field is defined, and for a field group's field, the
-  // way to the editor where it can be changed.
-  const definedAt = reason && (
-    <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-sm text-muted-foreground">
-      <span>{describeReadOnly(reason)}.</span>
-      {reason.kind === "field-group" && onOpenFieldGroup && (
-        <Button
-          type="button"
-          variant="link"
-          className="h-auto p-0"
-          onClick={() => onOpenFieldGroup(reason.slug)}
-        >
-          Open the field group {reason.label}
-        </Button>
-      )}
-    </div>
+  const definedAt = (
+    <DefinedAt reason={reason} onOpenFieldGroup={onOpenFieldGroup} />
   );
 
   const panel = (

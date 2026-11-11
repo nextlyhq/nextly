@@ -58,7 +58,7 @@ export function describeReadOnly(reason: ReadOnlyReason): string {
  * then whatever its container passes down (a read-only entity, a locked or
  * owned container).
  */
-export function fieldReadOnlyReason(
+function fieldReadOnlyReason(
   field: BuilderField,
   inherited: ReadOnlyReason | null
 ): ReadOnlyReason | null {
@@ -150,50 +150,76 @@ function containerOf(field: BuilderField): OutlineContainer | null {
   return null;
 }
 
+/** Where a level of the outline sits: what holds it, and what it inherits. */
+interface Level {
+  parent: OutlineNode | null;
+  inherited: ReadOnlyReason | null;
+  /** Field groups already open above this level, so a cycle stops. */
+  chain: readonly string[];
+  /** In the entity's own definition, as opposed to a field group's. */
+  own: boolean;
+}
+
+/** One field's row, before what it holds is filled in. */
+function nodeFor(field: BuilderField, level: Level): OutlineNode {
+  const { parent } = level;
+  const segment = field.name || `#${field.id}`;
+  return {
+    id: field.id,
+    path: parent ? `${parent.path}/${segment}` : segment,
+    field,
+    parentId: parent?.id ?? null,
+    level: parent ? parent.level + 1 : 1,
+    container: containerOf(field),
+    children: [],
+    readOnly: fieldReadOnlyReason(field, level.inherited),
+    own: level.own,
+  };
+}
+
+/** Fill in what a row holds: its own fields, a field group's, or what a blocks field accepts. */
+function fillContainer(
+  node: OutlineNode,
+  ctx: BuildContext,
+  level: Level
+): void {
+  switch (node.container) {
+    case "group":
+    case "repeater":
+      node.children = buildLevel(node.field.fields ?? [], ctx, {
+        ...level,
+        parent: node,
+        inherited: node.readOnly,
+      });
+      return;
+    case "field-group":
+      fillFieldGroup(node, ctx, level.chain);
+      return;
+    case "blocks": {
+      const allow = node.field.blocks?.allow;
+      node.blocks = {
+        accepted: allow && allow.length > 0 ? allow.length : "all",
+      };
+      return;
+    }
+    default:
+      return;
+  }
+}
+
 function buildLevel(
   fields: readonly BuilderField[],
-  parent: OutlineNode | null,
-  inherited: ReadOnlyReason | null,
   ctx: BuildContext,
-  /** Field groups already open above this level, so a cycle stops. */
-  chain: readonly string[],
-  own: boolean
+  level: Level
 ): OutlineNode[] {
   const nodes: OutlineNode[] = [];
   for (const field of fields) {
     // The entity's built-in fields are shown above the outline, not in it.
     // Only its own top level holds them: a field of that name in a container
     // or a field group is an ordinary field there.
-    if (field.isSystem && parent === null && own) continue;
-    const segment = field.name || `#${field.id}`;
-    const node: OutlineNode = {
-      id: field.id,
-      path: parent ? `${parent.path}/${segment}` : segment,
-      field,
-      parentId: parent?.id ?? null,
-      level: parent ? parent.level + 1 : 1,
-      container: containerOf(field),
-      children: [],
-      readOnly: fieldReadOnlyReason(field, inherited),
-      own,
-    };
-    if (node.container === "group" || node.container === "repeater") {
-      node.children = buildLevel(
-        field.fields ?? [],
-        node,
-        node.readOnly,
-        ctx,
-        chain,
-        own
-      );
-    } else if (node.container === "field-group") {
-      fillFieldGroup(node, ctx, chain);
-    } else if (node.container === "blocks") {
-      const allow = field.blocks?.allow;
-      node.blocks = {
-        accepted: allow && allow.length > 0 ? allow.length : "all",
-      };
-    }
+    if (field.isSystem && level.parent === null && level.own) continue;
+    const node = nodeFor(field, level);
+    fillContainer(node, ctx, level);
     nodes.push(node);
   }
   return nodes;
@@ -212,14 +238,12 @@ function fieldGroupChildren(
   const fields = group.fields.map(definition =>
     derivedField(definition, `${parent.id}/${definition.name}`)
   );
-  return buildLevel(
-    fields,
+  return buildLevel(fields, ctx, {
     parent,
-    { kind: "field-group", slug, label: group.label },
-    ctx,
-    [...chain, slug],
-    false
-  );
+    inherited: { kind: "field-group", slug, label: group.label },
+    chain: [...chain, slug],
+    own: false,
+  });
 }
 
 function fillFieldGroup(
@@ -291,11 +315,13 @@ export function buildOutline(
 ): OutlineNode[] {
   return buildLevel(
     fields,
-    null,
-    options.entityReadOnly ? { kind: "entity" } : null,
     { fieldGroups: options.fieldGroups },
-    [],
-    true
+    {
+      parent: null,
+      inherited: options.entityReadOnly ? { kind: "entity" } : null,
+      chain: [],
+      own: true,
+    }
   );
 }
 
@@ -332,7 +358,7 @@ export interface VisibleRow {
 }
 
 /** Whether a row matches a find: its label, its name or its type's plain name. */
-export function rowMatches(
+function rowMatches(
   node: OutlineNode,
   query: string,
   typeLabel: (type: string) => string

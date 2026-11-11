@@ -25,21 +25,7 @@ import {
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
 
-/** What a row's menu can do. One object for every row, so rows stay memoized. */
-export interface OutlineActions {
-  setMenuOpen: (id: string | null) => void;
-  /** Put focus back on a row, after its menu closes. */
-  focusRow: (id: string) => void;
-  select: (id: string) => void;
-  addInside: (id: string) => void;
-  addAfter: (id: string) => void;
-  canMove: (id: string, delta: -1 | 1) => boolean;
-  move: (id: string, delta: -1 | 1) => void;
-  duplicate: (id: string) => void;
-  remove: (id: string) => void;
-  setHidden: (id: string, hidden: boolean) => void;
-  openFieldGroup: (slug: string) => void;
-}
+import type { OutlineActions } from "./outline-types";
 
 /**
  * The field group a row opens: the one a field-group field uses, or else the
