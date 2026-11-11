@@ -623,8 +623,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     ...tab.routes,
     ...problemRoutes(problemChecks),
     // The bulk edit table, and the import beside it.
-    ...bulkRoutes({ targets, readRules, checks: problemChecks }),
-    ...importRoutes({ targets, readRules, checks: problemChecks })
+    ...bulkRoutes({
+      targets,
+      readRules,
+      checks: problemChecks,
+      pagePermissions,
+    }),
+    ...importRoutes({
+      targets,
+      readRules,
+      checks: problemChecks,
+      pagePermissions,
+    })
   );
 
   return definePlugin({

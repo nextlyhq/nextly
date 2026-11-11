@@ -8,8 +8,8 @@
  * A dry run changes nothing. An apply writes what the dry run showed, into
  * empty places only, leaving a value the same as the automatic one
  * automatic, and refuses once anything changed since. A failure part-way
- * leaves every value as it was. Only whoever may change the SEO settings
- * may import.
+ * leaves every value as it was. Only whoever holds site-wide SEO
+ * (`manage-seo`) may import.
  *
  * nextlyhq.com's component is named `seo`; a type with a field of its own
  * named `seo` cannot take the plugin's group, so here it sits under another
@@ -43,6 +43,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../../redirects/collection";
+import { MANAGE_SEO_PERMISSION } from "../../permissions";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
 import type { DryRunBody, ImportGroupsBody, ImportSource } from "../contract";
 
@@ -162,6 +163,8 @@ async function boot(
 ): Promise<{ t: TestNextly; staff: Staff }> {
   const t = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
+    // Every permission the plugins declare, manage-seo among them.
+    seedPublic: true,
     plugins: [
       seoPlugin({ collections: ["posts", "pages"], sitemap: false }),
       redirectFailure,
@@ -255,11 +258,7 @@ async function boot(
   return {
     t,
     staff: {
-      importer: await keyHolding([
-        ...content,
-        `read-${SEO_SETTINGS_SLUG}`,
-        `update-${SEO_SETTINGS_SLUG}`,
-      ]),
+      importer: await keyHolding([...content, MANAGE_SEO_PERMISSION]),
       editorOnly: await keyHolding(content),
     },
   };
@@ -825,7 +824,7 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(await seoBySlug(t, "posts")).toEqual(before);
   });
 
-  it("refuses anyone who may not change the SEO settings", async () => {
+  it("refuses anyone without site-wide SEO", async () => {
     const { staff } = await boot(dialect);
     const source: ImportSource = {
       kind: "group",

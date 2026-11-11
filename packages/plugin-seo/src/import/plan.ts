@@ -33,7 +33,7 @@ import {
   typeNamesOf,
   type ReadPage,
 } from "../bulk/pages";
-import { refusalAbout, seoWith } from "../bulk/route";
+import { refusalAbout, seoWith, writablePages } from "../bulk/route";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
 import { putRedirect } from "../redirects/store";
@@ -72,6 +72,8 @@ export interface ImportSetup {
   readRules: ReadRules;
   /** The problem list's checks, run again for each changed page. */
   checks: ProblemChecks;
+  /** Whether changing a type's SEO takes a permission of its own. */
+  pagePermissions: boolean;
 }
 
 /** Where each place's value is kept in the plugin's `seo` group. */
@@ -702,6 +704,31 @@ function linesOf(
     .filter(line => line.pages > 0 || line.from.length > 0);
 }
 
+/**
+ * The pages of `changing` the caller may change the SEO of, and the names of
+ * those they may not, which the import leaves out.
+ */
+async function writableOf(
+  ctx: PluginRouteContext,
+  changing: readonly PlannedPage[],
+  options: { locale: string | undefined; pagePermissions: boolean }
+): Promise<{ writable: PlannedPage[]; refused: string[] }> {
+  const allowed = new Set<string>();
+  for (const type of new Set(changing.map(page => page.type))) {
+    const ids = changing
+      .filter(page => page.type === type)
+      .map(page => page.id);
+    for (const id of await writablePages(ctx, type, ids, options)) {
+      allowed.add(`${type}|${id}`);
+    }
+  }
+  const may = (page: PlannedPage) => allowed.has(`${page.type}|${page.id}`);
+  return {
+    writable: changing.filter(may),
+    refused: changing.filter(page => !may(page)).map(page => page.label),
+  };
+}
+
 /** The import worked out, changing nothing. */
 export async function planImport(
   ctx: PluginRouteContext,
@@ -731,8 +758,17 @@ export async function planImport(
         ? tidyOwn(page, tally)
         : decide(record, page, templates, images, tally)
   );
-  const changing = matched.planned.filter(page => page.places.length > 0);
+  const { writable: changing, refused: notYours } = await writableOf(
+    ctx,
+    matched.planned.filter(page => page.places.length > 0),
+    { locale, pagePermissions: setup.pagePermissions }
+  );
   const warnings = [...parsed.warnings, ...warningsOf(matched.skipped, tally)];
+  if (notYours.length > 0) {
+    warnings.push(
+      `${count(notYours.length, "page")} would change, but you may not change ${either(notYours.length, "its", "their")} SEO, so ${either(notYours.length, "it is", "they are")} left out: ${someOf(notYours)}.`
+    );
+  }
   const defaultLanguage =
     locale ?? (await ctx.publicAddresses.defaultLanguage());
   const refused = await refusedRedirects(

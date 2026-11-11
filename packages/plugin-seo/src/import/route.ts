@@ -3,10 +3,10 @@
  * dry run that changes nothing, and the apply of a dry run a person
  * confirmed.
  *
- * An import changes the whole site's SEO, so each route is for whoever may
- * change the SEO settings. Pages are read and written as that person too, so
- * a content type they may not change refuses the import, and nothing of it
- * is applied.
+ * An import changes the whole site's SEO, so each route is for whoever holds
+ * site-wide SEO (`manage-seo`). Pages are read and written as that person
+ * too, and a page whose SEO they may not change is left out of the import
+ * and said so in the dry run.
  *
  * @module import/route
  */
@@ -21,7 +21,7 @@ import {
 import { z } from "nextly/zod";
 
 import { asCaller } from "../bulk/route";
-import { SEO_SETTINGS_SLUG } from "../settings/contract";
+import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 
 import {
   IMPORT_APPLY_PATH,
@@ -109,18 +109,14 @@ function param(url: URL, name: string): string | undefined {
   return value === null || value === "" ? undefined : value;
 }
 
-/** Only whoever may change the SEO settings may import. */
-const SITE_WIDE: PluginRoute["requiredPermission"] = ({ single }) =>
-  single(SEO_SETTINGS_SLUG, "update");
-
 /** The import's routes. */
 export function importRoutes(setup: ImportSetup): PluginRoute[] {
-  return [
+  const routes: PluginRoute[] = [
     {
       method: "GET",
       path: IMPORT_GROUPS_PATH,
       noStore: true,
-      requiredPermission: SITE_WIDE,
+      requiredPermission: MANAGE_SEO_PERMISSION,
       handler: async (req, ctx) => {
         const locale = param(new URL(req.url), "locale");
         const body: ImportGroupsBody = {
@@ -132,7 +128,7 @@ export function importRoutes(setup: ImportSetup): PluginRoute[] {
     {
       method: "POST",
       path: IMPORT_DRY_RUN_PATH,
-      requiredPermission: SITE_WIDE,
+      requiredPermission: MANAGE_SEO_PERMISSION,
       handler: async (req, ctx) => {
         const request = requestOf(await parsedBody(req, REQUEST));
         const plan = await planImport(
@@ -147,7 +143,7 @@ export function importRoutes(setup: ImportSetup): PluginRoute[] {
     {
       method: "POST",
       path: IMPORT_APPLY_PATH,
-      requiredPermission: SITE_WIDE,
+      requiredPermission: MANAGE_SEO_PERMISSION,
       handler: async (req, ctx) => {
         const body = await parsedBody(req, APPLY);
         const request = requestOf(body);
@@ -169,4 +165,6 @@ export function importRoutes(setup: ImportSetup): PluginRoute[] {
       },
     },
   ];
+  // Site-wide SEO: each asks for manage-seo before its handler runs.
+  return routes.map(siteWide);
 }

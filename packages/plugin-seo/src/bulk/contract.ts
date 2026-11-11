@@ -59,6 +59,8 @@ export interface BulkRow {
   autoDescription?: string;
   /** The version the page was read at, sent back with a change to it. */
   rev?: string;
+  /** Whether the reader may change this page's SEO; shown read-only if not. */
+  editable: boolean;
 }
 
 /** What the rows route answers. */

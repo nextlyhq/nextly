@@ -13,6 +13,7 @@
  * @module bulk/route
  */
 import {
+  mayWriteEntry,
   NextlyError,
   respondAction,
   respondDoc,
@@ -23,6 +24,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
+import { mayChangePageSeo } from "../permissions";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
 import type { ReadRules } from "../resolver/provider";
@@ -55,6 +57,8 @@ export interface BulkSetup {
   readRules: ReadRules;
   /** The problem list's checks, run again for each saved page. */
   checks: ProblemChecks;
+  /** Whether changing a type's SEO takes a permission of its own. */
+  pagePermissions: boolean;
 }
 
 /** The person asking, as a managed read or write takes them. */
@@ -79,8 +83,38 @@ function targetOf(setup: BulkSetup, slug: string): string {
   return slug;
 }
 
+/**
+ * The pages of `type` whose SEO the caller may change: where the type's SEO
+ * takes its own permission, they hold it, and each page's own update, with
+ * its rules and the `seo` group's field rule, would let them write it.
+ */
+export async function writablePages(
+  ctx: PluginRouteContext,
+  type: string,
+  ids: readonly string[],
+  options: { locale?: string | undefined; pagePermissions: boolean }
+): Promise<Set<string>> {
+  const writable = new Set<string>();
+  const caller = ctx.caller;
+  if (caller === null) return writable;
+  if (!(await mayChangePageSeo(ctx, type, options.pagePermissions))) {
+    return writable;
+  }
+  const identity = await caller.identity();
+  for (const id of new Set(ids)) {
+    const may = await mayWriteEntry(identity, {
+      collection: type,
+      id,
+      fields: [SEO_GROUP],
+      ...(options.locale === undefined ? {} : { locale: options.locale }),
+    });
+    if (may) writable.add(id);
+  }
+  return writable;
+}
+
 /** A page as the table shows it. */
-function rowOf(page: ReadPage): BulkRow {
+function rowOf(page: ReadPage, writable: ReadonlySet<string>): BulkRow {
   const typed = (name: string) => {
     const value = page.seo[name];
     return typeof value === "string" ? value : "";
@@ -96,6 +130,7 @@ function rowOf(page: ReadPage): BulkRow {
       ? {}
       : { autoDescription: page.auto.description }),
     ...(page.rev === undefined ? {} : { rev: page.rev }),
+    editable: writable.has(page.id),
   };
 }
 
@@ -253,6 +288,18 @@ async function save(
       logContext: { reason: "seo-bulk-repeated-page" },
     });
   }
+  // Every page is asked first, so a page the caller may not change refuses
+  // the whole save before anything is written.
+  const writable = await writablePages(ctx, type, ids, {
+    locale: body.locale ?? undefined,
+    pagePermissions: setup.pagePermissions,
+  });
+  const refused = ids.find(id => !writable.has(id));
+  if (refused !== undefined) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "seo-bulk-page-not-writable", id: refused },
+    });
+  }
   await ctx.services.collections.warmLocalizedReadiness(type);
   const revs: Record<string, string> = {};
   await ctx.services.collections.withTransaction(async transaction => {
@@ -327,9 +374,15 @@ export function bulkRoutes(setup: BulkSetup): PluginRoute[] {
           page,
           limit: BULK_PAGE_SIZE,
         });
+        const writable = await writablePages(
+          ctx,
+          type,
+          read.pages.map(page => page.id),
+          { locale, pagePermissions: setup.pagePermissions }
+        );
         const body: BulkRowsBody = {
           type,
-          rows: read.pages.map(rowOf),
+          rows: read.pages.map(page => rowOf(page, writable)),
           total: read.total,
           more: page * BULK_PAGE_SIZE < read.total,
         };

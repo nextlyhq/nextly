@@ -250,6 +250,8 @@ describe.each(getConfiguredTestDialects())(
       await as("checker", ["check-seo"]);
       await as("media", ["create-media", "read-media"]);
       await as("addsMedia", ["create-media"]);
+      await as("importer", ["manage-seo", ...POST_EDITOR, "edit-seo-posts"]);
+      await as("importerWithoutPageSeo", ["manage-seo", ...POST_EDITOR]);
     }, 120_000);
 
     afterAll(async () => {
@@ -475,6 +477,121 @@ describe.each(getConfiguredTestDialects())(
           expect([who, itemOf(answer.body).mayChange]).toEqual([who, false]);
         }
         expect((await resolve(people.manageOnly!, id)).status).toBe(403);
+      });
+    });
+
+    describe("bulk edit, where a page's SEO has its own permission", () => {
+      /** The posts' rows as the table reads them for `cookie`, by id. */
+      async function rowsFor(cookie: string) {
+        const read = await route("GET", "/bulk/rows?type=posts", cookie);
+        expect(read.status, JSON.stringify(read.body)).toBe(200);
+        const body = read.body as unknown as {
+          rows: { id: string; rev?: string; editable: boolean }[];
+        };
+        return new Map(body.rows.map(row => [row.id, row]));
+      }
+
+      it("shows the rows read-only, and saves none of them, for someone without it", async () => {
+        const id = await post(t, "bulk-kept");
+        const row = (await rowsFor(people.postEditor!)).get(id);
+        expect(row?.editable).toBe(false);
+        const saved = await route("POST", "/bulk/save", people.postEditor!, {
+          type: "posts",
+          changes: [{ id, rev: row?.rev, title: "Changed without leave" }],
+        });
+        expect(saved.status).toBe(403);
+        expect((await stored(t, id)).metaTitle).toBe("bulk-kept as searched");
+      });
+
+      it("saves the rows of someone holding it", async () => {
+        const id = await post(t, "bulk-changed");
+        const row = (await rowsFor(people.seoEditor!)).get(id);
+        expect(row?.editable).toBe(true);
+        const saved = await route("POST", "/bulk/save", people.seoEditor!, {
+          type: "posts",
+          changes: [{ id, rev: row?.rev, title: "Changed with leave" }],
+        });
+        expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+        expect((await stored(t, id)).metaTitle).toBe("Changed with leave");
+      });
+
+      it("shows a reader the rows, read-only", async () => {
+        const id = await post(t, "bulk-read");
+        expect((await rowsFor(people.reader!)).get(id)?.editable).toBe(false);
+      });
+    });
+
+    describe("imports need manage-seo", () => {
+      const source = { kind: "group", field: "seo", map: {} };
+
+      it("refuses the groups, a dry run and an apply without it", async () => {
+        for (const who of ["postEditor", "seoEditor", "storesOnly"] as const) {
+          expect(
+            (await route("GET", "/import/groups", people[who]!)).status
+          ).toBe(403);
+          expect(
+            (await route("POST", "/import/dry-run", people[who]!, { source }))
+              .status
+          ).toBe(403);
+          expect(
+            (
+              await route("POST", "/import/apply", people[who]!, {
+                source,
+                plan: "x",
+              })
+            ).status
+          ).toBe(403);
+        }
+        expect((await route("GET", "/import/groups", null)).status).toBe(401);
+      });
+
+      it("imports for someone holding it, leaving out pages whose SEO they may not change", async () => {
+        const id = await post(t, "imported");
+        // Its typed title made the same as its automatic one, whatever the
+        // settings earlier cases saved make that.
+        const rows = await route(
+          "GET",
+          "/bulk/rows?type=posts",
+          people.importer!
+        );
+        const automatic = (
+          rows.body as unknown as { rows: { id: string; autoTitle?: string }[] }
+        ).rows.find(row => row.id === id)?.autoTitle;
+        expect(automatic).toBeDefined();
+        await t.nextly.update({
+          collection: "posts",
+          id,
+          data: { seo: { metaTitle: automatic }, _overwrite: true },
+          overrideAccess: true,
+        });
+        // The typed title is the same as the automatic one, so the import
+        // makes it automatic, for someone who may change the page's SEO.
+        const without = await route(
+          "POST",
+          "/import/dry-run",
+          people.importerWithoutPageSeo!,
+          { source }
+        );
+        expect(without.status, JSON.stringify(without.body)).toBe(200);
+        const left = without.body as unknown as {
+          pages: number;
+          warnings: string[];
+        };
+        expect(left.pages).toBe(0);
+        expect(left.warnings.join(" ")).toContain("you may not change");
+
+        const dry = await route("POST", "/import/dry-run", people.importer!, {
+          source,
+        });
+        expect(dry.status, JSON.stringify(dry.body)).toBe(200);
+        const run = dry.body as unknown as { pages: number; plan: string };
+        expect(run.pages).toBeGreaterThan(0);
+        const applied = await route("POST", "/import/apply", people.importer!, {
+          source,
+          plan: run.plan,
+        });
+        expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+        expect((await stored(t, id)).metaTitle).toBe("");
       });
     });
 
