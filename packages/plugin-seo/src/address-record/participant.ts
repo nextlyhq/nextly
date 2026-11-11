@@ -5,11 +5,13 @@
  * holds after the save.
  *
  * Two saves of one address never both commit: an address's row has a unique
- * key, and before reading, each call takes the lock rows of every path it
- * touches and every path above them, in one sorted order, so a range and an
- * address inside it meet on the range's lock row, and two saves in several
- * languages never wait on each other in a cycle. SQLite runs one writer at a
- * time, so it takes no locks.
+ * key, and before reading, each call takes the lock row of every page it
+ * moves, then those of every path it touches and every path above them, each
+ * set in one sorted order, so a range and an address inside it meet on the
+ * range's lock row, two saves in several languages never wait on each other
+ * in a cycle, and two writes to one page's addresses (a save and the
+ * catch-up at start) take turns. SQLite runs one writer at a time, so it
+ * takes no locks.
  *
  * @module address-record/participant
  */
@@ -43,11 +45,19 @@ type Transaction = ParticipantTransaction["transaction"];
 /** How many rows one read takes. */
 const READ_PAGE = 200;
 
-/** The stored claim key: the SHA-256 of its text, the same on every dialect. */
+/** The SHA-256 of `text`, the same on every dialect. */
+function sha256(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/** The stored claim key of an address, range or path lock row. */
 function claimKey(kind: RowKind, locale: string, path: string): string {
-  return createHash("sha256")
-    .update(`${kind}:${locale}|${path}`, "utf8")
-    .digest("hex");
+  return sha256(`${kind}:${locale}|${path}`);
+}
+
+/** The claim key of a page's own lock row. */
+function holderLockKey(holder: AddressHolder): string {
+  return sha256(`lock:holder|${holder.collection}:${holder.id}`);
 }
 
 /** The kind of row an address is kept as. */
@@ -159,8 +169,8 @@ export function releaseOnCollectionDelete(ctx: PluginContext): void {
   });
 }
 
-/** The participant, bound to the SEO plugin's context. */
-export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
+/** Reading and locking the record's rows on a transaction. */
+function recordRows(ctx: PluginContext) {
   const slug = recordSlug(ctx);
   const collections = ctx.services.collections;
   const reads = ctx.services.ownCollections;
@@ -192,16 +202,15 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   }
 
   /**
-   * Hold the lock row of `path` in `locale` until the save ends: read for
-   * update where it exists, made where it does not (a save making it at the
+   * Hold the lock row `key` until the transaction ends: read for update where
+   * it exists, made with `fields` where it does not (a save making it at the
    * same moment waits on the key's index), and written, which is the lock.
    */
   async function holdLock(
     transaction: Transaction,
-    locale: string,
-    path: string
+    key: string,
+    fields: { locale: string; path: string }
   ): Promise<void> {
-    const key = claimKey("lock", locale, path);
     const byKey = { claimKey: { equals: key } };
     let [row] = await rowsWhere(transaction, byKey, "update");
     if (row === undefined) {
@@ -209,8 +218,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
         await collections.createEntryInTransaction(transaction, slug, {
           claimKey: key,
           kind: "lock",
-          locale,
-          path,
+          ...fields,
         });
         return;
       } catch (error) {
@@ -219,7 +227,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
       [row] = await rowsWhere(transaction, byKey, "update");
       if (row === undefined) {
         throw NextlyError.internal({
-          logContext: { reason: "address-lock-vanished", locale, path },
+          logContext: { reason: "address-lock-vanished", ...fields },
         });
       }
     }
@@ -228,6 +236,60 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
       _overwrite: true,
     });
   }
+
+  /** Hold `holder`'s own lock row until the transaction ends. */
+  function holdHolderLock(
+    transaction: Transaction,
+    holder: AddressHolder
+  ): Promise<void> {
+    return holdLock(transaction, holderLockKey(holder), {
+      locale: "",
+      path: `${holder.collection}:${holder.id}`,
+    });
+  }
+
+  /** The addresses and ranges `holder` keeps, read for update. */
+  async function rowsOf(
+    transaction: Transaction,
+    holder: AddressHolder
+  ): Promise<RecordRow[]> {
+    return rowsWhere(
+      transaction,
+      {
+        and: [
+          { kind: { in: ["address", "range"] } },
+          { holderCollection: { equals: holder.collection } },
+          { holderId: { equals: holder.id } },
+        ],
+      },
+      "update"
+    );
+  }
+
+  return { slug, rowsWhere, holdLock, holdHolderLock, rowsOf };
+}
+
+/**
+ * What the record says `holder` holds now, read on `transaction` with the
+ * page's own lock held until it ends: a save of the page waits for it, so
+ * what is read cannot change before the transaction's own writes.
+ */
+export async function heldNow(
+  ctx: PluginContext,
+  transaction: Transaction,
+  holder: AddressHolder
+): Promise<HeldAddress[]> {
+  const rows = recordRows(ctx);
+  if (ctx.dialect !== "sqlite") await rows.holdHolderLock(transaction, holder);
+  return (await rows.rowsOf(transaction, holder)).flatMap(row =>
+    row.address === null ? [] : [row.address]
+  );
+}
+
+/** The participant, bound to the SEO plugin's context. */
+export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
+  const { slug, rowsWhere, holdLock, holdHolderLock, rowsOf } = recordRows(ctx);
+  const collections = ctx.services.collections;
 
   /**
    * Take the lock rows of every address in `batch` and every path above each,
@@ -238,6 +300,15 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     batch: readonly HeldAddressUpdate[]
   ): Promise<void> {
     if (ctx.dialect === "sqlite") return;
+    // Each page's own lock first, every caller in the same order, so a write
+    // holding a page's lock never waits on one holding a path's for it.
+    const holders = new Map(
+      batch.map(update => [holderLockKey(update.holder), update.holder])
+    );
+    for (const key of [...holders.keys()].sort()) {
+      const holder = holders.get(key);
+      if (holder !== undefined) await holdHolderLock(transaction, holder);
+    }
     const keys = new Map<string, { locale: string; path: string }>();
     for (const update of batch) {
       for (const held of update.holds) {
@@ -249,7 +320,9 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     // Plain code-unit order, the same in every process, whatever its locale.
     for (const key of [...keys.keys()].sort()) {
       const at = keys.get(key);
-      if (at !== undefined) await holdLock(transaction, at.locale, at.path);
+      if (at !== undefined) {
+        await holdLock(transaction, claimKey("lock", at.locale, at.path), at);
+      }
     }
   }
 
@@ -300,17 +373,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     const wanted = new Set(
       update.holds.map(h => claimKey(kindOf(h), h.locale, h.path))
     );
-    const rows = await rowsWhere(
-      transaction,
-      {
-        and: [
-          { kind: { in: ["address", "range"] } },
-          { holderCollection: { equals: update.holder.collection } },
-          { holderId: { equals: update.holder.id } },
-        ],
-      },
-      "update"
-    );
+    const rows = await rowsOf(transaction, update.holder);
     const still = new Set<string>();
     for (const row of rows) {
       const key = row.address

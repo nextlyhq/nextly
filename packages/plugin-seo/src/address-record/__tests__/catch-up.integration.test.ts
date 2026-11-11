@@ -225,6 +225,31 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("leaves a page as a save made while it runs recorded it", async () => {
+      const { t } = await boot(dialect);
+      const page = await publish(t, "pages", "old");
+      await forget(t);
+
+      // The catch-up has read the page at /old; the editor then moves it to
+      // /new, which the save records, before the catch-up records anything.
+      const report = await catchUp({
+        afterListing: async () => {
+          await t.nextly.update({
+            collection: "pages",
+            id: page,
+            data: { slug: "new", _overwrite: true },
+          });
+        },
+      });
+
+      expect(report.ran).toBe(true);
+      expect(await recorded(t)).toEqual({ "en|/new": `pages:${page}` });
+      // The page still holds /new: another page is refused it.
+      await expect(publish(t, "posts", "new")).rejects.toMatchObject({
+        code: "DUPLICATE",
+      });
+    });
+
     it("lets go of a page that no longer exists", async () => {
       const { t, ctx } = await boot(dialect);
       await ctx.services.collections.withTransaction(tx =>

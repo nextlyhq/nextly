@@ -18,6 +18,11 @@
  * The fingerprint is stored last, so a start interrupted part-way runs the
  * whole catch-up again.
  *
+ * Saves go on while it runs, so what it read can be overtaken. Each page's
+ * record is changed only where it still says what the catch-up read, checked
+ * under the page's own lock on the transaction that changes it: a save that
+ * got there first is newer, and the page is left as that save recorded it.
+ *
  * @module address-record/catch-up
  */
 import { createHash } from "node:crypto";
@@ -31,7 +36,7 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { recordSlug, rowOf, type RecordRow } from "./participant";
+import { heldNow, recordSlug, rowOf, type RecordRow } from "./participant";
 
 /** A page left without an address another page holds. */
 export interface LostAddress {
@@ -121,6 +126,37 @@ const holderKey = (holder: AddressHolder) =>
 const sameAddress = (a: HeldAddress, b: HeldAddress) =>
   a.locale === b.locale && a.path === b.path && a.range === b.range;
 
+/** The stored fingerprint row, found by its key: one row read. */
+async function storedFingerprint(
+  ctx: PluginContext
+): Promise<{ id: string; value: unknown } | undefined> {
+  const { data } = await ctx.services.ownCollections.listEntries(
+    recordSlug(ctx),
+    {
+      where: { claimKey: { equals: FINGERPRINT_KEY } },
+      pagination: { limit: 1, page: 1 },
+      depth: 0,
+    }
+  );
+  const [row] = data as Record<string, unknown>[];
+  return row === undefined
+    ? undefined
+    : { id: String(row.id), value: row.path };
+}
+
+/** Whether the record holds any address at all: one row read at most. */
+async function holdsAny(ctx: PluginContext): Promise<boolean> {
+  const { data } = await ctx.services.ownCollections.listEntries(
+    recordSlug(ctx),
+    {
+      where: { kind: { in: ["address", "range"] } },
+      pagination: { limit: 1, page: 1 },
+      depth: 0,
+    }
+  );
+  return (data as unknown[]).length > 0;
+}
+
 /** The record's rows, held addresses and the stored fingerprint. */
 async function readRecord(ctx: PluginContext): Promise<{
   held: RecordRow[];
@@ -171,24 +207,62 @@ async function everyPage(ctx: PluginContext): Promise<HeldDocument[]> {
   return updates.sort((a, b) => madeAt(a) - madeAt(b));
 }
 
-/** Make `updates` on a transaction of their own, asking every participant. */
-function move(ctx: PluginContext, updates: HeldAddressUpdate[]) {
-  return ctx.services.collections.withTransaction(transaction =>
-    ctx.publicAddresses.move(updates, transaction)
+/**
+ * What the catch-up expects the record to say each page holds: what it read,
+ * then what each of its own changes left. A page a save overtook is dropped,
+ * and left alone from then on.
+ */
+type Expected = Map<string, HeldAddress[]>;
+
+const sameHolds = (a: readonly HeldAddress[], b: readonly HeldAddress[]) =>
+  a.length === b.length &&
+  a.every(held => b.some(other => sameAddress(held, other)));
+
+/**
+ * Make `update` on a transaction of its own, asking every participant, where
+ * the record still says the page holds what `expected` does: checked under
+ * the page's lock on the same transaction, so a save cannot land between the
+ * check and the change. Answers what was refused, or `overtaken` where a save
+ * changed the page first.
+ */
+async function moveIfCurrent(
+  ctx: PluginContext,
+  update: HeldAddressUpdate,
+  expected: Expected
+): Promise<
+  { refused: { address: HeldAddress; heldBy: AddressHolder }[] } | "overtaken"
+> {
+  const key = holderKey(update.holder);
+  const before = expected.get(key);
+  if (before === undefined) return "overtaken";
+  const outcome = await ctx.services.collections.withTransaction(
+    async transaction => {
+      const now = await heldNow(ctx, transaction, update.holder);
+      if (!sameHolds(now, before)) return "overtaken" as const;
+      return ctx.publicAddresses.move([update], transaction);
+    }
   );
+  if (outcome === "overtaken") expected.delete(key);
+  else if (outcome.refused.length === 0) expected.set(key, [...update.holds]);
+  return outcome;
 }
 
-/** Claim `update`'s addresses, giving up each one another page holds. */
+/**
+ * Claim `update`'s addresses, giving up each one another page holds; nothing
+ * once a save has overtaken the page. Answers whether anything was claimed.
+ */
 async function claim(
   ctx: PluginContext,
   update: HeldAddressUpdate,
+  expected: Expected,
   lost: LostAddress[]
-): Promise<void> {
+): Promise<boolean> {
   let holds = [...update.holds];
   for (;;) {
-    const { refused } = await move(ctx, [{ ...update, holds }]);
-    const first = refused[0];
-    if (first === undefined) return;
+    const outcome = await moveIfCurrent(ctx, { ...update, holds }, expected);
+    if (outcome === "overtaken") return false;
+    const first = outcome.refused[0];
+    if (first === undefined) return true;
     lost.push({
       holder: update.holder,
       address: first.address,
@@ -223,17 +297,20 @@ function heldBefore(
 async function keepWhatStands(
   ctx: PluginContext,
   pages: readonly HeldAddressUpdate[],
-  was: ReadonlyMap<string, { holds: HeldAddress[] }>
+  was: ReadonlyMap<string, { holds: HeldAddress[] }>,
+  expected: Expected
 ): Promise<Map<string, HeldAddress[]>> {
   const kept = new Map<string, HeldAddress[]>();
   for (const page of pages) {
-    const before = was.get(holderKey(page.holder))?.holds ?? [];
+    const key = holderKey(page.holder);
+    const before = was.get(key)?.holds ?? [];
+    if (!expected.has(key)) expected.set(key, [...before]);
     const keep = page.holds.filter(held =>
       before.some(b => sameAddress(b, held))
     );
-    kept.set(holderKey(page.holder), keep);
+    kept.set(key, keep);
     if (keep.length !== before.length) {
-      await move(ctx, [{ holder: page.holder, holds: keep }]);
+      await moveIfCurrent(ctx, { holder: page.holder, holds: keep }, expected);
     }
   }
   return kept;
@@ -246,7 +323,8 @@ async function keepWhatStands(
 async function letGoOfTheGone(
   ctx: PluginContext,
   was: ReadonlyMap<string, { holder: AddressHolder }>,
-  kept: ReadonlyMap<string, unknown>
+  kept: ReadonlyMap<string, unknown>,
+  expected: Expected
 ): Promise<void> {
   const siteTypes = new Set(
     (await ctx.publicAddresses.types()).map(type =>
@@ -255,7 +333,7 @@ async function letGoOfTheGone(
   );
   for (const [key, entry] of was) {
     if (!kept.has(key) && siteTypes.has(entry.holder.collection)) {
-      await move(ctx, [{ holder: entry.holder, holds: [] }]);
+      await moveIfCurrent(ctx, { holder: entry.holder, holds: [] }, expected);
     }
   }
 }
@@ -264,15 +342,15 @@ async function letGoOfTheGone(
 async function claimTheNew(
   ctx: PluginContext,
   pages: readonly HeldAddressUpdate[],
-  kept: ReadonlyMap<string, HeldAddress[]>
+  kept: ReadonlyMap<string, HeldAddress[]>,
+  expected: Expected
 ): Promise<{ recorded: number; lost: LostAddress[] }> {
   let recorded = 0;
   const lost: LostAddress[] = [];
   for (const page of pages) {
     const keep = kept.get(holderKey(page.holder)) ?? [];
     if (page.holds.length === keep.length) continue;
-    await claim(ctx, page, lost);
-    recorded += 1;
+    if (await claim(ctx, page, expected, lost)) recorded += 1;
   }
   for (const each of lost) {
     ctx.logger.warn(
@@ -288,16 +366,20 @@ async function runCatchUp(
   options: CatchUpOptions
 ): Promise<CatchUpReport> {
   const fingerprint = await ctx.publicAddresses.fingerprint();
+  // The stored fingerprint by its key, and whether any address is recorded:
+  // an unchanged start reads no more than that.
+  const stored = await storedFingerprint(ctx);
+  if (stored?.value === fingerprint && (await holdsAny(ctx))) return NOTHING;
   const record = await readRecord(ctx);
-  if (record.fingerprint?.value === fingerprint && record.held.length > 0) {
-    return NOTHING;
-  }
   const pages = await everyPage(ctx);
   await options.afterListing?.();
   const was = heldBefore(record.held);
-  const kept = await keepWhatStands(ctx, pages, was);
-  await letGoOfTheGone(ctx, was, kept);
-  const { recorded, lost } = await claimTheNew(ctx, pages, kept);
+  const expected: Expected = new Map(
+    [...was].map(([key, entry]) => [key, [...entry.holds]])
+  );
+  const kept = await keepWhatStands(ctx, pages, was, expected);
+  await letGoOfTheGone(ctx, was, kept, expected);
+  const { recorded, lost } = await claimTheNew(ctx, pages, kept, expected);
   // Stored last: a start interrupted before this point runs it all again.
   await storeFingerprint(ctx, record.fingerprint?.id, fingerprint);
   return { ran: true, recorded, lost };
