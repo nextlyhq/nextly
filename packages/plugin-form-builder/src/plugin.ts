@@ -33,6 +33,7 @@ import { submissionAnswers } from "./emails/answers";
 import { formsEmailTemplates } from "./emails/starter-messages";
 import { addressedFormPages, FORM_EDITOR_VIEW } from "./form-pages";
 import { registerFormClosing } from "./handlers/form-closing-hold";
+import { responseKeyOf } from "./handlers/one-response";
 import {
   sameSubmittedPayload,
   submissionMarks,
@@ -52,6 +53,7 @@ import type {
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
+import { normalizeFormSettings } from "./utils/form-settings";
 import { normalizeRedirectRelationships } from "./utils/redirect-target";
 import {
   SCHEMA_ONLY_CONTEXT,
@@ -483,6 +485,11 @@ export function formBuilder(
         nextly.self.collections[declaredSubmissionsSlug] ??
         declaredSubmissionsSlug;
       installedSubmissionsSlug = submissionSlug;
+
+      // The plugin's digest key, made and read now, at start: a submission's
+      // one-response key is taken inside its write's transaction, where a
+      // first use is refused.
+      await nextly.security.digests.prepare();
 
       // Hook/event subscriptions are idempotent across HMR — the platform
       // clears a plugin's prior subscriptions before re-init (B2), so the old
@@ -1016,6 +1023,9 @@ export async function prepareSubmissionForWrite(
   };
   const submission = ctx.data;
   if (!submission || typeof submission !== "object") return ctx.data;
+  // A submission's one-response key is the plugin's to write, never a
+  // caller's: one posting a key could take a value's place before its owner.
+  delete submission.responseKey;
   const stored = ctx.originalData;
 
   // A patch need not repeat the relationship, so the stored row is what says
@@ -1096,6 +1106,14 @@ export async function prepareSubmissionForWrite(
   }
   if (ctx.operation !== "create" && submission.data === undefined) {
     stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
+  }
+  if (ctx.operation === "create") {
+    // Made from what is stored, after the spam verdict: spam takes no key.
+    ctx.data.responseKey = await responseKeyOf(
+      () => nextly.security.digests,
+      normalizeFormSettings(form.settings),
+      ctx.data
+    );
   }
   return ctx.data;
 }

@@ -200,6 +200,18 @@ export function submissionsCollection(
         description: "ID of the admin who last edited the submitted data",
       },
     }),
+
+    // The submission's one-response key: a keyed digest of the email answer
+    // or network address its form's "one response per person" compares,
+    // never the value itself. Written by the plugin at the write seam, never
+    // taken from a caller, and empty when the form allows several responses
+    // or the submission is spam. Unique per form (see `indexes`), so two
+    // submissions with the same value cannot both be stored.
+    text({
+      name: "responseKey",
+      label: "One-response key",
+      admin: { hidden: true },
+    }),
   ];
 
   // Process additional fields from formSubmissionOverrides
@@ -222,6 +234,10 @@ export function submissionsCollection(
     labels,
     fields: finalFields,
     timestamps: true,
+    // One response per person, held by the database: a second submission
+    // with the same key on the same form is refused at its insert, even when
+    // two arrive at once. A submission with no key is not constrained.
+    indexes: [{ fields: ["form", "responseKey"], unique: true }],
 
     // Submissions carry visitor-entered answers plus ipAddress/userAgent, so the
     // default `entry.*` events stay suppressed — otherwise every submission would
