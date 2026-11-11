@@ -13,6 +13,7 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { whenServicesRegistered } from "../di/service-access";
 import type { HeldDocument } from "../domains/public-addresses/held-listing";
 import {
   addParticipant,
@@ -28,7 +29,6 @@ import {
   siteTypes,
   type PublicAddressType,
 } from "../domains/public-addresses/public-address";
-import { whenServicesRegistered } from "../di/service-access";
 import type { HookOwner } from "../hooks/types";
 
 import type { PluginTransaction } from "./database/plugin-database";
