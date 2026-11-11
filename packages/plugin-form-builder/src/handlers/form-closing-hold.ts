@@ -322,7 +322,7 @@ function respondedRefusal(formId: string) {
  * committed.
  */
 async function holdKeyWrite(
-  own: OwnCollections,
+  deps: HoldDeps,
   write: InTransactionContext,
   slugs: FormLimitSlugs
 ): Promise<void> {
@@ -334,10 +334,29 @@ async function holdKeyWrite(
   if (typeof key !== "string" || key === before) return;
   const formId = formIdOf((write.data as { form?: unknown }).form);
   if (formId === undefined) return;
-  const { settings } = await formOf(own, write, slugs, formId, "update");
+  const { settings } = await formOf(deps.own, write, slugs, formId, "update");
   if (keyVersionOf(key) !== (settings.oneResponseVersion ?? 0)) {
     throw changedRefusal(formId);
   }
+  // An edit that gives the submission another answer or address: while
+  // earlier submissions are still without keys for this version, the index
+  // cannot see theirs, so their answers are compared as a new submission's
+  // are. A key change with the same value is not compared: the plugin's own
+  // key write walks the form oldest first, so an earlier holder has its key
+  // already, and a submission restored from spam takes its key back only
+  // where no other submission holds it (`responseKeyAfterUpdate`).
+  if (sameValue(write)) return;
+  await refuseEarlierResponse(deps, write, slugs, formId, settings);
+}
+
+/** Whether an update left a submission's answers and address as they were. */
+function sameValue(write: InTransactionContext): boolean {
+  const after = write.data as Record<string, unknown> | undefined;
+  const before = write.originalData as Record<string, unknown> | undefined;
+  const same = (field: string) =>
+    JSON.stringify(after?.[field] ?? null) ===
+    JSON.stringify(before?.[field] ?? null);
+  return same("data") && same("ipAddress");
 }
 
 /** Hold every form's closing on the submissions this plugin stores. */
@@ -351,7 +370,7 @@ export function registerFormClosing(
   };
   ctx.hooks.onInTransaction(slugs.submissions, async write => {
     await holdFormClosing(deps, write, slugs);
-    await holdKeyWrite(deps.own, write, slugs);
+    await holdKeyWrite(deps, write, slugs);
   });
 }
 

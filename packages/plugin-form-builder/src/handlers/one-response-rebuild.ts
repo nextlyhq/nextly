@@ -27,9 +27,9 @@
 import {
   defineJob,
   type JobDefinition,
+  NextlyError,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
-import { NextlyError } from "nextly";
 
 import type { FormSettings } from "../types";
 import { normalizeFormSettings } from "../utils/form-settings";
@@ -200,9 +200,9 @@ type Row = Record<string, unknown>;
 
 /**
  * Give every form whose keys are behind its earlier submissions' keys, until
- * `deadline`. A form is marked up to date only after a pass over its
- * submissions that found nothing to write, so one changed while the sweep ran
- * is looked at again rather than taken as done.
+ * `deadline`. A form is marked up to date only after a pass in which every
+ * submission took its key, with none to look at again and no row gone or
+ * added, so one changed while the sweep ran is not taken as done.
  */
 export async function rebuildResponseKeys(
   deps: RebuildDeps,
@@ -241,9 +241,11 @@ function pastDeadline(deadline: Date): boolean {
 }
 
 /**
- * Passes over one form's submissions until one finds nothing to write: done,
- * or `stop` when the deadline passed or the form's version moved on, which
- * leaves the rest to a later sweep.
+ * Passes over one form's submissions until one leaves nothing to look at
+ * again: done, or `stop` when the deadline passed or the form's version moved
+ * on, which leaves the rest to a later sweep. A sweep that resumes passes
+ * quickly over the rows an earlier run keyed: each holds its own key, which
+ * is recognised without a query.
  */
 async function rebuildForm(
   deps: RebuildDeps,
@@ -266,9 +268,10 @@ async function rebuildForm(
  * One pass over a form's non-spam submissions, oldest first. Rows stored
  * after the pass began are left out (`passCutoff`): they were keyed for the
  * current version when they were stored, and leaving them out keeps a busy
- * form's count steady. The count of those rows is taken
- * before and after, so a submission deleted or marked spam during the pass,
- * which moves the rows after it back a place, sends the sweep round again.
+ * form's count steady. The count of those rows is taken before and after, so
+ * a submission deleted or marked spam during the pass, which moves the rows
+ * after it back a place, sends the sweep round again; so does a row whose
+ * write was refused as edited since, or as holding a value taken since.
  */
 async function rebuildPass(
   deps: RebuildDeps,
@@ -284,7 +287,7 @@ async function rebuildPass(
   const count = () =>
     deps.collections.count(deps.submissionsSlug, { where }, { as: "system" });
   const before = await count();
-  let written = 0;
+  let retries = 0;
   for (let page = 1; ; page++) {
     const { data } = await deps.collections.listEntries(
       deps.submissionsSlug,
@@ -299,13 +302,13 @@ async function rebuildPass(
     const rows = data as Row[];
     const keyed = await keyRows(deps, formId, settings, rows, deadline);
     if (keyed === "stop") return "stop";
-    written += keyed;
+    retries += keyed;
     if (rows.length < PAGE) break;
   }
-  return written === 0 && (await count()) === before ? "done" : "again";
+  return retries === 0 && (await count()) === before ? "done" : "again";
 }
 
-/** Key one page of rows: how many were written, or `stop`. */
+/** Key one page of rows: how many must be looked at again, or `stop`. */
 async function keyRows(
   deps: RebuildDeps,
   formId: string,
@@ -313,14 +316,14 @@ async function keyRows(
   rows: Row[],
   deadline: Date
 ): Promise<number | "stop"> {
-  let written = 0;
+  let retries = 0;
   for (const row of rows) {
     if (pastDeadline(deadline)) return "stop";
     const outcome = await keyRow(deps, formId, settings, row);
     if (outcome === "stale-form") return "stop";
-    if (outcome === "written") written += 1;
+    if (outcome === "retry") retries += 1;
   }
-  return written;
+  return retries;
 }
 
 /**
@@ -332,11 +335,13 @@ async function keyRow(
   formId: string,
   settings: FormSettings,
   row: Row
-): Promise<"unchanged" | "written" | "stale-form"> {
-  let target = await responseKeyOf(deps.digests, settings, row);
-  if (target !== null && (await heldByAnother(deps, formId, row, target))) {
-    target = null;
-  }
+): Promise<"unchanged" | "written" | "retry" | "stale-form"> {
+  const own = await responseKeyOf(deps.digests, settings, row);
+  // Holding its own value's key already: the holder, with nothing to ask.
+  // Most rows of a sweep that resumes are these, so they cost no query.
+  if (own !== null && row.responseKey === own) return "unchanged";
+  const target =
+    own !== null && (await heldByAnother(deps, formId, row, own)) ? null : own;
   if ((row.responseKey ?? null) === target) return "unchanged";
   try {
     await deps.collections.updateEntry(
@@ -351,10 +356,10 @@ async function keyRow(
     );
   } catch (error) {
     if (heldRefusal(error) === "changed") return "stale-form";
-    // Edited since it was read, or its value taken a moment ago: the next
+    // Edited since it was read, or its value taken a moment ago: another
     // pass reads it again.
     if (codeOf(error) === "STALE_VERSION" || codeOf(error) === "DUPLICATE") {
-      return "written";
+      return "retry";
     }
     throw error;
   }

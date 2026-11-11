@@ -296,6 +296,39 @@ describe.each(getConfiguredTestDialects())(
       expect((await submit({ email: "ada@example.com" })).success).toBe(true);
     });
 
+    it("refuses an edit onto an earlier answer the sweep has not keyed yet", async () => {
+      const { nextly, submit, saveSettings, rows, gate, sweep } = await boot({
+        oneResponse: "off",
+      });
+      expect((await submit({ email: "ada@example.com" })).success).toBe(true);
+      await tick();
+      expect((await submit({ email: "grace@example.com" })).success).toBe(true);
+      const grace = (await rows()).find(
+        row => row.data.email === "grace@example.com"
+      );
+
+      gate.hold();
+      const saving = saveSettings({
+        oneResponse: "email",
+        oneResponseField: "email",
+      });
+      // Held at its first write: the oldest, ada's, has no key yet.
+      await gate.reached();
+      await expect(
+        nextly.update({
+          collection: "form-submissions",
+          id: grace!.id,
+          data: { data: { email: "ADA@example.com" }, _overwrite: true },
+        })
+      ).rejects.toThrow();
+      gate.open();
+      await saving;
+      await sweep();
+      expect((await rows()).find(row => row.id === grace!.id)?.data.email).toBe(
+        "grace@example.com"
+      );
+    });
+
     it("keeps the form's other settings when it records the keys made", async () => {
       const { submit, saveSettings, form } = await boot({
         oneResponse: "off",

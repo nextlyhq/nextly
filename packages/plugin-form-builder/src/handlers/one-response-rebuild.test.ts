@@ -4,10 +4,14 @@
  * taken from the payload, with the keys behind it until the sweep says
  * otherwise; and the version a key was made under, read off the key.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { keysBehind, keyVersionOf, responseKeyOf } from "./one-response";
-import { stampOneResponseVersion } from "./one-response-rebuild";
+import {
+  type RebuildDeps,
+  rebuildResponseKeys,
+  stampOneResponseVersion,
+} from "./one-response-rebuild";
 
 const FORM_KEYED = Symbol.for("nextly.plugin-form-builder.form-keyed");
 
@@ -166,5 +170,49 @@ describe("a key's version", () => {
     ).toBe(false);
     // Saved before the keyed version was recorded: up to date.
     expect(keysBehind({ oneResponseVersion: 0 })).toBe(false);
+  });
+});
+
+describe("a sweep resuming over keys it made", () => {
+  it("asks nothing about rows holding their own key, and finishes in one pass", async () => {
+    const digests = () => ({
+      digest: async (purpose: string, value: string) => `${purpose}-${value}`,
+      prepare: async () => undefined,
+    });
+    const settings = {
+      oneResponse: "ip",
+      oneResponseVersion: 2,
+      oneResponseKeyedVersion: 1,
+    };
+    // Every row already holds the key of its own address for version 2.
+    const rows = ["198.51.100.1", "198.51.100.2"].map((ip, n) => ({
+      id: `s${n}`,
+      _rev: "1",
+      ipAddress: ip,
+      responseKey: `v2:ip-${ip}`,
+    }));
+    const listEntries = vi.fn(async (slug: string) => ({
+      data: slug === "forms" ? [{ id: "f1", _rev: "3", settings }] : rows,
+    }));
+    const count = vi.fn(async () => rows.length);
+    const updateEntry = vi.fn(async () => ({}));
+    const deps = {
+      collections: { listEntries, count, updateEntry },
+      digests,
+      formsSlug: "forms",
+      submissionsSlug: "form-submissions",
+    } as unknown as RebuildDeps;
+
+    await rebuildResponseKeys(deps, new Date(Date.now() + 60_000));
+
+    // Only the pass's own before-and-after counts: no question per row.
+    expect(count).toHaveBeenCalledTimes(2);
+    const submissionReads = listEntries.mock.calls.filter(
+      ([slug]) => slug === "form-submissions"
+    );
+    expect(submissionReads).toHaveLength(1);
+    // Nothing to write to the rows; the form is recorded as up to date.
+    expect(updateEntry).toHaveBeenCalledTimes(1);
+    expect(updateEntry.mock.calls[0]?.[0]).toBe("forms");
   });
 });
