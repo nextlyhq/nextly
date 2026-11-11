@@ -58,7 +58,12 @@ export function fieldToLocalizedColumnSpec(
   // another.
   builtBy: ColumnOrigin
 ): LocalizedColumnSpec | null {
-  const desc = getColumnDescriptor(field as FieldDefinition, dialect, builtBy);
+  // Asked without the field's `unique` flag: a translated field is unique per language, keyed by
+  // an index over an expression or a prefix that MySQL builds on a TEXT column, so its uniqueness
+  // never bounds the column the way a shared unique field's whole-column key does. Bounding it
+  // here would make a later localization disable restore longer values into `varchar(255)`.
+  const { unique: _unique, ...shape } = field as FieldDefinition;
+  const desc = getColumnDescriptor(shape, dialect, builtBy);
   if (!desc || desc.kind === "skip") return null;
   // Extension-only kinds cannot reach here: a companion column mirrors a
   // FIELD's column, and no collection field produces one. Narrowed explicitly

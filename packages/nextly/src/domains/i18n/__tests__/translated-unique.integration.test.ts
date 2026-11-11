@@ -681,18 +681,55 @@ describeEachDialect("a translated unique field", dialect => {
     }
   );
 
-  it("makes a field group's text field with no width unique only as a change to its table on MySQL", async () => {
-    // On MySQL a unique text field that states no width is the bounded default MySQL can key, and
-    // a field that is not unique is unbounded, so turning Unique on changes the column: the field
-    // group's own update refuses it and sends it to the schema preview. Elsewhere the column is
-    // text either way, and the update goes ahead.
+  it("keeps a unique translated value longer than 255 characters, and refuses to let it leave translation into a bounded column", async () => {
+    // Translated, the field is unique per language and its column stays TEXT, so a long value is
+    // stored whole. Leaving translation would put it in the main table, where a unique field that
+    // states no width is bounded on MySQL: refused rather than cut.
+    const created = await handler().createCollection({
+      name: "pages",
+      label: "Page",
+      localized: true,
+      fields: [
+        { name: "handle", type: "text", unique: true },
+        { name: "note", type: "text" },
+      ],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const long = "h".repeat(300);
+    await write("en", { handle: long, note: "n" });
+
+    const changed = await handler().updateCollection(
+      { collectionName: "pages" },
+      {
+        fields: [
+          { name: "handle", type: "text", unique: true, localized: false },
+          { name: "note", type: "text" },
+        ],
+      }
+    );
+
+    if (dialect === "mysql") {
+      expect(changed.success, JSON.stringify(changed)).toBe(false);
+    }
+    // Whatever the change did, the stored value is whole.
+    const lengths = await query<{ n: unknown }>(
+      `SELECT ${dialect === "postgresql" ? "char_length" : "length"}(${quoted("handle")}) AS ${quoted("n")} FROM ${quoted(changed.success ? "dc_pages" : "dc_pages_locales")}`
+    );
+    expect(lengths.map(row => Number(row.n))).toEqual([300]);
+  });
+
+  it("makes a field group's shared text field with no width unique only as a change to its table on MySQL", async () => {
+    // On MySQL a shared unique text field that states no width is the bounded default MySQL can
+    // key, and one that is not unique is unbounded, so turning Unique on changes the column: the
+    // field group's own update refuses it and sends it to the schema preview. Elsewhere the column
+    // is text either way, and the update goes ahead. A translated field is keyed per language and
+    // keeps its column, so only a shared one is changed this way.
     await dispatchComponents(
       "createComponent",
       {},
       {
         slug: "teaser",
         label: "Teaser",
-        localized: true,
         fields: [{ name: "heading", type: "text" }],
       }
     );
