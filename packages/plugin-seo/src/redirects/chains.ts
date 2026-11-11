@@ -16,7 +16,11 @@ import { pathOf, withQuery } from "./addresses";
  * visitor sent on from `from` arrives at.
  */
 export function withQueryOf(to: string, from: string): string {
-  const query = (from.split("#", 1)[0] ?? "").split("?")[1] ?? "";
+  // Everything after the first `?` and before any fragment: a query's own
+  // values may hold a `?` too.
+  const head = from.split("#", 1)[0] ?? "";
+  const at = head.indexOf("?");
+  const query = at === -1 ? "" : head.slice(at + 1);
   return withQuery(to, query);
 }
 

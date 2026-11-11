@@ -60,6 +60,9 @@ describe("following a redirect's To address to the end of its chain", () => {
       "https://example.org/c?x=1#top"
     );
     expect(withQueryOf("/c?own=1#s", "/b?x=1")).toBe("/c?own=1#s");
+    expect(withQueryOf("/c", "/b?next=/search?q=red#top")).toBe(
+      "/c?next=/search?q=red"
+    );
   });
 
   it("ends a chain at a hop to another site, whatever its path", async () => {
