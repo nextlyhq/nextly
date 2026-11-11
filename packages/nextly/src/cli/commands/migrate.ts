@@ -38,6 +38,7 @@ import type { Command } from "commander";
 
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
 import { container } from "../../di/container";
+import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-plain-passwords";
 import {
@@ -113,6 +114,10 @@ import {
   type ChangedOldBuilderFile,
   type OldBuilderLedger,
 } from "../../domains/schema/migrate/old-builder-ledger";
+import {
+  orphanScopeOf,
+  type MigrationOrphanScope,
+} from "../../domains/schema/migrate/permission-orphans";
 import {
   assertPluginHistories,
   assertPluginListsSound,
@@ -598,6 +603,15 @@ export async function runMigrate(
             configResult,
             logger
           ),
+        // A permission leaves when the recorded migration whose snapshot drops it applies, on
+        // this command's connection, keeping its grants.
+        markOrphanedPermissions: (scope, migration) =>
+          markOrphansOnCommandConnection(
+            adapter as unknown as DrizzleAdapter,
+            scope,
+            migration,
+            logger
+          ),
         // A translations column already in place that cannot hold a field the config newly
         // translates, judged as the files left it and before the registry records them: refused
         // here, the registry keeps its definitions and the next run is refused the same way.
@@ -877,6 +891,39 @@ async function seedAccessOnCommandConnection(
 }
 
 /**
+ * What an applied migration orphans (`MigrateCoreDeps.markOrphanedPermissions`), on the command's
+ * own connection, lent to the services a permission write retires the cached answers through
+ * (`withCommandServicesLent`), as Phase 4 writes. Each mark set or cleared is logged with the
+ * grants the permission keeps (`logOrphanMarkChange`), at the operator's level, since a permission
+ * leaving the role editor is what the operator needs to hear of. A mark that could not be written
+ * is warned of by the service and named here with its migration.
+ */
+async function markOrphansOnCommandConnection(
+  adapter: DrizzleAdapter,
+  scope: MigrationOrphanScope,
+  migration: string,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const serviceLogger = {
+    debug: (message: string) => logger.debug(message),
+    info: (message: string) => logger.info(message),
+    warn: (message: string) => logger.warn(message),
+    error: (message: string) => logger.error(message),
+  };
+  const result = await withCommandServicesLent(adapter, serviceLogger, () =>
+    new PermissionSeedService(adapter, serviceLogger).markOrphanedPermissions(
+      scope.declared,
+      scope
+    )
+  );
+  if (result.errors > 0) {
+    logger.warn(
+      `The orphan marks of the permissions ${migration}.sql no longer declares were not all written; those not written stay as they were.`
+    );
+  }
+}
+
+/**
  * Provision `user_ext`, the table the project's user fields are stored in, for
  * the code-defined fields and the ones defined in the admin. `nextly migrate`
  * sets up every production database, and a production boot never changes the
@@ -1068,6 +1115,17 @@ export interface MigrateCoreDeps {
    * passes it; absent, the run leaves permissions, roles and grants to whoever else writes them.
    */
   seedPermissions?: () => Promise<void>;
+  /**
+   * Marks orphaned, under the lock, what an applied app migration's snapshot no longer declares
+   * for the owners it speaks for, and clears the mark of what it declares again
+   * (`permission-orphans.ts`, `PermissionSeedService.markOrphanedPermissions`). Called as each
+   * migration whose snapshot declares permissions applies, never at a start. `nextly migrate`
+   * passes it; absent (the boot paths), no applied migration changes an orphan mark.
+   */
+  markOrphanedPermissions?: (
+    scope: MigrationOrphanScope,
+    migration: string
+  ) => Promise<void>;
   /**
    * The database's first run on this release (`first-run.ts`): with it, a run that finds no
    * registry record writes it once, with the registry baseline where its point has no registry
@@ -2099,7 +2157,8 @@ async function runMigrationStreams(
   deps: MigrateCoreDeps,
   runFiles: typeof runFileMigrations,
   judged: ReadonlyMap<string, string>,
-  beforeApply?: (name: string) => Promise<void>
+  beforeApply?: (name: string) => Promise<void>,
+  afterApply?: (applied: AppliedAppMigration) => Promise<void>
 ): Promise<{ pluginModulesApplied: number; applied: number }> {
   const pluginOutcome = await runPluginPhase(deps);
   const pluginModulesApplied = pluginOutcome.applied + pluginOutcome.adopted;
@@ -2125,6 +2184,7 @@ async function runMigrationStreams(
       : {}),
     judged,
     ...(beforeApply === undefined ? {} : { beforeApply }),
+    ...(afterApply === undefined ? {} : { afterApply }),
   });
   return { pluginModulesApplied, applied };
 }
@@ -2278,6 +2338,26 @@ export async function migrateCore(
     await deps.assertLockHeld?.();
     await deps.seedPermissions();
   };
+  /**
+   * What an applied app migration orphans, as it applies (`MigrateCoreDeps.markOrphanedPermissions`):
+   * its snapshot's declared permissions, for the owners it and the point before it speak for. The
+   * registry record is read here, after the file, since a first run may have just committed it
+   * before that file applied.
+   */
+  const markOrphans =
+    deps.markOrphanedPermissions === undefined
+      ? undefined
+      : async (applied: AppliedAppMigration): Promise<void> => {
+          const scope = orphanScopeOf({
+            snapshot: applied.snapshot,
+            before: applied.before,
+            previous: applied.previous,
+            record: await storedRegistryRecord(deps),
+          });
+          if (scope === undefined) return;
+          await deps.assertLockHeld?.();
+          await deps.markOrphanedPermissions?.(scope, applied.name);
+        };
   const dz = deps.adapter as unknown as DrizzleAdapter;
   /**
    * Store the registry record on `tx` at the point the database is now at,
@@ -2537,7 +2617,8 @@ export async function migrateCore(
           deps,
           runFiles,
           judgedFiles,
-          firstRun.beforeApply
+          firstRun.beforeApply,
+          markOrphans
         ));
       } catch (error) {
         // A file failed after earlier ones applied: their registry rows are
@@ -3811,6 +3892,18 @@ function assertRunsAsJudged(
   }
 }
 
+/** An app migration file `runFileMigrations` has just applied, with the point before it. */
+export interface AppliedAppMigration {
+  /** Its base name. */
+  name: string;
+  /** Its own snapshot. */
+  snapshot: SnapshotFile;
+  /** The newest snapshot of a migration ordered before it, or null where none has one. */
+  before: SnapshotFile | null;
+  /** The base name of the app migration ordered just before it, or null where it is the first. */
+  previous: string | null;
+}
+
 export async function runFileMigrations(args: {
   adapter: CLIDatabaseAdapter;
   db: unknown;
@@ -3844,6 +3937,14 @@ export async function runFileMigrations(args: {
    * the registry metadata (`first-run.ts`). A throw stops the run before the file.
    */
   beforeApply?: (name: string) => Promise<void>;
+  /**
+   * Awaited just after each file with a snapshot applies (or is recorded as already applied), with
+   * its snapshot, the newest snapshot ordered before it and the base name of the migration just
+   * before it: `nextly migrate` marks orphaned here what the snapshot no longer declares
+   * (`permission-orphans.ts`), as each migration applies, so a later file in the same run that
+   * declares a permission again clears the mark again. A throw stops the run after the file.
+   */
+  afterApply?: (applied: AppliedAppMigration) => Promise<void>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -3892,6 +3993,10 @@ export async function runFileMigrations(args: {
 
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
   let beforeContributions: Record<string, ContributedElements> = {};
+  // The newest snapshot file ordered before the file in hand, and the file just before it: the
+  // point before each migration, as `afterApply` is told it.
+  let beforeFile: SnapshotFile | null = null;
+  let previous: string | null = null;
   let applied = 0;
   const plan = fileRunPlan(await withApplied(all, repo), args.step);
   assertRunsAsJudged(
@@ -3909,7 +4014,9 @@ export async function runFileMigrations(args: {
       if (targetFile) {
         before = targetFile.snapshot;
         beforeContributions = targetFile.contributions ?? {};
+        beforeFile = targetFile;
       }
+      previous = m.name;
       continue;
     }
     if (!plan.runs.has(m)) break;
@@ -4004,6 +4111,7 @@ export async function runFileMigrations(args: {
       }
       applied++;
       logger.success(`Applied ${filename}`);
+      previous = m.name;
       continue;
     }
 
@@ -4057,10 +4165,22 @@ export async function runFileMigrations(args: {
       repo,
       executeSql,
     });
-    before = target;
-    beforeContributions = targetFile?.contributions ?? {};
     applied++;
     logger.success(`Applied ${filename}`);
+    // Once the file is recorded applied, so what its snapshot no longer declares leaves with it.
+    // `targetFile` is never null here (its snapshot is `target`); asked so the type says so.
+    if (targetFile !== null) {
+      await args.afterApply?.({
+        name: m.name,
+        snapshot: targetFile,
+        before: beforeFile,
+        previous,
+      });
+    }
+    before = target;
+    beforeContributions = targetFile?.contributions ?? {};
+    beforeFile = targetFile;
+    previous = m.name;
   }
 
   return applied;
