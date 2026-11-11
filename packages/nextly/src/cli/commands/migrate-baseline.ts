@@ -599,6 +599,42 @@ function withAppStreamTables(
 }
 
 /**
+ * The DDL that brings the app's contributed elements to a fresh environment.
+ *
+ * The adopting database already has them, but this file is also what a fresh
+ * environment rebuilds from — and nothing else can supply them there: the
+ * foreign table arrives from its owner's own migrations, whose generator has
+ * never seen the app's config, and the snapshot this run writes records the
+ * elements as present, so the next `migrate:create` sees no work left. The
+ * body therefore carries the ALTER and INDEX statements for exactly the
+ * recorded contributions, diffed from the same compiled stream the snapshot
+ * copied — the owner's bare declaration against the declaration carrying the
+ * contributions — so the two cannot disagree, and never a CREATE of the
+ * foreign table itself.
+ */
+function contributedElementStatements(
+  appStream: AppStreamTables | undefined,
+  folded: { contributions: Readonly<Record<string, ContributedElements>> },
+  dialect: SupportedDialect
+): string[] {
+  if (appStream === undefined) return [];
+  const statements: string[] = [];
+  for (const name of Object.keys(folded.contributions)) {
+    const spec = appStream.contributed.get(name)?.spec;
+    const bare = appStream.baselines.get(name);
+    if (spec === undefined || bare === undefined) continue;
+    statements.push(
+      ...generateStatements(
+        diffSnapshots({ tables: [bare] }, { tables: [spec] }),
+        dialect,
+        [spec]
+      )
+    );
+  }
+  return statements;
+}
+
+/**
  * What adopting the database would write, decided from the database and the migrations folder:
  * the migration's text, where it and its snapshot go, or the reason there is nothing to adopt.
  * Reads only, so a run calls it under the migrate lock and a dry run calls it alone.
@@ -706,6 +742,14 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
     };
   }
 
+  // The app's extension tables and contributed elements, recorded so the
+  // first `migrate:create` after adoption owes nothing (`withAppStreamTables`).
+  const folded = withAppStreamTables(
+    plan.snapshot,
+    deps.appStream,
+    new Set(names)
+  );
+
   // Companions carry a foreign key to their main table, so every main
   // table has to exist before any of them runs.
   const sqlStatements = [
@@ -718,6 +762,9 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
       dialect,
       plan.snapshot.tables
     ),
+    // What the app contributed to other owners' tables, so a fresh
+    // environment receives it from this file (`contributedElementStatements`).
+    ...contributedElementStatements(deps.appStream, folded, dialect),
     ...companionSql.junctionStatements,
     ...companionSql.statements,
   ];
@@ -737,14 +784,6 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
     // compute them, not because the migration changes nothing.
     entitiesAreScoped: false,
   });
-
-  // The app's extension tables and contributed elements, recorded so the
-  // first `migrate:create` after adoption owes nothing (`withAppStreamTables`).
-  const folded = withAppStreamTables(
-    plan.snapshot,
-    deps.appStream,
-    new Set(names)
-  );
 
   return {
     kind: "adopt",

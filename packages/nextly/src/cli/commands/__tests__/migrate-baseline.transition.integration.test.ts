@@ -349,11 +349,23 @@ async function bootstrapLedger(h: Harness): Promise<void> {
   }
 }
 
+/**
+ * An identifier, quoted the way the dialect quotes identifiers.
+ *
+ * The probes below hand SQL to the adapter directly, and a double-quoted
+ * identifier is a string literal on MySQL — every probe threw there and read
+ * as "absent", so a suite assertion expecting absence passed without asking
+ * the database anything.
+ */
+function id(h: Harness, name: string): string {
+  return h.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+}
+
 /** Whether a table exists, probed the way the write path probes it. */
 async function tableExists(h: Harness, name: string): Promise<boolean> {
   try {
     await (h.adapter as unknown as DrizzleAdapter).executeQuery(
-      `SELECT 1 FROM "${name}" LIMIT 0`
+      `SELECT 1 FROM ${id(h, name)} LIMIT 0`
     );
     return true;
   } catch {
@@ -365,7 +377,7 @@ async function tableExists(h: Harness, name: string): Promise<boolean> {
 async function hasColumn(h: Harness, column: string): Promise<boolean> {
   try {
     await (h.adapter as unknown as DrizzleAdapter).executeQuery(
-      `SELECT "${column}" FROM "${TABLE}" LIMIT 0`
+      `SELECT ${id(h, column)} FROM ${id(h, TABLE)} LIMIT 0`
     );
     return true;
   } catch {
@@ -581,6 +593,33 @@ function runSuite(dialect: SupportedDialect): void {
     expect(createsOf(APP_TABLE)).not.toEqual([]);
     expect(createsOf("fx__notes")).toEqual([]);
     expect(createsOf("users")).toEqual([]);
+
+    // The contributed elements are in the body, so a fresh environment —
+    // which gets the foreign tables from their owners' migrations and the
+    // elements from nowhere else — receives them from this file: an ALTER
+    // per contributed column and a CREATE per contributed index, never a
+    // CREATE of the foreign table. The snapshot above records the same
+    // elements as present, so without this the next `migrate:create` would
+    // owe nothing and the columns would never arrive.
+    expect(
+      up.filter(s => /^ALTER TABLE/i.test(s) && s.includes("app_ref"))
+    ).not.toEqual([]);
+    expect(
+      up.filter(
+        s =>
+          /^CREATE (UNIQUE )?INDEX/i.test(s) &&
+          s.includes("idx_fx_notes_app_ref")
+      )
+    ).not.toEqual([]);
+    expect(
+      up.filter(s => /^ALTER TABLE/i.test(s) && s.includes("nickname"))
+    ).not.toEqual([]);
+    expect(
+      up.filter(
+        s =>
+          /^CREATE (UNIQUE )?INDEX/i.test(s) && s.includes("idx_users_nickname")
+      )
+    ).not.toEqual([]);
 
     // The graduation itself: with the origin recorded from the same compiled
     // schema the generation reads, nothing is pending after the baseline.
@@ -885,7 +924,7 @@ function runSuite(dialect: SupportedDialect): void {
     await runDbSync(h, configV1);
     const junction = `${TABLE}_${TABLE}_related`;
     await (h.adapter as unknown as DrizzleAdapter).executeQuery(
-      `CREATE TABLE "${junction}" (a text NOT NULL, b text NOT NULL)`
+      `CREATE TABLE ${id(h, junction)} (a text NOT NULL, b text NOT NULL)`
     );
 
     const adopted = await baselineCore({
@@ -1021,4 +1060,15 @@ describe.each([
 
 describe.skipIf(!PG_URL)("db:sync to migrations (postgres)", () =>
   runSuite("postgresql")
+);
+
+/**
+ * The same suite on MySQL: each dialect introspects and renders DDL through
+ * completely different queries, so a baseline that round-trips on two says
+ * nothing about the third. `makeHarness` already supports it, and the suite
+ * self-skips wherever the dialect's URL is unset, as the postgres suite does.
+ */
+const MYSQL_URL = process.env.TEST_MYSQL_URL ?? "";
+describe.skipIf(!MYSQL_URL)("db:sync to migrations (mysql)", () =>
+  runSuite("mysql")
 );
