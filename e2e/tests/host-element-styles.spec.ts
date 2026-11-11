@@ -108,7 +108,9 @@ async function dashboardStyles(page: Page): Promise<Styles> {
   const styles: Styles = {
     heading: await stylesOf(main.getByRole("heading", { level: 1 })),
     paragraph: await stylesOf(main.locator("p").first()),
-    button: await stylesOf(main.getByRole("button", { name: "Customize" })),
+    button: await stylesOf(
+      page.getByRole("button", { name: "Customize dashboard" })
+    ),
     link: await stylesOf(
       page.getByRole("navigation").getByRole("link", { name: "Dashboard" })
     ),

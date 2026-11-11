@@ -432,9 +432,9 @@ function doneFor(props: ArrangedCellProps): {
 
 /**
  * The cell's classes: its columns (`span`, the card's drawn width or the width the grid draws it
- * at in its place), its leaving the grid while hidden, and its spacing.
+ * at in its place) and its leaving the grid while hidden.
  */
-function cellClassName(span: number, isEditing: boolean): string {
+function cellClassName(span: number): string {
   return cn(
     // `relative` so the drag handle, which is absolutely positioned, lands
     // on this cell rather than on the grid. Nothing clips or scrolls: the
@@ -446,12 +446,7 @@ function cellClassName(span: number, isEditing: boolean): string {
     cardSpanClass(span),
     // A card whose widget hides when empty leaves the grid while its answer is: the frame marks
     // it (`data-hidden-empty`) only outside customise mode, so the cell needs no state of its own.
-    "has-[[data-hidden-empty]]:hidden",
-    // Room above each control as it takes focus, so scrolling it into view
-    // stops below the customise bar stuck to the top rather than under
-    // it. On the controls rather than the cell, because the margin that
-    // counts is the focused element's own.
-    isEditing && "[&_button]:scroll-mt-40"
+    "has-[[data-hidden-empty]]:hidden"
   );
 }
 
@@ -727,7 +722,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       highlighted={props.highlighted}
       {...(props.drag === undefined ? {} : { drag: props.drag })}
       data-testid={`widget-cell-${widget.id}`}
-      className={cellClassName(props.drawnW ?? size.w, isEditing)}
+      className={cellClassName(props.drawnW ?? size.w)}
       cellRef={held.cellRef}
       style={held.style}
     >

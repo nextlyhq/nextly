@@ -514,7 +514,7 @@ test.describe("the settings sheet", () => {
   }) => {
     const begin = page.getByTestId("dashboard-edit-begin");
     await begin.click();
-    const bar = page.getByRole("group", { name: "Customize your dashboard" });
+    const bar = page.getByRole("group", { name: "Customize dashboard" });
     await expect(bar).toBeVisible();
 
     const writes: Request[] = [];
@@ -539,7 +539,7 @@ test.describe("the settings sheet", () => {
     await chooseRows(sheet, 2);
     await sheet.getByRole("button", { name: "Done" }).click();
     await expect(sheet).toBeHidden();
-    await expect(bar.getByText("Unsaved changes")).toBeVisible();
+    await expect(bar.getByRole("button", { name: "Save" })).toBeEnabled();
     expect(writes).toEqual([]);
 
     await bar.getByRole("button", { name: "Save" }).click();
