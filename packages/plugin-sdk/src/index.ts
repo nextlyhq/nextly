@@ -775,6 +775,15 @@ export { pluginCacheTag } from "nextly";
 export { nextlyTags } from "nextly";
 
 /**
+ * @experimental How the content routes read a later page of a paginated list
+ * (`news/page/2`): `listPageOf` splits a path into the address it is a page
+ * of and the page's segment, and `listPageNumber` reads the one spelling of
+ * a page number. For a plugin naming a later page's own address. Intended to
+ * be stable with the page-metadata contract.
+ */
+export { listPageNumber, listPageOf } from "nextly";
+
+/**
  * @experimental The canonical response envelopes, and the trusted-client-IP
  *   facade. Graduates per D55 once `plugin-form-builder`'s public form routes
  *   ship in a release.

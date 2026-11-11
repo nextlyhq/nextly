@@ -9,6 +9,8 @@
 import {
   NextlyError,
   languageAddressOf,
+  listPageNumber,
+  listPageOf,
   publicAddressOf,
   type PageMetadataImage,
   type PageMetadataInput,
@@ -168,14 +170,40 @@ function firstField(
 async function addressOf(
   type: PublicAddressType,
   document: Readonly<Record<string, unknown>>,
-  locale: string | undefined
+  locale: string | undefined,
+  served: string | undefined
 ): Promise<string | undefined> {
   const address = await publicAddressOf(type, document, locale);
   if (address.status !== "resolved") return undefined;
-  if (locale === undefined) return address.path;
-  const inLanguage = await languageAddressOf(address.path, locale);
-  if (inLanguage.status !== "resolved") return undefined;
-  return `${inLanguage.origin ?? ""}${inLanguage.path}`;
+  let origin = "";
+  let path = address.path;
+  if (locale !== undefined) {
+    const inLanguage = await languageAddressOf(address.path, locale);
+    if (inLanguage.status !== "resolved") return undefined;
+    origin = inLanguage.origin ?? "";
+    path = inLanguage.path;
+  }
+  return `${origin}${laterListPage(path, served) ?? path}`;
+}
+
+/**
+ * The address `served` names where it is a later page of the list at `path`
+ * (`/news/page/2` of `/news`), so each page of a list is its own page to
+ * search engines; nothing for page 1 under a second spelling, a page number
+ * spelled another way, or a page of another address.
+ */
+function laterListPage(
+  path: string,
+  served: string | undefined
+): string | undefined {
+  if (served === undefined) return undefined;
+  const later = listPageOf(served.replace(/^\/+/, ""));
+  if (later === null) return undefined;
+  const page = listPageNumber(later.segment);
+  if (page === null || page < 2) return undefined;
+  return `/${later.base}` === path || (later.base === "" && path === "/")
+    ? served
+    : undefined;
 }
 
 /** What a person typed in the page's `seo` group. */
@@ -276,7 +304,7 @@ export async function levelsOf(
     hasImage(input.code.image) ||
     hasImage(input.derived.image);
   const content = await contentLevel(ctx, document, !higherImage);
-  const address = await addressOf(type, document, input.locale);
+  const address = await addressOf(type, document, input.locale, input.path);
   return {
     page,
     code: input.code,

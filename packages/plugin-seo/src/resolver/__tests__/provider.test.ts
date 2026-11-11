@@ -186,6 +186,33 @@ describe("one answer for each kind of page", () => {
     expect(answer.canonical).toEqual({ value: "/blog/moved", from: "address" });
   });
 
+  it("a later page of the document's list keeps its own address", async () => {
+    const at = async (path: string, locale?: string) =>
+      (
+        await resolveSeo(
+          context(),
+          entryInput(
+            "pages",
+            { slug: "news" },
+            { path, ...(locale === undefined ? {} : { locale }) }
+          )
+        )
+      ).canonical;
+    expect(await at("/news/page/2")).toEqual({
+      value: "/news/page/2",
+      from: "address",
+    });
+    expect(await at("/de/news/page/3", "de")).toEqual({
+      value: "/de/news/page/3",
+      from: "address",
+    });
+    // Page 1 under a second spelling, a number spelled otherwise, or a list
+    // that is not this document's: the document's own address.
+    for (const path of ["/news/page/1", "/news/page/02", "/other/page/2"]) {
+      expect(await at(path)).toEqual({ value: "/news", from: "address" });
+    }
+  });
+
   it("a page in another language: its address in that language", async () => {
     const answer = await resolveSeo(
       context(),
@@ -275,7 +302,10 @@ describe("what the answer depends on", () => {
         coverImage: "broken",
       })
     );
-    expect(answer.image).toEqual({ value: { url: "/typed.jpg" }, from: "page" });
+    expect(answer.image).toEqual({
+      value: { url: "/typed.jpg" },
+      from: "page",
+    });
     expect(answer.title).toEqual({ value: "Typed", from: "page" });
     const fromCode = await resolveSeo(
       context({}, ["broken"]),
@@ -285,7 +315,10 @@ describe("what the answer depends on", () => {
         { code: { image: { url: "/code.jpg" } } }
       )
     );
-    expect(fromCode.image).toEqual({ value: { url: "/code.jpg" }, from: "code" });
+    expect(fromCode.image).toEqual({
+      value: { url: "/code.jpg" },
+      from: "code",
+    });
   });
 
   it("goes on to the next content image where one names an image that is gone", async () => {
