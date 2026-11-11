@@ -184,4 +184,50 @@ describe("DurableEventsKick", () => {
       { scope: undefined, caller: undefined, actor: undefined },
     ]);
   });
+
+  it("a failed pass still runs the one queued behind it", async () => {
+    const after = heldAfter();
+    let failFirst!: (error: Error) => void;
+    const dispatch = vi
+      .fn<() => Promise<void>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            failFirst = reject;
+          })
+      )
+      .mockResolvedValue(undefined);
+    const kick = new DurableEventsKick({
+      ...base,
+      logger: { warn: vi.fn() },
+      loadAfter: after.load,
+      dispatch,
+    });
+    kick.offer();
+    const first = after.runAll();
+    // Offered while the first pass runs: queued behind it.
+    kick.offer();
+    await after.runAll();
+    failFirst(new Error("the database is down"));
+    await first;
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("one after() callback runs two passes at most, leaving the rest to the sweep", async () => {
+    const after = heldAfter();
+    let kick: DurableEventsKick | undefined;
+    // Every pass sees another commit, so another pass is always queued.
+    // Stops queueing after five, so a kick with no bound fails here rather
+    // than running forever.
+    const dispatch = vi.fn(async () => {
+      if (dispatch.mock.calls.length < 5) {
+        kick?.offer();
+        await after.runAll();
+      }
+    });
+    kick = new DurableEventsKick({ ...base, loadAfter: after.load, dispatch });
+    kick.offer();
+    await after.runAll();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
 });

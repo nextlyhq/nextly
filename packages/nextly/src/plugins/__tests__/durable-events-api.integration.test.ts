@@ -270,6 +270,25 @@ describe.each(getConfiguredTestDialects())(
       expect([...delivered].sort()).toEqual([`award:${id}`, `receipt:${id}`]);
     });
 
+    it("a name registered again for another event never receives the event its old deliveries are owed", async () => {
+      const { orders, pass, delivered } = await boot();
+      clearPluginSubscriptions(LOYALTY);
+      const { id } = await orders.events.emitDurable(PAID, { order: "o-12" });
+      // Fanned out while retired: owed to "award" and "receipt" for PAID.
+      await pass();
+      // Back, with "award" now subscribed to another event.
+      const misdelivered: string[] = [];
+      getDurableSubscribers().register(LOYALTY, VIEWED, "award", event => {
+        misdelivered.push(`${event.name}:${event.id}`);
+      });
+      getDurableSubscribers().register(LOYALTY, PAID, "receipt", event => {
+        delivered.push(`receipt:${event.id}`);
+      });
+      await pass();
+      expect(delivered).toEqual([`receipt:${id}`]);
+      expect(misdelivered).toEqual([]);
+    });
+
     it("an emit its transaction's callback did not wait for is recorded, and its commit offers the prompt dispatch", async () => {
       const { orders, rows } = await boot();
       const offer = vi.spyOn(getDurableEventsKick(), "offer");
