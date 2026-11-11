@@ -24,6 +24,7 @@ import { useCallback } from "react";
 
 import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
+import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import {
   isRemovedFromCode,
@@ -40,7 +41,6 @@ import {
   CONTENT_MEASURE_LENGTH,
   CONTENT_PAGE_MEASURE,
 } from "@admin/components/layout/content-measure";
-import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";

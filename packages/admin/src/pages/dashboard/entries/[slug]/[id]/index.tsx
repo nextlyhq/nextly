@@ -15,6 +15,7 @@ import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 
 import { usePinAction } from "@admin/components/features/dashboard/pin-action";
+import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
 import {
   DocumentLockBanner,
@@ -36,7 +37,6 @@ import {
   CONTENT_PAGE_MEASURE,
   CONTENT_MEASURE_LENGTH,
 } from "@admin/components/layout/content-measure";
-import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
