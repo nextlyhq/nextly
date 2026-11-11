@@ -276,13 +276,6 @@ async function moveIfCurrent(
     async transaction => {
       const now = await heldNow(ctx, transaction, update.holder);
       if (!sameHolds(now, before)) return "overtaken" as const;
-      // A page deleted since it was listed claims nothing: its delete has
-      // already let go of what it held, and would never let go of a claim
-      // made after it. A delete still running waits for the page's lock, held
-      // here, and lets go of this claim once it does.
-      if (update.holds.length > 0 && !(await stillExists(ctx, update.holder))) {
-        return "overtaken" as const;
-      }
       return ctx.publicAddresses.move([update], transaction);
     }
   );
@@ -294,6 +287,13 @@ async function moveIfCurrent(
 /**
  * Claim `update`'s addresses, giving up each one another page holds; nothing
  * once a save has overtaken the page. Answers whether anything was claimed.
+ *
+ * A page deleted since it was listed keeps nothing: its delete let go of
+ * what it held before this claim, so once the claim has committed the page is
+ * looked up, and a page found gone lets go again. The lookup is made after
+ * the claim's transaction, never inside it, so it never waits for a
+ * connection the transaction holds. A delete still running when the claim is
+ * made waits for the page's lock and lets go of the claim itself.
  */
 async function claim(
   ctx: PluginContext,
@@ -306,7 +306,13 @@ async function claim(
     const outcome = await moveIfCurrent(ctx, { ...update, holds }, expected);
     if (outcome === "overtaken") return false;
     const first = outcome.refused[0];
-    if (first === undefined) return true;
+    if (first === undefined) {
+      if (holds.length === 0 || (await stillExists(ctx, update.holder))) {
+        return true;
+      }
+      await moveIfCurrent(ctx, { holder: update.holder, holds: [] }, expected);
+      return false;
+    }
     lost.push({
       holder: update.holder,
       address: first.address,
