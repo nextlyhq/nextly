@@ -1279,6 +1279,8 @@ export interface PluginAdminConfig {
    *   is to a menu item naming the collection, so the link follows the slug
    *   the host registered. A sub-path, a query or a hash after either is kept.
    *
+   * A reader who may not open it (a collection they cannot read, a page whose
+   * `requiredPermission` they lack) is sent where it would go without one.
    * Without it, the rail item opens the first of the plugin's collections the
    * reader can see, in the order its panel lists them, and with none, the
    * first menu item its panel lists. A value naming anything else is ignored,

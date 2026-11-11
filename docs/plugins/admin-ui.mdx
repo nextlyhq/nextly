@@ -900,7 +900,8 @@ anchored after the section named by `after`.
 A standalone plugin's icon opens the page named by `landing`, written the way a menu
 item's `to` is: one of the plugin's own pages (`/admin/plugins/<slug>/<path>`, a
 `contributes.admin.pages` path) or one of its own collections
-(`/admin/collections/<slug>`, which follows a host's rename). Without `landing`, the icon
+(`/admin/collections/<slug>`, which follows a host's rename). A reader who may not open
+that page goes where the icon would go without one. Without `landing`, the icon
 opens the first collection its panel lists for the reader, and with none, the first menu
 item the panel lists. A `landing` naming anything else is ignored, and a development
 start warns about it, as it does about a standalone plugin with menu items but no

@@ -96,6 +96,14 @@ function plugin(overrides: Partial<PluginMetadata> = {}): PluginMetadata {
     placement: "standalone",
     collections: ["forms", "submissions"],
     menu: MENU,
+    pages: [
+      { path: "reports", component: "@acme/forms/admin#Reports" },
+      {
+        path: "settings",
+        component: "@acme/forms/admin#Settings",
+        requiredPermission: "manage-forms",
+      },
+    ],
     ...overrides,
   };
 }
@@ -109,6 +117,57 @@ describe("standalonePluginLanding", () => {
         reader(["forms", "submissions"])
       )
     ).toBe(landing);
+  });
+
+  it("goes to a landing page that needs a permission the reader holds", () => {
+    const landing = "/admin/plugins/forms/settings?tab=general";
+    expect(
+      standalonePluginLanding(
+        plugin({ landing }),
+        reader(["forms", "submissions"], ["manage-forms"])
+      )
+    ).toBe(landing);
+  });
+
+  it("falls through a landing page whose permission the reader lacks", () => {
+    expect(
+      standalonePluginLanding(
+        plugin({ landing: "/admin/plugins/forms/settings" }),
+        reader(["submissions"])
+      )
+    ).toBe("/admin/collections/submissions");
+    // And on to the menu with no collection to open: past the gated Settings
+    // item too, to the first the reader may open.
+    expect(
+      standalonePluginLanding(
+        plugin({ landing: "/admin/plugins/forms/settings", collections: [] }),
+        reader([])
+      )
+    ).toBe("/admin/plugins/forms/reports");
+  });
+
+  it("goes to a landing collection the reader may read", () => {
+    expect(
+      standalonePluginLanding(
+        plugin({ landing: "/admin/collections/submissions" }),
+        reader(["forms", "submissions"])
+      )
+    ).toBe("/admin/collections/submissions");
+  });
+
+  it("falls through a landing collection the reader may not read", () => {
+    expect(
+      standalonePluginLanding(
+        plugin({ landing: "/admin/collections/forms?status=draft" }),
+        reader(["submissions"])
+      )
+    ).toBe("/admin/collections/submissions");
+    expect(
+      standalonePluginLanding(
+        plugin({ landing: "/admin/collections/forms", collections: ["forms"] }),
+        reader([])
+      )
+    ).toBe("/admin/plugins/forms/reports");
   });
 
   it("goes to the first collection in the panel's order, not the first declared", () => {
