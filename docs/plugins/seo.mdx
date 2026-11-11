@@ -399,7 +399,8 @@ hidden from search is offered only Web page and Collection page.
 
 Each detail is read from the field the content type maps to it, or else from the first field named
 like it (`author`, `publishedAt`, `price`, `startDate` and so on). A relationship that holds only an
-id is read through to the entry it names, and an author with a public address of their own is
+id is read through to the entry it names, as a visitor would read it and in the page's language, so
+an unpublished or private entry is never named. An author with a public address of their own is
 linked to it.
 
 ```ts

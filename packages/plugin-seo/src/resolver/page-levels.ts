@@ -167,7 +167,7 @@ function firstField(
  * rule forms it where the route read it in one, root-relative or on the
  * language's own domain. None where its type declares no address.
  */
-async function addressOf(
+export async function addressOf(
   type: PublicAddressType,
   document: Readonly<Record<string, unknown>>,
   locale: string | undefined,

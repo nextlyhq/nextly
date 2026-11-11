@@ -11,13 +11,12 @@
  */
 import {
   NextlyError,
-  publicAddressOf,
   type PageMetadataImage,
   type PageMetadataInput,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { imageOf } from "../resolver/page-levels";
+import { addressOf, imageOf } from "../resolver/page-levels";
 
 import { DETAIL_GUESSES, type StructuredDataDetail } from "./catalog";
 import type { DetailSource } from "./rules";
@@ -180,14 +179,17 @@ async function namedEntry(
 ): Promise<Named | undefined> {
   const name = nameIn(entry);
   if (name === undefined) return undefined;
-  const address = await publicAddressOf(
+  // The entry's address in the page's language, as the page's own canonical
+  // is formed: the language's prefix or its own domain included.
+  const address = await addressOf(
     { kind: "collection", slug: collection },
     entry,
-    locale
+    locale,
+    undefined
   );
-  return address.status === "resolved"
-    ? { name, url: new URL(address.path, origin).href }
-    : { name };
+  return address === undefined
+    ? { name }
+    : { name, url: new URL(address, `${origin}/`).href };
 }
 
 /**
@@ -234,10 +236,22 @@ async function entryById(
 ): Promise<Named | undefined> {
   let entry: unknown;
   try {
-    entry = await ctx.services.collections.findEntryById(collection, id);
+    // Read as a visitor reads it, in the page's language: an entry a visitor
+    // may not see, or one not yet published, is not named on a public page,
+    // as a relationship expanded by the route would withhold it.
+    entry = await ctx.services.collections.findEntryById(collection, id, {
+      as: "public",
+      ...(locale === undefined ? {} : { locale }),
+    });
   } catch (error) {
-    // A removed entry names nobody, so the detail is missing.
-    if (NextlyError.isCode(error, "NOT_FOUND")) return undefined;
+    // A removed or withheld entry names nobody, so the detail is missing.
+    if (
+      NextlyError.isCode(error, "NOT_FOUND") ||
+      NextlyError.isCode(error, "FORBIDDEN") ||
+      NextlyError.isCode(error, "AUTH_REQUIRED")
+    ) {
+      return undefined;
+    }
     throw error;
   }
   return isRecord(entry)

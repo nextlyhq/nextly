@@ -1,7 +1,8 @@
 /**
  * A page's structured data reaches its render through the route helpers, on
  * every configured dialect: built from the same answer as its head, with an
- * author a relationship holds by id read through to the author's own page,
+ * author a relationship holds by id read through, as a visitor reads it, to
+ * the author's own page,
  * written so that no value can end its script element, and a page's own
  * choice of type stored with the page.
  */
@@ -31,6 +32,9 @@ afterEach(async () => {
 async function boot(dialect: TestDialect) {
   current = await createTestNextly({
     dialect,
+    // The Public role a visitor is judged by, granted the reads whose rule
+    // allows everyone, as a site's boot grants them.
+    seedPublic: true,
     plugins: [
       seoPlugin({
         collections: ["posts", "authors"],
@@ -137,6 +141,30 @@ describe.each(getConfiguredTestDialects())(
         image: { url: "https://example.com/media/cover.jpg" },
         publisher: { "@id": "https://example.com/#organization" },
       });
+    });
+
+    it("names no author a visitor cannot see yet", async () => {
+      const t = await boot(dialect);
+      const author = await t.nextly.create({
+        collection: "authors",
+        data: { name: "Draft Writer", slug: "draft", status: "draft" },
+      });
+      await t.nextly.create({
+        collection: "posts",
+        data: {
+          title: "Unsigned",
+          slug: "unsigned",
+          publishedAt: "2026-11-10",
+          author: (author.item as { id: string }).id,
+          status: "published",
+        },
+      });
+
+      const text = await renderedWith(t, "unsigned");
+
+      // The type's markup is left out rather than naming an unpublished author.
+      expect(nodeOf(text, "BlogPosting")).toBeUndefined();
+      expect(text).not.toContain("Draft Writer");
     });
 
     it("keeps a page's own choice of type with the page", async () => {

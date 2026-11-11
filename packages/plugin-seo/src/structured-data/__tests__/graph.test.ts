@@ -38,12 +38,21 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
     type.kind === "collection" && type.slug === "authors"
       ? { status: "resolved", path: `/authors/${String(entry?.slug)}` }
       : { status: "none" },
+  // Every language but English is served under its own prefix.
+  languageAddressOf: async (path: string, locale: string) => ({
+    status: "resolved",
+    path: locale === "en" ? path : `/${locale}${path}`,
+  }),
 }));
 
-/** The authors a relationship names by id. */
+/** The authors a relationship names by id; `hidden` is one visitors may not read. */
 const AUTHORS: Record<string, Record<string, unknown>> = {
   a1: { id: "a1", name: "Sara Khan", slug: "sara-khan" },
+  hidden: { id: "hidden", name: "Not Public", slug: "not-public" },
 };
+
+/** How each related entry was asked for. */
+const reads: unknown[] = [];
 
 /** A context reading the authors and the posts' declared fields. */
 function context(): PluginContext {
@@ -60,7 +69,16 @@ function context(): PluginContext {
             ],
           },
         }),
-        findEntryById: async (collection: string, id: string) => {
+        findEntryById: async (
+          collection: string,
+          id: string,
+          opts?: { as?: string }
+        ) => {
+          reads.push(opts);
+          // The service refuses a visitor what visitors may not read.
+          if (id === "hidden" && opts?.as === "public") {
+            throw NextlyError.forbidden({});
+          }
           const found = collection === "authors" ? AUTHORS[id] : undefined;
           if (found === undefined) throw NextlyError.notFound({});
           return found;
@@ -98,10 +116,13 @@ function rules(
   };
 }
 
-function postInput(entry: Record<string, unknown>): PageMetadataInput {
+function postInput(
+  entry: Record<string, unknown>,
+  locale = "en"
+): PageMetadataInput {
   return {
     path: "/blog/surfer-seo-vs-rext-ai",
-    locale: "en",
+    locale,
     source: { kind: "entry", collection: "posts", entry },
     code: {},
     derived: {},
@@ -259,6 +280,36 @@ describe("a page's structured data", () => {
       name: "Sara Khan",
       url: `${ORIGIN}/authors/sara-khan`,
     });
+  });
+
+  it("reads a related author as a visitor would, in the page's language, at its address there", async () => {
+    reads.length = 0;
+    const { nodes } = await buildStructuredData(
+      context(),
+      postInput({ ...POST, writer: undefined, author: "a1" }, "de"),
+      ANSWER,
+      rules()
+    );
+
+    expect(reads).toEqual([{ as: "public", locale: "de" }]);
+    expect(nodeOf(nodes, "Article")?.author).toEqual({
+      "@type": "Person",
+      name: "Sara Khan",
+      url: `${ORIGIN}/de/authors/sara-khan`,
+    });
+  });
+
+  it("names no author a visitor may not read", async () => {
+    const { nodes, problems } = await buildStructuredData(
+      context(),
+      postInput({ ...POST, writer: undefined, author: "hidden" }),
+      ANSWER,
+      rules({ posts: { type: "article" } })
+    );
+
+    expect(nodeOf(nodes, "Article")).toBeUndefined();
+    expect(JSON.stringify(nodes)).not.toContain("Not Public");
+    expect(problems.map(problem => problem.detail)).toEqual(["author"]);
   });
 
   it("leaves an Article out when its author is missing, naming the field to fill in", async () => {

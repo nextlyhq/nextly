@@ -206,20 +206,12 @@ export const STRUCTURED_DATA_TYPES: Readonly<
   },
 };
 
-/** The keys of every type offered, in the order they are offered. */
-export const STRUCTURED_DATA_TYPE_KEYS: readonly StructuredDataTypeKey[] = [
-  "article",
-  "blogPosting",
-  "webPage",
-  "collectionPage",
-  "profilePage",
-  "softwareApplication",
-  "product",
-  "event",
-  "videoObject",
-  "review",
-  "localBusiness",
-];
+/**
+ * The keys of every type offered, in the order they are offered: the
+ * catalog's own order, so a type added there is offered and accepted alike.
+ */
+export const STRUCTURED_DATA_TYPE_KEYS: readonly StructuredDataTypeKey[] =
+  Object.keys(STRUCTURED_DATA_TYPES) as StructuredDataTypeKey[];
 
 /** True for a stored choice naming a type that is offered. */
 export function isStructuredDataTypeKey(
