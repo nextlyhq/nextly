@@ -912,6 +912,20 @@ describe("leaving with unsaved changes", () => {
     ).toEqual({ heading: "Mine" });
   });
 
+  it("the bar's Save keeps an open drawer's width too, with its settings", async () => {
+    // A width chosen in the drawer, left open, and the dashboard saved from the bar.
+    renderDashboard();
+    const user = await beginEditing();
+    const drawer = await openDrawer(user, "Notes");
+    await user.click(within(drawer).getByRole("radio", { name: "50% width" }));
+    await user.type(within(drawer).getByLabelText(/Heading/), "Mine");
+    await user.click(saveButton());
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(
+      sentPlacements().find(placement => placement.widgetId === "core/c")
+    ).toMatchObject({ w: 6, config: { heading: "Mine" } });
+  });
+
   it("the bar's Save stops, with the panel saying why, when the panel's change is refused", async () => {
     renderDashboard();
     const user = await beginEditing();

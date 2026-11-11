@@ -268,7 +268,7 @@ function useCardControls(
       openSettings,
       menuRef: menus.rest,
     }),
-    done: doneFor(props, size),
+    done: doneFor(props),
   };
 }
 
@@ -352,26 +352,19 @@ function restingMenuFor(
  * with the dashboard's other unsaved changes until the customise bar's Save, and the drawer
  * closes. Outside it, the settings, title and width are saved at once in one write, the same
  * write as the header's quick setting, and the drawer hears how that ended: it closes when the
- * save lands and says why in place when it does not. A width is sent only when the reader
- * changed it, so a card drawn at a width its stored one was held to keeps the stored one.
+ * save lands and says why in place when it does not. A size is sent only when the reader chose
+ * another width (`PanelKept`'s `resize`).
  */
-function doneFor(
-  props: ArrangedCellProps,
-  /** The size the card is drawn at, which the drawer's Width opened on. */
-  size: GridSize
-): {
+function doneFor(props: ArrangedCellProps): {
   done: SettingsPanelProps["onDone"];
   blocked: string | undefined;
 } {
   const write = props.settingsWrite;
-  const resized = (w: number | undefined): GridSize | undefined =>
-    w === undefined || w === size.w ? undefined : { w, h: size.h };
   if (props.isEditing || !write) {
     return {
       done: (kept, settled) => {
         props.on.saveSettings(kept.config, kept.ownTitle);
-        const next = resized(kept.w);
-        if (next) props.on.setSize(next);
+        if (kept.resize) props.on.setSize(kept.resize.size);
         settled.saved();
       },
       blocked: undefined,
@@ -387,7 +380,7 @@ function doneFor(
           showsFailure: true,
         },
         kept.ownTitle,
-        resized(kept.w)
+        kept.resize?.size
       ),
     blocked: write.unavailable,
   };

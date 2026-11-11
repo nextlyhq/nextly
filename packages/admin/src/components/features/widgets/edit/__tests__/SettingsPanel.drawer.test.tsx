@@ -89,7 +89,7 @@ function drawer(
     settled.saved()
   );
   const previewed = vi.fn((draft: PanelKept) => (
-    <p data-testid="preview-stand-in">{`w ${String(draft.w)}`}</p>
+    <p data-testid="preview-stand-in">{`w ${String(draft.resize?.size.w)}`}</p>
   ));
   render(
     <SettingsPanel
@@ -100,7 +100,7 @@ function drawer(
       settings={widget.settings ?? []}
       widget={widget}
       config={config}
-      sizing={{ w, bounds: widget.size }}
+      sizing={{ size: { w, h: 3 }, bounds: widget.size }}
       onDone={onDone}
       renderPreview={previewed}
     />
@@ -267,7 +267,7 @@ describe("a Number of entries saved before as none of 5, 10 or 20", () => {
         settings={rows.settings ?? []}
         widget={rows}
         config={config}
-        sizing={{ w: 6, bounds: rows.size }}
+        sizing={{ size: { w: 6, h: 3 }, bounds: rows.size }}
         onDone={() => {}}
       />
     );
@@ -325,16 +325,25 @@ describe("the Size section's Width", () => {
     ).toHaveAttribute("aria-checked", "true");
     await user.type(screen.getByLabelText("Title"), "Mine");
     await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(onDone.mock.calls.at(-1)?.[0]).toMatchObject({ w: 5 });
+    // Saved with no size: the card keeps the width it has.
+    const kept = onDone.mock.calls.at(-1)?.[0];
+    expect(kept?.ownTitle).toBe("Mine");
+    expect(kept).not.toHaveProperty("resize");
   });
 
   it("hands the preview the width chosen, and keeps it on Save", async () => {
     const user = userEvent.setup();
     const { onDone, previewed } = drawer(PLUGIN, undefined, 6);
     await user.click(screen.getByRole("radio", { name: "100% width" }));
-    expect(previewed.mock.calls.at(-1)?.[0]).toMatchObject({ w: 12 });
+    expect(previewed.mock.calls.at(-1)?.[0].resize).toEqual({
+      size: { w: 12, h: 3 },
+      bounds: PLUGIN.size,
+    });
     expect(screen.getByTestId("preview-stand-in")).toHaveTextContent("w 12");
     await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(onDone.mock.calls.at(-1)?.[0]).toMatchObject({ w: 12 });
+    expect(onDone.mock.calls.at(-1)?.[0].resize?.size).toEqual({
+      w: 12,
+      h: 3,
+    });
   });
 });

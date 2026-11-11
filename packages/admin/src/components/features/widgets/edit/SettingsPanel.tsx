@@ -49,6 +49,7 @@ import {
   MAX_CARD_TITLE_LENGTH,
   textLength,
   type AnyWidgetSetting,
+  type GridSize,
   type WidgetSizeBounds,
 } from "nextly/config";
 import {
@@ -116,10 +117,10 @@ export interface SettingsPanelProps {
   /** What this placement has stored, if anything. */
   config: Record<string, unknown> | undefined;
   /**
-   * The card's width as drawn and its widget's bounds, for the Size section's Width. Absent,
-   * the drawer has no Size section.
+   * The card's size as drawn and its widget's bounds, for the Size section's Width. Absent, the
+   * drawer has no Size section.
    */
-  sizing?: { w: number; bounds: WidgetSizeBounds };
+  sizing?: { size: GridSize; bounds: WidgetSizeBounds };
   /** The title the reader gave this card, as stored; absent while it is titled automatically. */
   ownTitle?: string | undefined;
   /**
@@ -879,8 +880,8 @@ function usePanelKeeping(args: {
   fieldsRef: RefObject<HTMLFieldSetElement | null>;
   /** Show the settings a check refused (`useRevealRefused`). */
   reveal: () => void;
-  /** The card's width as the drawer holds it, kept with the rest; absent with no Size. */
-  w: number | undefined;
+  /** The size the reader chose in the drawer, kept with the rest (`PanelKept`'s `resize`). */
+  resize: PanelKept["resize"];
 }) {
   const { settings, config, form, own, submit, holdsChanges, fieldsRef } = args;
   const { reveal } = args;
@@ -907,7 +908,7 @@ function usePanelKeeping(args: {
     return {
       config: toStoredConfig(settings, values, config),
       ownTitle: own.ownTitle.trim(),
-      ...(args.w === undefined ? {} : { w: args.w }),
+      ...(args.resize === undefined ? {} : { resize: args.resize }),
     };
   };
 
@@ -1120,7 +1121,8 @@ function usePanelState(props: SettingsPanelProps) {
   const formState = usePanelForm(open, settings, sources, defaultValues);
   const draft = usePanelDraft(formState.form, settings, config);
   const own = useOwnTitle(open, props.ownTitle);
-  const [w, setW] = useDraftWidth(open, props.sizing?.w);
+  const drawnW = props.sizing?.size.w;
+  const [w, setW] = useDraftWidth(open, drawnW);
   const doneState = usePanelDone(props);
   // Rows begun and not finished write nothing to the draft, so they are counted on their own.
   const pendingRows = usePendingRows();
@@ -1131,18 +1133,28 @@ function usePanelState(props: SettingsPanelProps) {
     () => toStoredConfig(settings, defaultValues, config),
     [settings, defaultValues, config]
   );
+  // By the size's numbers and the bounds, not the sizing object, which the caller may build anew.
+  const drawnH = props.sizing?.size.h;
+  const bounds = props.sizing?.bounds;
+  const resize = useMemo(
+    () =>
+      drawnW === undefined || drawnH === undefined || bounds === undefined
+        ? undefined
+        : resizeOf({ size: { w: drawnW, h: drawnH }, bounds }, w),
+    [drawnW, drawnH, bounds, w]
+  );
   const kept: PanelKept = useMemo(
     () => ({
       config: draft,
       ownTitle: own.ownTitle.trim(),
-      ...(w === undefined ? {} : { w }),
+      ...(resize === undefined ? {} : { resize }),
     }),
-    [draft, own.ownTitle, w]
+    [draft, own.ownTitle, resize]
   );
   const holdsChanges =
     !sameSettingValue(draft, opened) ||
     kept.ownTitle !== (props.ownTitle ?? "") ||
-    w !== props.sizing?.w ||
+    resize !== undefined ||
     pendingRows.anyPending;
   return {
     sources,
@@ -1154,6 +1166,7 @@ function usePanelState(props: SettingsPanelProps) {
     own,
     w,
     setW,
+    resize,
     ...doneState,
     // Frozen while Save saves, or while a dashboard write carries what the panel staged.
     saving: doneState.saving || props.dashboardWriting === true,
@@ -1174,6 +1187,20 @@ function automaticTitleOf(
 }
 
 /**
+ * The size the reader chose in the drawer, held against the card's own: its new width with the
+ * height it has, and its widget's bounds; `undefined` while the width is the card's own.
+ */
+function resizeOf(
+  sizing: SettingsPanelProps["sizing"],
+  w: number | undefined
+): PanelKept["resize"] {
+  if (sizing === undefined || w === undefined || w === sizing.size.w) {
+    return undefined;
+  }
+  return { size: { w, h: sizing.size.h }, bounds: sizing.bounds };
+}
+
+/**
  * The Size section's width: the drawer's own, its choices within the widget's bounds, read
  * against the width the card is drawn at (so a stored width outside them is offered until the
  * reader picks another), and a way to choose one. `undefined` where the drawer has no Size.
@@ -1186,7 +1213,7 @@ function sizeSection(
   if (sizing === undefined || w === undefined) return undefined;
   return {
     w,
-    choices: widthChoices(sizing.bounds, sizing.w),
+    choices: widthChoices(sizing.bounds, sizing.size.w),
     bounds: sizing.bounds,
     onSelect: setW,
   };
@@ -1213,7 +1240,7 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
     holdsChanges,
     fieldsRef,
     reveal: refusal.reveal,
-    w: state.w,
+    resize: state.resize,
   });
   useOnePanelOpen(props.placementId, open, holdsChanges, {
     close: () => changeOpen(false),

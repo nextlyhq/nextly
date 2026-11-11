@@ -76,12 +76,12 @@ export default function CellSettings({
       config={row.config}
       ownTitle={row.ownTitle}
       // The Size section's Width, opened on the width the card is drawn at.
-      sizing={{ w: size.w, bounds: row.widget.size }}
+      sizing={{ size, bounds: row.widget.size }}
       onDone={done.done}
       {...(done.blocked === undefined ? {} : { blocked: done.blocked })}
       renderPreview={(draft, clearFilters) => {
         // Drawn at the width the drawer holds, so choosing another shows the card at it.
-        const w = draft.w ?? size.w;
+        const w = draft.resize?.size.w ?? size.w;
         return (
           <SettingsPreview
             widget={row.widget}
@@ -91,6 +91,7 @@ export default function CellSettings({
             ownTitle={draft.ownTitle}
             shown={data}
             size={{ w, h: size.h }}
+            shownW={size.w}
             cardWidth={
               dashboardWidth === undefined
                 ? undefined

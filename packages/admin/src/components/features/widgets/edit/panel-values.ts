@@ -8,7 +8,9 @@
 import {
   resolveWidgetSettings,
   type AnyWidgetSetting,
+  type GridSize,
   type PublishedContentSource,
+  type WidgetSizeBounds,
 } from "nextly/config";
 
 import {
@@ -18,15 +20,19 @@ import {
 } from "./content-settings";
 
 /**
- * What Save keeps: the settings, as `toStoredConfig` builds them, the card's own title, and its
- * width where the drawer offers one.
+ * What Save keeps: the settings, as `toStoredConfig` builds them, the card's own title, and the
+ * size the reader chose in the drawer's Size.
  */
 export interface PanelKept {
   config: Record<string, unknown>;
   /** The title the reader gave the card, trimmed; `""` titles it automatically. */
   ownTitle: string;
-  /** The card's width in columns, from the drawer's Size; absent where it offers none. */
-  w?: number;
+  /**
+   * The card's new size, with its widget's bounds, which a write holds it to: present only when
+   * the reader chose another width, so a card drawn at a width its stored one was held to keeps
+   * the stored one.
+   */
+  resize?: { size: GridSize; bounds: WidgetSizeBounds };
 }
 
 /**

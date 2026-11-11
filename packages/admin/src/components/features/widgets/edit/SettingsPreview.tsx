@@ -197,8 +197,10 @@ export function SettingsPreview(props: {
   /** The title the panel holds for the card; empty for the automatic one. */
   ownTitle: string;
   shown: ShownAnswer;
-  /** The size the card is drawn at on the dashboard. */
+  /** The size the preview draws the card at: the drawer's width. */
   size: GridSize;
+  /** The width the card itself is drawn at on the dashboard, which its own answer was asked at. */
+  shownW?: number;
   /** The width the card is drawn at on the dashboard, in pixels, when it is known. */
   cardWidth: number | undefined;
   /** Empty every Filter setting in the panel; absent where nothing beside the preview holds one. */
@@ -214,6 +216,7 @@ export function SettingsPreview(props: {
     shown: props.shown,
     ownTitle: props.ownTitle,
     size,
+    ...(props.shownW === undefined ? {} : { shownW: props.shownW }),
     // The tier the preview is drawn at, so its question is asked at the size it shows.
     ...(tier === undefined ? {} : { tier }),
   });
