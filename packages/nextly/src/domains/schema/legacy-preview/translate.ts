@@ -23,6 +23,7 @@ import { isVirtualField } from "../../../collections/fields/virtual";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
@@ -88,9 +89,14 @@ export async function translatePipelinePreviewToLegacy(
   const localized = context.localized === true;
 
   // Step 1: legacy field-level diff (pure function).
+  // Where the fields' values are stored, before and after, by the shared rule: an entity keeps its
+  // translatable values in the companion when translated, and every entity does under per-language
+  // storage, where turning the entity's translation on or off moves none of them.
   const diff = computeFieldDiff(currentFields, newFields, {
-    localized,
-    newLocalized: context.requestedLocalized ?? localized,
+    localized: storesPerLanguage({ localized }),
+    newLocalized: storesPerLanguage({
+      localized: context.requestedLocalized ?? localized,
+    }),
   });
 
   if (!diff.hasChanges) {
