@@ -2076,7 +2076,7 @@ ${allColumnDefs.join(",\n")}
         newFields,
         previousDefinitionOf
       )) {
-        if (field.required !== oldField.required) {
+        if (this.nullabilityChanged(oldField, field)) {
           options?.onSqliteNullability?.(
             toSnakeCase(field.name),
             field.required === true
@@ -2088,24 +2088,11 @@ ${allColumnDefs.join(",\n")}
         newFields,
         previousDefinitionOf
       )) {
-        // Requiredness is asked SEPARATELY from `isFieldModified`, because for
-        // one kind of field the two disagree. `getColumnDescriptor` reports a
-        // relationship as nullable whatever its `required` says — the column
-        // it describes is the key's, and a key is described by its constraint
-        // — so a relationship's requiredness toggle left both descriptors
-        // identical, this branch was never entered, and the column stayed as
-        // the CREATE made it. A link turned optional therefore kept a NOT NULL
-        // column while its foreign key moved to `SET NULL`: MySQL rejects that
-        // pairing outright, and PostgreSQL accepts it and fails later, on the
-        // first delete, in production.
-        //
-        // Kept out of `isFieldModified` itself, which answers whether the
-        // column's STORAGE changed and whose `true` drives a type rewrite. The
-        // rewrite is still gated on `columnChanged` below, so a field that
-        // arrives here only because its requiredness moved restates
-        // nullability and nothing else.
-        const requirednessChanged = field.required !== oldField.required;
-        if (this.isFieldModified(oldField, field) || requirednessChanged) {
+        // `isFieldModified` answers true for a nullability change too, a relationship's included:
+        // the descriptor's `nullable` follows `required`. The type rewrite below stays gated on
+        // `columnChanged`, so a field that arrives here only because its requiredness moved
+        // restates nullability and nothing else.
+        if (this.isFieldModified(oldField, field)) {
           const alterCol = toSnakeCase(field.name);
           // The descriptor decides the target column, the same answer the comparison above used to
           // decide there was a change at all. Asking a different renderer here is what let a field
@@ -2150,7 +2137,7 @@ ${allColumnDefs.join(",\n")}
               : before.dialectType !== described.dialectType ||
                 before.kind !== described.kind ||
                 before.name !== described.name;
-          const nullabilityChanged = field.required !== oldField.required;
+          const nullabilityChanged = this.nullabilityChanged(oldField, field);
 
           if (this.dialect === "mysql") {
             // MySQL restates the WHOLE definition, so everything the column carries travels with
@@ -2287,6 +2274,23 @@ ${allColumnDefs.join(",\n")}
    * `unique` and `index` are compared separately because they are not properties of the column's
    * shape. Two columns can be identical and differ in whether an index covers them.
    */
+  /**
+   * Whether the column moves between NOT NULL and nullable: the descriptor's answer, the one the
+   * CREATE and a migration plan from. A relationship's column follows `required` like any other,
+   * and a link turned optional must lose its NOT NULL as its foreign key moves to `SET NULL`,
+   * which MySQL refuses beside NOT NULL and PostgreSQL accepts and fails on at the first delete.
+   */
+  private nullabilityChanged(
+    oldField: FieldDefinition,
+    newField: FieldDefinition
+  ): boolean {
+    const before = getColumnDescriptor(oldField, this.dialect, "collection");
+    const after = getColumnDescriptor(newField, this.dialect, "collection");
+    return (
+      before !== null && after !== null && before.nullable !== after.nullable
+    );
+  }
+
   isFieldModified(
     oldField: FieldDefinition,
     newField: FieldDefinition
@@ -2469,7 +2473,7 @@ ${allColumnDefs.join(",\n")}
     // pass existed carries whatever `CREATE TABLE` gave the column and nothing
     // has moved it since — so an optional relationship can be sitting on a
     // NOT NULL column right now, both definitions agreeing it is optional and
-    // `requirednessChanged` therefore false. Installing `SET NULL` against
+    // the column pass therefore stating nothing. Installing `SET NULL` against
     // that is refused by MySQL after the drop has auto-committed, and accepted
     // by PostgreSQL until the first delete.
     //
@@ -2477,7 +2481,10 @@ ${allColumnDefs.join(",\n")}
     // already stating it: relaxing a column that already accepts nulls is a
     // no-op both dialects accept, so this costs an idempotent statement and
     // repairs the databases the old behaviour left behind.
-    const columnPassStatesNullability = oldField.required !== newField.required;
+    const columnPassStatesNullability = this.nullabilityChanged(
+      oldField,
+      newField
+    );
     if (installsSetNull && !columnPassStatesNullability) {
       statements.unshift(
         this.relaxColumnForSetNull(tableName, columnName, newField)

@@ -41,7 +41,7 @@ function hasOwnColumn(field: FieldDefinition): boolean {
 
 /**
  * Whether the save writes the field's column NOT NULL, as the descriptor builds it: a required
- * relationship's foreign key stays nullable, its requiredness enforced when an entry is saved.
+ * field's, a relationship's included.
  */
 function columnIsNotNull(
   field: FieldDefinition,
@@ -54,9 +54,9 @@ function columnIsNotNull(
 /**
  * What a field the save makes required has in its way: its column as the live table holds it
  * (before any rename in this save), `null` for a column created now (every row), or undefined
- * when nothing can be in its way: a column the save leaves nullable (not required, or a
- * relationship's), no column of its own, one already NOT NULL, a column the table does not have
- * yet (left to its own refusal), or one created holding a value.
+ * when nothing can be in its way: a column the save leaves nullable (not required), no column
+ * of its own, one already NOT NULL, a column the table does not have yet (left to its own
+ * refusal), or one created holding a value.
  */
 function columnToCount(
   field: FieldDefinition,

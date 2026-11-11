@@ -460,9 +460,10 @@ export function getColumnDescriptor(
   // "skip" covers every column-less field type via fieldProducesColumn: a component
   // and a many-to-many, both of which keep their values in another table.
   const kind = classifyFieldKind(field, builtBy);
-  // FK columns are always created without NOT NULL in the DDL (both generateMigrationSQL
-  // and the Drizzle runtime builder). `required` is enforced at the application layer.
-  const nullable = kind === "fkSingle" ? true : field.required !== true;
+  // A relationship's column follows `required` like any other: the Builder's CREATE makes a
+  // required one NOT NULL, so a migration planned from here does too, and turning `required` on
+  // or off plans the change.
+  const nullable = field.required !== true;
 
   if (kind === "skip") return null;
 

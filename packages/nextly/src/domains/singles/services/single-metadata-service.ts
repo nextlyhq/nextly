@@ -1164,6 +1164,10 @@ export class SingleMetadataService {
         {
           wasStatus,
           hasStatus,
+          // The junction tables are decided on the full lists, as a collection's save decides
+          // them: a translated many-to-many sits in neither list the main diff sees and still
+          // has one.
+          junctionFields: { old: startingFields, new: fields },
           tableHasRows: liveFacts.tableHasRows,
           foreignKeysByColumn: liveFacts.foreignKeysByColumn,
           indexNames: liveFacts.indexNames,

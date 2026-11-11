@@ -352,17 +352,6 @@ const ACCEPTED = byAspect([
     { origins: ["fieldGroup"] }
   ),
 
-  // --- Required foreign keys: nullability ----------------------------------
-  // The descriptor states that every FK column is nullable and that requiredness is enforced above
-  // the database. Both generators emit NOT NULL, so a row the application would have rejected with
-  // a field-level message is refused by the database with a driver error instead.
-  ...everywhere(
-    FK_TYPES,
-    ["required"],
-    "nullability",
-    "generator emits NOT NULL for a required FK column; descriptor calls every FK column nullable"
-  ),
-
   // --- Foreign keys on PostgreSQL: type ------------------------------------
   // The field-group generator gives an FK column the UUID type; the descriptor calls it text, which
   // is what the runtime table binds and what a collection's own FK columns are. A UUID column
