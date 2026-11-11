@@ -242,7 +242,7 @@ function withRootFileRewrites(
     const phases: Partial<RewritePhases> = Array.isArray(theirs)
       ? // A plain list is Next's `afterFiles`.
         { afterFiles: theirs as Rewrite[] }
-      : ((theirs ?? {}) as Partial<RewritePhases>);
+      : (theirs ?? {});
     const all = [
       ...(phases.beforeFiles ?? []),
       ...(phases.afterFiles ?? []),

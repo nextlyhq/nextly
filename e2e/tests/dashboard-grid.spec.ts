@@ -320,15 +320,13 @@ async function sizeDashboard(page: Page, target: number): Promise<void> {
 }
 
 /**
- * The sizes a Width submenu offers, read from each choice's test id (`card-width-6`)
- * rather than its text: a width is named by its share of the row ("50%") with its columns beneath,
- * so the text is no number to read.
+ * The widths a settings drawer's Width offers, in columns, read from each choice's value
+ * (`data-value`) rather than its text: a width is named by its share of the row ("50%"), so the
+ * text is no number to read.
  */
 async function valuesOf(choices: Locator): Promise<number[]> {
   return choices.evaluateAll(items =>
-    items.map(item =>
-      Number((item.getAttribute("data-testid") ?? "").split("-").pop())
-    )
+    items.map(item => Number(item.getAttribute("data-value")))
   );
 }
 
@@ -465,7 +463,7 @@ test("changes band at the dashboard's own 639/640 and 1,023/1,024 px, and its ga
   }
 });
 
-test("never resizes a card past its widget's maximum, from the menu or the layout write", async ({
+test("never resizes a card past its widget's maximum, from the settings drawer or the layout write", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
@@ -482,30 +480,25 @@ test("never resizes a card past its widget's maximum, from the menu or the layou
   await page.getByTestId("dashboard-edit-begin").click();
   const menuButton = cell.getByRole("button", { name: /^Card actions for / });
 
-  // The widths offered stop at the maximum; choosing the last draws the card at it.
-  const widthMenu = page.getByTestId("card-width-menu");
+  // The widths offered stop at the maximum and start at the minimum; choosing the last, and
+  // saving the drawer, draws the card at the maximum.
   await menuButton.click();
-  if ((await widthMenu.count()) > 0) {
-    await widthMenu.focus();
-    await page.keyboard.press("ArrowRight");
-    const widths = page.getByRole("menuitemradio");
-    const offered = await valuesOf(widths);
-    expect(Math.max(...offered)).toBe(bounds.max.w);
-    expect(Math.min(...offered)).toBe(bounds.min.w);
-    await widths.last().focus();
-    await page.keyboard.press("Enter");
-    await expect(page.getByRole("menu")).toHaveCount(0);
-  } else {
-    // A widget of one width offers no Width at all.
-    expect(bounds.min.w).toBe(bounds.max.w);
-    await page.keyboard.press("Escape");
-  }
-
+  await page.getByRole("menuitem", { name: "Settings…" }).click();
+  const drawer = page.getByTestId("widget-settings-drawer");
+  const widths = drawer
+    .getByRole("radiogroup", { name: "Width" })
+    .getByRole("radio");
+  await expect(widths.first()).toBeVisible();
+  const offered = await valuesOf(widths);
+  expect(Math.max(...offered)).toBe(bounds.max.w);
+  expect(Math.min(...offered)).toBe(bounds.min.w);
   // No Height is offered: a card is as tall as its content.
-  await menuButton.click();
-  await expect(page.getByTestId("card-height-menu")).toHaveCount(0);
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(drawer.getByRole("radiogroup", { name: /Height/ })).toHaveCount(
+    0
+  );
+  await widths.last().click();
+  await drawer.getByRole("button", { name: "Save" }).click();
+  await expect(drawer).toBeHidden();
 
   const area = await areaWidth(page);
   const gap = expectedColumnGap(area);
