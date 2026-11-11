@@ -58,6 +58,7 @@ import {
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
+import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import {
   applyCollectionSchemaChange,
   recordedFieldsOf,
@@ -958,6 +959,25 @@ const COLLECTIONS_METHODS: Record<
           }
           // `dialect` is an abstract readonly property on DrizzleAdapter, not a method.
           const dialect = adapter.dialect;
+
+          // A field renamed onto a column that is already there is refused before anything
+          // changes, on either way below: written and run as a migration, or pushed. The dialog
+          // never offers such a change as a rename, only as the old column dropped beside a field
+          // kept on the column that is there, so it is found from the field lists.
+          await refuseRenamedFieldOntoTakenColumn(
+            adapter,
+            {
+              previousFields: (collection.fields ??
+                []) as unknown as FieldDefinition[],
+              fields: fields as unknown as FieldDefinition[],
+              mainTable: tableName,
+              wasLocalized: storesPerLanguage({ localized: wasLocalized }),
+              isLocalized: isStoredPerLanguage,
+              dialect,
+              builtBy: "collection",
+            },
+            { collection: p.collectionName }
+          );
 
           // One apply of the schema pipeline, with the admin's answers from the dialog, then the
           // companion brought in step: the same path a Builder save of the collection takes. Legacy
