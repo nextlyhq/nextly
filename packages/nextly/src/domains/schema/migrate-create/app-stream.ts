@@ -655,3 +655,92 @@ export function mergeContributions(
   }
   return out;
 }
+
+/**
+ * A contribution the database holds, as the live table says it holds it.
+ *
+ * The compiled stream says what the app contributes NOW, and a config edited
+ * since the last push names elements the database has never received. An
+ * adoption that recorded such an element as present would tell the next
+ * generation the work was already done — a column no migration ever brought —
+ * so each element survives only when the live table carries its name, and the
+ * copy is the compiled spec with the absent ones taken out: the owner's own
+ * shape comes from the compile either way, so the owner's drift is never
+ * mixed into what this decides.
+ */
+export function standingContribution(input: {
+  /** The table as compiled, owner's declaration plus the app's elements. */
+  spec: TableSpec;
+  /** What the app contributes to it, by element name. */
+  elements: ContributedElements;
+  /** The same table as the database holds it. */
+  live: TableSpec;
+}): { spec: TableSpec; elements: ContributedElements } {
+  const carries = (names: readonly string[], kind: keyof TableSpec) => {
+    const present = new Set(
+      ((input.live[kind] ?? []) as { name: string }[]).map(e => e.name)
+    );
+    return names.filter(name => present.has(name));
+  };
+  const elements: ContributedElements = {
+    columns: carries(input.elements.columns, "columns"),
+    indexes: carries(input.elements.indexes, "indexes"),
+    foreignKeys: carries(input.elements.foreignKeys, "foreignKeys"),
+    checks: carries(input.elements.checks, "checks"),
+  };
+  // The copy keeps what the live table keeps. An element the compile adds
+  // that the database lacks is dropped here and stays pending: the next
+  // migration is what brings it, to this database and to fresh ones alike.
+  // A dimension the spec leaves untracked stays untracked.
+  const survived = <T extends { name: string }>(
+    own: readonly T[] | undefined,
+    contributed: readonly string[],
+    standing: readonly string[]
+  ): T[] | undefined =>
+    own === undefined
+      ? undefined
+      : own.filter(
+          element =>
+            !contributed.includes(element.name) ||
+            standing.includes(element.name)
+        );
+  return {
+    spec: {
+      ...input.spec,
+      columns:
+        survived(
+          input.spec.columns,
+          input.elements.columns,
+          elements.columns
+        ) ?? [],
+      ...(input.spec.indexes !== undefined
+        ? {
+            indexes: survived(
+              input.spec.indexes,
+              input.elements.indexes,
+              elements.indexes
+            ),
+          }
+        : {}),
+      ...(input.spec.foreignKeys !== undefined
+        ? {
+            foreignKeys: survived(
+              input.spec.foreignKeys,
+              input.elements.foreignKeys,
+              elements.foreignKeys
+            ),
+          }
+        : {}),
+      ...(input.spec.checks !== undefined
+        ? {
+            checks: survived(
+              input.spec.checks,
+              input.elements.checks,
+              elements.checks
+            ),
+          }
+        : {}),
+    },
+    elements,
+  };
+}

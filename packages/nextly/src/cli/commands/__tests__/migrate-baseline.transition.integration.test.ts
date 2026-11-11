@@ -146,12 +146,6 @@ const extendsSchema: SchemaHook = ({ schema }) => {
     columns: { appRef: col.shortText({ nullable: true }) },
     indexes: [{ columns: ["app_ref"], name: "idx_fx_notes_app_ref" }],
   });
-  // And one to a core table, whose copy the baseline already holds by
-  // introspection: only the contribution has to be named there.
-  schema.extendTable("users", {
-    columns: { nickname: col.shortText({ nullable: true }) },
-    indexes: [{ columns: ["nickname"] }],
-  });
 };
 
 /** The config a `db:sync` project with that extension schema runs on. */
@@ -160,6 +154,33 @@ const extensionConfig = defineConfig({
   collections: [],
   db: { schema: { extend: [extendsSchema] } },
 });
+
+/**
+ * The drift-recovery shape: `db:sync` ran before the app contributed
+ * anything, and the config has gained the contribution since — so the
+ * database and the compiled stream disagree about it. The collection is
+ * what makes the project one a baseline adopts at all: without it there is
+ * nothing managed to adopt, and the first migration is the flow's starting
+ * point instead.
+ */
+const contributesToPlugin: SchemaHook = ({ schema }) => {
+  schema.extendTable("fx__notes", {
+    columns: { appRef: col.shortText({ nullable: true }) },
+    indexes: [{ columns: ["app_ref"], name: "idx_fx_notes_app_ref" }],
+  });
+};
+const PENDING_SLUG = `baseline_pend_${RUN_ID}`;
+const pendingConfig = (extend: SchemaHook[]) =>
+  defineConfig({
+    plugins: [notesPlugin],
+    collections: [
+      defineCollection({
+        slug: PENDING_SLUG,
+        fields: [text({ name: "title" })],
+      }),
+    ],
+    ...(extend.length > 0 ? { db: { schema: { extend } } } : {}),
+  });
 
 const logger = createLogger({ quiet: true });
 const context = { logger, options: {} } as CommandContext;
@@ -564,16 +585,9 @@ function runSuite(dialect: SupportedDialect): void {
     const names = recorded.snapshot.tables.map(table => table.name);
     expect(names).toContain(APP_TABLE);
     expect(names).toContain("fx__notes");
-    expect(names).toContain("users");
     expect(recorded.contributions?.fx__notes).toEqual({
       columns: ["app_ref"],
       indexes: ["idx_fx_notes_app_ref"],
-      foreignKeys: [],
-      checks: [],
-    });
-    expect(recorded.contributions?.users).toEqual({
-      columns: ["nickname"],
-      indexes: ["idx_users_nickname"],
       foreignKeys: [],
       checks: [],
     });
@@ -592,7 +606,6 @@ function runSuite(dialect: SupportedDialect): void {
       });
     expect(createsOf(APP_TABLE)).not.toEqual([]);
     expect(createsOf("fx__notes")).toEqual([]);
-    expect(createsOf("users")).toEqual([]);
 
     // The contributed elements are in the body, so a fresh environment —
     // which gets the foreign tables from their owners' migrations and the
@@ -611,15 +624,6 @@ function runSuite(dialect: SupportedDialect): void {
           s.includes("idx_fx_notes_app_ref")
       )
     ).not.toEqual([]);
-    expect(
-      up.filter(s => /^ALTER TABLE/i.test(s) && s.includes("nickname"))
-    ).not.toEqual([]);
-    expect(
-      up.filter(
-        s =>
-          /^CREATE (UNIQUE )?INDEX/i.test(s) && s.includes("idx_users_nickname")
-      )
-    ).not.toEqual([]);
 
     // The graduation itself: with the origin recorded from the same compiled
     // schema the generation reads, nothing is pending after the baseline.
@@ -634,6 +638,70 @@ function runSuite(dialect: SupportedDialect): void {
       nonInteractive: true,
     });
     expect(pending).toBeNull();
+  });
+
+  it("leaves a contribution the database has not received pending", async () => {
+    // The drift-recovery flow walks an operator into editing the config
+    // BEFORE adopting, so a contribution the last push never brought is the
+    // ordinary case rather than the exotic one. A baseline that recorded it
+    // as present would make every later generation owe nothing for a column
+    // no migration ever brought; adoption states what is there, and the
+    // change stays pending for the app's first migration after it.
+    await runDbSync(h, pendingConfig([]));
+
+    const appStream = await compileAppStreamTables({
+      config: pendingConfig([contributesToPlugin]),
+      dialect: h.dialect,
+      logger: { warn: () => {} },
+    });
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream,
+    });
+    if (adopted.kind !== "baselined")
+      throw new Error(`expected a baseline, got ${adopted.kind}`);
+
+    const recorded = JSON.parse(
+      await readFile(adopted.snapshotPath, "utf-8")
+    ) as {
+      snapshot: { tables: { name: string; columns?: { name: string }[] }[] };
+      contributions?: Record<string, unknown>;
+    };
+    // The plugin's table is copied as the database holds it — bare of the
+    // contribution — and nothing is credited to the app on it.
+    const fx = recorded.snapshot.tables.find(t => t.name === "fx__notes");
+    expect(fx?.columns?.map(c => c.name)).not.toContain("app_ref");
+    expect(recorded.contributions?.fx__notes).toBeUndefined();
+
+    // Nor does the body build what the adopting database never received.
+    const up = splitSqlStatements(
+      parseSqlSections(await readFile(adopted.sqlPath, "utf-8")).upSql
+    );
+    expect(up.filter(s => s.includes("app_ref"))).toEqual([]);
+
+    // The change is still owed, and it is the app's migration that brings
+    // it — the whole point of leaving it unrecorded.
+    const pending = await generateMigration({
+      name: "contribute",
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      collections: [],
+      singles: [],
+      components: [],
+      appStream,
+      nonInteractive: true,
+    });
+    expect(pending).not.toBeNull();
+    const pendingUp = splitSqlStatements(
+      parseSqlSections(await readFile(pending!.sqlPath, "utf-8")).upSql
+    );
+    expect(
+      pendingUp.filter(s => /^ALTER TABLE/i.test(s) && s.includes("app_ref"))
+    ).not.toEqual([]);
   });
 
   it("carries a localized companion into the baseline SQL, but not the snapshot", async () => {

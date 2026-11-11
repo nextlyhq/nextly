@@ -55,6 +55,7 @@ import {
 } from "../../domains/schema/migrate/resolved-schema";
 import {
   compileAppStreamTables,
+  standingContribution,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
 import { withCyclicForeignKeysSplit } from "../../domains/schema/migrate-create/cyclic-foreign-keys";
@@ -73,6 +74,7 @@ import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/intro
 import type {
   ContributedElements,
   NextlySchemaSnapshot,
+  TableSpec,
 } from "../../domains/schema/pipeline/diff/types";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import {
@@ -565,37 +567,57 @@ async function derivedTableStatements(
  * that recorded neither makes that generation re-emit every element the app
  * contributed — against a database that already has them.
  *
- * The copy is the compiled schema's, never an introspected one: the app's
- * elements are picked out of it by name, from the `contributions` record
- * written beside it, so the two must describe the same table. The record is
- * written only for a table standing in the database — one the app contributes
- * to that is not there has its elements still to arrive, and they must stay
- * free to arrive through the app's first migration after this baseline.
+ * What is recorded is what the DATABASE holds, element by element: the
+ * compiled stream says what the app contributes now, and a config edited
+ * since the last push names elements the database never received. Recording
+ * one of those as present would tell every later generation the work was
+ * done, so `standingContribution` keeps an element only when the live table
+ * carries its name, and what has not arrived stays pending — the next
+ * `migrate:create` is what brings it. A table the app contributes to that is
+ * not standing at all is skipped for the same reason.
  */
 function withAppStreamTables(
   snapshot: NextlySchemaSnapshot,
   appStream: AppStreamTables | undefined,
-  standing: ReadonlySet<string>
+  live: ReadonlyMap<string, TableSpec>
 ): {
   snapshot: NextlySchemaSnapshot;
   contributions: Record<string, ContributedElements>;
+  /** The copy each contributed table took in the snapshot, by name. */
+  recordedSpecs: Map<string, TableSpec>;
 } {
-  if (appStream === undefined) return { snapshot, contributions: {} };
+  if (appStream === undefined) {
+    return { snapshot, contributions: {}, recordedSpecs: new Map() };
+  }
   const present = new Set(snapshot.tables.map(table => table.name));
   const tables = [...snapshot.tables];
   const contributions: Record<string, ContributedElements> = {};
-  for (const [name, { spec, elements }] of appStream.contributed) {
-    if (!standing.has(name)) continue;
+  const recordedSpecs = new Map<string, TableSpec>();
+  for (const [name, entry] of appStream.contributed) {
+    const liveTable = live.get(name);
+    if (liveTable === undefined) continue;
+    const held = standingContribution({ ...entry, live: liveTable });
     // Core tables are already adopted whole by the managed-prefix filter; a
     // plugin's table is not, and enters here for the first time. Either way
     // the copy that stands in the snapshot is one the reader can trust.
     if (!present.has(name)) {
-      tables.push(spec);
+      tables.push(held.spec);
       present.add(name);
     }
-    contributions[name] = elements;
+    recordedSpecs.set(name, held.spec);
+    // Recorded only where something stands: an empty record would name a
+    // table with nothing credited to it, which the next diff reads as
+    // "contributed once, since withdrawn" rather than "never arrived".
+    if (
+      held.elements.columns.length > 0 ||
+      held.elements.indexes.length > 0 ||
+      held.elements.foreignKeys.length > 0 ||
+      held.elements.checks.length > 0
+    ) {
+      contributions[name] = held.elements;
+    }
   }
-  return { snapshot: { ...snapshot, tables }, contributions };
+  return { snapshot: { ...snapshot, tables }, contributions, recordedSpecs };
 }
 
 /**
@@ -607,22 +629,20 @@ function withAppStreamTables(
  * never seen the app's config, and the snapshot this run writes records the
  * elements as present, so the next `migrate:create` sees no work left. The
  * body therefore carries the ALTER and INDEX statements for exactly the
- * recorded contributions, diffed from the same compiled stream the snapshot
- * copied — the owner's bare declaration against the declaration carrying the
- * contributions — so the two cannot disagree, and never a CREATE of the
- * foreign table itself.
+ * recorded contributions — the owner's bare declaration against the copy the
+ * snapshot took, so the file and the record cannot disagree — and never a
+ * CREATE of the foreign table itself.
  */
 function contributedElementStatements(
   appStream: AppStreamTables | undefined,
-  folded: { contributions: Readonly<Record<string, ContributedElements>> },
+  folded: { recordedSpecs: ReadonlyMap<string, TableSpec> },
   dialect: SupportedDialect
 ): string[] {
   if (appStream === undefined) return [];
   const statements: string[] = [];
-  for (const name of Object.keys(folded.contributions)) {
-    const spec = appStream.contributed.get(name)?.spec;
+  for (const [name, spec] of folded.recordedSpecs) {
     const bare = appStream.baselines.get(name);
-    if (spec === undefined || bare === undefined) continue;
+    if (bare === undefined) continue;
     statements.push(
       ...generateStatements(
         diffSnapshots({ tables: [bare] }, { tables: [spec] }),
@@ -743,11 +763,26 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   }
 
   // The app's extension tables and contributed elements, recorded so the
-  // first `migrate:create` after adoption owes nothing (`withAppStreamTables`).
+  // first `migrate:create` after adoption owes nothing for what the database
+  // already has (`withAppStreamTables`). The contributed tables are read as
+  // the database holds them, so an element the config declares but the last
+  // push never brought stays pending rather than recorded as present.
+  // Standing names only: introspecting a table that is not there is an
+  // error, not an answer.
+  const contributedNames = [
+    ...(deps.appStream?.contributed.keys() ?? []),
+  ].filter(name => names.includes(name));
+  const contributedLive = new Map(
+    contributedNames.length > 0
+      ? (
+          await introspectLiveSnapshot(db, dialect, contributedNames)
+        ).tables.map(table => [table.name, table] as const)
+      : []
+  );
   const folded = withAppStreamTables(
     plan.snapshot,
     deps.appStream,
-    new Set(names)
+    contributedLive
   );
 
   // Companions carry a foreign key to their main table, so every main
