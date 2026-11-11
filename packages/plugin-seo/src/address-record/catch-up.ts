@@ -97,9 +97,12 @@ export function lastCatchUp(): Promise<CatchUpReport> | undefined {
  */
 interface CatchUpOptions {
   afterListing?: () => Promise<void>;
-  /** How many pages one listing read takes, and what runs between reads. */
+  /**
+   * How many pages one listing read takes, and what runs between reads,
+   * told the pages listed so far.
+   */
   pageSize?: number;
-  betweenPages?: () => Promise<void>;
+  betweenPages?: (listed: readonly HeldDocument[]) => Promise<void>;
 }
 
 /** Run the catch-up again with the last context, as the next start would. */
@@ -230,7 +233,7 @@ async function everyPage(
       });
       updates.push(...page.items);
       after = page.next;
-      if (after !== undefined) await options.betweenPages?.();
+      if (after !== undefined) await options.betweenPages?.(updates);
     } while (after !== undefined);
   }
   const madeAt = (page: HeldDocument) =>
@@ -273,6 +276,13 @@ async function moveIfCurrent(
     async transaction => {
       const now = await heldNow(ctx, transaction, update.holder);
       if (!sameHolds(now, before)) return "overtaken" as const;
+      // A page deleted since it was listed claims nothing: its delete has
+      // already let go of what it held, and would never let go of a claim
+      // made after it. A delete still running waits for the page's lock, held
+      // here, and lets go of this claim once it does.
+      if (update.holds.length > 0 && !(await stillExists(ctx, update.holder))) {
+        return "overtaken" as const;
+      }
       return ctx.publicAddresses.move([update], transaction);
     }
   );
@@ -369,6 +379,24 @@ function typesIn(row: MetaRow | undefined): Set<string> {
     );
   } catch {
     return new Set();
+  }
+}
+
+/**
+ * Whether the page `holder` names still exists. A Single is listed whole
+ * and cannot be deleted, so one listed exists; an entry is looked up.
+ */
+async function stillExists(
+  ctx: PluginContext,
+  holder: AddressHolder
+): Promise<boolean> {
+  if (holder.collection.startsWith("single:")) return true;
+  try {
+    await ctx.services.collections.findEntryById(holder.collection, holder.id);
+    return true;
+  } catch (error) {
+    if (NextlyError.isCode(error, "NOT_FOUND")) return false;
+    throw error;
   }
 }
 
