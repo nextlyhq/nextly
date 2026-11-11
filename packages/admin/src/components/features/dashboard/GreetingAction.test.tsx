@@ -1,7 +1,7 @@
 /**
  * The greeting row's one place: what a part of the page renders there is drawn
- * at the row's end, wherever in the page it was rendered, and where it stands
- * when there is no row to draw into.
+ * at the row's end, wherever in the page it was rendered, and where its owner
+ * says when the page has no row to draw into.
  */
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -52,9 +52,28 @@ describe("the greeting row's action place", () => {
     );
   });
 
-  it("draws nothing while the page has no greeting row to draw into", () => {
+  it("draws the action through withoutRow on a page with no greeting row, as when a plugin replaced the greeting", () => {
     render(
       <GreetingActionProvider>
+        <header data-testid="bar" />
+        <section data-testid="grid">
+          <GreetingAction
+            withoutRow={action => <div data-testid="fallback">{action}</div>}
+          >
+            <Action />
+          </GreetingAction>
+        </section>
+      </GreetingActionProvider>
+    );
+    expect(screen.getByTestId("fallback")).toContainElement(
+      screen.getByRole("button", { name: "Customize dashboard" })
+    );
+  });
+
+  it("moves the action into the row when a row arrives later", () => {
+    const page = (withRow: boolean) => (
+      <GreetingActionProvider>
+        {withRow ? <GreetingActionTarget /> : null}
         <section data-testid="grid">
           <GreetingAction>
             <Action />
@@ -62,6 +81,14 @@ describe("the greeting row's action place", () => {
         </section>
       </GreetingActionProvider>
     );
-    expect(screen.queryByRole("button")).toBeNull();
+    const view = render(page(false));
+    expect(screen.getByTestId("grid")).toContainElement(
+      screen.getByRole("button", { name: "Customize dashboard" })
+    );
+    view.rerender(page(true));
+    expect(screen.getByTestId("dashboard-greeting-action")).toContainElement(
+      screen.getByRole("button", { name: "Customize dashboard" })
+    );
+    expect(within(screen.getByTestId("grid")).queryByRole("button")).toBeNull();
   });
 });

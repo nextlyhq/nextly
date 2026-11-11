@@ -9,14 +9,17 @@
  * greeting in its own tree. It renders the cog where it renders everything
  * else, keeping its state and context, and the cog is drawn into the row.
  *
- * Outside the dashboard page (a grid rendered on its own, as a test does)
- * there is no row, and the action draws where it stands.
+ * Where the page has no greeting row, the action is drawn where its owner
+ * says instead (`withoutRow`), by default where it stands: outside the
+ * dashboard page (a grid rendered on its own, as a test does), and on a page
+ * whose greeting a plugin replaced, which draws no row.
  *
  * @module components/features/dashboard/GreetingAction
  */
 import {
   createContext,
   useContext,
+  useLayoutEffect,
   useMemo,
   useState,
   type JSX,
@@ -28,6 +31,11 @@ interface GreetingActionValue {
   /** The row's element, once the greeting has mounted. */
   target: HTMLElement | null;
   setTarget: (element: HTMLElement | null) => void;
+  /**
+   * Whether the page's first commit is done. A greeting there has set the
+   * target by then, so a target still missing means the page has no row.
+   */
+  settled: boolean;
 }
 
 const GreetingActionContext = createContext<GreetingActionValue | null>(null);
@@ -39,7 +47,15 @@ export function GreetingActionProvider({
   children: ReactNode;
 }): JSX.Element {
   const [target, setTarget] = useState<HTMLElement | null>(null);
-  const value = useMemo(() => ({ target, setTarget }), [target]);
+  const [settled, setSettled] = useState(false);
+  // A parent's layout effect runs after its children's refs are set, in the
+  // same commit, so the row (if any) has set the target before this. Both
+  // updates land in one render before the first paint.
+  useLayoutEffect(() => setSettled(true), []);
+  const value = useMemo(
+    () => ({ target, setTarget, settled }),
+    [target, settled]
+  );
   return (
     <GreetingActionContext.Provider value={value}>
       {children}
@@ -49,18 +65,23 @@ export function GreetingActionProvider({
 
 /**
  * Draw `children` at the greeting row's right end for as long as this is
- * mounted. Outside a provider, draws them here instead.
+ * mounted. Where the page has no row, draws them through `withoutRow`, by
+ * default here.
  */
 export function GreetingAction({
   children,
+  withoutRow = action => action,
 }: {
   children: ReactNode;
-}): JSX.Element | null {
+  /** Where the action goes on a page with no greeting row. */
+  withoutRow?: (action: ReactNode) => ReactNode;
+}): ReactNode {
   const place = useContext(GreetingActionContext);
-  if (place === null) return <>{children}</>;
-  // The greeting sets the place while it mounts, in the same commit as the
-  // grid, so this re-renders into it before the first paint.
-  return place.target === null ? null : createPortal(children, place.target);
+  if (place?.target) return createPortal(children, place.target);
+  // Nothing until the page's first commit is done: the greeting sets the
+  // place in that commit, before the first paint.
+  if (place !== null && !place.settled) return null;
+  return withoutRow(children);
 }
 
 /** The element the action is drawn into, rendered by the greeting row. */

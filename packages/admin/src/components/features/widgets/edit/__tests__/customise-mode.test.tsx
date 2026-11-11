@@ -203,7 +203,14 @@ const ELSEWHERE = "/admin/media";
  * top bar, whose two places the page fills; without it there is no bar, and
  * the controls are drawn where they stand.
  */
-function renderDashboard({ inBar = false }: { inBar?: boolean } = {}) {
+function renderDashboard({
+  inBar = false,
+  greeting = true,
+}: {
+  inBar?: boolean;
+  /** False for a page whose greeting a plugin replaced, which draws no row. */
+  greeting?: boolean;
+} = {}) {
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false, retryDelay: 0, gcTime: 0 },
@@ -216,7 +223,7 @@ function renderDashboard({ inBar = false }: { inBar?: boolean } = {}) {
   // The page's heading beside the grid, so the outline is the page's.
   const page = (
     <>
-      <WelcomeHeader />
+      {greeting ? <WelcomeHeader /> : <h1>A plugin&apos;s welcome</h1>}
       <WidgetGrid />
     </>
   );
@@ -662,6 +669,13 @@ describe("in the admin's top bar", () => {
     expect(
       within(topBar()).getByRole("navigation", { name: "Breadcrumb" })
     ).toHaveTextContent(/^Dashboard$/);
+  });
+
+  it("puts the cog at the bar's right end on a page whose greeting a plugin replaced", async () => {
+    renderDashboard({ inBar: true, greeting: false });
+    const cog = await screen.findByTestId("dashboard-edit-begin");
+    expect(topBar()).toContainElement(cog);
+    expect(screen.queryByTestId("dashboard-greeting-row")).toBeNull();
   });
 
   it("the cog is named and tooltipped Customize dashboard", async () => {

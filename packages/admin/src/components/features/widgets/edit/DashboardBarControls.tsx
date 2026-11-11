@@ -26,7 +26,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { GreetingAction } from "@admin/components/features/dashboard/GreetingAction";
 import * as Icons from "@admin/components/icons";
@@ -116,6 +116,11 @@ export interface DashboardBarControlsProps {
   addWidgetRef?: Register;
   /** Registers the mode's controls, where focus lands as the mode opens. */
   barRef: Register;
+}
+
+/** Draw `action` at the bar's right end. */
+function inBar(action: ReactNode): JSX.Element {
+  return <TopBarPlace name="end">{action}</TopBarPlace>;
 }
 
 /** The cog that opens customise mode, named and tooltipped by what it does. */
@@ -265,8 +270,10 @@ export function DashboardBarControls({
     );
   }
   if (!canBegin) return null;
+  // A page whose greeting a plugin replaced draws no row; the cog goes to
+  // the bar's right end then, so Customize is never out of reach.
   return (
-    <GreetingAction>
+    <GreetingAction withoutRow={inBar}>
       <CustomizeCog onBegin={onBegin} isWriting={controls.isWriting} />
     </GreetingAction>
   );
