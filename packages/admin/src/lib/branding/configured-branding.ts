@@ -19,7 +19,7 @@ import { z } from "zod";
 import type { AdminBranding } from "@admin/types/branding";
 
 /** The element the admin route writes the configured branding into. */
-export const CONFIGURED_BRANDING_ELEMENT_ID = "nextly-admin-branding";
+const CONFIGURED_BRANDING_ELEMENT_ID = "nextly-admin-branding";
 
 /** The keys a configuration may set, each a non-empty string when set. */
 export type ConfiguredBranding = Pick<
