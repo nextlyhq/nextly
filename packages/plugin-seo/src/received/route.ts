@@ -32,6 +32,7 @@ import { productionAddressesOf } from "../canonical";
 import { originOf } from "../origin";
 import { listPages } from "../outputs/listing";
 import { CHECK_SEO_PERMISSION } from "../permissions";
+import { designLevelOf } from "../resolver/design-level";
 import type { SeoLevel, Sourced } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import { publishedWhere } from "../sitemap";
@@ -277,14 +278,14 @@ async function storedAt(
   for (const holder of await addressHolders(ctx, path, kept.locale)) {
     const source = await sourceOf(ctx, holder, kept.locale, setup);
     if (source === undefined) continue;
-    // What the page's route and design supply cannot be known here: they
-    // run only where the page is served.
+    // What the page's route supplies cannot be known here: it runs only
+    // where the page is served. Its design is asked of the Page Builder.
     const input: PageMetadataInput = {
       path,
       locale: kept.locale,
       source,
       code: {},
-      derived: {},
+      derived: await designLevelOf(ctx, source, kept.locale),
     };
     const answer = await setup.pageMetadata(ctx).resolve(input);
     // Where each value came from, so one Nextly worked out automatically is
