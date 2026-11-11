@@ -53,16 +53,34 @@ import {
 import { _resetEnvCache } from "../../shared/lib/env";
 import { sanitizeConfig } from "../../shared/types/config";
 
-/** `n` collections and a fifth as many Singles, each with one text field. */
-function entities(n: number, changed?: string) {
+/**
+ * `n` collections and a fifth as many Singles, each with one text field. The
+ * one entity a test changes gains a field (`how: "field"`, a change a start
+ * finds the table behind on) or a new label (`how: "label"`, which leaves the
+ * table as it is).
+ */
+function entities(
+  n: number,
+  changed?: string,
+  how: "field" | "label" = "field"
+) {
   const fields = (slug: string) => [
     text({ name: "title" }),
-    // The one entity a test changes gains a field.
-    ...(slug === changed ? [text({ name: "subtitle" })] : []),
+    ...(slug === changed && how === "field"
+      ? [text({ name: "subtitle" })]
+      : []),
   ];
+  const labels = (slug: string) =>
+    slug === changed && how === "label"
+      ? { labels: { singular: "Renamed", plural: "Renamed" } }
+      : {};
   return {
     collections: Array.from({ length: n }, (_, i) =>
-      defineCollection({ slug: `p${i}x`, fields: fields(`p${i}x`) })
+      defineCollection({
+        slug: `p${i}x`,
+        fields: fields(`p${i}x`),
+        ...labels(`p${i}x`),
+      })
     ),
     singles: Array.from({ length: Math.ceil(n / 5) }, (_, i) =>
       defineSingle({ slug: `s${i}x`, fields: fields(`s${i}x`) })
@@ -257,16 +275,27 @@ describe.each(getConfiguredTestDialects())(
       expect([...seen].filter(slug => slug !== "p1x")).toEqual([]);
     }, 300_000);
 
-    it("checks a changed entity again until a start finds it in line, then skips it", async () => {
+    it("checks a drifted entity again at every start, and no other", async () => {
       const adapterFor = await startedDatabase(5);
-      // The drift check of this start finds p2x's new field not applied yet,
-      // so this start does not vouch for it.
+      // A start does not alter a table that exists (HMR and `db:sync` do), so
+      // its drift check finds p2x's new field missing: not vouched for.
       await recordStart(adapterFor, entities(5, "p2x"));
 
       const again = await recordStart(adapterFor, entities(5, "p2x"));
-      expect(again.some(call => named(call).has("p2x"))).toBe(true);
+      const seen = new Set(again.flatMap(call => [...named(call)]));
+      expect([...seen]).toEqual(["p2x"]);
+    }, 300_000);
 
-      const after = await recordStart(adapterFor, entities(5, "p2x"));
+    it("records a changed entity a start finds in line, and skips it at the next", async () => {
+      const adapterFor = await startedDatabase(5);
+      // A new label changes the declaration and leaves the table as it is.
+      const changed = await recordStart(
+        adapterFor,
+        entities(5, "p2x", "label")
+      );
+      expect(changed.some(call => named(call).has("p2x"))).toBe(true);
+
+      const after = await recordStart(adapterFor, entities(5, "p2x", "label"));
       expect(
         after.filter(call => named(call).size > 0).map(c => c.text)
       ).toEqual([]);
