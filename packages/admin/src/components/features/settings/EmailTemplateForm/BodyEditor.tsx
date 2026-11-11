@@ -79,7 +79,7 @@ function ProblemList({ problems }: { problems: LiquidProblem[] }) {
     <div
       role="alert"
       data-testid="body-problems"
-      className="shrink-0 border-t border-destructive bg-destructive/5 px-3 py-2 text-xs"
+      className="shrink-0 border-t border-danger-border bg-danger-surface px-3 py-2 text-xs"
     >
       {problems.map(problem => (
         <p

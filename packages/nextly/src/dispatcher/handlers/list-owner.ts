@@ -11,7 +11,6 @@
 import { NextlyError } from "../../errors";
 import { pluginEntitySlugs } from "../../plugins/admin-meta";
 import type { PluginDefinition } from "../../plugins/plugin-context";
-import { getHandlerConfig } from "../../route-handler/auth-handler";
 
 /** The two owners a list can be asked for. */
 const LIST_OWNERS = ["site", "plugins"] as const;
@@ -93,13 +92,24 @@ export function ownerSlugLists(
  * The slug lists a list handler hands its registry for an owner, the
  * plugins' slugs read from the installed plugins only when an owner asks.
  */
-export function slugListsForOwner(
+export async function slugListsForOwner(
   owner: ListOwner | undefined,
   kind: OwnedEntityKind,
   allowlist: string[] | undefined
-): { slugAllowlist?: string[]; slugDenylist?: string[] } {
+): Promise<{ slugAllowlist?: string[]; slugDenylist?: string[] }> {
   const pluginSlugs = owner
-    ? pluginOwnedSlugs(kind, getHandlerConfig()?.plugins ?? [])
+    ? pluginOwnedSlugs(kind, await installedPlugins())
     : [];
   return ownerSlugLists(owner, pluginSlugs, allowlist);
+}
+
+/**
+ * The installed plugins, as the route handler's config store holds them.
+ * The store's module is loaded here, when a list asks for an owner, not
+ * imported at the top: it reaches the auth routes and every plugin's
+ * context, several hundred modules a list dispatcher otherwise never loads.
+ */
+async function installedPlugins(): Promise<readonly PluginDefinition[]> {
+  const { getHandlerConfig } = await import("../../route-handler/auth-handler");
+  return getHandlerConfig()?.plugins ?? [];
 }

@@ -24,9 +24,9 @@
  * one. Every one of those is visible to any authenticated admin, and adding a
  * gate would hide a card someone currently sees -- a behaviour change wearing
  * the costume of a refactor. The exception is `core/team`, decided rather than
- * inherited: it is for the people who manage the team, so it is offered to a
- * reader who may read people AND may add or change them (`TEAM_GATE`), and its
- * `system:team` source asks the same gate before it counts anyone.
+ * inherited: it lists the people, so it is offered to a reader who may read
+ * people (`TEAM_GATE`), and its `system:team-people` source asks the same gate
+ * before it reads anyone.
  *
  * 🔴 A card added HERE is new to every reader, so that argument does not extend
  * to it: nothing is hidden that was previously visible, so the gate is decided
