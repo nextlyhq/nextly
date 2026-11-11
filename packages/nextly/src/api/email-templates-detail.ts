@@ -106,7 +106,8 @@ export const GET = withErrorHandler(
  * Request Body (all fields optional):
  * - name, subject, htmlContent, plainTextContent, variables, useLayout,
  *   isActive, providerId, description (a string, or null to clear it), cc
- *   and bcc (lists of addresses, or null to clear them).
+ *   and bcc (lists of addresses, or null to clear them), and for a written
+ *   template its blocks (`@experimental`).
  *
  * Response Codes:
  * - 200 OK: Template updated successfully
@@ -152,6 +153,10 @@ export const PATCH = withErrorHandler(
     }
     // Copies are new to this handler too, and parsed the same way.
     Object.assign(updateData, copiesFrom(body));
+    // A written template's format and blocks, checked by the service as every
+    // transport's are.
+    if (body.format !== undefined) updateData.format = body.format;
+    if (body.blocks !== undefined) updateData.blocks = body.blocks;
 
     const service = await getEmailTemplateService();
     const template = await service.updateTemplate(

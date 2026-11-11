@@ -7,6 +7,8 @@
 
 import { z } from "zod";
 
+import { writtenDocumentSchema } from "./written/document";
+
 const versionSchema = z
   .object({
     subject: z.string(),
@@ -44,6 +46,7 @@ export const undoOwnerUpdateSchema = z
     undo: z
       .object({
         version: versionSchema,
+        blocks: writtenDocumentSchema.nullable().optional(),
         base: versionSchema,
         applied: z.string().min(1),
         appliedBase: z.string().min(1),

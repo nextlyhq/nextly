@@ -4,10 +4,7 @@
  * configured dialect: an `email_templates` table without them gains them in
  * place, its rows untouched, and the ownership backfill then works on it.
  */
-import { eq } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
-
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import {
   availableDialects,
@@ -18,9 +15,7 @@ import {
   migrateFresh,
   noMigrationsDir,
 } from "../../../__tests__/helpers/migrate-core";
-import { EmailTemplateService } from "../services/email-template-service";
-
-import { silentLogger } from "./template-ownership-fixture";
+import { serviceOver, storedRow } from "./template-ownership-fixture";
 
 /** The columns this change adds, none of them indexed. */
 const OWNERSHIP_COLUMNS = [
@@ -50,26 +45,6 @@ async function insertLegacyRow(fresh: FreshDatabase): Promise<void> {
   );
 }
 
-/** The service over the fresh database, as a boot constructs it. */
-function serviceOver(fresh: FreshDatabase): EmailTemplateService {
-  const adapter = {
-    dialect: fresh.dialect,
-    getDrizzle: () => fresh.db,
-    getCapabilities: () => ({ dialect: fresh.dialect }),
-    connect: async () => {},
-    disconnect: async () => {},
-    executeQuery: async (sql: string) => {
-      await fresh.exec(sql);
-      return [];
-    },
-    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fresh.db),
-  };
-  return new EmailTemplateService(
-    adapter as unknown as DrizzleAdapter,
-    silentLogger
-  );
-}
-
 const { dir: NO_MIGRATIONS, remove } = noMigrationsDir("nextly-eto-");
 afterAll(remove);
 
@@ -91,20 +66,7 @@ describe.each(availableDialects())(
         expect(await fresh.columnsOf("email_templates")).toEqual(
           expect.arrayContaining(OWNERSHIP_COLUMNS)
         );
-        const db = fresh.db as unknown as {
-          select: () => {
-            from: (table: unknown) => {
-              where: (cond: unknown) => Promise<Record<string, unknown>[]>;
-            };
-          };
-        };
-        const table = fresh.tables.emailTemplates as unknown as {
-          id: unknown;
-        };
-        const [row] = await db
-          .select()
-          .from(table)
-          .where(eq(table.id as never, LEGACY_ID));
+        const row = await storedRow(fresh, LEGACY_ID);
         expect(row).toMatchObject({
           subject: "Reset it now",
           ownerKind: null,
