@@ -2,15 +2,20 @@
  * The package `nextly plugins add` installed, read from the project the way
  * Node resolves a bare name from it: `node_modules/<name>` in the project's
  * folder or the nearest folder above it that has one. Its manifest says how it
- * is registered; its entry, the file an `import` of the name loads, is what
- * the config will import.
+ * is registered; its entry, the file an `import` of the name loads as Node
+ * resolves it from the project, is what the config will import.
  *
  * @module cli/commands/plugins-add/installed-package
  */
-import { statSync } from "node:fs";
+import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
+
+import { pluginRegistrationUnknown } from "../../errors/areas/plugins";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * The package name in a spec as typed: `@acme/seo@^1` is `@acme/seo`, and
@@ -45,78 +50,58 @@ export async function findInstalledPackage(
   }
 }
 
-/** The conditions an `import` from Node matches by default, as Node checks them. */
-const IMPORT_CONDITIONS = new Set(["node-addons", "node", "import", "default"]);
+/**
+ * Resolves the name in `process.argv[1]` as an `import` from the folder it
+ * runs in, and prints the file it names.
+ */
+const RESOLVE = "process.stdout.write(import.meta.resolve(process.argv[1]))";
 
-/** The file an exports target names for an import: the first matching condition, in written order. */
-function exportTarget(target: unknown): string | undefined {
-  if (typeof target === "string") return target;
-  if (Array.isArray(target)) {
-    for (const each of target) {
-      const found = exportTarget(each);
-      if (found !== undefined) return found;
-    }
-    return undefined;
-  }
-  if (typeof target !== "object" || target === null) return undefined;
-  for (const [condition, value] of Object.entries(target)) {
-    if (!IMPORT_CONDITIONS.has(condition)) continue;
-    const found = exportTarget(value);
-    if (found !== undefined) return found;
-  }
-  return undefined;
-}
-
-/** The files Node tries for a package's `main`, in its order, then the package's own index. */
-const LEGACY_MAIN = (main: string): string[] => [
-  main,
-  `${main}.js`,
-  `${main}.json`,
-  `${main}.node`,
-  join(main, "index.js"),
-  join(main, "index.json"),
-  join(main, "index.node"),
-];
-
-/** Whether `path` is a file (not a folder). */
-function isFile(path: string): boolean {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
+/** The line of a failed resolution that says why, for the person adding it. */
+function reasonOf(error: unknown): string {
+  const text =
+    typeof error === "object" && error !== null && "stderr" in error
+      ? String((error as { stderr: unknown }).stderr)
+      : String(error);
+  const line = text
+    .split("\n")
+    .map(each => each.trim())
+    .find(each => /Error/.test(each) && !each.startsWith("node:"));
+  return line ?? "Node could not resolve it";
 }
 
 /**
- * The file an `import` of the package's name loads: from `exports` when the
- * package has them, by the conditions an import matches; otherwise its `main`
- * as Node resolves one, trying the extensions and an index in it, and then
- * `index.js`. `module` is a bundler's field, which Node does not read.
+ * The file an `import` of `name` from the project at `cwd` loads, as Node
+ * itself resolves it: run in the project's folder, by the same Node, with
+ * the same environment, so every condition Node matches (`module-sync`
+ * among them, and any the site passes with `--conditions`) counts exactly as
+ * it does for the site.
  */
-export function entryFileOf(dir: string, manifest: PackageManifest): string {
-  const { exports } = manifest;
-  if (exports !== undefined) {
-    const root =
-      typeof exports === "object" &&
-      exports !== null &&
-      !Array.isArray(exports) &&
-      Object.keys(exports).some(key => key.startsWith("."))
-        ? (exports as Record<string, unknown>)["."]
-        : exports;
-    return join(dir, exportTarget(root) ?? "index.js");
-  }
-  const main = typeof manifest.main === "string" ? manifest.main : undefined;
-  const tried = main === undefined ? [] : LEGACY_MAIN(join(dir, main));
-  return tried.find(isFile) ?? join(dir, "index.js");
+async function nodeEntryOf(cwd: string, name: string): Promise<string> {
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    ["--input-type=module", "--eval", RESOLVE, name],
+    { cwd }
+  );
+  return fileURLToPath(stdout);
 }
 
-/** The package's entry, imported, as a record of its exports. */
+/**
+ * The package's entry, imported, as a record of its exports: the file an
+ * `import` of `name` loads from the project at `cwd`.
+ */
 export async function importEntry(
-  dir: string,
-  manifest: PackageManifest
+  cwd: string,
+  name: string
 ): Promise<Record<string, unknown>> {
-  const loaded: unknown = await import(
-    pathToFileURL(entryFileOf(dir, manifest)).href
-  );
+  let entry: string;
+  try {
+    entry = await nodeEntryOf(cwd, name);
+  } catch (error) {
+    throw pluginRegistrationUnknown(
+      name,
+      `Node cannot load its entry from this project: ${reasonOf(error)}`
+    );
+  }
+  const loaded: unknown = await import(pathToFileURL(entry).href);
   return { ...(loaded as Record<string, unknown>) };
 }

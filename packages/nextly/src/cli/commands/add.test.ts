@@ -82,9 +82,12 @@ vi.mock("@clack/prompts", async () => ({
   },
 }));
 
-vi.mock("node:child_process", async () => {
+vi.mock("node:child_process", async importOriginal => {
   const { EventEmitter } = await import("node:events");
   return {
+    // The rest as it is: the entry of an installed package is resolved by
+    // Node itself, in a process of its own.
+    ...(await importOriginal<typeof import("node:child_process")>()),
     spawn: (command: string, args: string[]) => {
       install.runs.push([command, ...args]);
       install.steps.push(`install ${args.at(-1)}`);

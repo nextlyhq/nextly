@@ -203,7 +203,7 @@ async function planRegistration(
   if (declared.kind === "invalid") {
     throw pluginDeclarationInvalid(name, declared.problem);
   }
-  const exports = await importEntry(found.dir, found.manifest);
+  const exports = await importEntry(cwd, name);
   const registration =
     declared.kind === "declared"
       ? declared.registration

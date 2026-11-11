@@ -10,8 +10,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  entryFileOf,
   findInstalledPackage,
+  importEntry,
   packageNameOf,
 } from "./installed-package";
 
@@ -56,51 +56,59 @@ describe("the installed package", () => {
     expect(await findInstalledPackage(app, "@acme/other")).toBeUndefined();
   });
 
-  it("loads the entry its exports give an import, in the order they are written", () => {
-    const dir = "/p";
-    expect(
-      entryFileOf(dir, {
-        exports: {
-          ".": {
-            types: "./dist/index.d.ts",
-            import: "./dist/index.js",
-            default: "./dist/index.cjs",
-          },
-        },
-      })
-    ).toBe(join(dir, "dist/index.js"));
-    expect(
-      entryFileOf(dir, {
-        exports: { require: "./a.cjs", default: "./a.mjs" },
-      })
-    ).toBe(join(dir, "a.mjs"));
-    expect(
-      entryFileOf(dir, {
-        exports: { ".": { node: { import: "./n.mjs" }, default: "./d.js" } },
-      })
-    ).toBe(join(dir, "n.mjs"));
-    expect(entryFileOf(dir, { exports: "./e.js" })).toBe(join(dir, "e.js"));
-    // Node matches `node-addons` by default, as it does `node`.
-    expect(
-      entryFileOf(dir, { exports: { ".": { "node-addons": "./native.js" } } })
-    ).toBe(join(dir, "native.js"));
+  /** A package at `@acme/seo`, its manifest and its files, in the project. */
+  async function installWith(
+    manifest: object,
+    files: Record<string, string>
+  ): Promise<void> {
+    const dir = await install(project, { name: "@acme/seo", ...manifest });
+    for (const [file, text] of Object.entries(files)) {
+      await mkdir(join(dir, file, ".."), { recursive: true });
+      await writeFile(join(dir, file), text);
+    }
+  }
+
+  it("imports the entry Node resolves, whichever of Node's conditions names it", async () => {
+    // `module-sync`, which Node matches by default as it does `import`.
+    await installWith(
+      { exports: { ".": { "module-sync": "./plugin.js" } }, type: "module" },
+      { "plugin.js": 'export const seoPlugin = "module-sync";' }
+    );
+    expect(await importEntry(project, "@acme/seo")).toEqual({
+      seoPlugin: "module-sync",
+    });
   });
 
-  it("without exports, loads main as Node does, trying its extensions, and never module", async () => {
-    const dir = join(project, "legacy");
-    await mkdir(join(dir, "dist", "lib"), { recursive: true });
-    await writeFile(join(dir, "dist", "index.js"), "");
-    await writeFile(join(dir, "dist", "lib", "index.js"), "");
-    await writeFile(join(dir, "index.js"), "");
-    expect(entryFileOf(dir, { main: "./dist/index" })).toBe(
-      join(dir, "dist", "index.js")
+  it("imports what an import is given, not what a require is", async () => {
+    await installWith(
+      {
+        type: "module",
+        exports: { ".": { require: "./a.cjs", import: "./a.js" } },
+      },
+      {
+        "a.cjs": 'module.exports = { seoPlugin: "require" };',
+        "a.js": 'export const seoPlugin = "import";',
+      }
     );
-    expect(entryFileOf(dir, { main: "./dist/lib" })).toBe(
-      join(dir, "dist", "lib", "index.js")
+    expect(await importEntry(project, "@acme/seo")).toEqual({
+      seoPlugin: "import",
+    });
+  });
+
+  it("without exports, imports main as Node does, trying its extensions", async () => {
+    await installWith(
+      { main: "./dist/index", type: "module" },
+      { "dist/index.js": 'export const seoPlugin = "main";' }
     );
-    expect(
-      entryFileOf(dir, { module: "./dist/index.js", main: "./nowhere" })
-    ).toBe(join(dir, "index.js"));
-    expect(entryFileOf(dir, {})).toBe(join(dir, "index.js"));
+    expect(await importEntry(project, "@acme/seo")).toEqual({
+      seoPlugin: "main",
+    });
+  });
+
+  it("refuses, naming why, a package Node cannot load from the project", async () => {
+    await installWith({ exports: { ".": { browser: "./b.js" } } }, {});
+    await expect(importEntry(project, "@acme/seo")).rejects.toMatchObject({
+      code: "PLUGIN_REGISTRATION_UNKNOWN",
+    });
   });
 });
