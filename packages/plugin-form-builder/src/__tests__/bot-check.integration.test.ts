@@ -5,6 +5,7 @@
  * site default on and off, a check with no secret, and the site key a
  * visitor's form renders.
  */
+import { definePlugin, type PluginContext } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -13,6 +14,8 @@ import {
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { sendVerification } from "../handlers/bot-check-send";
+import { submitForm } from "../handlers/submit-form";
 import { formBuilder } from "../plugin";
 
 /** The provider's answer, as each test sets it. */
@@ -48,9 +51,25 @@ describe.each(getConfiguredTestDialects())("bot checks (%s)", dialect => {
     const fb = formBuilder({
       spamProtection: { honeypot: false, ...spamProtection },
     });
+    let probe: PluginContext | undefined;
     current = await createTestNextly({
       dialect,
-      plugins: [fb.plugin],
+      plugins: [
+        fb.plugin,
+        definePlugin({
+          name: "@test/fb-bot-probe",
+          version: "1.0.0",
+          nextly: ">=0.0.0",
+          // A site's own code calling `submitForm` with its plugin's context
+          // has a fetch only for the hosts it declared, as here.
+          capabilities: {
+            net: { outbound: ["www.google.com", "challenges.cloudflare.com"] },
+          },
+          init: ctx => {
+            probe = ctx;
+          },
+        }),
+      ],
       seedPublic: true,
     });
     await current.nextly.create({
@@ -97,7 +116,23 @@ describe.each(getConfiguredTestDialects())("bot checks (%s)", dialect => {
           params("forms", "contact")
         )
       ).json()) as Record<string, unknown>;
-    return { submit, read, post, rows };
+    /** `submitForm` called directly, as a site's own server code calls it. */
+    const direct = (
+      data: Record<string, unknown>,
+      opts: { request?: Request; ipAddress?: string } = {}
+    ) =>
+      submitForm(
+        {
+          formSlug: "contact",
+          data: { message: "hello", ...data },
+          ...(opts.request ? { request: opts.request } : {}),
+          ...(opts.ipAddress
+            ? { metadata: { ipAddress: opts.ipAddress } }
+            : {}),
+        },
+        { pluginContext: probe!, pluginConfig: fb.config }
+      );
+    return { submit, read, post, rows, direct };
   }
 
   it("accepts a submission whose reCAPTCHA token passes, and flags one that fails", async () => {
@@ -188,6 +223,60 @@ describe.each(getConfiguredTestDialects())("bot checks (%s)", dialect => {
     });
     expect(res.status).toBe(400);
     expect(await rows()).toHaveLength(before);
+  });
+
+  it("leaves a server-side call with no request to its validation, as the seam does", async () => {
+    const { direct, rows } = await boot(
+      { turnstile: { enabled: false, ...KEYS } },
+      { botCheck: "turnstile" }
+    );
+    answer.value = { success: false };
+    expect(await direct({ email: "not-an-email" })).toMatchObject({
+      success: false,
+      outcome: "invalid",
+    });
+    expect(await rows()).toHaveLength(0);
+  });
+
+  it("answers a submission the seam flags as spam, never handing back its id", async () => {
+    const { post, rows } = await boot(
+      { turnstile: { enabled: false, ...KEYS } },
+      { botCheck: "turnstile" }
+    );
+    answer.value = { success: false };
+    const res = await post({ "cf-turnstile-response": "bad" });
+    expect(res.status).toBe(201);
+    expect(await res.json()).not.toHaveProperty("submissionId");
+    expect((await rows())[0]).toMatchObject({ status: "spam" });
+  });
+
+  it("asks the rate limit before the provider, and counts a submission once", async () => {
+    const { direct, rows } = await boot(
+      {
+        turnstile: { enabled: false, ...KEYS },
+        rateLimit: { maxSubmissions: 1, windowMs: 60_000 },
+      },
+      { botCheck: "turnstile" }
+    );
+    answer.value = { success: false };
+    const calls = vi.mocked(sendVerification).mock.calls.length;
+    const request = () =>
+      new Request("http://localhost/api/forms/contact/submit");
+    const bot = { email: "not-an-email", "cf-turnstile-response": "bad" };
+
+    // The first is checked, kept as spam, and counted once on its way.
+    expect(
+      await direct(bot, { request: request(), ipAddress: "203.0.113.9" })
+    ).toMatchObject({ success: true, outcome: "accepted" });
+    expect(await rows()).toHaveLength(1);
+
+    // The second is over the limit: answered as accepted, with no call to
+    // the provider and nothing kept.
+    expect(
+      await direct(bot, { request: request(), ipAddress: "203.0.113.9" })
+    ).toMatchObject({ success: true, outcome: "accepted" });
+    expect(vi.mocked(sendVerification).mock.calls.length - calls).toBe(1);
+    expect(await rows()).toHaveLength(1);
   });
 
   it("accepts submissions unchecked when the check has a secret but no site key", async () => {

@@ -96,6 +96,20 @@ function readyKeys(
   return secret && siteKey ? { secret, siteKey } : undefined;
 }
 
+/**
+ * Whether a form's bot check will be run: it names a provider and that
+ * provider's keys are both known. The same answer `judgeBotCheck` acts on.
+ */
+export function botCheckReady(
+  settings: { botCheck?: BotCheckMode; captchaSiteKey?: string },
+  spam: SpamProtection
+): boolean {
+  const provider = botProviderOf(settings.botCheck, spam);
+  return (
+    provider !== undefined && readyKeys(provider, spam, settings) !== undefined
+  );
+}
+
 const RECAPTCHA_ANSWER = z.object({
   success: z.boolean(),
   score: z.number().optional(),

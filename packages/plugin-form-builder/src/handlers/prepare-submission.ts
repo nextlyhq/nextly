@@ -124,6 +124,11 @@ export interface SubmissionOriginMarks {
    * which verifies them once: a token is spent when it is verified.
    */
   botTokens?: BotTokens;
+  /**
+   * The rate limit has already counted this submission, on the handler's way
+   * to judging its bot check; the seam does not count it again.
+   */
+  rateCounted?: boolean;
 }
 
 /** Mark `row` as this plugin's own write, and hand it back. */

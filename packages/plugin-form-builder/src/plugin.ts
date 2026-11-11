@@ -1325,7 +1325,11 @@ async function judgeSubmission(
     formSlug: rateLimitKeyFor(form),
     config: {
       honeypot: settings.honeypotEnabled ?? config.spamProtection.honeypot,
-      rateLimit: config.spamProtection.rateLimit,
+      // Counted once: not again when the handler counted it already.
+      rateLimit:
+        marks?.rateCounted === true
+          ? undefined
+          : config.spamProtection.rateLimit,
     },
   });
   if (verdict.isSpam) return verdict;
