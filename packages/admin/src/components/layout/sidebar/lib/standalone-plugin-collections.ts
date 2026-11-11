@@ -38,12 +38,25 @@ export function standalonePluginCollections<
   const listed = collections.filter(
     c => owned.has(c.name) && !c.admin?.hidden && c.admin?.isPlugin
   );
-  return filterCollectionItems(listed, capabilities).sort((a, b) => {
-    const orderA = a.admin?.order ?? DEFAULT_ORDER;
-    const orderB = b.admin?.order ?? DEFAULT_ORDER;
-    if (orderA !== orderB) return orderA - orderB;
-    return (a.labels?.plural || a.label || a.name).localeCompare(
-      b.labels?.plural || b.label || b.name
-    );
-  });
+  return filterCollectionItems(listed, capabilities).sort(byPanelOrder);
+}
+
+/** The panel's order: `admin.order`, then the label it shows. */
+function byPanelOrder(
+  a: StandalonePanelCollection,
+  b: StandalonePanelCollection
+): number {
+  return (
+    panelOrder(a) - panelOrder(b) || panelLabel(a).localeCompare(panelLabel(b))
+  );
+}
+
+/** A collection's `admin.order`, or the default place when it declares none. */
+function panelOrder(collection: StandalonePanelCollection): number {
+  return collection.admin?.order ?? DEFAULT_ORDER;
+}
+
+/** The label the panel shows for a collection. */
+function panelLabel(collection: StandalonePanelCollection): string {
+  return collection.labels?.plural || collection.label || collection.name;
 }

@@ -93,29 +93,42 @@ function ownedDestination(
 
   if (path.startsWith(COLLECTIONS_PREFIX)) {
     const [named = ""] = path.slice(COLLECTIONS_PREFIX.length).split("/", 1);
-    const renameMap = plugin.renameMap ?? {};
-    const slugs = pluginCollectionSlugs(plugin);
-    // A declared slug wins over a registered one across the whole set: renames
-    // may chain (`reports` to `exports`, `exports` to `data-exports`), and the
-    // plugin's author writes the slug they declared.
-    if (slugs.includes(named)) {
-      return retargetedTo(declared, named, renamedSlug(renameMap, named));
-    }
-    return slugs.some(slug => renamedSlug(renameMap, slug) === named)
-      ? declared
-      : undefined;
+    return ownedCollectionDestination(plugin, declared, named);
   }
 
   // The address the admin mounts the plugin's pages at (`pluginPagePath`).
   const pagesPrefix = `/admin/plugins/${pluginAdminSlug(plugin.name)}/`;
   if (path.startsWith(pagesPrefix)) {
-    const named = path.slice(pagesPrefix.length);
     const pages = plugin.contributes?.admin?.pages ?? [];
+    const named = path.slice(pagesPrefix.length);
     return pages.some(page => page.path.replace(/^\/+/, "") === named)
       ? declared
       : undefined;
   }
   return undefined;
+}
+
+/**
+ * The address `declared` resolves to when the collection it `named` is one of
+ * the plugin's own, by the slug it declared or the one the host registered.
+ *
+ * A declared slug wins over a registered one across the whole set: renames
+ * may chain (`reports` to `exports`, `exports` to `data-exports`), and the
+ * plugin's author writes the slug they declared.
+ */
+function ownedCollectionDestination(
+  plugin: PluginDefinition,
+  declared: string,
+  named: string
+): string | undefined {
+  const renameMap = plugin.renameMap ?? {};
+  const slugs = pluginCollectionSlugs(plugin);
+  if (slugs.includes(named)) {
+    return retargetedTo(declared, named, renamedSlug(renameMap, named));
+  }
+  return slugs.some(slug => renamedSlug(renameMap, slug) === named)
+    ? declared
+    : undefined;
 }
 
 /** One line of the start-up report about plugins' landings. */
