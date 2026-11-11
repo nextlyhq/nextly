@@ -45,13 +45,14 @@ import {
 
 import { redirectDeployMove } from "../redirects/moves";
 
-import { heldNow, recordSlug, rowOf, type RecordRow } from "./participant";
+import { heldNow } from "./participant";
 import {
   forgetPending,
   keepPending,
   pendingMoves,
   type PendingMove,
 } from "./pending-moves";
+import { recordSlug, rowOf, type RecordRow } from "./rows";
 
 type Transaction = ParticipantTransaction["transaction"];
 
@@ -114,6 +115,11 @@ export function lastCatchUp(): Promise<CatchUpReport> | undefined {
  */
 interface CatchUpOptions {
   afterListing?: () => Promise<void>;
+  /**
+   * Runs once every page has let go of what it no longer holds and before
+   * any claims anew: the moment a save may move a page the catch-up moved.
+   */
+  afterReleases?: () => Promise<void>;
   /**
    * How many pages one listing read takes, and what runs between reads,
    * told the pages listed so far.
@@ -507,32 +513,23 @@ async function claimTheNew(
 
 /**
  * Make the redirects every page's move owes, this start's and any an earlier
- * start left owing, from each page's address now: none to an address the
- * page lost (`lost`), and none for a page no longer listed. Each owed move
- * is forgotten once its redirect is made or refused.
+ * start left owing, each to where the record says the page is now. Each
+ * owed move is forgotten once its redirect is made or refused.
  */
-async function redirectOwedMoves(
-  ctx: PluginContext,
-  pages: readonly HeldAddressUpdate[],
-  lost: readonly LostAddress[]
-): Promise<void> {
+async function redirectOwedMoves(ctx: PluginContext): Promise<void> {
   const owed = new Map<string, PendingMove[]>();
   for (const move of await pendingMoves(ctx)) {
     const key = holderKey(move.holder);
     owed.set(key, [...(owed.get(key) ?? []), move]);
   }
-  for (const [key, moves] of owed) {
+  for (const moves of owed.values()) {
     const [first] = moves;
     if (first === undefined) continue;
-    const page = pages.find(each => holderKey(each.holder) === key);
-    const lostHere = lost
-      .filter(each => holderKey(each.holder) === key)
-      .map(each => each.address);
     await redirectDeployMove(
       ctx,
-      { holder: first.holder, holds: page?.holds ?? [] },
+      first.holder,
       moves.map(move => move.address),
-      lostHere
+      transaction => heldNow(ctx, transaction, first.holder)
     );
     await forgetPending(
       ctx,
@@ -569,8 +566,9 @@ async function runCatchUp(
     now: new Set(siteTypes),
     before: typesIn(record.siteTypes),
   });
+  await options.afterReleases?.();
   const { recorded, lost } = await claimTheNew(ctx, pages, kept, expected);
-  await redirectOwedMoves(ctx, pages, lost);
+  await redirectOwedMoves(ctx);
   await storeMeta(
     ctx,
     record.siteTypes?.id,

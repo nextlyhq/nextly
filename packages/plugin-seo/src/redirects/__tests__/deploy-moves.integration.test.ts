@@ -21,7 +21,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { catchUp, lastCatchUp } from "../../address-record/catch-up";
 import { ADDRESS_RECORD_SLUG } from "../../address-record/collection";
-import { claimKey } from "../../address-record/participant";
+import { claimKey } from "../../address-record/rows";
 import { NOT_FOUND_SLUG } from "../../not-found/collection";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../collection";
@@ -123,9 +123,9 @@ async function heldBeforeTheDeploy(
 }
 
 /** Run the catch-up again, as the next start would. */
-async function restart() {
+async function restart(options?: Parameters<typeof catchUp>[0]) {
   if (lastCatchUp() === undefined) throw new Error("no catch-up ever started");
-  return catchUp();
+  return catchUp(options);
 }
 
 async function redirects(t: TestNextly) {
@@ -216,6 +216,32 @@ describe.each(getConfiguredTestDialects())("a deploy's moves (%s)", dialect => {
       "en|/old": REDIRECTS_SLUG,
     });
     expect((await rows(t)).filter(row => row.kind === "pending")).toEqual([]);
+  });
+
+  it("send the old address where the page is now, when a save moved it during the start", async () => {
+    const t = await boot(dialect);
+    const page = await publish(t, "pages", "new");
+    await restart();
+    await heldBeforeTheDeploy(t, { collection: "pages", id: page }, "/old");
+
+    await restart({
+      // A person saves the page at a third address while the start runs.
+      afterReleases: async () => {
+        await t.nextly.update({
+          collection: "pages",
+          id: page,
+          data: { slug: "latest", _overwrite: true },
+        });
+      },
+    });
+
+    expect(await redirects(t)).toEqual({
+      "en|/old": "/latest permanent automatic",
+    });
+    expect(await held(t)).toEqual({
+      "en|/latest": "pages",
+      "en|/old": REDIRECTS_SLUG,
+    });
   });
 
   it("list the old address as a broken link where its redirect cannot be saved", async () => {

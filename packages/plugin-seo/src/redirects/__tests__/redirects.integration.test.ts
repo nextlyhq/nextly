@@ -319,6 +319,40 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
     });
   });
 
+  it("refuses a redirect that patterns would send round in a loop, and allows one a page stops", async () => {
+    const { t, seo } = await boot(dialect);
+    await put(seo, { source: "/old/*", target: "/new/*" });
+
+    expect(await put(seo, { source: "/new/*", target: "/old/*" })).toEqual({
+      refused: "That makes a loop: /new/* → /old/* → /new/*.",
+      reason: "loop",
+    });
+    expect(await put(seo, { source: "/new/x", target: "/old/x" })).toEqual({
+      refused: "That makes a loop: /new/x → /old/* → /new/x.",
+      reason: "loop",
+    });
+    // A page at /new/live is served, so nothing comes back round.
+    await publish(t, "pages", "live");
+    const page = (await t.nextly.find({ collection: "pages", limit: 1 }))
+      .items[0] as {
+      id: string;
+    };
+    await seo.services.collections.withTransaction(tx =>
+      seo.publicAddresses.move(
+        [
+          {
+            holder: { collection: "pages", id: String(page.id) },
+            holds: [{ locale: "en", path: "/new/live" }],
+          },
+        ],
+        tx
+      )
+    );
+    expect(
+      await put(seo, { source: "/elsewhere", target: "/old/live" })
+    ).toHaveProperty("saved");
+  });
+
   it("makes a person's redirect permanent unless they choose otherwise", async () => {
     const { t, ctx, seo } = await boot(dialect);
 

@@ -19,16 +19,11 @@ import {
   type PluginProxyHandler,
 } from "@nextlyhq/plugin-sdk";
 
-import {
-  claimKey,
-  pathsAbove,
-  recordSlug,
-  rowOf,
-} from "../address-record/participant";
 import { notAPageAddress } from "../not-found/log";
 
-import { destinationOf, pickRedirect, type HeldRow } from "./addresses";
+import { destinationOf } from "./addresses";
 import { redirectsSlug } from "./collection";
+import { redirectMeeting } from "./meeting";
 import { redirectOf, type StoredRedirect } from "./store";
 
 /**
@@ -42,36 +37,11 @@ async function redirectFor(
   ctx: PluginContext,
   address: KeptAddress
 ): Promise<StoredRedirect | undefined> {
-  const { locale, path } = address;
-  const keys = [
-    claimKey("address", locale, path),
-    ...[path, ...pathsAbove(path)].map(at => claimKey("range", locale, at)),
-  ];
-  const { data } = await ctx.services.ownCollections.listEntries(
-    recordSlug(ctx),
-    {
-      where: { claimKey: { in: keys } },
-      pagination: { limit: keys.length, page: 1 },
-      depth: 0,
-    }
-  );
-  const redirects = redirectsSlug(ctx);
-  const rows: HeldRow[] = (data as unknown[]).flatMap(entry => {
-    const row = rowOf(entry);
-    if (row.address === null || row.holder === null) return [];
-    return [
-      {
-        path: row.address.path,
-        range: row.address.range === true,
-        redirect: row.holder.collection === redirects ? row.holder.id : null,
-      },
-    ];
-  });
-  const id = pickRedirect(path, rows);
+  const id = await redirectMeeting(ctx, address);
   if (id === null) return undefined;
   try {
     return redirectOf(
-      await ctx.services.ownCollections.findEntryById(redirects, id)
+      await ctx.services.ownCollections.findEntryById(redirectsSlug(ctx), id)
     );
   } catch {
     // Removed between the two reads: the address is answered as if it had

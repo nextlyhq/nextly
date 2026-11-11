@@ -16,7 +16,7 @@ import type {
   PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { recordSlug } from "./participant";
+import { recordSlug } from "./rows";
 
 type Transaction = ParticipantTransaction["transaction"];
 

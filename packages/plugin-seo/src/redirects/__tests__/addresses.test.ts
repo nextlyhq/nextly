@@ -39,6 +39,8 @@ describe("a redirect's From address", () => {
     ["/old/*/x", "Use * only at the end of the From address, as in /old/*."],
     ["/old*", "Use * only at the end of the From address, as in /old/*."],
     ["/*", "A pattern needs a fixed part before the *, as in /old/*."],
+    ["/a/../b", "Write the From address without . or .. parts."],
+    ["/a/%2E%2e/b", "Write the From address without . or .. parts."],
   ])("refuses %j", (text, message) => {
     expect(parseSource(text)).toEqual({ ok: false, error: message });
   });
@@ -97,6 +99,9 @@ describe("a redirect's To address", () => {
     ["/old/*", "/old/*", "That would send the address to itself."],
     ["/a?ref=1", "/a", "That would send the address to itself."],
     ["/a/#top", "/a", "That would send the address to itself."],
+    ["/b/../a", "/a", "Write the To address without . or .. parts."],
+    ["/b/%2e%2e/a", "/a", "Write the To address without . or .. parts."],
+    ["/./a", "/x", "Write the To address without . or .. parts."],
     [
       "/old",
       "/old/*",

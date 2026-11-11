@@ -22,9 +22,17 @@ import {
 
 import { forgetNotFound } from "../not-found/log";
 
-import { checkTarget, parseSource, pathOf, storedTarget } from "./addresses";
+import {
+  checkTarget,
+  destinationOf,
+  parseSource,
+  pathOf,
+  storedTarget,
+  within,
+} from "./addresses";
 import { followChain } from "./chains";
 import { redirectsSlug } from "./collection";
+import { redirectMeeting } from "./meeting";
 
 type Transaction = ParticipantTransaction["transaction"];
 
@@ -251,6 +259,52 @@ async function pointedOn(
   return repointed;
 }
 
+/** How many redirects a request is followed through before it is a loop. */
+const LONGEST_ROUND = 64;
+
+/**
+ * Why a redirect from `from` to `final` would send a request back round to
+ * itself, or null: a request it answers is followed through the redirects
+ * it meets, exactly as the Proxy would match them, patterns included, until
+ * a page serves it, nothing answers, or it comes back under `from`.
+ */
+async function roundTrip(
+  ctx: PluginContext,
+  transaction: Transaction,
+  locale: string,
+  from: { source: string; address: { path: string; range?: true } },
+  final: string,
+  editing: string | undefined
+): Promise<string | null> {
+  const fixed = from.address.path;
+  const comesBack = (path: string) =>
+    from.address.range ? within(path, fixed) : path === fixed;
+  const read = reads(ctx, transaction);
+  // A request the redirect answers: the address itself, or one below a
+  // pattern's fixed part.
+  const asked = from.address.range ? `${fixed === "/" ? "" : fixed}/a` : fixed;
+  const passed = [from.source];
+  let sent = destinationOf({ source: from.source, target: final }, asked);
+  for (let hop = 0; hop < LONGEST_ROUND; hop++) {
+    if (!sent.startsWith("/")) return null;
+    const at = pathOf(sent);
+    if (comesBack(at)) {
+      return `That makes a loop: ${[...passed, from.source].join(" → ")}.`;
+    }
+    const id = await redirectMeeting(
+      ctx,
+      { locale, path: at },
+      transaction,
+      editing
+    );
+    const next = id === null ? undefined : await read.byId(id);
+    if (next === undefined) return null;
+    passed.push(next.source);
+    sent = destinationOf(next, at);
+  }
+  return `That makes a loop: ${[...passed, from.source].join(" → ")}.`;
+}
+
 /**
  * Save a redirect from `input.source` to `input.target`, new or, with
  * `editing`, in place of that redirect's To address and type. Answers what
@@ -289,6 +343,15 @@ export async function putRedirect(
     }
   );
   if ("error" in end) return { refused: end.error, reason: "loop" };
+  const round = await roundTrip(
+    ctx,
+    transaction,
+    locale,
+    from,
+    end.final,
+    editing
+  );
+  if (round !== null) return { refused: round, reason: "loop" };
 
   const fields = {
     target: end.final,

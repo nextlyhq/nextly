@@ -9,12 +9,15 @@
 import type {
   AddressHolder,
   HeldAddress,
+  ParticipantTransaction,
   PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
 import { recordNotFound } from "../not-found/log";
 
 import { putRedirect, type RedirectInput } from "./store";
+
+type Transaction = ParticipantTransaction["transaction"];
 
 /**
  * The redirect a page holding `holds` now leaves from `old`, an address it
@@ -49,48 +52,47 @@ function listBroken(ctx: PluginContext, old: HeldAddress): Promise<void> {
 }
 
 /**
- * Leave a redirect from each address `page` let go of in a deploy's move,
- * each on a transaction of its own, once every page's claim stands: an old
- * address another page now holds is then refused, so it is never used as a
- * step towards a third page. None goes to an address the page lost to the
- * page already holding it (`lost`). The route has already moved, so a
- * redirect that cannot be saved does not keep the old address; the old
- * address is listed as a broken link instead. A refusal because another
- * page serves the old address, or because it would loop, leaves none.
+ * Leave a redirect from each address `holder` let go of in a deploy's move,
+ * to the address it holds now in the same language: read by `heldOn` on the
+ * redirect's own transaction once every claim stands, so an address a save
+ * gave the page meanwhile is where it goes, an address the page lost to the
+ * page already holding it gets none, and an old address another page now
+ * holds is refused rather than used as a step to a third page. The route
+ * has already moved, so a redirect that cannot be saved does not keep the
+ * old address; it is listed as a broken link instead. A refusal because
+ * another page serves the old address, or because it would loop, leaves none.
  */
 export async function redirectDeployMove(
   ctx: PluginContext,
-  page: { holder: AddressHolder; holds: readonly HeldAddress[] },
+  holder: AddressHolder,
   released: readonly HeldAddress[],
-  lost: readonly HeldAddress[]
+  heldOn: (transaction: Transaction) => Promise<HeldAddress[]>
 ): Promise<void> {
-  const kept = page.holds.filter(
-    held =>
-      !lost.some(
-        gone =>
-          gone.locale === held.locale &&
-          gone.path === held.path &&
-          (gone.range === true) === (held.range === true)
-      )
-  );
   for (const old of released) {
-    const input = movedRedirect(old, kept);
-    if (input === undefined) continue;
-    let outcome: Awaited<ReturnType<typeof putRedirect>>;
+    let outcome: Awaited<ReturnType<typeof putRedirect>> | undefined;
     try {
-      outcome = await ctx.services.collections.withTransaction(transaction =>
-        putRedirect(ctx, transaction, input)
+      outcome = await ctx.services.collections.withTransaction(
+        async transaction => {
+          const input = movedRedirect(old, await heldOn(transaction));
+          return input === undefined
+            ? undefined
+            : putRedirect(ctx, transaction, input);
+        }
       );
     } catch (error) {
       ctx.logger.warn("A moved page's old address could not be redirected", {
         old,
-        page: page.holder,
+        page: holder,
         error,
       });
       await listBroken(ctx, old);
       continue;
     }
-    if ("refused" in outcome && outcome.reason === "invalid") {
+    if (
+      outcome !== undefined &&
+      "refused" in outcome &&
+      outcome.reason === "invalid"
+    ) {
       await listBroken(ctx, old);
     }
   }

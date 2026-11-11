@@ -15,8 +15,6 @@
  *
  * @module address-record/participant
  */
-import { createHash } from "node:crypto";
-
 import {
   NextlyError,
   type AddressHolder,
@@ -31,33 +29,20 @@ import { redirectsSlug } from "../redirects/collection";
 import { movedRedirect } from "../redirects/moves";
 import { dropReplacedRedirect, putRedirect } from "../redirects/store";
 
-import { ADDRESS_RECORD_SLUG } from "./collection";
-
-/** What a row of the record is. */
-type RowKind = "address" | "range" | "lock";
-
-/** A row of the record, read back. */
-export interface RecordRow {
-  id: string;
-  kind: RowKind;
-  address: HeldAddress | null;
-  holder: AddressHolder | null;
-}
+import {
+  claimKey,
+  pathsAbove,
+  recordSlug,
+  rowOf,
+  sha256,
+  type RecordRow,
+  type RowKind,
+} from "./rows";
 
 type Transaction = ParticipantTransaction["transaction"];
 
 /** How many rows one read takes. */
 const READ_PAGE = 200;
-
-/** The SHA-256 of `text`, the same on every dialect. */
-function sha256(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
-/** The stored claim key of an address, range or path lock row. */
-export function claimKey(kind: RowKind, locale: string, path: string): string {
-  return sha256(`${kind}:${locale}|${path}`);
-}
 
 /** The claim key of a page's own lock row. */
 function holderLockKey(holder: AddressHolder): string {
@@ -67,17 +52,6 @@ function holderLockKey(holder: AddressHolder): string {
 /** The kind of row an address is kept as. */
 function kindOf(address: HeldAddress): RowKind {
   return address.range === true ? "range" : "address";
-}
-
-/** Every path above `path`, root first, the root itself included. */
-export function pathsAbove(path: string): string[] {
-  if (path === "/") return [];
-  const segments = path.split("/").filter(segment => segment !== "");
-  const above = ["/"];
-  for (let at = 1; at < segments.length; at++) {
-    above.push(`/${segments.slice(0, at).join("/")}`);
-  }
-  return above;
 }
 
 /** Whether `path` is `range` or below it. */
@@ -101,39 +75,6 @@ function overlaps(held: HeldAddress, asked: HeldAddress): boolean {
 
 function sameHolder(a: AddressHolder, b: AddressHolder): boolean {
   return a.collection === b.collection && a.id === b.id;
-}
-
-/** A stored row read back, every column checked rather than trusted. */
-export function rowOf(entry: unknown): RecordRow {
-  const row = entry as Record<string, unknown>;
-  const text = (value: unknown) => (typeof value === "string" ? value : null);
-  const locale = text(row.locale);
-  const path = text(row.path);
-  const kind: RowKind =
-    row.kind === "address" || row.kind === "range" ? row.kind : "lock";
-  const collection = text(row.holderCollection);
-  const id = text(row.holderId);
-  const label = text(row.holderLabel);
-  return {
-    id: String(row.id),
-    kind,
-    address:
-      locale === null || path === null
-        ? null
-        : { locale, path, ...(kind === "range" ? { range: true } : {}) },
-    holder:
-      collection === null || id === null
-        ? null
-        : { collection, id, ...(label ? { label } : {}) },
-  };
-}
-
-/**
- * The record's slug as this site has it: the plugin's own, or the name the
- * site renamed it to with the plugin's `rename`.
- */
-export function recordSlug(ctx: PluginContext): string {
-  return ctx.self.collections[ADDRESS_RECORD_SLUG] ?? ADDRESS_RECORD_SLUG;
 }
 
 /**

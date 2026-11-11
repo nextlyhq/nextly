@@ -18,6 +18,18 @@ export type ParsedSource =
 const START_FROM = "Start the From address with /, for example /old-page.";
 const STAR_FROM = "Use * only at the end of the From address, as in /old/*.";
 
+/**
+ * Whether a path has a `.` or `..` part, spelled plainly or encoded: a
+ * browser resolves those before it asks, so a path with one is never what a
+ * request arrives as, and a To address with one lands somewhere else.
+ */
+function hasDotPart(path: string): boolean {
+  return path.split("/").some(part => {
+    const plain = part.replace(/%2e/gi, ".");
+    return plain === "." || plain === "..";
+  });
+}
+
 /** Without a trailing slash, except the root's own. */
 function trimmed(path: string): string {
   return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
@@ -55,6 +67,12 @@ export function parseSource(text: string): ParsedSource {
     return {
       ok: false,
       error: "Leave the # and what follows it off the From address.",
+    };
+  }
+  if (hasDotPart(value)) {
+    return {
+      ok: false,
+      error: "Write the From address without . or .. parts.",
     };
   }
   const stars = value.split("*").length - 1;
@@ -98,6 +116,9 @@ export function checkTarget(target: string, source: string): string | null {
  * pattern itself matches, which would redirect again and again.
  */
 function sameSiteProblem(to: string, source: string): string | null {
+  if (hasDotPart(pathOf(to))) {
+    return "Write the To address without . or .. parts.";
+  }
   if (pathOf(to) === trimmed(source)) {
     return "That would send the address to itself.";
   }
@@ -178,7 +199,7 @@ export interface HeldRow {
 }
 
 /** Whether `path` is `range` or below it. */
-function within(path: string, range: string): boolean {
+export function within(path: string, range: string): boolean {
   return path === range || path.startsWith(range === "/" ? "/" : `${range}/`);
 }
 
