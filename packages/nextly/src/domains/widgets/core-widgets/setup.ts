@@ -116,8 +116,8 @@ const ALL_SET: SetupCardData = {
 export const setupWidget = defineWidget({
   id: CORE_WIDGET_ID.setup,
   title: "Set up your project",
-  description:
-    "The setup steps left on a new project, detected from its data. For super-admins, until setup is done.",
+  // One line, as the add panel lists it.
+  description: "The steps a new project needs. Ticks itself from your data.",
   // Drawn beside its name in the add panel: a name the admin's icon set holds.
   icon: "Flag",
   // Half the row by default, beside Needs attention, and never narrower: below

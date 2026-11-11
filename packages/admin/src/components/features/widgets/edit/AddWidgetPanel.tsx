@@ -48,7 +48,7 @@ import {
 
 import * as Icons from "@admin/components/icons";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
-import { pluginDisplayName } from "@admin/lib/plugins/plugin-display-name";
+import { REGISTRY_ENTRIES } from "@admin/lib/plugins/registry/entries";
 import type {
   DashboardWidget,
   WidgetPlacement,
@@ -62,6 +62,7 @@ import {
   collectionsFor,
   galleryRows,
   newCardSettings,
+  pluginShownName,
   rowsCount,
   searchRows,
   startingCollection,
@@ -240,7 +241,8 @@ function RowEnd({
       disabled={atCapacity && action.kind === "add"}
       aria-label={`Add ${tile.name}`}
       onClick={() => onAdd(row)}
-      data-add-row={tile.id}
+      // What the press does, for tests that look for a removed card's way back.
+      data-action={action.kind}
       data-testid={`add-panel-add-${tile.id}`}
       className="h-7 shrink-0 rounded-[7px] border-control-border bg-card px-2.5 text-[12.5px] font-medium"
     >
@@ -357,7 +359,8 @@ function Search({
           aria-label="Search widgets"
           aria-describedby={countId}
           autoComplete="off"
-          className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
+          // The browser's own clear button is hidden: it draws in a colour of its own.
+          className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:appearance-none"
           data-testid="add-panel-search"
         />
       </label>
@@ -490,7 +493,11 @@ function usePanelRows(
   const rows = useMemo(() => {
     if (read === undefined) return [];
     const named = (plugin: string) =>
-      pluginDisplayName(plugins?.find(each => each.name === plugin)) ?? plugin;
+      pluginShownName(
+        plugin,
+        plugins?.find(each => each.name === plugin),
+        REGISTRY_ENTRIES
+      );
     return galleryRows(read, placements, byId, canAsk, named);
   }, [read, placements, byId, canAsk, plugins]);
   const found = useMemo(() => searchRows(rows, query), [rows, query]);

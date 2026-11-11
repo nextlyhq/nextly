@@ -24,7 +24,8 @@ export const noteWidget = defineWidget({
   // Drawn beside its name in the add panel.
   icon: "Pencil",
   title: "Note",
-  description: "A note of your own, in Markdown, that only you see.",
+  // One line, as the add panel lists it.
+  description: "A private note, written in Markdown.",
   // Any width from a quarter, and as tall as its reader's text wants.
   size: {
     default: { w: 4, h: 3 },

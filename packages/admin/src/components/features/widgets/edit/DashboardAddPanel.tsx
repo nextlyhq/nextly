@@ -14,6 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { JSX } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { toast } from "@admin/components/ui";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
@@ -175,16 +176,21 @@ function CustomizingAddPanel({
       const id = editor.add(widgetId, settings);
       if (id === null) return null;
       landed(id);
+      const title = titleOf(widgetId, settings);
       if (matchesOne === true) {
-        // The panel gives way to the new card's settings, which take focus as they open.
+        // The panel gives way to the new card's settings, which take focus as they open, and
+        // says why they opened.
         lastAdded.current = null;
         handedOn.current = true;
         onOpenChange(false);
         startProvisional(id);
+        toast(
+          `${byId.get(widgetId)?.title ?? title} added. Every collection already has one, so pick its settings.`
+        );
       }
-      return { title: titleOf(widgetId, settings) };
+      return { title };
     },
-    [editor, landed, titleOf, onOpenChange, startProvisional]
+    [editor, byId, landed, titleOf, onOpenChange, startProvisional]
   );
 
   const onAddBack = useCallback(

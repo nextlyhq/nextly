@@ -354,18 +354,18 @@ async function openAddPanel(page: Page) {
   await bar(page).getByRole("button", { name: "Add widget" }).click();
   const panel = page.getByRole("dialog", { name: "Add widget" });
   await expect(
-    panel.getByRole("searchbox", { name: "Search widgets or collections" })
+    panel.getByRole("searchbox", { name: "Search widgets" })
   ).toBeFocused();
   return panel;
 }
 
 /**
- * The next control in the panel that puts a card on the dashboard at once: a removed card back,
- * which the gallery lists first. Whichever widgets the site offers, so the visit does not depend
- * on them; adding new cards, some through their add step, is `dashboard-gallery.spec.ts`'s.
+ * The next control in the panel that puts a removed card back: a one-card widget's Add, while its
+ * card is removed. Whichever widgets the site offers, so the visit does not depend on them;
+ * adding new cards is `dashboard-gallery.spec.ts`'s.
  */
 function nextAdd(panel: Locator): Locator {
-  return panel.locator('[data-testid^="add-panel-add-back-"]').first();
+  return panel.locator('[data-action="add-back"]').first();
 }
 
 test("the add panel adds three cards in one visit, each said and ringed, and closing lands on the last", async ({
@@ -391,7 +391,7 @@ test("the add panel adds three cards in one visit, each said and ringed, and clo
     await nextAdd(panel).click();
     await expect(page.locator(CELLS)).toHaveCount(before + added);
     await expect(panel.getByTestId("add-panel-live")).toHaveText(
-      /^Added back .+\.$/
+      /^Added .+\.$/
     );
     // Still open, and focus still inside it.
     await expect(panel).toBeVisible();
@@ -425,7 +425,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
         page.locator(CELLS).filter({ visible: true }).first()
       ).toBeVisible();
       await customize(page);
-      // One card removed, so the Removed group and its Add back are scanned too.
+      // One card removed, so the Add that puts it back is scanned too.
       await page
         .getByRole("button", { name: /^Card actions for / })
         .first()
@@ -439,8 +439,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
 
       await expectNoAxeViolations(page);
 
-      // WCAG 2.5.8's minimum, measured on every control the panel draws that a reader can use:
-      // a tile's preview is an inert picture of its card, whose controls nobody can reach.
+      // WCAG 2.5.8's minimum, measured on every control the panel draws that a reader can use.
       const small = await panel
         .locator("button:visible, input:visible")
         .evaluateAll(controls =>
@@ -671,7 +670,7 @@ test.describe("on a phone, with touch", () => {
     await bar(page).getByRole("button", { name: "Add widget" }).tap();
     const panel = page.getByRole("dialog", { name: "Add widget" });
     expect((await panel.boundingBox())?.width).toBe(390);
-    await panel.locator('[data-testid^="add-panel-add-back-"]').first().tap();
+    await panel.locator('[data-action="add-back"]').first().tap();
     await panel.getByRole("button", { name: "Close" }).tap();
     await expect(panel).toBeHidden();
 

@@ -15,6 +15,7 @@ import {
   collectionsFor,
   galleryRows,
   newCardSettings,
+  pluginShownName,
   rowsCount,
   searchRows,
   startingCollection,
@@ -235,5 +236,33 @@ describe("newCardSettings", () => {
   it("starts a card that reads no collection, or has none to start on, with no settings", () => {
     expect(newCardSettings(TEAM, "posts")).toBeUndefined();
     expect(newCardSettings(COUNT, undefined)).toBeUndefined();
+  });
+});
+
+describe("pluginShownName", () => {
+  const catalogue = [{ id: "@nextlyhq/plugin-seo", name: "SEO" }];
+
+  it("names a plugin by its own label, else the catalogue's name, else its package name", () => {
+    expect(
+      pluginShownName(
+        "@nextlyhq/plugin-seo",
+        { appearance: { label: "Search" } },
+        catalogue
+      )
+    ).toBe("Search");
+    // An empty label counts as none.
+    expect(
+      pluginShownName(
+        "@nextlyhq/plugin-seo",
+        { appearance: { label: "" } },
+        catalogue
+      )
+    ).toBe("SEO");
+    expect(pluginShownName("@acme/plugin-reviews", undefined, catalogue)).toBe(
+      "reviews"
+    );
+    expect(pluginShownName("widget-kit-fixture", undefined, catalogue)).toBe(
+      "widget-kit-fixture"
+    );
   });
 });

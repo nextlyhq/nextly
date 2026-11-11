@@ -25,8 +25,8 @@ export const continueWidget = defineWidget({
   // Drawn beside its name in the add panel.
   icon: "History",
   title: "Continue where you left off",
-  description:
-    "Your pinned entries and your latest saves, or what other people saved, one row per entry.",
+  // One line, as the add panel lists it.
+  description: "Entries you saved or pinned, to pick up again.",
   // Half the row by default; from a third, where its rows still read, to the
   // full width. Five rows tall at the default density (h 5), from four (h 4)
   // to the ten a list draws (h 8).

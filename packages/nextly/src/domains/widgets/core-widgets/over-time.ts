@@ -54,8 +54,8 @@ export const overTimeWidget = defineWidget({
   // Drawn beside its name in the add panel.
   icon: "TrendingUp",
   title: "Over time",
-  description:
-    "How many entries a collection gained in each day, week or month of a range.",
+  // One line, as the add panel lists it.
+  description: "Entries added per day, week or month.",
   offered: "per-collection",
   // Half the row by default; from a third, where its chart still reads, to the full width.
   size: {

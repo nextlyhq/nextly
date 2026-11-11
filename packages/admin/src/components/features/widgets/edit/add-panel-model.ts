@@ -11,6 +11,7 @@
 
 import type { PublishedContentSource, WidgetSizeBounds } from "nextly/config";
 
+import type { PluginMetadata } from "@admin/types/branding";
 import type {
   DashboardWidget,
   WidgetPlacement,
@@ -65,6 +66,23 @@ export interface GalleryRow {
   action: RowAction;
   /** The plugin's name as the admin shows it, for a plugin's widget. */
   pluginName?: string;
+}
+
+/**
+ * What a plugin is called beside its widget's name: the label the plugin gives itself in the
+ * admin, else the name the plugin catalogue knows it by ("SEO"), else its package name without
+ * its scope and a `plugin-` prefix, so "@acme/plugin-reviews" reads "reviews".
+ */
+export function pluginShownName(
+  plugin: string,
+  meta: Pick<PluginMetadata, "appearance"> | undefined,
+  catalogue: ReadonlyArray<{ id: string; name: string }>
+): string {
+  const label = meta?.appearance?.label;
+  if (label) return label;
+  const known = catalogue.find(entry => entry.id === plugin)?.name;
+  if (known !== undefined) return known;
+  return plugin.replace(/^@[^/]+\//, "").replace(/^plugin-/, "");
 }
 
 /** Whether a card of this widget set to this collection can be asked anything. */

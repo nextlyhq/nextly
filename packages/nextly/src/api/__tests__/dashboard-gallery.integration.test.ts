@@ -271,6 +271,41 @@ describe.each(getConfiguredTestDialects())(
       expect(theirSlugs).not.toContain(HIDDEN);
     });
 
+    it("still lists a one-card widget whose card the reader removed, so its row can put it back", async () => {
+      const read = await get<{ version: number; scope: string }>(
+        editor,
+        "dashboard/layout"
+      );
+      const saved = await send(editor, "dashboard/layout", {
+        method: "PUT",
+        body: {
+          placements: [
+            {
+              id: "activity",
+              widgetId: "core/team-activity",
+              w: 6,
+              h: 5,
+              removed: true,
+            },
+          ],
+          version: read.version,
+          scope: read.scope,
+        },
+      });
+      expect(saved.status).toBe(200);
+      const layout = await get<{ available: string[] }>(
+        editor,
+        "dashboard/layout"
+      );
+      // Not offered as a new card: its one card is held, removed.
+      expect(layout.available).not.toContain("core/team-activity");
+      expect(
+        (await galleryOf(editor)).tiles.find(
+          tile => tile.id === "core/team-activity"
+        )
+      ).toMatchObject({ placed: 0, allowsSeveral: false });
+    });
+
     it("refuses a card that reads a collection, added by a reader who may read none", async () => {
       expect((await galleryOf(nobody)).collections).toEqual([]);
       const read = await get<{ version: number; scope: string }>(

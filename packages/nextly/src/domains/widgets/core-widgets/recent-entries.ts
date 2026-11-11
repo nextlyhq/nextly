@@ -56,8 +56,8 @@ export const recentEntriesWidget = defineWidget({
   // Drawn beside its name in the add panel.
   icon: "List",
   title: "Recent entries",
-  description:
-    "A collection's entries changed most recently, each linking to its entry.",
+  // One line, as the add panel lists it.
+  description: "The latest changed entries of one collection, or of all.",
   // Added from a collection's group of the add panel, once per collection or
   // more, and never placed on the default dashboard.
   offered: "per-collection",
