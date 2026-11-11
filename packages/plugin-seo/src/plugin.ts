@@ -17,6 +17,11 @@ import {
   type PluginDefinition,
 } from "@nextlyhq/plugin-sdk";
 
+import { addressRecordCollection } from "./address-record/collection";
+import {
+  addressRecord,
+  releaseOnCollectionDelete,
+} from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
 import {
   generateSitemap,
@@ -160,6 +165,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
+    // The record that keeps each public address to one page.
+    collections: [addressRecordCollection()],
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -257,5 +264,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     category: "seo",
     tags: ["seo", "meta"],
     contributes,
+    init(ctx) {
+      // The site-wide record that keeps each public address to one page:
+      // asked on every save, and told what each document holds after it.
+      ctx.publicAddresses.participate(addressRecord(ctx));
+      releaseOnCollectionDelete(ctx);
+    },
   });
 }

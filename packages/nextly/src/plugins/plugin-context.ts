@@ -134,6 +134,10 @@ import {
 import { currentDependencies } from "./plugin-dependencies";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
 import { mediaForPlugin, type PluginMediaService } from "./plugin-media";
+import {
+  pluginPublicAddresses,
+  type PluginPublicAddresses,
+} from "./plugin-public-addresses";
 import { createPluginSettings } from "./plugin-settings-provider";
 import { toPluginSingleRecord, wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
@@ -178,10 +182,6 @@ import {
 } from "./service-opts";
 import { buildPluginServicesNamespace } from "./services/plugin-services-registry";
 import { recordPluginSubscription } from "./subscription-tracker";
-import {
-  pluginPublicAddresses,
-  type PluginPublicAddresses,
-} from "./plugin-public-addresses";
 import { type TransactionScope, transactionScope } from "./transaction-scope";
 
 // The typed surface `ctx.db` is, under the names the package exports.

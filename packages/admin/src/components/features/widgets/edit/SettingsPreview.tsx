@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * The card as the settings panel's values would draw it, at the top of the panel: the same
- * renderer the dashboard uses, so what the reader sees is what Done keeps. Shown, not used: its
+ * The card as the settings drawer's values would draw it, at the top of the drawer: the same
+ * renderer the dashboard uses, so what the reader sees is what Save keeps, at the width the
+ * drawer holds. Shown, not used: its
  * links and controls are out of reach, since the card they would act on is the one behind the
  * panel.
  *
@@ -34,6 +35,7 @@ import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { observeSize } from "../frame/observe-size";
 import { tierForWidth } from "../frame/tier";
+import { widthPercent } from "../sizes";
 import { WidgetRenderer } from "../WidgetRenderer";
 
 import { useSettingsPreview, type ShownAnswer } from "./useSettingsPreview";
@@ -195,8 +197,10 @@ export function SettingsPreview(props: {
   /** The title the panel holds for the card; empty for the automatic one. */
   ownTitle: string;
   shown: ShownAnswer;
-  /** The size the card is drawn at on the dashboard. */
+  /** The size the preview draws the card at: the drawer's width. */
   size: GridSize;
+  /** The width the card itself is drawn at on the dashboard, which its own answer was asked at. */
+  shownW?: number;
   /** The width the card is drawn at on the dashboard, in pixels, when it is known. */
   cardWidth: number | undefined;
   /** Empty every Filter setting in the panel; absent where nothing beside the preview holds one. */
@@ -212,6 +216,7 @@ export function SettingsPreview(props: {
     shown: props.shown,
     ownTitle: props.ownTitle,
     size,
+    ...(props.shownW === undefined ? {} : { shownW: props.shownW }),
     // The tier the preview is drawn at, so its question is asked at the size it shows.
     ...(tier === undefined ? {} : { tier }),
   });
@@ -229,7 +234,18 @@ export function SettingsPreview(props: {
       aria-label={`Preview of ${preview.definition.title}`}
       className="flex flex-col gap-2"
     >
-      <p className="text-xs font-medium text-muted-foreground">Preview</p>
+      {/* Headed as the drawer's sections are, with the share of the row it is drawn at. */}
+      <div className="flex flex-col gap-0.5">
+        <p className="text-xs font-semibold tracking-wide text-muted-foreground">
+          Preview
+        </p>
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid="settings-preview-width"
+        >
+          At {widthPercent(size.w)} of the dashboard
+        </p>
+      </div>
       <div
         ref={roomRef}
         className="relative w-full overflow-hidden"

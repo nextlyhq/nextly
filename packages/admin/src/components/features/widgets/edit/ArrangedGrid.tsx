@@ -51,6 +51,7 @@ import { ArrangedCell, type ArrangedCellProps } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
 import type { CardDrag } from "./drag/useCardDrag";
 import type { CellDrag } from "./DraggableWidgetCell";
+import { isEntriesSetting } from "./drawer-choices";
 import type { CellSettingsWrite } from "./useCardQuickSetting";
 import type { CardSettingsWriteCallbacks } from "./useCardSettingsWrite";
 import type { ArrangedWidget } from "./useDashboardArrangement";
@@ -71,12 +72,7 @@ export interface ArrangedGridProps {
    */
   drag?: Pick<
     CardDrag,
-    | "enabled"
-    | "oneColumn"
-    | "drag"
-    | "line"
-    | "onHandleKeyDown"
-    | "onHandleBlur"
+    "enabled" | "drag" | "line" | "onHandleKeyDown" | "onHandleBlur"
   >;
   /** What a card may write now, and how: one prop, as they are one concern. */
   writes: {
@@ -101,19 +97,12 @@ export interface ArrangedGridProps {
             config: Record<string, unknown>,
             callbacks: CardSettingsWriteCallbacks,
             /** The title the reader gave the card, where the change sets it. */
-            ownTitle?: string
-          ) => void;
-          /**
-           * Save a card's size at once: the card menu's and the quick popover's Size. Absent
-           * where only a card's settings are written, as a card body's own controls write them.
-           */
-          resize?: (
-            placementId: string,
-            title: string,
-            size: GridSize,
-            /** The card's widget's bounds, which the size is held to. */
-            bounds: WidgetSizeBounds,
-            callbacks: CardSettingsWriteCallbacks
+            ownTitle?: string,
+            /**
+             * The card's size, where the change sets it (the settings drawer's Width), with its
+             * widget's bounds, which the size is held to.
+             */
+            size?: { size: GridSize; bounds: WidgetSizeBounds }
           ) => void;
           isWriting: boolean;
           unavailable?: string;
@@ -233,29 +222,17 @@ function cellSettingsWrite(
   shownTitle: string
 ): { settingsWrite?: CellSettingsWrite } {
   if (!settingsWrite) return {};
-  const { resize } = settingsWrite;
   return {
     settingsWrite: {
-      write: (config, callbacks, ownTitle) =>
+      write: (config, callbacks, ownTitle, size) =>
         settingsWrite.write(
           row.placementId,
           shownTitle,
           config,
           callbacks,
-          ownTitle
+          ownTitle,
+          size === undefined ? undefined : { size, bounds: row.widget.size }
         ),
-      ...(resize === undefined
-        ? {}
-        : {
-            resize: (size: GridSize, callbacks: CardSettingsWriteCallbacks) =>
-              resize(
-                row.placementId,
-                shownTitle,
-                size,
-                row.widget.size,
-                callbacks
-              ),
-          }),
       isWriting: settingsWrite.isWriting,
       ...(settingsWrite.unavailable === undefined
         ? {}
@@ -329,7 +306,7 @@ export function answerSizeOf(
   sources: ArrangedGridProps["writes"]["sources"]
 ): AnswerSize | undefined {
   if (asked === undefined) return undefined;
-  if (!(widget.settings ?? []).some(setting => setting.name === "limit")) {
+  if (!(widget.settings ?? []).some(isEntriesSetting)) {
     return undefined;
   }
   return { items: settingsAsAsked(widget, asked.settings, sources).limit };
@@ -481,8 +458,6 @@ export function ArrangedGrid({
             drawnW={widths.get(row.placementId)}
             isEditing={isEditing}
             highlighted={highlightedId === row.placementId}
-            // At one column each card menu lists its sizes in place, where a submenu has no room.
-            sizesInPlace={drag?.oneColumn === true}
             drag={cellDragFor(drag, focus, row.placementId)}
             isWriting={writes.isWriting}
             singleCardWriteBlocked={writes.singleCardWriteBlocked}
