@@ -25,6 +25,10 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 import { useRouter } from "@admin/hooks/useRouter";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
 import {
+  isMultilingual,
+  type LocalizationConfig,
+} from "@admin/lib/localization";
+import {
   filterCollectionItems,
   filterSingleItems,
 } from "@admin/lib/permissions/authorization";
@@ -63,7 +67,6 @@ import {
 } from "./lib/place-standalone-plugins";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import { resolveActiveSection } from "./lib/resolve-section";
-import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
 import {
   railAnswersIn,
@@ -78,7 +81,49 @@ import type {
   RailItemId,
 } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
+import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { SubSidebarPanel } from "./SubSidebarPanel";
+
+/** Whether each rail entry's section has something to show, keyed by entry id. */
+type RailSections = Readonly<Record<string, boolean>>;
+
+/**
+ * Whether a rail entry's section has anything to show. An entry with no
+ * section of its own (Dashboard, Releases) always has.
+ */
+function sectionHasContent(id: string, sections: RailSections): boolean {
+  return sections[id] ?? true;
+}
+
+/** What each rail entry's section holds, as the rail's own answers give it. */
+interface RailSectionAnswers {
+  hasCollectionsSection: boolean;
+  hasSinglesSection: boolean;
+  pluginsSectionVisible: boolean;
+  hasMediaSection: boolean;
+  hasSettingsSection: boolean;
+  hasBuildersSection: boolean;
+  branding: { locales?: LocalizationConfig } | null | undefined;
+}
+
+/**
+ * Whether each rail entry's section has anything to show, by the entry's id.
+ * Six booleans, cheap enough to build on every render.
+ */
+function railSections(answers: RailSectionAnswers): RailSections {
+  return {
+    // Shown while either kind has something to list; the panel shows only the
+    // kinds that do.
+    [CONTENT_RAIL_ID]:
+      answers.hasCollectionsSection || answers.hasSinglesSection,
+    plugins: answers.pluginsSectionVisible,
+    media: answers.hasMediaSection,
+    settings: answers.hasSettingsSection,
+    builders: answers.hasBuildersSection,
+    // Only a site with two or more locales has anything to translate.
+    translations: isMultilingual(answers.branding?.locales),
+  };
+}
 
 /**
  * Where keyboard focus is on the rail: a ring, drawn on `:focus-visible`
@@ -288,6 +333,16 @@ export function DualSidebar({
   // Whether an entry shows, with an answer still loading read as "shown" for
   // the entries that say so below. The panel and the routes read this; what the
   // rail DRAWS is held to the entries already decided (`rail.items`).
+  const sections = railSections({
+    hasCollectionsSection,
+    hasSinglesSection,
+    pluginsSectionVisible,
+    hasMediaSection,
+    hasSettingsSection,
+    hasBuildersSection,
+    branding,
+  });
+
   const isMenuItemShown = useCallback(
     (item: MainMenuItem): boolean => {
       // A slug declared on the entry is a hard gate, ahead of the per-section
@@ -311,34 +366,9 @@ export function DualSidebar({
       if (item.id.startsWith("standalone-")) {
         return visibleStandaloneIds.has(item.id);
       }
-      switch (item.id) {
-        case CONTENT_RAIL_ID:
-          // Shown while either kind has something to list; the panel shows
-          // only the kinds that do.
-          return hasCollectionsSection || hasSinglesSection;
-        case "plugins":
-          return pluginsSectionVisible;
-        case "media":
-          return hasMediaSection;
-        case "settings":
-          return hasSettingsSection;
-        case "builders":
-          return hasBuildersSection;
-        default:
-          return true;
-      }
+      return sectionHasContent(item.id, sections);
     },
-    [
-      visibleStandaloneIds,
-      hasPermission,
-      hasPermissionDataPending,
-      hasCollectionsSection,
-      hasSinglesSection,
-      pluginsSectionVisible,
-      hasMediaSection,
-      hasSettingsSection,
-      hasBuildersSection,
-    ]
+    [visibleStandaloneIds, hasPermission, hasPermissionDataPending, sections]
   );
 
   const visibleMenuItems = useMemo(
@@ -454,7 +484,9 @@ export function DualSidebar({
   // table and not to the chain became unreachable from the rail. Background
   // Jobs was exactly that — the entry appeared, the link fell through every
   // arm, and a jobs-only operator landed on General Settings, which answers to
-  // manage-settings and returns 403.
+  // manage-settings and returns 403. The Settings crumb of the pages inside
+  // the panel asks the same function (`useSettingsLanding`), so the two
+  // cannot disagree.
   const settingsHref = resolveSettingsLanding({
     hasPermission,
     canAccessApiKeys: apiKeysReachable,
