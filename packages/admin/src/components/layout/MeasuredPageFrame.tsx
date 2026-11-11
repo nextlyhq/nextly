@@ -3,7 +3,6 @@
 import type { JSX, ReactNode } from "react";
 
 import { useSuppressedChrome } from "./ChromeSuppression";
-import { CONTENT_PAGE_MEASURE } from "./content-measure";
 import { PageContainer } from "./page-container";
 
 interface MeasuredPageFrameProps {
@@ -117,7 +116,13 @@ export function MeasuredPageFrame({
 
   return (
     <PageContainer
-      width={contentCarriesMeasure ? "full" : CONTENT_PAGE_MEASURE}
+      // An editor that measures its own field column is an Editor page: full
+      // width, no gutter, its panel against the window's edge. Any other view
+      // (a plugin's custom edit view) keeps the gutter but no cap, since it was
+      // drawn for a padded page and its layout is its own.
+      {...(contentCarriesMeasure
+        ? { type: "editor" as const }
+        : { width: "full" as const })}
       className={framed ? undefined : "contents"}
     >
       <div className={trailClass}>{breadcrumbs}</div>

@@ -104,11 +104,15 @@ function cardTitles(page: Page): Locator {
 async function dashboardStyles(page: Page): Promise<Styles> {
   await page.mouse.move(0, 0);
   await expect(cardTitles(page).first()).toBeVisible({ timeout: 30_000 });
-  const main = page.locator("main");
+  // The admin's own main, by its id: a site page left mounted (hidden) beside
+  // the admin has a `main` of its own, whose paragraph is the site's.
+  const main = page.locator("#nextly-main-content:visible");
   const styles: Styles = {
     heading: await stylesOf(main.getByRole("heading", { level: 1 })),
     paragraph: await stylesOf(main.locator("p").first()),
-    button: await stylesOf(main.getByRole("button", { name: "Customize" })),
+    button: await stylesOf(
+      page.getByRole("button", { name: "Customize dashboard" })
+    ),
     link: await stylesOf(
       page.getByRole("navigation").getByRole("link", { name: "Dashboard" })
     ),

@@ -22,6 +22,16 @@ let registration: {
   reject: (error: Error) => void;
 } | null = null;
 
+/**
+ * Fails the registration a case holds open, if any, and forgets it. Read
+ * through a function, so a case that settles one start and then waits for the
+ * next is not narrowed to the `null` it set in between.
+ */
+function refuseRegistration(error: Error): void {
+  registration?.reject(error);
+  registration = null;
+}
+
 vi.mock("../../di/register", () => ({
   registerServices: vi.fn(
     () =>
@@ -52,8 +62,7 @@ async function settlesWithin(
 
 afterEach(async () => {
   // A start a case left open is failed, so nothing outlives the case.
-  registration?.reject(new Error("the case ended"));
-  registration = null;
+  refuseRegistration(new Error("the case ended"));
   await awaitStartInFlight();
   await shutdownNextly();
   vi.restoreAllMocks();
@@ -81,8 +90,7 @@ describe("createRegister's register()", () => {
 
     await createRegister(config, { cacheComponents: "true" })();
     await vi.waitFor(() => expect(registration).not.toBeNull());
-    registration?.reject(new Error("the database refused the connection"));
-    registration = null;
+    refuseRegistration(new Error("the database refused the connection"));
     await awaitStartInFlight();
 
     // Vitest fails the run on an unhandled rejection, so reaching here with
@@ -102,8 +110,7 @@ describe("createRegister's register()", () => {
     const stopped = shutdownNextly();
 
     expect(await settlesWithin(stopped, 200), "stopped mid-start").toBe(false);
-    registration?.reject(new Error("stopped"));
-    registration = null;
+    refuseRegistration(new Error("stopped"));
     await stopped;
     expect(startInFlight()).toBeNull();
   });
@@ -117,8 +124,7 @@ describe("a reader after the start-up hook's start failed", () => {
 
     await createRegister(config, { cacheComponents: "true" })();
     await vi.waitFor(() => expect(registration).not.toBeNull());
-    registration?.reject(new Error("the database refused the connection"));
-    registration = null;
+    refuseRegistration(new Error("the database refused the connection"));
     await awaitStartInFlight();
     expect(registerServices).toHaveBeenCalledTimes(1);
 
@@ -127,8 +133,7 @@ describe("a reader after the start-up hook's start failed", () => {
     const read = nextly.count({ collection: "posts" });
     await vi.waitFor(() => expect(registration).not.toBeNull());
     expect(registerServices).toHaveBeenCalledTimes(2);
-    registration?.reject(new Error("still refused"));
-    registration = null;
+    refuseRegistration(new Error("still refused"));
     await expect(read).rejects.toThrow("still refused");
   });
 });
@@ -142,8 +147,7 @@ describe("shutdownNextly during a start that then fails", () => {
     await createRegister(config, { cacheComponents: "true" })();
     await vi.waitFor(() => expect(registration).not.toBeNull());
     const stopped = shutdownNextly();
-    registration?.reject(new Error("the database refused the connection"));
-    registration = null;
+    refuseRegistration(new Error("the database refused the connection"));
     await stopped;
 
     // Refused as nothing started, not started again after the shutdown.

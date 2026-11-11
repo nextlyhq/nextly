@@ -560,6 +560,18 @@ export { publicAddressOf, typesWithoutAddress } from "nextly";
 export type { PublicAddress, PublicAddressType } from "nextly";
 
 /**
+ * Where a page kept in one language is opened: `languageAddressOf(path,
+ * locale)` forms the address a path kept in `locale` is served at, under the
+ * language's prefix or on its own domain, as the site declares
+ * (`languageAddresses`), for a page's links to its other languages and its
+ * sitemap entries. Intended to become stable with `publicAddressOf`.
+ *
+ * @experimental
+ */
+export { languageAddressOf } from "nextly";
+export type { LanguageAddress, LanguageAddressRule } from "nextly";
+
+/**
  * Keeping every public address to one page. A plugin that keeps a record of
  * who holds each address takes part through `ctx.publicAddresses.participate`
  * with a `PublicAddressParticipant`: core asks every participant, inside each
@@ -576,6 +588,7 @@ export type {
   AddressHolder,
   HeldAddress,
   HeldAddressUpdate,
+  HeldDocument,
   ParticipantTransaction,
   PluginPublicAddresses,
   PublicAddressParticipant,
@@ -754,6 +767,23 @@ export { getCachedNextly } from "nextly";
 export { pluginCacheTag } from "nextly";
 
 /**
+ * @experimental The cache tags a read of a collection, or of one of its
+ * entries, carries, which a write to it expires: for a plugin whose cached
+ * answer is built from those reads, such as page metadata naming the media
+ * it shows. Intended to be stable with the page-metadata contract.
+ */
+export { nextlyTags } from "nextly";
+
+/**
+ * @experimental How the content routes read a later page of a paginated list
+ * (`news/page/2`): `listPageOf` splits a path into the address it is a page
+ * of and the page's segment, and `listPageNumber` reads the one spelling of
+ * a page number. For a plugin naming a later page's own address. Intended to
+ * be stable with the page-metadata contract.
+ */
+export { listPageNumber, listPageOf } from "nextly";
+
+/**
  * @experimental The canonical response envelopes, and the trusted-client-IP
  *   facade. Graduates per D55 once `plugin-form-builder`'s public form routes
  *   ship in a release.
@@ -799,6 +829,16 @@ export type {
   PluginRoutePermissionResolver,
   PluginRoutePermissionScope,
 } from "nextly";
+
+/**
+ * What a plugin adds to the site's Proxy (`contributes.proxy`): a handler that
+ * may answer a request before its page is served, set headers on what is
+ * served, or pass headers on to the page's render. Intended to become stable
+ * once the SEO plugin's redirects run on it.
+ *
+ * @experimental
+ */
+export type { PluginProxyHandler, ProxyAnswer } from "nextly";
 
 // A VALUE, so it cannot ride in the type-only block above. `narrowScope` is the
 // only correct way for a route to restrict its own scope before a call: the
@@ -1078,6 +1118,15 @@ export type {
  * @experimental
  */
 export type { PluginEmitOptions } from "nextly";
+
+/**
+ * A plugin's durable events: `ctx.events.emitDurable` and `onDurable`
+ * (`PluginDurableEvents`, beside `PluginEvents` on `ctx.events`), what an
+ * `onDurable` subscriber receives (the event's id, which it de-duplicates on,
+ * its name, payload and which try this is) and the handler that receives it.
+ * @experimental
+ */
+export type { DurableEvent, DurableHandler, PluginDurableEvents } from "nextly";
 
 /**
  * Event-name constants (D69) — document/auth/media families. The event names
