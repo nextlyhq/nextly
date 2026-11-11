@@ -189,35 +189,48 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("still refuses a network that submitted before the upgrade", async () => {
-      // A form saved with the old switch, and a submission stored before the
-      // key existed: no key on the row, its address stored.
-      const { nextly, submit, formId } = await boot({
-        allowMultipleSubmissions: false,
-      });
-      await nextly.create({
-        collection: "form-submissions",
-        data: {
-          form: formId,
-          data: { email: "ada@example.com" },
-          status: "new",
-          submittedAt: new Date(),
-          ipAddress: "203.0.113.9",
-        },
-      });
-      const { items } = await nextly.find({ collection: "form-submissions" });
-      const old = items[0] as { id: string };
+      // A submission stored while the form allowed several responses, so with
+      // no key, as every submission was before keys existed; then the form is
+      // saved with the old one-per-IP switch, which reads as one per network.
+      const { nextly, submit, formId } = await boot({});
+      expect(
+        (await submit({ email: "ada@example.com" }, "203.0.113.9")).success
+      ).toBe(true);
+      const [old] = await stored(nextly);
+      expect(old?.responseKey ?? null).toBeNull();
       await nextly.update({
-        collection: "form-submissions",
-        id: old.id,
-        data: { responseKey: null, _overwrite: true },
+        collection: "forms",
+        id: formId,
+        data: {
+          settings: { honeypotEnabled: true, allowMultipleSubmissions: false },
+          _overwrite: true,
+        },
       });
 
       expect(
         await submit({ email: "new@example.com" }, "203.0.113.9")
-      ).toMatchObject({
-        success: false,
-        outcome: "duplicate",
+      ).toMatchObject({ success: false, outcome: "duplicate" });
+      expect(
+        (await submit({ email: "new@example.com" }, "203.0.113.10")).success
+      ).toBe(true);
+    });
+
+    it("lets a person respond again once their submission is marked spam", async () => {
+      const { nextly, submit } = await boot({
+        oneResponse: "email",
+        oneResponseField: "email",
       });
+      expect((await submit({ email: "ada@example.com" })).success).toBe(true);
+      const [first] = await stored(nextly);
+      await nextly.update({
+        collection: "form-submissions",
+        id: first!.id,
+        data: { status: "spam", _overwrite: true },
+      });
+      const [marked] = await stored(nextly);
+      expect(marked?.responseKey ?? null).toBeNull();
+
+      expect((await submit({ email: "ada@example.com" })).success).toBe(true);
     });
   }
 );

@@ -1034,6 +1034,12 @@ export async function prepareSubmissionForWrite(
     parentFormId(submission) ?? (stored ? parentFormId(stored) : null);
   if (!formId) return ctx.data;
 
+  // Marked spam, a submission gives its key back: spam takes nobody's place,
+  // and the person it named may respond again.
+  if (ctx.operation !== "create" && submission.status === "spam") {
+    submission.responseKey = null;
+  }
+
   if (ctx.operation !== "create" && !updateNeedsChecking(submission, stored)) {
     return ctx.data;
   }

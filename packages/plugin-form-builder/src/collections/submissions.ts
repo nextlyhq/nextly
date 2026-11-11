@@ -40,6 +40,23 @@ function trustedSubmittedAt(context: HookContext): boolean {
   return context.req?.http === undefined && Boolean(context.data?.submittedAt);
 }
 
+/** The unique index one response per person rests on. */
+const RESPONSE_KEY_INDEX = {
+  fields: ["form", "responseKey"],
+  unique: true,
+};
+
+/** Whether two index declarations name the same columns and uniqueness. */
+function sameIndex(
+  index: { fields: readonly string[]; unique?: boolean },
+  other: { fields: readonly string[]; unique?: boolean }
+): boolean {
+  return (
+    index.fields.join("\u0000") === other.fields.join("\u0000") &&
+    (index.unique ?? false) === (other.unique ?? false)
+  );
+}
+
 /**
  * Generate the Form Submissions collection configuration.
  *
@@ -234,10 +251,6 @@ export function submissionsCollection(
     labels,
     fields: finalFields,
     timestamps: true,
-    // One response per person, held by the database: a second submission
-    // with the same key on the same form is refused at its insert, even when
-    // two arrive at once. A submission with no key is not constrained.
-    indexes: [{ fields: ["form", "responseKey"], unique: true }],
 
     // Submissions carry visitor-entered answers plus ipAddress/userAgent, so the
     // default `entry.*` events stay suppressed — otherwise every submission would
@@ -306,5 +319,17 @@ export function submissionsCollection(
 
     // Spread any additional overrides (excluding already used properties)
     ...overrides,
+
+    // One response per person, held by the database: a second submission
+    // with the same key on the same form is refused at its insert, even when
+    // two arrive at once. A submission with no key is not constrained. Kept
+    // beside any indexes the site adds, after the overrides, so customising
+    // the indexes cannot drop the one the rule depends on.
+    indexes: [
+      RESPONSE_KEY_INDEX,
+      ...(overrides.indexes ?? []).filter(
+        index => !sameIndex(index, RESPONSE_KEY_INDEX)
+      ),
+    ],
   };
 }
