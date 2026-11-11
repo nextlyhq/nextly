@@ -4,10 +4,11 @@
  * @module components/layout/sidebar/lib/standalone-plugin-landing
  */
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { filterCollectionItems } from "@admin/lib/permissions/authorization";
+import { capabilitiesAllow } from "@admin/hooks/useCurrentUserPermissions";
 import { resolveVisibleMenuItems } from "@admin/lib/plugins/menu";
 import { pluginPagePath } from "@admin/lib/plugins/plugin-route-registry";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
+import { resolveRoute } from "@admin/lib/routing";
 import type { PluginMetadata } from "@admin/types/branding";
 import type { AdminCapabilities } from "@admin/types/permissions";
 
@@ -70,11 +71,13 @@ export function standalonePluginLanding(
 
 /**
  * Whether the reader may open the plugin's landing, as the destination's own
- * guard decides: a collection by the readability the panel filters its
- * collections with, and one of the plugin's pages by the `requiredPermission`
- * its route carries, which `PermissionGuard` checks with `hasPermission`. A
- * landing the reader would be refused at falls through to the next rule, so
- * the rail never sends them to a refusal.
+ * guard decides: a collection address by the action its route asks of the
+ * collection (`resolveRoute`'s `entityAccess`: reading its list, creating an
+ * entry, reading a document's history), and one of the plugin's pages by the
+ * `requiredPermission` its route carries, which `PermissionGuard` checks with
+ * `hasPermission`. A landing the reader would be refused at, or one no route
+ * answers, falls through to the next rule, so the rail never sends them to a
+ * refusal.
  *
  * A landing that is neither is followed: the server serializes only one that
  * names one of the plugin's pages or collections.
@@ -88,9 +91,10 @@ function landingOpensFor(
   const [path = ""] = landing.split(/[?#]/, 1);
 
   if (path.startsWith(COLLECTIONS_PREFIX)) {
-    const [slug = ""] = path.slice(COLLECTIONS_PREFIX.length).split("/", 1);
+    const access = resolveRoute(path, "").entityAccess;
     return (
-      filterCollectionItems([{ name: slug }], reader.capabilities).length > 0
+      access !== undefined &&
+      capabilitiesAllow(reader.capabilities, access.slug, access.action)
     );
   }
 

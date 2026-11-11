@@ -23,10 +23,14 @@ import {
   standalonePluginLanding,
 } from "../lib/standalone-plugin-landing";
 
-/** The server's answer: the reader may read exactly `readable`. */
+/**
+ * The server's answer: the reader may read exactly `readable`, and create
+ * entries in exactly `creatable`.
+ */
 function answering(
   slugs: readonly string[],
-  readable: readonly string[]
+  readable: readonly string[],
+  creatable: readonly string[] = []
 ): CapabilitiesResponse {
   return {
     isSuperAdmin: false,
@@ -37,7 +41,10 @@ function answering(
         {
           kind: "collection" as const,
           read: readable.includes(slug),
-          create: false,
+          create: creatable.includes(slug),
+          // The create the admin sends, with no language, which the create
+          // page's guard asks.
+          createInDefaultLanguage: creatable.includes(slug),
           update: false,
           delete: false,
           publish: false,
@@ -64,7 +71,8 @@ const COLLECTIONS = [
 
 function reader(
   readable: readonly string[],
-  permissions: readonly string[] = []
+  permissions: readonly string[] = [],
+  creatable: readonly string[] = []
 ): StandaloneLandingReader {
   return {
     collections: COLLECTIONS,
@@ -73,7 +81,8 @@ function reader(
       false,
       answering(
         COLLECTIONS.map(c => c.name),
-        readable
+        readable,
+        creatable
       )
     ),
     can: permission => permissions.includes(permission),
@@ -168,6 +177,18 @@ describe("standalonePluginLanding", () => {
         reader([])
       )
     ).toBe("/admin/plugins/forms/reports");
+  });
+
+  it("asks of a landing collection address what its route asks, not only a read", () => {
+    const createForms = plugin({ landing: "/admin/collections/forms/create" });
+    // A reader who may read forms but not create one is refused by the create
+    // route's guard, so the rail opens the list instead.
+    expect(standalonePluginLanding(createForms, reader(["forms"]))).toBe(
+      "/admin/collections/forms"
+    );
+    expect(
+      standalonePluginLanding(createForms, reader(["forms"], [], ["forms"]))
+    ).toBe("/admin/collections/forms/create");
   });
 
   it("goes to the first collection in the panel's order, not the first declared", () => {
