@@ -182,13 +182,23 @@ test("a page's problems are counted on the tab", async ({ page }) => {
     slug: `long-title-${run}`,
   });
   await gotoAdmin(page, `/collections/${PAGES}/${id}`);
-  // Too long a title, and no description from any level.
-  await expect(seoTab(page)).toHaveAccessibleName("SEO (2 things to fix)");
+  /** The count beside the tab's label, as its name says it; none is 0. */
+  const countOf = async () => {
+    const name = (await seoTab(page).getAttribute("aria-label")) ?? "";
+    return Number(/\((\d+) things? to fix\)/.exec(name)?.[1] ?? 0);
+  };
+  // Too long a title, and no description from any level, besides what the
+  // page's structured data lacks on this site.
+  await expect(seoTab(page)).toHaveAccessibleName(
+    /^SEO \(\d+ things to fix\)$/
+  );
+  const before = await countOf();
+  expect(before).toBeGreaterThanOrEqual(2);
 
   await seoTab(page).click();
   await titleField(page).fill("Short");
   await descriptionField(page).fill("A description for the results page.");
-  await expect(seoTab(page)).toHaveAccessibleName(TAB);
+  await expect.poll(countOf).toBe(before - 2);
 });
 
 test("a new entry has the SEO tab, previewing what is typed before it is saved", async ({

@@ -20,6 +20,7 @@ export const SEO_PANEL_FIELDS = [
   "canonical",
   "canonicalElsewhere",
   "noindex",
+  "structuredDataType",
 ] as const;
 
 /** One value the panel edits. */

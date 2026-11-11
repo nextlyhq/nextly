@@ -20,6 +20,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useFormState, useWatch } from "react-hook-form";
 
+import type { SeoTabContext } from "../tab/contract";
 import { problemsBadge, seoProblems, type SeoProblem } from "../tab/problems";
 import { SEO_GROUP } from "../tab/typed";
 
@@ -86,11 +87,13 @@ function useChosenImage(imageId: string | undefined): ChosenImage | undefined {
  */
 function useProblemsBadge(
   answers: PanelAnswers | undefined,
+  structuredData: SeoTabContext["structuredData"],
   setBadge: DocumentTabProps["setBadge"]
 ): SeoProblem[] {
   const problems = useMemo(
-    () => (answers === undefined ? [] : seoProblems(answers.answer)),
-    [answers]
+    () =>
+      answers === undefined ? [] : seoProblems(answers.answer, structuredData),
+    [answers, structuredData]
   );
   const badge = useMemo(() => problemsBadge(problems), [problems]);
   useEffect(() => {
@@ -113,6 +116,7 @@ function useSeoFields(): Record<
     canonical: useDocumentField(`${SEO_GROUP}.canonical`),
     canonicalElsewhere: useDocumentField(`${SEO_GROUP}.canonicalElsewhere`),
     noindex: useDocumentField(`${SEO_GROUP}.noindex`),
+    structuredDataType: useDocumentField(`${SEO_GROUP}.structuredDataType`),
   };
 }
 
@@ -161,7 +165,7 @@ export function SeoTab({
     () => panelAnswers(levels, values, chosenImage),
     [levels, values, chosenImage]
   );
-  const problems = useProblemsBadge(answers, setBadge);
+  const problems = useProblemsBadge(answers, levels?.structuredData, setBadge);
 
   if (target === null) return null;
   const writable =

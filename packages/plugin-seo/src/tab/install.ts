@@ -8,6 +8,8 @@
  */
 import type { FieldConfig, PluginContributions } from "@nextlyhq/plugin-sdk";
 
+import type { ReadStructuredDataRules } from "../structured-data/rules";
+
 import { seoTabContributions, tabEditsGroup } from "./contributions";
 import { seoTabRoute } from "./route";
 
@@ -19,10 +21,15 @@ export function seoTabParts(setup: {
   fields: readonly FieldConfig[];
   /** The origin the plugin was configured with, where it was. */
   baseUrl: string | undefined;
+  /** Where structured data reads its rules from. */
+  readStructuredDataRules: ReadStructuredDataRules;
 }): Pick<PluginContributions, "admin"> & {
   routes: NonNullable<PluginContributions["routes"]>;
 } {
   const { collections, singles, fields, baseUrl } = setup;
+  const names = fields.flatMap(field =>
+    typeof field.name === "string" ? [field.name] : []
+  );
   return {
     // A group of fields the tab does not edit stays among the page's own
     // fields instead.
@@ -37,6 +44,8 @@ export function seoTabParts(setup: {
       seoTabRoute({
         collections,
         singles,
+        fields: names,
+        readStructuredDataRules: setup.readStructuredDataRules,
         ...(baseUrl === undefined ? {} : { baseUrl }),
       }),
     ],

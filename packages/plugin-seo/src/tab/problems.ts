@@ -2,8 +2,9 @@
  * A page's SEO problems, read from its answer: what the SEO tab counts beside
  * its label and marks beside the field each one belongs to.
  *
- * Only what the answer itself shows: a title or description longer than
- * Google shows, and either one missing from every level. The checks a site
+ * What the answer itself shows (a title or description longer than Google
+ * shows, or either one missing from every level) and what keeps the page's
+ * structured data out. The checks a site
  * publishes for its whole problem list grow from this one function, so the
  * tab and the list cannot count a page differently.
  *
@@ -19,15 +20,26 @@ export const DESCRIPTION_LIMIT = 160;
 
 /** One problem with a page's SEO, and the value it belongs to. */
 export interface SeoProblem {
-  id: "no-title" | "title-too-long" | "no-description" | "description-too-long";
+  id:
+    | "no-title"
+    | "title-too-long"
+    | "no-description"
+    | "description-too-long"
+    | "structured-data";
   /** The value it is about, where the tab marks it. */
-  value: "title" | "description";
+  value: "title" | "description" | "structuredData";
   /** What is wrong, in one plain sentence. */
   text: string;
 }
 
-/** Every problem the answer shows, the title's first. */
-export function seoProblems(answer: SeoAnswer): SeoProblem[] {
+/**
+ * Every problem the answer shows, the title's first, then what keeps the
+ * page's structured data out, where it was read.
+ */
+export function seoProblems(
+  answer: SeoAnswer,
+  structuredData?: { problems: readonly { message: string }[] }
+): SeoProblem[] {
   const problems: SeoProblem[] = [];
   const title = answer.title?.value;
   const description = answer.description?.value;
@@ -55,6 +67,13 @@ export function seoProblems(answer: SeoAnswer): SeoProblem[] {
       id: "description-too-long",
       value: "description",
       text: "The description is longer than Google shows.",
+    });
+  }
+  for (const problem of structuredData?.problems ?? []) {
+    problems.push({
+      id: "structured-data",
+      value: "structuredData",
+      text: problem.message,
     });
   }
   return problems;

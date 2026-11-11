@@ -211,6 +211,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     singles: singleTargets,
     fields: seoFields,
     baseUrl: options.baseUrl,
+    readStructuredDataRules,
   });
 
   const contributes: PluginContributions = {

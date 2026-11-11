@@ -146,15 +146,17 @@ The tab shows, in order:
   (its title, its excerpt), or the site's defaults. Typing marks it **Typed for this
   page**, with one action, **Go back to automatic**, that empties it again.
 - **Advanced**, closed until opened: hiding the page from search, its official address
-  (the canonical), a different title and description when shared, and the share image.
+  (the canonical), a different title and description when shared, the share image, and
+  the [structured data type](#structured-data), with what the type still lacks.
 
 The official address is the page's own public address. **Use another address** takes an
 address on the same site as typed; one on another site is used only once the person
 confirms the page first appeared there. Until then the page's own address stays in use.
 
 The count beside the tab's label is the number of problems the page's answer shows: a
-title longer than Google shows, a description that is too long, and a title or a
-description that no level supplies.
+title longer than Google shows, a description that is too long, a title or a
+description that no level supplies, and each detail the page's structured data type
+lacks.
 
 The tab's values come from the same answer the page's head is built from, worked out by
 the plugin's `POST /resolve` route for the document as it is typed. The route answers
@@ -166,7 +168,8 @@ The tab's component is `@nextlyhq/plugin-seo/admin#SeoTab`. `nextly generate:typ
 adds it to your app's generated component map, as it does every component a plugin
 declares.
 
-The tab edits the fields the plugin ships. A `fields` option whose group has fields the tab
+The tab edits the fields the plugin ships, and offers a control only for the ones the
+group declares. A `fields` option whose group has fields the tab
 does not edit (a focus keyword, say), or a field it cannot honour as declared (read-only,
 disabled, hidden or shown under a condition), keeps the whole group among the page's own fields
 instead, where each one can still be edited, and no tab is drawn.

@@ -7,7 +7,7 @@
  * @module admin/advanced
  */
 import { Button, Checkbox, Input, Switch, Textarea } from "@nextlyhq/ui";
-import { ChevronDown, TriangleAlert } from "lucide-react";
+import { Check, ChevronDown, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { SeoAnswer } from "../resolver/order";
@@ -52,6 +52,9 @@ export interface AdvancedProps {
 export function AdvancedSection(props: AdvancedProps): ReactNode {
   const [open, setOpen] = useState(props.defaultOpen);
   const id = useId();
+  const rows = advancedRows(props);
+  // Nothing to put under it where the group declares only the two fields.
+  if (rows.length === 0) return null;
   return (
     <section className="rounded-lg border border-border bg-card">
       <button
@@ -63,7 +66,7 @@ export function AdvancedSection(props: AdvancedProps): ReactNode {
       >
         <b className="text-sm font-semibold text-foreground">Advanced</b>
         <span className="min-w-0 flex-1 text-[12.5px] text-muted-foreground">
-          Hiding from search, official address, sharing
+          {summaryOf(rows.map(row => row.summary))}
         </span>
         {props.problemCount > 0 ? (
           <span
@@ -82,12 +85,136 @@ export function AdvancedSection(props: AdvancedProps): ReactNode {
         />
       </button>
       <div id={`${id}-body`} hidden={!open}>
-        <HideRow {...props} />
-        <OfficialAddressRow {...props} />
-        <SharedTitleRow {...props} />
-        <ShareImageRow {...props} />
+        {rows.map(({ key, Row: Drawn }) => (
+          <Drawn key={key} {...props} />
+        ))}
       </div>
     </section>
+  );
+}
+
+/** One row the section may draw, and how its name reads in the summary. */
+interface AdvancedRow {
+  key: string;
+  summary: string;
+  Row: (props: AdvancedProps) => ReactNode;
+}
+
+/**
+ * The rows for the fields the group declares: a control is offered only
+ * where its value can be stored. Every row while the group is not known yet.
+ */
+function advancedRows(props: AdvancedProps): AdvancedRow[] {
+  const has = (...names: string[]) =>
+    props.context === undefined ||
+    names.some(name => props.context?.fields.includes(name));
+  const rows: (AdvancedRow | false)[] = [
+    has("noindex") && {
+      key: "hide",
+      summary: "hiding from search",
+      Row: HideRow,
+    },
+    has("canonical") && {
+      key: "address",
+      summary: "official address",
+      Row: OfficialAddressRow,
+    },
+    has("socialTitle", "socialDescription", "ogImage") && {
+      key: "shared",
+      summary: "sharing",
+      Row: SharingRows,
+    },
+    props.context?.structuredData !== undefined && {
+      key: "structured",
+      summary: "structured data",
+      Row: StructuredDataRow,
+    },
+  ];
+  return rows.filter((row): row is AdvancedRow => row !== false);
+}
+
+/** The section's summary, "Hiding from search, official address, sharing". */
+function summaryOf(names: readonly string[]): string {
+  const text = names.join(", ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** The rows about shared links, each where its field is declared. */
+function SharingRows(props: AdvancedProps): ReactNode {
+  const has = (name: string) =>
+    props.context === undefined || props.context.fields.includes(name);
+  return (
+    <>
+      {has("socialTitle") || has("socialDescription") ? (
+        <SharedTitleRow {...props} />
+      ) : null}
+      {has("ogImage") ? <ShareImageRow {...props} /> : null}
+    </>
+  );
+}
+
+/** The type of thing Google is told the page is, and whether it is complete. */
+function StructuredDataRow({
+  values,
+  context,
+  writable,
+  onSet,
+}: AdvancedProps): ReactNode {
+  const id = useId();
+  const structured = context?.structuredData;
+  if (structured === undefined) return null;
+  const chosen = typedText(values.structuredDataType);
+  return (
+    <Row
+      label="Structured data type"
+      labelId={`${id}-label`}
+      help="Tells Google what kind of page this is, so it can show details like the author and date. Only types Google still shows are offered."
+      control={
+        <select
+          aria-labelledby={`${id}-label`}
+          value={chosen}
+          disabled={!writable}
+          onChange={event =>
+            onSet(
+              "structuredDataType",
+              event.target.value === "" ? null : event.target.value
+            )
+          }
+          className="h-9 min-w-[210px] cursor-pointer rounded-md border border-input bg-background px-3 text-sm text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <option value="">{structured.automatic.label} · automatic</option>
+          {structured.offered.map(type => (
+            <option key={type.key} value={type.key}>
+              {type.label}
+            </option>
+          ))}
+        </select>
+      }
+    >
+      {structured.problems.length > 0 ? (
+        <Note tone="warning">
+          {structured.problems.map(problem => (
+            <b key={problem.message} className="mr-1 font-semibold">
+              {problem.message}
+            </b>
+          ))}
+          Google gets no {structured.type.label} details for this page until
+          then.
+        </Note>
+      ) : (
+        <SourceRow>
+          <span className="inline-flex items-center gap-1 font-semibold text-success-text">
+            <Check aria-hidden="true" className="size-3.5" />
+            Complete
+          </span>
+          <span>
+            {structured.details.length > 0
+              ? structured.details.join(", ")
+              : "Generated from this page's content."}
+          </span>
+        </SourceRow>
+      )}
+    </Row>
   );
 }
 
@@ -117,6 +244,21 @@ function useOutsideChange(
 /** Stored values as one key, an absent value read as none. */
 const keyOf = (...stored: unknown[]): string =>
   JSON.stringify(stored.map(value => value ?? null));
+
+/**
+ * Whether the stored address was confirmed to be on another site: marked so,
+ * or, where the group keeps no mark, an address elsewhere at all, since one
+ * is stored only once confirmed.
+ */
+function confirmedElsewhere(
+  values: SeoPanelValues,
+  hosts: readonly string[]
+): boolean {
+  if (values.canonicalElsewhere === true) return true;
+  return (
+    checkCanonical(typedText(values.canonical), hosts).kind === "elsewhere"
+  );
+}
 
 /** One row of the section: its label and sentence, a control, and below. */
 function Row({
@@ -204,20 +346,20 @@ function OfficialAddressRow({
   onSet,
 }: AdvancedProps): ReactNode {
   const typed = typedText(values.canonical);
+  const hosts = context?.site.hosts ?? [];
   const [editing, setEditing] = useState(typed !== "");
   const [text, setText] = useState(typed);
-  const [confirmed, setConfirmed] = useState(
-    values.canonicalElsewhere === true
+  const [confirmed, setConfirmed] = useState(() =>
+    confirmedElsewhere(values, hosts)
   );
   const id = useId();
-  const hosts = context?.site.hosts ?? [];
   const wrote = useOutsideChange(
     keyOf(values.canonical, values.canonicalElsewhere),
     () => {
       const held = typedText(values.canonical);
       setText(held);
       setEditing(held !== "");
-      setConfirmed(values.canonicalElsewhere === true);
+      setConfirmed(confirmedElsewhere(values, hosts));
     }
   );
   const write = (next: string, elsewhere: boolean) => {
@@ -379,9 +521,12 @@ function AddressCheck({
 function SharedTitleRow({
   values,
   answer,
+  context,
   writable,
   onSet,
 }: AdvancedProps): ReactNode {
+  const has = (name: string) =>
+    context === undefined || context.fields.includes(name);
   const typedNow = () =>
     isTyped(values.socialTitle) || isTyped(values.socialDescription);
   const [on, setOn] = useState(typedNow);
@@ -421,42 +566,52 @@ function SharedTitleRow({
     >
       {on ? (
         <>
-          <Input
-            autoFocus
-            aria-label="Title when shared"
-            placeholder={answer?.title?.value ?? ""}
-            value={typed}
-            disabled={!writable}
-            onChange={event => write("socialTitle", event.target.value)}
-          />
-          <SourceRow>
-            {isTyped(typed) ? (
-              <Chip kind="typed">Typed for this page</Chip>
-            ) : (
-              <>
-                <Chip>Automatic</Chip>
-                <span>same as the Google title</span>
-              </>
-            )}
-          </SourceRow>
-          <Textarea
-            rows={2}
-            aria-label="Description when shared"
-            placeholder={answer?.description?.value ?? ""}
-            value={typedText(values.socialDescription)}
-            disabled={!writable}
-            onChange={event => write("socialDescription", event.target.value)}
-          />
-          <SourceRow>
-            {isTyped(values.socialDescription) ? (
-              <Chip kind="typed">Typed for this page</Chip>
-            ) : (
-              <>
-                <Chip>Automatic</Chip>
-                <span>same as the Google description</span>
-              </>
-            )}
-          </SourceRow>
+          {has("socialTitle") && (
+            <>
+              <Input
+                autoFocus
+                aria-label="Title when shared"
+                placeholder={answer?.title?.value ?? ""}
+                value={typed}
+                disabled={!writable}
+                onChange={event => write("socialTitle", event.target.value)}
+              />
+              <SourceRow>
+                {isTyped(typed) ? (
+                  <Chip kind="typed">Typed for this page</Chip>
+                ) : (
+                  <>
+                    <Chip>Automatic</Chip>
+                    <span>same as the Google title</span>
+                  </>
+                )}
+              </SourceRow>
+            </>
+          )}
+          {has("socialDescription") && (
+            <>
+              <Textarea
+                rows={2}
+                aria-label="Description when shared"
+                placeholder={answer?.description?.value ?? ""}
+                value={typedText(values.socialDescription)}
+                disabled={!writable}
+                onChange={event =>
+                  write("socialDescription", event.target.value)
+                }
+              />
+              <SourceRow>
+                {isTyped(values.socialDescription) ? (
+                  <Chip kind="typed">Typed for this page</Chip>
+                ) : (
+                  <>
+                    <Chip>Automatic</Chip>
+                    <span>same as the Google description</span>
+                  </>
+                )}
+              </SourceRow>
+            </>
+          )}
         </>
       ) : undefined}
     </Row>

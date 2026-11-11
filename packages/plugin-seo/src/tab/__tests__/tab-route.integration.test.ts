@@ -207,6 +207,11 @@ describe.each(getConfiguredTestDialects())(
         title: "Title",
         excerpt: "Summary",
       });
+      // The group's fields, and the page's structured data, since the group
+      // holds its type.
+      expect(answer.fields).toContain("structuredDataType");
+      expect(answer.structuredData?.chosen).toBe("automatic");
+      expect(answer.structuredData?.offered.length).toBeGreaterThan(1);
       expect(answer.site).toEqual({
         origin: "https://admin.example",
         hosts: ["admin.example"],

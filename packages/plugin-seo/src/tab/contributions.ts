@@ -11,6 +11,7 @@
  */
 import type { AdminContribution } from "@nextlyhq/plugin-sdk";
 
+import { STRUCTURED_DATA_FIELD } from "./contract";
 import { SEO_GROUP, TYPED_SEO_FIELDS } from "./typed";
 
 /** The tab's component, as the admin's component map names it. */
@@ -18,6 +19,16 @@ export const SEO_TAB_COMPONENT = "@nextlyhq/plugin-seo/admin#SeoTab";
 
 /** The tab's label, and its name in the address (`?tab=`). */
 const LABEL = "SEO";
+
+/**
+ * Every field of the `seo` group the tab has a control for: what a person
+ * types for the page, and the page's choice of structured data type. A
+ * control is offered only for the ones a group declares.
+ */
+const TAB_FIELDS: readonly string[] = [
+  ...TYPED_SEO_FIELDS,
+  STRUCTURED_DATA_FIELD,
+];
 
 /**
  * Whether a field's own admin options limit how it is edited: read-only,
@@ -49,11 +60,7 @@ export function tabEditsGroup(
     names.includes("metaTitle") &&
     names.includes("metaDescription") &&
     fields.every(field => !isGated(field.admin)) &&
-    names.every(
-      name =>
-        typeof name === "string" &&
-        (TYPED_SEO_FIELDS as readonly string[]).includes(name)
-    )
+    names.every(name => typeof name === "string" && TAB_FIELDS.includes(name))
   );
 }
 

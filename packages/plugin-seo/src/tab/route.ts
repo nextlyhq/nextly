@@ -29,8 +29,14 @@ import { z } from "nextly/zod";
 
 import type { Levels } from "../resolver/order";
 import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
+import type { ReadStructuredDataRules } from "../structured-data/rules";
 
-import { SEO_RESOLVE_PATH, type SeoTabContext } from "./contract";
+import {
+  SEO_RESOLVE_PATH,
+  STRUCTURED_DATA_FIELD,
+  type SeoTabContext,
+} from "./contract";
+import { tabStructuredData } from "./structured";
 import { withoutTyped } from "./typed";
 
 /** The site's rules, with the addresses it is served from in production. */
@@ -66,7 +72,11 @@ export interface SeoTabRouteSetup {
   singles: readonly string[];
   /** The origin the plugin was configured with, where it was. */
   baseUrl?: string;
+  /** The `seo` group's fields, by name. */
+  fields: readonly string[];
   readRules?: ReadTabRules;
+  /** Where structured data reads its rules from. */
+  readStructuredDataRules?: ReadStructuredDataRules;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -245,7 +255,27 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
         site: siteOf(rules, setup.baseUrl, req),
         typeLabel: typeLabelOf(declaration, body.slug),
         fieldLabels: fieldLabelsOf(declaration, levels),
+        fields: [...setup.fields],
       };
+      if (setup.fields.includes(STRUCTURED_DATA_FIELD)) {
+        // Read for the document as typed, its own choice of type included.
+        answer.structuredData = await tabStructuredData(
+          ctx,
+          {
+            ...input,
+            source:
+              body.kind === "collection"
+                ? { kind: "entry", collection: body.slug, entry: body.document }
+                : { kind: "single", slug: body.slug, document: body.document },
+          },
+          {
+            readRules,
+            ...(setup.readStructuredDataRules === undefined
+              ? {}
+              : { readStructuredDataRules: setup.readStructuredDataRules }),
+          }
+        );
+      }
       return Response.json(answer);
     },
   };

@@ -47,6 +47,27 @@ const CONTEXT: SeoTabContext = {
   site: { name: "Rext AI", origin: "https://rext.ai", hosts: ["rext.ai"] },
   typeLabel: "Blog post",
   fieldLabels: { title: "Title", excerpt: "Excerpt" },
+  fields: [
+    "metaTitle",
+    "metaDescription",
+    "socialTitle",
+    "socialDescription",
+    "ogImage",
+    "canonical",
+    "noindex",
+    "structuredDataType",
+  ],
+  structuredData: {
+    type: { key: "article", label: "Article" },
+    chosen: "type",
+    automatic: { key: "article", label: "Article" },
+    offered: [
+      { key: "article", label: "Article" },
+      { key: "webPage", label: "Web page" },
+    ],
+    problems: [{ message: "Missing: author." }],
+    details: ["Author", "Date published", "Image"],
+  },
 };
 
 /** The panel over values it keeps, as the tab keeps them in the form. */
@@ -54,7 +75,9 @@ function Harness({
   initial = {},
   reloaded,
   onWrite,
+  context = CONTEXT,
 }: {
+  context?: SeoTabContext;
   initial?: SeoPanelValues;
   /** Values the form is reset to from outside, as a reload does. */
   reloaded?: SeoPanelValues;
@@ -62,8 +85,8 @@ function Harness({
 }): ReactNode {
   const [values, setValues] = useState<SeoPanelValues>(initial);
   const answers = useMemo(
-    () => panelAnswers(CONTEXT, values, undefined),
-    [values]
+    () => panelAnswers(context, values, undefined),
+    [values, context]
   );
   return (
     <>
@@ -73,10 +96,14 @@ function Harness({
         </button>
       )}
       <SeoPanel
-        context={CONTEXT}
+        context={context}
         status="ready"
         answers={answers}
-        problems={answers === undefined ? [] : seoProblems(answers.answer)}
+        problems={
+          answers === undefined
+            ? []
+            : seoProblems(answers.answer, context.structuredData)
+        }
         values={values}
         chosenImage={undefined}
         writable
@@ -259,6 +286,13 @@ describe("Advanced", () => {
     expect(screen.getByRole("checkbox")).toBeChecked();
   });
 
+  it("reads a stored address elsewhere as confirmed, where the group keeps no mark", async () => {
+    const user = userEvent.setup();
+    render(<Harness initial={{ canonical: "https://medium.com/p/2" }} />);
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    expect(screen.getByRole("checkbox")).toBeChecked();
+  });
+
   it("edits the shared description beside the shared title", async () => {
     const user = userEvent.setup();
     const writes: [string, unknown][] = [];
@@ -271,6 +305,46 @@ describe("Advanced", () => {
     expect(writes.at(-1)).toEqual(["socialDescription", "Card"]);
     await user.click(screen.getByRole("tab", { name: "When shared" }));
     expect(screen.getByTestId("seo-share-card")).toHaveTextContent("Card");
+  });
+
+  it("offers the structured data type, automatic first, and says what is missing", async () => {
+    const user = userEvent.setup();
+    const writes: [string, unknown][] = [];
+    render(<Harness onWrite={(f, v) => writes.push([f, v])} />);
+    const advanced = screen.getByRole("button", { name: /Advanced/ });
+    // Its problem is counted on Advanced, where it is fixed.
+    expect(advanced).toHaveTextContent("structured data1");
+    await user.click(advanced);
+    const type = screen.getByRole("combobox", { name: "Structured data type" });
+    expect(type).toHaveValue("");
+    expect(
+      within(type)
+        .getAllByRole("option")
+        .map(option => option.textContent)
+    ).toEqual(["Article · automatic", "Article", "Web page"]);
+    expect(screen.getByText("Missing: author.")).toBeVisible();
+    await user.selectOptions(type, "webPage");
+    expect(writes.at(-1)).toEqual(["structuredDataType", "webPage"]);
+  });
+
+  it("offers no control for a field the group does not declare", () => {
+    const { structuredData: _none, ...rest } = CONTEXT;
+    render(
+      <Harness
+        context={{ ...rest, fields: ["metaTitle", "metaDescription"] }}
+      />
+    );
+    expect(screen.queryByRole("button", { name: /Advanced/ })).toBeNull();
+    expect(
+      screen.queryByRole("switch", { name: "Hide this page from search" })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Use another address" })
+    ).toBeNull();
+    expect(screen.queryByText("Share image")).toBeNull();
+    expect(
+      screen.queryByRole("combobox", { name: "Structured data type" })
+    ).toBeNull();
   });
 
   it("says why a typed address cannot be used", async () => {

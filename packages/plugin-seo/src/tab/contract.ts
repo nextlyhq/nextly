@@ -13,6 +13,31 @@ export const SEO_RESOLVE_PATH = "/resolve";
 /** The plugin's name, which its admin components address its routes by. */
 export const SEO_PLUGIN_NAME = "@nextlyhq/plugin-seo";
 
+/** The `seo` group's field holding the page's own structured data type. */
+export const STRUCTURED_DATA_FIELD = "structuredDataType";
+
+/** A structured data type as the tab offers it. */
+export interface TabStructuredType {
+  key: string;
+  label: string;
+}
+
+/** The page's structured data, as the tab shows and chooses it. */
+export interface TabStructuredData {
+  /** The type the page is described as. */
+  type: TabStructuredType;
+  /** Whether the page chose it, its content type did, or it is automatic. */
+  chosen: "page" | "type" | "automatic";
+  /** What the page is described as while it chooses nothing. */
+  automatic: TabStructuredType;
+  /** The types the page may choose from. */
+  offered: TabStructuredType[];
+  /** What keeps the type's markup out, each in one sentence. */
+  problems: { message: string }[];
+  /** The details the type is described with, as a person names them. */
+  details: string[];
+}
+
 /** What the route answers. */
 export interface SeoTabContext {
   /** Every level but the page's own, which the tab adds as it is typed. */
@@ -29,4 +54,8 @@ export interface SeoTabContext {
   typeLabel: string;
   /** What each of the document's fields a value came from is called. */
   fieldLabels: Record<string, string>;
+  /** The `seo` group's fields, so the tab offers a control for each alone. */
+  fields: string[];
+  /** The page's structured data, where the group holds its type. */
+  structuredData?: TabStructuredData;
 }
