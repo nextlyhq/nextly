@@ -97,7 +97,8 @@ export function useOutlineActions(
       setMenuOpen: setMenuFor,
       focusRow: id => focusRow(id),
       select: id => {
-        call().select(id);
+        // A registered block, or its prop, is no field: nothing to open.
+        if (!nodeOf(id)?.meta) call().select(id);
         focusRow(id);
       },
       addInside: id => call().addAt({ parentFieldId: id }),

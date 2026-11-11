@@ -12,6 +12,7 @@ import type { PageMetadataInput, PluginContext } from "@nextlyhq/plugin-sdk";
 
 import type { SeoLevel } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
+import { readSeoRules } from "../settings/rules";
 
 import {
   cardOrigin,
@@ -65,7 +66,13 @@ export async function shareImageProblems(
   input: PageMetadataInput,
   readers: ShareImageReaders = {}
 ): Promise<ShareImageProblem[]> {
-  const answer = await resolveSeo(ctx, input, readers.readRules);
+  // The rules the page's own head is answered with: the SEO settings when
+  // the caller gives none.
+  const answer = await resolveSeo(
+    ctx,
+    input,
+    readers.readRules ?? readSeoRules
+  );
   const image = answer.image;
   if (image === undefined) return [];
   const where = {

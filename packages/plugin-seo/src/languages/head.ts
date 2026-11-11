@@ -20,7 +20,8 @@ import {
 
 import { productionAddressesOf } from "../canonical";
 import { idOf, typeOf } from "../resolver/page-levels";
-import { noRules, overAnswer, type ReadRules } from "../resolver/provider";
+import { overAnswer, type ReadRules } from "../resolver/provider";
+import { readSeoRules } from "../settings/rules";
 
 import type { LanguageCodeProblem } from "./hreflang";
 import {
@@ -31,6 +32,7 @@ import {
 import {
   documentsIn,
   heldLanguages,
+  onceEach,
   otherLanguages,
   resolveIn,
   servedAt,
@@ -93,7 +95,7 @@ async function versionIn(
 export async function pageLanguageLinks(
   ctx: PluginContext,
   input: PageMetadataInput,
-  readRules: ReadRules = noRules
+  readRules: ReadRules = readSeoRules
 ): Promise<PageLanguageLinks> {
   const { type, key, document } = typeOf(input);
   const id = idOf(document);
@@ -101,7 +103,9 @@ export async function pageLanguageLinks(
   // Published in one language at most: there is nothing to link to.
   if (held === undefined || held.size < 2) return { links: [], problems: [] };
   const defaultLanguage = await ctx.publicAddresses.defaultLanguage();
-  const rules = await readRules(ctx, undefined);
+  // Read once for each language, not once for each version resolved in it.
+  const readOnce = onceEach(readRules);
+  const rules = await readOnce(ctx, undefined);
   const origin =
     productionAddressesOf(rules.productionAddresses)[0] ?? NO_ORIGIN;
   const versions: LanguageVersion[] = [];
@@ -113,13 +117,7 @@ export async function pageLanguageLinks(
     const version =
       paths === undefined
         ? null
-        : await versionIn(
-            ctx,
-            { type, id, paths },
-            language,
-            readRules,
-            origin
-          );
+        : await versionIn(ctx, { type, id, paths }, language, readOnce, origin);
     if (version !== null) versions.push(version);
   }
   const served = input.locale ?? defaultLanguage;
@@ -138,7 +136,7 @@ export async function pageLanguageLinks(
 export function withLanguageLinks(
   ctx: PluginContext,
   resolver: PageMetadataResolver,
-  readRules: ReadRules = noRules
+  readRules: ReadRules = readSeoRules
 ): PageMetadataResolver {
   return overAnswer(resolver, async (answer, input) => {
     const { links } = await pageLanguageLinks(ctx, input, readRules);

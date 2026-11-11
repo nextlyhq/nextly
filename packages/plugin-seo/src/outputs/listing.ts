@@ -34,6 +34,7 @@ import {
   absolute,
   documentsIn,
   heldLanguages,
+  onceEach,
   otherLanguages,
   resolveIn,
   servedAt,
@@ -212,8 +213,21 @@ export async function listPages(
 ): Promise<{ pages: ListedPage[]; problems: ListingProblem[] }> {
   const found = { pages: [] as ListedPage[], problems: [] as ListingProblem[] };
   const language = await recordLanguage(ctx);
+  // The site's rules are read once per language for the whole listing, not
+  // once a page; nothing is kept past it, so the next listing reads afresh.
+  const readRules =
+    options.readRules === undefined ? undefined : onceEach(options.readRules);
   for await (const batch of candidates(ctx, options)) {
-    await listBatch(ctx, batch, { ...options, language }, found);
+    await listBatch(
+      ctx,
+      batch,
+      {
+        ...options,
+        language,
+        ...(readRules === undefined ? {} : { readRules }),
+      },
+      found
+    );
   }
   return found;
 }

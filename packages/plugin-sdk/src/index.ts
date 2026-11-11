@@ -441,7 +441,10 @@ export type {
  *   `security.breachedPasswords`; `OpaqueSecrets` (`ctx.security.opaque`); and
  *   `OneTimeSecrets` (`ctx.security.secrets`) with `SecretData` and
  *   `TxOption`. Held experimental until a first-party plugin signs people in
- *   with them (see STABILITY.md). `PluginReceivedWebhooks`
+ *   with them (see STABILITY.md). `KeyedDigests` (`ctx.security.digests`),
+ *   keyed one-way digests under the plugin's own key that survive a secret
+ *   rotation, is experimental until a first-party plugin has shipped with it.
+ *   `PluginReceivedWebhooks`
  *   (`ctx.security.webhooks`), verifying a received webhook against a
  *   `standardWebhooks` or a plugin's own `InboundWebhookScheme` and claiming
  *   it once (`claimDelivery`, with `ClaimDeliveryOptions`, `DeliveryClaim`,
@@ -456,6 +459,7 @@ export type {
   PasswordCheck,
   BreachedPasswordsConfig,
   OpaqueSecrets,
+  KeyedDigests,
   OneTimeSecrets,
   SecretData,
   TxOption,
@@ -581,6 +585,17 @@ export { FRAMEWORK_CRAWL_EXCLUSIONS } from "nextly";
  */
 export { languageAddressOf } from "nextly";
 export type { LanguageAddress, LanguageAddressRule } from "nextly";
+
+/**
+ * The other way round: `addressOfRequest(url)` answers the language and the
+ * kept path a request asks for, by the same rule, so a Proxy handler can look
+ * an address up in a record kept by language and path. Intended to become
+ * stable with `languageAddressOf`.
+ *
+ * @experimental
+ */
+export { addressOfRequest } from "nextly";
+export type { KeptAddress } from "nextly";
 
 /**
  * Keeping every public address to one page. A plugin that keeps a record of

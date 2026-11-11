@@ -547,6 +547,7 @@ export {
   type PasswordHelper,
   type PasswordRules,
   type OpaqueSecrets,
+  type KeyedDigests,
   type OneTimeSecrets,
   type SecretData,
   type TxOption,
@@ -722,7 +723,9 @@ export {
 // declares it: the address a path kept in one language is opened at.
 // @experimental
 export {
+  addressOfRequest,
   languageAddressOf,
+  type KeptAddress,
   type LanguageAddress,
   type LanguageAddressRule,
 } from "./domains/i18n/language-addresses";

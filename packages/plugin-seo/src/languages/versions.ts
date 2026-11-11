@@ -189,6 +189,19 @@ export async function documentsIn(
   return found;
 }
 
+/** `readRules`, read at most once for each language it is asked in. */
+export function onceEach(readRules: ReadRules): ReadRules {
+  const read = new Map<string | undefined, ReturnType<ReadRules>>();
+  return (ctx, locale) => {
+    let rules = read.get(locale);
+    if (rules === undefined) {
+      rules = readRules(ctx, locale);
+      read.set(locale, rules);
+    }
+    return rules;
+  };
+}
+
 /**
  * The answer of a page's version in `language`, from its `document` as that
  * language serves it: what its head says, with no route's code or design,

@@ -102,7 +102,7 @@ export function OutlineTree({
             <OutlineRow
               key={node.id}
               row={item.row}
-              typeName={typeLabel(node.field.type)}
+              typeName={node.typeName ?? typeLabel(node.field.type)}
               error={errors.get(node.id)?.message}
               selected={node.id === selectedId}
               tabStop={node.id === tabStopId}

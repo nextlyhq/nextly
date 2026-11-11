@@ -50,6 +50,8 @@ import type {
   UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import type { AddressKind } from "../../../shared/address-rule";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
@@ -68,6 +70,7 @@ import { tablesChangedIn } from "../migrate/statement-targets";
 import {
   appMigrationInputs,
   type AppMigrationInputsArgs,
+  type HeldEntity,
 } from "../migrate-create/app-migration-inputs";
 import {
   buildDesiredSnapshotFromConfig,
@@ -88,12 +91,14 @@ import type {
 import { assertDeleteWithinThreshold } from "../pipeline/pre-cleanup/executor";
 import { validateDefaultValue } from "../pipeline/pre-cleanup/validate-default";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
+import { builtByFor } from "../pipeline/registered-collections";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
 import {
   classifyFieldKind,
   getColumnDescriptor,
   toSnakeCase,
+  type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import {
   uniquenessCanBeAnIndex,
@@ -101,7 +106,7 @@ import {
 } from "../services/index-name";
 import { loadUiSchema } from "../ui-schema/loader";
 import { uiToMinimal } from "../ui-schema/merge";
-import { mutateManifest } from "../ui-schema/mutate";
+import { mutateManifest, type ManifestKind } from "../ui-schema/mutate";
 
 /** What the writer works with: the app's database, config and folders. */
 export interface CollectionSaveDeps {
@@ -134,6 +139,11 @@ export type BuilderSaveSetup = Omit<
 
 /** One save of one collection. */
 export interface CollectionSave {
+  /**
+   * The kind of entity saved: a collection when absent. The writer reads
+   * everything that tells the kinds apart from `SAVE_KINDS`.
+   */
+  kind?: AddressKind;
   slug: string;
   /** The collection as it stood before the save; null for a create. */
   previous: UiSchemaEntity | null;
@@ -187,6 +197,49 @@ export interface CollectionSave {
   renamedFields?: ReadonlyArray<{ from: string; to: string }>;
   /** Override the clock for tests. */
   now?: Date;
+}
+
+/** What tells one kind's save apart from another's. */
+interface SaveKind {
+  kind: AddressKind;
+  /** The definition's list of the kind, which is also the generator's. */
+  manifest: ManifestKind;
+  /** How the kind's table is named (`uiToMinimal`). */
+  prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix;
+  /** The column rule the kind's Builder creator applies (`builtByFor`). */
+  builtBy: ColumnOrigin;
+}
+
+/**
+ * Each kind's save, as the writer reads it. One table, so a save of a Single
+ * or a field group takes its definition list, table name and column rule from
+ * the same place a collection's does, and nothing in the writer names a kind
+ * on its own.
+ */
+const SAVE_KINDS: Record<AddressKind, SaveKind> = {
+  collection: {
+    kind: "collection",
+    manifest: "collections",
+    prefix: "dc_",
+    builtBy: builtByFor("collection", true),
+  },
+  single: {
+    kind: "single",
+    manifest: "singles",
+    prefix: "single_",
+    builtBy: builtByFor("single", true),
+  },
+  fieldGroup: {
+    kind: "fieldGroup",
+    manifest: "components",
+    prefix: STORAGE_FORMAT.tablePrefix,
+    builtBy: builtByFor("fieldGroup", true),
+  },
+};
+
+/** The kind of entity `save` writes. */
+function kindOf(save: CollectionSave): SaveKind {
+  return SAVE_KINDS[save.kind ?? "collection"];
 }
 
 /** What a save wrote. */
@@ -436,6 +489,7 @@ async function planSave(
   deps: CollectionSaveDeps,
   save: CollectionSave
 ): Promise<SavePlan> {
+  const kind = kindOf(save);
   const current = withPreviousRecorded(
     await loadUiSchema({
       projectRoot: deps.projectRoot,
@@ -445,12 +499,12 @@ async function planSave(
   );
   // Named as the generator names it (`uiToMinimal`), so the scope is the
   // table the migration writes.
-  const table = uiToMinimal(collectionOf(save), "dc_").tableName;
+  const table = uiToMinimal(collectionOf(save), kind.prefix).tableName;
   return {
     current,
     next: (save.removedTogether ?? []).reduce(
-      (manifest, slug) => withCollection(manifest, slug, null),
-      withCollection(current, save.slug, save.entity)
+      (manifest, slug) => withEntity(manifest, kind, slug, null),
+      withEntity(current, kind, save.slug, save.entity)
     ),
     table,
     adoption: await adoptionFor(deps, save, current, table),
@@ -477,17 +531,23 @@ async function adoptionFor(
     await introspectLiveSnapshot(deps.adapter.getDrizzle(), dialect, [table])
   ).tables.find(t => t.name === table);
   if (live === undefined) return null;
+  const kind = kindOf(save);
   const inputs = await appMigrationInputs({
-    ...inputsArgs(deps, [save.previous], save.slug),
-    manifest: withCollection(current, save.slug, save.previous),
+    ...inputsArgs(deps, save, [save.previous]),
+    manifest: withEntity(current, kind, save.slug, save.previous),
   });
-  const declared = inputs.collections.find(c => c.slug === save.slug);
+  const declared = inputs[kind.manifest].find(c => c.slug === save.slug);
+  const placed = (list: ManifestKind) =>
+    declared !== undefined && list === kind.manifest ? [declared] : [];
   const mapped =
     declared === undefined
       ? undefined
-      : buildDesiredSnapshotFromConfig([declared], [], [], dialect).tables.find(
-          t => t.name === table
-        );
+      : buildDesiredSnapshotFromConfig(
+          placed("collections"),
+          placed("singles"),
+          placed("components"),
+          dialect
+        ).tables.find(t => t.name === table);
   return {
     table: live,
     conversions:
@@ -634,7 +694,7 @@ function storesJson(save: CollectionSave, name: string): boolean {
   const field = save.entity?.fields.find(f => f.name === name);
   return (
     field !== undefined &&
-    classifyFieldKind(field as FieldDefinition, "collection") === "json"
+    classifyFieldKind(field as FieldDefinition, kindOf(save).builtBy) === "json"
   );
 }
 
@@ -666,7 +726,7 @@ function refuseUnenforceableUniques(
     const column = getColumnDescriptor(
       field as FieldDefinition,
       dialect,
-      "collection"
+      kindOf(save).builtBy
     );
     if (column === null) continue;
     if (!uniquenessCanBeAnIndex(column.dialectType, dialect)) {
@@ -727,8 +787,8 @@ async function joiningJudgementOf(
         ? await joinRetries({
             adapter: deps.adapter,
             tableName: table,
-            // The Builder's column rule, which made the collection's tables.
-            builtBy: "collection",
+            // The Builder's column rule, which made the entity's tables.
+            builtBy: kindOf(save).builtBy,
             oldFields: namedFields(save.previous),
             newFields: namedFields(save.entity),
           })
@@ -769,7 +829,12 @@ async function writeFiles(
   if (plan.adoption !== null && save.previous !== null) {
     const adopted = await generateFor(deps, {
       ...held,
-      manifest: withCollection(plan.current, save.slug, save.previous),
+      manifest: withEntity(
+        plan.current,
+        kindOf(save),
+        save.slug,
+        save.previous
+      ),
       save,
       name: `${migrationSlug(save.slug)}_adopt`,
       table: plan.table,
@@ -801,7 +866,12 @@ async function writeFiles(
     convert.push(
       ...(await generateFor(deps, {
         ...held,
-        manifest: withCollection(plan.current, save.slug, save.previous),
+        manifest: withEntity(
+          plan.current,
+          kindOf(save),
+          save.slug,
+          save.previous
+        ),
         save,
         name: `${migrationSlug(save.slug)}_convert`,
         table: plan.table,
@@ -924,24 +994,29 @@ function withPreviousRecorded(
   manifest: UiSchemaManifest,
   save: CollectionSave
 ): UiSchemaManifest {
+  const list = kindOf(save).manifest;
   if (
     save.previous === null ||
-    manifest.collections.some(c => c.slug === save.slug)
+    manifest[list].some(c => c.slug === save.slug)
   ) {
     return manifest;
   }
-  return { ...manifest, collections: [...manifest.collections, save.previous] };
+  return { ...manifest, [list]: [...manifest[list], save.previous] };
 }
 
-/** The definition with `slug` replaced by `entity`, or removed where it is null. */
-function withCollection(
+/**
+ * The definition with the `kind` entity `slug` replaced by `entity`, or
+ * removed where it is null.
+ */
+function withEntity(
   manifest: UiSchemaManifest,
+  kind: SaveKind,
   slug: string,
   entity: UiSchemaEntity | null
 ): UiSchemaManifest {
   return entity === null
-    ? mutateManifest(manifest, { type: "delete", kind: "collections", slug })
-    : mutateManifest(manifest, { type: "upsert", kind: "collections", entity });
+    ? mutateManifest(manifest, { type: "delete", kind: kind.manifest, slug })
+    : mutateManifest(manifest, { type: "upsert", kind: kind.manifest, entity });
 }
 
 /** A file's text, or undefined where there is none. */
@@ -1027,7 +1102,7 @@ async function generateFor(
 ): Promise<string[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const inputs = await appMigrationInputs({
-    ...inputsArgs(deps, args.held, args.save.slug),
+    ...inputsArgs(deps, args.save, args.held),
     manifest: args.manifest,
   });
   const before = new Set(await sqlFiles(deps.migrationsDir));
@@ -1061,7 +1136,7 @@ async function generateFor(
     defaultLocale: deps.config.localization?.defaultLocale,
     onWarning: message => deps.logger.warn(message),
     scope: {
-      kind: "collection",
+      kind: kindOf(args.save).kind,
       slug: args.save.slug,
       tables: new Set([args.table]),
     },
@@ -1194,12 +1269,15 @@ function placedJunctions(
 /** What `appMigrationInputs` is asked with for this app, its definition aside. */
 function inputsArgs(
   deps: CollectionSaveDeps,
-  held: readonly UiSchemaEntity[] = [],
-  judged?: string
+  save: CollectionSave,
+  held: readonly UiSchemaEntity[] = []
 ): AppMigrationInputsArgs {
+  const { kind } = kindOf(save);
   return {
-    ...(held.length === 0 ? {} : { held }),
-    ...(judged === undefined ? {} : { judged }),
+    ...(held.length === 0
+      ? {}
+      : { held: held.map((entity): HeldEntity => ({ kind, entity })) }),
+    judged: { kind, slug: save.slug },
     config: deps.config,
     ...(deps.deferredExtends === undefined
       ? {}
