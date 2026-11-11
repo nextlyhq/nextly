@@ -26,6 +26,15 @@ export {
   ISSUE_SCAN_ROW_BUDGET,
 } from "./widget-source";
 export type { IssueChecks } from "./widget-source";
+// The listing every address-listing output reads, as the plugin's
+// `listedPages` service hands it out, and the AI crawler choices robots.txt
+// answers.
+export type {
+  ListedPage,
+  ListedPagesService,
+  ListingProblem,
+} from "./outputs/listing";
+export type { AiCrawlerChoice } from "./outputs/robots";
 export type {
   CollectionReads,
   EntriesPage,

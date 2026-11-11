@@ -2853,6 +2853,8 @@ function columnOriginOf(
   entity: MinimalConfigEntity,
   kind: I18nTransitionKind
 ): ColumnOrigin {
+  // The rule the push applies (`builtByFor`), so a Builder Single's or field group's table is
+  // described as its Builder creator made it, here too, and no file plans narrowing its columns.
   return builtByFor(kind, entity.settings?.source === "builder");
 }
 

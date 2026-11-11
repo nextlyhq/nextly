@@ -10,6 +10,7 @@ import {
   int as mysqlInt,
   boolean as mysqlBoolean,
   timestamp as mysqlTimestamp,
+  datetime as mysqlDatetime,
   json as mysqlJson,
   varchar as mysqlVarchar,
   double as mysqlDouble,
@@ -82,6 +83,7 @@ import {
 import {
   MAX_INDEX_NAME_LENGTH,
   columnTypeIsIndexable,
+  indexNameForColumn,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
 import {
@@ -176,6 +178,29 @@ const TIMESTAMP_DEFAULT: Record<SupportedDialect, string> = {
  */
 function timestampDefaultValue(dialect: SupportedDialect): string {
   return TIMESTAMP_DEFAULT[dialect].replace(/^DEFAULT\s+/, "");
+}
+
+/**
+ * The DEFAULT expression each SYSTEM column of a field group's table is created with, by column
+ * name: `structuralColumnDefaults` below, as a function of the dialect alone, so the desired schema
+ * a save and `migrate:create` plan from declares the defaults the table is created with.
+ */
+export function fieldGroupStructuralDefaults(
+  dialect: SupportedDialect
+): ReadonlyMap<string, string> {
+  // The timestamp keyword carries its own `DEFAULT ` prefix in the DDL table; the VALUE is what a
+  // comparison needs, so the prefix is stripped once, in `timestampDefaultValue`.
+  const timestamp = timestampDefaultValue(dialect);
+  return new Map([
+    [STORAGE_FORMAT.columns.order, "0"],
+    ["created_at", timestamp],
+    ["updated_at", timestamp],
+  ]);
+}
+
+/** The name of the index on a field group's `created_at`, as the desired schema names it. */
+function createdAtIndexName(tableName: string): string {
+  return indexNameForColumn(tableName, "created_at");
 }
 
 /**
@@ -301,6 +326,18 @@ export class FieldGroupSchemaService {
         `CREATE INDEX IF NOT EXISTS ${this.q}${parentIndexName}${this.q} ON ${this.q}${tableName}${this.q}(${parentColumns});`
       );
     }
+
+    // The index the desired schema has always declared on `created_at`, which a save and
+    // `migrate:create` plan from. Left out here, every table this made read as missing it, and its
+    // first save added it.
+    indexStatements.push(
+      this.createIndexSql(
+        createdAtIndexName(tableName),
+        tableName,
+        "created_at",
+        types.timestamp
+      )
+    );
 
     // A plain index on every column that references one entry, then on every
     // other column a field asks to index — one per column either way, by the
@@ -546,8 +583,15 @@ export class FieldGroupSchemaService {
       [STORAGE_FORMAT.columns.type]: mysqlVarchar(typeColumn, {
         length: 255,
       }),
-      created_at: mysqlTimestamp("created_at").defaultNow().notNull(),
-      updated_at: mysqlTimestamp("updated_at").defaultNow().notNull(),
+      // DATETIME, as the CREATE makes them and the desired schema declares them. Declared as
+      // TIMESTAMP here, any save that reached drizzle-kit converted both columns, taking on
+      // TIMESTAMP's 2038 limit and its time-zone conversion.
+      created_at: mysqlDatetime("created_at")
+        .default(sql.raw(timestampDefaultValue("mysql")))
+        .notNull(),
+      updated_at: mysqlDatetime("updated_at")
+        .default(sql.raw(timestampDefaultValue("mysql")))
+        .notNull(),
     };
 
     this.addFieldColumns(columns, fields, contributed);
@@ -712,14 +756,7 @@ export class FieldGroupSchemaService {
    * ask about and the ones the table actually gets are one expression.
    */
   structuralColumnDefaults(): ReadonlyMap<string, string> {
-    // The timestamp keyword carries its own `DEFAULT ` prefix in the DDL table; the VALUE is what a
-    // comparison needs, so the prefix is stripped once, in `timestampDefaultValue`.
-    const timestamp = timestampDefaultValue(this.dialect);
-    return new Map([
-      [STORAGE_FORMAT.columns.order, "0"],
-      ["created_at", timestamp],
-      ["updated_at", timestamp],
-    ]);
+    return fieldGroupStructuralDefaults(this.dialect);
   }
 
   /**
@@ -811,12 +848,17 @@ export class FieldGroupSchemaService {
    * The canonical descriptor's column for a field type this service does not map itself, or null
    * for a type it still maps below.
    *
-   * An icon's column is read from the descriptor for the SQL and the Drizzle table alike, so a
-   * field group's icon column is the column the desired schema and the diff compare against on
-   * every dialect: `text` on PostgreSQL and SQLite, `varchar(255)` on MySQL.
+   * An icon's and a text field's columns are read from the descriptor for the SQL and the Drizzle
+   * table alike, so they are the columns the desired schema and the diff compare against on every
+   * dialect. An icon is `text` on PostgreSQL and SQLite and `varchar(255)` on MySQL; a text field is
+   * bounded by its own `maxLength` and unbounded without one, by the descriptor's field-group rule.
+   * Mapped here a second time, the Drizzle table once declared a MySQL text field `varchar(255)`,
+   * and a save that reached drizzle-kit narrowed the TEXT column the CREATE had made.
    */
   private canonicalColumn(field: DataFieldConfig): ColumnDescriptor | null {
-    if (!isIconField(field) || !field.name) return null;
+    if (!field.name || !(isIconField(field) || isTextField(field))) {
+      return null;
+    }
     return getComponentRowColumnDescriptor(field, this.dialect, "fieldGroup");
   }
 
@@ -860,23 +902,8 @@ export class FieldGroupSchemaService {
     const types = SQL_COLUMN_TYPES[this.dialect];
 
     const canonical = this.canonicalColumn(field);
+    // A text field's column is the descriptor's too (`canonicalColumn`).
     if (canonical) return canonical.dialectType;
-    if (isTextField(field)) {
-      if (field.maxLength) return types.varchar(field.maxLength);
-      // A unique field that states no width takes the shared column rule's answer, which bounds it
-      // where the dialect cannot key TEXT (`textKindFor`), so this creator and every description
-      // of its table read one rule.
-      if ("unique" in field && field.unique === true) {
-        const described = getComponentRowColumnDescriptor(
-          field,
-          this.dialect,
-          "fieldGroup"
-        )?.dialectType;
-        // Bounded only where the rule bounds it (MySQL); elsewhere this creator's own spelling.
-        if (described?.startsWith("varchar(") === true) return described;
-      }
-      return types.text;
-    }
     if (
       isTextareaField(field) ||
       isRichTextField(field) ||
@@ -929,12 +956,24 @@ export class FieldGroupSchemaService {
 
   // Returns a Drizzle column builder — typed as `unknown` to avoid
   // depending on Drizzle's internal column builder types from the public API.
-  private mapFieldToPostgresColumn(field: DataFieldConfig): unknown {
+  /** A field's column name and whether it is required, as every dialect's mapper reads them. */
+  private columnNaming(
+    field: DataFieldConfig
+  ): { colName: string; isRequired: boolean } | null {
     if (!("name" in field) || !field.name) return null;
-    const isRequired = "required" in field && field.required === true;
-    const colName = this.toSnakeCase(field.name);
+    return {
+      colName: this.toSnakeCase(field.name),
+      isRequired: "required" in field && field.required === true,
+    };
+  }
 
-    if (isTextField(field) || isEmailField(field) || isPasswordField(field)) {
+  private mapFieldToPostgresColumn(field: DataFieldConfig): unknown {
+    const named = this.columnNaming(field);
+    if (named === null) return null;
+    const { colName, isRequired } = named;
+
+    // A text field's column is the descriptor's (`canonicalColumn`).
+    if (isEmailField(field) || isPasswordField(field)) {
       return isRequired ? pgText(colName).notNull() : pgText(colName);
     }
     if (
@@ -977,11 +1016,12 @@ export class FieldGroupSchemaService {
   }
 
   private mapFieldToMySQLColumn(field: DataFieldConfig): unknown {
-    if (!("name" in field) || !field.name) return null;
-    const isRequired = "required" in field && field.required === true;
-    const colName = this.toSnakeCase(field.name);
+    const named = this.columnNaming(field);
+    if (named === null) return null;
+    const { colName, isRequired } = named;
 
-    if (isTextField(field) || isEmailField(field) || isPasswordField(field)) {
+    // A text field's column is the descriptor's (`canonicalColumn`).
+    if (isEmailField(field) || isPasswordField(field)) {
       return isRequired
         ? mysqlVarchar(colName, { length: 255 }).notNull()
         : mysqlVarchar(colName, { length: 255 });
@@ -1032,12 +1072,12 @@ export class FieldGroupSchemaService {
   }
 
   private mapFieldToSQLiteColumn(field: DataFieldConfig): unknown {
-    if (!("name" in field) || !field.name) return null;
-    const isRequired = "required" in field && field.required === true;
-    const colName = this.toSnakeCase(field.name);
+    const named = this.columnNaming(field);
+    if (named === null) return null;
+    const { colName, isRequired } = named;
 
+    // A text field's column is the descriptor's (`canonicalColumn`).
     if (
-      isTextField(field) ||
       isEmailField(field) ||
       isPasswordField(field) ||
       isTextareaField(field) ||

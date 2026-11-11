@@ -547,6 +547,7 @@ export {
   type PasswordHelper,
   type PasswordRules,
   type OpaqueSecrets,
+  type KeyedDigests,
   type OneTimeSecrets,
   type SecretData,
   type TxOption,
@@ -702,6 +703,11 @@ export { listPageNumber, listPageOf } from "./runtime/routing/slug-param";
 // those reads, such as a plugin's page metadata.
 // @experimental
 export { nextlyTags } from "./runtime/cache/nextly-tags";
+
+// The paths every robots.txt of a Nextly site keeps crawlers out of, read
+// by `nextlyRobots` and by a plugin that serves the file.
+// @experimental
+export { FRAMEWORK_CRAWL_EXCLUSIONS } from "./shared/crawl-exclusions";
 
 // Where an entry is served, as the site declares it: one answer for every
 // reader of a page's public address.
