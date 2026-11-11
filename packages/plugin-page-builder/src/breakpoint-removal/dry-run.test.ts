@@ -4,7 +4,7 @@
  * may read, and never reported as nothing where something could not be read.
  */
 import { DEFAULT_LIMITS, type NamedClass } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { documentKeyOf, type HostAddress } from "../host-rewrite/contract";
 import type { HostDocument, HostRead } from "../host-rewrite/rewrite";
@@ -333,26 +333,72 @@ describe("a breakpoint removal counted across the site", () => {
     expect(run.removed[2]?.documents.named[0]).toBe("tv-0 (draft)");
   });
 
-  it("asks once for saved titles that run out of time, and keeps the names it has", async () => {
-    const deps = site([
-      {
-        host: entry("pages", "p1"),
-        published: page(styled("a", { locked: true })),
-      },
-    ]);
+  /**
+   * A dry run over one locked page, so the page is in both lists, whose saved
+   * titles never answer. Resolves `asked` once the first list has asked.
+   */
+  function stalledSavedTitles(deadline: Date) {
     const asks: number[] = [];
-    const run = await countRemoval(MOBILE, {
-      ...deps,
+    let firstAsk: () => void = () => undefined;
+    const asked = new Promise<void>(resolve => {
+      firstAsk = resolve;
+    });
+    const running = countRemoval(MOBILE, {
+      ...site([
+        {
+          host: entry("pages", "p1"),
+          published: page(styled("a", { locked: true })),
+        },
+      ]),
       savedTitles: hosts => {
         asks.push(hosts.length);
+        firstAsk();
         return new Promise(() => {});
       },
-      deadline: new Date(Date.now() + 100),
+      deadline,
     });
-    // Named in both lists by the access read's title, and asked only once.
-    expect(run.removed[0]?.documents.named).toEqual(["pages/p1"]);
-    expect(run.removed[0]?.locked.named).toEqual(["pages/p1"]);
-    expect(asks).toEqual([1]);
+    return { asks, asked, running };
+  }
+
+  it("asks once for saved titles that run out of time, and keeps the names it has", async () => {
+    vi.useFakeTimers();
+    try {
+      const { asks, asked, running } = stalledSavedTitles(
+        new Date(Date.now() + 100)
+      );
+      await asked;
+      await vi.advanceTimersByTimeAsync(100);
+      const run = await running;
+      // Named in both lists by the access read's title, and asked only once.
+      expect(run.removed[0]?.documents.named).toEqual(["pages/p1"]);
+      expect(run.removed[0]?.locked.named).toEqual(["pages/p1"]);
+      expect(asks).toEqual([1]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks once for saved titles even when its timer fires before the clock reaches the deadline", async () => {
+    // Node measures a timer from the event loop's cached time, which lags the
+    // clock on a busy process, so the wait can end a little early.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let clock = Date.now();
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      const { asks, asked, running } = stalledSavedTitles(
+        new Date(clock + 100)
+      );
+      await asked;
+      await vi.advanceTimersByTimeAsync(100);
+      clock += 100;
+      await vi.advanceTimersByTimeAsync(100);
+      const run = await running;
+      expect(run.removed[0]?.locked.named).toEqual(["pages/p1"]);
+      expect(asks).toEqual([1]);
+    } finally {
+      now.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("counts the whole site however slowly the caller's names come", async () => {
