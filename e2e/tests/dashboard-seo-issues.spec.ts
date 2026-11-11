@@ -45,6 +45,12 @@ const PROBLEMS_SCREEN = "plugins/nextlyhq-plugin-seo/problems";
 /** The kind of problem a title longer than Google shows is listed under. */
 const LONG_TITLE = "Title longer than Google shows";
 
+/** One bar of the card's answer. */
+interface Bucket {
+  value: string;
+  count: number;
+}
+
 /** One problem of the list, as far as this spec reads it. */
 interface Problem {
   kind: string;
@@ -67,7 +73,7 @@ interface DigestItem {
 
 /** One answer of the dashboard's query route. */
 type Slot =
-  | { ok: true; result: { items?: DigestItem[] } }
+  | { ok: true; result: { items?: DigestItem[]; buckets?: Bucket[] } }
   | { ok: false; code?: string };
 
 let admin: APIRequestContext;
@@ -225,6 +231,22 @@ test("the SEO issues card draws the problem list by kind", async ({ page }) => {
   const list = counted(await listNaming(admin, title));
   expect(list.some(problem => problem.kind === "longTitle")).toBe(true);
 
+  // The card's answer, as the dashboard's query route gives it to the same
+  // person: a bar per kind, as many problems as the list holds.
+  const slot = await askDashboard(page.request, { widget: CARD, settings: {} });
+  expect(slot.ok, JSON.stringify(slot)).toBe(true);
+  const buckets = slot.ok
+    ? ((slot.result as { buckets?: Bucket[] }).buckets ?? [])
+    : [];
+  expect(
+    buckets.find(bucket => bucket.value === LONG_TITLE)?.count ?? 0
+  ).toBeGreaterThan(0);
+  expect(buckets.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(
+    list.length
+  );
+
+  // Drawn on the dashboard: the bars view draws as many rows as the card's
+  // size has room for, each with its count.
   await gotoAdmin(page, "/");
   await placeCard(page);
   await gotoAdmin(page, "/");
@@ -233,11 +255,12 @@ test("the SEO issues card draws the problem list by kind", async ({ page }) => {
     .filter({ visible: true });
   await expect(card).toBeVisible();
   const bars = await drawnBars(card);
-
-  // As many problems as the list holds, the long title among them. The bars
-  // view orders its rows by count, so totals and one named bar are asserted.
-  expect(bars[LONG_TITLE] ?? 0).toBeGreaterThan(0);
-  expect(Object.values(bars).reduce((sum, n) => sum + n, 0)).toBe(list.length);
+  expect(Object.keys(bars).length).toBeGreaterThan(0);
+  for (const [kind, count] of Object.entries(bars)) {
+    expect(buckets.find(bucket => bucket.value === kind)?.count, kind).toBe(
+      count
+    );
+  }
 });
 
 test("its count is a Needs attention line linked to the problem list", async ({
