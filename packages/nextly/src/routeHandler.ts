@@ -63,6 +63,7 @@ import {
   getDashboardPins,
   postDashboardPin,
 } from "./api/dashboard-pins";
+import { getDashboardDiagnostics } from "./api/dashboard-diagnostics";
 import { getDashboardSetup, putDashboardSetup } from "./api/dashboard-setup";
 import { getDashboardSummary } from "./api/dashboard-summary";
 import {
@@ -135,6 +136,7 @@ import {
   SYSTEM_WRITE_POLICY,
   type RouteGrant,
 } from "./domains/auth/system-write-policy";
+import { recordServerError } from "./domains/health/server-errors";
 import {
   appLocalization,
   withCurrentLanguages,
@@ -495,6 +497,8 @@ async function handleDashboardRequest(
       return postDashboardNewType(req);
     case "getDashboardSetup":
       return getDashboardSetup(req);
+    case "getDashboardDiagnostics":
+      return getDashboardDiagnostics(req);
     case "putDashboardSetup":
       return putDashboardSetup(req);
     default:
@@ -2853,6 +2857,9 @@ export function createDynamicHandlers(options?: {
       response,
       effectiveRequestId
     );
+    // Every verb's server error, counted toward System health's "errors in
+    // the last 24 hours"; once per request, however many boundaries it passed.
+    if (identifiedResponse.status >= 500) recordServerError(req);
     // Imported here rather than at module scope, matching how this file already
     // reaches the logger, so the route entry point keeps its import graph.
     const { getNextlyLogger: resolveLogger } = await import(

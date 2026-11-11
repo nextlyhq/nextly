@@ -4,6 +4,7 @@
 import { getUnstableRethrow } from "../actions/next-runtime";
 import { runWithAccessMemo } from "../auth/access/request-memo";
 import { isDbError } from "../database/errors";
+import { recordServerError } from "../domains/health/server-errors";
 import { NextlyError } from "../errors/nextly-error";
 import { runWithRequestScope } from "../hooks/request-scope";
 import {
@@ -199,6 +200,11 @@ export function withErrorHandler<TArgs extends unknown[]>(
 
     // Always set X-Request-Id on the way out, unless the handler already did.
     response = withRequestIdHeader(response, requestId);
+
+    // A server error, thrown or answered, counts toward System health's
+    // "errors in the last 24 hours"; once per request, however many
+    // boundaries it passed.
+    if (response.status >= 500) recordServerError(req);
 
     // Written here rather than where they were collected, for two reasons.
     //
