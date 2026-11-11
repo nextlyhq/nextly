@@ -1,4 +1,4 @@
-import { Button } from "@nextlyhq/ui";
+import { Button, PageHeader } from "@nextlyhq/ui";
 import type React from "react";
 
 import { CollectionBreadcrumbs } from "@admin/components/features/collection-management/breadcrumbs";
@@ -26,33 +26,30 @@ const CollectionsPage: React.FC = () => {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <div className="mb-6">
+        <div className="mb-6 empty:hidden">
           <CollectionBreadcrumbs currentPage="list" />
         </div>
 
         {/* Page header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">
-              Collections
-            </h1>
-            {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-            <p className="text-sm font-normal text-muted-foreground mt-1">
-              Manage collections and their configuration
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link
-              href={ROUTES.BUILDER_COLLECTIONS_NEW}
-              className="w-full sm:w-auto"
-            >
-              <Button size="md">
-                <Plus className="h-4 w-4" />
-                <span>New Collection</span>
-              </Button>
-            </Link>
-          </div>
-        </div>
+        <PageHeader
+          title="Collections"
+          description="Manage collections and their configuration"
+          actions={
+            <>
+              <div className="flex items-center gap-2">
+                <Link
+                  href={ROUTES.BUILDER_COLLECTIONS_NEW}
+                  className="w-full sm:w-auto"
+                >
+                  <Button size="md">
+                    <Plus className="h-4 w-4" />
+                    <span>New Collection</span>
+                  </Button>
+                </Link>
+              </div>
+            </>
+          }
+        />
 
         {/* Collection table */}
         <CollectionTablePage />

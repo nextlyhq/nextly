@@ -61,6 +61,11 @@ export function deriveCompanionSpec(
   return { ...companionSpecShell(args), columns };
 }
 
+/** The table a main table's translated values are kept in. */
+export function companionTableOf(mainTable: string): string {
+  return `${mainTable}_locales`;
+}
+
 /**
  * The companion an entity's translation uses, named as `deriveCompanionSpec` names it, with no
  * columns: for a change that must still address the companion once no field of the entity is
@@ -79,7 +84,7 @@ export function companionSpecShell(args: DeriveArgs): CompanionMigrationSpec {
     collection: args.slug,
     ...(args.kind !== undefined ? { kind: args.kind } : {}),
     mainTable,
-    companionTable: `${mainTable}_locales`,
+    companionTable: companionTableOf(mainTable),
     defaultLocale: args.defaultLocale,
     parentIdType: parentIdType(args.dialect),
     columns: [],

@@ -34,7 +34,6 @@ export type {
 } from "./error-fallbacks";
 
 // Theme
-export { ThemeToggle } from "./theme-toggle";
 
 // Password
 export { PasswordStrengthIndicator } from "./password-strength-indicator";

@@ -44,6 +44,8 @@ type Props = {
   defining?: ReactNode;
   /** What the defining settings are called, as a group ("Dropdown settings"). */
   definingLabel?: string;
+  /** Whether Width is offered; the surface decides. */
+  width?: boolean;
   /** Drawn after the common settings: the type's and the surface's own. */
   children?: ReactNode;
 };
@@ -98,6 +100,7 @@ export function GeneralTab({
   apiPath,
   defining,
   definingLabel,
+  width = true,
   children,
 }: Props): JSX.Element {
   const set = <K extends keyof BuilderField>(key: K, value: BuilderField[K]) =>
@@ -167,11 +170,13 @@ export function GeneralTab({
         }}
       />
 
-      <WidthChoice
-        value={field.admin?.width ?? "100%"}
-        readOnly={readOnly}
-        onChange={width => setAdmin({ width })}
-      />
+      {width && (
+        <WidthChoice
+          value={field.admin?.width ?? "100%"}
+          readOnly={readOnly}
+          onChange={next => setAdmin({ width: next })}
+        />
+      )}
 
       {children}
     </div>

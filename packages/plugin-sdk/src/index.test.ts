@@ -66,6 +66,12 @@ describe("the dashboard widget surface the SDK publishes", () => {
 describe("the content-type scope the SDK publishes", () => {
   // Through the SDK's own entry point: a plugin imports only from here, and a
   // type-only re-export would compile and then be `undefined` at runtime.
+  it("re-exports publicAddressOf and typesWithoutAddress, which a plugin reads addresses through", async () => {
+    const sdk = await import("./index");
+    expect(typeof sdk.publicAddressOf).toBe("function");
+    expect(typeof sdk.typesWithoutAddress).toBe("function");
+  });
+
   it("re-exports typesReachedBy, which a plugin's extend scope is judged by", async () => {
     const sdk = await import("./index");
     const reached = sdk.typesReachedBy(

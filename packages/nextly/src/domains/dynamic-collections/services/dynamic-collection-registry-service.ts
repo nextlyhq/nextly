@@ -2,7 +2,20 @@ import { createHash } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { eq, and, or, like, asc, desc, count, inArray, sql } from "drizzle-orm";
+import {
+  eq,
+  and,
+  or,
+  like,
+  asc,
+  desc,
+  count,
+  inArray,
+  notInArray,
+  sql,
+  type Column,
+  type SQL,
+} from "drizzle-orm";
 
 import { resolveRelations } from "../../../database/resolve-relations";
 import { NextlyError } from "../../../errors";
@@ -130,6 +143,50 @@ export interface ListCollectionsOptions {
    * differs by dialect.
    */
   slugAllowlist?: string[];
+  /**
+   * Leave out collections whose `slug` is in this list: the plugins'
+   * collections, on the list of the site's own. A condition on the query, so
+   * the count and the page agree; with an allowlist both apply, so it only
+   * ever removes rows. `undefined` or `[]` denies nothing.
+   */
+  slugDenylist?: string[];
+}
+
+/** The slug lists a collections list is limited by. */
+export type CollectionSlugLists = Pick<
+  ListCollectionsOptions,
+  "slugAllowlist" | "slugDenylist"
+>;
+
+/**
+ * The WHERE conditions a list's slug lists become, for the count and the page
+ * alike: an `IN` for the allowlist, a `NOT IN` for a denylist that names a
+ * slug, ANDed by the caller.
+ *
+ * An empty allowlist has no condition: it means nothing is visible, which
+ * the list answers before any query, so being asked for one is a caller's
+ * mistake. Refused rather than rendered as `IN ()`, whose meaning differs by
+ * dialect.
+ */
+export function collectionSlugConditions(
+  slugColumn: Column,
+  lists: CollectionSlugLists
+): SQL[] {
+  const conditions: SQL[] = [];
+  if (lists.slugAllowlist) {
+    if (lists.slugAllowlist.length === 0) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "an empty slug allowlist reached the query builder",
+        },
+      });
+    }
+    conditions.push(inArray(slugColumn, lists.slugAllowlist));
+  }
+  if (lists.slugDenylist && lists.slugDenylist.length > 0) {
+    conditions.push(notInArray(slugColumn, lists.slugDenylist));
+  }
+  return conditions;
 }
 
 export interface ListCollectionsResponse<
@@ -489,6 +546,7 @@ export class DynamicCollectionRegistryService extends BaseService {
       includeSchema = true as TIncludeSchema,
       source,
       slugAllowlist,
+      slugDenylist,
     } = options || {};
 
     // An empty allowlist means the caller may see nothing. Answered here
@@ -504,14 +562,14 @@ export class DynamicCollectionRegistryService extends BaseService {
       };
     }
 
-    const conditions = [];
-
-    // 🔴 A CONDITION, not a filter over the result. Both the count below and
+    // 🔴 CONDITIONS, not a filter over the result. Both the count below and
     // the page query read `whereClause`, so the total describes exactly the
-    // rows this caller may see and `totalPages` counts pages of those.
-    if (slugAllowlist) {
-      conditions.push(inArray(this.dynamicCollections.slug, slugAllowlist));
-    }
+    // rows this caller may see and `totalPages` counts pages of those. The
+    // denylist (the plugins' collections, on the site's own list) the same.
+    const conditions: (SQL | undefined)[] = collectionSlugConditions(
+      this.dynamicCollections.slug,
+      { slugAllowlist, slugDenylist }
+    );
 
     if (search) {
       const searchPattern = `%${search}%`;

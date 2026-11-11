@@ -74,8 +74,11 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  * - `removed-from-code-singles-list`: the Singles list it reads is the Schema
  *   Builder's, which a production build turns off.
  * - `builder-field-gates`, `builder-runtime-collection`, `builder-nested-field`,
- *   `builder-repeater-row`: each makes its collection through the Schema
- *   Builder's own calls.
+ *   `builder-repeater-row`, `release-add-documents`, `template-addresses`:
+ *   each makes its collection through the Schema Builder's own calls.
+ * - `notification-bell`: the bell lists the Schema Builder's changes, so the
+ *   admin offers it only where the builder runs, and a production build hides
+ *   it with the builder.
  * - `builder-fonts`: its stand-in font catalogue is plain http on localhost,
  *   which only a development server may reach; a production server rightly
  *   refuses it.
@@ -90,6 +93,9 @@ const DEV_SPECS = [
   "**/builder-runtime-collection.spec.ts",
   "**/builder-nested-field.spec.ts",
   "**/builder-repeater-row.spec.ts",
+  "**/release-add-documents.spec.ts",
+  "**/template-addresses.spec.ts",
+  "**/notification-bell.spec.ts",
   "**/builder-canvas-embed.spec.ts",
   "**/removed-from-code-singles-list.spec.ts",
   "**/builder-fonts.spec.ts",

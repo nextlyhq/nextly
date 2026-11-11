@@ -1,6 +1,9 @@
 import { expectTypeOf } from "vitest";
 import type { ComponentType, ReactNode } from "react";
-import type { FieldTypeCatalogEntry } from "nextly/field-catalog";
+import type {
+  FieldTypeCatalogEntry,
+  FieldValidationRule,
+} from "nextly/field-catalog";
 
 import type { PluginAdminContributions as RootAdminContributions } from "@nextlyhq/plugin-sdk";
 import * as adminEntry from "@nextlyhq/plugin-sdk/admin";
@@ -247,6 +250,8 @@ expectTypeOf<adminEntry.FieldPickerProps>().toEqualTypeOf<{
   config: adminEntry.FieldPickerConfig;
   title?: string;
   placement?: string;
+  initialLabel?: string;
+  offerAddAnother?: boolean;
   onCancel: () => void;
   onAdd: (
     choice: adminEntry.FieldPickerChoice,
@@ -319,7 +324,20 @@ expectTypeOf<adminEntry.FieldSettingsSurface>().toEqualTypeOf<{
       ComponentType<adminEntry.FieldSettingsSurfaceControlProps>
     >
   >;
-  conditions: "sibling" | "none";
+  conditions:
+    | "sibling"
+    | "none"
+    | ComponentType<adminEntry.FieldSettingsConditionsProps>;
+  validationRules?: (
+    type: string,
+    allowed: readonly FieldValidationRule[]
+  ) => readonly FieldValidationRule[];
+  displaySwitches?: boolean;
+  widthSetting?: boolean;
+  pluginSettings?: boolean;
+  typeSettings?: Readonly<
+    Partial<Record<string, adminEntry.FieldTypeSettings>>
+  >;
 }>();
 expectTypeOf<adminEntry.FixedFieldSetting>().toEqualTypeOf<{
   setting: "name" | "type";

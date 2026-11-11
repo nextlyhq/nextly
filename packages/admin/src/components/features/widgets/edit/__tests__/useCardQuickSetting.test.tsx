@@ -328,7 +328,7 @@ describe("the card's size, changed at rest", () => {
     expect(result.current.popover?.size?.size).toEqual({ w: 4, h: 3 });
     act(() => result.current.popover?.changeSize({ w: 12, h: 3 }));
     expect(resize.mock.calls[0]?.[0]).toEqual({ w: 12, h: 3 });
-    expect(toasts()).toEqual(["Activity: Size set to 12 columns by 3 rows."]);
+    expect(toasts()).toEqual(["Activity: Size set to 100% wide."]);
     pressUndo();
     expect(resize.mock.calls.at(-1)?.[0]).toEqual({ w: 4, h: 3 });
   });
@@ -428,7 +428,7 @@ describe("an Undo offered at rest, once its card is removed", () => {
       initialProps: base(settingsWrite, { size: { w: 4, h: 3 } }),
     });
     act(() => result.current.popover?.changeSize({ w: 12, h: 3 }));
-    expect(toasts()).toEqual(["Activity: Size set to 12 columns by 3 rows."]);
+    expect(toasts()).toEqual(["Activity: Size set to 100% wide."]);
 
     unmount();
     expect(toast.dismiss).toHaveBeenCalledWith("card-change-p1");
