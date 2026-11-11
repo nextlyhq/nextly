@@ -110,7 +110,8 @@ interface DeclaredWidgetShape {
   /** The card's loading shape and add-panel sketch, checked at startup. */
   readonly skeleton?: WidgetSkeleton;
   /**
-   * The cases the development preview page draws the card's ready state from,
+   * The cases the preview board draws the card's ready state from (a page of
+   * the browser tests' own app, which checks every widget's accessibility),
    * each held at startup to what JSON carries (`previewProblems`).
    *
    * 🔴 Kept here, on the server, and never published: `toDefinition` names

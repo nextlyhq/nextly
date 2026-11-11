@@ -32,8 +32,8 @@ collection the reader chooses. On a terminal it asks for anything you leave out.
 - `--dry-run` shows the files and the config edit without writing them.
 - When it cannot edit your config safely, it leaves the file as it was and prints the line to add.
 
-Then open `/admin/dev/widget-previews` on your dev server to see the card before it has data,
-and run its test with `npx vitest run`.
+Its test draws the card from its `preview` case, so you see it before it has data. Run the test
+with `npx vitest run`.
 
 ## Availability
 

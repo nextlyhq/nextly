@@ -768,19 +768,6 @@ describe("in the admin's top bar", () => {
     expect(await screen.findByTestId("dashboard-edit-begin")).toBeVisible();
     expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
   });
-
-  it.each([true, false])(
-    "offers no Preview widgets, with the development server's previews %s",
-    async widgetPreviews => {
-      mockBranding = { ...branding(), widgetPreviews };
-      renderDashboard({ inBar: true });
-      await screen.findByTestId("dashboard-edit-begin");
-      expect(screen.queryByText("Preview widgets")).toBeNull();
-      await beginEditing();
-      expect(screen.queryByText("Preview widgets")).toBeNull();
-      expect(screen.queryByRole("link", { name: /preview/i })).toBeNull();
-    }
-  );
 });
 
 describe("leaving customise mode", () => {

@@ -4,7 +4,13 @@
  * for the dists that cannot be measured honestly.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -365,9 +371,9 @@ describe("bundle-report", () => {
 
       // The lazy route stays route-later even though the other entry
       // shares its imports.
-      expect(
-        report.categories.routeLater.chunks.map(c => c.rel)
-      ).toEqual(["chunk-route.mjs"]);
+      expect(report.categories.routeLater.chunks.map(c => c.rel)).toEqual([
+        "chunk-route.mjs",
+      ]);
       // First-screen is untouched by the other entry.
       expect(report.totals.firstScreen.count).toBe(3);
 
@@ -389,9 +395,9 @@ describe("bundle-report", () => {
       expect(report.chunks.find(c => c.file === "cli.cjs").minified).toBe(
         false
       );
-      expect(
-        report.chunks.find(c => c.file === "index.mjs").minified
-      ).toBe(true);
+      expect(report.chunks.find(c => c.file === "index.mjs").minified).toBe(
+        true
+      );
 
       const text = formatReport(report, { json: false });
       expect(text).toContain("Other entry chunks (2 chunks");
@@ -533,9 +539,29 @@ describe("bundle-report", () => {
         // The build emits no orphan: every chunk is reachable from an entry.
         // esbuild used to leave some behind, imported by nothing; one coming
         // back is bytes every install downloads and no page can load.
-        expect(report.categories.unreachable.chunks.map(c => c.rel)).toEqual([]);
+        expect(report.categories.unreachable.chunks.map(c => c.rel)).toEqual(
+          []
+        );
         expect(report.totals.routeLater.count).toBeGreaterThan(0);
         expect(report.routes.length).toBeGreaterThan(0);
+
+        // Invariant 2c: the widget preview board is test code. It ships only
+        // behind the test entry (`testing.mjs`), and nothing the admin's own
+        // entry loads, eagerly or lazily, holds it. The board's own words are
+        // its fingerprint; finding them in a test-entry chunk first is the
+        // control, so a board renamed out from under the check fails it
+        // rather than passing on words found nowhere.
+        const BOARD_WORDS = ["Check accessibility", "data-preview-section"];
+        const holdsBoard = rel => {
+          const code = readFileSync(join(distDir, rel), "utf8");
+          return BOARD_WORDS.some(words => code.includes(words));
+        };
+        expect(otherEntryFiles.filter(holdsBoard)).not.toEqual([]);
+        const adminFiles = [
+          ...firstScreenFiles,
+          ...report.categories.routeLater.chunks.map(c => c.rel),
+        ];
+        expect(adminFiles.filter(holdsBoard)).toEqual([]);
 
         // Invariant 3: CLI files must not be in browser categories
         expect(firstScreenFiles).not.toContain("cli.cjs");
