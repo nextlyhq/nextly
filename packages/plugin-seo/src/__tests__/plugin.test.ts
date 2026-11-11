@@ -77,10 +77,24 @@ describe("seoPlugin", () => {
     });
   });
 
+  it("offers making a share image to a person who may add to the media library", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    const route = plugin.contributes?.routes?.find(
+      ({ path }) => path === "/share-image"
+    );
+    expect(route).toMatchObject({
+      method: "POST",
+      requiredPermission: "create-media",
+    });
+    expect(route?.public).toBeUndefined();
+  });
+
   it("omits the sitemap route when sitemap is disabled", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
     // No public enumeration route when the sitemap is turned off.
-    expect(plugin.contributes?.routes).toBeUndefined();
+    expect(
+      plugin.contributes?.routes?.map(({ path }) => path) ?? []
+    ).not.toContain("/sitemap.xml");
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
   });
