@@ -55,6 +55,7 @@ describe("seoPlugin", () => {
       "metaDescription",
       "ogImage",
       "canonical",
+      "canonicalElsewhere",
       "noindex",
     ]);
   });
@@ -115,6 +116,7 @@ describe("seoPlugin", () => {
       "metaDescription",
       "ogImage",
       "canonical",
+      "canonicalElsewhere",
       "noindex",
     ]);
   });

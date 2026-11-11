@@ -295,6 +295,28 @@ export async function heldNow(
   );
 }
 
+/**
+ * Who the record says holds the address `path`: in `locale`, one row read by
+ * the address's unique key; with no language named, as a site with one
+ * language is read, the holders at `path` in any. None where no page holds
+ * it, as before the record has caught up with a site's content.
+ */
+export async function addressHolders(
+  ctx: PluginContext,
+  path: string,
+  locale: string | undefined
+): Promise<AddressHolder[]> {
+  const where =
+    locale === undefined
+      ? { and: [{ kind: { equals: "address" } }, { path: { equals: path } }] }
+      : { claimKey: { equals: claimKey("address", locale, path) } };
+  const { data } = await ctx.services.ownCollections.listEntries(
+    recordSlug(ctx),
+    { where, pagination: { limit: 20, page: 1 }, depth: 0 }
+  );
+  return (data as unknown[]).flatMap(entry => rowOf(entry).holder ?? []);
+}
+
 /** The participant, bound to the SEO plugin's context. */
 export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   const { slug, rowsWhere, holdLock, holdHolderLock, rowsOf } = recordRows(ctx);

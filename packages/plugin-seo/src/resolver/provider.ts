@@ -26,7 +26,7 @@ export type ReadRules = (
 ) => Promise<SiteRules>;
 
 /** No settings yet: the site's rules are empty. */
-const noRules: ReadRules = async () => NO_RULES;
+export const noRules: ReadRules = async () => NO_RULES;
 
 /**
  * The one resolution of a page: its answer, every value with its source,
