@@ -107,12 +107,11 @@ async function publishIn(
   });
 }
 
-/** A visitor's REST read of one document, with `query` (`?locale=…`). */
-async function restRead(
-  id: string,
+/** A visitor's REST GET of `path`, with `query` (`?locale=…`). */
+async function restGet(
+  path: string[],
   query: string
 ): Promise<{ status: number; json: Record<string, unknown> }> {
-  const path = ["collections", DOCS, "entries", id];
   const res = await createDynamicHandlers().GET(
     new Request(`http://localhost/api/${path.join("/")}${query}`, {
       headers: { origin: "http://localhost" },
@@ -124,6 +123,10 @@ async function restRead(
     json: (await res.json()) as Record<string, unknown>,
   };
 }
+
+/** A visitor's REST read of one document, with `query`. */
+const restRead = (id: string, query: string) =>
+  restGet(["collections", DOCS, "entries", id], query);
 
 /** A public reader's read of one document in `locale`. */
 async function readAs(
@@ -301,6 +304,36 @@ describe.each(getConfiguredTestDialects())(
         title: "Site in English",
         _locale: "en",
       });
+    }, 90_000);
+
+    // A Single through REST and the Direct API answers as an entry does: not
+    // found by default, and with whole-document fallback asked for, the first
+    // published language, named.
+    it("answers a Single's REST and Direct API reads the same way", async () => {
+      const t = await boot(dialect);
+      const saved = await singlesOf(t).update(
+        SITE,
+        { title: "Site in English", status: "published", _overwrite: true },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+
+      const missing = await restGet(["singles", SITE], "?locale=es");
+      expect(missing.status, JSON.stringify(missing.json)).toBe(404);
+      const fellBack = await restGet(
+        ["singles", SITE],
+        "?locale=es&fallback=document"
+      );
+      expect(fellBack.status, JSON.stringify(fellBack.json)).toBe(200);
+      expect(JSON.stringify(fellBack.json)).toContain('"_locale":"en"');
+
+      const direct = (await t.nextly.findSingle({
+        slug: SITE,
+        locale: "es",
+        status: "published",
+        wholeDocumentFallback: true,
+      })) as Record<string, unknown>;
+      expect(direct).toMatchObject({ title: "Site in English", _locale: "en" });
     }, 90_000);
   }
 );

@@ -96,6 +96,7 @@ import {
 } from "../helpers/service-envelope";
 import {
   isTruthyParam,
+  parseFallbackParam,
   parseRichTextFormat,
   parseSelectParam,
   parseStatusParam,
@@ -1627,22 +1628,3 @@ export const formatToastSummaryForTest = formatToastSummary;
 // Test seam for the hint-receipt decision helper. The behavioural
 // contract is "non-empty renames map -> log; everything else -> silent".
 export const shouldLogF14HintReceiptForTest = shouldLogF14HintReceipt;
-
-/**
- * `?fallback=`: `document` opts a read in to whole-document fallback, and
- * absent leaves it off. Any other value is refused rather than ignored, so a
- * read never goes ahead without the fallback its caller asked for.
- */
-function parseFallbackParam(value: unknown): boolean {
-  if (value === undefined || value === null || value === "") return false;
-  if (value === "document") return true;
-  throw NextlyError.validation({
-    errors: [
-      {
-        path: "fallback",
-        code: "INVALID_VALUE",
-        message: 'fallback must be "document".',
-      },
-    ],
-  });
-}

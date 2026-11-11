@@ -282,3 +282,22 @@ export const isTruthyParam = (value?: unknown): boolean => {
   const v = value.trim().toLowerCase();
   return v === "1" || v === "true" || v === "yes";
 };
+
+/**
+ * `?fallback=`: `document` opts a read in to whole-document fallback, and
+ * absent leaves it off. Any other value is refused rather than ignored, so a
+ * read never goes ahead without the fallback its caller asked for.
+ */
+export const parseFallbackParam = (value?: unknown): boolean => {
+  if (value === undefined || value === null || value === "") return false;
+  if (value === "document") return true;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "fallback",
+        code: "INVALID_VALUE",
+        message: 'fallback must be "document".',
+      },
+    ],
+  });
+};

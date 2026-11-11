@@ -50,6 +50,16 @@ export interface FindSingleArgs<TSlug extends SingleSlug = SingleSlug>
   slug: TSlug;
 
   /**
+   * Whole-document fallback. A published read in a language the Single is not
+   * published in answers not found; with this set it answers in the first
+   * language of the fallback chain the Single is published in instead, and
+   * says which in `_locale`.
+   *
+   * @default false
+   */
+  wholeDocumentFallback?: boolean;
+
+  /**
    * Return the pending working draft in place of the live document when one
    * exists (draft/published split). Mirrors `draft` on `findByID`, and forwards
    * to the same service option, so a Single and a collection entry are read the

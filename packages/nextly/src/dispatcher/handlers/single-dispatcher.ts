@@ -115,6 +115,7 @@ import {
 import {
   parseRichTextFormat,
   isTruthyParam,
+  parseFallbackParam,
   parseStatusParam,
   requireParam,
   toNumber,
@@ -744,6 +745,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // the language pills. All no-op for non-localized singles.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+        // `?fallback=document`: answer in the first published language of the
+        // chain where the Single is not published in the requested one.
+        wholeDocumentFallback: parseFallbackParam(p.fallback),
         translationStatus: p["translation-status"] === "1",
         // `?draft=1` opts into the working-draft overlay, matching the entry
         // read. Gated server-side on an actual update-capability probe, so a
