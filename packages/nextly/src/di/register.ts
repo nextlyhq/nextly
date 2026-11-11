@@ -221,6 +221,12 @@ import {
 } from "../plugins/plugin-dependencies";
 import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import {
+  clearProxyHandlers,
+  collectProxyHandlers,
+  registerProxyHandlers,
+  type CollectedProxyHandler,
+} from "../plugins/proxy/proxy-registry";
+import {
   resolveDeclaredPlugins,
   resolveTransformedPlugins,
 } from "../plugins/resolve";
@@ -1592,6 +1598,8 @@ function validateBootContributions(
   // again there.
   const pluginBootContributions: PluginBootContributions = {
     routes: collectPluginRoutes(transformedPlugins),
+    // A proxy handler with no name or no `handle` fails the boot here too.
+    proxy: collectProxyHandlers(transformedPlugins),
   };
 
   registerPluginFieldTypes(transformedPlugins);
@@ -2931,6 +2939,7 @@ function bindDirectApi(): void {
  */
 interface PluginBootContributions {
   routes: CollectedRoute[];
+  proxy: CollectedProxyHandler[];
 }
 
 /**
@@ -4750,6 +4759,9 @@ async function initializePlugins(
   hookRegistry: HookRegistry | undefined
 ): Promise<Array<{ plugin: PluginDefinition; context: PluginContext }>> {
   const plugins = transformedConfig.plugins ?? [];
+  // Before the early return: a boot with no plugin left must not keep an
+  // earlier boot's proxy handlers answering requests.
+  clearProxyHandlers();
   if (plugins.length === 0) return [];
 
   const collectedRoutes = contributions.routes;
@@ -5098,6 +5110,13 @@ async function initializePlugins(
     }
     logger.info?.(`Registered ${collectedRoutes.length} plugin route(s)`);
   }
+
+  // The proxy handlers, each with its plugin's context, registered with the
+  // routes so they too are rebuilt on every boot rather than accumulated.
+  registerProxyHandlers(
+    contributions.proxy,
+    new Map(teardown.map(t => [t.plugin.name, t.context]))
+  );
 
   // PASS 3 — `onReady`, after every plugin's init AND after the route registry
   // is rebuilt, so a plugin reading the assembled system sees all of it. In

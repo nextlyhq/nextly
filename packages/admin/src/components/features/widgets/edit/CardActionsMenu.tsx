@@ -105,7 +105,7 @@ export function CardSizeLabel({ size }: { size: GridSize }): JSX.Element {
  * where the deeper shade is the one that falls short.
  */
 export const REMOVE_ITEM_CLASS =
-  "text-destructive-700 data-[highlighted]:text-destructive-700 dark:text-destructive dark:data-[highlighted]:text-destructive";
+  "text-danger-text data-[highlighted]:text-danger-text";
 
 export function CardActionsMenu({
   title,

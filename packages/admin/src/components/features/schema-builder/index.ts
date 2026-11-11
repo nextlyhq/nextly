@@ -24,7 +24,6 @@ export { BuilderSettingsModal } from "./BuilderSettingsModal";
 export type { BuilderSettingsValues } from "./BuilderSettingsModal";
 export { BuilderToolbar } from "./BuilderToolbar";
 export { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
-export { BuilderFieldList } from "./BuilderFieldList";
 export { SchemaBuilderSlots } from "./SchemaBuilderSlots";
 
 // The builder pages themselves: the frame the three kinds share, the overlays
