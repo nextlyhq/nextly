@@ -747,6 +747,11 @@ export class CollectionsHandler {
     collectionName: string;
     /** Page number (1-indexed, default: 1) */
     page?: number;
+    /**
+     * Count the total no further than this; above it the total is the cap
+     * and `totalCapped` is set. See the query service's `countUpTo`.
+     */
+    countUpTo?: number;
     /** Rows to skip before the first returned, instead of a page. */
     offset?: number;
     /** Refuse a sort key that names no sortable field instead of dropping it. */
