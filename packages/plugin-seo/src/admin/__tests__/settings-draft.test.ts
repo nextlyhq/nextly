@@ -389,6 +389,22 @@ describe("a content type's structured data", () => {
       "byline.name"
     );
     expect(missingDetails(path, withFields, "article")).toEqual([]);
+    // Inside a group whose fields are known, the path must be one of them.
+    const event: SeoContentType = {
+      ...posts,
+      mappableFields: [
+        { name: "event", label: "Event" },
+        { name: "event.startsAt", label: "Event › Starts at" },
+      ],
+    };
+    const renamed = withDetailField(
+      draftOf(stored),
+      "posts",
+      "event",
+      "startDate",
+      "event.startedAt"
+    );
+    expect(missingDetails(renamed, event, "event")).toContain("startDate");
   });
 
   it("shows the plugin's own choice until the site chooses, and saves only what differs from it", () => {

@@ -337,18 +337,21 @@ export function missingDetails(
 
 /**
  * Whether a mapped source still reads something: a fixed value, a field the
- * type has, or a path into one (`author.name`). A field since removed reads
- * nothing, so its detail is missing until another is chosen.
+ * type has, or a path into a field whose inside is not listed, such as a
+ * linked entry's `author.name`. A group's fields are listed, so a path into
+ * a group must be one of them. A field since removed reads nothing, so its
+ * detail is missing until another is chosen.
  */
 export function holdsField(
   type: SeoContentType,
   source: DetailSource
 ): boolean {
   if (typeof source !== "string") return true;
-  const root = source.split(".")[0];
-  return type.mappableFields.some(
-    field => field.name === source || field.name === root
-  );
+  const names = type.mappableFields.map(field => field.name);
+  if (names.includes(source)) return true;
+  const root = source.split(".")[0] ?? "";
+  const listedInside = names.some(name => name.startsWith(`${root}.`));
+  return names.includes(root) && !listedInside;
 }
 
 /**

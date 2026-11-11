@@ -214,6 +214,9 @@ function siteOwn(
   return slug === undefined ? undefined : { slug, row: record };
 }
 
+/** How many types without SEO are counted at once. */
+const COUNTED_AT_ONCE = 8;
+
 /** How many collections one listing reads while finding the site's own. */
 const LISTING_PAGE = 100;
 
@@ -233,17 +236,27 @@ async function switchedOff(
       { page, limit: LISTING_PAGE, sortBy: "slug", sortOrder: "asc" },
       {}
     );
-    for (const record of listed.data) {
-      const own = siteOwn(record);
-      if (own === undefined || withSeo.has(own.slug)) continue;
-      const { slug, row } = own;
-      const { count } = await readableEntries(ctx, slug);
-      found.push({
-        key: slug,
-        label: labelOf(slug, row),
-        ...(count === undefined ? {} : { count }),
-        public: !withoutAddress.has(slug),
-        seo: false,
+    const owns = listed.data
+      .map(siteOwn)
+      .filter(
+        (own): own is NonNullable<typeof own> =>
+          own !== undefined && !withSeo.has(own.slug)
+      );
+    // Counted a few at a time, so one slow type does not hold up the rest.
+    for (let at = 0; at < owns.length; at += COUNTED_AT_ONCE) {
+      const batch = owns.slice(at, at + COUNTED_AT_ONCE);
+      const counts = await Promise.all(
+        batch.map(({ slug }) => readableEntries(ctx, slug))
+      );
+      batch.forEach(({ slug, row }, index) => {
+        const count = counts[index]?.count;
+        found.push({
+          key: slug,
+          label: labelOf(slug, row),
+          ...(count === undefined ? {} : { count }),
+          public: !withoutAddress.has(slug),
+          seo: false,
+        });
       });
     }
     if (!listed.pagination.hasMore) return found;
