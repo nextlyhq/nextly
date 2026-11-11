@@ -27,6 +27,9 @@ import {
   addressHolders,
   withAddressHolders,
 } from "../address-record/participant";
+import { codePages } from "../code-pages/answers";
+import { codePagesSlug } from "../code-pages/collection";
+import type { CodeRoute } from "../code-pages/routes";
 import { onceEach, resolveIn, servedAt } from "../languages/versions";
 import { originOf } from "../origin";
 import { isRecord, textOf } from "../plain-values";
@@ -49,6 +52,8 @@ export interface AiOutputsConfig {
   readRules: ReadRules;
   /** The site's configured origin, where its settings name no address. */
   origin?: string;
+  /** The pages built in code the sitemap lists, where any are known. */
+  codeRoutes?: () => readonly CodeRoute[];
   /** The collections the sitemap is narrowed to, where it is. */
   collections?: readonly string[];
 }
@@ -91,9 +96,73 @@ async function sectionsOf(
 }
 
 /**
+ * Each listed page's copy address to link, by its place in `pages`, where
+ * copies are on: not where a page of the site holds the copy's address, nor
+ * where another listed page has the copy's name for itself (a page named
+ * `index.html` keeps `index.html.md`, and its folder's page links itself).
+ */
+async function linkedCopies(
+  ctx: PluginContext,
+  pages: readonly ListedPage[],
+  rules: SiteRules
+): Promise<(at: number) => string | undefined> {
+  if (rules.plainTextCopies !== true) return () => undefined;
+  const copies = pages.map(page => copyAddressOf(page.loc));
+  const taken = await copiesTaken(ctx, copies);
+  const copySet = new Set(copies);
+  const literal = new Set(
+    pages.map(page => `${page.loc}.md`).filter(copy => copySet.has(copy))
+  );
+  return at => {
+    const copy = copies[at];
+    const own = `${pages[at]?.loc}.md`;
+    return copy === undefined ||
+      taken.has(copy) ||
+      (literal.has(copy) && copy !== own)
+      ? undefined
+      : copy;
+  };
+}
+
+/**
+ * Each listed page's title and description as the public may read them,
+ * and whether the public may read it at all, by its place in `pages`. A page
+ * built in code has no entry: its head is the SEO set for its address, which
+ * every visitor's page already carries.
+ */
+async function listedHeads(
+  ctx: PluginContext,
+  pages: readonly ListedPage[],
+  config: AiOutputsConfig,
+  readRules: ReadRules
+): Promise<
+  (at: number) => { title?: string; description?: string; readable: boolean }
+> {
+  const codeSlug = codePagesSlug(ctx);
+  const readable = await publicDocuments(
+    pages.filter(page => page.holder.collection !== codeSlug)
+  );
+  const heads = await publicHeads(ctx, pages, readable, readRules);
+  const codeHeads = await codeHeadsOf(ctx, config, readRules);
+  return at => {
+    const page = pages[at];
+    if (page === undefined) return { readable: false };
+    if (page.holder.collection === codeSlug) {
+      return { ...codeHeads.get(page.path), readable: false };
+    }
+    return {
+      ...heads.get(at),
+      readable: readable.has(readingKey(page)),
+    };
+  };
+}
+
+/**
  * The llms.txt of the site at `origin`, by the site's `rules`, or null while
  * it is switched off. Each page links to its plain-text copy where copies are
- * switched on, else to the page itself.
+ * switched on and the public may read it, else to the page itself; a page
+ * the public may not read is listed by its address alone, as the sitemap
+ * lists it.
  */
 export async function llmsTxtOf(
   ctx: PluginContext,
@@ -108,51 +177,27 @@ export async function llmsTxtOf(
   const { pages } = await listPages(ctx, {
     origin,
     readRules,
+    ...(config.codeRoutes === undefined
+      ? {}
+      : { codeRoutes: config.codeRoutes }),
     ...(config.collections === undefined
       ? {}
       : { collections: config.collections }),
   });
   const sections = await sectionsOf(ctx, pages);
-  // Each page's copy, where copies are on and no page holds its address,
-  // and no other page listed has the copy's name for itself: a page named
-  // `index.html` keeps `index.html.md`, and its folder's page links itself.
-  const copies =
-    rules.plainTextCopies === true
-      ? pages.map(page => copyAddressOf(page.loc))
-      : [];
-  const taken = await copiesTaken(ctx, copies);
-  const copySet = new Set(copies);
-  const literal = new Set(
-    pages.map(page => `${page.loc}.md`).filter(copy => copySet.has(copy))
-  );
-  const linked = (at: number): string | undefined => {
-    const copy = copies[at];
-    const own = `${pages[at]?.loc}.md`;
-    return copy === undefined ||
-      taken.has(copy) ||
-      (literal.has(copy) && copy !== own)
-      ? undefined
-      : copy;
-  };
-  // Each page's title and description as the public may read them; a page
-  // the public may not read is listed by its address alone, as the sitemap
-  // lists it.
-  const readable = await publicDocuments(pages);
-  const heads = await publicHeads(ctx, pages, readable, readRules);
-  const entries: LlmsEntry[] = [];
-  for (const [at, page] of pages.entries()) {
-    const document = readable.get(readingKey(page));
-    const head = heads.get(at) ?? {};
-    entries.push({
+  const linked = await linkedCopies(ctx, pages, rules);
+  const headOf = await listedHeads(ctx, pages, config, readRules);
+  const entries: LlmsEntry[] = pages.map((page, at) => {
+    const head = headOf(at);
+    return {
       section: sections.get(page.holder.collection) ?? SINGLES_SECTION,
       title: head.title ?? page.path,
-      // A page the public may not read has no copy to link.
-      url: (document === undefined ? undefined : linked(at)) ?? page.loc,
+      url: (head.readable ? linked(at) : undefined) ?? page.loc,
       ...(head.description === undefined
         ? {}
         : { description: head.description }),
-    });
-  }
+    };
+  });
   return llmsTxt({
     name: rules.siteName ?? new URL(origin).host,
     ...(rules.description === undefined
@@ -307,6 +352,29 @@ async function publicHeads(
         if (page === undefined || document === undefined) continue;
         heads.set(at, await publicHead(ctx, page, document, readRules));
       }
+    });
+  }
+  return heads;
+}
+
+/** The head of each page built in code, by its address. */
+async function codeHeadsOf(
+  ctx: PluginContext,
+  config: AiOutputsConfig,
+  readRules: ReadRules
+): Promise<Map<string, { title?: string; description?: string }>> {
+  const heads = new Map<string, { title?: string; description?: string }>();
+  if (config.codeRoutes === undefined) return heads;
+  for (const { route, answer } of await codePages(
+    ctx,
+    config.codeRoutes(),
+    readRules
+  )) {
+    heads.set(route.path, {
+      ...(answer.title === undefined ? {} : { title: answer.title.value }),
+      ...(answer.description === undefined
+        ? {}
+        : { description: answer.description.value }),
     });
   }
   return heads;

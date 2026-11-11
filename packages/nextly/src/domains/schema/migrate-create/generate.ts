@@ -561,7 +561,19 @@ function settingsInScope(
   settingsRecord: EntitySettingsRecord | undefined;
   changedSettings: EntitySettingsChange[];
 } {
-  const desired = settingsRecordOf(args);
+  // A configuration declaring no collection, Single or field group records
+  // that it declares none: an empty record, never a missing one, which reads
+  // as a snapshot written before declarations were recorded and would stop
+  // this migration applying after the database's registry record.
+  const declaresNone =
+    args.collections.length === 0 &&
+    args.singles.length === 0 &&
+    args.components.length === 0;
+  const desired =
+    settingsRecordOf(args) ??
+    (declaresNone
+      ? { collections: {}, singles: {}, fieldGroups: {} }
+      : undefined);
   const changes = settingsChangesFor(
     args,
     latest === null ? null : latest.entities

@@ -11,6 +11,7 @@ import {
   addressRecordReady,
   retryFailedCatchUp,
 } from "../address-record/catch-up";
+import type { CodeRoute } from "../code-pages/routes";
 import type { ReadRules } from "../resolver/provider";
 
 import { llmsTxtOf } from "./ai-outputs";
@@ -32,6 +33,8 @@ export interface RootFilesConfig {
   sitemap?: { collections?: readonly string[]; limits: SitemapLimits };
   /** Whether robots.txt is served, and what it asks AI crawlers. */
   robots?: { aiCrawlers: AiCrawlerChoice };
+  /** The pages the site's routes render from their own code. */
+  codeRoutes?: () => readonly CodeRoute[];
 }
 
 /**
@@ -99,6 +102,9 @@ export async function sitemapResponse(
   const { pages } = await listPages(ctx, {
     origin,
     readRules: config.readRules,
+    ...(config.codeRoutes === undefined
+      ? {}
+      : { codeRoutes: config.codeRoutes }),
     ...(config.sitemap.collections === undefined
       ? {}
       : { collections: config.sitemap.collections }),
@@ -175,6 +181,9 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
         origin,
         {
           readRules: config.readRules,
+          ...(config.codeRoutes === undefined
+            ? {}
+            : { codeRoutes: config.codeRoutes }),
           ...(sitemap?.collections === undefined
             ? {}
             : { collections: sitemap.collections }),

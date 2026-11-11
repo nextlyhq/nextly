@@ -5,7 +5,8 @@
  * under the component path the plugin names it by: the settings and redirects
  * pages, the SEO tab on each page the plugin adds SEO to, its side panel line,
  * and the panel the tab draws, for any surface that edits a page's SEO, the
- * problem list, and the "What search engines received" page.
+ * problem list, the "What search engines received" page, and the Pages and
+ * addresses screen.
  *
  * The registration is what makes them render: the admin resolves a component
  * path through its registry, so a component exported but not registered
@@ -15,12 +16,14 @@
  */
 import { registerComponents } from "@nextlyhq/plugin-sdk/admin";
 
+import { PAGES_PAGE } from "../code-pages/contract";
 import { PROBLEMS_PAGE } from "../problems/contract";
 import { RECEIVED_PAGE } from "../received/contract";
 import { REDIRECTS_PAGE } from "../redirects/contract";
 import { SETTINGS_PAGE } from "../settings/contract";
 import { SEO_STATUS_COMPONENT, SEO_TAB_COMPONENT } from "../tab/contributions";
 
+import { SeoPagesPage } from "./SeoPagesPage";
 import { SeoProblemsPage } from "./SeoProblemsPage";
 import { SeoReceivedPage } from "./SeoReceivedPage";
 import { SeoRedirectsPage } from "./SeoRedirectsPage";
@@ -36,10 +39,12 @@ registerComponents({
   [SEO_TAB_COMPONENT]: SeoTab,
   [SEO_STATUS_COMPONENT]: SeoStatusSection,
   [PROBLEMS_PAGE.component]: SeoProblemsPage,
+  [PAGES_PAGE.component]: SeoPagesPage,
 });
 
 export { SeoProblemsPage } from "./SeoProblemsPage";
 export { SeoReceivedPage } from "./SeoReceivedPage";
+export { SeoPagesPage } from "./SeoPagesPage";
 export { SeoRedirectsPage } from "./SeoRedirectsPage";
 export { SeoSettingsPage } from "./SeoSettingsPage";
 export { SeoTab } from "./SeoTab";

@@ -187,21 +187,22 @@ instead, where each one can still be edited, and no tab is drawn.
 
 ## Configuration
 
-| Option            | Type                                                             | Default            | What it does                                                                             |
-| ----------------- | ---------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------- |
-| `collections`     | `string[]`                                                       | required           | The collections that get the `seo` group                                                 |
-| `singles`         | `string[]`                                                       | none               | The Singles that get the `seo` group, such as a homepage                                 |
-| `fields`          | `FieldConfig[]`                                                  | the nine above     | The fields placed inside the group                                                       |
-| `baseUrl`         | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name          |
-| `sitemap`         | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                   |
-| `robots`          | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                   |
-| `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                          |
-| `hiddenTypes`     | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some            |
-| `structuredData`  | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields |
-| `socialCard`      | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                |
-| `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type      |
-| `urlFor`          | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                |
-| `basePath`        | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                  |
+| Option            | Type                                                             | Default            | What it does                                                                                                     |
+| ----------------- | ---------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `collections`     | `string[]`                                                       | required           | The collections that get the `seo` group                                                                         |
+| `singles`         | `string[]`                                                       | none               | The Singles that get the `seo` group, such as a homepage                                                         |
+| `fields`          | `FieldConfig[]`                                                  | the nine above     | The fields placed inside the group                                                                               |
+| `baseUrl`         | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name                                  |
+| `sitemap`         | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                                           |
+| `robots`          | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                                           |
+| `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                                                  |
+| `hiddenTypes`     | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some                                    |
+| `structuredData`  | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields                         |
+| `socialCard`      | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                                        |
+| `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                              |
+| `nextBuildDir`    | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code) |
+| `urlFor`          | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                                        |
+| `basePath`        | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                                          |
 
 ## The sitemap and robots.txt
 
@@ -228,6 +229,10 @@ never disagree. A page is listed when all of these hold:
   site or off it, is that page's to list;
 - the page holds its address. Where a deploy leaves two pages declaring one address, the
   page that held it keeps it, and the other is left out until it is given another.
+
+A [page built in code](#pages-built-in-code) is listed too, once its route calls
+`seoMetadata` and unless it is hidden from search: its head and its sitemap entry are then
+built from the same answer.
 
 A content type that declares no public address has no page in the sitemap, and nothing is
 guessed for it. Declare one with `publicAddress` on the collection or Single:
@@ -575,6 +580,11 @@ the first of these that has one:
 | 5     | The page's own content: its `title`, `excerpt` or `summary`, and a cover image | title, description, share image             |
 | 6     | The site's defaults                                                            | title, description, share image             |
 
+Level 3 is what the design drawing the page sets: a page's own blocks, or the template or own
+design an entry is drawn with, its SEO settings first. A route hands it as it serves the page; the
+SEO tab, the problem list and the check of what search engines received ask the Page Builder for
+it, where it is installed, so they show the value the page is served with.
+
 A level with nothing for a value, or only blank text, gives way to the next, so a page is never
 served an empty title. A pattern whose tokens have no value gives way too, rather than leaving a
 gap. What a person typed always wins, so a route's code fills only what nobody typed.
@@ -903,9 +913,10 @@ readers. It is served at
 `/admin/api/plugins/@nextlyhq/plugin-seo/problems/check` (`POST`), for a signed-in person.
 
 The check reads the values the plugin keeps: the page's own, its content type's pattern, its
-content and the site's defaults. A title, description or share image that only the route's code
-or a Page Builder design sets is not seen, so such a page is listed as missing it; typing the value
-on the page's SEO tab settles it either way.
+content and the site's defaults, and, where the Page Builder is installed, what the design drawing
+the page sets, worked out as the page's route works it out. A title, description or share image
+that only the route's code sets is not seen, so such a page is listed as missing it; typing the
+value on the page's SEO tab settles it either way.
 
 Not checked yet: whether a response is small enough for every value to fall within its first
 2 MB, and whether a page built in code calls the plugin's metadata function. Both need the page
@@ -959,14 +970,14 @@ With no production address set, the screen asks for one and checks nothing.
 
 The plugin declares its own permissions, which the role screen files under **SEO**:
 
-| Permission        | What it allows                                                                                                                                                                        |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `manage-seo`      | Site-wide SEO: the [SEO settings](#the-seo-settings) (with the Single's own read or update permission beside it), [redirects](#redirects), their imports, and the addresses not found |
-| `check-seo`       | [What search engines received](#what-search-engines-received): the screen, and the check it runs                                                                                      |
-| `edit-seo-<type>` | Changing the SEO of one content type's pages, such as `edit-seo-posts`, where `pagePermissions` is on                                                                                 |
+| Permission        | What it allows                                                                                                                                                                                                                                |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `manage-seo`      | Site-wide SEO: the [SEO settings](#the-seo-settings) (with the Single's own read or update permission beside it), [redirects](#redirects), their imports, the addresses not found, and the SEO of [pages built in code](#pages-built-in-code) |
+| `check-seo`       | [What search engines received](#what-search-engines-received): the screen, and the check it runs                                                                                                                                              |
+| `edit-seo-<type>` | Changing the SEO of one content type's pages, such as `edit-seo-posts`, where `pagePermissions` is on                                                                                                                                         |
 
 Each is asked by the server on every request, whatever the admin shows: someone without it is
-refused and given nothing of what it guards. The admin hides the Settings, Redirects and What search
+refused and given nothing of what it guards. The admin hides the Pages and addresses, Settings, Redirects and What search
 engines received entries from someone without the screen's permission.
 
 A page's SEO is part of the page. By default whoever may edit a page changes its SEO, and an SEO
@@ -997,6 +1008,83 @@ is a change to the media library, asked as `create-media` and `read-media`.
 An admin menu entry or screen can ask one permission. The settings screen asks `manage-seo`, so
 someone holding it without `read-seo-settings` sees the entry, and the screen is refused its
 contents.
+
+## Pages built in code
+
+A page a route renders from its own code, such as `/pricing` in `app/pricing/page.tsx`, has
+no entry to hold its SEO. Its SEO is set by address instead, on the **Pages and addresses**
+screen, under SEO in the admin. The screen lists every public address the site knows of:
+each entry's, each route with no variable part (`/pricing`), and each address a route with
+one declares through `generateStaticParams` (`/integrations/wordpress`). Choose **Edit SEO**
+on a page built in code to set its title, description, visibility and share image. The
+screen and its saves ask `manage-seo`.
+
+What is set there reaches the page once its route adds one line, calling `seoMetadata` with
+its address:
+
+```tsx
+// src/app/pricing/page.tsx
+import { seoMetadata } from "@nextlyhq/plugin-seo";
+
+export const generateMetadata = () =>
+  seoMetadata("/pricing", {
+    metadata: { title: "Pricing", description: "Plans for every team." },
+  });
+
+export default function PricingPage() {
+  return <h1>Pricing</h1>;
+}
+```
+
+A route with a variable part calls it for the address it is serving:
+
+```tsx
+// src/app/integrations/[name]/page.tsx
+import { seoMetadata } from "@nextlyhq/plugin-seo";
+
+export const generateStaticParams = () => [
+  { name: "wordpress" },
+  { name: "webflow" },
+];
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ name: string }>;
+}) {
+  const { name } = await params;
+  return seoMetadata(`/integrations/${name}`);
+}
+
+export default function IntegrationPage() {
+  return <h1>Integration</h1>;
+}
+```
+
+The page is answered by the same order of who wins as every page with an entry:
+
+- what a person set on the screen wins;
+- the route's own title, description and social values come next. Anything else the route
+  sets, such as keywords, is kept as it is;
+- then the site's [title pattern](#title-patterns) with the page's name, taken from its
+  address (`/thank-you` is "Thank you") or given as `name`, and the site's defaults.
+
+Visibility and the canonical come only from the answer, never from the route: the canonical
+is the page's own address, and a page is hidden only from the screen. A save on the screen
+reaches the page from its next visit, a page built ahead of time included.
+
+The screen marks **Not connected** each route that has not called `seoMetadata`. What is set
+for its address is kept, and reaches the page once the line is in. A route records that it is
+connected when it renders: while `next build` renders the site, or later for an address the
+site knows of. A request for any other address records nothing.
+
+<Callout type="info">
+**The list of routes comes from the build.** The plugin reads the routes and the addresses
+they declared from what `next build` wrote, so the full list is that of a production build.
+Under `next dev`, it holds only the routes compiled so far. If `next.config` sets `distDir`,
+pass the same directory as `nextBuildDir`.
+
+</Callout>
 
 ## Next steps
 
