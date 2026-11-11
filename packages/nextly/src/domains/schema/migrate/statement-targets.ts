@@ -186,6 +186,81 @@ export function indexesRenamedBy(
   return to !== undefined && cursor.done() ? [from, to] : undefined;
 }
 
+/** A unique index one statement creates: its table, its name and its columns, lower-cased. */
+export interface UniqueIndexCreated {
+  readonly table: string;
+  readonly name: string;
+  readonly columns: readonly string[];
+}
+
+/**
+ * The unique index `statement` creates, as a list of one, or `undefined` for any other statement:
+ * `CREATE UNIQUE INDEX [IF NOT EXISTS] name ON table [USING method] (columns)` and
+ * `ALTER TABLE table ADD CONSTRAINT name UNIQUE (columns)`. One over an expression, or with
+ * anything after its columns (a predicate, an index option), is not read: it is not plain
+ * uniqueness of its columns.
+ */
+export function uniqueIndexesCreatedBy(
+  statement: string,
+  dialect: SupportedDialect
+): UniqueIndexCreated[] | undefined {
+  const cursor = cursorOf(statement, dialect, EXACT);
+  const named = cursor.accept("CREATE", "UNIQUE", "INDEX")
+    ? createdUniqueIndex(cursor)
+    : cursor.accept("ALTER", "TABLE")
+      ? addedUniqueConstraint(cursor)
+      : undefined;
+  if (named === undefined || !cursor.accept("(")) return undefined;
+  const columns = columnList(cursor);
+  return columns !== undefined && cursor.done()
+    ? [{ ...named, columns }]
+    : undefined;
+}
+
+/** The table and name of `CREATE UNIQUE INDEX`, read after it, up to its key list. */
+function createdUniqueIndex(
+  cursor: StatementCursor
+): { table: string; name: string } | undefined {
+  cursor.acceptCondition();
+  const name = cursor.name();
+  if (name === undefined || !cursor.accept("ON")) return undefined;
+  const table = cursor.name();
+  if (table === undefined) return undefined;
+  // PostgreSQL names the index's method before its columns.
+  if (cursor.accept("USING")) cursor.at += 1;
+  return { table, name };
+}
+
+/** The table and name of `ALTER TABLE … ADD CONSTRAINT … UNIQUE`, read after ALTER TABLE. */
+function addedUniqueConstraint(
+  cursor: StatementCursor
+): { table: string; name: string } | undefined {
+  cursor.acceptCondition();
+  cursor.accept("ONLY");
+  const table = cursor.name();
+  if (table === undefined || !cursor.accept("ADD", "CONSTRAINT")) {
+    return undefined;
+  }
+  const name = cursor.name();
+  return name !== undefined && cursor.accept("UNIQUE")
+    ? { table, name }
+    : undefined;
+}
+
+/** The plain column names of a key list already opened, consumed with its `)`, or undefined. */
+function columnList(cursor: StatementCursor): string[] | undefined {
+  const items = parenthesised(cursor);
+  if (items === undefined) return undefined;
+  const columns: string[] = [];
+  for (const item of items) {
+    const key = new StatementCursor(item);
+    const column = key.name();
+    if (column === undefined || !key.done()) return undefined;
+    columns.push(column);
+  }
+  return columns;
+}
+
 /**
  * The tables `statement` drops when it is a DROP TABLE, lower-cased, or
  * `undefined` for any other statement: what a drop-only file is held to.

@@ -132,6 +132,11 @@ import {
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
+import {
+  adoptUniqueIndexesAlreadyThere,
+  refuseUniqueIndexesOverRepeats,
+  withoutAdoptedIndexes,
+} from "../../domains/schema/migrate/unique-column-guard";
 import { refuseUnresolvedAttempts } from "../../domains/schema/migrate/unresolved-attempt";
 import {
   mergeContributions,
@@ -2123,6 +2128,22 @@ export async function migrateCore(
       // own, which is what these rows say.
       await (deps.syncElementOwnersFn ?? syncElementOwners)(deps);
 
+      // Each one-to-one an earlier release left without its uniqueness gets it, judged on the
+      // definitions the files just left, and refused, creating nothing, while any repeats a value.
+      // A run `--step` stops short leaves it to one that runs every file.
+      if (deps.step === undefined) {
+        const { makeOneToOnesUnique } = await import(
+          "../../domains/schema/migrate/one-to-one-uniques"
+        );
+        await makeOneToOnesUnique({
+          db: deps.db,
+          dialect: deps.dialect,
+          executeQuery: statement =>
+            (deps.adapter as unknown as DrizzleAdapter).executeQuery(statement),
+          logger: deps.logger,
+        });
+      }
+
       // What the caller must hold true before the registry records the files' metadata.
       await deps.beforeMetadata?.();
 
@@ -3303,6 +3324,9 @@ export async function runFileMigrations(args: {
     });
     // A column made required over rows that would break it: refused here, before any statement.
     await refuseRequiredColumnsOverNulls(db, dialect, upStatements, filename);
+    // A column made unique while its entries repeat a value: refused here too, before any
+    // statement, where MySQL would otherwise keep every statement before the index's.
+    await refuseUniqueIndexesOverRepeats(db, dialect, upStatements, filename);
     // A file adding per-language unique indexes is refused here, before the ledger records an
     // attempt and before any statement, where one cannot hold. It also answers with the UP to
     // run on THIS database, which leaves out an index already installed here.
@@ -3322,6 +3346,19 @@ export async function runFileMigrations(args: {
       m.localization,
       filename
     );
+    // A unique index the database already carries under the file's name for it, made by the
+    // run's own one-to-one step or a Builder save before the file was written, is left out.
+    const adoption = await adoptUniqueIndexesAlreadyThere(
+      db,
+      dialect,
+      splitSqlStatements(m.upSql, dialect, m),
+      target ? before : undefined
+    );
+    if (adoption.adopted.length > 0) {
+      m.upSql = adoption.statements
+        .map(statement => `${statement};`)
+        .join("\n--> statement-breakpoint\n");
+    }
 
     if (!target) {
       // No paired snapshot (hand-written migration): run verbatim + record.
@@ -3395,7 +3432,11 @@ export async function runFileMigrations(args: {
     const sides = narrowToContributions({
       before,
       target,
-      live: await introspectLiveSnapshot(db, dialect, managed),
+      // Without the indexes the file adopted, which its snapshot before it does not record.
+      live: withoutAdoptedIndexes(
+        await introspectLiveSnapshot(db, dialect, managed),
+        adoption.adopted
+      ),
       contributions: mergeContributions(
         beforeContributions,
         targetFile?.contributions ?? {}

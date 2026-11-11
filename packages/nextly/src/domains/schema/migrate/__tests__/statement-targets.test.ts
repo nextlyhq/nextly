@@ -12,6 +12,7 @@ import {
   registryRowWrittenBy,
   tablesChangedIn,
   tablesDroppedBy,
+  uniqueIndexesCreatedBy,
 } from "../statement-targets";
 
 describe.each(["postgresql", "mysql"] as const)(
@@ -533,5 +534,85 @@ describe("archiveWriteOf", () => {
     ),
   ])("reads nothing from %s", sql => {
     expect(archiveWriteOf(sql, "postgresql")).toBeUndefined();
+  });
+});
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "uniqueIndexesCreatedBy on %s",
+  dialect => {
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+    const read = (sql: string) => uniqueIndexesCreatedBy(sql, dialect);
+    const created = {
+      table: "dc_profiles",
+      name: "uq_dc_profiles_person",
+      columns: ["person"],
+    };
+
+    it("reads a unique index the generators write, with and without IF NOT EXISTS", () => {
+      expect(
+        read(
+          `CREATE UNIQUE INDEX ${q("uq_dc_profiles_person")} ON ${q("dc_profiles")} (${q("person")});`
+        )
+      ).toEqual([created]);
+      expect(
+        read(
+          `CREATE UNIQUE INDEX IF NOT EXISTS ${q("uq_dc_profiles_person")} ON ${q("dc_profiles")} (${q("person")})`
+        )
+      ).toEqual([created]);
+    });
+
+    it("reads a unique constraint added to a table, and one over two columns", () => {
+      expect(
+        read(
+          `ALTER TABLE ${q("dc_profiles")} ADD CONSTRAINT ${q("uq_dc_profiles_person")} UNIQUE (${q("person")});`
+        )
+      ).toEqual([created]);
+      expect(
+        read(
+          `CREATE UNIQUE INDEX ${q("uq_pair")} ON ${q("dc_profiles")} (${q("person")}, ${q("team")})`
+        )
+      ).toEqual([
+        { table: "dc_profiles", name: "uq_pair", columns: ["person", "team"] },
+      ]);
+    });
+
+    it("reads no plain index, no expression, no predicate and no other statement", () => {
+      expect(
+        read(
+          `CREATE INDEX ${q("idx_dc_profiles_person")} ON ${q("dc_profiles")} (${q("person")})`
+        )
+      ).toBeUndefined();
+      expect(
+        read(
+          `CREATE UNIQUE INDEX ${q("uq_lower")} ON ${q("dc_profiles")} ((lower(${q("email")})))`
+        )
+      ).toBeUndefined();
+      expect(
+        read(
+          `CREATE UNIQUE INDEX ${q("uq_some")} ON ${q("dc_profiles")} (${q("person")}) WHERE ${q("person")} IS NOT NULL`
+        )
+      ).toBeUndefined();
+      expect(
+        read(`ALTER TABLE ${q("dc_profiles")} ADD COLUMN ${q("x")} text`)
+      ).toBeUndefined();
+    });
+  }
+);
+
+describe("uniqueIndexesCreatedBy on postgresql", () => {
+  it("reads past the index method drizzle-kit names", () => {
+    expect(
+      uniqueIndexesCreatedBy(
+        `CREATE UNIQUE INDEX "uq_dc_profiles_person" ON "dc_profiles" USING btree ("person")`,
+        "postgresql"
+      )
+    ).toEqual([
+      {
+        table: "dc_profiles",
+        name: "uq_dc_profiles_person",
+        columns: ["person"],
+      },
+    ]);
   });
 });

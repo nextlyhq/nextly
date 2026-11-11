@@ -300,8 +300,9 @@ Specific examples:
 4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp).
 5. Applies each pending file in one transaction on one connection (on MySQL each DDL statement still commits as it runs; see [database support](/docs/database/support) for MySQL caveats). What a file may contain is below.
 6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`.
-7. Names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree), once everything above has run. It changes nothing.
-8. Counts the accounts holding a password stored as typed, and when there are any, names the command that clears them. It changes nothing; see [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).
+7. Makes each one-to-one relationship's column unique where an earlier release left it without its uniqueness, once no file is pending, after checking it for repeated values (see [One-to-one relationships made unique](#one-to-one-relationships-made-unique)).
+8. Names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree), once everything above has run. It changes nothing.
+9. Counts the accounts holding a password stored as typed, and when there are any, names the command that clears them. It changes nothing; see [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).
 
 | Exit code | Meaning                                                                  |
 | --------- | ------------------------------------------------------------------------ |
@@ -309,6 +310,34 @@ Specific examples:
 | 1         | A migration failed during execution                                      |
 | 2         | `MIGRATION_TAMPERED`. Abort before running any.                          |
 | 3         | `MIGRATION_MISSING`. Abort; file referenced in DB but missing from disk. |
+
+### One-to-one relationships made unique
+
+A one-to-one relationship lets each target be pointed at by one entry at most, and its column
+carries a unique index that says so: `uq_<table>_<column>`, or, for a translated relationship, one
+per language on the translations table. An earlier release gave that index only to a one-to-one
+created with its collection, so one added to an existing collection, or made one-to-one later,
+took repeats.
+
+The first `nextly migrate` after the upgrade adds each missing index, once its files have run.
+Before it adds any, it checks every such column, and if entries already repeat a target it adds
+none and stops, naming each field and the repeated values (the first 20 per field; the full list
+is in the log):
+
+```text
+Making one-to-one relationships unique was not applied. Collection 'profiles': field 'person'
+cannot become unique while 1 value repeats: "ada" (2 entries). Give each entry its own value,
+or clear the repeats, then run `nextly migrate` again.
+```
+
+Point each of those entries at its own target, or clear the field on all but one, then run
+`nextly migrate` again. A run stopped part-way is finished by the next one, which adds only the
+indexes still missing. A run limited by `--step` leaves this to one that runs every file. A
+migration file `migrate:create` writes later for the same uniqueness is applied without its index,
+which is already there.
+
+A migration file that makes any column unique is checked the same way, before any of its
+statements runs, and refused with the same message while the column's entries repeat a value.
 
 ### A build older than the database
 
