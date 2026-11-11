@@ -411,8 +411,8 @@ describe("updateSingleSchema — what the request forwards into the DDL", () => 
 
 describe("updateSingleSchema — where a failure is allowed to surface", () => {
   it("raises a refusal instead of saving the fields it refused", async () => {
-    // The generator is a validator as well as a renderer: a REQUIRED column has no value for the
-    // rows already there, so it refuses before any statement runs. At that point the table is
+    // The generator is a validator as well as a renderer: a decimal with no digits has no column
+    // it can write, so it refuses before any statement runs. At that point the table is
     // untouched and the caller's field list is unsaved — recording that as `failed` would persist a
     // schema the table does not have and report the single as having it.
     let threw: unknown;
@@ -423,10 +423,11 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
           fields: [
             { name: "heading", type: "text" },
             {
-              name: "author",
-              type: "relationship",
-              required: true,
-              relationTo: "users",
+              name: "price",
+              type: "number",
+              dbType: "decimal",
+              precision: 0,
+              scale: 0,
             },
           ],
         },
@@ -437,6 +438,13 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
     }
 
     expect(threw).toBeInstanceOf(NextlyError);
+    expect(threw).toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({ code: "DECIMAL_PRECISION_INVALID" }),
+        ],
+      },
+    });
     expect(out, "the update did not reach its registry write").toBeUndefined();
     expect(executed, "nothing ran against the database").toEqual([]);
   });
