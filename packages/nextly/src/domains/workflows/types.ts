@@ -40,7 +40,11 @@ export interface WorkflowStage<S extends string = string> {
    * The name this stage had before it was renamed. A deploy moves the parts
    * still recorded under that name to this stage, keeping their approvals, and
    * records each move. Not a stage of the workflow: it may name no current
-   * stage, nor a stage `removedStages` lists.
+   * stage, nor a stage `removedStages` lists. A stage that allows publishing
+   * cannot record one, since a part never approved would arrive publishable;
+   * to retire such a stage, list it in `removedStages` with a stage before
+   * review. Like any stage a deploy moves parts to, it needs a path of steps
+   * to a stage that allows publishing.
    */
   renamedFrom?: string;
 }

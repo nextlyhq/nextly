@@ -13,6 +13,7 @@ export function registerWorkflowStrandedCommands(program: Command): void {
     .command("workflow:stranded")
     .description("List documents in a workflow stage that no longer exists")
     .option("--collection <slug>", "Only this collection's documents")
+    .option("--single <slug>", "Only this Single's document")
     .action(
       lazyAction(
         async () => (await import("./workflow-stranded")).workflowStrandedAction
@@ -34,6 +35,7 @@ export function registerWorkflowStrandedCommands(program: Command): void {
       "Why they are moved, kept with each move"
     )
     .option("--collection <slug>", "Only this collection's documents")
+    .option("--single <slug>", "Only this Single's document")
     .action(
       lazyAction(
         async () =>

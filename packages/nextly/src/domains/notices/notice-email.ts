@@ -283,9 +283,9 @@ export async function sendNoticeEmail(
 
 /**
  * The notice and its kind, while its person would still see it in their own
- * list, by its kind's own rule as that list applies it: a person who may no
- * longer see notices of the kind is not sent what their list now hides from
- * them. `null` for a notice that is gone or whose kind is not registered.
+ * list, by its kind's own rules as that list applies them: a person who may no
+ * longer see notices of the kind, or read the notice's subject, is not sent
+ * what their list now hides from them. `null` for a notice that is gone or whose kind is not registered.
  */
 async function stillShown(
   db: NoticesDb,
@@ -296,6 +296,15 @@ async function stillShown(
   const kind = registeredNoticeKind(notice.kind);
   if (kind === undefined) return null;
   if (kind.visible !== undefined && !(await kind.visible(notice.userId))) {
+    return null;
+  }
+  // Their list withholds what a notice says of a subject they may not read, so no email says it.
+  if (
+    kind.readable !== undefined &&
+    !(await kind.readable(notice.userId, [notice.subjectId])).has(
+      notice.subjectId
+    )
+  ) {
     return null;
   }
   return { notice, kind };
