@@ -41,9 +41,7 @@ describe("a declared widget's loading skeleton", () => {
     expect(table).not.toBeNull();
     if (table === null) return;
     expect(within(table).getAllByRole("columnheader")).toHaveLength(2);
-    expect(table.querySelectorAll("tbody tr")).toHaveLength(
-      rowsDrawn("large", null)
-    );
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(rowsDrawn(null));
   });
 
   it("draws a list's rows for a widget that loads as a list", () => {
@@ -55,6 +53,6 @@ describe("a declared widget's loading skeleton", () => {
     // the skeleton was the generic three lines.
     const list = skeleton.querySelector(".divide-y");
     expect(list).not.toBeNull();
-    expect(list?.children).toHaveLength(rowsDrawn("large", null));
+    expect(list?.children).toHaveLength(rowsDrawn(null));
   });
 });

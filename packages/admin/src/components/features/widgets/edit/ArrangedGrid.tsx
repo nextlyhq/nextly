@@ -36,7 +36,6 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { listDensityOf } from "../frame/list-rows";
 import type { AnswerSize } from "../frame/tier";
 import {
   moveAvailability,
@@ -317,22 +316,17 @@ function shownTitleOf(
 }
 
 /**
- * The size an answer was fetched at, as a card counts its rows by it: its tier and height, and
- * the density its settings asked for, read as the card reads its own (`settingsAsAsked`, then
- * `listDensityOf`), so a density its widget sets by default counts as the card would have drawn
- * it. `undefined` for an answer asked with no size.
+ * What an answer was fetched with, as a card counts its rows by it: the "Number of entries" its
+ * settings asked for, read as the card reads its own (`settingsAsAsked`), so a number its widget
+ * sets by default counts as the card would have drawn it. `undefined` for an answer not asked.
  */
 function answerSizeOf(
   widget: DashboardWidget,
   asked: AskedWith | undefined,
   sources: ArrangedGridProps["writes"]["sources"]
 ): AnswerSize | undefined {
-  if (asked?.size === undefined) return undefined;
-  return {
-    tier: asked.size.tier,
-    h: asked.size.h,
-    density: listDensityOf(settingsAsAsked(widget, asked.settings, sources)),
-  };
+  if (asked === undefined) return undefined;
+  return { items: settingsAsAsked(widget, asked.settings, sources).limit };
 }
 
 /** What the batch answered for one card, as its cell draws it (`ArrangedCellProps.data`). */
@@ -359,9 +353,9 @@ function cellData(
     // 🔴 This card's own request, not the batch's: partitions settle independently, and a
     // settled card must not dim.
     isFetching: answers.fetchingPlacementIds.has(placementId),
-    // The size and density its answer was fetched at: a card that grew or changed density keeps
-    // its old answer on screen while the new one loads, and drawn by the new ones that answer's
-    // one row past its rows, the sign that more exist, would read as a row.
+    // The "Number of entries" its answer was fetched with: a card whose reader asked for more
+    // keeps its old answer on screen while the new one loads, and drawn by the new number that
+    // answer's one row past its rows, the sign that more exist, would read as a row.
     answerSize: answerSizeOf(
       row.widget,
       answers.fetchedAskFor(placementId),

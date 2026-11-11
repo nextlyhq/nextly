@@ -298,6 +298,24 @@ describe("the list cards' Density", () => {
   );
 });
 
+describe("the list cards' Number of entries", () => {
+  it.each([
+    "core/recent-entries",
+    "core/continue",
+    "core/team-activity",
+    "core/upcoming-releases",
+    "core/content-table",
+  ])("%s offers five rows to start, from one to twenty", id => {
+    expect(card(id).settings?.find(s => s.name === "limit")).toMatchObject({
+      type: "number",
+      label: "Number of entries",
+      defaultValue: 5,
+      min: 1,
+      max: 20,
+    });
+  });
+});
+
 describe("a new card's defaults, before its reader touches a setting", () => {
   /** A declared core card as the registry publishes it to the admin. */
   function published(id: string) {

@@ -16,6 +16,9 @@ import {
 import { MAX_GRID_ROWS, MIN_GRID_ROWS } from "../grid-size";
 import { MAX_WIDGET_ROWS } from "../query-limits";
 
+/** The most rows `rowsThatFit` and `rowsInBody` answer, whatever a card's "Number of entries" offers. */
+const MOST_ROWS_THAT_FIT = 10;
+
 describe("rowsThatFit", () => {
   it("counts the whole default rows a card's body holds at each height", () => {
     // A body of 46, 134, 222, 310, 398 and 486 px (`cardBodyHeightPx`), over rows of 52 px.
@@ -33,7 +36,9 @@ describe("rowsThatFit", () => {
   });
 
   it("never counts more than ten rows, however tall the card", () => {
-    expect(MAX_WIDGET_ROWS).toBe(10);
+    // Ten, not the twenty a card's "Number of entries" now offers: an answer a published `load`
+    // reads keeps its meaning.
+    expect(MAX_WIDGET_ROWS).toBe(20);
     // 574 px holds eleven default rows and 926 px seventeen: both draw ten.
     expect(rowsThatFit({ h: 8 }, { density: "default" })).toBe(10);
     expect(rowsThatFit({ h: MAX_GRID_ROWS }, { density: "default" })).toBe(10);
@@ -47,7 +52,7 @@ describe("rowsThatFit", () => {
         expect(rowsThatFit({ h }, { density })).toBe(
           Math.min(
             Math.floor(cardBodyHeightPx(h) / LIST_ROW_HEIGHT_PX[density]),
-            MAX_WIDGET_ROWS
+            MOST_ROWS_THAT_FIT
           )
         );
         expect(rowsThatFit({ h }, { density })).toBe(

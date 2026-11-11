@@ -67,7 +67,7 @@ const DECLARED_TABLE_COLUMNS = 2;
 
 /**
  * The items setting a list or table card's skeleton holds the place of: `null`, the default
- * number, since a card's rows are what its widget's `load` reads for its size; `undefined` for
+ * number, since a declared widget's rows are what its `load` chose to read; `undefined` for
  * any other card, whose skeleton draws its default rows.
  */
 function skeletonItemsFor(definition: DashboardWidget): unknown {

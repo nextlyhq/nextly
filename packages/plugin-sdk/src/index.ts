@@ -139,6 +139,15 @@ export {
  * beside the formatters for the reason they are: a `load` runs on the server.
  */
 export { rowsThatFit } from "nextly";
+/**
+ * @experimental `listEntries(limit)` — how many rows a list card loads and shows
+ * for its "Number of entries" setting (`limit`): the setting, five where it is
+ * missing, at most `MAX_WIDGET_ROWS` (twenty), the most that setting may offer.
+ * A card is as tall as its content, so a list's length is its reader's choice,
+ * not its size: a widget's `load` asks `listEntries(settings.limit)` rows, with
+ * `total: true` so the card's footer can say "View all (N)" when there are more.
+ */
+export { listEntries, MAX_WIDGET_ROWS } from "nextly";
 
 /**
  * @experimental `defineAttentionItem` — declares one line of the Needs

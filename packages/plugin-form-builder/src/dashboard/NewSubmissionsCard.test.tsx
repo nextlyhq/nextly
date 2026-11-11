@@ -206,6 +206,45 @@ describe("New form submissions", () => {
     ).toHaveAttribute("href", ALL);
   });
 
+  it("draws its Number of entries of more submissions, its footer counting them all", () => {
+    // Seven new, and the card's "Number of entries" its starting five: five rows, and the
+    // footer says how many there are. 🔴 Drawn without the setting, a card counted by its size
+    // would draw what its height holds instead; without the total, "View all" said no count.
+    const seven: NewSubmissionsData = {
+      ...TWO_NEW,
+      items: Array.from({ length: 7 }, (_, i) => ({
+        id: `n${i}`,
+        title: `Person ${i}`,
+        at: "2026-01-05T09:30:00.000Z",
+        href: `${ALL}/n${i}`,
+      })),
+      total: 7,
+    };
+    drawCard("ready", seven);
+    const card = screen.getByRole("region", { name: CARD });
+    expect(within(card).getAllByTestId("entity-row")).toHaveLength(5);
+    const all = within(card).getByRole("link", { name: /View all/ });
+    expect(all).toHaveTextContent("View all (7)");
+    expect(all).toHaveAttribute("href", ALL);
+  });
+
+  it("says View all with no count when it draws every new submission", () => {
+    drawCard("ready", TWO_NEW);
+    const card = screen.getByRole("region", { name: CARD });
+    expect(within(card).getAllByTestId("entity-row")).toHaveLength(2);
+    const all = within(card).getByRole("link", { name: /View all/ });
+    expect(all.textContent).not.toMatch(/\(\d/);
+  });
+
+  it("says a floor as N+ in its footer when the count is one", () => {
+    // A count that is a floor, 40 or more, with two rows drawn.
+    drawCard("ready", { ...TWO_NEW, total: 40, atLeast: true });
+    const card = screen.getByRole("region", { name: CARD });
+    expect(
+      within(card).getByRole("link", { name: /View all/ })
+    ).toHaveTextContent("View all (40+)");
+  });
+
   it('stays on the dashboard while nothing is new, saying "No new submissions" with a link to all of them, as the site installed them', () => {
     // A site that renamed the collection: the link is the card's data's, the
     // installed slug, never the slug the plugin declared.
