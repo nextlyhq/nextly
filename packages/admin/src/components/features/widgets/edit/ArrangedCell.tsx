@@ -43,7 +43,7 @@ import { settingsAsAsked, titleAsAsked } from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
 
 import { CardActionsMenu, CardSizeLabel } from "./CardActionsMenu";
-import { CardMenu } from "./CardMenu";
+import { CardMenu, removeLabelFor } from "./CardMenu";
 import { CardQuickPopover, CardTitleButton } from "./CardQuickSetting";
 import {
   CardControlsOverlay,
@@ -384,6 +384,7 @@ function restingMenuFor(
     <CardMenu
       title={widget.title}
       triggerRef={controls.menuRef}
+      removeLabel={removeLabelFor(widget.id)}
       settingsDisabled={settingsBlocked(write)}
       removeDisabled={props.isWriting}
       {...(props.singleCardWriteBlocked === undefined

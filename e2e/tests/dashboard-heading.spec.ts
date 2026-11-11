@@ -21,7 +21,7 @@
  * unanswered. Everything after the answer -- the probe, the offer, the card and
  * the page -- is the real admin.
  *
- * The offer is made inside the setup card's first tile, "Start with sample
+ * The offer is made on the setup card's first line, "Start with sample
  * content", which the server offers only while the site holds no entries and
  * nobody has answered, and other specs in this run create entries; the card
  * itself retires once a site's steps are done. So the layout read is passed
@@ -32,25 +32,19 @@
  *
  * @module tests/dashboard-heading.spec
  */
-import { expect, type Page, type Request, type Route } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
-import { isLayoutRead } from "./support/dashboard-layout";
 import { LOCK } from "./support/locks";
+import { answerProbe, placeSetupCard } from "./support/setup-card";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
 
-/** The setup card's widget id, as core registers it. */
-const SETUP_WIDGET_ID = "core/setup";
-
-/** The card's id in the mocked layout. */
-const SETUP_CARD_ID = "e2e-setup";
-
 /** The offer's own action: present only when sample content is offered. */
-const OFFER_ACTION = { name: "Load", exact: true } as const;
+const OFFER_ACTION = { name: "Add samples", exact: true } as const;
 
 /**
  * The setup card's answer: sample content open, then a first entry to add. The
@@ -58,144 +52,20 @@ const OFFER_ACTION = { name: "Load", exact: true } as const;
  * declared widget's own data.
  */
 const SETUP_ANSWER = {
-  ok: true,
-  result: {
-    op: "data",
-    data: {
-      setup: {
-        known: true,
-        steps: [
-          { kind: "sample", status: "open" },
-          { kind: "entry", status: "open", collection: "posts" },
-        ],
-        done: 0,
-        total: 2,
-      },
-      collapsed: false,
-      allSet: false,
-    },
+  setup: {
+    known: true,
+    steps: [
+      { kind: "sample", status: "open" },
+      { kind: "entry", status: "open", collection: "posts" },
+    ],
+    done: 0,
+    total: 2,
   },
+  collapsed: false,
+  allSet: false,
 } as const;
 
-/**
- * Answer the sample-content probe with `status`, as the route would for this
- * person. Resolves `release` lets a test hold the answer, to look at the page
- * while the offer is still unanswered. Returns the probes seen, so a test can
- * show the probe was asked: an offer that is absent because nothing asked is
- * not an offer refused.
- */
-async function answerProbe(
-  page: Page,
-  status: 200 | 403,
-  hold?: Promise<void>
-): Promise<Request[]> {
-  const probes: Request[] = [];
-  await page.route("**/admin/api/seed", async (route: Route) => {
-    if (route.request().method() !== "HEAD") return route.fallback();
-    probes.push(route.request());
-    if (hold) await hold;
-    await route.fulfill({
-      status,
-      headers:
-        status === 200
-          ? {
-              "x-nextly-seed-template": "blog",
-              "x-nextly-seed-template-label": "Blog",
-            }
-          : {},
-      body: "",
-    });
-  });
-  return probes;
-}
-
-/** The dashboard's batch, whatever its query string. */
-const isBatchRead = (url: URL) => url.pathname.endsWith("/dashboard/query");
-
-/**
- * Pass the layout read through with the setup card placed first, and the
- * dashboard's batch through with the card's own slot answered as
- * {@link SETUP_ANSWER}. The batch is fetched for real and answered whole
- * (`{ results }`), which the admin reads as it reads a stream, so every other
- * card is drawn from the server's own answer.
- */
-async function placeSetupCard(page: Page): Promise<void> {
-  await page.route(isLayoutRead, async (route: Route) => {
-    if (route.request().method() !== "GET") return route.fallback();
-    // A read still in flight when the test ends fails its fetch. Aborted rather
-    // than thrown: a throw out of the handler fails a test that had passed,
-    // and its message prints the request, session cookie included.
-    let response: Awaited<ReturnType<Route["fetch"]>>;
-    try {
-      response = await route.fetch();
-    } catch {
-      await route.abort().catch(() => {});
-      return;
-    }
-    const body = (await response.json()) as Record<string, unknown>;
-    // The read may come bare or in a `data` envelope; place the card in
-    // whichever holds the placements.
-    const layout = (Array.isArray(body.placements) ? body : body.data) as {
-      placements: Array<Record<string, unknown>>;
-    };
-    // The array order IS the dashboard's order, so the card goes first by
-    // being first in the list, full width as setup is. A mocked read, so the
-    // size is the card's drawn one, not checked by a write.
-    layout.placements = [
-      {
-        id: SETUP_CARD_ID,
-        widgetId: SETUP_WIDGET_ID,
-        w: 12,
-        h: 2,
-        removed: false,
-      },
-      ...layout.placements.filter(p => p.widgetId !== SETUP_WIDGET_ID),
-    ];
-    await route.fulfill({ response, json: body });
-  });
-  await page.route(isBatchRead, async (route: Route) => {
-    if (route.request().method() !== "POST") return route.fallback();
-    const asked = (
-      route.request().postDataJSON() as {
-        queries?: Array<{ widget?: string } | null>;
-      }
-    ).queries;
-    let response: Awaited<ReturnType<Route["fetch"]>>;
-    try {
-      response = await route.fetch();
-    } catch {
-      await route.abort().catch(() => {});
-      return;
-    }
-    // The server streams one `{ index, slot }` line per settled slot, or
-    // answers `{ results }` whole: read either into slots by position.
-    const text = await response.text();
-    const results: unknown[] = [];
-    try {
-      const whole = JSON.parse(text) as { results?: unknown[] };
-      results.push(...(whole.results ?? []));
-    } catch {
-      for (const line of text.split("\n")) {
-        if (line.trim() === "") continue;
-        const { index, slot } = JSON.parse(line) as {
-          index: number;
-          slot: unknown;
-        };
-        results[index] = slot;
-      }
-    }
-    (asked ?? []).forEach((query, index) => {
-      if (query?.widget === SETUP_WIDGET_ID) results[index] = SETUP_ANSWER;
-    });
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: { results },
-    });
-  });
-}
-
-/** The page's level-one headings: exactly one, visible, the greeting. */
+/** The page's level-one headings: exactly one, visible, named for the project. */
 async function expectOneMainHeading(page: Page): Promise<void> {
   const mains = page.getByRole("heading", { level: 1 });
   await expect(mains).toHaveCount(1);
@@ -214,7 +84,7 @@ test.describe("the dashboard's main heading", () => {
     let release!: () => void;
     const held = new Promise<void>(resolve => (release = resolve));
     const probes = await answerProbe(page, 200, held);
-    await placeSetupCard(page);
+    await placeSetupCard(page, SETUP_ANSWER);
 
     await gotoAdmin(page, "/");
     await expect.poll(() => probes.length).toBeGreaterThan(0);
@@ -230,7 +100,7 @@ test.describe("the dashboard's main heading", () => {
   for (const theme of ["light", "dark"] as Theme[]) {
     test(`passes axe with the offer standing (${theme})`, async ({ page }) => {
       await answerProbe(page, 200);
-      await placeSetupCard(page);
+      await placeSetupCard(page, SETUP_ANSWER);
       await gotoAdmin(page, "/", theme);
       await expect(page.getByRole("button", OFFER_ACTION)).toBeVisible();
       await expectOneMainHeading(page);
@@ -239,7 +109,7 @@ test.describe("the dashboard's main heading", () => {
 
     test(`passes axe with no offer (${theme})`, async ({ page }) => {
       const probes = await answerProbe(page, 403);
-      await placeSetupCard(page);
+      await placeSetupCard(page, SETUP_ANSWER);
       await gotoAdmin(page, "/", theme);
       await expect.poll(() => probes.length).toBeGreaterThan(0);
       await expectOneMainHeading(page);
@@ -253,7 +123,7 @@ test.describe("the sample-content offer", () => {
     page,
   }) => {
     await answerProbe(page, 200);
-    await placeSetupCard(page);
+    await placeSetupCard(page, SETUP_ANSWER);
     await gotoAdmin(page, "/");
     // The site's answer comes with the card's own data, so a yes from the
     // probe is all that stands between the card and the offer.
@@ -262,7 +132,7 @@ test.describe("the sample-content offer", () => {
 
   test("is not made to a person the route refuses", async ({ page }) => {
     const probes = await answerProbe(page, 403);
-    await placeSetupCard(page);
+    await placeSetupCard(page, SETUP_ANSWER);
     await gotoAdmin(page, "/");
     // The probe was asked and answered before the verdict, so "no offer" is
     // the answer's doing, not a page that never asked.
