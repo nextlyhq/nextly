@@ -862,7 +862,17 @@ export class FieldGroupSchemaService {
     const canonical = this.canonicalColumn(field);
     if (canonical) return canonical.dialectType;
     if (isTextField(field)) {
-      return field.maxLength ? types.varchar(field.maxLength) : types.text;
+      if (field.maxLength) return types.varchar(field.maxLength);
+      // A unique field that states no width takes the shared column rule's answer, which bounds it
+      // where the dialect cannot key TEXT (`textKindFor`), so this creator and every description
+      // of its table read one rule.
+      if ("unique" in field && field.unique === true) {
+        return (
+          getComponentRowColumnDescriptor(field, this.dialect, "fieldGroup")
+            ?.dialectType ?? types.text
+        );
+      }
+      return types.text;
     }
     if (
       isTextareaField(field) ||

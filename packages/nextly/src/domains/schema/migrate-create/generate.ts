@@ -141,6 +141,7 @@ import {
   formatTimestamp,
   slugify,
 } from "./format-file";
+import { refuseIndexedTextWidening } from "./indexed-text-widening";
 import type { RenameDecision } from "./prompt-renames";
 import {
   scopedSettingsChanges,
@@ -889,6 +890,13 @@ export async function generateMigration(
       next: desiredSnapshot,
     });
   }
+  // A MySQL column widened into TEXT under a whole-column index cannot be altered; refused before
+  // any file is written (`refuseIndexedTextWidening`).
+  refuseIndexedTextWidening({
+    operations,
+    previous: previousSnapshot,
+    dialect: args.dialect,
+  });
   if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
     return null;
   }

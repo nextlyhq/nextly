@@ -176,3 +176,148 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
     });
   }
 );
+
+/** The three Builder tables, each with one text field that states no width. */
+const TABLES = ["dc_cases", "single_about", "comp_teaser"] as const;
+
+/** A collection, a Single and a field group, each with `field` added to it. */
+function manifestWith(field: Record<string, unknown>) {
+  return {
+    collections: [{ slug: "cases", fields: [field] }],
+    singles: [{ slug: "about", fields: [field] }],
+    components: [{ slug: "teaser", fields: [field] }],
+  };
+}
+
+/** The migration files in the project, oldest first. */
+function sqlFiles(): string[] {
+  return readdirSync(join(dir, "migrations"))
+    .filter(name => name.endsWith(".sql"))
+    .sort();
+}
+
+/**
+ * The newest snapshot with `column` of each Builder table stated as `type`: the record an
+ * earlier `migrate:create` left, which described these tables by the code-first rule.
+ */
+async function recordedAs(column: string, type: string): Promise<void> {
+  const meta = join(dir, "migrations", "meta");
+  const [newest] = readdirSync(meta)
+    .filter(name => name.endsWith(".json"))
+    .sort()
+    .reverse();
+  const file = JSON.parse(await readFile(join(meta, newest), "utf-8")) as {
+    snapshot: {
+      tables: { name: string; columns: { name: string; type: string }[] }[];
+    };
+  };
+  for (const table of file.snapshot.tables) {
+    if (!(TABLES as readonly string[]).includes(table.name)) continue;
+    for (const spec of table.columns)
+      if (spec.name === column) spec.type = type;
+  }
+  await writeFile(join(meta, newest), JSON.stringify(file));
+}
+
+describe.each(["sqlite", "postgresql", "mysql"] as const)(
+  "a keyed Builder text field on %s",
+  dialect => {
+    /** `migrate:create` over a Builder-only project of `manifest`. */
+    async function create(manifest: unknown) {
+      process.env.DB_DIALECT = dialect;
+      process.env.DATABASE_URL = URLS[dialect](dir);
+      _resetEnvCache();
+      await writeFile(join(dir, "ui-schema.json"), JSON.stringify(manifest));
+      return run(context => {
+        setNonInteractive(true);
+        return runMigrateCreate("keyed", { cwd: dir }, context).finally(() =>
+          setNonInteractive(false)
+        );
+      });
+    }
+    const check = () => run(context => runMigrateCheck({ cwd: dir }, context));
+
+    it("keeps a unique one bounded where MySQL can key it, with no drift", async () => {
+      const manifest = manifestWith({
+        name: "code",
+        type: "text",
+        unique: true,
+      });
+      expect((await create(manifest)).code).toBeUndefined();
+
+      // A unique key on MySQL needs a bounded column, so every Builder table's `code` is the
+      // bounded default there, as an earlier migrate:create wrote it; the others keep text.
+      const { upSql } = parseSqlSections(
+        await readFile(join(dir, "migrations", sqlFiles()[0]), "utf-8")
+      );
+      const codes = upSql
+        .split("\n")
+        .filter(line => /^\s+["`]code["`] /.test(line));
+      expect(codes).toHaveLength(3);
+      for (const line of codes) {
+        if (dialect === "mysql") expect(line).toMatch(/varchar\(255\)/);
+        else expect(line).not.toMatch(/varchar/i);
+      }
+      const checked = await check();
+      expect(checked.said.join("\n")).not.toContain("change_column_type");
+      expect(checked.code).toBeUndefined();
+    });
+
+    it("writes nothing for an indexed one already stored as text", async () => {
+      const manifest = manifestWith({ name: "tag", type: "text", index: true });
+      expect((await create(manifest)).code).toBeUndefined();
+
+      const again = await create(manifest);
+
+      // Nothing to write ends the command with success.
+      expect(again.code ?? 0).toBe(0);
+      expect(sqlFiles()).toHaveLength(1);
+    });
+
+    it.runIf(dialect === "mysql")(
+      "refuses to widen an indexed one an earlier file made varchar(255), writing nothing",
+      async () => {
+        const manifest = manifestWith({
+          name: "tag",
+          type: "text",
+          index: true,
+        });
+        expect((await create(manifest)).code).toBeUndefined();
+        await recordedAs("tag", "varchar(255)");
+
+        const refused = await create(manifest);
+
+        expect(refused.code).toBe(1);
+        const said = refused.said.join("\n");
+        for (const table of TABLES) expect(said).toContain(`${table}.tag`);
+        expect(said).toContain("maxLength");
+        expect(sqlFiles()).toHaveLength(1);
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
+      "still widens one no index keys",
+      async () => {
+        const manifest = manifestWith({ name: "summary", type: "text" });
+        expect((await create(manifest)).code).toBeUndefined();
+        await recordedAs("summary", "varchar(255)");
+
+        expect((await create(manifest)).code).toBeUndefined();
+
+        const files = sqlFiles();
+        expect(files).toHaveLength(2);
+        const { upSql } = parseSqlSections(
+          await readFile(join(dir, "migrations", files[1]), "utf-8")
+        );
+        for (const table of TABLES) {
+          expect(upSql).toMatch(
+            new RegExp(
+              `ALTER TABLE \`${table}\` MODIFY COLUMN \`summary\` text`,
+              "i"
+            )
+          );
+        }
+      }
+    );
+  }
+);
