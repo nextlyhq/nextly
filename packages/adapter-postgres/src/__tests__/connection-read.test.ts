@@ -6,6 +6,7 @@
  * stand-in, so each answer the server could give is tried in turn.
  */
 
+import { Socket } from "node:net";
 import { Duplex } from "node:stream";
 import { TLSSocket } from "node:tls";
 
@@ -13,8 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PostgresAdapter } from "../index";
 
-const plainSocket = () => new Duplex({ read() {}, write() {} });
-const tlsSocket = () => new TLSSocket(plainSocket());
+const plainSocket = () => new Socket();
+const tlsSocket = () => new TLSSocket(new Duplex({ read() {}, write() {} }));
 
 /** The pooled client the adapter is handed: its row, its socket, its release. */
 const client: {
@@ -84,9 +85,10 @@ afterEach(() => {
 });
 
 describe("PostgresAdapter.inspectConnection", () => {
-  it("reads an encrypted session, the server's version and the round trip", async () => {
+  it("reads an encrypted session on a TLS socket, the server's version and the round trip", async () => {
     serverAnswers({ version: "17.2 (Debian 17.2-1)", ssl: true });
     const adapter = await connected(REMOTE);
+    client.connection.stream = tlsSocket();
     expect(await adapter.inspectConnection()).toEqual({
       encryption: "encrypted",
       local: false,
@@ -107,6 +109,19 @@ describe("PostgresAdapter.inspectConnection", () => {
     serverAnswers({ version: "17.2", ssl: false });
     const adapter = await connected(REMOTE);
     client.connection.stream = tlsSocket();
+    expect((await adapter.inspectConnection()).encryption).toBe("encrypted");
+  });
+
+  it("reads a session a pooler encrypted, on this client's plain socket, as not encrypted", async () => {
+    serverAnswers({ version: "17.2", ssl: true });
+    const adapter = await connected(REMOTE);
+    expect((await adapter.inspectConnection()).encryption).toBe("unencrypted");
+  });
+
+  it("takes the session's answer when the client's socket cannot be read", async () => {
+    serverAnswers({ version: "17.2", ssl: true });
+    const adapter = await connected(REMOTE);
+    client.connection.stream = new Duplex({ read() {}, write() {} });
     expect((await adapter.inspectConnection()).encryption).toBe("encrypted");
   });
 

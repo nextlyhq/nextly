@@ -25,6 +25,7 @@ import {
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
 import { readAccessCaller } from "../../../auth/entity-read-access";
+import { container } from "../../../di/container";
 import { recordRollbackFailed } from "../../../cli/commands/plugin-module-rollback";
 import { defineCollection, text } from "../../../config";
 import { SCHEMA_CHANGE_STALE_MS } from "../../../domains/schema/events/schema-problems";
@@ -569,6 +570,20 @@ describe.each(getConfiguredTestDialects())(
         scopeSlug: NOTES,
       });
       expect((await healthFor(admin)).schemaChanges.failed).toEqual([]);
+    });
+
+    it("names the adapter the media library writes through, not the local fallback", async () => {
+      const { admin } = await boot();
+      // Storage routing media to S3, as an install with a cloud adapter has it.
+      container.registerSingleton("mediaStorage", () =>
+        storageAnswering(() =>
+          Promise.resolve({ url: "https://s3.test/a.jpg", path: "a.jpg" })
+        )
+      );
+      expect((await healthFor(admin)).storage).toEqual({
+        status: "ok",
+        type: "s3",
+      });
     });
 
     it("reports the storage adapter's failed write until a write succeeds", async () => {

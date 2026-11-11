@@ -6,6 +6,7 @@
  * a stand-in, so each answer the server could give is tried in turn.
  */
 
+import { Socket } from "node:net";
 import { Duplex } from "node:stream";
 import { TLSSocket } from "node:tls";
 
@@ -13,8 +14,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MySqlAdapter } from "../index";
 
-const plainSocket = () => new Duplex({ read() {}, write() {} });
-const tlsSocket = () => new TLSSocket(plainSocket());
+const plainSocket = () => new Socket();
+const tlsSocket = () => new TLSSocket(new Duplex({ read() {}, write() {} }));
 
 /** The pooled connection: the promise wrapper over mysql2's callback connection. */
 const connection = {
@@ -81,9 +82,10 @@ beforeEach(() => {
 });
 
 describe("MySqlAdapter.inspectConnection", () => {
-  it("reads a session with a cipher as encrypted, with the version and round trip", async () => {
+  it("reads a session with a cipher on a TLS socket as encrypted, with the version and round trip", async () => {
     serverAnswers("TLS_AES_256_GCM_SHA384");
     const adapter = await connected(REMOTE);
+    connection.connection.stream = tlsSocket();
     expect(await adapter.inspectConnection()).toEqual({
       encryption: "encrypted",
       local: false,
@@ -103,6 +105,12 @@ describe("MySqlAdapter.inspectConnection", () => {
     const adapter = await connected(REMOTE);
     connection.connection.stream = tlsSocket();
     expect((await adapter.inspectConnection()).encryption).toBe("encrypted");
+  });
+
+  it("reads a session a proxy encrypted, on this connection's plain socket, as not encrypted", async () => {
+    serverAnswers("TLS_AES_256_GCM_SHA384");
+    const adapter = await connected(REMOTE);
+    expect((await adapter.inspectConnection()).encryption).toBe("unencrypted");
   });
 
   it("answers unknown when the server would not say", async () => {

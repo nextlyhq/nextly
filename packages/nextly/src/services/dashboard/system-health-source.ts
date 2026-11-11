@@ -151,12 +151,22 @@ function migrationsLine(
   return { status, failed, pending: running };
 }
 
-/** The storage adapter's type, or nothing when storage could not say. */
+/**
+ * The collection the media library's uploads are routed by: storage picks a
+ * collection's own adapter (S3, Vercel Blob, UploadThing) by it, and falls back
+ * to local disk for any other.
+ */
+const MEDIA_COLLECTION = "media";
+
+/**
+ * The type of the storage adapter the media library writes through, or
+ * nothing when storage could not say.
+ */
 function storageType(): { type?: string } {
   try {
     const type = container
-      .get<{ getStorageType: () => string }>("mediaStorage")
-      .getStorageType();
+      .get<{ getStorageType: (collection?: string) => string }>("mediaStorage")
+      .getStorageType(MEDIA_COLLECTION);
     return typeof type === "string" && type !== "" ? { type } : {};
   } catch {
     return {};

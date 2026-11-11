@@ -4,9 +4,10 @@
  * socket; whether a socket negotiated TLS; and whether a host is this machine.
  *
  * The dialect adapters read the facts; these rules turn them into the answer,
- * so every branch is pinned here once, the pooler's included.
+ * so every branch is pinned here once, both pooler cases included.
  */
 
+import { Socket } from "node:net";
 import { Duplex } from "node:stream";
 import { TLSSocket } from "node:tls";
 
@@ -43,11 +44,11 @@ class RulesAdapter extends DrizzleAdapter {
   }
   encryption(read: {
     session: boolean | undefined;
-    ownSocketTls: boolean;
+    ownSocketTls: boolean | undefined;
   }): ConnectionEncryption {
     return this.encryptionOf(read);
   }
-  tls(handle: unknown): boolean {
+  tls(handle: unknown): boolean | undefined {
     return this.ownSocketIsTls(handle);
   }
   local(host: string | undefined): boolean {
@@ -64,16 +65,10 @@ const rules = new RulesAdapter();
 const tlsSocket = () => new TLSSocket(new Duplex({ read() {}, write() {} }));
 
 describe("encryptionOf", () => {
-  it("is encrypted when the session says so, whatever the socket", () => {
-    expect(rules.encryption({ session: true, ownSocketTls: false })).toBe(
-      "encrypted"
-    );
+  it("follows this process's own socket once the session has answered", () => {
     expect(rules.encryption({ session: true, ownSocketTls: true })).toBe(
       "encrypted"
     );
-  });
-
-  it("is not encrypted when the session says not and the socket is plain", () => {
     expect(rules.encryption({ session: false, ownSocketTls: false })).toBe(
       "unencrypted"
     );
@@ -85,13 +80,27 @@ describe("encryptionOf", () => {
     );
   });
 
+  it("is not encrypted when this socket is plain, though a pooler's session to the database is TLS", () => {
+    expect(rules.encryption({ session: true, ownSocketTls: false })).toBe(
+      "unencrypted"
+    );
+  });
+
+  it("takes the session's answer when the socket could not be read", () => {
+    expect(rules.encryption({ session: true, ownSocketTls: undefined })).toBe(
+      "encrypted"
+    );
+    expect(rules.encryption({ session: false, ownSocketTls: undefined })).toBe(
+      "unencrypted"
+    );
+  });
+
   it("is unknown when the session gave no answer, even over TLS", () => {
-    expect(rules.encryption({ session: undefined, ownSocketTls: true })).toBe(
-      "unknown"
-    );
-    expect(rules.encryption({ session: undefined, ownSocketTls: false })).toBe(
-      "unknown"
-    );
+    for (const ownSocketTls of [true, false, undefined]) {
+      expect(rules.encryption({ session: undefined, ownSocketTls })).toBe(
+        "unknown"
+      );
+    }
   });
 
   it("answers unknown from the base inspection, which reads nothing", async () => {
@@ -103,21 +112,22 @@ describe("encryptionOf", () => {
 });
 
 describe("ownSocketIsTls", () => {
-  it("reads a TLS socket at connection.stream as TLS", () => {
+  it("reads a TLS socket at connection.stream as TLS, and a plain socket as not", () => {
     expect(rules.tls({ connection: { stream: tlsSocket() } })).toBe(true);
+    expect(rules.tls({ connection: { stream: new Socket() } })).toBe(false);
   });
 
-  it("reads a plain socket, or a handle shaped otherwise, as not TLS", () => {
-    const plain = new Duplex({ read() {}, write() {} });
-    expect(rules.tls({ connection: { stream: plain } })).toBe(false);
-    expect(rules.tls({ connection: {} })).toBe(false);
-    expect(rules.tls({ connection: null })).toBe(false);
-    expect(rules.tls({ stream: tlsSocket() })).toBe(false);
-    expect(rules.tls(undefined)).toBe(false);
+  it("cannot say for a handle shaped otherwise, or a stream that is not a socket", () => {
+    const duplex = new Duplex({ read() {}, write() {} });
+    expect(rules.tls({ connection: { stream: duplex } })).toBeUndefined();
+    expect(rules.tls({ connection: {} })).toBeUndefined();
+    expect(rules.tls({ connection: null })).toBeUndefined();
+    expect(rules.tls({ stream: tlsSocket() })).toBeUndefined();
+    expect(rules.tls(undefined)).toBeUndefined();
     // A look-alike is not a socket that negotiated anything.
-    expect(rules.tls({ connection: { stream: { encrypted: true } } })).toBe(
-      false
-    );
+    expect(
+      rules.tls({ connection: { stream: { encrypted: true } } })
+    ).toBeUndefined();
   });
 });
 

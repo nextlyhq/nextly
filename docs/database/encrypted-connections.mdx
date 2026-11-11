@@ -7,7 +7,7 @@ When your app talks to a database on another machine, everything it sends crosse
 
 ## What System health checks
 
-The **Connection** line of the System health card (for super-admins, on the dashboard) reads from the database whether the connection is encrypted. It does not read your configuration. On PostgreSQL it reads the session's own row in `pg_stat_ssl`; on MySQL, the session's `Ssl_cipher` status. SQLite is a file on the same machine, so there is nothing to encrypt and the line is not shown.
+The **Connection** line of the System health card (for super-admins, on the dashboard) reads whether the connection is encrypted from the connection itself, not from your configuration: the database session's own answer (on PostgreSQL its row in `pg_stat_ssl`, on MySQL its `Ssl_cipher` status) and whether your app's own connection negotiated TLS. SQLite is a file on the same machine, so there is nothing to encrypt and the line is not shown.
 
 | The line says                    | What it means                                                                                                                                                                  | Counted as         |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ |
@@ -20,7 +20,7 @@ The **Connection** line of the System health card (for super-admins, on the dash
 
 ### Connection poolers
 
-Behind a connection pooler (PgBouncer, or the poolers that Neon, Supabase and other hosted providers run), the database session belongs to the pooler. Its `pg_stat_ssl` row describes the pooler's own connection to the database, which can be unencrypted inside the provider's network. When the session says it is not encrypted but your app's own connection to the pooler negotiated TLS, System health shows **Encrypted**: the traffic that leaves your machine is encrypted.
+Behind a connection pooler or proxy (PgBouncer, or the poolers that Neon, Supabase and other hosted providers run), the database session belongs to the pooler. Its `pg_stat_ssl` row or `Ssl_cipher` describes the pooler's own connection to the database, not your app's connection to the pooler. So once the session has answered, System health judges by your app's own connection, the leg your traffic leaves on: **Encrypted** when it negotiated TLS, even if the pooler reaches the database without it inside the provider's network, and **Not encrypted** when it did not, even if the pooler's connection to the database is encrypted.
 
 ## Turn on TLS for PostgreSQL
 

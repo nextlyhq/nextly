@@ -198,9 +198,9 @@ export interface PoolStats {
 /**
  * Whether a connection's traffic is encrypted.
  *
- * - `"encrypted"` / `"unencrypted"`: what the database session said about
- *   itself, or encrypted where this process's own socket negotiated TLS to a
- *   pooler whose session to the server is plain.
+ * - `"encrypted"` / `"unencrypted"`: whether this process's own connection
+ *   negotiated TLS, read from its socket, once the database session has
+ *   answered; the session's own answer where the socket cannot be read.
  * - `"unknown"`: the read failed, or the server would not say. Never a pass.
  * - `"not-applicable"`: there is no network connection to encrypt (a local file).
  *
