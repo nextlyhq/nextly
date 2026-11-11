@@ -853,6 +853,16 @@ place on one of its pages with `TargetSlot` and `PlaceTabs` from
 ```tsx
 import { PlaceTabs, TargetSlot } from "@nextlyhq/plugin-sdk/admin";
 
+// The plugin's own invoice view.
+import { Invoice } from "./Invoice";
+
+// The place's type, as declared above, so its id and context are checked.
+declare module "@nextlyhq/plugin-sdk" {
+  interface AdminPlaces {
+    "acme-billing.invoice": { context: { invoiceId: string } };
+  }
+}
+
 export function InvoicePage({ invoiceId }: { invoiceId: string }) {
   const context = { invoiceId };
   return (

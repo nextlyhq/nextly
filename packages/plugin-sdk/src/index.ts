@@ -560,6 +560,18 @@ export { publicAddressOf, typesWithoutAddress } from "nextly";
 export type { PublicAddress, PublicAddressType } from "nextly";
 
 /**
+ * Where a page kept in one language is opened: `languageAddressOf(path,
+ * locale)` forms the address a path kept in `locale` is served at, under the
+ * language's prefix or on its own domain, as the site declares
+ * (`languageAddresses`), for a page's links to its other languages and its
+ * sitemap entries. Intended to become stable with `publicAddressOf`.
+ *
+ * @experimental
+ */
+export { languageAddressOf } from "nextly";
+export type { LanguageAddress, LanguageAddressRule } from "nextly";
+
+/**
  * Keeping every public address to one page. A plugin that keeps a record of
  * who holds each address takes part through `ctx.publicAddresses.participate`
  * with a `PublicAddressParticipant`: core asks every participant, inside each
@@ -576,6 +588,7 @@ export type {
   AddressHolder,
   HeldAddress,
   HeldAddressUpdate,
+  ParticipantTransaction,
   PluginPublicAddresses,
   PublicAddressParticipant,
   RefusedAddressUpdate,
