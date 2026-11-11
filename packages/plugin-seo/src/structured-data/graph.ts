@@ -18,6 +18,8 @@ import type {
   PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { originOf } from "../origin";
+
 import {
   DETAIL_LABELS,
   isStructuredDataTypeKey,
@@ -27,8 +29,6 @@ import {
   type StructuredDataDetail,
   type StructuredDataTypeKey,
 } from "./catalog";
-import { originOf } from "../origin";
-
 import type { DetailMapping, StructuredDataRules } from "./rules";
 import {
   dateOf,

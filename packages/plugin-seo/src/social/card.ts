@@ -143,10 +143,9 @@ export function withSocialCard(
     );
   // The card reads nothing beyond what the answer read, so its cache tags
   // are the answer's own.
-  const tags = resolver.tags;
-  return tags === undefined
+  return resolver.tags === undefined
     ? { resolve }
-    : { resolve, tags: input => tags.call(resolver, input) };
+    : { resolve, tags: input => resolver.tags?.(input) ?? [] };
 }
 
 /** The card's rules the plugin's options name, until the SEO settings do. */

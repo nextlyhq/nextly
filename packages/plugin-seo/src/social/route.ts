@@ -9,9 +9,11 @@
  */
 import {
   NextlyError,
+  respondMutation,
   type PluginRoute,
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
+import { z } from "zod";
 
 import type { MadeShareImageItem } from "./contract";
 import { SHARE_IMAGE_ROUTE_PATH } from "./contract";
@@ -23,19 +25,19 @@ const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
 /** How long reading the picture may take, in milliseconds. */
 const READ_TIMEOUT_MS = 20_000;
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+/** What the action is sent, as it is read. */
+const REQUEST = z.object({ media: z.string().trim().min(1) });
 
 /** The media item the request names, or a refusal saying what is missing. */
 async function requested(req: Request): Promise<string> {
   const body: unknown = await req.json().catch(() => undefined);
-  const media = isRecord(body) ? body.media : undefined;
-  if (typeof media !== "string" || media.trim() === "") {
+  const parsed = REQUEST.safeParse(body);
+  if (!parsed.success) {
     throw NextlyError.invalidInput({
       message: "Name the media library item to make a share image from.",
     });
   }
-  return media;
+  return parsed.data.media;
 }
 
 /** A refusal for a picture that could not be read from where it is kept. */
@@ -102,6 +104,15 @@ async function readPicture(url: string, origin: string): Promise<Uint8Array> {
     throw notRead({
       address: address.href,
       cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+  // Storage that refuses an anonymous read serves the picture to nobody
+  // outside the admin, so no network could load it on a card either.
+  if (response.status === 401 || response.status === 403) {
+    throw NextlyError.invalidInput({
+      message:
+        "This picture's address is not public, so networks could not load it on a card either. Choose a picture the site serves publicly.",
+      logContext: { address: address.href, status: response.status },
     });
   }
   if (!response.ok) {
@@ -189,7 +200,9 @@ async function handle(
     },
     { as: "user", user, request: req }
   );
-  return Response.json(itemOf(copy, made), { status: 201 });
+  return respondMutation("Share image made.", itemOf(copy, made), {
+    status: 201,
+  });
 }
 
 /**

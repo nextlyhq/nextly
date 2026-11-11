@@ -201,6 +201,9 @@ async function makeShareImage(cookie: string, media: string) {
     }
   );
   const body = (await response.json()) as Record<string, unknown>;
+  // Deleted after the test whatever it asserts, with its files.
+  const made = body.item as { id?: unknown } | undefined;
+  if (typeof made?.id === "string") stored.push(made.id);
   return { status: response.status, body };
 }
 
@@ -209,7 +212,7 @@ async function makeShareImage(cookie: string, media: string) {
  * under `https://example.com` is answered from the stored file. Every other
  * address is refused, so a read from anywhere else fails the test.
  */
-function serveUploads() {
+function serveUploads(status = 200) {
   const reads: string[] = [];
   vi.stubGlobal("fetch", async (input: URL | string) => {
     const address = new URL(String(input));
@@ -217,6 +220,7 @@ function serveUploads() {
     if (address.origin !== "https://example.com") {
       return new Response(null, { status: 404 });
     }
+    if (status !== 200) return new Response(null, { status });
     return new Response(
       await readFile(path.join(UPLOADS, decodeURIComponent(address.pathname)))
     );
@@ -268,18 +272,22 @@ describe.each(getConfiguredTestDialects())("social cards (%s)", dialect => {
 
     expect(made.status).toBe(201);
     expect(reads).toEqual([`https://example.com${picture.url}`]);
+    // The mutation envelope: what was done, and the item it made.
     expect(made.body).toMatchObject({
-      filename: expect.stringMatching(/\.jpg$/),
-      mimeType: "image/jpeg",
-      width: 1200,
-      height: 630,
-      altText: "A harbour at dawn",
+      message: expect.any(String),
+      item: {
+        filename: expect.stringMatching(/\.jpg$/),
+        mimeType: "image/jpeg",
+        width: 1200,
+        height: 630,
+        altText: "A harbour at dawn",
+      },
     });
-    stored.push(String(made.body.id));
+    const item = made.body.item as { id: string };
 
     // The file the library holds is the card: read back from where it was
     // stored, not from what the action said of it.
-    const copy = await t.nextly.media.findByID({ id: String(made.body.id) });
+    const copy = await t.nextly.media.findByID({ id: item.id });
     const bytes = await readFile(path.join(UPLOADS, copy.url));
     const file = await sharp(bytes).metadata();
     expect(file.format).toBe("jpeg");
@@ -293,6 +301,18 @@ describe.each(getConfiguredTestDialects())("social cards (%s)", dialect => {
       height: 600,
       mimeType: "image/png",
     });
+  });
+
+  it("refuses a picture its storage will not serve publicly, which no network could load", async () => {
+    const t = await boot(dialect);
+    const picture = await undersized(t);
+    serveUploads(403);
+    const editor = await holding(t, ["create-media", "read-media"]);
+
+    const made = await makeShareImage(editor, picture.id);
+
+    expect(made.status).toBe(400);
+    expect(JSON.stringify(made.body)).toMatch(/not public/);
   });
 
   it("refuses a person who may read the library but not add to it", async () => {
