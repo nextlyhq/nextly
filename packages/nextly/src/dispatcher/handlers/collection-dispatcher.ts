@@ -109,6 +109,7 @@ import {
 } from "../helpers/service-envelope";
 import {
   isTruthyParam,
+  parseCountParam,
   parseRichTextFormat,
   parseSelectParam,
   parseStatusParam,
@@ -1257,6 +1258,8 @@ const COLLECTIONS_METHODS: Record<
         fallbackLocale: p["fallback-locale"],
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
+        // `?count=capped` counts the total no further than the list shows.
+        countUpTo: parseCountParam(p.count),
       });
 
       type PaginatedShape = {
@@ -1267,6 +1270,7 @@ const COLLECTIONS_METHODS: Record<
         totalPages: number;
         hasNextPage: boolean;
         hasPrevPage: boolean;
+        totalCapped?: true;
       };
       const paginated = unwrapServiceResult<PaginatedShape>(result, {
         collectionName: p.collectionName,
