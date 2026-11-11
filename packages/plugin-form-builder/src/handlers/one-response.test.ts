@@ -25,6 +25,14 @@ describe("a submission's one-response key", () => {
     ).toBe("email:ada@example.com");
   });
 
+  it("reads answers stored as a JSON string, as a stored row holds them", async () => {
+    expect(
+      await responseKeyOf(digests, email, {
+        data: JSON.stringify({ email: "Ada@Example.com" }),
+      })
+    ).toBe("email:ada@example.com");
+  });
+
   it("compares the network address", async () => {
     expect(await responseKeyOf(digests, ip, { ipAddress: "203.0.113.9" })).toBe(
       "ip:203.0.113.9"

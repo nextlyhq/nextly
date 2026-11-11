@@ -35,12 +35,27 @@ function textOf(value: unknown): string | undefined {
   return trimmed === "" ? undefined : trimmed;
 }
 
+/**
+ * A submission's answers as an object: as written, or as a stored row holds
+ * them before a read decodes them, a JSON string.
+ */
+function answersOf(data: unknown): Record<string, unknown> | undefined {
+  let value = data;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 /** The answer to `field` in a submission's data. */
 function answerOf(data: unknown, field: string | undefined): unknown {
-  if (field === undefined || data === null || typeof data !== "object") {
-    return undefined;
-  }
-  return (data as Record<string, unknown>)[field];
+  return field === undefined ? undefined : answersOf(data)?.[field];
 }
 
 /**
@@ -72,4 +87,48 @@ export async function responseKeyOf(
     default:
       return null;
   }
+}
+
+/** Whether an update changes what a submission's key is made from. */
+export function touchesResponseKey(patch: KeyedSubmission): boolean {
+  return (
+    patch.status !== undefined ||
+    patch.data !== undefined ||
+    patch.ipAddress !== undefined
+  );
+}
+
+/**
+ * A submission's key after an update, made from the stored row with the
+ * update applied: none once it is spam; its own again when restored from
+ * spam, unless another submission has since taken that value, when it keeps
+ * none and the value stays with that one; and a new one when its answer or
+ * address changed, which the unique index refuses if another submission
+ * holds it already, so an edit cannot give two submissions one value.
+ */
+export async function responseKeyAfterUpdate(input: {
+  digests: () => Digests;
+  settings: Pick<FormSettings, "oneResponse" | "oneResponseField">;
+  patch: KeyedSubmission;
+  stored: (KeyedSubmission & { responseKey?: unknown }) | undefined;
+  /** Whether another submission of the form holds `key`. */
+  heldElsewhere: (key: string) => Promise<boolean>;
+}): Promise<string | null> {
+  const { patch, stored } = input;
+  const key = await responseKeyOf(input.digests, input.settings, {
+    status: patch.status ?? stored?.status,
+    data: patch.data ?? stored?.data,
+    ipAddress: patch.ipAddress ?? stored?.ipAddress,
+  });
+  if (key === null || key === stored?.responseKey) return key;
+  // Restored from spam with the same value it was stored with (an update
+  // carries the whole payload, so the value is compared, not its presence).
+  const restoring =
+    stored?.status === "spam" &&
+    key ===
+      (await responseKeyOf(input.digests, input.settings, {
+        data: stored.data,
+        ipAddress: stored.ipAddress,
+      }));
+  return restoring && (await input.heldElsewhere(key)) ? null : key;
 }

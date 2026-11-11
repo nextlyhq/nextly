@@ -33,7 +33,11 @@ import { submissionAnswers } from "./emails/answers";
 import { formsEmailTemplates } from "./emails/starter-messages";
 import { addressedFormPages, FORM_EDITOR_VIEW } from "./form-pages";
 import { registerFormClosing } from "./handlers/form-closing-hold";
-import { responseKeyOf } from "./handlers/one-response";
+import {
+  responseKeyAfterUpdate,
+  responseKeyOf,
+  touchesResponseKey,
+} from "./handlers/one-response";
 import {
   sameSubmittedPayload,
   submissionMarks,
@@ -1018,6 +1022,7 @@ export async function prepareSubmissionForWrite(
     data?: Record<string, unknown>;
     operation?: string;
     originalData?: Record<string, unknown>;
+    collection?: string;
     user?: { id?: string };
     req?: { http?: { ip: string | null; method: string } };
   };
@@ -1034,13 +1039,9 @@ export async function prepareSubmissionForWrite(
     parentFormId(submission) ?? (stored ? parentFormId(stored) : null);
   if (!formId) return ctx.data;
 
-  // Marked spam, a submission gives its key back: spam takes nobody's place,
-  // and the person it named may respond again.
-  if (ctx.operation !== "create" && submission.status === "spam") {
-    submission.responseKey = null;
-  }
-
   if (ctx.operation !== "create" && !updateNeedsChecking(submission, stored)) {
+    // A status change still moves the key: spam gives it back.
+    await rekeyAfterUpdate(ctx, formsSlug, formId, nextly);
     return ctx.data;
   }
 
@@ -1120,8 +1121,53 @@ export async function prepareSubmissionForWrite(
       normalizeFormSettings(form.settings),
       ctx.data
     );
+  } else {
+    await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);
   }
   return ctx.data;
+}
+
+/**
+ * Move an updated submission's one-response key with what the update changes
+ * (`responseKeyAfterUpdate`): spam gives it back, a restored or edited
+ * submission takes the key of what it now holds. An update that touches none
+ * of status, answers or address leaves it as stored.
+ */
+async function rekeyAfterUpdate(
+  ctx: {
+    data?: Record<string, unknown>;
+    originalData?: Record<string, unknown>;
+    collection?: string;
+  },
+  formsSlug: string,
+  formId: string,
+  nextly: NextlyInstance,
+  form?: Record<string, unknown>
+): Promise<void> {
+  const row = ctx.data;
+  if (!row || !touchesResponseKey(row)) return;
+  const parent =
+    form ?? (await formToCheckAgainst(undefined, formsSlug, formId, nextly));
+  const stored = ctx.originalData;
+  row.responseKey = await responseKeyAfterUpdate({
+    digests: () => nextly.security.digests,
+    settings: normalizeFormSettings(parent.settings),
+    patch: row,
+    stored,
+    heldElsewhere: async key =>
+      (await nextly.services.collections.count(
+        ctx.collection ?? "form-submissions",
+        {
+          where: {
+            form: { equals: formId },
+            responseKey: { equals: key },
+            ...(stored?.id ? { id: { not_equals: stored.id } } : {}),
+          },
+        },
+        // Elevated: the value is held whoever may read the holder.
+        { as: "system" }
+      )) > 0,
+  });
 }
 
 /**

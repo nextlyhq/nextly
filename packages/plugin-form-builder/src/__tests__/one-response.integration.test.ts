@@ -215,6 +215,68 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(true);
     });
 
+    it("moves the key with an edited email, and refuses an edit onto a held one", async () => {
+      const { nextly, submit } = await boot({
+        oneResponse: "email",
+        oneResponseField: "email",
+      });
+      await submit({ email: "ada@example.com" });
+      await submit({ email: "grace@example.com" });
+      const ada = (await stored(nextly)).find(
+        row => row.data.email === "ada@example.com"
+      )!;
+
+      // Staff correct Ada's address: the old one is free, the new one held.
+      await nextly.update({
+        collection: "form-submissions",
+        id: ada.id,
+        data: { data: { email: "ada@lovelace.dev" }, _overwrite: true },
+      });
+      expect((await submit({ email: "ada@example.com" })).success).toBe(true);
+      expect(await submit({ email: "ADA@lovelace.dev" })).toMatchObject({
+        outcome: "duplicate",
+      });
+
+      // An edit onto an address another submission holds is refused.
+      await expect(
+        nextly.update({
+          collection: "form-submissions",
+          id: ada.id,
+          data: { data: { email: "grace@example.com" }, _overwrite: true },
+        })
+      ).rejects.toMatchObject({ code: "DUPLICATE" });
+    });
+
+    it("gives a submission restored from spam its key back, unless taken since", async () => {
+      const { nextly, submit } = await boot({
+        oneResponse: "email",
+        oneResponseField: "email",
+      });
+      await submit({ email: "ada@example.com" });
+      const [first] = await stored(nextly);
+      const markAs = (id: string, status: string) =>
+        nextly.update({
+          collection: "form-submissions",
+          id,
+          data: { status, _overwrite: true },
+        });
+
+      // Restored with the value free: it holds it again.
+      await markAs(first!.id, "spam");
+      await markAs(first!.id, "new");
+      expect(await submit({ email: "ada@example.com" })).toMatchObject({
+        outcome: "duplicate",
+      });
+
+      // Taken while it was spam: the restore keeps no key, and succeeds.
+      await markAs(first!.id, "spam");
+      expect((await submit({ email: "ada@example.com" })).success).toBe(true);
+      await markAs(first!.id, "new");
+      const restored = (await stored(nextly)).find(row => row.id === first!.id);
+      expect(restored?.status).toBe("new");
+      expect(restored?.responseKey ?? null).toBeNull();
+    });
+
     it("lets a person respond again once their submission is marked spam", async () => {
       const { nextly, submit } = await boot({
         oneResponse: "email",
