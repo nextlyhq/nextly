@@ -87,6 +87,8 @@ export {
   type PageMetadataResolver,
   type PageMetadataSource,
   type PageMetadataValues,
+  type StructuredDataNode,
+  type StructuredDataValue,
 } from "./runtime/seo";
 
 // Draft previews — the route that turns a scoped preview link into a draft
@@ -226,6 +228,7 @@ export {
   resolveContent,
   isReservedPath,
   contentPageMetadata,
+  contentPageStructuredData,
   createContentRoute,
   createPublicContentRoute,
   createSingleRoute,

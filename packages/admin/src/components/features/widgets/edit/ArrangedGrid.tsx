@@ -57,6 +57,7 @@ import type { CellSettingsWrite } from "./useCardQuickSetting";
 import type { CardSettingsWriteCallbacks } from "./useCardSettingsWrite";
 import type { ArrangedWidget } from "./useDashboardArrangement";
 import type { DashboardFocus } from "./useDashboardFocus";
+import type { ProvisionalCard } from "./useProvisionalCard";
 
 export interface ArrangedGridProps {
   /** The cards to draw, in order. */
@@ -67,6 +68,8 @@ export interface ArrangedGridProps {
   isEditing: boolean;
   /** The card just placed (moved, resized, added or put back), ringed until the next. */
   highlightedId?: string | null;
+  /** The card the add panel added as one the reader already has, whose settings open at once. */
+  provisional?: ProvisionalCard;
   /**
    * The drag, for its handles and the order it has reached. Its handles are drawn only while it
    * is `enabled`: at one column the card menu moves cards.
@@ -170,7 +173,7 @@ function EmptyArrangement({
       className="col-span-full flex items-center justify-center rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground"
     >
       {isEditing
-        ? "Every card is removed. Put one back from Add widget, or reset to the default dashboard."
+        ? "Every card is removed. Add one from Add widget, or reset to the default dashboard."
         : // Customise mode is offered at every width, so the way back is the same on a phone.
           "Your dashboard has no cards on it. Customize it to bring one back, or reset to the default dashboard."}
     </p>
@@ -409,12 +412,29 @@ function useGridRows(
   };
 }
 
+/** What the provisional card's cell is handed, bound to it, or nothing for every other cell. */
+function provisionalFor(
+  provisional: ProvisionalCard | undefined,
+  placementId: string
+): Pick<ArrangedCellProps, "provisional"> {
+  if (provisional === undefined || !provisional.ids.has(placementId)) return {};
+  return {
+    provisional: {
+      refusal: (config, ownTitle) =>
+        provisional.refusal(placementId, config, ownTitle),
+      keep: () => provisional.keep(placementId),
+      closed: () => provisional.closed(placementId),
+    },
+  };
+}
+
 export function ArrangedGrid({
   rows,
   placements,
   isDrawn,
   isEditing,
   highlightedId = null,
+  provisional,
   drag,
   resize,
   writes,
@@ -475,6 +495,7 @@ export function ArrangedGrid({
             drawnW={widths.get(row.placementId)}
             isEditing={isEditing}
             highlighted={highlightedId === row.placementId}
+            {...provisionalFor(provisional, row.placementId)}
             drag={cellDragFor(drag, row.placementId)}
             resize={cellResizeFor(drag, resize, row)}
             order={order.get(row.placementId)}
