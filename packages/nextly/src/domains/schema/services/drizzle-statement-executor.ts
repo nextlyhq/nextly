@@ -108,7 +108,7 @@ export class DrizzleStatementExecutor
     for (const stmt of splitStatements(statements)) {
       // A run that lost the schema lock starts no further statement. SQLite runs one writer at a
       // time, so a statement here needs no claim for a run taking over to find.
-      assertSchemaLockHeld();
+      await assertSchemaLockHeld();
       try {
         dbTyped.run(sqlTag.raw(stmt));
       } catch (err) {
@@ -131,7 +131,7 @@ async function executeMarked(
   const { sql: sqlTag } = await import("drizzle-orm");
   const txTyped = tx as AsyncExecuteClient;
   for (const stmt of statements) {
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     await txTyped.execute(sqlTag.raw(markedForSchemaLock(stmt)));
   }
 }

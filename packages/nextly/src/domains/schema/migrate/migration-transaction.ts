@@ -271,7 +271,7 @@ export async function runMigrationStatements(
       for (const [index, statement] of statements.entries()) {
         await checkpoint?.(tx.db, index);
         // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
-        assertSchemaLockHeld();
+        await assertSchemaLockHeld();
         await tx.execute(sent(statement));
       }
       if (after !== undefined) {
@@ -279,7 +279,9 @@ export async function runMigrationStatements(
         await after(tx.db, statements.length);
       }
       // The commit is what lands the file: refused, and the transaction undone, as a statement.
-      assertSchemaLockHeld();
+      // Not on MySQL, whose DDL committed as it ran: the file has landed by now, and refusing here
+      // would report it as not recorded.
+      if (dialect !== "mysql") await assertSchemaLockHeld();
     });
     return statements.length;
   }
@@ -292,7 +294,7 @@ export async function runMigrationStatements(
       // caller as it is, not as a statement that failed part-way.
       await checkpoint?.(adapter.getDrizzle(), index);
       // Asked before the statement, outside the failure below: refused here, nothing of it ran.
-      assertSchemaLockHeld();
+      await assertSchemaLockHeld();
       try {
         await execute(sent(statement));
       } catch (error) {
@@ -332,7 +334,7 @@ export async function runMigrationStatements(
     await runEach(onPool);
   }
   if (after !== undefined) {
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     await after(adapter.getDrizzle(), statements.length);
   }
   return statements.length;

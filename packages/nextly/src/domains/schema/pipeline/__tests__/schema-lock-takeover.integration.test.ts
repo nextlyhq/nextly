@@ -272,11 +272,15 @@ describe.each(SERVERS)(
             `ALTER TABLE ${BUSY} ADD COLUMN late integer`
           );
           expect(await tablesWithPrefix(adapter, PREFIX)).toEqual([BUSY]);
-          // Refused with the lock given back, so the next run need not wait out a lease.
+          // Refused with the lock handed back to the earlier holder's claim, not freed and not kept:
+          // the next run finds that claim and waits for its statement in turn, where a freed row
+          // would let it start beside the statement still running.
           const rows = await adapter.executeQuery<{ owner: string | null }>(
             "SELECT owner FROM nextly_schema_lock"
           );
-          expect(rows).toEqual([{ owner: null }]);
+          expect(rows).toHaveLength(1);
+          expect(rows[0].owner).toMatch(/^.+:\d+#[0-9a-f-]{36}$/);
+          expect(rows[0].owner).not.toContain(`:${process.pid}#`);
         } finally {
           await watcher.disconnect();
           freeTheTable();

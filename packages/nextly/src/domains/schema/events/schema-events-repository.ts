@@ -213,7 +213,7 @@ export class SchemaEventsRepository {
   /** Insert an in_progress event and return its generated id. */
   async recordStart(input: RecordStartInput): Promise<string> {
     // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     const id = crypto.randomUUID();
     const values: Record<string, unknown> = {
       id,
@@ -244,7 +244,7 @@ export class SchemaEventsRepository {
    */
   async insertEvent(values: Record<string, unknown>): Promise<string> {
     // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     const id = (values.id as string | undefined) ?? crypto.randomUUID();
     const startedAt =
       values.startedAt ??
@@ -275,7 +275,7 @@ export class SchemaEventsRepository {
    */
   async markApplied(id: string, input: MarkAppliedInput): Promise<boolean> {
     // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     const set: Record<string, unknown> = {
       status: "applied",
       endedAt: new Date(),
@@ -338,7 +338,7 @@ export class SchemaEventsRepository {
    */
   async discardAttempt(id: string): Promise<void> {
     // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     await this.db
       .delete(this.table)
       .where(and(eq(this.table.id, id), eq(this.table.status, "in_progress")));
@@ -347,7 +347,7 @@ export class SchemaEventsRepository {
   /** Transition a row to failed. */
   async markFailed(id: string, input: MarkFailedInput): Promise<void> {
     // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     await this.db
       .update(this.table)
       .set({
@@ -391,7 +391,7 @@ export class SchemaEventsRepository {
     byEventId: string;
   }): Promise<void> {
     // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     await this.db
       .update(this.table)
       .set({ supersededEventIds: args.supersededEventIds })
@@ -419,7 +419,7 @@ export class SchemaEventsRepository {
     now: Date;
   }): Promise<string[]> {
     // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     const rows = (await this.db
       .select()
       .from(this.table)) as unknown as SchemaEventRow[];
@@ -453,7 +453,7 @@ export class SchemaEventsRepository {
    */
   async deletePluginModuleRows(pluginName: string): Promise<void> {
     // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     const rows = (await this.db
       .select()
       .from(this.table)
@@ -588,7 +588,7 @@ export class SchemaEventsRepository {
     note: string
   ): Promise<void> {
     // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     const row = await this.findById(id);
     if (!row) return;
     await this.db
@@ -623,7 +623,7 @@ export class SchemaEventsRepository {
     input: { note?: string | null } = {}
   ): Promise<void> {
     // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     const row = await this.findById(id);
     if (!row) return;
     const set: Record<string, unknown> = { status: "rolled_back" };

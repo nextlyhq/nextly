@@ -438,7 +438,7 @@ async function executeStatements(
       for (const stmt of statements) {
         // A run that lost the schema lock starts no further statement, and each carries the run's
         // claim so a run taking the lock over can find and stop it.
-        assertSchemaLockHeld();
+        await assertSchemaLockHeld();
         await tx.execute(sqlTag.raw(markedForSchemaLock(stmt)));
         executed.push(stmt);
       }
@@ -458,7 +458,7 @@ async function executeStatements(
     run("PRAGMA foreign_keys = OFF");
     try {
       for (const stmt of statements) {
-        assertSchemaLockHeld();
+        await assertSchemaLockHeld();
         try {
           run(stmt);
           executed.push(stmt);
@@ -488,7 +488,7 @@ async function executeStatements(
   }
 
   for (const stmt of statements) {
-    assertSchemaLockHeld();
+    await assertSchemaLockHeld();
     try {
       await (db as AsyncExecuteDb).execute(
         sqlTag.raw(markedForSchemaLock(stmt))

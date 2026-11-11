@@ -24,6 +24,17 @@ describe("a lost schema lock's refusal", () => {
     );
   });
 
+  it("names the file it stopped in, whose statements may stay applied, before the last one it finished", () => {
+    const error = lostLockError(
+      "nextly migrate",
+      "0002_add_tags.sql",
+      "0003_add_slugs.sql"
+    );
+    expect(error.publicMessage).toContain(
+      "recorded nothing further. It stopped while running 0003_add_slugs.sql, some of whose statements may have applied. The last migration it applied is 0002_add_tags.sql. Check the database"
+    );
+  });
+
   it("says nothing of migrations where the caller has none to name", () => {
     const error = lostLockError("nextly db:sync");
     expect(error.publicMessage).not.toContain("migration it applied");

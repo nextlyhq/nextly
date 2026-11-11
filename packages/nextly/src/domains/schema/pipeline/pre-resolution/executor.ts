@@ -568,7 +568,7 @@ export async function runRaw(
   dialect: SupportedDialect
 ): Promise<void> {
   // A run that lost the schema lock starts no further statement (`assertSchemaLockHeld`).
-  assertSchemaLockHeld();
+  await assertSchemaLockHeld();
   if (dialect === "sqlite") {
     // better-sqlite3 / drizzle-orm/better-sqlite3 uses synchronous .run()
     // (and tx wrappers also expose .run()). The F3 pipeline runs SQLite

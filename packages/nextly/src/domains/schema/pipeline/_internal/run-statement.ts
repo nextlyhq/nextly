@@ -12,7 +12,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { assertSchemaLockHeld } from "../schema-lock";
+import { assertSchemaLockHeld, markedSqlForSchemaLock } from "../schema-lock";
 
 interface AsyncExecuteHandle {
   execute: (q: unknown) => Promise<unknown>;
@@ -34,10 +34,11 @@ export async function runStatement(
   stmt: unknown
 ): Promise<void> {
   // A run that lost the schema lock starts no further statement (`assertSchemaLockHeld`).
-  assertSchemaLockHeld();
+  await assertSchemaLockHeld();
   if (dialect === "sqlite") {
     (txOrDb as SyncRunHandle).run(stmt);
     return;
   }
-  await (txOrDb as AsyncExecuteHandle).execute(stmt);
+  // Carries the run's claim, so a run taking the lock over can find and stop it.
+  await (txOrDb as AsyncExecuteHandle).execute(markedSqlForSchemaLock(stmt));
 }

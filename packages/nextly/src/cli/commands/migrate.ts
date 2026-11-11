@@ -177,7 +177,10 @@ import {
   withMigrateLock,
 } from "../../domains/schema/pipeline/locks";
 import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
-import { lostLockError } from "../../domains/schema/pipeline/schema-lock";
+import {
+  lostLockError,
+  SCHEMA_LOCK_LOST_REASON,
+} from "../../domains/schema/pipeline/schema-lock";
 import { provisionUserFieldStorage } from "../../domains/users/services/provision-user-field-storage";
 import { UserExtSchemaService } from "../../domains/users/services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
@@ -3414,9 +3417,14 @@ export async function runFileMigrations(args: {
   // The last file this run applied, which a run that lost the schema lock names, so the operator
   // knows where the database stands.
   let lastApplied: string | null = null;
+  // The file being run, while some of its statements may stay applied if the run stops in it: one
+  // not wrapped in a transaction, or any file on MySQL, where DDL commits as it runs. A lost lock
+  // names it, since the database may then stand part-way through it.
+  let running: string | undefined;
   try {
     for (const m of all) {
       const filename = `${m.name}.sql`;
+      running = undefined;
       const targetFile = await loadTargetSnapshot(metaDir, m.name);
       const target = targetFile?.snapshot ?? null;
 
@@ -3478,6 +3486,7 @@ export async function runFileMigrations(args: {
         filename
       );
 
+      if (m.transaction === false || dialect === "mysql") running = filename;
       if (!target) {
         // No paired snapshot (hand-written migration): run verbatim + record.
         logger.warn(
@@ -3518,6 +3527,7 @@ export async function runFileMigrations(args: {
         }
         applied++;
         lastApplied = filename;
+        running = undefined;
         logger.success(`Applied ${filename}`);
         continue;
       }
@@ -3576,10 +3586,11 @@ export async function runFileMigrations(args: {
       beforeContributions = targetFile?.contributions ?? {};
       applied++;
       lastApplied = filename;
+      running = undefined;
       logger.success(`Applied ${filename}`);
     }
   } catch (error) {
-    throw withLastApplied(error, lastApplied);
+    throw withLastApplied(error, lastApplied, running);
   }
 
   return applied;
@@ -3587,19 +3598,25 @@ export async function runFileMigrations(args: {
 
 /**
  * A run that lost the schema lock part-way through the files, refused naming the last file it
- * applied; any other error as it is.
+ * applied and the file it stopped in where that one's statements may stay applied; any other error
+ * as it is.
  */
-function withLastApplied(error: unknown, lastApplied: string | null): unknown {
+function withLastApplied(
+  error: unknown,
+  lastApplied: string | null,
+  running: string | undefined
+): unknown {
   if (
     !NextlyError.is(error) ||
-    error.logContext?.reason !== "schema lock lost while held"
+    error.logContext?.reason !== SCHEMA_LOCK_LOST_REASON
   ) {
     return error;
   }
   const command = error.logContext.command;
   return lostLockError(
     typeof command === "string" ? command : "nextly migrate",
-    lastApplied
+    lastApplied,
+    running
   );
 }
 

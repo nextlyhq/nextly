@@ -58,8 +58,8 @@ export interface RegistryWriteDeps {
   /**
    * Asked before each row is written, and throws once this run can no longer
    * show it holds the schema lock: a run that lost the lock writes nothing
-   * further. Absent, the schema lock's own check (`assertSchemaLockHeld`),
-   * which lets every write go ahead outside a holder of the lock.
+   * further. Asked besides the schema lock's own check (`assertSchemaLockHeld`),
+   * which every write asks first.
    */
   assertLockHeld?: () => Promise<void> | void;
   /**
@@ -97,8 +97,8 @@ export async function writeRegistryFromSource(
     for (const row of await recordedRows(source, deps)) {
       // Outside the per-row guard below: a lost lock stops the pass, it is
       // never one row's failure to report and go on from.
-      if (deps.assertLockHeld === undefined) assertSchemaLockHeld();
-      else await deps.assertLockHeld();
+      await assertSchemaLockHeld();
+      await deps.assertLockHeld?.();
       try {
         if ((await row.write()) !== "unchanged") result.written[row.kind] += 1;
       } catch (error) {
