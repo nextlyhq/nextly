@@ -15,14 +15,13 @@ import { DETAIL_LABELS } from "../structured-data/catalog";
 import type { StructuredDataProblem } from "../structured-data/graph";
 
 import {
-  DESCRIPTION_LIMIT,
-  TITLE_LIMIT,
   WHOLE_SITE,
   type Problem,
   type ProblemFix,
   type ProblemKind,
   type ProblemSubject,
 } from "./contract";
+import { textChecks, type TextCheck } from "./text-checks";
 
 /** An image a page's content shows, and the alt text it is shown with. */
 export interface ImageFact {
@@ -76,11 +75,6 @@ function languageCodeProblems(facts: PageFacts): Problem[] {
   }));
 }
 
-/** How long `text` reads: in characters, so an emoji counts once. */
-function characters(text: string): number {
-  return [...text].length;
-}
-
 /** What a developer is asked for, for a value only code sets. */
 const CODE_NOTE = (page: ProblemSubject, what: string) =>
   `${page.detail ?? page.label}: ${what} is set by the page's route code. Change it there.`;
@@ -108,58 +102,48 @@ function textFix(
   return { fix: { place: "page", tab: "seo", field } };
 }
 
-/** The problems with the page's title and description. */
+/** The list's kind and action for each title and description problem. */
+const TEXT_KINDS: Record<
+  `${TextCheck["value"]}:${TextCheck["problem"]}`,
+  { kind: ProblemKind; action: string; what?: string }
+> = {
+  "title:missing": {
+    kind: "noTitle",
+    action: "Add a title",
+    what: "No title from any level",
+  },
+  "title:long": { kind: "longTitle", action: "Shorten the title" },
+  "description:missing": {
+    kind: "noDescription",
+    action: "Add a description",
+    what: "No description from any level",
+  },
+  "description:long": {
+    kind: "longDescription",
+    action: "Shorten the description",
+  },
+};
+
+/**
+ * The problems with the page's title and description, as the shared check
+ * finds them, each fixed where its value is set.
+ */
 function textProblems(facts: PageFacts): Problem[] {
-  const { answer, subject } = facts;
-  const problems: Problem[] = [];
-  const check = (
-    value: Sourced<string> | undefined,
-    field: "metaTitle" | "metaDescription",
-    limit: number,
-    missing: { kind: ProblemKind; what: string; action: string },
-    long: { kind: ProblemKind; action: string }
-  ) => {
-    const { action, fix } = textFix(value, field, subject);
-    if (value === undefined) {
-      problems.push({
-        kind: missing.kind,
-        subject,
-        what: missing.what,
-        action: missing.action,
-        fix,
-      });
-      return;
-    }
-    const length = characters(value.value);
-    if (length > limit) {
-      problems.push({
-        kind: long.kind,
-        subject,
-        what: `${length} characters`,
-        action: action ?? long.action,
-        fix,
-      });
-    }
-  };
-  check(
-    answer.title,
-    "metaTitle",
-    TITLE_LIMIT,
-    { kind: "noTitle", what: "No title from any level", action: "Add a title" },
-    { kind: "longTitle", action: "Shorten the title" }
-  );
-  check(
-    answer.description,
-    "metaDescription",
-    DESCRIPTION_LIMIT,
-    {
-      kind: "noDescription",
-      what: "No description from any level",
-      action: "Add a description",
-    },
-    { kind: "longDescription", action: "Shorten the description" }
-  );
-  return problems;
+  const { subject } = facts;
+  return textChecks(facts.answer).map(check => {
+    const field = check.value === "title" ? "metaTitle" : "metaDescription";
+    const { action, fix } = textFix(check.sourced, field, subject);
+    const words = TEXT_KINDS[`${check.value}:${check.problem}`];
+    return {
+      kind: words.kind,
+      subject,
+      what: words.what ?? `${check.length ?? 0} characters`,
+      // A long value only code sets is a note for a developer.
+      action:
+        check.problem === "long" ? (action ?? words.action) : words.action,
+      fix,
+    };
+  });
 }
 
 /**

@@ -1,17 +1,18 @@
 /**
  * An orphaned permission keeps its grants.
  *
- * A start whose configuration no longer lists a plugin marks the plugin's
- * permissions orphaned, then brings the preset roles back to what their
- * predicates resolve to. The presets resolve against the declared permissions
+ * A permission a recorded migration no longer declares is marked orphaned
+ * (`markOrphanedPermissions`, as `nextly migrate` calls it), and the next
+ * start brings the preset roles back to what their predicates resolve to. The presets resolve against the declared permissions
  * only, so a preset role set by difference against that list took away its
  * grant of the orphan: the admin role lost the plugin's permission, and the
  * plugin's return gave it back, while the log said the grants were unchanged.
  *
  * On every dialect this process can reach, the plugin's permission is granted
  * to the admin preset and to a role made by hand, and then:
- * - a start without the plugin orphans it and leaves every grant of it as it
- *   was, the admin preset's included, however many starts follow;
+ * - orphaned, with the plugin gone from the configuration, it keeps every
+ *   grant of it as it was, the admin preset's included, however many starts
+ *   follow;
  * - a start with the plugin back clears the mark and finds the grants as they
  *   were before it was orphaned;
  * - a preset that does not hold an orphaned permission is not given it.
@@ -53,6 +54,16 @@ function services(handle: TestNextly): ServiceContainer {
 /** A start's seeding: every permission, then the preset roles. */
 async function start(): Promise<void> {
   await seedPermissionsAndRolePresets();
+}
+
+/**
+ * The plugin's permission marked orphaned, as `nextly migrate` marks it when a
+ * migration that speaks for the plugin no longer declares it.
+ */
+async function orphan(handle: TestNextly): Promise<void> {
+  await handle
+    .getService("permissionSeedService")
+    .markOrphanedPermissions([], { owners: new Set([formsPlugin.name]) });
 }
 
 /**
@@ -135,7 +146,7 @@ describe.each(getConfiguredTestDialects())(
       return booted;
     }
 
-    it("keeps every grant through an orphaning start, and finds them as they were when declared again", async () => {
+    it("keeps every grant once orphaned, through every start, and finds them as they were when declared again", async () => {
       handle = await installed(dialect);
       const before = await holders(handle);
       // The fixture is what it claims: the admin preset and the hand-made
@@ -145,6 +156,7 @@ describe.each(getConfiguredTestDialects())(
       expect((await pluginPermission(handle)).orphaned).toBe(false);
 
       setInstalled(handle, false);
+      await orphan(handle);
       await start();
 
       expect((await pluginPermission(handle)).orphaned).toBe(true);
@@ -165,6 +177,7 @@ describe.each(getConfiguredTestDialects())(
     it("does not give a preset an orphaned permission it does not hold", async () => {
       handle = await installed(dialect);
       setInstalled(handle, false);
+      await orphan(handle);
       await start();
       expect((await pluginPermission(handle)).orphaned).toBe(true);
 

@@ -43,6 +43,7 @@ vi.mock("../check", () => ({
       { type: "posts", id: "1" },
       { type: "posts", id: "2" },
       { type: "pages", id: "3" },
+      { type: "single:home", id: "9" },
     ]);
     calls.readable = [...answer].sort();
     return { problems: [], pagesChecked: 0, outOfDate: false, due: true };
@@ -53,6 +54,7 @@ import { problemRoutes } from "../route";
 
 const CHECKS = {
   targets: ["posts", "pages"],
+  singles: [],
   readers: {
     readRules: async () => ({ patterns: {} }),
     readStructuredDataRules: async () => ({ brand: {}, types: {} }),
@@ -105,6 +107,9 @@ function context(
 }
 
 const [list, check] = problemRoutes(CHECKS);
+
+/** The routes where SEO is added to the homepage Single as well. */
+const [listWithHome] = problemRoutes({ ...CHECKS, singles: ["home"] });
 
 async function status(
   route: typeof list,
@@ -173,5 +178,14 @@ describe("the problem list's routes", () => {
     } finally {
       ready.record = true;
     }
+  });
+
+  it("answer a reader of a Single SEO is added to with its page, and no other reader", async () => {
+    // May read the Single alone: the list answers, with its one page.
+    expect(await status(listWithHome, ["home"])).toBe(200);
+    expect(calls.readable).toEqual(["single:home:9"]);
+    // May read posts only: the Single's page is not theirs.
+    expect(await status(listWithHome, ["posts"])).toBe(200);
+    expect(calls.readable).toEqual(["posts:1", "posts:2"]);
   });
 });

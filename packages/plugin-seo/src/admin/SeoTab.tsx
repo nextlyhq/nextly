@@ -131,18 +131,18 @@ function useSeoErrors(
 
 /**
  * Where the page's check of what search engines received is: a saved page
- * with an address of its own can be checked; one being created has nothing
- * served yet.
+ * with an address of its own can be checked, at the address its language
+ * serves it at; one being created has nothing served yet.
  */
-function receivedHrefOf(
+export function receivedHrefOf(
   id: string | null,
   levels: SeoTabContext | undefined
 ): string | undefined {
-  const address = levels?.levels.address;
-  if (id === null || address === undefined || levels === undefined) {
+  const served = levels?.served;
+  if (id === null || served === undefined || levels === undefined) {
     return undefined;
   }
-  return receivedHrefFor(new URL(address, levels.site.origin).href);
+  return receivedHrefFor(new URL(served, levels.site.origin).href);
 }
 
 /** The media library, opened to choose the page's share image. */
