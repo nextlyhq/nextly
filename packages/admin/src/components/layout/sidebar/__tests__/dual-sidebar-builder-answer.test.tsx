@@ -60,19 +60,6 @@ vi.mock("../SubSidebarPanel", () => ({ SubSidebarPanel: () => null }));
 // The rail's foot (Inbox and account menu) has its own tests; these read the
 // rail's entries.
 vi.mock("../RailAccount", () => ({ RailAccount: () => null }));
-/** "+ New"'s own answer: what the reader may create, and whether that is known. */
-let newMenu: { types: { slug: string }[]; isReady: boolean } = {
-  types: [{ slug: "posts" }],
-  isReady: true,
-};
-vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
-  useNewMenuTypes: () => newMenu,
-  NewMenuView: ({ variant }: { variant: string }) => (
-    <button type="button" data-testid="new-menu" data-variant={variant}>
-      New
-    </button>
-  ),
-}));
 vi.mock("@admin/hooks/useRouter", () => ({
   useRouter: () => ({ pathname: "/admin", route: null, isHydrated: true }),
 }));
