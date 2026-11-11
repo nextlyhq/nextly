@@ -31,8 +31,9 @@ import {
 
 import { productionAddressesOf } from "../canonical";
 import { siteOriginFor } from "../outputs/site-origin";
+import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 import type { ReadRules } from "../resolver/provider";
-import { SEO_SETTINGS_SLUG, SETTINGS_PAGE_HREF } from "../settings/contract";
+import { SETTINGS_PAGE_HREF } from "../settings/contract";
 
 import {
   CONNECTIONS_ROUTE_PATH,
@@ -428,27 +429,15 @@ async function disconnect(ctx: PluginRouteContext): Promise<void> {
   }
 }
 
-/** Who may change the connections: whoever may change the SEO settings. */
-const mayChange = ({
-  single,
-}: {
-  single: (slug: string, action: string) => string;
-}) => single(SEO_SETTINGS_SLUG, "update");
-
-/** Who may see the connections: whoever may read the SEO settings. */
-const mayRead = ({
-  single,
-}: {
-  single: (slug: string, action: string) => string;
-}) => single(SEO_SETTINGS_SLUG, "read");
-
-/** The routes the Connections tab reads and changes Search Console through. */
+/**
+ * The routes the Connections tab reads and changes Search Console through:
+ * site-wide SEO, each one asking `manage-seo` before it runs.
+ */
 export function searchConsoleRoutes(setup: SearchConsoleSetup): PluginRoute[] {
-  return [
+  const routes: PluginRoute[] = [
     {
       method: "GET",
       path: CONNECTIONS_ROUTE_PATH,
-      requiredPermission: mayRead,
       handler: async (_req, ctx) => {
         const stored = await readConnections(ctx);
         const body: ConnectionsBody = {
@@ -465,13 +454,11 @@ export function searchConsoleRoutes(setup: SearchConsoleSetup): PluginRoute[] {
     {
       method: "POST",
       path: SEARCH_CONSOLE_CONNECT_PATH,
-      requiredPermission: mayChange,
       handler: async (req, ctx) => respondDoc(await connect(req, ctx, setup)),
     },
     {
       method: "GET",
       path: SEARCH_CONSOLE_CALLBACK_PATH,
-      requiredPermission: mayChange,
       handler: async (req, ctx) => {
         await finish(new URL(req.url), ctx, setup);
         // Back to the Connections tab, which shows how it went.
@@ -484,7 +471,6 @@ export function searchConsoleRoutes(setup: SearchConsoleSetup): PluginRoute[] {
     {
       method: "POST",
       path: SEARCH_CONSOLE_DISCONNECT_PATH,
-      requiredPermission: mayChange,
       handler: async (_req, ctx) => {
         await disconnect(ctx);
         return respondMutation("Search Console disconnected.", null);
@@ -493,8 +479,10 @@ export function searchConsoleRoutes(setup: SearchConsoleSetup): PluginRoute[] {
     {
       method: "GET",
       path: SEARCH_CONSOLE_REPORT_PATH,
-      requiredPermission: mayRead,
       handler: async (_req, ctx) => respondDoc(await report(ctx, setup)),
     },
   ];
+  return routes.map(route =>
+    siteWide({ ...route, requiredPermission: MANAGE_SEO_PERMISSION })
+  );
 }
