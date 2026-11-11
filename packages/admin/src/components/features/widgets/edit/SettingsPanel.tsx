@@ -569,11 +569,14 @@ function SettingControl({
   sources,
   saving,
   widget,
+  opened,
 }: {
   setting: AnyWidgetSetting;
   sources: WidgetSources;
   saving: boolean;
   widget: DashboardWidget | undefined;
+  /** The setting's value as the drawer opened on it: the card's own, for a choice to keep. */
+  opened: unknown;
 }) {
   // A setting with its own editor is drawn by it, whatever its type.
   if (setting.editor !== undefined) {
@@ -587,7 +590,7 @@ function SettingControl({
     );
   }
   // A short choice, an on/off or a note's text: the drawer's own controls.
-  const own = drawerControlOf(setting, saving);
+  const own = drawerControlOf(setting, saving, opened);
   if (own !== undefined) return own;
   if (isContentSetting(setting)) {
     return (
@@ -647,18 +650,24 @@ function SectionFields({
   saving,
   widget,
   resetNotices,
+  baseline,
 }: {
   settings: readonly AnyWidgetSetting[];
   sources: WidgetSources;
   saving: boolean;
   widget: DashboardWidget | undefined;
   resetNotices: Readonly<Record<string, string>>;
+  /** The values the drawer opened on (`usePanelBaseline`), by setting name. */
+  baseline: Readonly<Record<string, unknown>>;
 }) {
   return (
     <>
       {settings.map(setting => (
         <div key={setting.name} className="flex flex-col gap-1.5">
-          <SettingControl {...{ setting, sources, saving, widget }} />
+          <SettingControl
+            {...{ setting, sources, saving, widget }}
+            opened={baseline[setting.name]}
+          />
           <ResetNotice setting={setting} notice={resetNotices[setting.name]} />
         </div>
       ))}
@@ -1022,12 +1031,15 @@ function PanelSections({
   own,
   automatic,
   size,
+  baseline,
 }: {
   settings: readonly AnyWidgetSetting[];
   sources: WidgetSources;
   saving: boolean;
   widget: DashboardWidget | undefined;
   resetNotices: Readonly<Record<string, string>>;
+  /** The values the drawer opened on, by setting name. */
+  baseline: Readonly<Record<string, unknown>>;
   resetSection: (section: SettingSection) => void;
   own: ReturnType<typeof useOwnTitle>;
   automatic: string;
@@ -1074,6 +1086,7 @@ function PanelSections({
               saving={saving}
               widget={widget}
               resetNotices={resetNotices}
+              baseline={baseline}
             />
           </PanelSection>
         );
@@ -1134,6 +1147,8 @@ function usePanelState(props: SettingsPanelProps) {
   return {
     sources,
     stale,
+    // What the drawer opened on, held apart from the form, whose own defaults a reset replaces.
+    baseline: defaultValues,
     ...formState,
     draft,
     own,
@@ -1277,6 +1292,7 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
                         resetSection,
                       }}
                       {...{ own, automatic, size }}
+                      baseline={state.baseline}
                       widget={props.widget}
                     />
                   </fieldset>

@@ -18,7 +18,7 @@ import {
   type WidgetSetting,
 } from "nextly/config";
 import { Fragment, useId, type JSX, type ReactNode } from "react";
-import { useController, useFormContext } from "react-hook-form";
+import { useController } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import { cn } from "@admin/lib/utils";
@@ -155,15 +155,14 @@ function SegmentedSettingControl({
 function EntriesSettingControl({
   setting,
   disabled,
+  opened,
 }: {
   setting: EntriesSetting;
   disabled: boolean;
+  /** The value the drawer opened on: the card's own. */
+  opened: unknown;
 }): JSX.Element {
-  const { formState } = useFormContext<Record<string, unknown>>();
-  const choices = entriesChoices(
-    setting,
-    formState.defaultValues?.[setting.name]
-  );
+  const choices = entriesChoices(setting, opened);
   if (choices.length === 0) {
     // No cast: `WidgetSetting` is assignable to `FieldConfig` (`settings.compat.test-d.ts`).
     return <FieldRenderer field={setting} mode="edit" />;
@@ -359,10 +358,18 @@ export function WidthControl({
  */
 export function drawerControlOf(
   setting: AnyWidgetSetting,
-  disabled: boolean
+  disabled: boolean,
+  /** The setting's value as the drawer opened on it, which a Number of entries keeps offered. */
+  opened: unknown
 ): JSX.Element | undefined {
   if (isEntriesSetting(setting)) {
-    return <EntriesSettingControl setting={setting} disabled={disabled} />;
+    return (
+      <EntriesSettingControl
+        setting={setting}
+        disabled={disabled}
+        opened={opened}
+      />
+    );
   }
   const segmented = segmentedOptionsOf(setting);
   if (segmented !== undefined) {

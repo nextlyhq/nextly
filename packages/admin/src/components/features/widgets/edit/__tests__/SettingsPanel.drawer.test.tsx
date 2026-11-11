@@ -221,6 +221,72 @@ describe("a Number of entries saved before as none of 5, 10 or 20", () => {
     expect(onDone.mock.calls.at(-1)?.[0].config).toMatchObject({ limit: 7 });
   });
 
+  it("offers a widget's own default that is none of them, as the card uses it, with nothing stored", () => {
+    drawer(
+      {
+        ...PLUGIN,
+        settings: [
+          {
+            name: "limit",
+            type: "number",
+            label: "Rows",
+            defaultValue: 3,
+          },
+        ],
+      },
+      undefined
+    );
+    const entries = screen.getByRole("radiogroup", { name: "Rows" });
+    expect(
+      within(entries)
+        .getAllByRole("radio")
+        .map(radio => radio.textContent)
+    ).toEqual(["3", "5", "10", "20"]);
+    expect(within(entries).getByRole("radio", { name: "3" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+  });
+
+  it("stays offered when the card's settings arrive again behind the open drawer", async () => {
+    // 🔴 The form's own defaults are replaced when the card's stored settings are read again
+    // while the drawer is open; the card's own 3 must not leave the choices with them.
+    const user = userEvent.setup();
+    const rows: DashboardWidget = {
+      ...PLUGIN,
+      settings: [
+        { name: "limit", type: "number", label: "Rows", defaultValue: 3 },
+      ],
+    };
+    const draw = (config: Record<string, unknown>) => (
+      <SettingsPanel
+        placementId="p1"
+        open
+        onOpenChange={() => {}}
+        title={rows.title}
+        settings={rows.settings ?? []}
+        widget={rows}
+        config={config}
+        sizing={{ w: 6, bounds: rows.size }}
+        onDone={() => {}}
+      />
+    );
+    const view = render(draw({}));
+    await user.click(screen.getByRole("radio", { name: "5" }));
+    // The same stored settings, read again: a new object holding the same values.
+    view.rerender(draw({}));
+    const entries = screen.getByRole("radiogroup", { name: "Rows" });
+    expect(
+      within(entries)
+        .getAllByRole("radio")
+        .map(radio => radio.textContent)
+    ).toEqual(["3", "5", "10", "20"]);
+    expect(within(entries).getByRole("radio", { name: "5" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+  });
+
   it("is replaced by the reader's own choice, stored as a number", async () => {
     const user = userEvent.setup();
     const { onDone } = drawer(core("core/recent-entries"), {
