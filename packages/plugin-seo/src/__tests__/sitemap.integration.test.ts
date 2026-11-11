@@ -37,6 +37,8 @@ const pages = () =>
     // sitemap filters on (`{ status: { equals: "published" } }`).
     status: true,
     fields: [text({ name: "slug" }), text({ name: "title" })],
+    // The sitemap lists a page at the address its type declares.
+    publicAddress: "/pages/{slug}",
   });
 
 let current: TestNextly | undefined;
@@ -207,6 +209,7 @@ describe("seo sitemap route (integration)", () => {
       defineCollection({
         slug: "notes",
         fields: [text({ name: "slug" }), text({ name: "title" })],
+        publicAddress: "/notes/{slug}",
       });
 
     current = await createTestNextly({
@@ -231,6 +234,7 @@ describe("seo sitemap route (integration)", () => {
         slug: "posts",
         status: true,
         fields: [text({ name: "slug" }), text({ name: "title" })],
+        publicAddress: "/posts/{slug}",
       });
 
     current = await createTestNextly({

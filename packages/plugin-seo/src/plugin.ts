@@ -15,6 +15,7 @@ import {
   type FieldConfig,
   type PluginContributions,
   type PluginDefinition,
+  type PluginRoute,
 } from "@nextlyhq/plugin-sdk";
 
 import { startCatchUp } from "./address-record/catch-up";
@@ -24,9 +25,13 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
-import { seoPageMetadata } from "./resolver/provider";
+import { listPages, type ListedPagesService } from "./outputs/listing";
+import type { AiCrawlerChoice } from "./outputs/robots";
+import { rootFileRoutes, sitemapResponse } from "./outputs/root-routes";
+import { SITEMAP_LIMITS, type SitemapLimits } from "./outputs/sitemap-files";
+import { NO_RULES } from "./resolver/page-levels";
+import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import {
-  generateSitemap,
   resolveBaseOrigin,
   type SitemapOptions,
   type UrlForEntry,
@@ -55,54 +60,183 @@ export interface SeoPluginOptions {
    */
   fields?: FieldConfig[];
   /**
-   * Absolute site origin used for `<loc>` in the generated sitemap
-   * (e.g. "https://example.com", no trailing slash). When omitted, the sitemap
-   * route derives the origin from the incoming request — correct for a
-   * single-origin deployment, but wrong behind a proxy that rewrites the host,
-   * so set it explicitly there.
+   * The site's production origin (e.g. "https://example.com", no trailing
+   * slash): every address the sitemap lists, and the sitemap's address in
+   * robots.txt, are made absolute against it. When omitted, each request's own
+   * origin is used — correct for a single-origin deployment, but wrong behind
+   * a proxy that rewrites the host, so set it explicitly there.
    */
   baseUrl?: string;
   /**
-   * Build the URL path for a sitemap entry (leading slash, appended to the
-   * origin). Defaults to `/<collection>/<slug>`. Override it to match your
-   * routing (e.g. posts served at `/blog/:slug`).
-   *
-   * Prefer {@link SeoPluginOptions.basePath} where only the PREFIX differs: it
-   * keeps the slug half derived from the route's own answer, which a hand-built
-   * path has to reproduce correctly for nested, encoded and unservable slugs.
+   * @deprecated The sitemap lists each page at the public address its content
+   * type declares (`publicAddress`), the same address its canonical names, so
+   * this no longer shapes it. Declare `publicAddress` on the collection
+   * instead. `buildSitemapUrls` still reads it.
    */
   urlFor?: UrlForEntry;
   /**
-   * Where each collection's route is mounted, which decides the prefix its
-   * sitemap URLs carry. Defaults to `/<collection>`.
-   *
-   * Pass `""` for a collection served at the site root — page-builder pages
-   * render at `/about`, not `/pages/about`. A function receives each collection
-   * name; returning `null` excludes that collection from the sitemap.
-   *
-   * It does not declare that the mount's own root is served: an entry with an
-   * empty slug is skipped regardless, because whether that root routes depends
-   * on the route file rather than on the prefix. List a homepage with `urlFor`.
-   *
-   * Ignored when `urlFor` is supplied, which already owns the whole path.
-   *
-   * Typed FROM {@link SitemapOptions} rather than restated, because this option
-   * is passed through to it unchanged — the same reason `urlFor` above names
-   * `UrlForEntry`. Two independent declarations of one option agree on the day
-   * they are written and drift silently afterwards.
+   * @deprecated As {@link SeoPluginOptions.urlFor}: the sitemap lists each
+   * page at the address its content type declares (`publicAddress`).
+   * `buildSitemapUrls` still reads it. Typed from {@link SitemapOptions}, which
+   * it is passed to unchanged.
    */
   basePath?: SitemapOptions["basePath"];
   /**
-   * Controls the public sitemap route. `true` (the default) serves a sitemap of
-   * the `collections` above. `false` omits the route entirely. Pass
-   * `{ collections: [...] }` to advertise only a subset.
+   * Controls the sitemap, served at `/sitemap.xml`. `true` (the default) lists
+   * every published page of each content type that declares a public address,
+   * Singles included. `false` serves none. Pass `{ collections: [...] }` to
+   * list only those collections' pages.
    *
-   * The sitemap is PUBLIC and lists every published entry's URL as system, so it
-   * bypasses per-collection read access. Exclude any collection whose entries
-   * should not be publicly enumerable (owner-only, role-gated, or internal) by
-   * narrowing this list or disabling the route.
+   * Past `maxUrlsPerFile` addresses or `maxBytesPerFile` bytes (the protocol's
+   * 50,000 and 50 MB by default, and never more), `/sitemap.xml` is a sitemap
+   * index naming each file as `/sitemap.xml?page=<n>`.
+   *
+   * The sitemap is PUBLIC and lists every published page's address, read as
+   * the system, so it bypasses per-collection read access. A content type
+   * that declares a public address states that its pages are public; narrow
+   * this list, or hide the type, for any that should not be enumerable.
    */
-  sitemap?: boolean | { collections?: string[] };
+  sitemap?:
+    | boolean
+    | {
+        collections?: string[];
+        maxUrlsPerFile?: number;
+        maxBytesPerFile?: number;
+      };
+  /**
+   * @experimental Serve `/robots.txt`. On by default. It lets search engines
+   * read every page but the admin, asks AI crawlers what `aiCrawlers` says,
+   * and names the sitemap by its absolute address.
+   */
+  robots?: boolean;
+  /**
+   * @experimental What robots.txt asks AI crawlers: `"all"` (the default)
+   * lets every one read the site; `"search"` asks those that collect pages to
+   * train AI models to stay away, while tools that answer questions may still
+   * read and cite pages; `"block"` asks every known one to stay away. These
+   * are requests that crawlers may ignore. Asking Google not to train
+   * (`Google-Extended`) also limits what Gemini can use; Google Search is not
+   * affected by any of them.
+   */
+  aiCrawlers?: AiCrawlerChoice;
+  /**
+   * @experimental Content types hidden from search as a whole: every page of
+   * one is served `noindex` and left out of the sitemap, whatever the page's
+   * own setting, and returns to its own setting once the type is shown again.
+   * A collection's slug, such as `"tags"`, or `"single:<slug>"` for a Single.
+   */
+  hiddenTypes?: string[];
+}
+
+/** A page-size option, a positive whole number no larger than the protocol allows. */
+function fileLimit(
+  name: string,
+  value: number | undefined,
+  protocol: number
+): number {
+  if (value === undefined) return protocol;
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(
+      `seoPlugin: sitemap.${name} must be a positive whole number, got: ${value}`
+    );
+  }
+  return Math.min(value, protocol);
+}
+
+/** The limits one sitemap file is held to. */
+function sitemapLimits(sitemap: SeoPluginOptions["sitemap"]): SitemapLimits {
+  const options = typeof sitemap === "object" ? sitemap : {};
+  return {
+    urls: fileLimit(
+      "maxUrlsPerFile",
+      options.maxUrlsPerFile,
+      SITEMAP_LIMITS.urls
+    ),
+    bytes: fileLimit(
+      "maxBytesPerFile",
+      options.maxBytesPerFile,
+      SITEMAP_LIMITS.bytes
+    ),
+  };
+}
+
+/**
+ * The collections `sitemap.collections` narrows the sitemap to, where it
+ * does. Each must be one of the SEO collections: a slug outside them is
+ * never extended, so a typo would only surface at request time, and is
+ * refused at construction instead.
+ */
+function subsetOf(
+  sitemap: SeoPluginOptions["sitemap"],
+  targets: readonly string[]
+): string[] | undefined {
+  if (typeof sitemap !== "object" || sitemap.collections === undefined) {
+    return undefined;
+  }
+  const subset = [...new Set(sitemap.collections)];
+  const unknown = subset.filter(slug => !targets.includes(slug));
+  if (unknown.length > 0) {
+    throw new Error(
+      `seoPlugin: sitemap.collections must be a subset of collections; ` +
+        `unknown: ${unknown.join(", ")}`
+    );
+  }
+  return subset;
+}
+
+/**
+ * The site's rules as every page's head and the sitemap read them alike, so
+ * a hidden type is hidden in both.
+ */
+function rulesReader(hidden: readonly string[] | undefined): ReadRules {
+  const hiddenTypes = [...new Set(hidden ?? [])];
+  const rules =
+    hiddenTypes.length > 0 ? { ...NO_RULES, hiddenTypes } : NO_RULES;
+  return () => Promise.resolve(rules);
+}
+
+/**
+ * The routes serving the site's sitemap and robots.txt at its root, and the
+ * sitemap again at the plugin's own address, where sites served it from
+ * before it reached the root.
+ */
+function siteFileRoutes(
+  options: SeoPluginOptions,
+  readRules: ReadRules,
+  collections: readonly string[] | undefined
+): PluginRoute[] {
+  const sitemapEnabled = options.sitemap !== false;
+  // A configured baseUrl must be an absolute http(s) ORIGIN, or every listed
+  // address is invalid; checked at construction so a typo fails at boot, and
+  // only where the sitemap, which robots.txt names by it, is served.
+  const origin =
+    sitemapEnabled && options.baseUrl !== undefined
+      ? resolveBaseOrigin(options.baseUrl)
+      : undefined;
+  const sitemap = sitemapEnabled
+    ? {
+        limits: sitemapLimits(options.sitemap),
+        ...(collections === undefined ? {} : { collections }),
+      }
+    : undefined;
+  const config = {
+    ...(origin === undefined ? {} : { origin }),
+    readRules,
+    ...(sitemap === undefined ? {} : { sitemap }),
+    ...(options.robots === false
+      ? {}
+      : { robots: { aiCrawlers: options.aiCrawlers ?? "all" } }),
+  };
+  const routes = rootFileRoutes(config);
+  if (sitemap !== undefined) {
+    routes.push({
+      method: "GET",
+      path: "/sitemap.xml",
+      public: true,
+      handler: (req, ctx) => sitemapResponse(req, ctx, { ...config, sitemap }),
+    });
+  }
+  return routes;
 }
 
 /**
@@ -133,44 +267,30 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // sitemap.
   const targets = [...new Set(options.collections)];
 
-  // The sitemap is on by default; `sitemap: false` disables the route, and
-  // `{ collections }` narrows which collections it advertises (defaulting to the
-  // SEO collections). Kept separate from `targets` so a private collection can
-  // carry SEO fields without being enumerated in the public sitemap.
-  const sitemapEnabled = options.sitemap !== false;
-
-  // A configured baseUrl must be an absolute http(s) ORIGIN — otherwise every
-  // `<loc>` is invalid (or doubles a base path). Validate at construction (same
-  // rule the generator applies) so a misconfig fails fast — but only when the
-  // sitemap is enabled, since a disabled route never consumes baseUrl.
-  if (sitemapEnabled && options.baseUrl !== undefined) {
-    resolveBaseOrigin(options.baseUrl);
-  }
-  const sitemapTargets =
-    options.sitemap &&
-    typeof options.sitemap === "object" &&
-    options.sitemap.collections
-      ? [...new Set(options.sitemap.collections)]
-      : targets;
-
-  // A sitemap subset must be a subset of the SEO collections. A slug outside
-  // them is never extended, so it would only surface at request time as a 500
-  // (metadata lookup on an unknown collection) — fail fast at construction.
-  const unknownSitemap = sitemapTargets.filter(slug => !targets.includes(slug));
-  if (unknownSitemap.length > 0) {
-    throw new Error(
-      `seoPlugin: sitemap.collections must be a subset of collections; ` +
-        `unknown: ${unknownSitemap.join(", ")}`
-    );
-  }
+  const sitemapSubset = subsetOf(options.sitemap, targets);
+  const readRules = rulesReader(options.hiddenTypes);
 
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
     // The record that keeps each public address to one page.
     collections: [addressRecordCollection()],
-    // Every page's head, worked out by the one order of who wins.
-    services: { pageMetadata: ctx => seoPageMetadata(ctx) },
+    services: {
+      // Every page's head, worked out by the one order of who wins.
+      pageMetadata: ctx => seoPageMetadata(ctx, readRules),
+      // The pages the site lists and the problems that left any out, read by
+      // the same rules as the head: one reading for every listing output.
+      listedPages: (ctx): ListedPagesService => ({
+        list: (origin: string) =>
+          listPages(ctx, {
+            origin,
+            readRules,
+            ...(sitemapSubset === undefined
+              ? {}
+              : { collections: sitemapSubset }),
+          }),
+      }),
+    },
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -188,49 +308,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     };
   }
 
-  if (sitemapEnabled) {
-    // Serve a sitemap of published entries over HTTP, mounted at
-    // /api/plugins/@nextlyhq/plugin-seo/sitemap.xml. Public so crawlers and
-    // headless frontends (which have no Next `app/sitemap.ts`) can read it.
-    // The document is generated per request (agnostic, no `next`); ISR caching
-    // of the canonical `/sitemap.xml` belongs to the Next delivery layer, and
-    // headless consumers cache at their edge.
-    contributes.routes = [
-      {
-        method: "GET",
-        path: "/sitemap.xml",
-        public: true,
-        handler: async (req, ctx) => {
-          // A single-origin deployment can rely on the request origin; a
-          // proxied one must configure `baseUrl` so `<loc>` uses the public
-          // host rather than the internal one.
-          const configuredBaseUrl = options.baseUrl;
-          const baseUrl = configuredBaseUrl ?? new URL(req.url).origin;
-          const xml = await generateSitemap(ctx.services, {
-            collections: sitemapTargets,
-            baseUrl,
-            urlFor: options.urlFor,
-            // Spread rather than assigned: `basePath` distinguishes absent from
-            // `""`, and a present-but-undefined key would read as the declared
-            // root mount and start emitting a URL for every empty slug.
-            ...(options.basePath === undefined
-              ? {}
-              : { basePath: options.basePath }),
-          });
-          const headers: Record<string, string> = {
-            "content-type": "application/xml; charset=utf-8",
-          };
-          if (!configuredBaseUrl) {
-            // The origin came from the (spoofable) request Host — keep an
-            // intermediary from caching a host-derived document and serving it
-            // for a different host. Configure `baseUrl` for a cacheable sitemap.
-            headers["cache-control"] = "no-store";
-          }
-          return new Response(xml, { headers });
-        },
-      },
-    ];
-  }
+  const routes = siteFileRoutes(options, readRules, sitemapSubset);
+  if (routes.length > 0) contributes.routes = routes;
 
   return definePlugin({
     name: "@nextlyhq/plugin-seo",
@@ -271,6 +350,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     provides: ["page-metadata"],
     contributes,
     init(ctx) {
+      if (options.urlFor !== undefined || options.basePath !== undefined) {
+        ctx.logger.warn(
+          "seoPlugin: urlFor and basePath no longer shape the sitemap, which lists each page at the address its content type declares. Declare publicAddress on each public collection instead."
+        );
+      }
       // The site-wide record that keeps each public address to one page:
       // asked on every save, and told what each document holds after it.
       ctx.publicAddresses.participate(addressRecord(ctx));
