@@ -224,10 +224,21 @@ test("a dragged card moves the others aside across a row and down a row, and lan
   const after = [beside, below, diagonal, held, ...before.slice(4)];
   await expect.poll(() => drawnOrder(page)).toEqual(after);
   // The outline holds the held card's place: the card itself is under the pointer.
+  // Read once the slides have finished (an endless spinner never does, so it is left out), and
+  // within a pixel: both are drawn at fractional positions.
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every(
+        animation =>
+          animation.playState !== "running" ||
+          animation.effect?.getTiming().iterations === Number.POSITIVE_INFINITY
+      )
+  );
   const outline = await boxOf(page.getByTestId("widget-drop-outline"));
   const place = await boxOf(card(held));
-  expect(Math.round(outline.x)).toBe(Math.round(place.x));
-  expect(Math.round(outline.width)).toBe(Math.round(place.width));
+  expect(Math.abs(outline.x - place.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(outline.width - place.width)).toBeLessThanOrEqual(1);
 
   await page.mouse.up();
   await expect.poll(() => heldOrder(page)).toEqual(after);
@@ -310,6 +321,26 @@ test("a 50% card's edge snaps it to 33%, showing the width while held", async ({
   await expect(card.getByTestId("card-size-label")).toContainText("33%");
   await expect(page.getByTestId("widget-grid-live")).not.toBeEmpty();
   await expect(page.getByTestId("dashboard-edit-save")).toBeEnabled();
+});
+
+test("Escape while a card's edge is held puts it back at the width it had", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  await customize(page);
+  const card = cell(page, CONTINUE);
+  const before = await laidOut(card);
+
+  await holdEdgeAndMove(page, card, (await edgeFor(page, card, 4)) + 20);
+  await expect(page.getByTestId("widget-resize-width")).toHaveText("33%");
+  await page.keyboard.press("Escape");
+
+  await expect(page.getByTestId("widget-resize-width")).toHaveCount(0);
+  await expect.poll(async () => (await laidOut(card)).width).toBe(before.width);
+  // Released after the Escape: nothing is staged.
+  await page.mouse.up();
+  await expect(card.getByTestId("card-size-label")).toContainText("50%");
+  await expect(page.getByTestId("dashboard-edit-save")).toBeDisabled();
 });
 
 test("a 50% card's edge dragged to the end of the row makes it 100%, and the card beside it moves to fit", async ({

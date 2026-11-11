@@ -48,6 +48,7 @@ import { GRID_CLASS } from "../sizes";
 import { settingsAsAsked, titleAsAsked } from "../widget-as-asked";
 
 import { ArrangedCell, type ArrangedCellProps } from "./ArrangedCell";
+import { EscapePutsCardBack } from "./drag/EscapePutsCardBack";
 import type { CardDrag } from "./drag/useCardDrag";
 import type { CardResize } from "./drag/useCardResize";
 import type { CellDrag, CellResize } from "./DraggableWidgetCell";
@@ -75,7 +76,7 @@ export interface ArrangedGridProps {
    * The edge resize, for each card's right edge and the width one is held at. Its edges are
    * drawn only from 1,024px, and never while a card is dragged.
    */
-  resize?: Pick<CardResize, "resizing" | "edgeFor">;
+  resize?: Pick<CardResize, "resizing" | "edgeFor" | "cancel">;
   /** What a card may write now, and how: one prop, as they are one concern. */
   writes: {
     /** Whether a layout write is in flight anywhere on this dashboard. */
@@ -464,6 +465,9 @@ export function ArrangedGrid({
           count={shownCount(rows, isEditing, hidden)}
           isEditing={isEditing}
         />
+        {resize?.resizing ? (
+          <EscapePutsCardBack cancel={resize.cancel} />
+        ) : null}
         {rows.map(row => (
           <ArrangedCell
             key={row.placementId}

@@ -19,8 +19,8 @@ import { useCallback, type JSX, type ReactNode } from "react";
 
 import { usePrefersReducedMotion } from "../../charts/reduced-motion";
 
-import { SLIDE_MS } from "./useCardFlip";
 import { SILENT_DRAG, type CardDrag } from "./useCardDrag";
+import { SLIDE_MS } from "./useCardFlip";
 
 /**
  * On release the picture settles into the card's new place, as the other cards slide into

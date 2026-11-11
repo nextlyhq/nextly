@@ -1,6 +1,6 @@
 /**
  * Resizing a card by dragging its right edge: which cards have an edge, the width it snaps to as
- * the pointer moves, and what release and Escape keep.
+ * the pointer moves, and what release and a cancel keep.
  *
  * jsdom lays nothing out, so the grid is given its corner on the screen and the card its left
  * edge within the grid; the pointer's events are handed to the edge's handlers as React would.
@@ -161,14 +161,12 @@ describe("a card's edge", () => {
     expect(setSize).not.toHaveBeenCalled();
   });
 
-  it("puts the card back on Escape, sliding the others back too", () => {
+  it("puts the card back when cancelled, as Escape does, sliding the others back too", () => {
     const { result, edge, setSize, flip } = renderResize();
     const edgeOf = () => result.current.edgeFor(row(RESIZABLE, 6));
     dragTo(edgeOf, edge, [gapAfter(12)]);
     flip.capture.mockClear();
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    });
+    act(() => result.current.cancel());
 
     expect(result.current.resizing).toBe(null);
     expect(flip.capture).toHaveBeenCalledTimes(1);

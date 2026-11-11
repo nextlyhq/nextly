@@ -62,6 +62,8 @@ export interface CardResize {
   resizing: ResizeInProgress | null;
   /** One card's edge, or `undefined` where none is offered (too narrow, or one width). */
   edgeFor: (row: ArrangedWidget) => CardEdge | undefined;
+  /** Puts the held card back at the width it was picked up at; nothing while none is held. */
+  cancel: () => void;
 }
 
 export function useCardResize({
@@ -93,21 +95,10 @@ export function useCardResize({
     setResizing(null);
   }, [flip, setResizing]);
 
-  // Escape puts the card back, and so does the dashboard narrowing below where edges are offered.
+  // The dashboard narrowing below where edges are offered puts the card back. Escape does too,
+  // through the admin's one shortcut owner (`EscapePutsCardBack`, drawn while a card is held).
   useEffect(() => {
-    if (resizing === null) return undefined;
-    if (!enabled) {
-      cancel();
-      return undefined;
-    }
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      cancel();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    if (resizing !== null && !enabled) cancel();
   }, [resizing, enabled, cancel]);
 
   const edgeFor = useCallback(
@@ -166,5 +157,5 @@ export function useCardResize({
     [enabled, gridRef, flip, setResizing, setSize, cancel]
   );
 
-  return { enabled, resizing, edgeFor };
+  return { enabled, resizing, edgeFor, cancel };
 }
