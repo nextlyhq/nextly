@@ -137,4 +137,20 @@ describe("brokenLinks", () => {
     );
     expect(asked).toEqual(["/blog/gone"]);
   });
+
+  it("reads a link's address as the record keeps it, encoded and without dot segments", async () => {
+    const found = await brokenLinks(
+      [
+        { field: "body", url: "/blog/café" },
+        { field: "body", url: "/blog/./café" },
+        { field: "body", url: "https://example.com/blog/café" },
+      ],
+      {
+        shapes,
+        productionAddresses: ["https://example.com"],
+        isHeld: async path => path === "/blog/caf%C3%A9",
+      }
+    );
+    expect(found).toEqual([]);
+  });
 });

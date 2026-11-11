@@ -8,7 +8,6 @@
  * @module problems/page-checks
  */
 import type { LanguageCodeProblem } from "../languages/hreflang";
-import { originOf } from "../origin";
 import type { SeoAnswer, Sourced } from "../resolver/order";
 import type { ShareImageProblem } from "../social/problems";
 import { DETAIL_LABELS } from "../structured-data/catalog";
@@ -23,6 +22,7 @@ import {
   type ProblemKind,
   type ProblemSubject,
 } from "./contract";
+import { sitePath } from "./links";
 
 /** An image a page's content shows, and the alt text it is shown with. */
 export interface ImageFact {
@@ -164,27 +164,6 @@ function textProblems(facts: PageFacts): Problem[] {
   return problems;
 }
 
-/** A path without its trailing slash, the root kept as `/`. */
-function bare(path: string): string {
-  const trimmed = path.replace(/\/+$/, "");
-  return trimmed === "" ? "/" : trimmed;
-}
-
-/**
- * The path `address` names on the site, where it is on the site: a path
- * from the root, or an address on one of the production addresses.
- */
-function pathOnSite(
-  address: string,
-  productionAddresses: readonly string[]
-): string | undefined {
-  if (address.startsWith("/")) return bare(address.split(/[?#]/)[0] ?? "/");
-  const origin = originOf(address);
-  const own = productionAddresses.flatMap(each => originOf(each) ?? []);
-  if (origin === undefined || !own.includes(origin)) return undefined;
-  return bare(new URL(address).pathname);
-}
-
 /**
  * A canonical a person typed that names an address other than the page's
  * own, which tells search engines to list that one instead.
@@ -192,8 +171,8 @@ function pathOnSite(
 function canonicalProblem(facts: PageFacts): Problem[] {
   const canonical = facts.answer.canonical;
   if (canonical?.from !== "page" || facts.ownAddress === undefined) return [];
-  const own = bare(facts.ownAddress);
-  if (pathOnSite(canonical.value, facts.productionAddresses) === own) {
+  const own = sitePath(facts.ownAddress, facts.productionAddresses);
+  if (sitePath(canonical.value, facts.productionAddresses) === own) {
     return [];
   }
   return [
@@ -281,11 +260,16 @@ function structuredDataProblems(facts: PageFacts): Problem[] {
             ...(problem.field === undefined ? {} : { field: problem.field }),
           },
         };
+      // A detail's field is mapped in the plugin's options until the
+      // settings offer it.
       case "mapping":
         return {
           ...base,
-          action: "Choose a field",
-          fix: { place: "settings" as const, tab: "types" as const },
+          action: COPY_NOTE,
+          fix: {
+            place: "developer" as const,
+            note: `${subject.detail ?? subject.label}: no field of ${subject.type ?? "this type"} holds the ${label}. Map one in seoPlugin({ structuredData: { types: { ${subject.type ?? "<type>"}: { details } } } }).`,
+          },
         };
       case "settings":
         return {

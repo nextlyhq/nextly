@@ -12,6 +12,7 @@
  */
 import { originOf } from "../origin";
 import { isRecord } from "../plain-values";
+import { pathOf } from "../redirects/addresses";
 
 import type { LinkFact } from "./page-checks";
 
@@ -72,25 +73,20 @@ export interface LinkJudge {
 }
 
 /**
- * The path a link names on the site, without its query, fragment or
- * trailing slash: a path from the root, or a full address on one of the
- * production addresses. Nothing for any other link.
+ * The path an address names on the site, spelled as the record keeps it
+ * (encoded, without dot segments, query, fragment or trailing slash): a path
+ * from the root, or a full address on one of the production addresses.
+ * Nothing for any other address.
  */
-function sitePath(
+export function sitePath(
   url: string,
   productionAddresses: readonly string[]
 ): string | undefined {
-  let path: string;
-  if (url.startsWith("/") && !url.startsWith("//")) {
-    path = url.split(/[?#]/)[0] ?? url;
-  } else {
-    const origin = originOf(url);
-    const own = productionAddresses.flatMap(each => originOf(each) ?? []);
-    if (origin === undefined || !own.includes(origin)) return undefined;
-    path = new URL(url).pathname;
-  }
-  const trimmed = path.replace(/\/+$/, "");
-  return trimmed === "" ? "/" : trimmed;
+  if (url.startsWith("/") && !url.startsWith("//")) return pathOf(url);
+  const origin = originOf(url);
+  const own = productionAddresses.flatMap(each => originOf(each) ?? []);
+  if (origin === undefined || !own.includes(origin)) return undefined;
+  return pathOf(new URL(url).pathname);
 }
 
 /**

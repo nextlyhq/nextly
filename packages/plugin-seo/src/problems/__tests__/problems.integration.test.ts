@@ -25,7 +25,13 @@ import { readSeoRules } from "../../settings/rules";
 import { structuredDataFromSettings } from "../../settings/structured-data-rules";
 import { noSocialCardRules } from "../../social/card";
 import { rulesFromOptions } from "../../structured-data/rules";
-import { checkSite, problemList, type ProblemChecks } from "../check";
+import {
+  checkSite,
+  pageRefKey,
+  problemList,
+  type ProblemChecks,
+  type ReadablePages,
+} from "../check";
 import type { Problem } from "../contract";
 import { PROBLEMS_SLUG } from "../store";
 
@@ -35,6 +41,15 @@ afterEach(async () => {
   await current?.destroy();
   current = undefined;
 });
+
+/** A reader who may read every page. */
+const everything: ReadablePages = async pages => new Set(pages.map(pageRefKey));
+
+/** A reader who may read only the pages `allowed` names. */
+const only =
+  (allowed: (page: { type: string; id: string }) => boolean): ReadablePages =>
+  async pages =>
+    new Set(pages.filter(allowed).map(pageRefKey));
 
 /** The checks as the plugin runs them for `posts`, with nothing set. */
 const CHECKS: ProblemChecks = {
@@ -183,7 +198,7 @@ describe.each(getConfiguredTestDialects())(
       });
       const [first] = await until(t, checkedSince(id));
 
-      let list = await problemList(ctx, CHECKS, () => true);
+      let list = await problemList(ctx, CHECKS, everything);
       expect(kindsOf(list.problems, id)).toEqual([
         "brokenLink",
         "noDescription",
@@ -214,8 +229,24 @@ describe.each(getConfiguredTestDialects())(
       });
       await until(t, checkedSince(id, String(first?.checkedAt)));
 
-      list = await problemList(ctx, CHECKS, () => true);
+      list = await problemList(ctx, CHECKS, everything);
       expect(kindsOf(list.problems, id)).toEqual(["shareImage"]);
+    });
+
+    it("shows a reader only the pages they may read, compared among those", async () => {
+      const { t, ctx } = await boot(dialect);
+      const a = await publish(t, { title: "Harbour", slug: "a" });
+      const b = await publish(t, { title: "Harbour", slug: "b" });
+      await until(t, found => checkedSince(a)(found) && checkedSince(b)(found));
+
+      const list = await problemList(
+        ctx,
+        CHECKS,
+        only(page => page.id === a)
+      );
+      expect(list.problems.some(p => p.subject.id === b)).toBe(false);
+      // The title it shares is with a page the reader may not see.
+      expect(kindsOf(list.problems, a)).not.toContain("sharedTitle");
     });
 
     it("lists a shared title on both pages, and forgets a deleted page", async () => {
@@ -224,14 +255,14 @@ describe.each(getConfiguredTestDialects())(
       const b = await publish(t, { title: "Harbour", slug: "b" });
       await until(t, found => checkedSince(a)(found) && checkedSince(b)(found));
 
-      let list = await problemList(ctx, CHECKS, () => true);
+      let list = await problemList(ctx, CHECKS, everything);
       expect(kindsOf(list.problems, a)).toContain("sharedTitle");
       expect(kindsOf(list.problems, b)).toContain("sharedTitle");
 
       await t.nextly.delete({ collection: "posts", id: b });
       await until(t, found => !found.some(row => row.holderId === b));
 
-      list = await problemList(ctx, CHECKS, () => true);
+      list = await problemList(ctx, CHECKS, everything);
       expect(kindsOf(list.problems, a)).not.toContain("sharedTitle");
       expect(kindsOf(list.problems, b)).toEqual([]);
     });
@@ -242,7 +273,7 @@ describe.each(getConfiguredTestDialects())(
       const live = await publish(t, { title: "Now", slug: "now" });
       await until(t, checkedSince(live));
       // The draft was saved first, and its check ran before the live one's.
-      const list = await problemList(ctx, CHECKS, () => true);
+      const list = await problemList(ctx, CHECKS, everything);
       expect(kindsOf(list.problems, draft)).toEqual([]);
       expect((await rows(t)).some(row => row.holderId === draft)).toBe(false);
     });
@@ -252,7 +283,7 @@ describe.each(getConfiguredTestDialects())(
       const id = await publish(t, { title: "Harbour", slug: "harbour" });
       await until(t, checkedSince(id));
 
-      const list = await problemList(ctx, CHECKS, () => true);
+      const list = await problemList(ctx, CHECKS, everything);
       const site = list.problems.filter(p => p.subject.id === undefined);
       expect(site.map(p => [p.kind, p.subject.label, p.what])).toEqual([
         ["productionAddress", "Whole site", expect.any(String)],
@@ -262,7 +293,11 @@ describe.each(getConfiguredTestDialects())(
         ["structuredData", "Whole site", "Missing: the site's address."],
       ]);
 
-      const hidden = await problemList(ctx, CHECKS, type => type !== "posts");
+      const hidden = await problemList(
+        ctx,
+        CHECKS,
+        only(page => page.type !== "posts")
+      );
       expect(kindsOf(hidden.problems, id)).toEqual([]);
       expect(hidden.problems.map(p => p.kind)).toEqual([
         "productionAddress",
@@ -275,12 +310,12 @@ describe.each(getConfiguredTestDialects())(
       const id = await publish(t, { title: "Harbour", slug: "harbour" });
       await until(t, checkedSince(id));
 
-      let list = await problemList(ctx, CHECKS, () => true);
+      let list = await problemList(ctx, CHECKS, everything);
       expect(list.checkedAt).toBeUndefined();
       expect(list.due).toBe(true);
 
       await checkSite(ctx, CHECKS);
-      list = await problemList(ctx, CHECKS, () => true);
+      list = await problemList(ctx, CHECKS, everything);
       expect(list).toMatchObject({
         pagesChecked: 1,
         outOfDate: false,
@@ -290,7 +325,7 @@ describe.each(getConfiguredTestDialects())(
 
       // A day and a minute later, the list is due a full check again.
       const later = Date.parse(checkedAt) + 24 * 60 * 60 * 1000 + 60_000;
-      expect((await problemList(ctx, CHECKS, () => true, later)).due).toBe(
+      expect((await problemList(ctx, CHECKS, everything, later)).due).toBe(
         true
       );
 
@@ -303,7 +338,7 @@ describe.each(getConfiguredTestDialects())(
         data: { title: "Harbour at dawn", _overwrite: true },
       });
       await until(t, checkedSince(id, String(before?.checkedAt)));
-      list = await problemList(ctx, CHECKS, () => true);
+      list = await problemList(ctx, CHECKS, everything);
       expect(list.outOfDate).toBe(true);
     });
 
@@ -345,7 +380,7 @@ describe.each(getConfiguredTestDialects())(
       await save("/new/*", "/newer/*");
 
       await checkSite(ctx, CHECKS);
-      const list = await problemList(ctx, CHECKS, () => true);
+      const list = await problemList(ctx, CHECKS, everything);
       expect(
         list.problems.filter(p => p.kind === "redirectChain").map(p => p.what)
       ).toEqual(["/a → /new/x → /newer/x"]);
@@ -370,12 +405,19 @@ describe.each(getConfiguredTestDialects())(
       );
 
       await checkSite(ctx, CHECKS);
-      const list = await problemList(ctx, CHECKS, () => true);
+      // Not shown to a reader who may not read the page left out.
+      const hidden = await problemList(
+        ctx,
+        CHECKS,
+        only(page => page.id !== id)
+      );
+      expect(hidden.problems.some(p => p.kind === "notListed")).toBe(false);
+      const list = await problemList(ctx, CHECKS, everything);
       const left = list.problems.filter(p => p.kind === "notListed");
       expect(left.map(p => [p.subject.id, p.what])).toEqual([
         [
           id,
-          "Its address /blog/harbour is held by Boats, so it has no official address and isn't in the sitemap",
+          "Its address /blog/harbour is held by another page, so it has no official address and isn't in the sitemap",
         ],
       ]);
     });

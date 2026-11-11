@@ -124,6 +124,12 @@ describe("pageProblems", () => {
       })
     );
     expect(own).toEqual([]);
+    // Typed with the characters a person sees, held encoded.
+    const unicode = pageProblems({
+      ...withAnswer({ canonical: { value: "/blog/café", from: "page" } }),
+      ownAddress: "/blog/caf%C3%A9",
+    });
+    expect(unicode).toEqual([]);
     const elsewhere = pageProblems(
       withAnswer({ canonical: { value: "/blog/other", from: "page" } })
     );
@@ -218,7 +224,14 @@ describe("pageProblems", () => {
         "Add the author",
         { place: "page", tab: "content", field: "writer" },
       ],
-      ["structuredData", "Choose a field", { place: "settings", tab: "types" }],
+      [
+        "structuredData",
+        "Copy a note for a developer",
+        {
+          place: "developer",
+          note: "/blog/harbour-walk: no field of posts holds the date published. Map one in seoPlugin({ structuredData: { types: { posts: { details } } } }).",
+        },
+      ],
       [
         "structuredData",
         "Set the address",

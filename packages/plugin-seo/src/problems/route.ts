@@ -18,7 +18,13 @@ import {
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { checkSite, problemList, type ProblemChecks } from "./check";
+import {
+  checkSite,
+  pageRefKey,
+  problemList,
+  type ProblemChecks,
+  type ReadablePages,
+} from "./check";
 import { PROBLEMS_CHECK_ROUTE_PATH, PROBLEMS_ROUTE_PATH } from "./contract";
 
 /**
@@ -39,6 +45,62 @@ async function readableTypes(
   return readable;
 }
 
+/** How many ids one read of a type asks about. */
+const ID_CHUNK = 100;
+
+/** The pages of `refs` grouped by type, each id once. */
+function idsByType(refs: Parameters<ReadablePages>[0]): Map<string, string[]> {
+  const byType = new Map<string, Set<string>>();
+  for (const { type, id } of refs) {
+    const ids = byType.get(type) ?? new Set<string>();
+    ids.add(id);
+    byType.set(type, ids);
+  }
+  return new Map([...byType].map(([type, ids]) => [type, [...ids]]));
+}
+
+/**
+ * Which pages the caller may read, asked of the collections themselves as
+ * the caller, so a read rule that admits only some entries (the caller's
+ * own, say) decides, as it does for every other read. A type the caller may
+ * not read at all is not asked about.
+ */
+function readableBy(
+  ctx: PluginRouteContext,
+  types: ReadonlySet<string>
+): ReadablePages {
+  const asReader = {
+    as: "user" as const,
+    user: ctx.user ?? undefined,
+    ...(ctx.authenticatedScope === undefined
+      ? {}
+      : { authenticatedScope: ctx.authenticatedScope }),
+  };
+  return async refs => {
+    const allowed = new Set<string>();
+    for (const [type, ids] of idsByType(refs)) {
+      if (!types.has(type)) continue;
+      for (let at = 0; at < ids.length; at += ID_CHUNK) {
+        const chunk = ids.slice(at, at + ID_CHUNK);
+        const { data } = await ctx.services.collections.listEntries(
+          type,
+          {
+            where: { id: { in: chunk } },
+            select: { id: true },
+            depth: 0,
+            pagination: { limit: chunk.length, page: 1 },
+          },
+          asReader
+        );
+        for (const entry of data as { id?: unknown }[]) {
+          allowed.add(pageRefKey({ type, id: String(entry.id) }));
+        }
+      }
+    }
+    return allowed;
+  };
+}
+
 /** The routes that read the list and check the site again. */
 export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
   return [
@@ -49,7 +111,7 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
       handler: async (_req, ctx) => {
         const readable = await readableTypes(ctx, checks.targets);
         return respondDoc(
-          await problemList(ctx, checks, type => readable.has(type))
+          await problemList(ctx, checks, readableBy(ctx, readable))
         );
       },
     },
@@ -60,7 +122,7 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
         // Asked before the check, which reads and writes as the system.
         const readable = await readableTypes(ctx, checks.targets);
         await checkSite(ctx, checks);
-        const list = await problemList(ctx, checks, type => readable.has(type));
+        const list = await problemList(ctx, checks, readableBy(ctx, readable));
         const pages = `${list.pagesChecked} ${list.pagesChecked === 1 ? "page" : "pages"}`;
         return respondAction(`Checked ${pages}.`, { ...list });
       },

@@ -113,8 +113,8 @@ describe("noAddressProblems", () => {
       ],
       [
         { type: "notes", label: "Notes", detail: "1 entry" },
-        "settings",
-        "Set an address",
+        "developer",
+        "Copy a note for a developer",
       ],
     ]);
     const note = problems[0]?.fix;
@@ -179,7 +179,8 @@ describe("listingProblems", () => {
       [
         "notListed",
         { type: "posts", id: "7", label: "Harbour", detail: "/blog/harbour" },
-        "Its address /blog/harbour is held by Harbour page, so it has no official address and isn't in the sitemap",
+        // The other page is not named: the reader may not be able to read it.
+        "Its address /blog/harbour is held by another page, so it has no official address and isn't in the sitemap",
         { place: "page", tab: "content" },
       ],
       [

@@ -143,19 +143,15 @@ export function noAddressProblems(
     },
     what: "No public address, so these pages have no official address and aren't in the sitemap",
     // A type declared in code declares its address there; one made in the
-    // Schema Builder takes it from the SEO settings.
-    ...(type.inCode
-      ? {
-          action: "Copy a note for a developer",
-          fix: {
-            place: "developer" as const,
-            note: `The ${type.key} collection has no public address. Add one to its config, such as publicAddress: "/${type.key}/{slug}".`,
-          },
-        }
-      : {
-          action: "Set an address",
-          fix: { place: "settings" as const, tab: "types" as const },
-        }),
+    // Schema Builder is given one by a developer too, until the settings
+    // offer it.
+    action: "Copy a note for a developer",
+    fix: {
+      place: "developer" as const,
+      note: type.inCode
+        ? `The ${type.key} collection has no public address. Add one to its config, such as publicAddress: "/${type.key}/{slug}".`
+        : `The ${type.key} content type, made in the Schema Builder, has no public address yet. A developer sets where its pages live.`,
+    },
   }));
 }
 
@@ -208,7 +204,6 @@ export function listingProblems(
       problem.language === defaultLanguage
         ? problem.path
         : `${problem.path} in ${problem.language}`;
-    const heldBy = problem.heldBy;
     return {
       kind: "notListed",
       subject: {
@@ -217,11 +212,16 @@ export function listingProblems(
         label: known?.label ?? `${collection} ${id}`,
         detail: known?.detail ?? problem.path,
       },
+      // The page holding the address is not named: the reader may not be
+      // allowed to read it.
       what:
-        heldBy === undefined
+        problem.kind === "not-recorded"
           ? `Its address ${at} isn't recorded as its own yet, so it's left out of the sitemap. Saving the page records it.`
-          : `Its address ${at} is held by ${heldBy.label ?? `${heldBy.collection} ${heldBy.id}`}, so it has no official address and isn't in the sitemap`,
-      action: heldBy === undefined ? "Open the page" : "Change its address",
+          : `Its address ${at} is held by another page, so it has no official address and isn't in the sitemap`,
+      action:
+        problem.kind === "not-recorded"
+          ? "Open the page"
+          : "Change its address",
       fix: { place: "page", tab: "content" },
     };
   });

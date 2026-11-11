@@ -398,31 +398,30 @@ export function checkSite(
   return running;
 }
 
-/** The checks waiting or running for each page, one after another. */
+/** The work waiting or running for each page, one piece after another. */
 const pageQueue = new Map<string, Promise<void>>();
 
 /**
- * Check a page after it is saved, behind any check of it still running, and
- * mark the full check out of date where the save can alter another page's
- * result. Started, not awaited, so a save never waits on it; a failure is
- * logged, never thrown into the save that is already done.
+ * Run `work` for the page `type`/`id` once every piece of work already
+ * queued for it has settled: a save's check and a deletion's cleanup never
+ * overlap, so a check that read the page before it was deleted cannot write
+ * its row back after the cleanup removed it. Started, not awaited, so a save
+ * or a delete never waits on it; a failure is logged as `failed`, never
+ * thrown into the write that is already done.
  */
-export function recheckSaved(
+function inTurn(
   ctx: PluginContext,
-  checks: ProblemChecks,
   type: string,
-  id: string
+  id: string,
+  failed: string,
+  work: () => Promise<void>
 ): void {
   const key = pageKey(type, id);
   const run = async () => {
     try {
-      await checkPage(ctx, checks, type, id);
+      await work();
     } catch (error) {
-      ctx.logger.error("The SEO plugin could not check a saved page", {
-        error,
-        collection: type,
-        id,
-      });
+      ctx.logger.error(failed, { error, collection: type, id });
     }
   };
   const next = (pageQueue.get(key) ?? Promise.resolve()).then(run);
@@ -432,24 +431,37 @@ export function recheckSaved(
   });
 }
 
-/** Forget a deleted page, and mark the full check out of date. */
+/** Check a page after it is saved, in its turn. */
+export function recheckSaved(
+  ctx: PluginContext,
+  checks: ProblemChecks,
+  type: string,
+  id: string
+): void {
+  inTurn(ctx, type, id, "The SEO plugin could not check a saved page", () =>
+    checkPage(ctx, checks, type, id)
+  );
+}
+
+/**
+ * Forget a deleted page in its turn, marking the full check out of date
+ * first, as a check that removes a page does.
+ */
 export function forgetDeleted(
   ctx: PluginContext,
   type: string,
   id: string
 ): void {
-  void (async () => {
-    try {
-      await removePage(ctx, type, id);
+  inTurn(
+    ctx,
+    type,
+    id,
+    "The SEO plugin could not forget a deleted page",
+    async () => {
       await markOutOfDate(ctx);
-    } catch (error) {
-      ctx.logger.error("The SEO plugin could not forget a deleted page", {
-        error,
-        collection: type,
-        id,
-      });
+      await removePage(ctx, type, id);
     }
-  })();
+  );
 }
 
 /** A content type as code declares it, as far as the list reads it. */
@@ -514,26 +526,58 @@ function byKind(a: Problem, b: Problem): number {
   return kind !== 0 ? kind : a.subject.label.localeCompare(b.subject.label);
 }
 
+/** A page, by its content type's key and its id. */
+export interface PageRef {
+  type: string;
+  id: string;
+}
+
 /**
- * The list as `canRead` may see it: every site-wide problem, and the
- * problems of pages of the types they may read, with pages compared only
- * among those.
+ * Which of `pages` the reader may read, as `type:id` keys: what the list
+ * names of a page is shown only to someone who may read that page.
+ */
+export type ReadablePages = (
+  pages: readonly PageRef[]
+) => Promise<ReadonlySet<string>>;
+
+/** A page's key in a {@link ReadablePages} answer. */
+export const pageRefKey = (page: PageRef): string => `${page.type}:${page.id}`;
+
+/** The page a problem is about, where it is about one. */
+function pageOf(problem: Problem): PageRef | undefined {
+  const { type, id } = problem.subject;
+  return type === undefined || id === undefined ? undefined : { type, id };
+}
+
+/**
+ * The list as the reader `readable` answers for may see it: every problem of
+ * the whole site, and the problems of the pages they may read, with pages
+ * compared only among those.
  */
 export async function problemList(
   ctx: PluginContext,
   checks: ProblemChecks,
-  canRead: (type: string) => boolean,
+  readable: ReadablePages,
   now: number = Date.now()
 ): Promise<ProblemListBody> {
   const site = await readSiteCheck(ctx);
-  const pages = (await readPages(ctx)).filter(row => canRead(row.subject.type));
+  const rows = await readPages(ctx);
+  const allowed = await readable([
+    ...rows.map(row => row.subject),
+    ...site.problems.flatMap(problem => pageOf(problem) ?? []),
+  ]);
+  const pages = rows.filter(row => allowed.has(pageRefKey(row.subject)));
+  const found = site.problems.filter(problem => {
+    const page = pageOf(problem);
+    return page === undefined || allowed.has(pageRefKey(page));
+  });
   const rules = await checks.readers.readRules(ctx, undefined);
   const addresses = productionAddressesOf(rules.productionAddresses);
   const host =
     addresses[0] === undefined ? undefined : new URL(addresses[0]).host;
   const problems = once([
     ...(await siteProblems(ctx, checks, addresses)),
-    ...site.problems,
+    ...found,
     ...pages.flatMap(row => row.problems),
     ...sharedValueProblems(pages),
   ]).sort(byKind);
