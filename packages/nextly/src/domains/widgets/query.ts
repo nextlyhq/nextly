@@ -869,8 +869,9 @@ function heldAsSourceFilter(
 
 /**
  * Confirms a source filter's value is the one it takes: a collection by its
- * slug, Only mine as true or false, a Tab as one of its values. Who "mine"
- * is, is never in the query: the source reads it from the caller.
+ * slug, Only mine as true or false, a Tab as one of its values, a Role by its
+ * slug. Who "mine" is, is never in the query: the source reads it from the
+ * caller.
  */
 function assertFilterValue(key: string, value: unknown, source: string): void {
   if (key === "collection" && (typeof value !== "string" || value === "")) {
@@ -880,6 +881,9 @@ function assertFilterValue(key: string, value: unknown, source: string): void {
   }
   if (key === "onlyMine" && typeof value !== "boolean") {
     fail(`where filter "onlyMine" on "${source}" must be true or false`);
+  }
+  if (key === "role" && (typeof value !== "string" || value === "")) {
+    fail(`where filter "role" on "${source}" must be a role's slug`);
   }
   if (key === "tab" && !isWidgetTab(value)) {
     fail(
