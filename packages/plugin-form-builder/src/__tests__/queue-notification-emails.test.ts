@@ -4,6 +4,8 @@
 // as queued, or as failed when its first attempt failed for good or the queue
 // refused it, and no log line ever names a recipient.
 
+import { createHash } from "node:crypto";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "@nextlyhq/plugin-sdk";
@@ -14,6 +16,11 @@ import type { FormEmailNotification } from "../types";
 const TO = "owner@example.com";
 const CC = "team@example.com";
 const BCC = "audit@example.com";
+
+/** The short digest of a notification's id that its key carries. */
+function digest(id: string): string {
+  return createHash("sha256").update(id).digest("hex").slice(0, 16);
+}
 
 const notification: FormEmailNotification = {
   to: TO,
@@ -54,6 +61,13 @@ function logged(logger: {
   ]);
 }
 
+/** The idempotency key of each queued email, in order. */
+function keys(queue: ReturnType<typeof vi.fn>): string[] {
+  return queue.mock.calls.map(
+    call => (call[3] as { idempotencyKey: string }).idempotencyKey
+  );
+}
+
 describe("queueing a form's notifications", () => {
   it("queues each with its rule's settings and a key per submission and notification", async () => {
     const queue = vi.fn().mockResolvedValue({ id: "q-1", state: "sent" });
@@ -71,7 +85,7 @@ describe("queueing a form's notifications", () => {
         cc: [CC],
         bcc: [BCC],
         attachments: [{ mediaId: "media-1" }],
-        idempotencyKey: "form-notification:sub-1:notify-owner",
+        idempotencyKey: `form-notification:sub-1:0:${digest("notify-owner")}`,
       }
     );
   });
@@ -84,13 +98,40 @@ describe("queueing a form's notifications", () => {
     ]);
     await done;
 
-    const keys = queue.mock.calls.map(
-      call => (call[3] as { idempotencyKey: string }).idempotencyKey
-    );
-    expect(keys).toEqual([
-      "form-notification:sub-1:0",
-      "form-notification:sub-1:1",
+    expect(keys(queue)).toEqual([
+      `form-notification:sub-1:0:${digest("")}`,
+      `form-notification:sub-1:1:${digest("")}`,
     ]);
+  });
+
+  it("keys two emails of one notification apart, as when a hook adds a copy", async () => {
+    const queue = vi.fn().mockResolvedValue({ id: "q", state: "waiting" });
+    const { done } = run(queue, [
+      notification,
+      { ...notification, to: "second@example.com" },
+    ]);
+    await done;
+
+    const [first, second] = keys(queue);
+    expect(first).not.toBe(second);
+  });
+
+  it("keeps a key short whatever its notification's id, and apart from a near one", async () => {
+    const long = "n".repeat(400);
+    const queue = vi.fn().mockResolvedValue({ id: "q", state: "waiting" });
+    const { done } = run(queue, [
+      { ...notification, notificationId: long },
+      { ...notification, notificationId: `${long}x` },
+    ]);
+    await done;
+
+    const [first, second] = keys(queue);
+    // The email service takes keys of up to 256 characters.
+    expect(first.length).toBeLessThanOrEqual(256);
+    expect(second.length).toBeLessThanOrEqual(256);
+    expect(first.replace(/^form-notification:sub-1:0:/, "")).not.toBe(
+      second.replace(/^form-notification:sub-1:1:/, "")
+    );
   });
 
   it("logs a queued notification with where it stands, naming no recipient", async () => {

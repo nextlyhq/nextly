@@ -8,6 +8,7 @@
  * @since 0.1.0
  */
 
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 
 import {
@@ -1331,13 +1332,32 @@ async function handleSubmissionCreated(
 }
 
 /**
+ * The key a notification is queued under: its submission, its place among
+ * the submission's emails, and a short digest of its notification's id. The
+ * place keeps apart two emails of one notification (a `beforeEmail` hook
+ * may add a copy of one), and the digest keeps the key short whatever the
+ * id's length. The same submission's emails, built again, get the same keys.
+ */
+function notificationKey(
+  submissionId: string,
+  index: number,
+  notificationId: string | undefined
+): string {
+  const digest = createHash("sha256")
+    .update(notificationId ?? "")
+    .digest("hex")
+    .slice(0, 16);
+  return `form-notification:${submissionId}:${index}:${digest}`;
+}
+
+/**
  * Queue each notification, and log where it stands.
  *
  * Queued through the email service's queued send rather than sent once: the
  * queue makes the first attempt at once, and a failure a retry can help is
  * tried again through the job queue, with backoff, until it is sent or fails
  * for good, never dropped. Each carries an idempotency key from its
- * submission and notification, so a provider that takes keys delivers it
+ * submission and notification (`notificationKey`), so a provider that takes keys delivers it
  * once even if this hook runs again. No log line names a recipient: an
  * address in a log outlives the submission it came from, and the
  * notification's id and the queued email's id are enough to find it.
@@ -1371,9 +1391,11 @@ export async function queueNotificationEmails(input: {
           cc: email.cc,
           bcc: email.bcc,
           attachments: fileAttachments.length > 0 ? fileAttachments : undefined,
-          idempotencyKey: `form-notification:${input.submissionId}:${
-            email.notificationId ?? index
-          }`,
+          idempotencyKey: notificationKey(
+            input.submissionId,
+            index,
+            email.notificationId
+          ),
         }
       );
       // The first attempt has been made: sent, waiting for a retry, or

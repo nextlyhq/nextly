@@ -441,6 +441,8 @@ Template variables available in your email templates: all submitted field values
 
 Each notification is queued once its submission is saved, then sent at once. A failure that a retry can help (the provider is down, or times out) is not dropped: it is tried again, with a growing wait between attempts, until it is sent or fails for good. Retries run when your site calls the jobs trigger (`POST /admin/api/jobs/run`, see [Jobs](/docs/jobs)), so schedule that call on any site that sends form notifications. A refusal no retry can change, such as an invalid address, fails at once.
 
+A notification that fails for good is logged twice, and the two lines share the queued email's id (`queuedId`): the Form Builder's line names the form and the notification, and the server's own `queued-email-failed` line gives the reason. Neither names a recipient.
+
 ### beforeEmail Hook
 
 Modify or filter outgoing emails before they are sent:
