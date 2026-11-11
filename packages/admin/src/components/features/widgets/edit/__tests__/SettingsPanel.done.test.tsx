@@ -1,5 +1,5 @@
 /**
- * The settings sheet's Done: what the sheet does while the change is being kept, when it has
+ * The settings drawer's Save: what the sheet does while the change is being kept, when it has
  * been, when it was refused, and when it cannot be kept at all.
  *
  * Where the change goes is the cell's business (`ArrangedCell`'s `doneFor`); the sheet hears
@@ -49,24 +49,25 @@ function sheet(blocked?: string) {
   return { onDone, onOpenChange, settle: () => settled! };
 }
 
-const done = () => screen.getByRole("button", { name: /^(Done|Saving…)$/ });
+const done = () => screen.getByRole("button", { name: /^(Save|Saving…)$/ });
 const cancel = () => screen.getByRole("button", { name: "Cancel" });
 
-describe("the settings sheet's Done", () => {
-  it("stays open while the change is being kept, with Done and Cancel off", async () => {
+describe("the settings drawer's Save", () => {
+  it("stays open while the change is being kept, with Save, Cancel and the close button off", async () => {
     const { onDone, onOpenChange } = sheet();
     await userEvent.click(done());
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
     expect(done()).toHaveTextContent("Saving…");
     expect(done()).toBeDisabled();
     expect(cancel()).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
     // Escape does not close it mid-save either.
     await userEvent.keyboard("{Escape}");
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
   it("freezes the form and Reset while the change is being kept, and gives them back if refused", async () => {
-    // 🔴 The save carries the values Done was pressed on. A field changed while it ran was
+    // 🔴 The save carries the values Save was pressed on. A field changed while it ran was
     // dropped without a word when the sheet closed, and after a refusal the form no longer said
     // what had been refused.
     const { onDone, settle } = sheet();
@@ -105,12 +106,12 @@ describe("the settings sheet's Done", () => {
       "Recent posts changed elsewhere, so this change was not saved."
     );
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
-    // And Done can be pressed again.
-    expect(done()).toHaveTextContent("Done");
+    // And Save can be pressed again.
+    expect(done()).toHaveTextContent("Save");
     expect(done()).toBeEnabled();
   });
 
-  it("says why Done cannot keep a change, and leaves Done off", () => {
+  it("says why Save cannot keep a change, and leaves Save off", () => {
     const reason =
       "Your saved dashboard cannot be read, so card settings cannot be saved. Reload the page or reset the dashboard.";
     sheet(reason);
@@ -222,7 +223,7 @@ describe("reopening the settings sheet", () => {
 });
 
 describe("the settings sheet's preview", () => {
-  it("is handed what Done would keep, as the reader changes the form", async () => {
+  it("is handed what Save would keep, as the reader changes the form", async () => {
     const renderPreview = vi.fn(() => null);
     render(
       <SettingsPanel

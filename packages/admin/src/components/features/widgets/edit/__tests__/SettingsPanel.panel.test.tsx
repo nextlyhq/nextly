@@ -1,8 +1,8 @@
 /**
- * The More settings panel as a reader meets it: beside a dashboard that stays usable, its
- * settings in Data, Display and Advanced, Advanced folded, the card's own title kept on Done, the
- * filter edited as chips joined with AND, a change of collection saying what it reset, and a leave
- * with changes still in the panel asked first.
+ * The settings drawer as a reader meets it: beside a dashboard that stays usable, its settings in
+ * Content and Display, nothing folded, the card's own title kept on Save, the filter edited as
+ * chips joined with AND, a change of collection saying what it reset, and a leave with changes
+ * still in the drawer asked first.
  *
  * The branding context stands in for the workspace payload's `widgetSources`; everything else is
  * the real panel.
@@ -105,78 +105,58 @@ describe("the More settings panel beside the dashboard", () => {
     expect(outside.closest("[aria-hidden='true']")).toBeNull();
     await userEvent.click(outside);
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
-    expect(
-      screen.getByRole("dialog", { name: "Recent posts settings" })
-    ).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Recent posts" })).toBeTruthy();
   });
 });
 
-describe("the panel's sections", () => {
-  it("draws Data and Display open, and Advanced folded until opened", async () => {
-    panel({ collection: "posts" });
-    expect(screen.getByRole("region", { name: "Data" })).toHaveTextContent(
+describe("the drawer's sections", () => {
+  it("draws Content and Display, each open, with Row spacing under Display and nothing folded", () => {
+    panel({ collection: "posts" }, [
+      ...LIST.slice(0, 4),
+      { ...LIST[4], label: "Row spacing" } as AnyWidgetSetting,
+    ]);
+    expect(screen.getByRole("region", { name: "Content" })).toHaveTextContent(
       /Collection.*Filter.*Sort/s
     );
     const display = screen.getByRole("region", { name: "Display" });
     expect(within(display).getByLabelText("Title")).toBeTruthy();
     expect(display).toHaveTextContent("Number of items");
-    const advanced = screen.getByRole("button", { name: "Advanced" });
-    expect(advanced).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByText("Density")).toBeNull();
-    await userEvent.click(advanced);
-    expect(screen.getByText("Density")).toBeTruthy();
-  });
-
-  it("heads Advanced as Data and Display are headed: a heading, with its Reset on the same row", () => {
-    panel({ collection: "posts" });
-    const advanced = screen.getByRole("button", { name: "Advanced" });
-    // A heading like the others', its trigger inside it, so the outline lists all three.
+    // A setting a widget still marks `advanced` is drawn under Display, at once.
     expect(
-      screen.getByRole("heading", { level: 3, name: "Advanced" })
-    ).toContainElement(advanced);
-    const reset = screen.getByRole("button", {
-      name: "Reset Advanced to defaults",
-    });
-    const display = screen.getByRole("button", {
-      name: "Reset Display to defaults",
-    });
-    // One row: the heading and its Reset share a parent, as Display's do.
-    expect(reset.parentElement).toBe(
-      advanced.closest("h3")?.parentElement ?? null
-    );
-    expect(display.parentElement).toBe(
-      screen.getByRole("heading", { level: 3, name: "Display" }).parentElement
-    );
+      within(display).getByRole("radiogroup", { name: "Row spacing" })
+    ).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Advanced" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Advanced/ })).toBeNull();
+    expect(document.querySelector("[aria-expanded]")).toBeNull();
   });
 
-  it("says whether Advanced is open on its trigger, and turns its chevron with it", async () => {
+  it("heads every section the same way: a heading, with its Reset on the same row", () => {
     panel({ collection: "posts" });
-    const advanced = screen.getByRole("button", { name: "Advanced" });
-    const chevron = advanced.querySelector("svg");
-    expect(chevron).not.toBeNull();
-    expect(advanced).toHaveAttribute("aria-expanded", "false");
-    expect(chevron).not.toHaveClass("rotate-180");
-    await userEvent.click(advanced);
-    expect(advanced).toHaveAttribute("aria-expanded", "true");
-    expect(chevron).toHaveClass("rotate-180");
-    await userEvent.click(advanced);
-    expect(advanced).toHaveAttribute("aria-expanded", "false");
-    expect(chevron).not.toHaveClass("rotate-180");
-    expect(screen.queryByText("Density")).toBeNull();
+    for (const name of ["Content", "Display"]) {
+      const heading = screen.getByRole("heading", { level: 3, name });
+      const reset = screen.getByRole("button", {
+        name: `Reset ${name} to defaults`,
+      });
+      expect(reset.parentElement).toBe(heading.parentElement);
+    }
   });
 
-  it("keeps Cancel and Done in a footer held to the panel's foot while the form scrolls", () => {
+  it("keeps Cancel and Save at the drawer's foot, below the part that scrolls", () => {
     panel({ collection: "posts" });
-    const done = screen.getByRole("button", { name: "Done" });
-    const footer = done.parentElement;
-    // jsdom lays nothing out, so the rule that holds it there is what is checked: sticky at the
-    // bottom of the scrolling form, on the panel's own surface so fields pass under it unseen.
-    expect(footer).toHaveClass("sticky", "bottom-0", "bg-background");
+    const save = screen.getByRole("button", { name: "Save" });
+    const footer = save.parentElement;
+    // jsdom lays nothing out, so the structure that holds it there is what is checked: the
+    // footer is the form's last child, outside the scrolling part above it.
     expect(footer?.parentElement?.tagName).toBe("FORM");
-    expect(footer?.parentElement).toHaveClass("overflow-y-auto");
+    expect(footer?.parentElement?.lastElementChild).toBe(footer);
+    expect(footer?.closest(".overflow-y-auto")).toBeNull();
+    expect(footer?.previousElementSibling).toHaveClass("overflow-y-auto");
+    expect(
+      within(footer as HTMLElement).getByRole("button", { name: "Cancel" })
+    ).toBeTruthy();
   });
 
-  it("draws only what the widget declares: no Data or Advanced for a card with neither", () => {
+  it("draws only what the widget declares: no Content for a card with none", () => {
     panel(undefined, [
       {
         name: "limit",
@@ -185,8 +165,7 @@ describe("the panel's sections", () => {
         defaultValue: 5,
       },
     ]);
-    expect(screen.queryByRole("region", { name: "Data" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Advanced" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Content" })).toBeNull();
     expect(screen.getByRole("region", { name: "Display" })).toBeTruthy();
   });
 });
@@ -219,10 +198,10 @@ describe("a change made to the card behind the open panel", () => {
 
   it("keeps a setting the card changed meanwhile, where the panel left it untouched", async () => {
     const { onDone, storedBecomes } = openOver({ collection: "posts" });
-    // The reader changes the title in the panel, and the card's quick setting saves its rows.
+    // The reader changes the title in the drawer, and the card's header control saves its rows.
     await userEvent.type(screen.getByLabelText("Title"), "Mine");
     storedBecomes({ collection: "posts", limit: 9 });
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(kept(onDone)).toEqual({
       config: { collection: "posts", limit: 9 },
@@ -232,18 +211,16 @@ describe("a change made to the card behind the open panel", () => {
 
   it("keeps the reader's own change over the card's, for a setting the panel changed", async () => {
     const { onDone, storedBecomes } = openOver({ collection: "posts" });
-    const rows = screen.getByRole("spinbutton", { name: /Number of items/ });
-    await userEvent.clear(rows);
-    await userEvent.type(rows, "7");
-    storedBecomes({ collection: "posts", limit: 9 });
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("radio", { name: "20" }));
+    storedBecomes({ collection: "posts", limit: 10 });
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(kept(onDone)?.config).toEqual({ collection: "posts", limit: 7 });
+    expect(kept(onDone)?.config).toEqual({ collection: "posts", limit: 20 });
   });
 });
 
-describe("a refused setting inside folded Advanced", () => {
-  // A note kept under Advanced, longer than its bound: Done refuses it.
+describe("a refused setting", () => {
+  // A note a widget still marks `advanced`, longer than its bound: Save refuses it.
   const ADVANCED_NOTE: AnyWidgetSetting[] = [
     { name: "collection", type: "collection", label: "Collection" },
     {
@@ -255,26 +232,24 @@ describe("a refused setting inside folded Advanced", () => {
     },
   ];
 
-  it("opens Advanced on Done and takes focus on the refused field", async () => {
+  it("takes focus on Save, in plain view under Display", async () => {
     const { onDone } = panel(
       { collection: "posts", aside: "too long" },
       ADVANCED_NOTE
     );
-    const advanced = screen.getByRole("button", { name: "Advanced" });
-    expect(advanced).toHaveAttribute("aria-expanded", "false");
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Advanced" })).toHaveAttribute(
-        "aria-expanded",
-        "true"
-      )
-    );
-    const aside = await screen.findByRole("textbox", { name: /Aside/ });
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const aside = screen.getByRole("textbox", { name: /Aside/ });
     await waitFor(() => expect(aside).toHaveFocus());
+    expect(
+      within(screen.getByRole("region", { name: "Display" })).getByRole(
+        "textbox",
+        { name: /Aside/ }
+      )
+    ).toBe(aside);
     expect(onDone).not.toHaveBeenCalled();
   });
 
-  it("opens Advanced when the dashboard's Save stages a refused change", async () => {
+  it("takes focus when the dashboard's Save stages a refused change", async () => {
     panel({ collection: "posts", aside: "too long" }, ADVANCED_NOTE);
     // A change, so there is something to stage.
     await userEvent.type(screen.getByLabelText("Title"), "Mine");
@@ -284,22 +259,16 @@ describe("a refused setting inside folded Advanced", () => {
     });
     expect(staged).toBe("invalid");
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Advanced" })).toHaveAttribute(
-        "aria-expanded",
-        "true"
-      )
-    );
-    await waitFor(() =>
       expect(screen.getByRole("textbox", { name: /Aside/ })).toHaveFocus()
     );
   });
 });
 
 describe("the card's own title", () => {
-  it("is kept on Done, trimmed, beside the settings", async () => {
+  it("is kept on Save, trimmed, beside the settings", async () => {
     const { onDone } = panel({ collection: "posts" });
     await userEvent.type(screen.getByLabelText("Title"), "  Drafts to finish ");
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(kept(onDone)).toEqual({
       config: { collection: "posts" },
@@ -313,14 +282,14 @@ describe("the card's own title", () => {
     await userEvent.click(title);
     // Eighty emoji are 160 UTF-16 units and still fit: one more does not.
     await userEvent.paste("😀".repeat(81));
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(
       await screen.findByText("A title can be at most 80 characters.")
     ).toBeTruthy();
     expect(onDone).not.toHaveBeenCalled();
     await userEvent.clear(title);
     await userEvent.paste("😀".repeat(80));
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
   });
 
@@ -330,7 +299,7 @@ describe("the card's own title", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Reset Display to defaults" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(kept(onDone)?.ownTitle).toBe("");
   });
@@ -356,7 +325,7 @@ describe("the panel's filter chips", () => {
     await addFilter("Title", "World");
     expect(screen.getByRole("button", { name: "Title is Hello" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Title is World" })).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(kept(onDone)?.config.where).toEqual({
       and: [{ title: { equals: "Hello" } }, { title: { equals: "World" } }],
@@ -370,7 +339,7 @@ describe("the panel's filter chips", () => {
       screen.getByRole("combobox", { name: "Condition field" })
     );
     await userEvent.click(screen.getByRole("option", { name: "Title" }));
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(
       await screen.findByText("Finish this filter, or remove it.")
     ).toBeTruthy();
@@ -378,14 +347,14 @@ describe("the panel's filter chips", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Remove this filter" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
   });
 
   it("refuses a filter row added and left blank, as it refuses one half built", async () => {
     const { onDone } = panel({ collection: "posts" });
     await userEvent.click(screen.getByRole("button", { name: "+ Add filter" }));
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(
       await screen.findByText("Finish this filter, or remove it.")
     ).toBeTruthy();
@@ -420,7 +389,7 @@ describe("the panel's filter chips", () => {
       "World"
     );
     expect(add()).toBeEnabled();
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(kept(onDone)?.config.where).toEqual({
       and: [{ title: { equals: "Hello" } }, { title: { equals: "World" } }],
@@ -455,7 +424,7 @@ describe("the panel's filter chips", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Remove filter: Title is Hello" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     // No conditions, stored: unset, the default would filter the card again.
     expect(kept(onDone)?.config.where).toEqual({});
@@ -485,7 +454,7 @@ describe("the panel's filter chips", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Remove filter: Title is Hello" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(kept(onDone)?.config.where).toEqual({
       title: { equals: "World" },
