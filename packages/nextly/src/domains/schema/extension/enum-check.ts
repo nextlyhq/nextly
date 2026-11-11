@@ -272,6 +272,18 @@ export function enumValuesIn(sql: string): string[] | null {
 }
 
 /**
+ * The column an enum check constrains, or null when it is not one of ours.
+ *
+ * A narrowed set is refused over the rows still holding a value it takes
+ * away, and that refusal counts rows IN the column the check names — read
+ * here rather than re-parsed, so what counts and what constrains can never
+ * disagree.
+ */
+export function enumColumnIn(sql: string): string | null {
+  return readEnumCheck(sql)?.column ?? null;
+}
+
+/**
  * The values this change would take away.
  *
  * Empty when the change only adds. A non-empty answer is the case the database
