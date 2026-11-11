@@ -39,6 +39,19 @@ describe("removedEntityTables", () => {
     });
   });
 
+  it("reads a field group whose old dbName carried a collection's or a Single's prefix as one", () => {
+    expect(
+      removed(
+        table("dc_seo", ["heading", ...PARENT]),
+        table("single_seo", ["heading", ...PARENT])
+      )
+    ).toEqual({
+      collections: [],
+      singles: [],
+      fieldGroups: ["dc_seo", "single_seo"],
+    });
+  });
+
   it("reads no field group in a table without a prefix or the parent columns", () => {
     expect(removed(table("my_archive", ["heading"]))).toEqual({
       collections: [],

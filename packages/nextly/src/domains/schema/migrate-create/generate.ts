@@ -3185,25 +3185,22 @@ export interface RemovedEntityTables {
 }
 
 /**
- * Whether a table is a field group's: named with the field-group prefix, or
- * carrying the parent columns every field-group table has. A field group named
- * through the `dbName` it once accepted keeps the table its author chose, which
- * no prefix gives away, but its columns do: no collection or Single can have
- * them, since a field name starts with a letter.
+ * Whether a table is a field group's: carrying the parent columns every
+ * field-group table has, or named with the field-group prefix. The columns are
+ * asked first: a field group named through the `dbName` it once accepted keeps
+ * the table its author chose, which may carry any prefix, a collection's or a
+ * Single's included, but no collection or Single can have those columns, since
+ * a field name starts with a letter.
  */
 function isFieldGroupTable(table: TableSpec): boolean {
-  if (table.name.startsWith(STORAGE_FORMAT.tablePrefix)) return true;
-  if (
-    table.name.startsWith(COLLECTION_TABLE_PREFIX) ||
-    table.name.startsWith(SINGLE_TABLE_PREFIX)
-  ) {
-    return false;
-  }
   const columns = new Set(table.columns.map(column => column.name));
-  return (
+  if (
     columns.has(STORAGE_FORMAT.columns.parentId) &&
     columns.has(STORAGE_FORMAT.columns.parentTable)
-  );
+  ) {
+    return true;
+  }
+  return table.name.startsWith(STORAGE_FORMAT.tablePrefix);
 }
 
 /**
@@ -3232,12 +3229,14 @@ export function removedEntityTables(input: {
     table => !desired.has(table.name)
   );
   const names = (tables: readonly TableSpec[]) => tables.map(t => t.name);
+  const fieldGroups = removed.filter(isFieldGroupTable);
+  const others = removed.filter(t => !fieldGroups.includes(t));
   return {
     collections: names(
-      removed.filter(t => t.name.startsWith(COLLECTION_TABLE_PREFIX))
+      others.filter(t => t.name.startsWith(COLLECTION_TABLE_PREFIX))
     ),
-    singles: names(removed.filter(t => t.name.startsWith(SINGLE_TABLE_PREFIX))),
-    fieldGroups: names(removed.filter(isFieldGroupTable)),
+    singles: names(others.filter(t => t.name.startsWith(SINGLE_TABLE_PREFIX))),
+    fieldGroups: names(fieldGroups),
   };
 }
 
