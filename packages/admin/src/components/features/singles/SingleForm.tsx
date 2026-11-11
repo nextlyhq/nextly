@@ -32,6 +32,8 @@ import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFr
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
 import {
+  topLevelFieldNames,
+  useContentFields,
   useDocumentPanelParts,
   useDocumentPlace,
 } from "@admin/components/features/entries/EntryForm/document-place";
@@ -45,7 +47,6 @@ import {
 } from "@admin/components/features/entries/EntryForm/DocumentActionsContext";
 import { DocumentBanners } from "@admin/components/features/entries/EntryForm/DocumentBanners";
 import { DocumentBar } from "@admin/components/features/entries/EntryForm/DocumentBar";
-import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import {
   DOCUMENT_COLUMN_INSET,
   DocumentEditorLayout,
@@ -139,6 +140,7 @@ import {
   ViewedVersionBody,
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
+import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
@@ -1510,6 +1512,10 @@ export function SingleForm({
     { kind: "single", single: schema.slug },
     document
   );
+  // The fields a plugin's tab edits are drawn in that tab, not here; every
+  // field keeps its value in the form, so Save still stores them.
+  const fieldNames = useMemo(() => topLevelFieldNames(allFields), [allFields]);
+  const contentFields = useContentFields(documentPlace, fieldNames, mainFields);
   // The side panel's sections in the order the server placed them, with the
   // sections plugins declared at the Single's page among them, as on a
   // collection entry's page.
@@ -1908,6 +1914,7 @@ export function SingleForm({
                                       recovering,
                                       removedFromCode,
                                     })}
+                                    fieldNames={fieldNames}
                                   >
                                     {/* The title, fixed by the Single's config and
                                   so read-only. No slug line: a Single's slug
@@ -1968,7 +1975,7 @@ export function SingleForm({
                                       historicalFields={historicalFields}
                                       historicalValues={historicalValues}
                                       isSubmitting={isSubmitting}
-                                      mainFields={mainFields}
+                                      mainFields={contentFields}
                                       readOnly={lock.readOnly}
                                       // A submit in flight withholds restore too: a
                                       // restore racing the ordinary save would let

@@ -41,6 +41,7 @@ import {
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { useT } from "@admin/lib/i18n/I18nProvider";
+import { tabFitsDocument } from "@admin/lib/plugins/place-entries";
 import { cn } from "@admin/lib/utils";
 
 import { IsolatedContribution } from "./IsolatedContribution";
@@ -108,6 +109,12 @@ export interface PlaceTabsProps<P extends AdminPlaceId> extends PlaceProps<P> {
    * content. Left out, the strip keeps it.
    */
   openTab?: string | null;
+  /**
+   * On an edit page, the document's top-level field names: a tab that edits
+   * fields of the document (`fields`) is drawn only where it has every one of
+   * them, and nowhere when this is left out.
+   */
+  fieldNames?: readonly string[];
   /** Told the tab the reader opens, by the same values `openTab` takes. */
   onOpenTabChange?: (tab: string | null) => void;
   /**
@@ -208,12 +215,17 @@ function useShownTab(
 function useDeliveredTabs<P extends AdminPlaceId>(
   place: P,
   context: PlaceProps<P>["context"],
-  entry: PlaceProps<P>["entry"]
+  entry: PlaceProps<P>["entry"],
+  fieldNames: readonly string[] | undefined
 ) {
   const delivered = usePlaceContributions(place, "tab", { context, entry });
   if (context === null) return [];
   return delivered.flatMap(item =>
-    "builtIn" in item || item.kind !== "tab" ? [] : [item]
+    "builtIn" in item ||
+    item.kind !== "tab" ||
+    !tabFitsDocument(item, fieldNames)
+      ? []
+      : [item]
   );
 }
 
@@ -243,10 +255,10 @@ export function PlaceTabs<P extends AdminPlaceId>({
   openTab,
   onOpenTabChange,
   onShownTabChange,
+  fieldNames,
   children,
 }: PlaceTabsProps<P>): ReactNode {
-  const tabs = useDeliveredTabs(place, context, entry);
-  const { badges, setterFor } = useTabBadges();
+  const tabs = useDeliveredTabs(place, context, entry, fieldNames);
   const { shown, choose } = useShownTab(
     tabs.map(tab => tab.id),
     openTab,
@@ -256,47 +268,80 @@ export function PlaceTabs<P extends AdminPlaceId>({
   return (
     <>
       {context === null || tabs.length === 0 ? null : (
-        <Tabs
-          value={shown}
-          onValueChange={choose}
-          {...(className === undefined ? {} : { className })}
-        >
-          <TabsList scrollable>
-            {/* The page's content is not one of the strip's panels, since
-                wrapping it in one would change the page with no tab or
-                remount it when a tab arrives, so this tab names no panel. */}
-            <TabsTrigger value={CONTENT_TAB} aria-controls={undefined}>
-              {contentLabel}
-            </TabsTrigger>
-            {tabs.map(tab => (
-              <PlaceTabTrigger
-                key={tab.id}
-                value={tab.id}
-                label={tab.label}
-                badge={drawnBadge(badges[tab.id])}
-              />
-            ))}
-          </TabsList>
-          {tabs.map(tab => (
-            <PlaceTabPanel<P>
-              key={tab.id}
-              id={tab.id}
-              component={tab.component}
-              open={shown === tab.id}
-              props={{
-                ...tabProps,
-                context,
-                ...(entry === undefined ? {} : { entry }),
-                setBadge: setterFor(tab.id),
-              }}
-            />
-          ))}
-        </Tabs>
+        <PlaceTabStrip<P>
+          tabs={tabs}
+          shown={shown}
+          choose={choose}
+          contentLabel={contentLabel}
+          className={className}
+          handed={{
+            ...tabProps,
+            context,
+            ...(entry === undefined ? {} : { entry }),
+          }}
+        />
       )}
       <Activity mode={shown === CONTENT_TAB ? "visible" : "hidden"}>
         {children}
       </Activity>
     </>
+  );
+}
+
+/**
+ * The strip and each contributed tab's panel, drawn once the page knows its
+ * ids and a tab is delivered. `handed` is what every tab receives besides its
+ * own `setBadge`.
+ */
+function PlaceTabStrip<P extends AdminPlaceId>({
+  tabs,
+  shown,
+  choose,
+  contentLabel,
+  className,
+  handed,
+}: {
+  tabs: ReturnType<typeof useDeliveredTabs<P>>;
+  shown: string;
+  choose: (value: string) => void;
+  contentLabel: string;
+  className: string | undefined;
+  handed: Omit<PlaceTabProps<P>, "setBadge"> &
+    Readonly<Record<string, unknown>>;
+}): ReactNode {
+  const { badges, setterFor } = useTabBadges();
+  return (
+    <Tabs
+      value={shown}
+      onValueChange={choose}
+      {...(className === undefined ? {} : { className })}
+    >
+      <TabsList scrollable>
+        {/* The page's content is not one of the strip's panels, since
+            wrapping it in one would change the page with no tab or remount
+            it when a tab arrives, so this tab names no panel. */}
+        <TabsTrigger value={CONTENT_TAB} aria-controls={undefined}>
+          {contentLabel}
+        </TabsTrigger>
+        {tabs.map(tab => (
+          <PlaceTabTrigger
+            key={tab.id}
+            value={tab.id}
+            label={tab.label}
+            badge={drawnBadge(badges[tab.id])}
+          />
+        ))}
+      </TabsList>
+      {tabs.map(tab => (
+        <PlaceTabPanel<P>
+          key={tab.id}
+          id={tab.id}
+          component={tab.component}
+          open={shown === tab.id}
+          props={{ ...handed, setBadge: setterFor(tab.id) }}
+        />
+      ))}
+    </Tabs>
   );
 }
 

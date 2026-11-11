@@ -10,6 +10,8 @@
  * @module plugins/admin-place-contributions
  * @experimental
  */
+import { judgeConfiguredAddress } from "../shared/address-rule";
+
 import type {
   AdminContribution,
   AdminContributionAction,
@@ -58,12 +60,13 @@ const BASE_KEYS = [
   "requiredPermission",
   "visibleWhen",
   "collections",
+  "singles",
 ];
 
 /** The keys of each kind's own. */
 const KIND_KEYS: Record<AdminContributionKind, readonly string[]> = {
   block: ["component"],
-  tab: ["label", "component"],
+  tab: ["label", "component", "fields"],
   sidebarSection: ["label", "component", "narrow"],
   column: ["label", "field", "component"],
   rowAction: ["label", "action"],
@@ -85,6 +88,12 @@ const ROW_KINDS = new Set<AdminContributionKind>(["rowAction", "bulkAction"]);
  * on rows, and a write is what the admin sends with its CSRF token.
  */
 const ROUTE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+
+/** The edit pages, whose tabs may edit the document's own fields. */
+const DOCUMENT_PLACES = new Set(["collection.edit", "single.edit"]);
+
+/** A top-level field's name. */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** A field's name, or a dotted path into a group. */
 const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
@@ -214,6 +223,42 @@ function kindProblem(
   return isText(declared.component) ? undefined : "it names no component";
 }
 
+/**
+ * What makes a tab's `fields` unusable, or `undefined`: a non-empty list of
+ * top-level field names, on an edit page, the only place with a document whose
+ * fields a tab could take over.
+ */
+function tabFieldsProblem(fields: unknown, place: unknown): string | undefined {
+  if (typeof place !== "string" || !DOCUMENT_PLACES.has(place)) {
+    return `it names \`fields\` at "${String(place)}", which edits no document`;
+  }
+  if (!Array.isArray(fields) || fields.length === 0) {
+    return "its `fields` is not a list of the document's field names";
+  }
+  const named = (fields as unknown[]).find(
+    name => typeof name !== "string" || !FIELD_NAME.test(name)
+  );
+  return named === undefined
+    ? undefined
+    : `its \`fields\` names ${JSON.stringify(named)}, which is not a top-level field's name`;
+}
+
+/** What makes `singles` unusable here, or `undefined`. */
+function singlesProblem(singles: unknown, place: string): string | undefined {
+  if (singles === undefined) return undefined;
+  if (place !== "single.edit") {
+    return `it names \`singles\` at "${place}", which is not a Single's page`;
+  }
+  if (!Array.isArray(singles)) {
+    return "its `singles` is not a list of Single slugs";
+  }
+  for (const slug of singles as unknown[]) {
+    const refusal = judgeConfiguredAddress("single", slug);
+    if (refusal) return `its \`singles\` names no Single: ${refusal.message}`;
+  }
+  return undefined;
+}
+
 /** What makes the placement and audience fields unusable, or `undefined`. */
 function placementProblem(
   declared: Record<string, unknown>,
@@ -256,6 +301,8 @@ function audienceProblem(
   kind: AdminContributionKind
 ): string | undefined {
   const place = declared.place as string;
+  const singles = singlesProblem(declared.singles, place);
+  if (singles) return singles;
   if (declared.collections !== undefined) {
     if (!COLLECTION_PLACES.has(place)) {
       return `it names \`collections\` at "${place}", which is not about a collection`;
@@ -299,6 +346,9 @@ function contributionProblem(
   if (typeof declared.place !== "string") return "it names no place";
   return (
     kindProblem(kind as AdminContributionKind, declared, plugin) ??
+    (declared.fields === undefined
+      ? undefined
+      : tabFieldsProblem(declared.fields, declared.place)) ??
     placementProblem(declared, kind as AdminContributionKind)
   );
 }
