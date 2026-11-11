@@ -43,6 +43,11 @@ import type { PageMetadataValues } from "../seo/page-metadata-contract";
 import { triggerNotFound, triggerPermanentRedirect } from "./not-found";
 import { isReservedPath } from "./reserved-paths";
 import {
+  requestLanguage,
+  servedAddress,
+  type RequestLanguage,
+} from "./request-language";
+import {
   resolveContent,
   type ContentEntry,
   type NextlyContentReader,
@@ -69,7 +74,8 @@ export interface ResolvedContext {
   /** The joined slug path (no leading slash), e.g. `"about/team"`. */
   slug: string;
   /**
-   * The locale this route was configured to read in, verbatim.
+   * The locale this request is read in: the route's `[locale]` segment where
+   * it has one, otherwise the locale it was configured to read in, verbatim.
    *
    * Carried explicitly rather than read back off the row: the companion overlay
    * copies localized values ONTO the entry without stamping which locale they
@@ -81,8 +87,8 @@ export interface ResolvedContext {
    * different locale than the read that follows authorizes one translation and
    * serves another.
    *
-   * Absent when {@link ContentRouteConfig.locale} was not set — which a
-   * localized site must not do, for the reason documented there.
+   * Absent when neither a segment nor {@link ContentRouteConfig.locale} names
+   * one — which a localized site must not do, for the reason documented there.
    */
   locale?: string;
 }
@@ -250,6 +256,10 @@ export interface ContentRouteConfig<TNode> {
    * the first request of a cold process than on the next one.
    *
    * Omit it only where the site configures no localization at all.
+   *
+   * A route under a `[locale]` segment (`app/[locale]/[[...slug]]`) reads the
+   * language from the segment instead, so one route serves every language:
+   * leave this out there.
    */
   locale?: string;
   /**
@@ -409,9 +419,31 @@ export type DraftGrant =
       readAs?: UserContext;
     };
 
+/**
+ * The route's params: the optional catch-all's `slug`, and `locale` where the
+ * route sits under a `[locale]` segment.
+ */
+export interface ContentRouteParams {
+  slug?: string[];
+  /**
+   * The language the request names, from a `[locale]` segment. Read in place
+   * of the route's configured `locale`; a value naming none of the site's
+   * languages answers not found.
+   */
+  locale?: string;
+}
+
 /** The optional-catch-all route arg: `{ params: Promise<{ slug?: string[] }> }`. */
 export interface ContentRouteArgs {
-  params: Promise<{ slug?: string[] }> | { slug?: string[] };
+  params: Promise<ContentRouteParams> | ContentRouteParams;
+}
+
+/**
+ * What Next hands `generateStaticParams` under a `[locale]` segment whose
+ * layout lists the languages: the parent's params, the language among them.
+ */
+export interface ContentStaticParamsArgs {
+  params?: Promise<{ locale?: string }> | { locale?: string };
 }
 
 /**
@@ -440,7 +472,9 @@ export interface ContentRoute<TNode> {
  * enforced route does not compile.
  */
 export interface StaticContentRoute<TNode> extends ContentRoute<TNode> {
-  generateStaticParams: () => Promise<Array<{ slug: string[] }>>;
+  generateStaticParams: (
+    args?: ContentStaticParamsArgs
+  ) => Promise<Array<{ slug: string[] }>>;
 }
 
 const MAX_STATIC_PARAMS_PER_PAGE = 500;
@@ -461,27 +495,40 @@ function buildRoute<TNode>(
   const collections = [...new Set(config.collections)];
   const mountPath = checkedMountPath(config.mountPath);
 
-  /** The address this route serves `slug` at, under its mount. */
-  function addressOf(slug: string): string {
+  /** The path this route serves `slug` at, under its mount. */
+  function mountedPathOf(slug: string): string {
     const path = slugToPath(slug) ?? "/";
     if (mountPath === "") return path;
     return path === "/" ? mountPath : `${mountPath}${path}`;
   }
 
-  /** `context` with the addresses of its entry's list pages, when listed. */
-  function withListPaths(context: RenderContext): RenderContext {
+  /**
+   * The address this route serves `slug` at in `language`: under its mount,
+   * and formed by the site's language rule where the language came from the
+   * route's `[locale]` segment.
+   */
+  function addressOf(slug: string, language: RequestLanguage): Promise<string> {
+    return servedAddress(mountedPathOf(slug), language);
+  }
+
+  /**
+   * `context` with the addresses of its entry's list pages, when listed, in
+   * the request's language. `listPagePath` answers at once, so the language's
+   * address for the entry is formed here and the page's own part appended.
+   */
+  async function withListPaths(
+    context: RenderContext,
+    language: RequestLanguage
+  ): Promise<RenderContext> {
     if (config.listPages === undefined) return context;
     const base = context.slug;
+    const first = await addressOf(base, language);
     return {
       ...context,
       listPagePath: page =>
-        addressOf(
-          page <= 1
-            ? base
-            : [base, LIST_PAGE_SEGMENT, String(page)]
-                .filter(part => part !== "")
-                .join("/")
-        ),
+        page <= 1
+          ? first
+          : `${first === "/" ? "" : first}/${LIST_PAGE_SEGMENT}/${String(page)}`,
     };
   }
 
@@ -599,9 +646,13 @@ function buildRoute<TNode>(
     return typeof decision === "function" ? decision(context) : decision;
   }
 
-  /** Resolve the joined slug across the configured collections (first match wins). */
+  /**
+   * Resolve the joined slug across the configured collections (first match
+   * wins), read in `locale`.
+   */
   async function resolve(
-    slug: string
+    slug: string,
+    locale: string | undefined
   ): Promise<{ entry: ContentEntry; context: RenderContext } | null> {
     for (const collection of collections) {
       // Built once and handed to both the draft decision and the render, so the
@@ -620,7 +671,7 @@ function buildRoute<TNode>(
       const context: ResolvedContext = {
         collection,
         slug,
-        ...(config.locale ? { locale: config.locale } : {}),
+        ...(locale ? { locale } : {}),
       };
       // Asked per collection, not once per request: the answer is scoped to a
       // document, and the same slug can name a different document in each
@@ -657,7 +708,7 @@ function buildRoute<TNode>(
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,
-        ...(config.locale ? { locale: config.locale } : {}),
+        ...(locale ? { locale } : {}),
         // `status` is left to widen itself when a draft is asked for, so a
         // route cannot end up previewing with only one of the two draft layers
         // switched on.
@@ -714,30 +765,38 @@ function buildRoute<TNode>(
    * none matches is it read as a page of the entry at its front.
    */
   async function resolvePath(
-    slug: string
+    slug: string,
+    language: RequestLanguage
   ): Promise<
     | { entry: ContentEntry; context: RenderContext }
     | { redirect: string }
     | null
   > {
-    const exact = await resolve(slug);
+    const exact = await resolve(slug, language.locale);
     if (exact)
-      return { entry: exact.entry, context: withListPaths(exact.context) };
+      return {
+        entry: exact.entry,
+        context: await withListPaths(exact.context, language),
+      };
     const listPages = config.listPages;
     const later = listPages === undefined ? null : listPageOf(slug);
     if (listPages === undefined || later === null) return null;
     // Checked before anything is read, so a malformed number costs no query.
     const page = listPageNumber(later.segment);
     if (page === null) return null;
-    const base = await resolve(later.base);
+    const base = await resolve(later.base, language.locale);
     if (!base) return null;
     const pages = pageCount(await listPages(base.entry, base.context));
     if (pages === null) return null;
-    if (page === 1) return { redirect: addressOf(later.base) };
+    if (page === 1) return { redirect: await addressOf(later.base, language) };
     if (page > pages) return null;
     return {
       entry: base.entry,
-      context: { ...withListPaths(base.context), page, listPages: pages },
+      context: {
+        ...(await withListPaths(base.context, language)),
+        page,
+        listPages: pages,
+      },
     };
   }
 
@@ -747,13 +806,14 @@ function buildRoute<TNode>(
    */
   async function listPageParams(
     params: readonly { slug: string[] }[],
-    room: number
+    room: number,
+    locale: string | undefined
   ): Promise<Array<{ slug: string[] }>> {
     const listPages = config.listPages;
     if (listPages === undefined || room <= 0) return [];
     const extra: Array<{ slug: string[] }> = [];
     for (const param of params) {
-      const resolved = await resolve(param.slug.join("/"));
+      const resolved = await resolve(param.slug.join("/"), locale);
       if (!resolved) continue;
       const pages = pageCount(
         await listPages(resolved.entry, resolved.context)
@@ -768,12 +828,24 @@ function buildRoute<TNode>(
     return extra;
   }
 
-  async function generateStaticParams(): Promise<Array<{ slug: string[] }>> {
+  async function generateStaticParams(
+    args?: ContentStaticParamsArgs
+  ): Promise<Array<{ slug: string[] }>> {
     // A non-positive limit disables pre-rendering entirely — every path then
     // renders on demand via `dynamicParams`. Return before querying so a `0`
     // limit yields zero params instead of one-per-collection.
     if (staticParamsLimit <= 0) return [];
     const nextly = await getInstance();
+    // Under a `[locale]` segment whose layout lists the languages, Next hands
+    // each language here in turn: its paths are scanned in it, and a value
+    // naming none of the site's languages has none to build.
+    const language = await requestLanguage(
+      (await args?.params)?.locale,
+      config.locale,
+      async () => nextly
+    );
+    if (language === null) return [];
+    const locale = language.locale;
     const params: Array<{ slug: string[] }> = [];
     for (const collection of collections) {
       let page = 1;
@@ -799,7 +871,7 @@ function buildRoute<TNode>(
             // route pre-renders DEFAULT-locale slugs — paths its own resolver
             // then answers with `notFound()` — while the slugs it does serve
             // are absent from the scan and left to render on demand.
-            ...(config.locale ? { locale: config.locale } : {}),
+            ...(locale ? { locale } : {}),
             select: { [slugField]: true },
             // `id` is unique and present on every collection; `createdAt` may be
             // absent (timestamps off) or non-unique, letting rows shift between
@@ -850,7 +922,7 @@ function buildRoute<TNode>(
       // render on their first request.
       params.push(
         ...(await runWithAccessMemo(() =>
-          listPageParams(own, staticParamsLimit - own.length)
+          listPageParams(own, staticParamsLimit - own.length, locale)
         ))
       );
     }
@@ -871,14 +943,22 @@ function buildRoute<TNode>(
    */
   async function servedAt<T>(
     args: ContentRouteArgs,
-    use: (served: Served) => T | Promise<T>
+    use: (served: Served, language: RequestLanguage) => T | Promise<T>
   ): Promise<T> {
-    const slug = joinSlug(await args.params);
+    const params = await args.params;
+    const slug = joinSlug(params);
     if (isReservedPath(`/${slug}`)) triggerNotFound();
+    // A `[locale]` naming none of the site's languages is not a page here.
+    const language = await requestLanguage(
+      params.locale,
+      config.locale,
+      getInstance
+    );
+    if (language === null) triggerNotFound();
     return runWithAccessMemo(async () => {
-      const resolved = await resolvePath(slug);
+      const resolved = await resolvePath(slug, language);
       if (!resolved) triggerNotFound();
-      return use(resolved);
+      return use(resolved, language);
     });
   }
 
@@ -886,7 +966,7 @@ function buildRoute<TNode>(
     // Nothing of its own to serve and no provider to ask: the page is not
     // resolved for its head at all, as before providers existed.
     if (!config.buildMetadata && knownNoPageMetadataProvider()) return {};
-    return servedAt(args, resolved => {
+    return servedAt(args, async (resolved, language) => {
       // A redirect's metadata is never read: the page answers with it.
       if ("redirect" in resolved) return {};
       const { entry, context } = resolved;
@@ -895,7 +975,7 @@ function buildRoute<TNode>(
       const path =
         context.page !== undefined && context.listPagePath !== undefined
           ? context.listPagePath(context.page)
-          : addressOf(context.slug);
+          : await addressOf(context.slug, language);
       return contentPageMetadata(config, entry, context, path);
     });
   }
@@ -1112,6 +1192,6 @@ function checkedMountPath(mountPath: string | undefined): string {
 }
 
 /** Join the optional-catch-all segments into a slug path (no leading slash). */
-function joinSlug(params: { slug?: string[] }): string {
+function joinSlug(params: ContentRouteParams): string {
   return (params.slug ?? []).join("/");
 }
