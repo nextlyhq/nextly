@@ -18,6 +18,8 @@ import {
 
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
+import { pageLanguageLinks } from "../languages/head";
+import { listPages } from "../outputs/listing";
 import { isRecord, textOf } from "../plain-values";
 import { destinationOf, pathOf } from "../redirects/addresses";
 import { redirectsSlug } from "../redirects/collection";
@@ -41,6 +43,7 @@ import {
 import { addressShapes, brokenLinks } from "./links";
 import { pageProblems } from "./page-checks";
 import {
+  listingProblems,
   noAddressProblems,
   productionAddressProblems,
   redirectChainProblems,
@@ -50,6 +53,7 @@ import {
 import {
   markOutOfDate,
   pageKey,
+  readPage,
   readPages,
   readSiteCheck,
   removePage,
@@ -159,6 +163,14 @@ async function examine(
     shareImage: await shareImageProblems(ctx, input, readers),
     structuredData: await structuredDataProblems(ctx, input, readers),
     images: content.images,
+    languageCodes: (
+      await pageLanguageLinks(
+        ctx,
+        input,
+        readers.readRules,
+        answer.canonical?.value
+      )
+    ).problems,
     brokenLinks: await brokenLinks(content.links, {
       shapes: addressShapes(ctx.config.collections ?? []),
       productionAddresses,
@@ -183,32 +195,40 @@ async function examine(
 }
 
 /**
+ * Whether a page's new check can alter another page's result: it appeared,
+ * or its address, title or description changed.
+ */
+function altersOthers(before: PageRow | undefined, row: PageRow): boolean {
+  return (
+    before === undefined ||
+    before.subject.detail !== row.subject.detail ||
+    before.title !== row.title ||
+    before.description !== row.description
+  );
+}
+
+/**
  * Check one page and keep what was found, or forget it where it is not a
- * public page (gone, a draft, or of a type with no address). Says whether
- * the change can have altered another page's result: the page appeared or
- * went, or its address, title or description changed.
+ * public page (gone, a draft, or of a type with no address). Where the
+ * change can alter another page's result, the full check is marked out of
+ * date first, so whoever reads the page's new row also reads the mark.
  */
 async function checkPage(
   ctx: PluginContext,
   checks: ProblemChecks,
   type: string,
   id: string
-): Promise<{ altersOthers: boolean }> {
-  const before = (await readPages(ctx)).find(
-    row => row.subject.type === type && row.subject.id === id
-  );
+): Promise<void> {
+  const before = await readPage(ctx, type, id);
   const row = await examine(ctx, checks, type, id);
   if (row === undefined) {
-    return { altersOthers: await removePage(ctx, type, id) };
+    if (before === undefined) return;
+    await markOutOfDate(ctx);
+    await removePage(ctx, type, id);
+    return;
   }
+  if (altersOthers(before, row)) await markOutOfDate(ctx);
   await savePage(ctx, row);
-  return {
-    altersOthers:
-      before === undefined ||
-      before.subject.detail !== row.subject.detail ||
-      before.title !== row.title ||
-      before.description !== row.description,
-  };
 }
 
 /** Pages read per step of a full check. */
@@ -267,8 +287,49 @@ async function runSiteCheck(
   await saveSiteCheck(ctx, {
     checkedAt: new Date().toISOString(),
     pagesChecked: seen.size,
-    problems: redirectChainProblems(await redirectChains(ctx)),
+    problems: [
+      ...(await leftOutOfListing(ctx, checks)),
+      ...redirectChainProblems(await redirectChains(ctx)),
+    ],
   });
+}
+
+/** The origin pages are listed on where the site names none: only paths are kept. */
+const NO_ORIGIN = "https://site.invalid";
+
+/**
+ * The pages the sitemap leaves out though their type declares them an
+ * address, read by the same listing the sitemap is made from, and named as
+ * their last check left them.
+ */
+async function leftOutOfListing(
+  ctx: PluginContext,
+  checks: ProblemChecks
+): Promise<Problem[]> {
+  const rules = await checks.readers.readRules(ctx, undefined);
+  const origin =
+    productionAddressesOf(rules.productionAddresses)[0] ?? NO_ORIGIN;
+  const { problems } = await listPages(ctx, {
+    origin,
+    readRules: checks.readers.readRules,
+    collections: checks.targets,
+  });
+  const labels = new Map(
+    (await readPages(ctx)).map(row => [
+      `${row.subject.type}:${row.subject.id}`,
+      {
+        label: row.subject.label,
+        ...(row.subject.detail === undefined
+          ? {}
+          : { detail: row.subject.detail }),
+      },
+    ])
+  );
+  return listingProblems(
+    problems,
+    labels,
+    await ctx.publicAddresses.defaultLanguage()
+  );
 }
 
 /** Redirects read per step of a full check. */
@@ -355,8 +416,7 @@ export function recheckSaved(
   const key = pageKey(type, id);
   const run = async () => {
     try {
-      const { altersOthers } = await checkPage(ctx, checks, type, id);
-      if (altersOthers) await markOutOfDate(ctx);
+      await checkPage(ctx, checks, type, id);
     } catch (error) {
       ctx.logger.error("The SEO plugin could not check a saved page", {
         error,

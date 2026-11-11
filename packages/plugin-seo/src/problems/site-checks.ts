@@ -6,6 +6,8 @@
  *
  * @module problems/site-checks
  */
+import type { ListingProblem } from "../outputs/listing";
+
 import { WHOLE_SITE, type Problem, type ProblemSubject } from "./contract";
 
 /** A page as the last check left it: what it is, and its title and description. */
@@ -181,4 +183,46 @@ export function redirectChainProblems(
       note: `Point ${chain.source} straight at ${chain.end}: its redirect now passes through ${chain.target} first. Saving the redirect again does this.`,
     },
   }));
+}
+
+/** What the list names a page by, kept from its last check. */
+export type PageLabels = ReadonlyMap<
+  string,
+  { label: string; detail?: string }
+>;
+
+/**
+ * Each page the sitemap leaves out though its type declares it an address:
+ * one whose address another page holds, and one the record has not given
+ * its address yet.
+ */
+export function listingProblems(
+  problems: readonly ListingProblem[],
+  labels: PageLabels,
+  defaultLanguage: string
+): Problem[] {
+  return problems.map(problem => {
+    const { collection, id } = problem.holder;
+    const known = labels.get(`${collection}:${id}`);
+    const at =
+      problem.language === defaultLanguage
+        ? problem.path
+        : `${problem.path} in ${problem.language}`;
+    const heldBy = problem.heldBy;
+    return {
+      kind: "notListed",
+      subject: {
+        type: collection,
+        id,
+        label: known?.label ?? `${collection} ${id}`,
+        detail: known?.detail ?? problem.path,
+      },
+      what:
+        heldBy === undefined
+          ? `Its address ${at} isn't recorded as its own yet, so it's left out of the sitemap. Saving the page records it.`
+          : `Its address ${at} is held by ${heldBy.label ?? `${heldBy.collection} ${heldBy.id}`}, so it has no official address and isn't in the sitemap`,
+      action: heldBy === undefined ? "Open the page" : "Change its address",
+      fix: { place: "page", tab: "content" },
+    };
+  });
 }

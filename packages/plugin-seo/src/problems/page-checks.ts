@@ -7,6 +7,7 @@
  *
  * @module problems/page-checks
  */
+import type { LanguageCodeProblem } from "../languages/hreflang";
 import { originOf } from "../origin";
 import type { SeoAnswer, Sourced } from "../resolver/order";
 import type { ShareImageProblem } from "../social/problems";
@@ -57,6 +58,24 @@ export interface PageFacts {
   structuredData: readonly StructuredDataProblem[];
   images: readonly ImageFact[];
   brokenLinks: readonly LinkFact[];
+  /** The site's languages left out of the page's language links. */
+  languageCodes: readonly LanguageCodeProblem[];
+}
+
+/** The site's languages left out of language links, each said of the whole site. */
+function languageCodeProblems(facts: PageFacts): Problem[] {
+  // The site's languages are set in its config or in Settings, so the note
+  // names both rather than guessing which this site uses.
+  return facts.languageCodes.map(problem => ({
+    kind: "languageCode",
+    subject: WHOLE_SITE,
+    what: problem.message,
+    action: COPY_NOTE,
+    fix: {
+      place: "developer",
+      note: `Give the language "${problem.language}" a code search engines accept, such as "de" or "pt-BR", where the site's languages are set: localization in nextly.config.ts, or Settings.`,
+    },
+  }));
 }
 
 /** How long `text` reads: in characters, so an emoji counts once. */
@@ -360,5 +379,6 @@ export function pageProblems(facts: PageFacts): Problem[] {
     ...shareImageProblems(facts),
     ...imageAltProblems(facts),
     ...structuredDataProblems(facts),
+    ...languageCodeProblems(facts),
   ];
 }

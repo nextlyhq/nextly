@@ -30,6 +30,8 @@ export type ProblemKind =
   | "productionAddress"
   | "noAddress"
   | "redirectChain"
+  | "languageCode"
+  | "notListed"
   | "noTitle"
   | "noDescription"
   | "sharedTitle"
@@ -60,6 +62,18 @@ export const KIND_TEXT: Readonly<
     explain:
       "Each extra hop slows the visit, and search engines may stop following before the end.",
     siteWide: true,
+  },
+  languageCode: {
+    title: "Language search engines can't name",
+    explain:
+      "Pages in this language get no language links, so search engines may show people the wrong language.",
+    siteWide: true,
+  },
+  notListed: {
+    title: "Page left out of the sitemap",
+    explain:
+      "The page has no official address, so search engines aren't told about it.",
+    siteWide: false,
   },
   noAddress: {
     title: "Content type with no public address",
@@ -136,6 +150,8 @@ export const KIND_ORDER: readonly ProblemKind[] = [
   "productionAddress",
   "noAddress",
   "redirectChain",
+  "languageCode",
+  "notListed",
   "noTitle",
   "sharedTitle",
   "canonical",

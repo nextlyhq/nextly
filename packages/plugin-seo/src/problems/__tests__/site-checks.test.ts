@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   noAddressProblems,
   productionAddressProblems,
+  listingProblems,
   redirectChainProblems,
   sharedValueProblems,
   type CheckedPage,
@@ -142,5 +143,51 @@ describe("redirectChainProblems", () => {
     expect(fix?.place === "developer" && fix.note).toContain(
       "Point /a straight at /newer/x"
     );
+  });
+});
+
+describe("listingProblems", () => {
+  const labels = new Map([
+    ["posts:7", { label: "Harbour", detail: "/blog/harbour" }],
+  ]);
+
+  it("passes a site whose every page is listed", () => {
+    expect(listingProblems([], labels, "en")).toEqual([]);
+  });
+
+  it("reports a page whose address another page holds, and one not recorded yet", () => {
+    const problems = listingProblems(
+      [
+        {
+          kind: "held-by-another",
+          holder: { collection: "posts", id: "7" },
+          path: "/blog/harbour",
+          language: "en",
+          heldBy: { collection: "pages", id: "2", label: "Harbour page" },
+        },
+        {
+          kind: "not-recorded",
+          holder: { collection: "posts", id: "8" },
+          path: "/blog/boats",
+          language: "de",
+        },
+      ],
+      labels,
+      "en"
+    );
+    expect(problems.map(p => [p.kind, p.subject, p.what, p.fix])).toEqual([
+      [
+        "notListed",
+        { type: "posts", id: "7", label: "Harbour", detail: "/blog/harbour" },
+        "Its address /blog/harbour is held by Harbour page, so it has no official address and isn't in the sitemap",
+        { place: "page", tab: "content" },
+      ],
+      [
+        "notListed",
+        { type: "posts", id: "8", label: "posts 8", detail: "/blog/boats" },
+        "Its address /blog/boats in de isn't recorded as its own yet, so it's left out of the sitemap. Saving the page records it.",
+        { place: "page", tab: "content" },
+      ],
+    ]);
   });
 });

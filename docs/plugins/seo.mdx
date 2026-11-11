@@ -679,6 +679,52 @@ export default async function NotFound() {
 
 `logNotFound` never throws, and logs nothing for a request the Proxy did not pass on.
 
+## Problems
+
+**SEO › Problems** in the admin lists what affects how the site shows up in search and when
+shared, grouped by kind, each with a button that goes straight to its fix: the page's SEO tab or
+its content, the SEO settings, the media library, or a note to copy for a developer where the fix
+is in code. There is no score, and nothing on the list stops anyone publishing.
+
+Each public page of the collections the plugin extends is checked, as its head would be served,
+for:
+
+- no title or description from any level (a field left empty is never reported where a pattern,
+  the page's content or the site's defaults supply a value);
+- a title or description another page has too;
+- a title over 60 characters, or a description over 160;
+- a canonical typed for the page that names another address;
+- a link in its content to an address of a content type that no page holds;
+- no share image, or one networks crop or shrink;
+- an image in its content with no alt text, unless it is marked decorative;
+- structured data missing a detail its type needs;
+- a language the site's language links leave out, because search engines don't accept its code.
+
+A page hidden from search on purpose is checked only for broken links and alt text. The site as a
+whole is checked for a missing production address, a collection with no public address, a
+redirect whose To address redirects again, and a page left out of the sitemap because another page
+holds its address.
+
+### When the list is checked
+
+- **A page is checked again when it is saved**, after the save, so a check never slows or undoes
+  it. A save that changes a page's address, title or description, and a deletion, mark the last
+  full check as out of date, since another page's result may have changed.
+- **The whole site is checked when the list opens** and its last full check is over 24 hours old,
+  and whenever someone chooses **Check now**. The list says when it was last checked. No scheduler
+  is needed, so this works the same on a self-hosted server.
+- **Serving a page runs no check.** What each check found is kept, and the list reads it.
+
+The list answers each person with the pages of the collections they may read. It is served at
+`/admin/api/plugins/@nextlyhq/plugin-seo/problems`, and a full check at
+`/admin/api/plugins/@nextlyhq/plugin-seo/problems/check` (`POST`), for a signed-in person.
+
+Not checked yet: whether a response is small enough for every value to fall within its first
+2 MB, and whether a page built in code calls the plugin's metadata function. Both need the page
+fetched as a search engine fetches it. A link is judged only under a collection's own address
+prefix (`/blog/{slug}`): under one served from the root (`/{slug}`), pages built in code share
+every address, so a missing one can't be told from the record alone.
+
 ## Next steps
 
 - [Routing and SEO](/docs/guides/routing-and-seo) for rendering the tags and serving the sitemap

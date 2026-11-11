@@ -35,6 +35,7 @@ function facts(over: Partial<PageFacts> = {}): PageFacts {
     structuredData: [],
     images: [],
     brokenLinks: [],
+    languageCodes: [],
     ...over,
   };
 }
@@ -291,5 +292,32 @@ describe("pageProblems", () => {
       brokenLinks: [{ field: "body", url: "/blog/gone" }],
     });
     expect(kinds(problems)).toEqual(["brokenLink", "imageAlt"]);
+  });
+
+  it("reports a language left out of language links once, for the whole site", () => {
+    const problems = pageProblems(
+      facts({
+        languageCodes: [
+          {
+            language: "klingon",
+            detail: "code",
+            message: '"klingon" is not a language code search engines accept.',
+            fix: "settings",
+          },
+        ],
+      })
+    );
+    expect(problems).toEqual([
+      {
+        kind: "languageCode",
+        subject: { label: "Whole site" },
+        what: '"klingon" is not a language code search engines accept.',
+        action: "Copy a note for a developer",
+        fix: {
+          place: "developer",
+          note: 'Give the language "klingon" a code search engines accept, such as "de" or "pt-BR", where the site\'s languages are set: localization in nextly.config.ts, or Settings.',
+        },
+      },
+    ]);
   });
 });

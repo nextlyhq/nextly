@@ -245,6 +245,16 @@ export async function removePage(
   return true;
 }
 
+/** The row of the page `id` of `type`, as its last check left it. */
+export async function readPage(
+  ctx: PluginContext,
+  type: string,
+  id: string
+): Promise<PageRow | undefined> {
+  const row = await rowAt(ctx, pageKey(type, id));
+  return row === undefined ? undefined : pageRowOf(row);
+}
+
 /** Every page row, in pages of {@link READ_PAGE}. */
 export async function readPages(ctx: PluginContext): Promise<PageRow[]> {
   const rows: PageRow[] = [];

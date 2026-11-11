@@ -350,5 +350,34 @@ describe.each(getConfiguredTestDialects())(
         list.problems.filter(p => p.kind === "redirectChain").map(p => p.what)
       ).toEqual(["/a → /new/x → /newer/x"]);
     });
+
+    it("a full check reports a page left out of the sitemap because another holds its address", async () => {
+      const { t, ctx } = await boot(dialect);
+      const id = await publish(t, { title: "Harbour", slug: "harbour" });
+      await until(t, checkedSince(id));
+      // As a deploy that moved another page onto /blog/harbour left it.
+      await ctx.services.collections.withTransaction(tx =>
+        ctx.publicAddresses.move(
+          [
+            { holder: { collection: "posts", id }, holds: [] },
+            {
+              holder: { collection: "posts", id: "p9", label: "Boats" },
+              holds: [{ locale: "en", path: "/blog/harbour" }],
+            },
+          ],
+          tx
+        )
+      );
+
+      await checkSite(ctx, CHECKS);
+      const list = await problemList(ctx, CHECKS, () => true);
+      const left = list.problems.filter(p => p.kind === "notListed");
+      expect(left.map(p => [p.subject.id, p.what])).toEqual([
+        [
+          id,
+          "Its address /blog/harbour is held by Boats, so it has no official address and isn't in the sitemap",
+        ],
+      ]);
+    });
   }
 );
