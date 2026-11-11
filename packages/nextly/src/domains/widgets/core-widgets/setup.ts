@@ -131,6 +131,9 @@ export const setupWidget = defineWidget({
   shows: async ({ services }) => setupReads().shownTo(services),
   load: async ({ services, now }) => setupReads().dataFor(services, now),
   view: { component: "core#Setup" },
+  // Loads as a list's rows, as tall as a checklist of steps, so the card does
+  // not grow under the cards below it when its steps arrive.
+  skeleton: "list",
   // Never empty: `shows` decides whether the card is there, and while it is
   // it always has something to say, "could not check setup" included.
   isEmpty: () => false,
