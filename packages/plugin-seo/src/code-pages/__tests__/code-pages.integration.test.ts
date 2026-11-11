@@ -367,9 +367,15 @@ describe.each(getConfiguredTestDialects())(
         (await t.nextly.find({ collection: "nx_seo_code_pages" })).items
       ).toEqual([]);
 
+      // While the site is built, an address its manifests do not list yet
+      // is one the build is rendering, and is recorded.
       process.env.NEXT_PHASE = "phase-production-build";
+      await seoMetadata("/brand-new");
       await seoMetadata("/thank-you");
 
+      const rows = (await t.nextly.find({ collection: "nx_seo_code_pages" }))
+        .items as { path?: unknown; connected?: unknown }[];
+      expect(rows.find(row => row.path === "/brand-new")?.connected).toBe(true);
       const { items } = await addressesFor(owner);
       expect(items?.find(item => item.path === "/thank-you")?.standing).toBe(
         "listed"

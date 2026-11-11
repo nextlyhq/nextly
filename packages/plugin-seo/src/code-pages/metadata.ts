@@ -64,12 +64,10 @@ export interface SeoMetadataOptions {
 async function seoContext(): Promise<PluginContext | undefined> {
   const kept = keptSeoContext();
   if (kept !== undefined) return kept;
-  try {
-    await getCachedNextly();
-  } catch {
-    // Nothing the app registered to start: the page keeps its own metadata.
-    return undefined;
-  }
+  // A start that fails throws, so the read is not kept as "no plugin": the
+  // route serves its own metadata this once and the next request starts
+  // Nextly again.
+  await getCachedNextly();
   return keptSeoContext();
 }
 
