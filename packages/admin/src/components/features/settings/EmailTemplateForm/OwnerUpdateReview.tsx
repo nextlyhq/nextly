@@ -76,8 +76,8 @@ function CodeLines({ lines, label }: { lines: Lines; label: string }) {
             key={index}
             className={cn(
               "grid grid-cols-[1.5rem_minmax(0,1fr)]",
-              line.sign === "-" && "bg-destructive/10",
-              line.sign === "+" && "bg-success/10"
+              line.sign === "-" && "bg-danger-surface",
+              line.sign === "+" && "bg-success-surface"
             )}
           >
             <span aria-hidden className="text-center text-muted-foreground">

@@ -696,9 +696,10 @@ Every card draws in one frame: a header of one fixed height, the body, and at mo
 link. The header shows the card's subject as its title (a collection card set to Posts reads
 "Posts"), with the widget's own name beneath it when the two differ ("Count"), then the card's
 quick control and its menu, in the same place on every card. A widget may mark up to three
-settings `quick`: the header draws the first, and the card's quick popover, opened from its
-title or from Settings in its menu, holds them all with the card's Collection and Size. The
-menu lists Settings, Size, Refresh and Remove. A card does not say when its data arrived.
+settings `quick`: the header draws the first it can (a `select` or a `checkbox`). Every setting
+is changed in the card's settings drawer, opened from Settings… in its menu: a preview of the
+card, then Content, Display and Size (its width), saved on Save. The menu lists Settings…,
+Refresh and Remove. A card does not say when its data arrived.
 
 The frame also owns the states, so a card never draws its own: a skeleton while data has never
 arrived, the last value marked busy while it refreshes, an empty state, one "Not available to

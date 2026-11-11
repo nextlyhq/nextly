@@ -47,6 +47,21 @@ export function CardControlsSpace(): JSX.Element {
 }
 
 /**
+ * Room in a framed card's header, before its title, for the drag handle drawn over it
+ * (`DraggableWidgetCell`): the header's leading slot, so the handle adds no row and the title
+ * starts after it.
+ */
+export function CardHandleSpace(): JSX.Element {
+  return (
+    <span
+      aria-hidden
+      data-testid="card-handle-space"
+      className="block h-7 w-6"
+    />
+  );
+}
+
+/**
  * The framed card's size label and menu, placed over its header's right end.
  *
  * `inset-px` stands in for the card's one-pixel border, so `top-5 right-5`

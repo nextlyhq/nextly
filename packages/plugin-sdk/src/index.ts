@@ -560,6 +560,18 @@ export { publicAddressOf, typesWithoutAddress } from "nextly";
 export type { PublicAddress, PublicAddressType } from "nextly";
 
 /**
+ * Where a page kept in one language is opened: `languageAddressOf(path,
+ * locale)` forms the address a path kept in `locale` is served at, under the
+ * language's prefix or on its own domain, as the site declares
+ * (`languageAddresses`), for a page's links to its other languages and its
+ * sitemap entries. Intended to become stable with `publicAddressOf`.
+ *
+ * @experimental
+ */
+export { languageAddressOf } from "nextly";
+export type { LanguageAddress, LanguageAddressRule } from "nextly";
+
+/**
  * Keeping every public address to one page. A plugin that keeps a record of
  * who holds each address takes part through `ctx.publicAddresses.participate`
  * with a `PublicAddressParticipant`: core asks every participant, inside each
@@ -576,6 +588,8 @@ export type {
   AddressHolder,
   HeldAddress,
   HeldAddressUpdate,
+  HeldDocument,
+  ParticipantTransaction,
   PluginPublicAddresses,
   PublicAddressParticipant,
   RefusedAddressUpdate,
@@ -751,6 +765,23 @@ export { getCachedNextly } from "nextly";
  * be stable once a first-party plugin expires its pages through `ctx.cache`.
  */
 export { pluginCacheTag } from "nextly";
+
+/**
+ * @experimental The cache tags a read of a collection, or of one of its
+ * entries, carries, which a write to it expires: for a plugin whose cached
+ * answer is built from those reads, such as page metadata naming the media
+ * it shows. Intended to be stable with the page-metadata contract.
+ */
+export { nextlyTags } from "nextly";
+
+/**
+ * @experimental How the content routes read a later page of a paginated list
+ * (`news/page/2`): `listPageOf` splits a path into the address it is a page
+ * of and the page's segment, and `listPageNumber` reads the one spelling of
+ * a page number. For a plugin naming a later page's own address. Intended to
+ * be stable with the page-metadata contract.
+ */
+export { listPageNumber, listPageOf } from "nextly";
 
 /**
  * @experimental The canonical response envelopes, and the trusted-client-IP
@@ -1058,10 +1089,34 @@ export type {
 export { recordAdvisoryNotice, type AdvisoryNotice } from "nextly";
 
 /**
- * Event bus (D8/D51) — `ctx.events` surface + types.
- * @public Exercised by seo (`ctx.events.on`).
+ * Event bus (D8/D51) — `ctx.events` surface + types. A plugin's `ctx.events`
+ * is `PluginEvents`: the bus's methods, with an `emit` that waits for the
+ * work that emitted it to commit (`PluginEmitOptions` names its transaction).
+ * @public
  */
-export type { EventBus, EventEnvelope, EventHandler, EventName } from "nextly";
+export type {
+  EventBus,
+  EventEnvelope,
+  EventHandler,
+  EventName,
+  PluginEvents,
+} from "nextly";
+
+/**
+ * Where a plugin's event is delivered from: `{ tx }`, the handle
+ * `ctx.db.transaction` passes its callback.
+ * @experimental
+ */
+export type { PluginEmitOptions } from "nextly";
+
+/**
+ * A plugin's durable events: `ctx.events.emitDurable` and `onDurable`
+ * (`PluginDurableEvents`, beside `PluginEvents` on `ctx.events`), what an
+ * `onDurable` subscriber receives (the event's id, which it de-duplicates on,
+ * its name, payload and which try this is) and the handler that receives it.
+ * @experimental
+ */
+export type { DurableEvent, DurableHandler, PluginDurableEvents } from "nextly";
 
 /**
  * Event-name constants (D69) — document/auth/media families. The event names

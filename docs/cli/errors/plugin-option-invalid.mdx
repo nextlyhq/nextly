@@ -1,0 +1,24 @@
+---
+title: PLUGIN_OPTION_INVALID
+description: "An option given to `nextly plugins add` is malformed, is not one the plugin asks for, or was refused by the plugin."
+---
+
+## Cause
+
+An option given to `nextly plugins add` is malformed, is not one the plugin asks for, or was refused by the plugin.
+
+An `--option` was not written as `<name>=<value>`, named an option the plugin does not ask for, was given twice, or had a value of the wrong kind (an address must be a full `https://` or `http://` address). Or the plugin itself refused the options when it was made from them, and its own words are in the Why line. The configuration was not changed.
+
+## Fix
+
+- Give each option once, as `--option <name>=<value>`, with a name the plugin asks for.
+- Give an address in full, with its scheme: `--option siteUrl=https://example.com`.
+
+## Example
+
+```text
+✗ An option given for "@acme/seo" cannot be used.
+  Why:  siteUrl must be a full web address, such as https://example.com, and "example.com" is not one. The configuration was not changed.
+  Next: Run the command again with each option as `--option <name>=<value>`, named as the plugin asks.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-option-invalid  (PLUGIN_OPTION_INVALID)
+```

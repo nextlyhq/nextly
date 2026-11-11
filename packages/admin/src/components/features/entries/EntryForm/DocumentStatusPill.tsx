@@ -16,6 +16,7 @@ import type { JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 
+import { WORDS_IN_NARROW_BAR } from "./narrow-bar";
 import {
   PILL_LABEL,
   savedPillState,
@@ -53,8 +54,11 @@ export function DocumentStatusPill({
   return (
     <span
       data-status={state}
+      title={PILL_LABEL[state]}
       className={cn(
         "inline-flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-xs font-semibold",
+        // In a narrow bar the dot alone: the pill closes around it.
+        "in-data-[state-compact]:@max-lg/toolbar:px-2",
         PILL_CLASS[state],
         className
       )}
@@ -64,7 +68,7 @@ export function DocumentStatusPill({
         className="h-1.5 w-1.5 rounded-full bg-current"
         aria-hidden="true"
       />
-      {PILL_LABEL[state]}
+      <span className={WORDS_IN_NARROW_BAR}>{PILL_LABEL[state]}</span>
     </span>
   );
 }

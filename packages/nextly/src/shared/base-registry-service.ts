@@ -72,6 +72,20 @@ export interface BaseListOptions {
    */
   slugAllowlist?: string[];
 
+  /**
+   * Leave out records whose `slug` is in this list: the plugins' entities, on
+   * the list of the site's own.
+   *
+   * A condition on the query, like the allowlist, so the `total` counts only
+   * the rows the page can show. It only ever removes rows: with an allowlist
+   * both apply, so nothing the allowlist leaves out comes back.
+   *
+   * Semantics:
+   *  - `undefined` or `[]` means nothing is denied, and adds no condition
+   *    (never a `NOT IN ()`, whose meaning differs by dialect).
+   */
+  slugDenylist?: string[];
+
   /** Maximum number of results */
   limit?: number;
 
@@ -800,6 +814,16 @@ export abstract class BaseRegistryService<
         column: "slug",
         op: "IN",
         value: options.slugAllowlist as SqlParam[],
+      });
+    }
+
+    // The denylist the same way: a `NOT IN` only when it names a slug, since
+    // an empty one denies nothing.
+    if (options?.slugDenylist && options.slugDenylist.length > 0) {
+      conditions.push({
+        column: "slug",
+        op: "NOT IN",
+        value: options.slugDenylist as SqlParam[],
       });
     }
 

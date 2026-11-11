@@ -60,6 +60,9 @@ const CHANGES_THE_DOCUMENT: Record<
   updateNotification: c => c.updateNotification("n1", { subject: "Changed" }),
   deleteNotification: c => c.deleteNotification("n1"),
   seedNotifications: c => c.seedNotifications([createNotification()]),
+  // Takes the last change back, which changes the document as much as making
+  // it did.
+  undo: c => (c as FormBuilderContextValue & FieldBookkeeping).undo(),
 };
 
 /** The actions that are navigation or bookkeeping rather than an edit. */
@@ -71,15 +74,23 @@ const READS = [
   "markFieldsSaved",
 ];
 
+/**
+ * What an action needs done first for it to have anything to do: Undo takes
+ * back a change, so a change is made before it, while the editor still holds
+ * the document.
+ */
+const PREPARE: Partial<Record<string, (ctx: FormBuilderContextValue) => void>> =
+  { undo: c => c.updateFormData({ name: "Changed" }) };
+
 function mount(readOnly: boolean) {
   let ctx!: FormBuilderContextValue;
   function Probe() {
     ctx = useFormBuilder();
     return null;
   }
-  render(
+  const tree = (held: boolean) => (
     <FormBuilderProvider
-      readOnly={readOnly}
+      readOnly={held}
       initialData={{
         name: "Contact",
         slug: "contact",
@@ -91,7 +102,25 @@ function mount(readOnly: boolean) {
       <Probe />
     </FormBuilderProvider>
   );
-  return () => ctx;
+  const { rerender } = render(tree(readOnly));
+  const read = () => ctx;
+  /** A colleague takes the document, with whatever the editor changed. */
+  read.claim = () => rerender(tree(true));
+  return read;
+}
+
+/**
+ * The context with `name`'s preparation made while the editor held the
+ * document, then held by a colleague when `held`.
+ */
+function prepared(name: string, held: boolean) {
+  const prepare = PREPARE[name];
+  const ctx = mount(held && prepare === undefined);
+  if (prepare !== undefined) {
+    act(() => prepare(ctx()));
+    if (held) act(() => ctx.claim());
+  }
+  return ctx;
 }
 
 /** Everything about the document, as one comparable value. */
@@ -123,7 +152,7 @@ describe("the form builder's state under a colleague's claim", () => {
 
   for (const [name, call] of Object.entries(CHANGES_THE_DOCUMENT)) {
     it(`withholds ${name}`, () => {
-      const read = mount(true);
+      const read = prepared(name, true);
       const before = document(read());
 
       act(() => {
@@ -137,7 +166,7 @@ describe("the form builder's state under a colleague's claim", () => {
       // The control for the case above. Without it "nothing changed" is
       // satisfied by a call that never does anything, and every refusal here
       // would pass against a builder that cannot edit at all.
-      const write = mount(false);
+      const write = prepared(name, false);
       const before = document(write());
 
       act(() => {
