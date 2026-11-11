@@ -56,6 +56,7 @@ describe("seoPlugin", () => {
       "ogImage",
       "canonical",
       "noindex",
+      "structuredDataType",
     ]);
   });
 
@@ -116,6 +117,7 @@ describe("seoPlugin", () => {
       "ogImage",
       "canonical",
       "noindex",
+      "structuredDataType",
     ]);
   });
 });

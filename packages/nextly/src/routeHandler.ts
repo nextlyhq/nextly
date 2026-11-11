@@ -1966,6 +1966,7 @@ const NO_WIDGETS: WidgetAudience = {
   token: visibilityToken([], []),
   // No reader and no cards, so no collection a card could name.
   readableCollections: new Set(),
+  readsUsers: false,
 };
 
 /**
@@ -2115,13 +2116,6 @@ async function buildAdminMeta(
   // would dial exists.
   workspace.devReload = isDevServerRuntime();
 
-  // Whether the widget preview page exists, from the same comparison that
-  // gates its read below, so the admin registers the page exactly when the
-  // read it draws from answers. Its own field rather than `devReload`: each
-  // says what the admin may do with it, and a later rule for one (a config
-  // switch, say) must not move the other.
-  workspace.widgetPreviews = isDevServerRuntime();
-
   // The site's languages for the admin (present only when i18n is enabled): the language list as
   // it is now, so a language added in Settings shows without a restart.
   const localization = appLocalization() ?? config?.localization;
@@ -2210,7 +2204,11 @@ async function buildAdminMeta(
   const widgets = publishableWidgets()
     .filter(widget => audience.declared.has(widget.id))
     .map(widget =>
-      collectionDefaultForReader(actionsForAudience(widget, audience), readable)
+      collectionDefaultForReader(
+        actionsForAudience(widget, audience),
+        readable,
+        audience.readsUsers
+      )
     );
   if (widgets.length > 0) {
     workspace.widgets = widgets;

@@ -228,6 +228,15 @@ export type ContentSetting =
        * @experimental
        */
       rows?: "titled";
+      /**
+       * `true`: also offers Users, the people with an account, stored as
+       * `"users"` (a slug no collection can take), to a reader who may read
+       * users. A card set to it is withheld from, and refused for, any other
+       * reader, as a card set to a collection they may not read is.
+       *
+       * @experimental
+       */
+      users?: true;
     })
   | (WidgetSettingBase & {
       type: "filter";
@@ -734,6 +743,7 @@ function settingProblem(
     max?: unknown;
     rows?: unknown;
     section?: unknown;
+    users?: unknown;
   };
 
   if (typeof name !== "string" || name === "") {
@@ -787,11 +797,14 @@ function sectionProblem(section: unknown): string | undefined {
     : `has section ${quote(section)}; expected one of ${SETTING_SECTIONS.map(known => `"${known}"`).join(", ")}`;
 }
 
-/** Why a setting's `quick`, `rows`, `section` or `defaultFrom` is unusable, or `undefined`. */
+/**
+ * Why a setting's `quick`, `rows`, `users`, `section` or `defaultFrom` is
+ * unusable, or `undefined`.
+ */
 function flagsProblem(
   type: AnyWidgetSetting["type"],
   quick: unknown,
-  rest: { rows?: unknown; section?: unknown },
+  rest: { rows?: unknown; section?: unknown; users?: unknown },
   defaultFrom: unknown
 ): string | undefined {
   if (quick !== undefined && typeof quick !== "boolean") {
@@ -806,7 +819,28 @@ function flagsProblem(
   ) {
     return `has defaultFrom ${quote(defaultFrom)}; only a Group by setting takes it, as "collection"`;
   }
-  return rowsProblem(type, rest.rows) ?? sectionProblem(rest.section);
+  return (
+    rowsProblem(type, rest.rows) ??
+    usersProblem(type, rest.users) ??
+    sectionProblem(rest.section)
+  );
+}
+
+/**
+ * Why a setting's `users` is unusable, or `undefined`: only a Collection
+ * setting offers Users beside its collections, and only as `true`.
+ */
+function usersProblem(
+  type: AnyWidgetSetting["type"],
+  users: unknown
+): string | undefined {
+  if (users === undefined) return undefined;
+  if (type !== "collection") {
+    return "declares users, which only a Collection setting takes";
+  }
+  return users === true
+    ? undefined
+    : `has users ${quote(users)}; expected true`;
 }
 
 /**
