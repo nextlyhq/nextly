@@ -92,6 +92,30 @@ export function unreadableCollectionCard(
 }
 
 /**
+ * The first card a write ADDS that reads a collection, for a reader who may read none, or
+ * `undefined`.
+ *
+ * Such a card has nothing to read: whatever it is set to, every read it asks is refused, so it
+ * could only ever be drawn as not available. The add panel offers none to this reader, and the
+ * layout write refuses one sent anyway. Only a card new to the reader's arrangement (`shownIds`)
+ * is judged: one they already held is carried as it is, whichever collections they may read now.
+ */
+export function addedCardWithoutCollection(
+  submitted: readonly WidgetPlacement[],
+  widgets: ReadonlyMap<string, AnyWidgetSetting>,
+  shownIds: ReadonlySet<string>,
+  readsAnyCollection: boolean
+): WidgetPlacement | undefined {
+  if (readsAnyCollection) return undefined;
+  return submitted.find(
+    placement =>
+      !shownIds.has(placement.id) &&
+      !placement.removed &&
+      widgets.has(placement.widgetId)
+  );
+}
+
+/**
  * Each widget's Collection setting, whole, as scope-token inputs.
  *
  * Whole because every property of it can decide which collection a stored

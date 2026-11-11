@@ -22,9 +22,9 @@ export type StatusTone = "neutral" | "good" | "warn" | "bad";
 
 const TONE_CLASS: Readonly<Record<StatusTone, string>> = {
   neutral: "bg-muted text-foreground",
-  good: "bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100",
-  warn: "bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100",
-  bad: "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100",
+  good: "bg-success-surface text-success-text",
+  warn: "bg-warning-surface text-warning-text",
+  bad: "bg-danger-surface text-danger-text",
 };
 
 /** A status as a row's trailing slot draws it: a rounded label in its tone. */

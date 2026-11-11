@@ -19,6 +19,7 @@ import { useCallback, type Dispatch, type SetStateAction } from "react";
 import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
 import {
+  discardPlacement,
   movePlacement,
   movePlacementToPosition,
   removePlacement,
@@ -55,6 +56,11 @@ export interface PlacementMutations {
   remove: (placementId: string) => void;
   /** Put a removed card back where it was. */
   restore: (placementId: string) => void;
+  /**
+   * Drop a card added this session as if it was never added (`discardPlacement`): no removed
+   * card is left to save or to put back.
+   */
+  discard: (placementId: string) => void;
 }
 
 export function usePlacementMutations(
@@ -118,6 +124,12 @@ export function usePlacementMutations(
     [mutatePlacements]
   );
 
+  const discard = useCallback(
+    (placementId: string) =>
+      mutatePlacements(placements => discardPlacement(placements, placementId)),
+    [mutatePlacements]
+  );
+
   const setConfig = useCallback(
     (placementId: string, config: Record<string, unknown>, ownTitle?: string) =>
       mutatePlacements(placements =>
@@ -126,5 +138,5 @@ export function usePlacementMutations(
     [mutatePlacements]
   );
 
-  return { move, moveTo, setSize, remove, restore, setConfig };
+  return { move, moveTo, setSize, remove, restore, discard, setConfig };
 }
