@@ -44,6 +44,7 @@ import { rowWriteOf } from "./not-null-statements";
 import { readRequiredColumnOwners } from "./required-column-guard";
 import {
   indexesDroppedBy,
+  indexesRenamedBy,
   tablesChangedIn,
   renamesIn,
   tablesCreatedBy,
@@ -721,8 +722,9 @@ export interface AdoptedUniqueIndex {
 /**
  * Whether a statement drops `table`, or may drop an index of it: a DROP TABLE naming it, a DROP
  * INDEX naming `index`, MySQL's DROP INDEX on the table, whose index is not read here, MySQL's
- * RENAME TABLE, or an ALTER TABLE on it that drops or renames anything (a column, a constraint, an
- * index), which may take the index with it.
+ * RENAME TABLE, PostgreSQL's ALTER INDEX renaming `index` away (or any one not read here), or an
+ * ALTER TABLE on it that drops or renames anything (a column, a constraint, an index), which may
+ * take the index with it.
  */
 function dropsTableOrIndex(
   statement: string,
@@ -732,6 +734,10 @@ function dropsTableOrIndex(
 ): boolean {
   if (tablesDroppedBy(statement, dialect)?.includes(table)) return true;
   if (indexesDroppedBy(statement, dialect)?.includes(index)) return true;
+  if (/^\s*ALTER\s+INDEX\b/i.test(statement)) {
+    const renamed = indexesRenamedBy(statement, dialect);
+    return renamed === undefined || renamed[0] === index;
+  }
   const onTable = tablesChangedIn(statement, dialect)?.includes(table) === true;
   if (/^\s*DROP\s+INDEX\b/i.test(statement)) return onTable;
   // MySQL's RENAME TABLE moves the table, with its indexes, away from the name a later create

@@ -984,6 +984,59 @@ describe.each(LOCK_DIALECTS)(
       expect(await ledger()).toEqual([]);
     }, 120_000);
 
+    // Only PostgreSQL adds a column under IF NOT EXISTS.
+    it.runIf(dialect === "postgresql")(
+      "applies a file that adds under IF NOT EXISTS, with a constant default, a column the table already holds distinct values in",
+      async () => {
+        await run([profile("p1", "ada"), profile("p2", "bob")]);
+        writeFileAs(NAME, [
+          `ALTER TABLE ${q(PROFILES)} ADD COLUMN IF NOT EXISTS ${q("person")} varchar(36) DEFAULT 'x'`,
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+        ]);
+
+        await migrate();
+
+        expect(await personIsUnique()).toBe(true);
+      },
+      120_000
+    );
+
+    // Only PostgreSQL renames an index by its own statement.
+    it.runIf(dialect === "postgresql")(
+      "keeps the create of a unique index whose name an earlier statement renames away, leaving the column unique",
+      async () => {
+        await run([
+          profile("p1", "ada"),
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+        ]);
+        writeFileAs(NAME, [
+          `ALTER INDEX ${q(UNIQUE)} RENAME TO ${q("uq_old")}`,
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+          `DROP INDEX ${q("uq_old")}`,
+        ]);
+
+        await migrate();
+
+        expect(await personIsUnique()).toBe(true);
+      },
+      120_000
+    );
+
     /** The schema an unqualified name reaches on this connection. */
     async function ownSchema(): Promise<string> {
       if (dialect === "sqlite") return "main";

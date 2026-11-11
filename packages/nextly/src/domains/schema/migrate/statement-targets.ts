@@ -505,8 +505,8 @@ export interface ColumnAdded {
   readonly column: string;
   /**
    * The literal its DEFAULT names (a string, a number, TRUE or FALSE), which every existing row
-   * takes; undefined for no default, NULL, or anything else (an expression, a function call, a
-   * generated column), whose values are not read here.
+   * takes; undefined for no default, NULL, anything else (an expression, a function call, a
+   * generated column), whose values are not read here, and an add under IF NOT EXISTS.
    */
   readonly filledWith?: string;
 }
@@ -554,7 +554,11 @@ export function columnsAddedBy(
     clause.acceptCondition();
     const column = clause.name();
     if (column === undefined) return undefined;
-    const filledWith = literalDefault(clause.rest());
+    // An add under IF NOT EXISTS fills nothing where the column is there already: which one runs
+    // is not read here, so it names no constant.
+    const filledWith = clause.conditional
+      ? undefined
+      : literalDefault(clause.rest());
     added.push({
       table,
       column,

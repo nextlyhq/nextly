@@ -764,7 +764,7 @@ describe("columnsAddedBy", () => {
       `ALTER TABLE "t" ADD "c" varchar(20) NOT NULL DEFAULT 'x'::character varying`,
       "x",
     ],
-    [`ALTER TABLE "t" ADD COLUMN IF NOT EXISTS "c" integer DEFAULT 12`, "12"],
+    [`ALTER TABLE "t" ADD COLUMN "c" integer DEFAULT 12`, "12"],
     [`ALTER TABLE "t" ADD COLUMN "c" numeric DEFAULT -1.5 NOT NULL`, "-1.5"],
     [`ALTER TABLE "t" ADD COLUMN "c" boolean DEFAULT TRUE`, "TRUE"],
   ])("reads the constant %s fills existing rows with", (sql, filledWith) => {
@@ -777,6 +777,8 @@ describe("columnsAddedBy", () => {
     `ALTER TABLE "t" ADD COLUMN "c" uuid DEFAULT gen_random_uuid()`,
     `ALTER TABLE "t" ADD COLUMN "c" text DEFAULT 'a' || 'b'`,
     `ALTER TABLE "t" ADD COLUMN "c" integer DEFAULT 1 + 1`,
+    // A no-op where the column is there already.
+    `ALTER TABLE "t" ADD COLUMN IF NOT EXISTS "c" integer DEFAULT 12`,
   ])("reads no constant in %s", sql => {
     expect(added(sql)).toEqual([{ table: "t", column: "c" }]);
   });
