@@ -11,13 +11,25 @@
  * database as it was on every dialect.
  *
  * A rename is judged against the database as it stands before the run, so
- * only a rename no earlier statement of the run changes the table of: a
- * rename after another change to the same table in the run (an added or
- * dropped column, a table created, dropped or renamed, or a statement this
- * reading cannot place) is left to the runner's failure, as before. Judged
- * this way, a file that would run is never refused. A rename already made (the
- * old name gone, the new one there) is not refused either: there is nothing
- * left to rename.
+ * only where nothing earlier in the run could have changed what its names
+ * hold. Judged this way, a file that would run is never refused, and the check
+ * is not a guarantee: these renames are left to the runner's failure, as
+ * before.
+ *
+ * - A rename after another change to its table in the run: an added or dropped
+ *   column, a table created, dropped or renamed (an earlier pair of the same
+ *   MySQL `RENAME TABLE` included).
+ * - Every rename after a statement this reading cannot place, or after a
+ *   `SET search_path` / `SET SCHEMA` on PostgreSQL.
+ * - On PostgreSQL and SQLite, a table's rename after an index, sequence or type
+ *   is created, dropped or renamed: they share a table's name space.
+ * - On a MySQL server comparing table names by case
+ *   (`lower_case_table_names=0`), every table rename (`judgedOnThisServer`).
+ * - A rename onto a name held only by what the live readers do not describe: a
+ *   SQLite generated column, or a relation outside PostgreSQL's current schema.
+ *
+ * A rename already made (the old name gone, the new one there) is not refused
+ * either: there is nothing left to rename.
  *
  * Statements are read through the shared readers (`renamesIn`,
  * `tablesChangedIn`), so a word in a string or a comment is never code.
@@ -30,6 +42,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { queryLiveColumnTypes } from "../pipeline/live-column-types";
 import { readNameHoldersElsewhere } from "../pipeline/live-table-facts";
 import { identifierKey } from "../rename-target";
+import { readIdentifierCaseRules } from "../utils/read-identifier-case";
 
 import { cursorOf } from "./statement-cursor";
 import {
@@ -64,15 +77,41 @@ const CHANGES_NO_TABLE: readonly string[][] = [
  * Whether `statement` changes no table and no column, though `tablesChangedIn`
  * does not read it: an index dropped or altered (a `DROP INDEX` without
  * CASCADE), a comment, a session setting other than PostgreSQL's
- * `search_path` (which changes the table an unqualified name reaches), or a
- * type or sequence created. Any other statement it cannot read may change any
- * table.
+ * `search_path` and its alias `SCHEMA` (which change the table an unqualified
+ * name reaches), or a type or sequence created. Any other statement it cannot
+ * read may change any table.
  */
 function changesNoTable(statement: string, dialect: SupportedDialect): boolean {
   const cursor = cursorOf(statement, dialect);
   if (cursor.accept("DROP", "INDEX")) return !cursor.rest().includes("CASCADE");
-  if (cursor.accept("SET")) return !cursor.rest().includes("SEARCH_PATH");
+  if (cursor.accept("SET")) {
+    return !cursor
+      .rest()
+      .some(token => token === "SEARCH_PATH" || token === "SCHEMA");
+  }
   return CHANGES_NO_TABLE.some(words => cursor.accept(...words));
+}
+
+/** First words of statements that create, drop or rename a relation other than a table. */
+const NAMES_A_RELATION: readonly string[][] = [
+  ["CREATE", "INDEX"],
+  ["CREATE", "UNIQUE", "INDEX"],
+  ["DROP", "INDEX"],
+  ["ALTER", "INDEX"],
+  ["CREATE", "SEQUENCE"],
+  ["CREATE", "TYPE"],
+];
+
+/**
+ * Whether `statement` changes which names relations other than tables hold,
+ * where a table shares their name space: PostgreSQL gives every relation of a
+ * schema one name space (an index, a sequence, a composite type), SQLite one
+ * for the whole database. MySQL names an index per table, so nothing there.
+ */
+function namesARelation(statement: string, dialect: SupportedDialect): boolean {
+  if (dialect === "mysql") return false;
+  const cursor = cursorOf(statement, dialect);
+  return NAMES_A_RELATION.some(words => cursor.accept(...words));
 }
 
 /** The tables a rename involves: its table, or both of a table's names. */
@@ -81,42 +120,57 @@ function tablesOf(rename: StatementRename): string[] {
 }
 
 /**
- * A statement that renames nothing, read in order: the tables it changes are
- * added to `changed`, or `stop` when it may change any table.
+ * What the run's statements read so far have changed: the tables, and whether
+ * a relation's name (an index's, a sequence's) changed, after which a table's
+ * new name is no longer judged against the catalog as the run found it.
+ */
+interface RunChanges {
+  tables: Set<string>;
+  relationNames: boolean;
+}
+
+/**
+ * A statement that renames nothing, read in order: what it changes is added to
+ * `changes`, or `stop` when it may change any table.
  */
 function noteChanges(
   statement: string,
   dialect: SupportedDialect,
-  changed: Set<string>
+  changes: RunChanges
 ): [] | "stop" {
+  if (namesARelation(statement, dialect)) changes.relationNames = true;
   const tables = tablesChangedIn(statement, dialect);
   if (tables === undefined) {
     return changesNoTable(statement, dialect) ? [] : "stop";
   }
-  for (const table of tables) changed.add(table);
+  for (const table of tables) changes.tables.add(table);
   return [];
 }
 
 /**
  * One statement of the run, read in order: the renames it makes that no
  * earlier statement or earlier rename in it changed the table of, or `stop`
- * when it may change any table. The tables it changes are added to `changed`.
- * A rename after another of the same name in one statement, as in MySQL's
+ * when it may change any table. What it changes is added to `changes`. A
+ * rename after another of the same name in one statement, as in MySQL's
  * `RENAME TABLE a TO tmp, b TO a, tmp TO b`, is not judged: the earlier one
- * changes what the name holds.
+ * changes what the name holds. Nor is a table's rename after a relation's name
+ * changed (`namesARelation`).
  */
 function judgedIn(
   statement: string,
   dialect: SupportedDialect,
-  changed: Set<string>
+  changes: RunChanges
 ): StatementRename[] | "stop" {
   const renames = renamesIn(statement, dialect);
-  if (renames === undefined) return noteChanges(statement, dialect, changed);
+  if (renames === undefined) return noteChanges(statement, dialect, changes);
   const judged: StatementRename[] = [];
   for (const rename of renames) {
     const tables = tablesOf(rename);
-    if (tables.every(table => !changed.has(table))) judged.push(rename);
-    for (const table of tables) changed.add(table);
+    const unchanged =
+      tables.every(table => !changes.tables.has(table)) &&
+      !(rename.kind === "table" && changes.relationNames);
+    if (unchanged) judged.push(rename);
+    for (const table of tables) changes.tables.add(table);
   }
   return judged;
 }
@@ -131,15 +185,39 @@ function judgedRenames(
   dialect: SupportedDialect
 ): { file: string; rename: StatementRename }[] {
   const judged: { file: string; rename: StatementRename }[] = [];
-  const changed = new Set<string>();
+  const changes: RunChanges = { tables: new Set(), relationNames: false };
   for (const { label, statements } of units) {
     for (const statement of statements) {
-      const renames = judgedIn(statement, dialect, changed);
+      const renames = judgedIn(statement, dialect, changes);
       if (renames === "stop") return judged;
       judged.push(...renames.map(rename => ({ file: label, rename })));
     }
   }
   return judged;
+}
+
+/**
+ * `judged` as this server can judge it: a MySQL server comparing table names
+ * by their case (`lower_case_table_names=0`) keeps its table renames out,
+ * since a statement's names are read lower-cased and the case it wrote them in
+ * is not known (`notes TO Archive` beside an `archive` is a rename it runs).
+ * Column names compare without case on every MySQL server, so those stay.
+ */
+async function judgedOnThisServer(
+  judged: { file: string; rename: StatementRename }[],
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<{ file: string; rename: StatementRename }[]> {
+  if (dialect !== "mysql" || judged.every(j => j.rename.kind === "column")) {
+    return judged;
+  }
+  const rules = await readIdentifierCaseRules({
+    dialect,
+    getDrizzle: <T>() => db as T,
+  });
+  return rules.tables === "preserve"
+    ? judged.filter(j => j.rename.kind === "column")
+    : judged;
 }
 
 /** The live tables' columns, each name by `key`. */
@@ -151,7 +229,8 @@ type LiveNames = ReadonlyMap<string, ReadonlySet<string>>;
  * with columns is in `live`. PostgreSQL gives a table the name space of every
  * relation in its schema (an index, a view, a sequence, a table with no
  * column), and SQLite one name space for the whole database, so there the
- * catalog is asked too (`readNameHoldersElsewhere`); on MySQL a view is in
+ * catalog is asked too (`readNameHoldersElsewhere`), for the table renamed as
+ * well, which is not in `live` when it has no column; on MySQL a view is in
  * `live` with its columns.
  */
 async function tableNameHolder(
@@ -160,13 +239,17 @@ async function tableNameHolder(
   key: (name: string) => string,
   read: { db: unknown; dialect: SupportedDialect }
 ): Promise<string | undefined> {
-  if (!live.has(key(rename.from))) return undefined;
+  const holders = await readNameHoldersElsewhere(
+    read.db,
+    read.dialect,
+    rename.from,
+    [rename.from, rename.to]
+  );
+  const renamedIsThere =
+    live.has(key(rename.from)) || holders.get(rename.from)?.type === "table";
+  if (!renamedIsThere) return undefined;
   if (live.has(key(rename.to))) return `a table '${rename.to}' already exists`;
-  const holder = (
-    await readNameHoldersElsewhere(read.db, read.dialect, rename.from, [
-      rename.to,
-    ])
-  ).get(rename.to);
+  const holder = holders.get(rename.to);
   if (holder === undefined) return undefined;
   const article = /^[aeiou]/.test(holder.type) ? "an" : "a";
   return `${article} ${holder.type} '${holder.name}' already exists`;
@@ -205,7 +288,11 @@ export async function renamesOntoTakenTargets(
   db: unknown,
   dialect: SupportedDialect
 ): Promise<TakenRename[]> {
-  const judged = judgedRenames(units, dialect);
+  const judged = await judgedOnThisServer(
+    judgedRenames(units, dialect),
+    db,
+    dialect
+  );
   if (judged.length === 0) return [];
   const tables = [...new Set(judged.flatMap(({ rename }) => tablesOf(rename)))];
   const live = await queryLiveColumnTypes(db, dialect, tables);

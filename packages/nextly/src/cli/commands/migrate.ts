@@ -2424,6 +2424,10 @@ export async function pendingPluginDeletions(
 ): Promise<{ label: string; text: string; deletions: Deletion[] }[]> {
   const applied = await appliedPluginModules(deps);
   const units = pluginModuleUnits(sets, applied, undefined, deps.dialect);
+  // The modules' renames, judged as `nextly migrate` judges a run's before any statement: an
+  // install applies the same modules through the same phase, so a module renaming onto a name
+  // already there is refused before it starts (`refuseRenamesOntoTakenTargets`).
+  await refuseRenamesOntoTakenTargets(units, deps.db, deps.dialect);
   return (await pendingRunDeletions(units, deps.db, deps.dialect)).map(
     ({ unit, deletions }) => ({ label: unit.label, text: unit.text, deletions })
   );

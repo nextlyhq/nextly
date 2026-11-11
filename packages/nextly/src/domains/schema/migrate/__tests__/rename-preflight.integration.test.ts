@@ -24,7 +24,11 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { migrateCore, previewMigrate } from "../../../../cli/commands/migrate";
+import {
+  migrateCore,
+  pendingPluginDeletions,
+  previewMigrate,
+} from "../../../../cli/commands/migrate";
 import { createLogger } from "../../../../cli/utils/logger";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
@@ -43,6 +47,7 @@ import {
   type MigrationContent,
 } from "../plugin/plugin-migration";
 import { renamesOntoTakenTargets } from "../rename-preflight";
+import { readIdentifierCaseRules } from "../../utils/read-identifier-case";
 
 const logger = createLogger({ quiet: true });
 const NAME = "20261111_000001_rename";
@@ -211,6 +216,16 @@ describe.each(LOCK_DIALECTS)(
       return row?.v;
     }
 
+    /** Whether this server compares table names by their case: MySQL with `lower_case_table_names=0`. */
+    async function tablesKeepCase(): Promise<boolean> {
+      if (dialect !== "mysql") return false;
+      const rules = await readIdentifierCaseRules({
+        dialect,
+        getDrizzle: <T>() => adapter.getDrizzle() as T,
+      });
+      return rules.tables === "preserve";
+    }
+
     const renameColumn = (from: string, to: string) =>
       `ALTER TABLE ${q(NOTES)} RENAME COLUMN ${q(from)} TO ${q(to)}`;
 
@@ -241,8 +256,21 @@ describe.each(LOCK_DIALECTS)(
       );
     });
 
-    it("refuses a table renamed onto a table that exists", async () => {
-      writeFile([`ALTER TABLE ${q(NOTES)} RENAME TO ${q(ARCHIVE)}`]);
+    it("refuses a table renamed onto a table that exists, where the server's table names are judged", async () => {
+      const statement = `ALTER TABLE ${q(NOTES)} RENAME TO ${q(ARCHIVE)}`;
+      writeFile([statement]);
+      if (await tablesKeepCase()) {
+        // A MySQL server comparing table names by case: a statement's names are read lower-cased,
+        // so the check steps aside and the database refuses the rename when it runs.
+        expect(
+          await renamesOntoTakenTargets(
+            [{ label: FILE, statements: [statement] }],
+            adapter.getDrizzle(),
+            dialect
+          )
+        ).toEqual([]);
+        return;
+      }
 
       const error = await refusal();
 
@@ -411,6 +439,116 @@ describe.each(LOCK_DIALECTS)(
             code: "RENAME_TARGET_TAKEN",
             message: `Table '${NOTES}' cannot be renamed to 'rtp_held': an index 'rtp_held' already exists.`,
           },
+        ]);
+      }
+    );
+
+    // An install applies a plugin's modules through the same phase as `nextly migrate`, after
+    // reading what they delete (`pendingPluginDeletions`), so their renames are judged there too.
+    it("refuses an install's module renaming a column onto one its table has, before it applies", async () => {
+      const error = await pendingPluginDeletions(
+        pluginSet([renameColumn("heading", "headline")]),
+        { adapter: adapter as never, db: adapter.getDrizzle(), dialect }
+      ).then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+
+      expect(NextlyError.is(error)).toBe(true);
+      expect(entries(error as NextlyError)).toEqual([
+        {
+          path: expect.stringContaining("rtx"),
+          code: "RENAME_TARGET_TAKEN",
+          message: `Column 'heading' cannot be renamed to 'headline': table '${NOTES}' already has a column 'headline'.`,
+        },
+      ]);
+      expect(await valueOf("heading")).toBe("Kept");
+    });
+
+    // PostgreSQL and SQLite give a table the name space of indexes too: a run that drops the index
+    // holding a name before a table takes it would run, so it is not refused.
+    it.runIf(dialect !== "mysql")(
+      "runs a table rename onto an index's name after the run drops the index",
+      async () => {
+        await run([
+          `CREATE INDEX ${q("rtp_held")} ON ${q(OTHER)} (${q("id")})`,
+        ]);
+        writeFile([
+          `DROP INDEX ${q("rtp_held")}`,
+          `ALTER TABLE ${q(NOTES)} RENAME TO ${q("rtp_held")}`,
+        ]);
+
+        await migrate();
+
+        expect(await ledger()).toEqual(["applied"]);
+        expect(await tableExists("rtp_held")).toBe(true);
+        expect(await tableExists(NOTES)).toBe(false);
+      }
+    );
+
+    // `SET SCHEMA` is PostgreSQL's alias for setting search_path.
+    it.runIf(dialect === "postgresql")(
+      "does not judge a rename after SET SCHEMA",
+      async () => {
+        expect(
+          await renamesOntoTakenTargets(
+            [
+              {
+                label: FILE,
+                statements: [
+                  `SET SCHEMA 'rtp_side'`,
+                  renameColumn("heading", "headline"),
+                ],
+              },
+            ],
+            adapter.getDrizzle(),
+            dialect
+          )
+        ).toEqual([]);
+      }
+    );
+
+    // A PostgreSQL table may have no column, so it is found in the catalog rather than among the
+    // tables with columns.
+    it.runIf(dialect === "postgresql")(
+      "refuses a table with no column renamed onto a table that exists",
+      async () => {
+        await run([`CREATE TABLE ${q("rtp_bare")} ()`]);
+        writeFile([`ALTER TABLE ${q("rtp_bare")} RENAME TO ${q(ARCHIVE)}`]);
+
+        const error = await refusal();
+
+        expect(await ledger()).toEqual([]);
+        expect(await columnsOf(ARCHIVE)).toEqual(["id"]);
+        expect(entries(error)).toEqual([
+          {
+            path: FILE,
+            code: "RENAME_TARGET_TAKEN",
+            message: `Table 'rtp_bare' cannot be renamed to '${ARCHIVE}': a table '${ARCHIVE}' already exists.`,
+          },
+        ]);
+      }
+    );
+
+    // A MySQL server comparing table names by case keeps `RTP_ARCHIVE` apart from `rtp_archive`,
+    // so the rename runs; one folding them refuses it before the run.
+    it.runIf(dialect === "mysql")(
+      "judges a table rename onto a name in another case as the server compares table names",
+      async () => {
+        writeFile([`RENAME TABLE ${q(NOTES)} TO ${q("RTP_ARCHIVE")}`]);
+
+        if (await tablesKeepCase()) {
+          await migrate();
+          expect(await ledger()).toEqual(["applied"]);
+          const [row] = await adapter.executeQuery<{ v: unknown }>(
+            `SELECT ${q("heading")} AS v FROM ${q("RTP_ARCHIVE")}`
+          );
+          expect(row?.v).toBe("Kept");
+          return;
+        }
+        const error = await refusal();
+        expect(entries(error)).toEqual([
+          expect.objectContaining({ code: "RENAME_TARGET_TAKEN" }),
         ]);
       }
     );
