@@ -98,10 +98,10 @@ export const StatsCard: React.ForwardRefExoticComponent<
                     {change !== undefined && (
                       <div
                         className={cn(
-                          "flex items-center gap-1 px-2 py-0.5 rounded-sm text-xs font-bold uppercase tracking-wider ring-1 transition-all duration-500",
+                          "flex items-center gap-1 px-2 py-0.5 rounded-sm border text-xs font-bold uppercase tracking-wider transition-all duration-500",
                           trend === "up"
-                            ? "bg-success-surface text-success-text ring-success-border"
-                            : "bg-danger-surface text-danger-text ring-danger-border"
+                            ? "bg-success-surface text-success-text border-success-border"
+                            : "bg-danger-surface text-danger-text border-danger-border"
                         )}
                       >
                         {trend === "up" ? (

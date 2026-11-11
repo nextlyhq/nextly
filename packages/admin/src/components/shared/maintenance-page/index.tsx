@@ -24,7 +24,7 @@ export function MaintenancePage(): JSX.Element {
         {/* A quiet chip, as the Badge draws one: the card's fill and the
             page's text, with the status carried by the icon's colour. */}
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium bg-card text-foreground mb-6 border border-border">
-          <Settings className="h-3 w-3 text-warning-solid animate-spin duration-[3000ms]" />
+          <Settings className="h-3 w-3 text-warning-text animate-spin duration-[3000ms]" />
           Maintenance Mode
         </div>
 

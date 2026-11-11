@@ -704,10 +704,11 @@ function CompactCount({ day }: { day: ReleaseCalendarDay }) {
       className={cn(
         "inline-flex min-w-5 justify-center rounded-full px-1 text-[11px] font-medium leading-4 tabular-nums sm:hidden",
         // A day holding a stopped release counts in the danger status's text
-        // on its surface, ringed by its border: the pair the contrast suite
-        // holds to AA in both modes. Other days use the neutral badge's.
+        // and surface colours swapped: a filled count, in the pair the
+        // contrast suite holds to AA in both modes. Other days use the
+        // neutral badge's.
         day.counts.blocked > 0
-          ? "bg-danger-surface text-danger-text ring-1 ring-inset ring-danger-border"
+          ? "bg-danger-text text-danger-surface"
           : "bg-muted text-foreground"
       )}
     >

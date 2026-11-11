@@ -77,7 +77,7 @@ const editorTheme = {
     ol: "list-decimal ml-6 mb-2",
     listitem: "mb-1",
     listitemChecked:
-      "line-through text-muted-foreground list-none relative pl-6 before:content-['✓'] before:absolute before:left-0 before:text-success-solid",
+      "line-through text-muted-foreground list-none relative pl-6 before:content-['✓'] before:absolute before:left-0 before:text-success-text",
     listitemUnchecked:
       "list-none relative pl-6 before:content-['○'] before:absolute before:left-0",
     nested: {

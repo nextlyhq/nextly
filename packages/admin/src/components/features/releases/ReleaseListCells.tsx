@@ -99,12 +99,12 @@ export const RELEASE_STATUS_TONE: Record<
   scheduled: { bar: "bg-primary", icon: "text-primary" },
   overdue: {
     bar: "bg-warning-solid",
-    icon: "text-warning-solid",
+    icon: "text-warning-text",
   },
   stopped: { bar: "bg-destructive", icon: "text-destructive" },
   published: {
     bar: "bg-success-solid",
-    icon: "text-success-solid",
+    icon: "text-success-text",
   },
   draft: { bar: "bg-border", icon: "text-muted-foreground" },
   cancelled: { bar: "bg-muted-foreground/40", icon: "text-muted-foreground" },

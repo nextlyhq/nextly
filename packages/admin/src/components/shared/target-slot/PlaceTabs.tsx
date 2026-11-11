@@ -371,7 +371,7 @@ function PlaceTabTrigger({
           className={cn(
             "ml-2 inline-flex min-w-5 justify-center rounded-full px-1.5 text-xs font-medium tabular-nums leading-5",
             attention
-              ? "bg-warning-surface text-warning-text ring-1 ring-inset ring-warning-border"
+              ? "bg-warning-text text-warning-surface"
               : "bg-muted text-muted-foreground"
           )}
         >
