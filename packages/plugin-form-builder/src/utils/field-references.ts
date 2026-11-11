@@ -35,11 +35,15 @@ export interface FieldReference {
  * Match `{{ fieldName }}` interpolations (whitespace-tolerant), the syntax the
  * notification send path resolves recipients and reply-to values with.
  */
-function referencesInTemplate(template: string, fieldName: string): boolean {
-  const pattern = new RegExp(
-    `\\{\\{\\s*${fieldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\}\\}`
+function templatePattern(fieldName: string, flags?: string): RegExp {
+  return new RegExp(
+    `\\{\\{\\s*${fieldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\}\\}`,
+    flags
   );
-  return pattern.test(template);
+}
+
+function referencesInTemplate(template: string, fieldName: string): boolean {
+  return templatePattern(fieldName).test(template);
 }
 
 /** All references to `fieldName` across the form's fields and notifications. */
@@ -105,4 +109,63 @@ export function buildFieldReferenceMap(
     map.set(field.name, findFieldReferences(field.name, fields, notifications));
   }
   return map;
+}
+
+/**
+ * The fields with every condition on `from` naming `to` instead: the
+ * conditions `findFieldReferences` reads, disabled ones too, so a rename never
+ * leaves one pointing at a field that no longer has that name.
+ */
+export function renameInFieldConditions(
+  fields: readonly AnyFormField[],
+  from: string,
+  to: string
+): AnyFormField[] {
+  return fields.map(field => {
+    const logic = field.conditionalLogic;
+    if (!logic?.conditions?.some(condition => condition.field === from)) {
+      return field;
+    }
+    return {
+      ...field,
+      conditionalLogic: {
+        ...logic,
+        conditions: logic.conditions.map(condition =>
+          condition.field === from ? { ...condition, field: to } : condition
+        ),
+      },
+    };
+  });
+}
+
+/**
+ * The notifications with every reference to `from` naming `to` instead: the
+ * addresses (`{{ from }}`) and the condition `findFieldReferences` reads.
+ */
+export function renameInNotifications(
+  notifications: readonly FormNotification[],
+  from: string,
+  to: string
+): FormNotification[] {
+  const pattern = templatePattern(from, "g");
+  const rename = (template: string): string =>
+    template.replace(pattern, `{{${to}}}`);
+  return notifications.map(notification => {
+    // Stored notifications can predate the cc and bcc lists, so each part is
+    // renamed only where it is there.
+    const { cc, bcc } = notification as Partial<FormNotification>;
+    const next: FormNotification = {
+      ...notification,
+      to: rename(notification.to),
+    };
+    if (cc) next.cc = cc.map(rename);
+    if (bcc) next.bcc = bcc.map(rename);
+    if (notification.replyTo !== undefined) {
+      next.replyTo = rename(notification.replyTo);
+    }
+    if (notification.condition?.field === from) {
+      next.condition = { ...notification.condition, field: to };
+    }
+    return next;
+  });
 }

@@ -529,9 +529,11 @@ describe.each(LOCK_DIALECTS)(
 
         // The lock lapses; both commands refuse as for a migration the folder
         // lacks (exit 3), naming the file a newer build tried, and change
-        // nothing.
-        for (const command of [migrate(), migrateDown()]) {
-          const refusal = await command.then(
+        // nothing. Each command starts only once the one before it has ended,
+        // so its refusal is awaited as it happens and the database is read
+        // between the two.
+        for (const command of [migrate, migrateDown]) {
+          const refusal = await command().then(
             () => undefined,
             (thrown: unknown) => thrown
           );

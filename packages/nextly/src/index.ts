@@ -689,6 +689,30 @@ export {
   type ContentTypeScope,
 } from "./plugins/content-type-scope";
 
+// Where an entry is served, as the site declares it: one answer for every
+// reader of a page's public address.
+// @experimental
+export {
+  publicAddressOf,
+  typesWithoutAddress,
+  type PublicAddress,
+  type PublicAddressType,
+} from "./domains/public-addresses/public-address";
+
+// Keeping every public address to one page: the record a plugin keeps, as
+// core asks it on each save (`ctx.publicAddresses`).
+// @experimental
+export type {
+  AddressHolder,
+  HeldAddress,
+  HeldAddressUpdate,
+} from "./domains/public-addresses/participants";
+export type {
+  PluginPublicAddresses,
+  PublicAddressParticipant,
+  RefusedAddressUpdate,
+} from "./plugins/plugin-public-addresses";
+
 // The plugin limiter: `contributes.limits` rules and `ctx.limits`.
 // @experimental
 export type { LimitRule } from "./domains/limits/limit-rules";
@@ -1193,6 +1217,7 @@ export {
   type NavFilterContext,
   type ListQueryWhere,
   type ListQueryFilterContext,
+  type PublicAddressTemplateContext,
 } from "./filters";
 
 // ============================================================

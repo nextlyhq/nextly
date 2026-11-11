@@ -1,5 +1,9 @@
+import { Slot } from "@radix-ui/react-slot";
 import {
+  cloneElement,
   forwardRef,
+  isValidElement,
+  type AnchorHTMLAttributes,
   type HTMLAttributes,
   type ReactNode,
   type ForwardRefExoticComponent,
@@ -24,6 +28,21 @@ export interface PageHeaderProps
   breadcrumbs?: ReactNode;
   /** Page-level actions, trailing the title on one line where there is room. */
   actions?: ReactNode;
+  /**
+   * A row of tabs under the title, for a page whose sections each have their
+   * own address (`PageTabs` with a `PageTab` per section). Rendered across the
+   * header's full width, below the title and actions.
+   */
+  tabs?: ReactNode;
+  /**
+   * The `id` of the title's `h1`, for a region that names itself by the page's
+   * title (`aria-labelledby` on the page's form).
+   */
+  titleId?: string;
+  /** A leading visual, such as a plugin's icon tile, before the title. */
+  media?: ReactNode;
+  /** Small chips beside the title: a version, a status, a category. */
+  meta?: ReactNode;
 }
 
 /**
@@ -53,25 +72,58 @@ export interface PageHeaderProps
 export const PageHeader: ForwardRefExoticComponent<
   PropsWithoutRef<PageHeaderProps> & RefAttributes<HTMLElement>
 > = forwardRef<HTMLElement, PageHeaderProps>(
-  ({ title, description, breadcrumbs, actions, className, ...props }, ref) => (
+  (
+    {
+      title,
+      description,
+      breadcrumbs,
+      actions,
+      tabs,
+      media,
+      meta,
+      titleId,
+      className,
+      ...props
+    },
+    ref
+  ) => (
     <header
       ref={ref}
       data-slot="page-header"
       className={cn("mb-8", className)}
       {...props}
     >
-      {breadcrumbs ? <div className="mb-6">{breadcrumbs}</div> : null}
+      {breadcrumbs ? (
+        // Collapses when the breadcrumb is drawn elsewhere (the admin draws it
+        // in its top bar), so the header keeps no empty row above its title.
+        <div className="mb-6 empty:hidden">{breadcrumbs}</div>
+      ) : null}
 
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-        <div className="space-y-1">
-          <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-          {/* Muted rather than a faint tint of the primary: the latter was tried
+        <div className="flex min-w-0 items-start gap-4">
+          {media ? <div className="shrink-0">{media}</div> : null}
+          <div className="min-w-0 space-y-1">
+            {/* The title and its chips wrap together, so a long name pushes
+              the chips onto the next line instead of squeezing itself. */}
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 id={titleId} className="text-xl font-semibold tracking-tight">
+                {title}
+              </h1>
+              {meta}
+            </div>
+            {/* Muted rather than a faint tint of the primary: the latter was tried
               and did not meet contrast for secondary text. */}
-          {description ? (
-            <p className="mt-1 text-sm font-normal text-muted-foreground">
-              {description}
-            </p>
-          ) : null}
+            {description ? (
+              // A block rather than a <p>, so a description may hold its own
+              // paragraphs (a plugin's summary, then its author).
+              <div
+                data-slot="page-header-description"
+                className="mt-1 text-sm font-normal text-muted-foreground"
+              >
+                {description}
+              </div>
+            ) : null}
+          </div>
         </div>
 
         {/* Each optional slot is omitted rather than rendered empty. An empty
@@ -82,7 +134,126 @@ export const PageHeader: ForwardRefExoticComponent<
           <div className="flex items-center gap-3">{actions}</div>
         ) : null}
       </div>
+
+      {/* Tabs sit under the title row and span the header, so a page with
+          sections reads title, then where you are within it. */}
+      {tabs ? <div className="mt-6">{tabs}</div> : null}
     </header>
   )
 );
 PageHeader.displayName = "PageHeader";
+
+/** @experimental */
+export interface PageTabsProps extends HTMLAttributes<HTMLElement> {
+  /** What the sections are, for assistive technology (`"Form sections"`). */
+  label: string;
+}
+
+/**
+ * The tab row of a page whose sections each have their own address. A labelled
+ * `nav` of links rather than an ARIA tablist: every tab changes the URL, and a
+ * link inside `role="tab"` breaks the tabs pattern's keyboard and announcement
+ * contract. The current section is marked with `aria-current="page"` by
+ * `PageTab`.
+ * @experimental
+ */
+export const PageTabs: ForwardRefExoticComponent<
+  PropsWithoutRef<PageTabsProps> & RefAttributes<HTMLElement>
+> = forwardRef<HTMLElement, PageTabsProps>(
+  ({ label, className, children, ...props }, ref) => (
+    <nav
+      ref={ref}
+      aria-label={label}
+      data-slot="page-tabs"
+      className={cn(
+        "flex gap-1 overflow-x-auto border-b border-border",
+        className
+      )}
+      {...props}
+    >
+      {children}
+    </nav>
+  )
+);
+PageTabs.displayName = "PageTabs";
+
+/**
+ * The anchor attributes a tab passes through. `aria-current` is not among
+ * them: it is derived from `current`, so the tab is announced as current
+ * exactly when it is drawn as current.
+ */
+type PageTabAnchorProps = Omit<
+  AnchorHTMLAttributes<HTMLAnchorElement>,
+  "aria-current" | "href"
+>;
+
+/**
+ * A tab changes the address, so it always has a destination: its own `href`,
+ * or, with `asChild`, the router link it wraps.
+ * @experimental
+ */
+export type PageTabProps = PageTabAnchorProps & {
+  /** Whether this tab is the section being shown. */
+  current?: boolean;
+} & (
+    | {
+        /** Where the tab leads. */
+        href: string;
+        asChild?: false;
+      }
+    | {
+        /**
+         * Render the caller's own link element (a router link) in place of
+         * an `<a>`; that element carries the destination. The tab keeps its
+         * look and its `aria-current`.
+         */
+        asChild: true;
+        href?: undefined;
+      }
+  );
+
+/**
+ * One section of a `PageTabs` row: a link, underlined when current.
+ * @experimental
+ */
+export const PageTab: ForwardRefExoticComponent<
+  PropsWithoutRef<PageTabProps> & RefAttributes<HTMLAnchorElement>
+> = forwardRef<HTMLAnchorElement, PageTabProps>(
+  (
+    { current = false, asChild = false, className, children, ...props },
+    ref
+  ) => {
+    const Comp = asChild ? Slot : "a";
+    const marker = current ? "page" : undefined;
+    // `Slot` lets the wrapped element's own props win over the ones set here,
+    // so a router link carrying its own `aria-current` would be announced by
+    // that instead of by `current`. Setting the marker on the child itself
+    // keeps `current` the one source of it.
+    const content =
+      asChild && isValidElement<{ "aria-current"?: string }>(children)
+        ? cloneElement(children, { "aria-current": marker })
+        : children;
+    return (
+      <Comp
+        // The caller's attributes first, so nothing they pass can replace the
+        // current marker or the slot this component sets.
+        {...props}
+        ref={ref}
+        data-slot="page-tab"
+        aria-current={marker}
+        className={cn(
+          // The current tab's underline sits on the row's own bottom border,
+          // so the row reads as one rule with one section marked.
+          "-mb-px inline-flex h-9 shrink-0 items-center border-b-2 px-3 text-sm font-medium whitespace-nowrap transition-colors",
+          current
+            ? "border-foreground text-foreground"
+            : "border-transparent text-muted-foreground hover:text-foreground",
+          className
+        )}
+      >
+        {content}
+      </Comp>
+    );
+  }
+);
+PageTab.displayName = "PageTab";

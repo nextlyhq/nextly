@@ -17,6 +17,7 @@ import type {
   ListQueryWhere,
   NavCollectionItem,
   NavFilterContext,
+  PublicAddressTemplateContext,
 } from "../filters/seams";
 
 /**
@@ -68,6 +69,11 @@ export interface HookPointPayloads {
     kind: "filter";
     value: ListQueryWhere;
     context: ListQueryFilterContext;
+  };
+  "publicAddress.template": {
+    kind: "filter";
+    value: string | undefined;
+    context: PublicAddressTemplateContext;
   };
 }
 

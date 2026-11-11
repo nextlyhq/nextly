@@ -168,6 +168,10 @@ import {
 } from "./service-opts";
 import { buildPluginServicesNamespace } from "./services/plugin-services-registry";
 import { recordPluginSubscription } from "./subscription-tracker";
+import {
+  pluginPublicAddresses,
+  type PluginPublicAddresses,
+} from "./plugin-public-addresses";
 import { type TransactionScope, transactionScope } from "./transaction-scope";
 
 // The typed surface `ctx.db` is, under the names the package exports.
@@ -883,6 +887,12 @@ export interface PluginContext {
    * No first-party plugin registers via `ctx.hooks` yet (see STABILITY.md).
    */
   hooks: PluginHookRegistry;
+  /**
+   * @experimental Take part in keeping every public address to one page:
+   * answer from this plugin's record who holds an address, and be told what
+   * each document holds after a save.
+   */
+  publicAddresses: PluginPublicAddresses;
 
   /** @experimental Typed filter registry. Transform values at named seams. */
   filters: PluginFilterRegistry;
@@ -2887,6 +2897,14 @@ export function createPluginContext(
     self,
     config: pluginConfigView(config),
     hooks: pluginHooks,
+    publicAddresses: pluginPublicAddresses({
+      bindTo: bindToTransaction,
+      owner: hookOwner ?? "app",
+      // Withdrawn at teardown with the plugin's other subscriptions.
+      onTeardown: undo => {
+        if (pluginName) recordPluginSubscription(pluginName, undo);
+      },
+    }),
     filters: pluginFilters,
     actions: pluginActions,
     // A plain property rather than a getter: `runPluginRoute` spreads the base

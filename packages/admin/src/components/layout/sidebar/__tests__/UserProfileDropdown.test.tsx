@@ -1,3 +1,4 @@
+import type React from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -104,9 +105,11 @@ describe("the user menu's interface language", () => {
     await openMenu(user);
 
     expect(await screen.findByText("Interface language")).toBeTruthy();
+    // The language radios only: the menu's Theme choice is radios too.
     const choices = screen
       .getAllByRole("menuitemradio")
-      .map(item => item.textContent);
+      .map(item => item.textContent)
+      .filter(name => !["Light", "Dark", "System"].includes(name ?? ""));
     expect(choices).toEqual(["Follow the browser", "English", "Français"]);
     expect(
       screen
@@ -209,5 +212,69 @@ describe("the user menu's My Account", () => {
     );
 
     expect(navigateTo).toHaveBeenCalledWith("/admin/account");
+  });
+});
+
+describe("the user menu's theme and help", () => {
+  function renderWith(
+    props: Partial<React.ComponentProps<typeof UserProfileDropdown>> = {}
+  ) {
+    vi.spyOn(navigator, "language", "get").mockReturnValue("en-US");
+    return render(
+      <AdminI18nProvider signedIn>
+        <UserProfileDropdown
+          user={{ id: "u1", name: "Ada", email: "ada@example.com" }}
+          onLogout={() => {}}
+          {...props}
+        />
+      </AdminI18nProvider>
+    );
+  }
+
+  it("offers the theme as a choice of three", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openMenu(user);
+    expect(await screen.findByText("Theme")).toBeTruthy();
+    for (const name of ["Light", "Dark", "System"]) {
+      expect(
+        screen.getByRole("menuitemradio", { name: new RegExp(name) })
+      ).toBeTruthy();
+    }
+  });
+
+  it("lists Documentation, GitHub and Discord as links that open apart", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openMenu(user);
+    expect(await screen.findByText("Help and community")).toBeTruthy();
+    for (const [name, href] of [
+      ["Documentation", "https://nextlyhq.com/docs"],
+      ["GitHub", "https://github.com/nextlyhq/nextly"],
+      ["Discord", "https://discord.gg/hJUg9AZMn"],
+    ]) {
+      const link = screen.getByRole("menuitem", { name });
+      expect(link.getAttribute("href")).toBe(href);
+      expect(link.getAttribute("target")).toBe("_blank");
+    }
+  });
+
+  it("leaves out the links a plugin hides", async () => {
+    const user = userEvent.setup();
+    renderWith({ hidden: new Set(["github", "discord"]) });
+    await openMenu(user);
+    expect(
+      await screen.findByRole("menuitem", { name: "Documentation" })
+    ).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "GitHub" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Discord" })).toBeNull();
+  });
+
+  it("drops the group when every link is hidden and no plugin adds one", async () => {
+    const user = userEvent.setup();
+    renderWith({ hidden: new Set(["github", "discord", "docs"]) });
+    await openMenu(user);
+    expect(await screen.findByText("Theme")).toBeTruthy();
+    expect(screen.queryByText("Help and community")).toBeNull();
   });
 });

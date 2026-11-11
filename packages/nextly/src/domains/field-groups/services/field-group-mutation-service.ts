@@ -197,6 +197,15 @@ export interface SaveComponentDataParams {
    */
   write?: EntryWriteContext;
 
+  /**
+   * Whether the values in `data` are the row's own, carried by an assembled
+   * document (a promotion, a go-live merge) rather than sent by this write's
+   * caller: the instance pass then leaves a legacy stored fraction alone, as
+   * the entry gate judged it. Absent for a caller's own write, whose values
+   * the whole-number floor judges like any other.
+   */
+  assembledFromStorage?: boolean;
+
   /** Who the write is made as; see {@link FieldGroupWriteAccess}. */
   access: FieldGroupWriteAccess;
 }
@@ -333,7 +342,7 @@ async function keepContainersAtStored(
   stored: Record<string, unknown>,
   judge: (data: Record<string, unknown>) => Promise<void>
 ): Promise<void> {
-  const kept = await keepDeniedAtStored({
+  const { kept } = await keepDeniedAtStored({
     update: instance,
     stored,
     applyRules: judge,
@@ -691,6 +700,7 @@ export class FieldGroupMutationService extends BaseService {
    */
   async saveComponentData(params: SaveComponentDataParams): Promise<void> {
     const { parentId, parentTable, fields, data, locale, req } = params;
+    const { assembledFromStorage } = params;
 
     // A pooled write reads pooled; the scope still shares what it resolves; see `writeScope`.
     const connection = {
@@ -720,6 +730,7 @@ export class FieldGroupMutationService extends BaseService {
                 data: fieldData,
                 locale,
                 req,
+                assembledFromStorage,
               });
             } else if (f.component) {
               if (f.repeatable) {
@@ -731,6 +742,7 @@ export class FieldGroupMutationService extends BaseService {
                   data: fieldData,
                   locale,
                   req,
+                  assembledFromStorage,
                 });
               } else {
                 await this.saveSingleComponent({
@@ -741,6 +753,7 @@ export class FieldGroupMutationService extends BaseService {
                   data: fieldData as ComponentInstanceData,
                   locale,
                   req,
+                  assembledFromStorage,
                 });
               }
             }
@@ -871,7 +884,16 @@ export class FieldGroupMutationService extends BaseService {
      */
     validateOnly = false
   ): Promise<void> {
-    const { parentId, parentTable, fields, data, locale, req, write } = params;
+    const {
+      parentId,
+      parentTable,
+      fields,
+      data,
+      locale,
+      req,
+      write,
+      assembledFromStorage,
+    } = params;
 
     // Every read made beneath this write goes through the transaction's own connection; see
     // `writeScope`.
@@ -908,6 +930,7 @@ export class FieldGroupMutationService extends BaseService {
                   locale,
                   req,
                   write,
+                  assembledFromStorage,
                 },
                 validateOnly
               );
@@ -924,6 +947,7 @@ export class FieldGroupMutationService extends BaseService {
                     locale,
                     req,
                     write,
+                    assembledFromStorage,
                   },
                   validateOnly
                 );
@@ -939,6 +963,7 @@ export class FieldGroupMutationService extends BaseService {
                     locale,
                     req,
                     write,
+                    assembledFromStorage,
                   },
                   validateOnly
                 );
@@ -1017,6 +1042,8 @@ export class FieldGroupMutationService extends BaseService {
     data: ComponentInstanceData;
     locale?: string;
     req?: Record<string, unknown>;
+    /** See {@link SaveComponentDataParams.assembledFromStorage}. */
+    assembledFromStorage?: boolean;
   }): Promise<void> {
     const {
       parentId,
@@ -1026,6 +1053,7 @@ export class FieldGroupMutationService extends BaseService {
       data,
       locale,
       req,
+      assembledFromStorage,
     } = params;
 
     try {
@@ -1051,7 +1079,9 @@ export class FieldGroupMutationService extends BaseService {
         req,
         componentMeta.slug,
         // The row this field's single instance is, whatever id is sent.
-        existing[0]?.id
+        existing[0]?.id,
+        undefined,
+        assembledFromStorage
       );
 
       // i18n: split translatable values out of the main comp_ write — they live on the
@@ -1132,6 +1162,8 @@ export class FieldGroupMutationService extends BaseService {
       locale?: string;
       req?: Record<string, unknown>;
       write?: EntryWriteContext;
+      /** See {@link SaveComponentDataParams.assembledFromStorage}. */
+      assembledFromStorage?: boolean;
     },
     /** Prepare and validate only; write nothing. */
     validateOnly = false
@@ -1144,6 +1176,7 @@ export class FieldGroupMutationService extends BaseService {
       data,
       locale,
       req,
+      assembledFromStorage,
     } = params;
 
     try {
@@ -1175,7 +1208,8 @@ export class FieldGroupMutationService extends BaseService {
         componentMeta.slug,
         // The row this field's single instance is, whatever id is sent.
         existing[0]?.id,
-        params.write
+        params.write,
+        assembledFromStorage
       );
       // Validation only: the instance has been judged as the write would
       // judge it, and nothing is stored.
@@ -1245,6 +1279,8 @@ export class FieldGroupMutationService extends BaseService {
     data: unknown;
     locale?: string;
     req?: Record<string, unknown>;
+    /** See {@link SaveComponentDataParams.assembledFromStorage}. */
+    assembledFromStorage?: boolean;
   }): Promise<void> {
     const {
       parentId,
@@ -1254,6 +1290,7 @@ export class FieldGroupMutationService extends BaseService {
       data,
       locale,
       req,
+      assembledFromStorage,
     } = params;
 
     if (!Array.isArray(data)) {
@@ -1295,7 +1332,9 @@ export class FieldGroupMutationService extends BaseService {
           req,
           componentMeta.slug,
           // The stored row an existing instance is, for its stored passwords.
-          instanceId && existingMap.has(instanceId) ? instanceId : undefined
+          instanceId && existingMap.has(instanceId) ? instanceId : undefined,
+          undefined,
+          assembledFromStorage
         );
 
         // i18n: split translatable values out per instance (companion-owned). The
@@ -1378,6 +1417,8 @@ export class FieldGroupMutationService extends BaseService {
       locale?: string;
       req?: Record<string, unknown>;
       write?: EntryWriteContext;
+      /** See {@link SaveComponentDataParams.assembledFromStorage}. */
+      assembledFromStorage?: boolean;
     },
     /** Prepare and validate only; write nothing. */
     validateOnly = false
@@ -1390,6 +1431,7 @@ export class FieldGroupMutationService extends BaseService {
       data,
       locale,
       req,
+      assembledFromStorage,
     } = params;
 
     if (!Array.isArray(data)) {
@@ -1436,7 +1478,8 @@ export class FieldGroupMutationService extends BaseService {
           componentMeta.slug,
           // The stored row an existing instance is, for its stored passwords.
           instanceId && existingMap.has(instanceId) ? instanceId : undefined,
-          params.write
+          params.write,
+          assembledFromStorage
         );
         // Validation only: judge every instance, store none.
         if (validateOnly) continue;
@@ -1525,9 +1568,19 @@ export class FieldGroupMutationService extends BaseService {
     data: unknown;
     locale?: string;
     req?: Record<string, unknown>;
+    /** See {@link SaveComponentDataParams.assembledFromStorage}. */
+    assembledFromStorage?: boolean;
   }): Promise<void> {
-    const { parentId, parentTable, fieldName, field, data, locale, req } =
-      params;
+    const {
+      parentId,
+      parentTable,
+      fieldName,
+      field,
+      data,
+      locale,
+      req,
+      assembledFromStorage,
+    } = params;
     const allowedSlugs = field.components ?? [];
 
     // Shared with the pre-transaction check, so the two cannot disagree about which
@@ -1616,6 +1669,7 @@ export class FieldGroupMutationService extends BaseService {
           metaCache,
           globalExistingMap,
           req,
+          assembledFromStorage,
         });
         if (!prepared) continue;
         const { meta, componentFields, instanceId, existingEntry } = prepared;
@@ -1704,12 +1758,22 @@ export class FieldGroupMutationService extends BaseService {
       locale?: string;
       req?: Record<string, unknown>;
       write?: EntryWriteContext;
+      /** See {@link SaveComponentDataParams.assembledFromStorage}. */
+      assembledFromStorage?: boolean;
     },
     /** Prepare and validate only; write nothing. */
     validateOnly = false
   ): Promise<void> {
-    const { parentId, parentTable, fieldName, field, data, locale, req } =
-      params;
+    const {
+      parentId,
+      parentTable,
+      fieldName,
+      field,
+      data,
+      locale,
+      req,
+      assembledFromStorage,
+    } = params;
     const allowedSlugs = field.components ?? [];
 
     // Shared with the pre-transaction check, so the two cannot disagree about which
@@ -1784,6 +1848,7 @@ export class FieldGroupMutationService extends BaseService {
           globalExistingMap,
           req,
           write: params.write,
+          assembledFromStorage,
         });
         if (!prepared) continue;
         const { meta, componentFields, instanceId, existingEntry } = prepared;
@@ -2044,7 +2109,9 @@ export class FieldGroupMutationService extends BaseService {
     slug?: string,
     storedId?: string,
     /** The host write's context, seen through {@link instanceWriteOf}. */
-    write?: EntryWriteContext
+    write?: EntryWriteContext,
+    /** See {@link SaveComponentDataParams.assembledFromStorage}. */
+    assembledFromStorage?: boolean
   ): Promise<void> {
     // A component instance must be a plain object. A primitive (e.g. a bare
     // string sent for a non-repeatable component field) would make the field
@@ -2095,6 +2162,9 @@ export class FieldGroupMutationService extends BaseService {
         {
           mode,
           req,
+          // An assembled write carries the row's own component values, and
+          // the floor leaves those to the row, as the entry gate judged them.
+          ...(assembledFromStorage ? { assembledFromStorage: true } : {}),
           componentFields: nested,
           // A field type that reads the library judges this instance with the
           // host write's context, as it judges the host's own field.
@@ -2533,6 +2603,7 @@ export class FieldGroupMutationService extends BaseService {
     metaCache: Map<string, DynamicFieldGroupRecord>;
     globalExistingMap: Map<string, { row: ComponentRow; tableName: string }>;
     req?: Record<string, unknown>;
+    assembledFromStorage?: boolean;
   }): Promise<{
     meta: DynamicFieldGroupRecord;
     componentFields: FieldConfig[];
@@ -2557,7 +2628,8 @@ export class FieldGroupMutationService extends BaseService {
       meta.slug,
       // The stored row an existing block is, for its stored passwords.
       existingEntry ? instanceId : undefined,
-      args.write
+      args.write,
+      args.assembledFromStorage
     );
     return { meta, componentFields, instanceId, existingEntry };
   }
