@@ -267,6 +267,49 @@ describe("unsaved changes", () => {
   });
 });
 
+describe("undo in an open editor", () => {
+  it("shows the restored Reply-To in the notification editor, not the mode taken back", async () => {
+    vi.stubGlobal("fetch", server());
+    const user = view({
+      view: "notifications",
+      initialData: {
+        name: "Meetup sign-up",
+        slug: "meetup",
+        status: "published",
+        fields: [{ id: "f1", name: "email", label: "Email", type: "email" }],
+        notifications: [
+          {
+            id: "n1",
+            name: "Team",
+            enabled: true,
+            recipientType: "static",
+            to: "team@example.com",
+            cc: [],
+            bcc: [],
+            replyTo: "lead@example.com",
+            templateSlug: "forms-submission",
+          },
+        ],
+      },
+    });
+    await user.click(
+      await screen.findByRole("button", { name: "Edit notification Team" })
+    );
+    const replyTo = () => screen.getByRole("combobox", { name: "Reply-To" });
+    expect(replyTo()).toHaveTextContent("A custom address");
+
+    await user.click(replyTo());
+    await user.click(await screen.findByRole("option", { name: "None" }));
+    expect(replyTo()).toHaveTextContent("None");
+
+    await user.click(within(bar()).getByRole("button", { name: "Undo" }));
+
+    // The rule sends to the address again, and the editor says so.
+    expect(replyTo()).toHaveTextContent("A custom address");
+    expect(screen.getByDisplayValue("lead@example.com")).toBeVisible();
+  });
+});
+
 describe("a refused save", () => {
   it("keeps the changes and says what to fix, with the way to where it is", async () => {
     vi.stubGlobal(

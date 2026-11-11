@@ -364,7 +364,8 @@ export function FieldCards({
     moveField,
   } = useFormBuilder();
   // A colleague's claim makes every setting read-only, as the provider holds it.
-  const { savedFieldNames, replaceField, readOnly } = useFieldBookkeeping();
+  const { savedFieldNames, replaceField, readOnly, restored } =
+    useFieldBookkeeping();
 
   const [isAddOpen, setIsAddOpen] = useState(false);
   const docked = useDocked();
@@ -471,6 +472,9 @@ export function FieldCards({
   const selected = selectedIndex === -1 ? undefined : fields[selectedIndex];
   const settingsPanel = selected && (
     <FieldSettingsPanel
+      // Opened afresh on the restored field after an Undo, so nothing the
+      // panel keeps of its own shows what was taken back.
+      key={restored}
       surface={FORMS_FIELD_SURFACE}
       field={panelFields[selectedIndex]}
       ancestors={[]}

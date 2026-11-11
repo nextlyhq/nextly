@@ -23,6 +23,12 @@ import {
 export interface ChangeHistoryHandle<Doc> {
   /** How many unsaved changes there are. */
   changeCount: number;
+  /**
+   * How many times Undo has restored the form. An editor that keeps its own
+   * copy of a value (a mode it opened in) is keyed on it, so it reads the
+   * restored value afresh rather than showing what was taken back.
+   */
+  restored: number;
   /** The form as last rendered, which the next change records. */
   current: () => Doc;
   /** Count a change about to be made; `key` names what it edits. */
@@ -50,6 +56,7 @@ export function useChangeHistory<Doc>(
   // `changeCount` is its length, for rendering.
   const history = useRef<ChangeHistory<Doc>>(emptyHistory());
   const [changeCount, setChangeCount] = useState(0);
+  const [restored, setRestored] = useState(0);
   // How many changes the save under way is storing (`beginSaving`).
   const saveMark = useRef<number | undefined>(undefined);
   const documentRef = useRef(document);
@@ -77,6 +84,7 @@ export function useChangeHistory<Doc>(
     if (undone === undefined) return;
     settle(undone.history);
     restore(undone.restore);
+    setRestored(count => count + 1);
   }, [settle, restore]);
 
   const beginSave = useCallback(() => {
@@ -96,6 +104,7 @@ export function useChangeHistory<Doc>(
 
   return {
     changeCount,
+    restored,
     current,
     record,
     undo,

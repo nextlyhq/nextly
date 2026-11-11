@@ -47,6 +47,8 @@ vi.mock("../../context/FormBuilderContext", () => ({
     updateNotification,
     deleteNotification,
   }),
+  // No Undo here, so the editors are never asked to open again.
+  useFieldBookkeeping: () => ({ restored: 0 }),
 }));
 
 // Imported after the mock, so the component resolves the mocked context.

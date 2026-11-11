@@ -175,6 +175,11 @@ export interface FieldBookkeeping {
   changeCount: number;
   /** Take the last unsaved change back, on any tab. */
   undo: () => void;
+  /**
+   * How many times Undo has restored the form: the key for an editor that
+   * keeps its own copy of a value, so it rereads the restored one.
+   */
+  restored: number;
 }
 
 export type FormBuilderInternalValue = FormBuilderContextValue &
@@ -513,6 +518,7 @@ export function FormBuilderProvider({
   // Each of these is stable; the handle that carries them is not.
   const {
     changeCount,
+    restored,
     record,
     undo,
     current: currentDocument,
@@ -806,6 +812,7 @@ export function FormBuilderProvider({
       readOnly,
       changeCount,
       undo,
+      restored,
     }),
     [
       fields,
@@ -837,6 +844,7 @@ export function FormBuilderProvider({
       readOnly,
       changeCount,
       undo,
+      restored,
     ]
   );
 
