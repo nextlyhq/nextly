@@ -30,6 +30,7 @@
  * @since 1.0.0
  */
 import type { SupportedDialect } from "../../../../database/schema-registry";
+import { pluginCollectionSources } from "./plugin-collection-sources";
 import { describeError } from "../../../../errors/describe-error";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { newestEvent, newestEventsByFilename } from "../../events/newest-event";
@@ -243,6 +244,7 @@ export async function pluginMigrationArgs(
   pluginMigrationSets: PluginMigrationSet[];
   pluginsWithMigrations: Set<string>;
   declaredPlugins: Set<string>;
+  collectionSources: Map<string, `plugin:${string}`>;
 }> {
   const sets = await pluginMigrationSetsFrom(plugins);
   return {
@@ -252,6 +254,9 @@ export async function pluginMigrationArgs(
     // check finds a module the ledger records applied for a plugin whose
     // list has since emptied, which the sets above leave out.
     declaredPlugins: new Set(plugins.map(plugin => plugin.name)),
+    // Who contributed each plugin collection, for a registry row the run
+    // creates: from the same plugin list, so the command and the boot agree.
+    collectionSources: pluginCollectionSources(plugins),
   };
 }
 
