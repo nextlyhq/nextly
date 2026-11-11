@@ -11,6 +11,16 @@
  */
 import { pathOf } from "./addresses";
 
+/**
+ * `to` with the query of `from` where `to` names none of its own: what a
+ * visitor sent on from `from` arrives at.
+ */
+export function withQueryOf(to: string, from: string): string {
+  if (to.includes("?")) return to;
+  const query = from.split("#", 1)[0]?.split("?")[1];
+  return query === undefined || query === "" ? to : `${to}?${query}`;
+}
+
 /** Where a chain ends, and every address it passes on the way. */
 export type ChainEnd = { final: string; path: string[] } | { error: string };
 
@@ -48,8 +58,11 @@ export async function followChain(
       };
     }
     seen.add(pathOf(hop));
-    path.push(hop);
-    current = hop;
+    // A visitor's query goes on with them where the next To address names
+    // none, so the one hop keeps the query the chain would have carried.
+    const carried = withQueryOf(hop, current);
+    path.push(carried);
+    current = carried;
   }
   return { final: current, path };
 }

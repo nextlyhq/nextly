@@ -20,7 +20,7 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { forgetNotFound } from "../not-found/log";
+import { forgetNotFound, forgetNotFoundUnder } from "../not-found/log";
 
 import {
   checkTarget,
@@ -30,7 +30,7 @@ import {
   storedTarget,
   within,
 } from "./addresses";
-import { followChain } from "./chains";
+import { followChain, withQueryOf } from "./chains";
 import { redirectsSlug } from "./collection";
 import { redirectMeeting } from "./meeting";
 
@@ -146,6 +146,35 @@ function reads(ctx: PluginContext, transaction: Transaction) {
     to(locale: string, path: string) {
       return where({ targetKey: { equals: redirectKey(locale, path) } }, 200);
     },
+    /** Every redirect whose From address is `base` or below it, in `locale`. */
+    async under(locale: string, base: string) {
+      const found: StoredRedirect[] = [];
+      const filter = {
+        and: [
+          { locale: { equals: locale } },
+          { source: { contains: base === "/" ? "/" : base } },
+        ],
+      };
+      for (let page = 1; ; page++) {
+        const { data } = await own.listEntriesInTransaction(
+          transaction,
+          slug,
+          { where: filter, pagination: { limit: 200, page }, depth: 0 },
+          { lock: "none" }
+        );
+        const rows = (data as unknown[]).map(redirectOf);
+        // `contains` matches anywhere in the address; keep those truly below.
+        found.push(
+          ...rows.filter(row =>
+            within(
+              row.source.endsWith("/*") ? row.source.slice(0, -2) : row.source,
+              base
+            )
+          )
+        );
+        if (rows.length < 200) return found;
+      }
+    },
     async byId(id: string) {
       const [found] = await where({ id: { equals: id } }, 1);
       return found;
@@ -250,7 +279,12 @@ async function pointedOn(
         transaction,
         read.slug,
         before.id,
-        { target: final, targetKey, _overwrite: true }
+        {
+          // Its own query goes on with it, as a visitor following it would carry it.
+          target: withQueryOf(final, before.target),
+          targetKey,
+          _overwrite: true,
+        }
       );
     }
     repointed += page.length;
@@ -276,13 +310,85 @@ async function roundTrip(
   final: string,
   editing: string | undefined
 ): Promise<string | null> {
+  for (const asked of await requestsAnswered(
+    ctx,
+    transaction,
+    locale,
+    from,
+    final,
+    editing
+  )) {
+    const loop = await followRequest(
+      ctx,
+      transaction,
+      locale,
+      from,
+      final,
+      editing,
+      asked
+    );
+    if (loop !== null) return loop;
+  }
+  return null;
+}
+
+/**
+ * Requests a redirect from `from` to `final` answers that between them meet
+ * every redirect its destination can: one below a pattern's fixed part (or
+ * the address itself), and, for a pattern sent to a pattern, one landing on
+ * each redirect at or below the destination's fixed part.
+ */
+async function requestsAnswered(
+  ctx: PluginContext,
+  transaction: Transaction,
+  locale: string,
+  from: { source: string; address: { path: string; range?: true } },
+  final: string,
+  editing: string | undefined
+): Promise<string[]> {
+  const fixed = from.address.path;
+  if (!from.address.range) return [fixed];
+  const prefix = fixed === "/" ? "" : fixed;
+  const asked = [`${prefix}/a`];
+  if (!final.startsWith("/") || !final.endsWith("/*")) return asked;
+  const landing = pathOf(final.slice(0, -2)) || "/";
+  for (const other of await reads(ctx, transaction).under(locale, landing)) {
+    if (other.id !== editing)
+      asked.push(landingOn(other.source, landing, prefix));
+  }
+  return asked;
+}
+
+/**
+ * The request under `prefix` that a pattern landing at `landing` sends to
+ * `source`, another redirect's From address there (one below it, for a
+ * pattern).
+ */
+function landingOn(source: string, landing: string, prefix: string): string {
+  const pattern = source.endsWith("/*");
+  const base = pattern ? source.slice(0, -2) : source;
+  const rest = base.slice(landing === "/" ? 0 : landing.length);
+  return `${prefix}${rest}${pattern ? "/a" : ""}`;
+}
+
+/**
+ * Follow `asked`, a request the new redirect answers, through the redirects
+ * it meets, exactly as the Proxy would match them, until a page serves it,
+ * nothing answers, or it comes back under `from`: why it loops, or null.
+ */
+async function followRequest(
+  ctx: PluginContext,
+  transaction: Transaction,
+  locale: string,
+  from: { source: string; address: { path: string; range?: true } },
+  final: string,
+  editing: string | undefined,
+  asked: string
+): Promise<string | null> {
   const fixed = from.address.path;
   const comesBack = (path: string) =>
     from.address.range ? within(path, fixed) : path === fixed;
   const read = reads(ctx, transaction);
-  // A request the redirect answers: the address itself, or one below a
-  // pattern's fixed part.
-  const asked = from.address.range ? `${fixed === "/" ? "" : fixed}/a` : fixed;
   const passed = [from.source];
   let sent = destinationOf({ source: from.source, target: final }, asked);
   for (let hop = 0; hop < LONGEST_ROUND; hop++) {
@@ -370,10 +476,21 @@ export async function putRedirect(
           )
         );
   if ("refused" in saved) return saved;
-  // A pattern is never another redirect's To address, and never logged.
-  const repointed = from.address.range
-    ? 0
-    : await pointedOn(ctx, transaction, locale, from.source, end.final, saved);
+  // A pattern is never another redirect's To address; the addresses it now
+  // answers no longer belong in the not-found log.
+  let repointed = 0;
+  if (from.address.range) {
+    await forgetNotFoundUnder(ctx, transaction, locale, from.address.path);
+  } else {
+    repointed = await pointedOn(
+      ctx,
+      transaction,
+      locale,
+      from.source,
+      end.final,
+      saved
+    );
+  }
   return { saved, chain: end.path, repointed };
 }
 

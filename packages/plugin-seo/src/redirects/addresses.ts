@@ -69,6 +69,11 @@ export function parseSource(text: string): ParsedSource {
       error: "Leave the # and what follows it off the From address.",
     };
   }
+  // A browser reads `\` as `/`, so an address with one is never asked for
+  // as written.
+  if (value.includes("\\")) {
+    return { ok: false, error: "Use / rather than \\ in the From address." };
+  }
   if (hasDotPart(value)) {
     return {
       ok: false,
@@ -116,6 +121,7 @@ export function checkTarget(target: string, source: string): string | null {
  * pattern itself matches, which would redirect again and again.
  */
 function sameSiteProblem(to: string, source: string): string | null {
+  if (to.includes("\\")) return "Use / rather than \\ in the To address.";
   if (hasDotPart(pathOf(to))) {
     return "Write the To address without . or .. parts.";
   }

@@ -35,9 +35,21 @@ describe("following a redirect's To address to the end of its chain", () => {
       error: "That makes a loop: /a → /a?ref=1.",
     });
     expect(await followChain("/a", "/b?ref=1", hops({ "/b": "/c" }))).toEqual({
-      final: "/c",
-      path: ["/b?ref=1", "/c"],
+      final: "/c?ref=1",
+      path: ["/b?ref=1", "/c?ref=1"],
     });
+  });
+
+  it("keeps a To address's query to the end of the chain, as a visitor following it would", async () => {
+    expect(
+      await followChain("/a", "/b?campaign=x", hops({ "/b": "/c" }))
+    ).toEqual({
+      final: "/c?campaign=x",
+      path: ["/b?campaign=x", "/c?campaign=x"],
+    });
+    expect(
+      await followChain("/a", "/b?campaign=x", hops({ "/b": "/c?ref=y" }))
+    ).toEqual({ final: "/c?ref=y", path: ["/b?campaign=x", "/c?ref=y"] });
   });
 
   it("refuses a To address already caught in a loop of its own", async () => {

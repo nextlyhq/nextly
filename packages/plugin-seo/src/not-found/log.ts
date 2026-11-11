@@ -245,3 +245,50 @@ export async function forgetNotFound(
     );
   }
 }
+
+/**
+ * Drop every address at or below `base` in `locale` from the log, as a
+ * pattern redirect now answers them all.
+ */
+export async function forgetNotFoundUnder(
+  ctx: PluginContext,
+  transaction: Parameters<
+    PluginContext["services"]["collections"]["deleteEntryInTransaction"]
+  >[0],
+  locale: string,
+  base: string
+): Promise<void> {
+  const slug = notFoundSlug(ctx);
+  const below = (path: string) =>
+    path === base || path.startsWith(base === "/" ? "/" : `${base}/`);
+  let page = 1;
+  for (;;) {
+    const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
+      transaction,
+      slug,
+      {
+        where: {
+          and: [{ locale: { equals: locale } }, { path: { contains: base } }],
+        },
+        pagination: { limit: PAGE, page },
+        sort: { field: "pathKey", direction: "asc" },
+        depth: 0,
+      },
+      { lock: "update" }
+    );
+    // `contains` matches anywhere in the address; only those below go.
+    const rows = (data as unknown[]).map(notFoundRowOf);
+    const gone = rows.filter(row => below(row.path));
+    for (const row of gone) {
+      await ctx.services.collections.deleteEntryInTransaction(
+        transaction,
+        slug,
+        row.id
+      );
+    }
+    if (rows.length < PAGE) return;
+    // A page that lost rows is read again, as the rows after it moved up;
+    // one that lost none is passed.
+    if (gone.length === 0) page += 1;
+  }
+}

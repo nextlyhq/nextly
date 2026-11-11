@@ -41,6 +41,7 @@ describe("a redirect's From address", () => {
     ["/*", "A pattern needs a fixed part before the *, as in /old/*."],
     ["/a/../b", "Write the From address without . or .. parts."],
     ["/a/%2E%2e/b", "Write the From address without . or .. parts."],
+    ["/a\\b", "Use / rather than \\ in the From address."],
   ])("refuses %j", (text, message) => {
     expect(parseSource(text)).toEqual({ ok: false, error: message });
   });
@@ -102,6 +103,7 @@ describe("a redirect's To address", () => {
     ["/b/../a", "/a", "Write the To address without . or .. parts."],
     ["/b/%2e%2e/a", "/a", "Write the To address without . or .. parts."],
     ["/./a", "/x", "Write the To address without . or .. parts."],
+    ["/b\\..\\a", "/a", "Use / rather than \\ in the To address."],
     [
       "/old",
       "/old/*",

@@ -353,6 +353,27 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
     ).toHaveProperty("saved");
   });
 
+  it("refuses a pattern that a narrower pattern under its To address sends back round", async () => {
+    const { seo } = await boot(dialect);
+    await put(seo, { source: "/new/special/*", target: "/old/special/*" });
+
+    expect(await put(seo, { source: "/old/*", target: "/new/*" })).toEqual({
+      refused: "That makes a loop: /old/* → /new/special/* → /old/*.",
+      reason: "loop",
+    });
+  });
+
+  it("keeps a redirect's own query when it is pointed on to the end of a chain", async () => {
+    const { t, seo } = await boot(dialect);
+    await put(seo, { source: "/x", target: "/a?campaign=1" });
+
+    await put(seo, { source: "/a", target: "/b" });
+
+    expect(await redirects(t)).toMatchObject({
+      "en|/x": "/b?campaign=1 permanent person",
+    });
+  });
+
   it("makes a person's redirect permanent unless they choose otherwise", async () => {
     const { t, ctx, seo } = await boot(dialect);
 

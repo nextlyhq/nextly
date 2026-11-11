@@ -208,6 +208,24 @@ describe.each(getConfiguredTestDialects())(
       expect(await byLanguage()).toEqual({ "en|/gone": 1 });
     });
 
+    it("takes off every address a saved pattern now answers, and only those", async () => {
+      const { t, seo } = await boot(dialect);
+      for (const path of ["/old/x", "/old/y/z", "/older", "/old"]) {
+        await logNotFound(await renderedWith(path));
+      }
+
+      await seo.services.collections.withTransaction(tx =>
+        putRedirect(seo, tx, {
+          locale: "en",
+          source: "/old/*",
+          target: "/new/*",
+          origin: "person",
+        })
+      );
+
+      expect(await logged(t)).toEqual({ "/older": 1 });
+    });
+
     it("takes an address off once a redirect answers it", async () => {
       const { t, seo } = await boot(dialect);
       await logNotFound(await renderedWith("/gone"));
