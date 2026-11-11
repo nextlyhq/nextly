@@ -284,6 +284,44 @@ describe.each(getConfiguredTestDialects())(
       expect(read?.responseKey ?? null).toBeNull();
     });
 
+    it("judges a submission moved to another form by that form's responses", async () => {
+      const { nextly, submit, formId } = await boot({
+        oneResponse: "email",
+        oneResponseField: "email",
+      });
+      await submit({ email: "ada@example.com" });
+      // A form allowing several responses, with a submission from the same
+      // address and no key.
+      const open = await nextly.create({
+        collection: "forms",
+        data: {
+          name: "Open",
+          slug: "open",
+          status: "published",
+          fields: FIELDS,
+          settings: { honeypotEnabled: false },
+        },
+      });
+      const elsewhere = await nextly.create({
+        collection: "form-submissions",
+        data: {
+          form: open.item.id,
+          data: { email: "ADA@example.com" },
+          status: "new",
+          submittedAt: new Date(),
+        },
+      });
+
+      // Moved onto the form that already holds that address: refused.
+      await expect(
+        nextly.update({
+          collection: "form-submissions",
+          id: elsewhere.item.id,
+          data: { form: formId, _overwrite: true },
+        })
+      ).rejects.toMatchObject({ code: "DUPLICATE" });
+    });
+
     it("lets a person respond again once their submission is marked spam", async () => {
       const { nextly, submit } = await boot({
         oneResponse: "email",

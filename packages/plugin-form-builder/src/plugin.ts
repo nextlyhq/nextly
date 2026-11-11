@@ -1156,7 +1156,9 @@ async function rekeyAfterUpdate(
   const parent =
     form ?? (await formToCheckAgainst(undefined, formsSlug, formId, nextly));
   const stored = ctx.originalData;
+  const movedFrom = stored ? parentFormId(stored) : null;
   row.responseKey = await responseKeyAfterUpdate({
+    moved: movedFrom !== null && movedFrom !== formId,
     digests: () => nextly.security.digests,
     settings: normalizeFormSettings(parent.settings),
     patch: row,

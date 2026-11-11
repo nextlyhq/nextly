@@ -114,6 +114,8 @@ export async function responseKeyAfterUpdate(input: {
   stored: (KeyedSubmission & { responseKey?: unknown }) | undefined;
   /** Whether another submission of the form holds `key`. */
   heldElsewhere: (key: string) => Promise<boolean>;
+  /** Whether the update moves the submission to another form. */
+  moved: boolean;
 }): Promise<string | null> {
   const { patch, stored } = input;
   const key = await responseKeyOf(input.digests, input.settings, {
@@ -126,9 +128,10 @@ export async function responseKeyAfterUpdate(input: {
     data: stored?.data,
     ipAddress: stored?.ipAddress,
   });
-  // Edited to another value: that value's key, which the unique index
-  // refuses if another submission holds it.
-  if (key !== storedValue) return key;
+  // Edited to another value, or moved to another form whose responses it
+  // now joins: that value's key, which the unique index refuses if another
+  // submission of the form holds it.
+  if (input.moved || key !== storedValue) return key;
   // Restored from spam with the value it was stored with: its key back,
   // unless another submission has taken that value since.
   if (stored?.status === "spam") {
