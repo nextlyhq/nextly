@@ -1,5 +1,6 @@
 "use client";
 
+import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import { ChevronRight, Plug } from "lucide-react";
 import { useId, useMemo, useState, type JSX } from "react";
 
@@ -98,7 +99,11 @@ export function PluginEntitySections<Row extends { label?: string }>({
   const plugins = useBranding().plugins;
   // Every plugin entry this reader may read, then the ones the search finds;
   // the list's source and schema filters narrow the site's own entries only.
-  const { data: rows } = usePluginEntities(listKey, fetchPage);
+  const {
+    data: rows,
+    isError,
+    refetch,
+  } = usePluginEntities(listKey, fetchPage);
   const groups = useMemo(
     () =>
       groupByPlugin(
@@ -111,6 +116,20 @@ export function PluginEntitySections<Row extends { label?: string }>({
       ),
     [rows, search, slugOf, kind, plugins]
   );
+  // A read that failed is said, with a way to ask again: shown as no
+  // sections at all, it would read as "no plugin provides any".
+  if (isError) {
+    return (
+      <Alert variant="warning" className="mt-6">
+        <AlertDescription className="flex flex-wrap items-center gap-3">
+          <span>{`The plugins' ${noun.many} could not be loaded.`}</span>
+          <Button size="sm" variant="outline" onClick={() => void refetch()}>
+            Try again
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
   if (groups.length === 0) return null;
   return (
     <div className="mt-6 flex flex-col gap-3">

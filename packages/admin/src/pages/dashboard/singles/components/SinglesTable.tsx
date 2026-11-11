@@ -457,7 +457,7 @@ export default function SinglesTable({
         }
         empty={{
           icon: <FileText className="h-5 w-5" aria-hidden="true" />,
-          title: "No Singles yet",
+          title: "No Singles of your own yet",
           description:
             "Get started by creating your first Single to manage site-wide settings like headers, footers, and navigation.",
           action: (
@@ -471,9 +471,9 @@ export default function SinglesTable({
         }}
         emptyFiltered={{
           icon: <FileText className="h-5 w-5" aria-hidden="true" />,
-          title: "No Singles found",
+          title: "No Singles of your own found",
           description:
-            "No Singles match your search. Try adjusting your search terms or filters.",
+            "None of your own Singles match your search. Try adjusting your search terms or filters.",
         }}
         columns={columns}
         rows={filteredData}

@@ -459,9 +459,9 @@ export async function findEntityDependents(
  *
  * The same answer a delete gives about one field group's fields
  * (`findEntityDependents`), from the same walk over every stored field list,
- * read once for the whole set. Unlike a delete, nothing here goes together:
- * each field group is asked about on its own, so one field group's use of
- * another on the same page still counts. Only fields are counted, not keys or
+ * read once for the whole set. Each field group is asked about as if deleted
+ * on its own: its own fields go with it, so a reference to itself does not
+ * count, while one field group's use of another on the same page still does. Only fields are counted, not keys or
  * other owners' elements, which a delete also weighs.
  *
  * Rejects when the field lists cannot be read, so the caller decides how to
@@ -477,11 +477,16 @@ export async function fieldGroupPlacementCounts(
   const counts = new Map<string, number>();
   if (slugs.length === 0) return counts;
   const owners = await sources.fieldOwners();
-  const nothingGoes: ReadonlySet<string> = new Set();
   for (const slug of slugs) {
+    // What goes with a delete of this field group alone, as the delete
+    // decides it: its own fields, so a reference to itself does not count.
+    const goingToo = fieldsGoingWith(
+      [{ kind: "fieldGroup", slug, tables: [] }],
+      {}
+    );
     counts.set(
       slug,
-      referencesAmong(owners, "fieldGroup", slug, nothingGoes).length
+      referencesAmong(owners, "fieldGroup", slug, goingToo).length
     );
   }
   return counts;

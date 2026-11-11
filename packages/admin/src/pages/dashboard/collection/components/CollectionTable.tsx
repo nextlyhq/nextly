@@ -445,7 +445,7 @@ export default function CollectionTable(): JSX.Element {
         }
         empty={{
           icon: <Layers className="h-5 w-5" aria-hidden="true" />,
-          title: "No collections yet",
+          title: "No collections of your own yet",
           description:
             "Get started by creating your first collection to organize and manage your content.",
           action: (
@@ -459,9 +459,9 @@ export default function CollectionTable(): JSX.Element {
         }}
         emptyFiltered={{
           icon: <Layers className="h-5 w-5" aria-hidden="true" />,
-          title: "No collections found",
+          title: "No collections of your own found",
           description:
-            "No collections match your search. Try adjusting your search terms or filters.",
+            "None of your own collections match your search. Try adjusting your search terms or filters.",
         }}
         columns={columns}
         rows={filteredData}

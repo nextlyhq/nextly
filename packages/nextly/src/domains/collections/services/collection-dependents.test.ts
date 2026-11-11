@@ -866,6 +866,34 @@ describe("fieldGroupPlacementCounts", () => {
     }
   });
 
+  it("does not count a field group's reference to itself, as its own delete does not", async () => {
+    // "tree" places itself and is placed once by "pages"; its delete takes
+    // its own fields with it, so only the outside use refuses it.
+    const withSelf: FieldOwner[] = [
+      ...owners,
+      {
+        entityType: "fieldGroup",
+        entitySlug: "tree",
+        fields: [{ name: "children", type: "component", component: "tree" }],
+      },
+      {
+        entityType: "collection",
+        entitySlug: "menus",
+        fields: [{ name: "root", type: "component", component: "tree" }],
+      },
+    ];
+    const counts = await fieldGroupPlacementCounts(
+      ["tree"],
+      sources({ owners: withSelf })
+    );
+    const alone = await findEntityDependents(
+      [{ kind: "fieldGroup", slug: "tree", tables: [] }],
+      sources({ owners: withSelf })
+    );
+    expect(counts.get("tree")).toBe(1);
+    expect(counts.get("tree")).toBe(alone.get("tree")?.fields.length);
+  });
+
   it("reads the field owners once, however many field groups it is asked about", async () => {
     const fieldOwners = vi.fn(() => Promise.resolve(owners));
     await fieldGroupPlacementCounts(["card", "seo", "unused"], {

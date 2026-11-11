@@ -471,7 +471,7 @@ export default function FieldGroupTable(): JSX.Element {
         }
         empty={{
           icon: <Puzzle className="h-5 w-5" aria-hidden="true" />,
-          title: "No field groups yet",
+          title: "No field groups of your own yet",
           description:
             "Get started by creating your first reusable field group to share across your collections.",
           action: (
@@ -485,9 +485,9 @@ export default function FieldGroupTable(): JSX.Element {
         }}
         emptyFiltered={{
           icon: <Puzzle className="h-5 w-5" aria-hidden="true" />,
-          title: "No field groups found",
+          title: "No field groups of your own found",
           description:
-            "No field groups match your search. Try adjusting your search terms or filters.",
+            "None of your own field groups match your search. Try adjusting your search terms or filters.",
         }}
         columns={columns}
         rows={filteredData}

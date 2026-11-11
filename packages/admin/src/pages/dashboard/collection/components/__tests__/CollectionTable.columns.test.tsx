@@ -297,4 +297,61 @@ describe("CollectionTable columns", () => {
     );
     expect(offered).toEqual(["View", "View entries"]);
   });
+
+  it("says when the plugins' collections could not be read, rather than showing none", async () => {
+    const user = userEvent.setup();
+    fetchCollections.mockImplementation((_params: unknown, owner: unknown) =>
+      owner === "plugins"
+        ? Promise.reject(new Error("down"))
+        : Promise.resolve(listOf([collection({})]))
+    );
+    renderTable();
+    await within(await siteTable()).findAllByText("Posts");
+
+    const notice = await screen.findByText(
+      /plugins' collections could not be loaded/i
+    );
+    expect(notice).toBeDefined();
+
+    // Asked again on request, and listed once the read succeeds.
+    branding.current = {
+      plugins: [
+        {
+          name: "@nextlyhq/plugin-page-builder",
+          appearance: { label: "Page Builder" },
+          collections: ["pages"],
+        },
+      ],
+    };
+    serve(
+      [collection({})],
+      [collection({ name: "pages", label: "Site pages", locked: true })]
+    );
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(
+      await screen.findByRole("button", { name: /Page Builder\s*1 collection/ })
+    ).toBeDefined();
+  });
+
+  it("says the site has none of its own, not none at all, beside plugin collections", async () => {
+    branding.current = {
+      plugins: [
+        {
+          name: "@nextlyhq/plugin-page-builder",
+          appearance: { label: "Page Builder" },
+          collections: ["pages"],
+        },
+      ],
+    };
+    serve([], [collection({ name: "pages", label: "Site pages" })]);
+    renderTable();
+
+    expect(
+      await screen.findByText("No collections of your own yet")
+    ).toBeDefined();
+    expect(screen.queryByText("No collections yet")).toBeNull();
+    expect(
+      await screen.findByRole("button", { name: /Page Builder\s*1 collection/ })
+    ).toBeDefined();
+  });
 });
