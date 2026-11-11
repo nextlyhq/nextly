@@ -655,7 +655,9 @@ export function EntryForm({
   // What a restore puts values back into: this form. The document's lock is
   // decided further down, so a restore reads it when it asks.
   const restoreReadOnly = useRef(false);
-  const editingLanguage = getLocale(locale)?.label;
+  // The language being edited: the default where the address names none.
+  const editingLocale = locale ?? defaultLocale;
+  const editingLanguage = getLocale(editingLocale)?.label;
   const editorRestore = useEditorRestoreSurface({
     restore: formRestore,
     form,
@@ -663,7 +665,7 @@ export function EntryForm({
     readOnly: () => restoreReadOnly.current,
     localized: collection.localized === true,
     ...(editingLanguage ? { language: editingLanguage } : {}),
-    ...(locale ? { locale } : {}),
+    ...(editingLocale ? { locale: editingLocale } : {}),
   });
   const viewedVersionHost = useViewedVersion(
     allFields,

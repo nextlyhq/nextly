@@ -35,8 +35,11 @@ export function restoreIntoEditor(args: {
   const when = args.savedAt
     ? formatDateTime(args.savedAt)
     : `version ${args.versionNo}`;
+  // On a translated document, the language the fields went into, as the
+  // restore's list named it before.
+  const into = args.editor.language ? ` into ${args.editor.language}` : "";
   toast.success(
-    `${count === 1 ? "1 field" : `${count} fields`} restored from ${when}`,
+    `${count === 1 ? "1 field" : `${count} fields`} restored${into} from ${when}`,
     { action: { label: "Undo", onClick: () => applied.undo() } }
   );
 }

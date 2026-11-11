@@ -1010,8 +1010,11 @@ export function SingleForm({
     [locale, shownDefaultLocale, version, schema.slug, schema.draftsEnabled]
   );
   // What a restore puts values back into: this form, under its lock.
-  const { getLocale: localeOf } = useLocalization();
-  const editingLanguage = localeOf(locale)?.label;
+  const { getLocale: localeOf, defaultLocale: editingDefault } =
+    useLocalization();
+  // The language being edited: the default where the address names none.
+  const editingLocale = locale ?? editingDefault;
+  const editingLanguage = localeOf(editingLocale)?.label;
   const editorRestore = useEditorRestoreSurface({
     restore: formRestore,
     form,
@@ -1019,7 +1022,7 @@ export function SingleForm({
     readOnly: () => lock.readOnly,
     localized: schema.localized === true,
     ...(editingLanguage ? { language: editingLanguage } : {}),
-    ...(locale ? { locale } : {}),
+    ...(editingLocale ? { locale: editingLocale } : {}),
   });
   const viewedVersionHost = useViewedVersion(
     allFields,
