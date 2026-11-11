@@ -11,6 +11,7 @@ import { text } from "../../../collections/fields/helpers";
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
 import { createNextlyProxy } from "../../../runtime/proxy";
 import { definePlugin } from "../../plugin-context";
+import { hasProxyHandlers, proxyHandlersRegistered } from "../proxy-registry";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -82,5 +83,27 @@ describe.each(getConfiguredTestDialects())("proxy handlers (%s)", dialect => {
     const after = await proxy(new Request("https://example.com/old"));
     expect(after?.status).toBe(301);
     expect(after?.headers.get("location")).toBe("https://example.com/new");
+  });
+});
+
+describe("a start that fails after registering proxy handlers", () => {
+  it("leaves none registered, so the Proxy stands aside and starts again", async () => {
+    const failing = definePlugin({
+      name: "@test/proxy-then-fail",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      contributes: {
+        proxy: [{ name: "marks", handle: () => ({ headers: { "x-m": "1" } }) }],
+      },
+      onReady() {
+        throw new Error("could not finish starting");
+      },
+    });
+
+    await expect(createTestNextly({ plugins: [failing] })).rejects.toThrow();
+
+    // The handlers belonged to plugins the failed start destroyed.
+    expect(hasProxyHandlers()).toBe(false);
+    expect(proxyHandlersRegistered()).toBe(false);
   });
 });

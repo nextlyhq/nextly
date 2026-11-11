@@ -4910,6 +4910,9 @@ async function initializePlugins(
    * plugin's failure to clean up must not spare the others'.
    */
   const destroyInitializedPlugins = async (): Promise<void> => {
+    // The proxy handlers registered so far belong to plugins about to be
+    // destroyed: the Proxy must not run them against a failed boot.
+    clearProxyHandlers();
     for (let i = initialized.length - 1; i >= 0; i -= 1) {
       const { plugin, context } = initialized[i];
       if (!plugin.destroy) continue;
@@ -5261,6 +5264,9 @@ async function releaseServices(opts: {
     consoleLogger.error("Error during service shutdown", { error: error });
   } finally {
     container.clear();
+    // The proxy handlers close over the released plugins' contexts, so they
+    // go with them; the Proxy stands aside until a start registers new ones.
+    clearProxyHandlers();
     // The recording policy is a process-global registry, so it must be cleared
     // with the container — otherwise a later instance where a slug is only
     // DB/Builder-backed inherits a prior instance's stale opt-out and silently
