@@ -883,7 +883,7 @@ export function buildPgColumnFromKind(
     case "json":
       return withNullability(pgJsonb(name), nullable);
     case "fkSingle":
-      return pgText(name);
+      return withNullability(pgText(name), nullable);
     // Extension-only kinds. Omitting them does NOT fail to compile — this
     // function returns `unknown`, so a missing case falls through to
     // `undefined` and the table receives a non-column. Every kind is listed
@@ -953,7 +953,10 @@ export function buildMysqlColumnFromKind(
     case "json":
       return withNullability(mysqlJson(name), nullable);
     case "fkSingle":
-      return mysqlVarchar(name, { length: length ?? 36 });
+      return withNullability(
+        mysqlVarchar(name, { length: length ?? 36 }),
+        nullable
+      );
     // See the PostgreSQL builder: a missing case falls through to `undefined`
     // rather than failing to compile, so every kind is listed.
     case "bigint": {
@@ -1026,7 +1029,7 @@ export function buildSqliteColumnFromKind(
       // SQLite stores JSON as text.
       return withNullability(sqliteText(name), nullable);
     case "fkSingle":
-      return sqliteText(name);
+      return withNullability(sqliteText(name), nullable);
     case "skip":
       return null;
     default:
