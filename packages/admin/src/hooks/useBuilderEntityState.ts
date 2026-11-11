@@ -70,6 +70,12 @@ export interface BuilderPendingChanges {
   changes: readonly PendingChange[];
   /** Each changed field's row marks, by field id. */
   marks: ReadonlyMap<string, ReadonlySet<RowMark>>;
+  /**
+   * The fields as last saved, system rows excluded: the baseline the changes
+   * are counted from, and where a pending delete is shown and still holds its
+   * name.
+   */
+  saved: readonly BuilderField[];
   canUndo: boolean;
   canRedo: boolean;
   /** Undo one step, answering with what it undid, for announcing. */
@@ -102,6 +108,9 @@ export interface BuilderEntityState {
    *  sent — clearing first would show a clean form over stale stored values. */
   pinSettings: (saved: BuilderSettingsValues) => void;
 }
+
+/** One empty list, so a page with nothing loaded keeps one baseline object. */
+const NO_FIELDS: readonly BuilderField[] = [];
 
 export function useBuilderEntityState<TEntity>({
   entity,
@@ -226,6 +235,7 @@ export function useBuilderEntityState<TEntity>({
   const pending: BuilderPendingChanges = {
     changes,
     marks,
+    saved: originalFields ?? NO_FIELDS,
     canUndo: builder.canUndo,
     canRedo: builder.canRedo,
     undo,

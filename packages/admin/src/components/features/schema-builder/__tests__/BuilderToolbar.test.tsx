@@ -33,6 +33,7 @@ const componentConfig: BuilderConfig = {
 const noPending: BuilderPendingChanges = {
   changes: [],
   marks: new Map(),
+  saved: [],
   canUndo: false,
   canRedo: false,
   undo: () => null,

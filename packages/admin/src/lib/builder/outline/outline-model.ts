@@ -20,6 +20,8 @@ import { fieldLocalized } from "../field-localized";
 import type { FieldPlacement } from "../field-placement";
 import { convertToBuilderField } from "../field-transformers";
 
+import type { RowMark } from "../pending-changes";
+
 import { fillBlocks, type BlockCatalog } from "./block-rows";
 
 /** A field group the entity uses, as the Builder loaded it. */
@@ -184,6 +186,11 @@ export interface OutlineNode {
   typeName?: string;
   /** Keeps a value per language: its own rule, in a translated holder. */
   translatable: boolean;
+  /**
+   * The row's pending changes, when it has any: its marks, and for a
+   * container deleted with fields in it, how many go with it.
+   */
+  pending?: { marks: readonly RowMark[]; inside?: number };
 }
 
 /** Whether the field groups the outline reads have arrived. */

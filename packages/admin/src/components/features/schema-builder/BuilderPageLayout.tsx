@@ -33,6 +33,10 @@ import {
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
 import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
+import {
+  fieldsWithDeleted,
+  markPending,
+} from "@admin/lib/builder/outline/pending-rows";
 import { navigateTo } from "@admin/lib/navigation";
 
 import type { BuilderConfig } from "./builder-config";
@@ -159,12 +163,25 @@ function BuilderWorkspace(
     | "savedFieldIds"
     | "settings"
     | "unsavedCount"
+    | "pending"
   >
 ): JSX.Element {
-  const { outline, fieldGroups, fieldGroupsLoad } = useBuilderOutline(
-    props.builder.fields,
-    props.locked,
-    props.settings.i18n === true
+  const { builder, pending } = props;
+  // Drawn with every pending delete shown where it was saved, marked, so a
+  // delete stays in sight until it is saved or undone. Only drawn: the save
+  // sends the builder's fields as they are.
+  const shown = useMemo(
+    () => fieldsWithDeleted(builder.fields, pending.saved),
+    [builder.fields, pending.saved]
+  );
+  const {
+    outline: built,
+    fieldGroups,
+    fieldGroupsLoad,
+  } = useBuilderOutline(shown, props.locked, props.settings.i18n === true);
+  const outline = useMemo(
+    () => markPending(built, pending.marks, pending.changes),
+    [built, pending.marks, pending.changes]
   );
   // Leaves for a field group's own editor, where its fields are changed:
   // asked first while there are unsaved changes, which leaving discards.
