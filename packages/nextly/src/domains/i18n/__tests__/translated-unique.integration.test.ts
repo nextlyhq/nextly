@@ -210,11 +210,18 @@ describeEachDialect("a translated unique field", dialect => {
     expect(await columnsOf("dc_pages_locales")).not.toContain("ref");
   });
 
+  // Declared 255 characters wide, so the unique flag leaving with it does not change the column:
+  // on MySQL a text field that states no width is bounded only while it is unique.
+  const WIDE = {
+    options: { variant: "short" },
+    validation: { maxLength: 255 },
+  } as const;
+
   it.each([
     {
       change: "leaves translation",
       fields: [
-        { name: "handle", type: "text", localized: false },
+        { name: "handle", type: "text", localized: false, ...WIDE },
         { name: "note", type: "text" },
       ],
     },
@@ -227,7 +234,7 @@ describeEachDialect("a translated unique field", dialect => {
         label: "Page",
         localized: true,
         fields: [
-          { name: "handle", type: "text", unique: true },
+          { name: "handle", type: "text", unique: true, ...WIDE },
           { name: "note", type: "text" },
         ],
       });
@@ -674,7 +681,47 @@ describeEachDialect("a translated unique field", dialect => {
     }
   );
 
+  it("makes a field group's text field with no width unique only as a change to its table on MySQL", async () => {
+    // On MySQL a unique text field that states no width is the bounded default MySQL can key, and
+    // a field that is not unique is unbounded, so turning Unique on changes the column: the field
+    // group's own update refuses it and sends it to the schema preview. Elsewhere the column is
+    // text either way, and the update goes ahead.
+    await dispatchComponents(
+      "createComponent",
+      {},
+      {
+        slug: "teaser",
+        label: "Teaser",
+        localized: true,
+        fields: [{ name: "heading", type: "text" }],
+      }
+    );
+    const service = current.getService(
+      "fieldGroupMetadataService"
+    ) as FieldGroupMetadataService;
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "teaser",
+        fields: [{ name: "heading", type: "text", unique: true }],
+      })
+      .then(
+        () => undefined,
+        (error: { publicData?: unknown }) => error
+      );
+
+    if (dialect === "mysql") {
+      expect(JSON.stringify(refusal?.publicData ?? null)).toMatch(
+        /requires_schema_change/
+      );
+    } else {
+      expect(refusal).toBeUndefined();
+    }
+  });
+
   it("refuses a field group's own update that makes a translated field unique over duplicates, and changes nothing", async () => {
+    // Declared 255 characters wide, so making it unique leaves its column as it is and the
+    // duplicates are what the update is refused for.
     await dispatchComponents(
       "createComponent",
       {},
@@ -682,7 +729,7 @@ describeEachDialect("a translated unique field", dialect => {
         slug: "banner",
         label: "Banner",
         localized: true,
-        fields: [{ name: "heading", type: "text" }],
+        fields: [{ name: "heading", type: "text", maxLength: 255 }],
       }
     );
     await writeBanner("b1", "en", "Sale");
@@ -695,7 +742,7 @@ describeEachDialect("a translated unique field", dialect => {
       .updateFieldGroup({
         slug: "banner",
         fields: [
-          { name: "heading", type: "text", unique: true },
+          { name: "heading", type: "text", unique: true, maxLength: 255 },
           { name: "subtitle", type: "text" },
         ],
       })
