@@ -75,6 +75,7 @@ export type {
   SecretData,
   TxOption,
 } from "./security/one-time-secrets";
+export type { KeyedDigests } from "./security/keyed-digest";
 export type { OpaqueSecrets } from "./security/opaque-secrets";
 export {
   standardWebhooks,
