@@ -8,7 +8,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { chartColour, chartMarksFor, markColour, orderGroups } from "../chart-colour";
+import {
+  chartColour,
+  chartMarksFor,
+  markColour,
+  orderGroups,
+} from "../chart-colour";
 
 describe("the marks a chart's groups take", () => {
   it("puts each status on its own status mark in a chart of statuses", () => {
