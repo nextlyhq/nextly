@@ -31,7 +31,7 @@ import {
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
-import { seoTabContributions } from "./tab/contributions";
+import { seoTabContributions, tabEditsGroup } from "./tab/contributions";
 import { seoTabRoute } from "./tab/route";
 import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
@@ -180,13 +180,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Every page's head, worked out by the one order of who wins.
     services: { pageMetadata: ctx => seoPageMetadata(ctx) },
     // The SEO tab on each page the group is added to, and the route it reads
-    // a page's automatic values from.
-    admin: {
-      contributions: seoTabContributions({
-        collections: targets,
-        singles: singleTargets,
-      }),
-    },
+    // a page's automatic values from. A group of fields the tab does not
+    // edit stays among the page's own fields instead.
+    ...(tabEditsGroup(seoFields)
+      ? {
+          admin: {
+            contributions: seoTabContributions({
+              collections: targets,
+              singles: singleTargets,
+            }),
+          },
+        }
+      : {}),
     routes: [
       seoTabRoute({
         collections: targets,

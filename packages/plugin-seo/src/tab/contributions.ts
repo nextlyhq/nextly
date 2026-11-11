@@ -11,13 +11,31 @@
  */
 import type { AdminContribution } from "@nextlyhq/plugin-sdk";
 
-import { SEO_GROUP } from "./typed";
+import { SEO_GROUP, TYPED_SEO_FIELDS } from "./typed";
 
 /** The tab's component, as the admin's component map names it. */
 export const SEO_TAB_COMPONENT = "@nextlyhq/plugin-seo/admin#SeoTab";
 
 /** The tab's label, and its name in the address (`?tab=`). */
 const LABEL = "SEO";
+
+/**
+ * Whether the tab can edit every field of a group: it edits the fields the
+ * plugin ships, so a group of other fields, such as one with a focus keyword
+ * added, stays among the page's own fields, where each can be edited.
+ */
+export function tabEditsGroup(fields: readonly { name?: unknown }[]): boolean {
+  const names = fields.map(field => field.name);
+  return (
+    names.includes("metaTitle") &&
+    names.includes("metaDescription") &&
+    names.every(
+      name =>
+        typeof name === "string" &&
+        (TYPED_SEO_FIELDS as readonly string[]).includes(name)
+    )
+  );
+}
 
 /** The SEO tab on every page the plugin adds the `seo` group to. */
 export function seoTabContributions({

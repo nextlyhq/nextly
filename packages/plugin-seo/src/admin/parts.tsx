@@ -29,7 +29,7 @@ export function Chip({
       className={cx(
         "rounded-[5px] px-[7px] py-px text-[11px] leading-[1.5] font-semibold whitespace-nowrap",
         kind === "typed" && "bg-foreground text-background",
-        kind === "automatic" && "bg-muted text-foreground",
+        kind === "automatic" && "bg-secondary text-secondary-foreground",
         kind === "code" &&
           "border border-dashed border-muted-foreground text-foreground"
       )}

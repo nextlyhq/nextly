@@ -76,7 +76,7 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
   };
   const answer = answers?.answer;
   return (
-    <div className="flex flex-col gap-[18px] pb-12">
+    <div className="flex flex-col gap-[18px] pt-4 pb-12">
       <PreviewCard
         answer={answer}
         site={context?.site}

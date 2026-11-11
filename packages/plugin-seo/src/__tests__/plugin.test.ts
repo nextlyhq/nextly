@@ -229,3 +229,27 @@ describe("the SEO tab the plugin contributes", () => {
     ).toEqual(["collection.edit"]);
   });
 });
+
+describe("the SEO tab and fields of a project's own", () => {
+  it("leaves a group the tab cannot edit whole among the page's own fields", () => {
+    const plugin = seoPlugin({
+      collections: ["pages"],
+      sitemap: false,
+      fields: [
+        text({ name: "metaTitle" }),
+        text({ name: "metaDescription" }),
+        text({ name: "focusKeyword" }),
+      ],
+    });
+    expect(plugin.contributes?.admin).toBeUndefined();
+  });
+
+  it("draws the tab for a group of fields it edits, fewer than the defaults", () => {
+    const plugin = seoPlugin({
+      collections: ["pages"],
+      sitemap: false,
+      fields: [text({ name: "metaTitle" }), text({ name: "metaDescription" })],
+    });
+    expect(plugin.contributes?.admin?.contributions).toHaveLength(1);
+  });
+});

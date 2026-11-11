@@ -28,6 +28,7 @@ export const TYPED_SEO_FIELDS = [
   "socialDescription",
   "ogImage",
   "canonical",
+  "canonicalElsewhere",
   "noindex",
 ] as const;
 
