@@ -127,6 +127,7 @@ export default function SingleBuilderEditPage({
     setSettings,
     isInitialized,
     unsavedCount,
+    pending,
     savedFieldIds,
     pinFields,
     pinSettings,
@@ -318,6 +319,7 @@ export default function SingleBuilderEditPage({
       locked={isLocked}
       configPath={single?.configPath}
       unsavedCount={unsavedCount}
+      pending={pending}
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}

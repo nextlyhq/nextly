@@ -1,5 +1,6 @@
-// Simplified toolbar: no icon tile, no Hooks button, no unsaved-count badge
-// (the Save button's enabled state is the only unsaved signal).
+// Simplified toolbar: no icon tile, no Hooks button. The number of unsaved
+// changes is shown at all times, beside the Undo, Redo and Discard all that
+// act on them.
 //
 // Code-first entities show a "Read-only" badge next to the name. Their Save
 // stays disabled, but Settings stays enabled so the config can be inspected
@@ -11,18 +12,21 @@ import type { JSX } from "react";
 
 import { Lock, Plus, Settings } from "@admin/components/icons";
 import { ROUTES } from "@admin/constants/routes";
+import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 
 // Prose names the kind through the shared table, so the toolbar spells each
 // kind as every other builder message does.
 import { BUILDER_KIND_NOUN, type BuilderConfig } from "./builder-config";
 import { mayLeaveBuilder } from "./leave-builder";
+import { PendingChangesControls } from "./PendingChangesControls";
 
 type Props = {
   config: BuilderConfig;
   name: string;
-  /** Number of unsaved field changes. Drives Save-schema enable state only;
-   */
+  /** Number of unsaved changes: shown, and what enables Save. */
   unsavedCount: number;
+  /** The pending changes Undo, Redo and Discard all act on. */
+  pending: BuilderPendingChanges;
   /** True when the entity is code-first / locked from UI edits. */
   locked?: boolean;
   /** Opens the field picker for a field at the end of the list. */
@@ -57,6 +61,7 @@ export function BuilderToolbar({
   config,
   name,
   unsavedCount,
+  pending,
   locked = false,
   onAddField,
   onOpenSettings,
@@ -105,6 +110,11 @@ export function BuilderToolbar({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <PendingChangesControls
+          pending={pending}
+          count={unsavedCount}
+          locked={locked}
+        />
         {/* Adding is an edit, so a read-only entity has no add here. */}
         {!locked && (
           // Icon only on a phone, so the entity's name keeps its room; the

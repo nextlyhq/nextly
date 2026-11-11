@@ -52,6 +52,7 @@ function setup() {
   const rendered = renderHook(() => {
     const builder = useFieldBuilder({
       resolver: async values => ({ values, errors: {} }),
+      defaultValues: {},
     });
     const state = useBuilderEntityState({
       entity,

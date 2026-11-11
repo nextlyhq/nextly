@@ -175,6 +175,7 @@ export default function CollectionBuilderEditPage({
     setSettings,
     isInitialized,
     unsavedCount,
+    pending,
     savedFieldIds,
     pinFields,
     pinSettings,
@@ -383,6 +384,7 @@ export default function CollectionBuilderEditPage({
       locked={isLocked}
       configPath={collection?.configPath}
       unsavedCount={unsavedCount}
+      pending={pending}
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}

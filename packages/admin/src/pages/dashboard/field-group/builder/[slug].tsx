@@ -143,6 +143,7 @@ export default function FieldGroupBuilderEditPage({
     setSettings,
     isInitialized,
     unsavedCount,
+    pending,
     savedFieldIds,
     pinFields,
     pinSettings,
@@ -298,6 +299,7 @@ export default function FieldGroupBuilderEditPage({
       locked={isLocked}
       configPath={fieldGroup?.configPath}
       unsavedCount={unsavedCount}
+      pending={pending}
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}

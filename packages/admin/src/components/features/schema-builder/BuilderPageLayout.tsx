@@ -32,6 +32,7 @@ import {
   type LoadedFieldGroup,
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
+import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 import { navigateTo } from "@admin/lib/navigation";
 
 import type { BuilderConfig } from "./builder-config";
@@ -57,8 +58,10 @@ type Props = {
   locked: boolean;
   /** Source file of a locked entity, shown in the read-only notice. */
   configPath?: string | null;
-  /** Drives the toolbar's Save enable state. */
+  /** How many changes are unsaved: shown in the toolbar, and what enables Save. */
   unsavedCount: number;
+  /** The pending changes the toolbar's Undo, Redo and Discard all act on. */
+  pending: BuilderPendingChanges;
   /** Fields saved before, whose names no longer follow their labels. */
   savedFieldIds: ReadonlySet<string>;
   onSave: () => void;
@@ -88,6 +91,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     name,
     locked,
     unsavedCount,
+    pending,
     onSave,
     settings,
     onSettingsChange,
@@ -104,6 +108,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
         name={name}
         locked={locked}
         unsavedCount={unsavedCount}
+        pending={pending}
         onAddField={() => onActiveChange({ kind: "picker", position: {} })}
         onOpenSettings={() => onActiveChange({ kind: "settings" })}
         onSave={onSave}

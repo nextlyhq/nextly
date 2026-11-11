@@ -21,7 +21,7 @@ import type { FieldDefinition } from "@admin/types/collection";
 
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
 import { PendingChangesControls } from "../PendingChangesControls";
-import type { BuilderField, BuilderFieldsApi } from "../types";
+import type { BuilderField } from "../types";
 
 type Entity = { slug: string; name: string; fields: FieldDefinition[] };
 
@@ -60,12 +60,13 @@ const settingsOf = (loaded: Entity): BuilderSettingsValues => ({
 });
 
 /** What a test reaches into: the builder the controls are driven through. */
-let builder: BuilderFieldsApi;
+let builder: ReturnType<typeof useFieldBuilder>;
 let setSettings: (next: BuilderSettingsValues) => void;
 
 function Harness({ locked = false }: { locked?: boolean }) {
   const fieldBuilder = useFieldBuilder({
     resolver: async values => ({ values, errors: {} }),
+    defaultValues: {},
   });
   const state = useBuilderEntityState({
     entity,
