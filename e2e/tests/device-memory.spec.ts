@@ -3,7 +3,8 @@
  * browser's storage:
  *
  * - a second tab, with every admin request held, draws the real rail and
- *   Content panel from it before the server answers;
+ *   Content panel from it before the server answers, and the rail's foot
+ *   shapes where the real foot lands, so nothing moves when it arrives;
  * - after a session that opened an entry, the media library and a user, it
  *   holds only the metadata: none of their values, each planted with a marker
  *   the test looks for, so a store that kept any of them is caught by name;
@@ -26,6 +27,7 @@
 import {
   expect,
   type APIRequestContext,
+  type Locator,
   type Page,
   type Route,
 } from "@playwright/test";
@@ -109,6 +111,19 @@ async function hold(page: Page, matches: (url: URL) => boolean) {
   return { release, held: () => held };
 }
 
+/** Where an element is drawn, rounded to whole pixels. */
+async function boxOf(locator: Locator) {
+  const box = await locator.boundingBox();
+  expect(box, "drawn").not.toBeNull();
+  const { x, y, width, height } = box ?? { x: 0, y: 0, width: 0, height: 0 };
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.round(width),
+    height: Math.round(height),
+  };
+}
+
 /** Opens an admin page and waits for every answer the rail draws from. */
 async function openSettled(page: Page, path: string): Promise<void> {
   await page.goto(`${ADMIN}${path}`);
@@ -154,6 +169,50 @@ test.describe("the admin's memory on this device", () => {
     await waitForShellAnswers(second);
     await expect(panel.getByTestId("remembered-content")).toHaveCount(0);
     await second.close();
+  });
+
+  test("draws the rail's foot shapes where the real foot lands, with and without a memory", async ({
+    page,
+    context,
+  }) => {
+    await openSettled(page, "/collections/posts");
+    await menuRemembers(page, "posts");
+    const foot = page.getByTestId("rail-account");
+    const real = {
+      bell: await boxOf(foot.getByRole("button", { name: /notifications/i })),
+      avatar: await boxOf(
+        foot.getByRole("button", { name: "User profile menu" })
+      ),
+    };
+
+    for (const remembered of [true, false]) {
+      const held = await context.newPage();
+      if (!remembered) {
+        // A browser that signed in here but keeps no menu: the plain outline.
+        await held.addInitScript(memory => {
+          for (const key of Object.keys(window.localStorage)) {
+            if (key.startsWith(memory)) window.localStorage.removeItem(key);
+          }
+        }, MEMORY);
+      }
+      await hold(held, isAdminRequest);
+      await held.goto(`${ADMIN}/collections/posts`, { waitUntil: "commit" });
+      const ghost = held.getByTestId("rail-foot-ghost");
+      await expect(ghost).toBeVisible({ timeout: 30_000 });
+      // Next.js's development badge arrives after the first paint, and the
+      // foot keeps clear of it once it has.
+      await held.waitForTimeout(1_000);
+      const shapes = ghost.locator(":scope > *");
+      const label = remembered ? "drawn from memory" : "with no memory";
+      expect(await boxOf(shapes.first()), `the bell's shape, ${label}`).toEqual(
+        real.bell
+      );
+      expect(
+        await boxOf(shapes.last()),
+        `the avatar's shape, ${label}`
+      ).toEqual(real.avatar);
+      await held.close();
+    }
   });
 
   test("keeps only the metadata after a session that opened an entry, media and a user", async ({

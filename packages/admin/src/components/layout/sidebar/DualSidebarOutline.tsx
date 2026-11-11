@@ -20,7 +20,8 @@ import { recallMenu } from "@admin/lib/device-memory/device-memory";
 
 import { railItemOf, sectionShown } from "./lib/content-rail";
 import { resolveActiveSection } from "./lib/resolve-section";
-import { RailColumn, RailFootGhost, RailGhostItems } from "./RailColumn";
+import { RailAccountOutline } from "./RailAccount";
+import { RailColumn, RailGhostItems } from "./RailColumn";
 import {
   RememberedContentBody,
   RememberedRailEntries,
@@ -60,7 +61,9 @@ export function DualSidebarOutline({
     <div className="flex h-full overflow-hidden">
       <RailColumn
         settled={false}
-        foot={<RailFootGhost className="mt-4 shrink-0" />}
+        // The foot's own box, as the real foot draws it, so nothing moves
+        // when the reader's Inbox and avatar replace these shapes.
+        foot={<RailAccountOutline className="mt-4 shrink-0" />}
       >
         {menu === undefined ? (
           // As many shapes as the rail has entries before any is ruled out.
