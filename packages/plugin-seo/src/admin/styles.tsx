@@ -81,6 +81,10 @@ const CSS = `
 .nx-seo-mapfor{align-items:center;gap:8px}
 .nx-seo-mapgrid{display:grid;gap:6px}
 .nx-seo-mapline{display:grid;grid-template-columns:150px minmax(0,240px) 1fr;gap:6px 10px;align-items:center}
+.nx-seo-mapline .nx-seo-select{max-width:none}
+.nx-seo-notpublic svg{flex:none}
+.nx-seo-typescroll{overflow-x:auto}
+.nx-seo-typescroll .nx-seo-types{min-width:860px}
 .nx-seo-pedit{display:grid;gap:10px;max-width:760px}
 .nx-seo-vars{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .nx-seo-var{border:1px solid var(--nx-border);background:var(--nx-card);color:var(--nx-foreground);border-radius:6px;padding:3px 8px;font-family:var(--seo-mono);font-size:12px;cursor:pointer}
@@ -135,6 +139,7 @@ const CSS = `
 .nx-seo-alert{margin:12px 16px 0}
 .nx-seo-form2{grid-template-columns:minmax(0,1fr)}
 .nx-seo-rgroup.two{grid-template-columns:minmax(0,1fr)}
+.nx-seo-typescroll .nx-seo-types{min-width:0}
 .nx-seo-types thead{display:none}
 .nx-seo-types tr{display:grid;gap:6px;padding:12px;border-bottom:1px solid var(--nx-border-subtle)}
 .nx-seo-types tr:last-child{border-bottom:0}

@@ -397,7 +397,9 @@ export function ContentTypesTab({
   }
   return (
     <>
-      <div className="nx-seo-tbox">
+      {/* Wide enough for every column, scrolling sideways where the screen is
+          narrower, as the admin's other wide tables do; a phone stacks it. */}
+      <div className="nx-seo-tbox nx-seo-typescroll">
         <table className="nx-seo-tbl nx-seo-types">
           <thead>
             <tr>
