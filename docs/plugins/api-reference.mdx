@@ -651,9 +651,14 @@ page they serve, with no change to the site's routes. `resolve` is told:
 | `code`    | The title, description and social values the route's own `buildMetadata` or `metadata` set. A route never supplies visibility or the canonical. |
 | `derived` | What the page's content offers, such as the title, description and picture a Page Builder page's blocks show.                                   |
 
-It answers a `PageMetadataAnswer`: `title`, `description`, `canonical`, `robots`, `social` and
-`languages`, each optional. The route turns the answer into Next.js `Metadata`. Whatever else the
-route's own metadata set, such as an Open Graph `type`, is kept.
+It answers a `PageMetadataAnswer`: `title`, `description`, `canonical`, `robots`, `social`,
+`languages` and `structuredData`, each optional. The route turns the answer into Next.js
+`Metadata`. Whatever else the route's own metadata set, such as an Open Graph `type`, is kept.
+
+`structuredData` is the page's JSON-LD: a list of nodes, written without `@context`, holding plain
+JSON only. The route hands it to the page's render as `context.structuredData`, one schema.org
+graph written so that no value can end its script element. An answer whose structured data is not
+JSON is refused whole, as any answer of the wrong shape is.
 
 The answer is cached with the page: it expires when the page's document changes, and when any tag
 `tags` names is expired, so a change to the plugin's settings reaches every page without a

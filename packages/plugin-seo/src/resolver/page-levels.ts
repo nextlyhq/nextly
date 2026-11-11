@@ -109,7 +109,7 @@ function asImage(media: unknown): PageMetadataImage | undefined {
  * A media value as a share image: a populated media document, or an id
  * looked up as the system.
  */
-async function imageOf(
+export async function imageOf(
   ctx: PluginContext,
   value: unknown
 ): Promise<PageMetadataImage | undefined> {
