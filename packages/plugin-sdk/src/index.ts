@@ -560,6 +560,18 @@ export { publicAddressOf, typesWithoutAddress } from "nextly";
 export type { PublicAddress, PublicAddressType } from "nextly";
 
 /**
+ * Where a page kept in one language is opened: `languageAddressOf(path,
+ * locale)` forms the address a path kept in `locale` is served at, under the
+ * language's prefix or on its own domain, as the site declares
+ * (`languageAddresses`), for a page's links to its other languages and its
+ * sitemap entries. Intended to become stable with `publicAddressOf`.
+ *
+ * @experimental
+ */
+export { languageAddressOf } from "nextly";
+export type { LanguageAddress, LanguageAddressRule } from "nextly";
+
+/**
  * Keeping every public address to one page. A plugin that keeps a record of
  * who holds each address takes part through `ctx.publicAddresses.participate`
  * with a `PublicAddressParticipant`: core asks every participant, inside each
@@ -576,6 +588,7 @@ export type {
   AddressHolder,
   HeldAddress,
   HeldAddressUpdate,
+  ParticipantTransaction,
   PluginPublicAddresses,
   PublicAddressParticipant,
   RefusedAddressUpdate,
@@ -1058,10 +1071,25 @@ export type {
 export { recordAdvisoryNotice, type AdvisoryNotice } from "nextly";
 
 /**
- * Event bus (D8/D51) — `ctx.events` surface + types.
- * @public Exercised by seo (`ctx.events.on`).
+ * Event bus (D8/D51) — `ctx.events` surface + types. A plugin's `ctx.events`
+ * is `PluginEvents`: the bus's methods, with an `emit` that waits for the
+ * work that emitted it to commit (`PluginEmitOptions` names its transaction).
+ * @public
  */
-export type { EventBus, EventEnvelope, EventHandler, EventName } from "nextly";
+export type {
+  EventBus,
+  EventEnvelope,
+  EventHandler,
+  EventName,
+  PluginEvents,
+} from "nextly";
+
+/**
+ * Where a plugin's event is delivered from: `{ tx }`, the handle
+ * `ctx.db.transaction` passes its callback.
+ * @experimental
+ */
+export type { PluginEmitOptions } from "nextly";
 
 /**
  * Event-name constants (D69) — document/auth/media families. The event names
