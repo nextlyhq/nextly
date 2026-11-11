@@ -45,6 +45,7 @@ import {
   WIDGET_TABS,
   type WidgetOp,
   type WidgetSource,
+  type WidgetSourceFilter,
 } from "./sources";
 
 // The row limits and their one rule live in the import-free
@@ -861,34 +862,49 @@ function heldAsSourceFilter(
   depth: number,
   scope: WhereScope
 ): boolean {
-  const filters: readonly string[] = scope.source.filters ?? [];
-  if (depth !== 0 || !filters.includes(key)) return false;
-  assertFilterValue(key, value, scope.source.id);
+  // The declared filter `key` names, found by its own type.
+  const filter = (scope.source.filters ?? []).find(each => each === key);
+  if (depth !== 0 || filter === undefined) return false;
+  assertFilterValue(filter, value, scope.source.id);
   return true;
 }
 
+/** A non-empty string: a collection's or a role's slug. */
+const isSlug = (value: unknown): boolean =>
+  typeof value === "string" && value !== "";
+
 /**
- * Confirms a source filter's value is the one it takes: a collection by its
- * slug, Only mine as true or false, a Tab as one of its values, a Role by its
- * slug. Who "mine" is, is never in the query: the source reads it from the
- * caller.
+ * What each source filter's value must be, and what a refusal says it must
+ * be: a collection by its slug, Only mine as true or false, a Tab as one of
+ * its values, a Role by its slug.
  */
-function assertFilterValue(key: string, value: unknown, source: string): void {
-  if (key === "collection" && (typeof value !== "string" || value === "")) {
-    fail(
-      `where filter "collection" on "${source}" must be a collection's slug`
-    );
-  }
-  if (key === "onlyMine" && typeof value !== "boolean") {
-    fail(`where filter "onlyMine" on "${source}" must be true or false`);
-  }
-  if (key === "role" && (typeof value !== "string" || value === "")) {
-    fail(`where filter "role" on "${source}" must be a role's slug`);
-  }
-  if (key === "tab" && !isWidgetTab(value)) {
-    fail(
-      `where filter "tab" on "${source}" must be one of: ${WIDGET_TABS.join(", ")}`
-    );
+const FILTER_VALUE_RULES: Readonly<
+  Record<
+    WidgetSourceFilter,
+    { holds: (value: unknown) => boolean; must: string }
+  >
+> = {
+  collection: { holds: isSlug, must: "be a collection's slug" },
+  onlyMine: {
+    holds: value => typeof value === "boolean",
+    must: "be true or false",
+  },
+  tab: { holds: isWidgetTab, must: `be one of: ${WIDGET_TABS.join(", ")}` },
+  role: { holds: isSlug, must: "be a role's slug" },
+};
+
+/**
+ * Confirms a source filter's value is the one it takes (`FILTER_VALUE_RULES`).
+ * Who "mine" is, is never in the query: the source reads it from the caller.
+ */
+function assertFilterValue(
+  key: WidgetSourceFilter,
+  value: unknown,
+  source: string
+): void {
+  const rule = FILTER_VALUE_RULES[key];
+  if (!rule.holds(value)) {
+    fail(`where filter "${key}" on "${source}" must ${rule.must}`);
   }
 }
 

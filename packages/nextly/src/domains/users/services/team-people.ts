@@ -36,6 +36,7 @@ import {
   eq,
   exists,
   inArray,
+  max,
   sql,
   type Column,
   type SQL,
@@ -154,16 +155,25 @@ export async function readTeamPeople(
   const total = Number(counted?.value ?? 0);
   if (total === 0 || limit <= 0) return { people: [], total };
 
-  // Each person's two last-active readings, by the tables' user indexes. The
-  // decoders are the columns', so each comes back a Date on every dialect.
-  const sessionAt =
-    sql`(SELECT MAX(${refreshTokens.createdAt}) FROM ${refreshTokens} WHERE ${refreshTokens.userId} = ${users.id})`
-      .mapWith(refreshTokens.createdAt)
-      .as("session_at");
-  const signInAt =
-    sql`(SELECT MAX(${auditLog.createdAt}) FROM ${auditLog} WHERE ${auditLog.actorUserId} = ${users.id} AND ${auditLog.kind} = ${SIGN_IN_KIND})`
-      .mapWith(auditLog.createdAt)
-      .as("sign_in_at");
+  // Each person's two last-active readings, by the tables' user indexes, as
+  // correlated subqueries built by the query builder. Written as raw SQL in a
+  // one-table select, drizzle would print their columns unqualified, and
+  // `user_id = id` would compare the inner table with itself. The decoders
+  // are the columns', so each comes back a Date on every dialect.
+  const sessionAt = sql`${chain
+    .select({ at: max(refreshTokens.createdAt) })
+    .from(refreshTokens)
+    .where(eq(refreshTokens.userId, users.id))}`
+    .mapWith(refreshTokens.createdAt)
+    .as("session_at");
+  const signInAt = sql`${chain
+    .select({ at: max(auditLog.createdAt) })
+    .from(auditLog)
+    .where(
+      and(eq(auditLog.actorUserId, users.id), eq(auditLog.kind, SIGN_IN_KIND))
+    )}`
+    .mapWith(auditLog.createdAt)
+    .as("sign_in_at");
   const people = chain
     .select({
       id: users.id,

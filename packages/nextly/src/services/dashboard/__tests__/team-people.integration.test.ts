@@ -175,7 +175,10 @@ describe.each(getConfiguredTestDialects())(
       userId: string,
       config: Record<string, unknown> = {}
     ): Promise<Slot> {
-      versions.set(userId, await place(userId, config, versions.get(userId) ?? 0));
+      versions.set(
+        userId,
+        await place(userId, config, versions.get(userId) ?? 0)
+      );
       const res = await createDynamicHandlers().POST(
         new Request("http://localhost/api/dashboard/query", {
           method: "POST",
@@ -251,7 +254,6 @@ describe.each(getConfiguredTestDialects())(
       const slot = await card(ids.boss!);
       expect(slot.ok).toBe(true);
       const data = slot.result?.data;
-      console.log("DEBUGTP", JSON.stringify(data));
       // Known last active first, newest first; then the rest by name.
       expect(names(slot)).toEqual(["Lapsed", "Ana", "Omar", "Edi", "Aut"]);
       expect(data?.total).toBe(7);

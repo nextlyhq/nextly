@@ -22,7 +22,7 @@ import { CORE_WIDGET_ID } from "./ids";
 import { readCoreList } from "./system-read";
 
 /** The role filter's "everyone" choice: no role is asked for. */
-export const ALL_ROLES = "all";
+const ALL_ROLES = "all";
 
 /**
  * The roles the card's filter offers: the built-in ones, by slug. A person
