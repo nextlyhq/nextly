@@ -13,6 +13,8 @@ import {
   definePlugin,
   group,
   type FieldConfig,
+  type PageMetadataResolver,
+  type PluginContext,
   type PluginContributions,
   type PluginDefinition,
   type PluginRoute,
@@ -42,20 +44,30 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
+import {
+  CHECK_SEO_PERMISSION,
+  holdsPageSeo,
+  MANAGE_SEO_PERMISSION,
+  seoPermissionDeclarations,
+} from "./permissions";
 import { PROBLEMS_PAGE, PROBLEMS_PAGE_HREF } from "./problems/contract";
 import { watchSaves } from "./problems/hooks";
 import { problemRoutes } from "./problems/route";
 import { problemsCollection } from "./problems/store";
+import { RECEIVED_PAGE, RECEIVED_PAGE_HREF } from "./received/contract";
+import { receivedRoutes } from "./received/route";
 import { redirectsCollection } from "./redirects/collection";
+import { REDIRECTS_PAGE } from "./redirects/contract";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
+import { redirectRoutes } from "./redirects/routes";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import {
   contentTypesRoute,
   settingsDocumentRoute,
 } from "./settings/content-types-route";
 import {
-  SEO_SETTINGS_SLUG,
   SETTINGS_PAGE,
+  SEO_ADMIN_SLUG,
   SETTINGS_PAGE_HREF,
 } from "./settings/contract";
 import { readSeoRules, rememberSettingsSingle } from "./settings/rules";
@@ -85,6 +97,9 @@ import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
+/** Where the redirects screen is, for the admin's menu. */
+const REDIRECTS_PAGE_HREF = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
+
 const require = createRequire(import.meta.url);
 const { version: PLUGIN_VERSION } = require("../package.json") as {
   version: string;
@@ -219,6 +234,19 @@ export interface SeoPluginOptions {
    * needs its full address.
    */
   socialCard?: SocialCardOptions;
+  /**
+   * @experimental Give a page's SEO a permission of its own, one per content
+   * type SEO is added to: `edit-seo-<slug>`, such as `edit-seo-posts`. A
+   * role that may update a type's pages changes their SEO only while it also
+   * holds that type's permission; without it the rest of each page is saved
+   * and its SEO stays as it was, and the SEO tab shows it read-only.
+   *
+   * Off by default: whoever may edit a page changes its SEO, as before. The
+   * built-in Editor and Author roles never hold a plugin's permissions, so a
+   * site that turns this on gives the people who should change SEO a role
+   * of its own that holds it. Admin and Super Admin hold every one.
+   */
+  pagePermissions?: boolean;
 }
 
 /**
@@ -382,6 +410,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Always nest the fields (default or custom) under a single `seo` group so
   // every project exposes SEO consistently at `entry.seo.*`.
   const seoFields = options.fields ?? defaultSeoFields();
+  const pagePermissions = options.pagePermissions === true;
   const seoGroup = group({
     name: "seo",
     label: "SEO",
@@ -390,6 +419,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // has its own title, description and canonical; on a type that is not
     // translated, one value as before.
     localized: true,
+    // Where a page's SEO has its own permission, a write of it by anyone
+    // without that permission for the page's type keeps the stored SEO, and
+    // the rest of the page is saved. Reading it is the page's own read.
+    ...(pagePermissions
+      ? { access: { create: holdsPageSeo, update: holdsPageSeo } }
+      : {}),
   });
 
   // Dedupe once: a repeated slug would make the schema-extend fold add `seo`
@@ -420,7 +455,25 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     readRules,
     readStructuredDataRules,
     readSocialCardRules,
+    pagePermissions,
   });
+
+  // Every page's head, worked out by the one order of who wins, with its
+  // links to its other languages, its social card completed, and its
+  // structured data, worked out from that same answer and the settings'
+  // brand facts, with the plugin's options where the settings say nothing.
+  // What the site's routes are answered, and what the check of what search
+  // engines received compares each page with.
+  const pageMetadata = (ctx: PluginContext): PageMetadataResolver =>
+    withStructuredData(
+      ctx,
+      withSocialCard(
+        ctx,
+        withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
+        readSocialCardRules
+      ),
+      structuredDataFromSettings(readStructuredDataRules)
+    );
 
   // What the problem list checks, read with the rules every page's head is
   // worked out by, so the list and the page never disagree.
@@ -436,13 +489,20 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   };
 
   // The site's sitemap and robots.txt, the action that makes a share image
-  // of the right size, the SEO tab's own and the problem list's; all added
-  // below.
+  // of the right size, the settings and redirects screens' routes, the
+  // check of what search engines received, the SEO tab's own and the
+  // problem list's; all added below.
   const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: [...targets, ...singleTargets], fields: [seoGroup] }],
+    // Site-wide SEO, the check of what search engines received, and, where
+    // the site asks for it, each content type's page SEO.
+    permissions: seoPermissionDeclarations({
+      types: [...targets, ...singleTargets],
+      pagePermissions,
+    }),
     // The record that keeps each public address to one page, the redirects
     // whose From addresses it holds, the log of addresses not found, and
     // what the problem list's checks found.
@@ -452,21 +512,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       notFoundCollection(),
       problemsCollection(),
     ],
-    // Every page's head, worked out by the one order of who wins, with its
-    // links to its other languages, its social card completed, and its
-    // structured data, worked out from that same answer and the settings'
-    // brand facts, with the plugin's options where the settings say nothing.
+    // Every page's head, as worked out above.
     services: {
-      pageMetadata: ctx =>
-        withStructuredData(
-          ctx,
-          withSocialCard(
-            ctx,
-            withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
-            readSocialCardRules
-          ),
-          structuredDataFromSettings(readStructuredDataRules)
-        ),
+      pageMetadata,
       // The pages the site lists and the problems that left any out, read by
       // the same rules as the head: one reading for every listing output.
       listedPages: (ctx): ListedPagesService => ({
@@ -504,16 +552,38 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // Shown to everyone in the admin: the list answers each person with
         // the pages of the types they may read, and says so where none.
         { label: "Problems", to: PROBLEMS_PAGE_HREF, icon: "AlertTriangle" },
+        // The site-wide screens, gated on the plugin's own permissions,
+        // whose names no host renames. The settings also need the Single's
+        // own read, which an entry can't ask beside this one: someone
+        // holding `manage-seo` without it opens the screen and is refused
+        // its contents by the routes.
+        {
+          label: "Redirects",
+          to: REDIRECTS_PAGE_HREF,
+          icon: "Route",
+          requiredPermission: MANAGE_SEO_PERMISSION,
+        },
+        // The check has the server fetch the site's own pages, so it is
+        // its own permission, and compares only the pages whose type the
+        // person may read.
+        {
+          label: "What search engines received",
+          to: RECEIVED_PAGE_HREF,
+          icon: "Eye",
+          requiredPermission: CHECK_SEO_PERMISSION,
+        },
         {
           label: "Settings",
           to: SETTINGS_PAGE_HREF,
           icon: "Settings",
-          requiredPermission: `read-${SEO_SETTINGS_SLUG}`,
+          requiredPermission: MANAGE_SEO_PERMISSION,
         },
       ],
       pages: [
         PROBLEMS_PAGE,
-        { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
+        { ...SETTINGS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        { ...REDIRECTS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        { ...RECEIVED_PAGE, requiredPermission: CHECK_SEO_PERMISSION },
       ],
     },
   };
@@ -540,6 +610,16 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Single holds the settings.
     contentTypesRoute(targets),
     settingsDocumentRoute(),
+    // What the redirects screen reads and writes.
+    ...redirectRoutes(),
+    // What the "What search engines received" screen reads and checks.
+    ...receivedRoutes({
+      collections: targets,
+      singles: singleTargets,
+      ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+      readRules,
+      pageMetadata,
+    }),
     ...tab.routes,
     ...problemRoutes(problemChecks),
     // The bulk edit table, and the import beside it.

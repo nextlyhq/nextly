@@ -19,6 +19,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useFormState, useWatch } from "react-hook-form";
 
+import { receivedHrefFor } from "../received/contract";
 import type { SeoTabContext } from "../tab/contract";
 import { problemsBadge, seoProblems, type SeoProblem } from "../tab/problems";
 import { SEO_GROUP } from "../tab/typed";
@@ -128,6 +129,22 @@ function useSeoErrors(
   return refused;
 }
 
+/**
+ * Where the page's check of what search engines received is: a saved page
+ * with an address of its own can be checked; one being created has nothing
+ * served yet.
+ */
+function receivedHrefOf(
+  id: string | null,
+  levels: SeoTabContext | undefined
+): string | undefined {
+  const address = levels?.levels.address;
+  if (id === null || address === undefined || levels === undefined) {
+    return undefined;
+  }
+  return receivedHrefFor(new URL(address, levels.site.origin).href);
+}
+
 /** The media library, opened to choose the page's share image. */
 function ShareImagePicker({
   open,
@@ -194,8 +211,12 @@ export function SeoTab({
   useStatusLine(context, answers, problems.length, levels?.typeLabel);
 
   if (target === null) return null;
+  // Read-only while the document is held, and for someone who may not
+  // change this page's SEO, whose save would keep the stored SEO.
   const writable =
-    !documentLock.readOnly && fields.metaTitle?.writable !== false;
+    !documentLock.readOnly &&
+    fields.metaTitle?.writable !== false &&
+    levels?.mayChange !== false;
   return (
     <>
       <SeoPanel
@@ -215,6 +236,7 @@ export function SeoTab({
         shownImageFile={images.contentImage}
         onMakeShareImage={images.make}
         onGoToField={goToContent}
+        receivedHref={receivedHrefOf(target.id, levels)}
       />
       <ShareImagePicker
         open={choosing}

@@ -57,6 +57,7 @@ function only(
   return {
     pages: async pages => new Set(pages.filter(allowed).map(pageRefKey)),
     readsType: types,
+    seesRedirects: true,
     count: async type => {
       if (!seoContext) throw new Error("no SEO plugin context");
       return seoContext.services.collections.count(type, {});

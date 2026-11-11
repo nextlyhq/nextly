@@ -23,6 +23,10 @@ export function notFoundCollection(): CollectionConfig {
     slug: NOT_FOUND_SLUG,
     labels: { singular: "Address not found", plural: "Addresses not found" },
     internal: true,
+    // Written while a not-found page renders, where Next.js expires no cache
+    // tag, and read only by the admin's routes, which no cache holds: a write
+    // here has nothing to expire, and trying would log a failure every time.
+    revalidate: { disable: true },
     fields: [
       // The SHA-256 of the language and the address, so one address is one
       // row on every dialect, whatever its length.
@@ -37,6 +41,10 @@ export function notFoundCollection(): CollectionConfig {
       // languages' domains is two addresses.
       text({ name: "locale", label: "Language", required: true }),
       textarea({ name: "path", label: "Address", required: true }),
+      // The address exactly as a visitor asked for it, where that is not how
+      // the site's language rule spells the kept one (an unprefixed old link
+      // on a site whose languages are all prefixed).
+      textarea({ name: "asked", label: "Asked for" }),
       number({ name: "hits", label: "Visits", required: true, index: true }),
       date({
         name: "lastSeen",

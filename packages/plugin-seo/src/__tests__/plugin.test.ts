@@ -87,6 +87,17 @@ describe("seoPlugin", () => {
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
       ["GET", "/settings/document", undefined, undefined],
+      // The redirects screen's routes, for those the redirects' permissions allow.
+      ["GET", "/redirects", undefined, undefined],
+      ["POST", "/redirects", undefined, undefined],
+      ["PATCH", "/redirects/:id", undefined, undefined],
+      ["DELETE", "/redirects/:id", undefined, undefined],
+      ["POST", "/redirects/import", undefined, undefined],
+      ["GET", "/not-found", undefined, undefined],
+      // What search engines received: the pages it offers, and the check,
+      // for anyone signed in.
+      ["GET", "/received/pages", undefined, undefined],
+      ["POST", "/received", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
       // The problem list, read and checked again by a signed-in reader.
       ["GET", "/problems", undefined, undefined],
@@ -114,6 +125,29 @@ describe("seoPlugin", () => {
     expect(route?.public).toBeUndefined();
   });
 
+  it("asks site-wide SEO for the redirects' and not-found log's routes, whatever an installation names those stores", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+
+    const asked = (plugin.contributes?.routes ?? [])
+      .filter(
+        ({ path }) => path.startsWith("/redirects") || path === "/not-found"
+      )
+      .map(({ method, path, requiredPermission }) => [
+        method,
+        path,
+        requiredPermission,
+      ]);
+
+    expect(asked).toEqual([
+      ["GET", "/redirects", "manage-seo"],
+      ["POST", "/redirects", "manage-seo"],
+      ["PATCH", "/redirects/:id", "manage-seo"],
+      ["DELETE", "/redirects/:id", "manage-seo"],
+      ["POST", "/redirects/import", "manage-seo"],
+      ["GET", "/not-found", "manage-seo"],
+    ]);
+  });
+
   it("omits the sitemap routes when sitemap is disabled, and keeps robots.txt", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
@@ -121,6 +155,14 @@ describe("seoPlugin", () => {
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/redirects",
+      "/redirects",
+      "/redirects/:id",
+      "/redirects/:id",
+      "/redirects/import",
+      "/not-found",
+      "/received/pages",
+      "/received",
       "/resolve",
       "/problems",
       "/problems/check",
@@ -145,6 +187,14 @@ describe("seoPlugin", () => {
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/redirects",
+      "/redirects",
+      "/redirects/:id",
+      "/redirects/:id",
+      "/redirects/import",
+      "/not-found",
+      "/received/pages",
+      "/received",
       "/resolve",
       "/problems",
       "/problems/check",

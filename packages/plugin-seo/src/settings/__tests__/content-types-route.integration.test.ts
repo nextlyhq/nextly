@@ -84,6 +84,8 @@ describe.each(getConfiguredTestDialects())(
             collections: withNotes ? [NOTES] : [POSTS, CASES],
           }),
         ],
+        // The boot's seeding, so the plugin's own `manage-seo` exists to grant.
+        seedPublic: true,
       });
       current = t;
       return t;
@@ -232,6 +234,7 @@ describe.each(getConfiguredTestDialects())(
         data: { title: "A post", slug: "a-post" },
       });
       const settingsOnly = await personWith(t, "settings-only", [
+        "manage-seo",
         "read-seo-settings",
       ]);
       const nobody = await personWith(t, "nobody", []);
@@ -265,6 +268,7 @@ describe.each(getConfiguredTestDialects())(
         data: { title: "Closed note", team: "closed" },
       });
       const reader = await personWith(t, "note-reader", [
+        "manage-seo",
         "read-seo-settings",
         `read-${NOTES}`,
       ]);
