@@ -24,6 +24,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
+import type { FieldOwner } from "../../domains/collections/services/collection-dependents";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertSaveLeavesNoFieldGroupCycle } from "../../domains/field-groups/field-group-cycles";
 import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
@@ -61,7 +62,9 @@ import {
   type FieldGroupMigrationStatus,
 } from "../../schemas/dynamic-field-groups/types";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
+import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 import type { Logger } from "../../shared/types";
+import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import {
   builderSchemaPush,
@@ -82,6 +85,7 @@ import type { MethodHandler, Params } from "../types";
 
 import { readListOffset } from "./list-offset";
 import { readListOwner, slugListsForOwner } from "./list-owner";
+import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 
 interface ComponentsServices {
@@ -182,6 +186,95 @@ function readMigrationStatus(
  * A test reading these keys turns that into a failure by name.
  */
 /**
+ * The fields that place one field group, as its own editor lists them.
+ *
+ * Unlike the list page's count, this refuses when the field lists cannot be
+ * read: the answer is the whole response, and an empty list would claim the
+ * field group is used nowhere when that is not known.
+ */
+async function placementsOf(slug: string) {
+  const adapter = getAdapterFromDI();
+  if (!adapter) throw placementsUnreadable(slug, "no database adapter");
+  try {
+    // Loaded when asked, as the list and the delete path load it.
+    const { fieldGroupUsedBy } = await import(
+      "../../domains/collections/services/collection-dependents"
+    );
+    const { owners } = await readableFieldOwners(adapter);
+    return await fieldGroupUsedBy(slug, {
+      fieldOwners: () => Promise.resolve(owners),
+    });
+  } catch (error) {
+    throw placementsUnreadable(slug, error);
+  }
+}
+
+/**
+ * Every stored field list this reader may learn about, for where a field
+ * group is used and how often. A collection or Single the reader may not read
+ * is left out, by the same decision their own lists are scoped by
+ * (`readableSlugAllowlist`), so neither answer names or counts one those
+ * lists hide. A delete's refusal reads every field list instead: it must know
+ * every use, whoever asks.
+ */
+async function readableFieldOwners(
+  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>
+): Promise<{
+  owners: FieldOwner[];
+  /** Whether the reader may read every collection and Single there is. */
+  complete: boolean;
+}> {
+  const { ownersReadableBy, readFieldOwners } = await import(
+    "../../domains/collections/services/collection-dependents"
+  );
+  const reader = readAuthenticatedUser();
+  const caller = reader ? readAccessCallerForDispatch(reader) : undefined;
+  const [collection, single, owners] = await Promise.all([
+    readableOwnerSlugs(caller, "collection"),
+    readableOwnerSlugs(caller, "single"),
+    readFieldOwners(adapter),
+  ]);
+  const readable = ownersReadableBy(owners, { collection, single });
+  // Every collection and Single is an owner, so dropping any means the
+  // reader may not read all of them.
+  return { owners: readable, complete: readable.length === owners.length };
+}
+
+/**
+ * The slugs of `kind` the reader may read, or `undefined` for no reader.
+ * A registry that cannot be enumerated rejects rather than answering none:
+ * leaving out a whole kind would claim the field group is used less, or not
+ * at all, when that is not known. The caller turns the rejection into its
+ * own "could not be read".
+ */
+async function readableOwnerSlugs(
+  caller: ReturnType<typeof readAccessCallerForDispatch> | undefined,
+  kind: "collection" | "single"
+): Promise<string[] | undefined> {
+  if (!caller) return undefined;
+  const { slugs, reachable } = await readableSlugsOfKind(caller, kind);
+  if (!reachable) {
+    throw NextlyError.serviceUnavailable({
+      logContext: { reason: "readable-owners-unreachable", kind },
+    });
+  }
+  return slugs;
+}
+
+/** The refusal when a field group's uses cannot be read. */
+function placementsUnreadable(slug: string, cause: unknown): NextlyError {
+  return NextlyError.serviceUnavailable({
+    publicMessage: `Where the field group "${slug}" is used could not be read. Nothing is known about its uses. Fix the cause in the server log and try again.`,
+    ...(cause instanceof Error ? { cause } : {}),
+    logContext: {
+      reason: "field-group-placements-unreadable",
+      slug,
+      error: cause instanceof Error ? cause.message : String(cause),
+    },
+  });
+}
+
+/**
  * How many fields place each field group on a list page, or `null` when that
  * cannot be read. The list still answers without it: a count is something
  * the page shows, not something the request depends on, so an unreadable
@@ -197,11 +290,18 @@ async function placementCountsFor(
   try {
     // Loaded when a list asks, as the delete path loads it: the registry's
     // other callers never need the dependents readers.
-    const { fieldGroupPlacementCounts, readFieldOwners } = await import(
+    const { fieldGroupPlacementCounts } = await import(
       "../../domains/collections/services/collection-dependents"
     );
+    const { owners, complete } = await readableFieldOwners(adapter);
+    // A count from part of the site would read as the whole of it ("not
+    // used" for a field group only a hidden owner places), so a reader who
+    // cannot read every collection and Single is shown none. Decided by the
+    // reader, not by any one field group, so a missing count hints at no
+    // hidden use.
+    if (!complete) return null;
     return await fieldGroupPlacementCounts(slugs, {
-      fieldOwners: () => readFieldOwners(adapter),
+      fieldOwners: () => Promise.resolve(owners),
     });
   } catch (error) {
     (getLoggerFromDI() ?? DISCARDED_LOG).warn(
@@ -344,6 +444,21 @@ export const COMPONENTS_METHODS: Record<
       const slug = requireParam(p, "slug", "Component slug");
       const component = await svc.registry.getComponent(slug);
       return respondDoc(component);
+    },
+  },
+
+  // The fields that place one field group, and what holds each: what its own
+  // editor lists as using it. The field group is looked up first, so one
+  // that does not exist answers not found before anything else is read.
+  getComponentUsedBy: {
+    execute: async (svc, p) => {
+      const slug = requireParam(p, "slug", "Component slug");
+      await svc.registry.getComponent(slug);
+      const placements = await placementsOf(slug);
+      return respondList(
+        placements,
+        offsetPaginationToMeta({ total: placements.length })
+      );
     },
   },
 

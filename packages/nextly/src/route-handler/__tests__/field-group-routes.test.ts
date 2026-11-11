@@ -70,3 +70,71 @@ describe("field group REST routes", () => {
     ).toEqual({});
   });
 });
+
+/**
+ * Every field-group route: the operation authorization is decided from, the
+ * method that answers it, and the slug it carries. One table, so a change to
+ * how the routes are matched cannot quietly move one of them to another
+ * operation or method.
+ */
+describe("every field-group route", () => {
+  const ROUTES = [
+    [["field-groups"], "GET", "list", "listComponents", undefined],
+    [["field-groups"], "POST", "create", "createComponent", undefined],
+    [["field-groups", "seo"], "GET", "single", "getComponent", "seo"],
+    [["field-groups", "seo"], "PATCH", "update", "updateComponent", "seo"],
+    [["field-groups", "seo"], "DELETE", "delete", "deleteComponent", "seo"],
+    [
+      ["field-groups", "seo", "used-by"],
+      "GET",
+      "single",
+      "getComponentUsedBy",
+      "seo",
+    ],
+    [
+      ["field-groups", "schema", "seo", "preview"],
+      "POST",
+      "single",
+      "previewComponentSchemaChanges",
+      "seo",
+    ],
+    [
+      ["field-groups", "schema", "seo", "apply"],
+      "POST",
+      "update",
+      "applyComponentSchemaChanges",
+      "seo",
+    ],
+    [
+      ["field-groups", "schema", "seo", "reconcile"],
+      "GET",
+      "single",
+      "previewComponentReconcile",
+      "seo",
+    ],
+    [
+      ["field-groups", "schema", "seo", "reconcile"],
+      "POST",
+      "update",
+      "reconcileComponent",
+      "seo",
+    ],
+  ] as const;
+
+  it.each(ROUTES)("%j %s → %s %s", (path, verb, operation, method, slug) => {
+    const parsed = parseRestRoute([...path], verb);
+    expect(parsed).toMatchObject({
+      service: "field-groups",
+      operation,
+      method,
+    });
+    expect(parsed.routeParams?.slug).toBe(slug);
+  });
+
+  it("answers no verb a route does not have", () => {
+    expect(parseRestRoute(["field-groups"], "DELETE").method).toBeUndefined();
+    expect(
+      parseRestRoute(["field-groups", "seo"], "POST").method
+    ).toBeUndefined();
+  });
+});
