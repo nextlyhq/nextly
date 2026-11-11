@@ -164,6 +164,7 @@ export function nestedFixtureFieldGroups(): Map<string, LoadedFieldGroup> {
       {
         slug: "seo",
         label: "SEO",
+        placedBy: 3,
         fields: [
           { name: "meta_title", label: "Meta title", type: "text" },
           // The field group uses another field group.
@@ -181,6 +182,7 @@ export function nestedFixtureFieldGroups(): Map<string, LoadedFieldGroup> {
       {
         slug: "social",
         label: "Social",
+        placedBy: 1,
         fields: [{ name: "handle", label: "Handle", type: "text" }],
       },
     ],
