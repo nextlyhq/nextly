@@ -37,6 +37,10 @@ export function notFoundCollection(): CollectionConfig {
       // languages' domains is two addresses.
       text({ name: "locale", label: "Language", required: true }),
       textarea({ name: "path", label: "Address", required: true }),
+      // The address exactly as a visitor asked for it, where that is not how
+      // the site's language rule spells the kept one (an unprefixed old link
+      // on a site whose languages are all prefixed).
+      textarea({ name: "asked", label: "Asked for" }),
       number({ name: "hits", label: "Visits", required: true, index: true }),
       date({
         name: "lastSeen",

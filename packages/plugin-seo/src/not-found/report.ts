@@ -9,9 +9,10 @@
  *
  * @module not-found/report
  */
-import { addressOfRequest, type PluginContext } from "@nextlyhq/plugin-sdk";
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
 import { ASKED_FOR_HEADER } from "../redirects/proxy-handler";
+import { askedAddress } from "../redirects/served";
 
 import { notAPageAddress, recordNotFound } from "./log";
 
@@ -59,8 +60,10 @@ export async function logNotFound(headers: HeaderReader): Promise<void> {
     if (notAPageAddress(url.pathname)) return;
     // Kept by language and path, so `/gone` on two languages' domains is
     // two addresses, each answered by its own language's redirect.
-    const address = await addressOfRequest(url);
-    if (address !== undefined) await recordNotFound(ctx, address);
+    await recordNotFound(ctx, {
+      ...(await askedAddress(ctx, url)),
+      asked: url.pathname,
+    });
   } catch (error) {
     ctx.logger.warn("An address not found could not be logged", { error });
   }

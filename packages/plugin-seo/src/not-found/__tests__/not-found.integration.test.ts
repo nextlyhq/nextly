@@ -227,24 +227,24 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("logs an address asked for with a trailing slash as the address without one", async () => {
-    const { t, seo } = await boot(dialect);
-    await logNotFound(await renderedWith("/gone/"));
-    await logNotFound(await renderedWith("/gone"));
-    expect(await logged(t)).toEqual({ "/gone": 2 });
+      const { t, seo } = await boot(dialect);
+      await logNotFound(await renderedWith("/gone/"));
+      await logNotFound(await renderedWith("/gone"));
+      expect(await logged(t)).toEqual({ "/gone": 2 });
 
-    await seo.services.collections.withTransaction(tx =>
-      putRedirect(seo, tx, {
-        locale: "en",
-        source: "/gone",
-        target: "/here",
-        origin: "person",
-      })
-    );
+      await seo.services.collections.withTransaction(tx =>
+        putRedirect(seo, tx, {
+          locale: "en",
+          source: "/gone",
+          target: "/here",
+          origin: "person",
+        })
+      );
 
-    expect(await logged(t)).toEqual({});
-  });
+      expect(await logged(t)).toEqual({});
+    });
 
-  it("takes an address off once a redirect answers it", async () => {
+    it("takes an address off once a redirect answers it", async () => {
       const { t, seo } = await boot(dialect);
       await logNotFound(await renderedWith("/gone"));
       await logNotFound(await renderedWith("/still-gone"));

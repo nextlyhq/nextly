@@ -39,8 +39,10 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
-import { redirectsCollection } from "./redirects/collection";
+import { REDIRECTS_SLUG, redirectsCollection } from "./redirects/collection";
+import { REDIRECTS_PAGE } from "./redirects/contract";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
+import { redirectRoutes } from "./redirects/routes";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import {
   contentTypesRoute,
@@ -49,6 +51,7 @@ import {
 import {
   SEO_SETTINGS_SLUG,
   SETTINGS_PAGE,
+  SEO_ADMIN_SLUG,
   SETTINGS_PAGE_HREF,
 } from "./settings/contract";
 import { readSeoRules, rememberSettingsSingle } from "./settings/rules";
@@ -75,6 +78,9 @@ import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
+/** Where the redirects screen is, for the admin's menu. */
+const REDIRECTS_PAGE_HREF = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
+
 const require = createRequire(import.meta.url);
 const { version: PLUGIN_VERSION } = require("../package.json") as {
   version: string;
@@ -390,8 +396,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options.socialCard
   );
 
-  // The site's sitemap and robots.txt, and the action that makes a share
-  // image of the right size; all added below.
+  // The site's sitemap and robots.txt, the action that makes a share image
+  // of the right size, and the settings and redirects screens' routes; all
+  // added below.
   const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
@@ -446,6 +453,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       clientConfig: { aiCrawlers: options.aiCrawlers ?? "all" },
       menu: [
         {
+          label: "Redirects",
+          to: REDIRECTS_PAGE_HREF,
+          icon: "Route",
+          requiredPermission: `read-${REDIRECTS_SLUG}`,
+        },
+        {
           label: "Settings",
           to: SETTINGS_PAGE_HREF,
           icon: "Settings",
@@ -454,6 +467,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       ],
       pages: [
         { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
+        { ...REDIRECTS_PAGE, requiredPermission: `read-${REDIRECTS_SLUG}` },
       ],
     },
   };
@@ -479,7 +493,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
     contentTypesRoute(targets),
-    settingsDocumentRoute()
+    settingsDocumentRoute(),
+    // What the redirects screen reads and writes.
+    ...redirectRoutes()
   );
 
   return definePlugin({

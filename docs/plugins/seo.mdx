@@ -132,7 +132,7 @@ Overrides stay nested under `seo`: the example above reads at `entry.seo.focusKe
 | `sitemap`        | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                   |
 | `robots`         | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                   |
 | `aiCrawlers`     | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                          |
-| `hiddenTypes`    | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some           |
+| `hiddenTypes`    | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some            |
 | `structuredData` | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields |
 | `socialCard`     | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                |
 | `urlFor`         | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                |
@@ -319,12 +319,12 @@ address, what kind of site it is and what AI tools may do, and a logo with a def
 Each answer is saved as they move on, and closing the questions part-way keeps what was answered,
 with a line on the page to finish later. Every answer stays editable on the tabs:
 
-| Tab           | What it holds                                                                                                  |
-| ------------- | -------------------------------------------------------------------------------------------------------------- |
+| Tab           | What it holds                                                                                                                                                                     |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | General       | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, the default share image and description |
-| Content types | Each content type with SEO, whether it has a public address yet, and its title pattern                        |
-| Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                         |
-| Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none |
+| Content types | Each content type with SEO, whether it has a public address yet, and its title pattern                                                                                            |
+| Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                                                                                             |
+| Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none                                                                      |
 
 The production addresses saved on General are the ones the page's canonical, the sitemap,
 robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over
@@ -597,6 +597,27 @@ A published page whose address changes leaves a permanent redirect from its old 
 
 A redirect's From address is held like a page's address, so a published page and a redirect never share one. A From address may also be a pattern, `/old/*`, sending `/old/anything` to the same place under a new address with a To address of `/new/*`. Where several redirects match, an exact one answers first, then the pattern with the longest fixed part. A page at an address inside a pattern is served, and the pattern still redirects every other address below it.
 
+### The redirects screen
+
+**SEO › Redirects** in the admin lists every redirect, who added it and when. Add one by typing its From and To addresses as visitors open them (`/old-page`, or `/de/alt` on a site with language prefixes), with a pattern such as `/old/*` to `/new/*` for a whole section. A To address may also be a full `https://` address on another site. A redirect is permanent unless you choose Temporary, which tells search engines the page is coming back.
+
+The form refuses what would break: an address a published page holds, a second redirect from one address, and a redirect that would send visitors round in a loop. Where the To address already redirects onward, the new redirect goes straight to the end in one hop, and the form says so.
+
+The **Not found** tab lists the addresses people and search engines asked for that don't exist, most visited first. **Redirect…** fills the form with the address and the closest live page as a suggestion, for you to check before adding.
+
+### Importing redirects from a file
+
+**Import CSV** reads a file of redirects, one per line: the From address, the To address and, optionally, `temporary`. A first line naming the columns is skipped.
+
+```text
+From,To,Type
+/old-blog/*,/blog/*
+/guides/seo-basics,/resources
+/webinar,/events/spring-webinar,temporary
+```
+
+Nothing changes until you confirm. The dry run shows what each row would do: a new redirect, one that joins a chain or replaces an existing redirect, one already there, or one that can't be imported, such as a loop. A file with any row that can't be imported is not imported at all; fix it and upload it again. A confirmed file is applied in full or not at all.
+
 ### Running redirects
 
 Redirects answer from the site's Proxy, before the page is served, so a page that no longer exists never starts streaming a "not found" first. Wire the Proxy once, as [Proxy handlers](/docs/plugins/proxy) shows:
@@ -624,14 +645,28 @@ Log a request from the site's not-found page, with the request headers the Proxy
 
 ```tsx
 // src/app/not-found.tsx
-import { headers } from "next/headers";
 import { logNotFound } from "@nextlyhq/plugin-seo";
+import { headers } from "next/headers";
+import { Suspense } from "react";
 
-export default async function NotFound() {
+async function LogThisAddress() {
   await logNotFound(await headers());
-  return <h1>Page not found</h1>;
+  return null;
+}
+
+export default function NotFound() {
+  return (
+    <main>
+      <h1>Page not found</h1>
+      <Suspense fallback={null}>
+        <LogThisAddress />
+      </Suspense>
+    </main>
+  );
 }
 ```
+
+The log is written under a `Suspense` boundary because reading the request's headers makes that part dynamic, which Cache Components requires to sit inside one.
 
 `logNotFound` never throws, and logs nothing for a request the Proxy did not pass on.
 

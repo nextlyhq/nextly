@@ -85,6 +85,13 @@ describe("seoPlugin", () => {
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
       ["GET", "/settings/document", undefined, undefined],
+      // The redirects screen's routes, for those the redirects' permissions allow.
+      ["GET", "/redirects", undefined, undefined],
+      ["POST", "/redirects", undefined, undefined],
+      ["PATCH", "/redirects/:id", undefined, undefined],
+      ["DELETE", "/redirects/:id", undefined, undefined],
+      ["POST", "/redirects/import", undefined, undefined],
+      ["GET", "/not-found", undefined, undefined],
     ]);
   });
 
@@ -107,6 +114,12 @@ describe("seoPlugin", () => {
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/redirects",
+      "/redirects",
+      "/redirects/:id",
+      "/redirects/:id",
+      "/redirects/import",
+      "/not-found",
     ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
@@ -122,6 +135,12 @@ describe("seoPlugin", () => {
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/redirects",
+      "/redirects",
+      "/redirects/:id",
+      "/redirects/:id",
+      "/redirects/import",
+      "/not-found",
     ]);
   });
 

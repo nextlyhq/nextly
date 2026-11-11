@@ -155,7 +155,9 @@ export type IconName =
   | "info"
   | "lock"
   | "check"
-  | "arrow";
+  | "arrow"
+  | "upload"
+  | "pen";
 
 const PATHS: Record<IconName, JSX.Element> = {
   warn: (
@@ -187,6 +189,13 @@ const PATHS: Record<IconName, JSX.Element> = {
   ),
   check: <path d="M20 6 9 17l-5-5" />,
   arrow: <path d="M5 12h14M13 6l6 6-6 6" />,
+  upload: (
+    <>
+      <path d="M12 15V3M7 8l5-5 5 5" />
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    </>
+  ),
+  pen: <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />,
 };
 
 /** One of the screen's icons, in the text colour around it. */

@@ -12,7 +12,6 @@
  * @module redirects/proxy-handler
  */
 import {
-  addressOfRequest,
   languageAddressOf,
   type KeptAddress,
   type PluginContext,
@@ -24,6 +23,7 @@ import { notAPageAddress } from "../not-found/log";
 import { destinationOf, withQuery } from "./addresses";
 import { redirectsSlug } from "./collection";
 import { redirectMeeting } from "./meeting";
+import { askedAddress } from "./served";
 import { redirectOf, type StoredRedirect } from "./store";
 
 /**
@@ -80,20 +80,16 @@ async function locationOf(
  * one for the admin, the API or an asset.
  */
 async function pageAddressOf(
+  ctx: PluginContext,
   request: Request,
   url: URL
-): Promise<KeptAddress | undefined | "not-a-page"> {
-  if (request.method !== "GET" && request.method !== "HEAD")
+): Promise<KeptAddress | "not-a-page"> {
+  if (request.method !== "GET" && request.method !== "HEAD") {
     return "not-a-page";
-  if (notAPageAddress(url.pathname)) return "not-a-page";
-  const asked = await addressOfRequest(url);
-  if (
-    asked === undefined ||
-    asked.path.length <= 1 ||
-    !asked.path.endsWith("/")
-  ) {
-    return asked;
   }
+  if (notAPageAddress(url.pathname)) return "not-a-page";
+  const asked = await askedAddress(ctx, url);
+  if (asked.path.length <= 1 || !asked.path.endsWith("/")) return asked;
   return { ...asked, path: asked.path.slice(0, -1) };
 }
 
@@ -103,16 +99,15 @@ export function redirectsProxyHandler(): PluginProxyHandler {
     name: "redirects",
     async handle(request, ctx) {
       const url = new URL(request.url);
-      const address = await pageAddressOf(request, url);
+      const address = await pageAddressOf(ctx, request, url);
       if (address === "not-a-page") {
         // Emptied rather than left alone: a value a visitor sent in this
         // header themselves must never be logged as an address asked for.
         return { requestHeaders: { [ASKED_FOR_HEADER]: "" } };
       }
-      const redirect =
-        address === undefined ? undefined : await redirectFor(ctx, address);
+      const redirect = await redirectFor(ctx, address);
       const location =
-        redirect !== undefined && address !== undefined
+        redirect !== undefined
           ? await locationOf(redirect, address, url)
           : undefined;
       // A redirect to the very address asked for would answer it again and

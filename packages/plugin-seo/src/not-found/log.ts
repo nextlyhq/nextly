@@ -46,6 +46,8 @@ interface NotFoundRow {
 export interface LoggedAddress {
   locale: string;
   path: string;
+  /** The address exactly as it was asked for, where it is known. */
+  asked?: string;
 }
 
 /** The stored key of an address in a language. */
@@ -166,6 +168,7 @@ export async function recordNotFound(
       pathKey: key,
       locale: address.locale,
       path: address.path,
+      asked: address.asked ?? null,
       hits: 1,
       lastSeen,
       kind,
