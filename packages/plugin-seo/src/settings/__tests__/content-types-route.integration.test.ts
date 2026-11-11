@@ -129,18 +129,10 @@ describe.each(getConfiguredTestDialects())(
       return { status: res.status, items: body.items };
     }
 
-    it("lists each type with its variables, its newest page and whether it is public", async () => {
+    it("lists each type with its variables, a page to preview with and whether it is public", async () => {
       const t = await boot();
       // The first account holds super-admin.
       const owner = await personWith(t, "owner", []);
-      await t.nextly.create({
-        collection: POSTS,
-        data: {
-          title: "An older post",
-          slug: "older",
-          category: "News",
-        },
-      });
       await t.nextly.create({
         collection: POSTS,
         data: {

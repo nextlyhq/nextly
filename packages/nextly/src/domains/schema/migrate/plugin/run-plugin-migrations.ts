@@ -1015,6 +1015,23 @@ function assertTakesNoOwnedTable(
 }
 
 /**
+ * The tables a module leaves behind, as a run compares the database against
+ * its end: the plugin's own (`snapshot`) and the foreign tables it contributes
+ * elements to (`contributed`), before they are narrowed to its elements. The
+ * one answer `moduleSides` judges a module's end by, and that `nextly
+ * migrate`'s rename check reads for where a run may adopt a module.
+ */
+export function moduleTargetTables(
+  migration: PluginMigration,
+  dialect: SupportedDialect
+): NextlySchemaSnapshot["tables"] {
+  return [
+    ...(migration.snapshot[dialect]?.tables ?? []),
+    ...(migration.contributed?.[dialect]?.tables ?? []),
+  ];
+}
+
+/**
  * A module's start, end and the live database, scoped and narrowed the way
  * the reconcile judges them.
  */
@@ -1040,10 +1057,7 @@ async function moduleSides(
     ],
   };
   const target: NextlySchemaSnapshot = {
-    tables: [
-      ...(migration.snapshot[deps.dialect]?.tables ?? []),
-      ...(migration.contributed?.[deps.dialect]?.tables ?? []),
-    ],
+    tables: moduleTargetTables(migration, deps.dialect),
   };
   // The before side names tables an older module created, so both sides scope
   // the live read — a module dropping a table it no longer wants must still

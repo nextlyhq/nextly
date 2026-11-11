@@ -102,10 +102,14 @@ import {
   assertPluginHistories,
   assertPluginListsSound,
 } from "../../domains/schema/migrate/plugin/plugin-history";
-import { pluginModuleStatements } from "../../domains/schema/migrate/plugin/plugin-migration";
+import {
+  pluginModuleStatements,
+  type PluginMigration,
+} from "../../domains/schema/migrate/plugin/plugin-migration";
 import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import {
   appliedPluginShas,
+  moduleTargetTables,
   pendingPluginModules,
   pluginMigrationArgs,
   previewPluginMigrations,
@@ -119,6 +123,11 @@ import {
   findRegistryDisagreements,
   registryDisagreementLines,
 } from "../../domains/schema/migrate/registry-consistency";
+import {
+  refuseRenamesOntoTakenTargets,
+  renamesOntoTakenTargets,
+  type SchemaShape,
+} from "../../domains/schema/migrate/rename-preflight";
 import {
   previewRequiredColumns,
   refuseRequiredColumnsOverNulls,
@@ -1022,6 +1031,15 @@ export async function previewMigrate(args: {
     logger,
     pendingModules.length > 0
   );
+  // The renames a real run would refuse before any statement, from the same check over the same
+  // units: the modules, then the files.
+  for (const { file, message } of await renamesOntoTakenTargets(
+    [...moduleRuns, ...pendingFiles.map(file => fileUnit(file, dialect))],
+    db,
+    dialect
+  )) {
+    logger.info(`  ✖ a real run would refuse ${file}: ${message}`);
+  }
   await previewOldBuilderFiles({ ...args, logger });
   if (hasLedger) await previewChangedFiles(rows, args, logger);
   await previewAppHistory(args, logger);
@@ -2292,7 +2310,27 @@ async function judgeFileDeletions(
   const fileUnits = listed.flatMap(({ file }) =>
     plan.runs.has(file) ? [fileUnit(file, deps.dialect)] : []
   );
-  const units = [...(await moduleUnits(deps)), ...fileUnits];
+  const modules = await moduleUnits(deps);
+  // A module or file renaming a column or a table onto one already there is refused here, before
+  // any statement and before anyone is asked to consent to the run: on MySQL, which commits each
+  // schema statement as it runs, the database's own refusal would stop the unit part-way. Asked
+  // with this judgement both times, so again under the lock against the database as it stands.
+  // Only what this run reaches is judged: the modules, then the files the step leaves them
+  // (`appFileUnits`). A rename after another change to the same table in the run is left to the
+  // runner's failure (`renamesOntoTakenTargets`).
+  await refuseRenamesOntoTakenTargets(
+    [
+      ...modules,
+      ...appFileUnits(
+        listed,
+        appStepAfter(deps.step, modules.length),
+        deps.dialect
+      ),
+    ],
+    deps.db,
+    deps.dialect
+  );
+  const units = [...modules, ...fileUnits];
   for (const { unit, deletions } of await pendingRunDeletions(
     units,
     deps.db,
@@ -2337,6 +2375,25 @@ interface RunUnit {
   label: string;
   text: string;
   statements: string[];
+  /** A plugin module's: what the rename check reads of where a run may adopt it (`RenameUnit.adoptableAt`). */
+  adoptableAt?: readonly SchemaShape[];
+}
+
+/**
+ * The app files a run applies after its plugin modules have spent their share
+ * of `--step` (`step`, from `appStepAfter`), as units of the run: none when the
+ * modules spend all of it.
+ */
+function appFileUnits(
+  listed: readonly { file: ParsedMigration; applied: boolean }[],
+  step: number | undefined,
+  dialect: SupportedDialect
+): RunUnit[] {
+  if (step === 0) return [];
+  const plan = fileRunPlan(listed, step);
+  return listed.flatMap(({ file }) =>
+    plan.runs.has(file) ? [fileUnit(file, dialect)] : []
+  );
 }
 
 /** An app migration file as a unit of the run: its UP section. */
@@ -2374,6 +2431,10 @@ export async function pendingPluginDeletions(
 ): Promise<{ label: string; text: string; deletions: Deletion[] }[]> {
   const applied = await appliedPluginModules(deps);
   const units = pluginModuleUnits(sets, applied, undefined, deps.dialect);
+  // The modules' renames, judged as `nextly migrate` judges a run's before any statement: an
+  // install applies the same modules through the same phase, so a module renaming onto a name
+  // already there is refused before it starts (`refuseRenamesOntoTakenTargets`).
+  await refuseRenamesOntoTakenTargets(units, deps.db, deps.dialect);
   return (await pendingRunDeletions(units, deps.db, deps.dialect)).map(
     ({ unit, deletions }) => ({ label: unit.label, text: unit.text, deletions })
   );
@@ -2390,12 +2451,32 @@ function pluginModuleUnits(
   step: number | undefined,
   dialect: SupportedDialect
 ): RunUnit[] {
-  return pendingPluginModules(lists, applied, step).map(
-    ({ filename, migration }) => {
-      const statements = pluginModuleStatements(migration, dialect, "up");
-      return { label: filename, text: statements.join("\n;\n"), statements };
-    }
-  );
+  const pending = pendingPluginModules(lists, applied, step);
+  // Every pending module, past the step as well: a run looks for where the database stands over
+  // a plugin's whole history before the step caps what it records.
+  const allPending = pendingPluginModules(lists, applied, undefined);
+  const pluginOf = (migration: PluginMigration) =>
+    lists.find(set => set.migrations.includes(migration));
+  return pending.map(({ filename, migration }) => {
+    const statements = pluginModuleStatements(migration, dialect, "up");
+    // Where a run may find the database already standing and adopt the module without running
+    // it: the tables it leaves behind (`moduleTargetTables`, its own and those it contributes to)
+    // and each later pending module's of the same plugin, within the step or past it. Read only by the rename check (`refuseRenamesOntoTakenTargets`); the runner
+    // decides adoption itself.
+    const at = allPending.findIndex(later => later.migration === migration);
+    const adoptableAt = allPending
+      .slice(at)
+      .filter(later => pluginOf(later.migration) === pluginOf(migration))
+      .map(later => ({
+        tables: moduleTargetTables(later.migration, dialect),
+      }));
+    return {
+      label: filename,
+      text: statements.join("\n;\n"),
+      statements,
+      adoptableAt,
+    };
+  });
 }
 
 /**

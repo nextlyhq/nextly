@@ -11,10 +11,11 @@
  */
 import {
   getCachedNextly,
-  NextlyError,
   type PageMetadataImage,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
+
+import { imageOf } from "../resolver/page-levels";
 
 import {
   AI_CRAWLER_CHOICES,
@@ -184,37 +185,11 @@ export async function brandOf(
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** A media document as a share image; nothing without an address to load. */
-function asImage(media: unknown): PageMetadataImage | undefined {
-  if (!isRecord(media)) return undefined;
-  const url = textOf(media.url);
-  if (url === undefined) return undefined;
-  const alt = textOf(media.altText) ?? textOf(media.alt);
-  return {
-    url,
-    ...(typeof media.width === "number" ? { width: media.width } : {}),
-    ...(typeof media.height === "number" ? { height: media.height } : {}),
-    ...(alt === undefined ? {} : { alt }),
-  };
-}
-
-/**
- * Looks up the media a stored value names, as the system. A removed image is
- * no image; any other failure is thrown, so an answer is never cached
- * without an image the site has.
- */
-function mediaImages(ctx: PluginContext): ImageOf {
-  return async value => {
-    if (isRecord(value)) return asImage(value);
-    if (typeof value !== "string" || value === "") return undefined;
-    try {
-      return asImage(await ctx.services.media.findById(value, {}));
-    } catch (error) {
-      if (NextlyError.isCode(error, "NOT_FOUND")) return undefined;
-      throw error;
-    }
-  };
-}
+/** Images read as the resolver reads a page's: from the media library. */
+const mediaImages =
+  (ctx: PluginContext): ImageOf =>
+  value =>
+    imageOf(ctx, value);
 
 /**
  * The stored SEO settings in `locale`, as the system: the published values,

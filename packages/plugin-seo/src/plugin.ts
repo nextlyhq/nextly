@@ -24,7 +24,9 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
+import { seoPageMetadata } from "./resolver/provider";
 import { contentTypesRoute } from "./settings/content-types-route";
+import { readSeoRules } from "./settings/rules";
 import { seoSettingsSingle } from "./settings/single";
 import {
   generateSitemap,
@@ -170,6 +172,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     extend: [{ target: targets, fields: [seoGroup] }],
     // The record that keeps each public address to one page.
     collections: [addressRecordCollection()],
+    // Every page's head, worked out by the one order of who wins, from the
+    // site's own SEO settings where a page and its type set nothing.
+    services: { pageMetadata: ctx => seoPageMetadata(ctx, readSeoRules) },
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // What the settings screen lists: the types SEO is added to.
@@ -271,6 +276,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     },
     category: "seo",
     tags: ["seo", "meta"],
+    // The route helpers ask this plugin for each page's head.
+    provides: ["page-metadata"],
     contributes,
     init(ctx) {
       // The site-wide record that keeps each public address to one page:

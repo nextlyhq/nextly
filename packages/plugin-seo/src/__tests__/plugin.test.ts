@@ -68,17 +68,18 @@ describe("seoPlugin", () => {
 
   it("serves the sitemap route by default", () => {
     const plugin = seoPlugin({ collections: ["pages"] });
-    expect(plugin.contributes?.routes?.[0]).toMatchObject({
-      method: "GET",
-      path: "/sitemap.xml",
-      public: true,
-    });
+    expect(
+      plugin.contributes?.routes?.find(route => route.path === "/sitemap.xml")
+    ).toMatchObject({ method: "GET", public: true });
   });
 
   it("omits the sitemap route when sitemap is disabled", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
-    // No public enumeration route when the sitemap is turned off.
-    expect(plugin.contributes?.routes).toBeUndefined();
+    // No public enumeration route when the sitemap is turned off: the one
+    // route left is the settings screen's, which asks for a signed-in reader.
+    const routes = plugin.contributes?.routes ?? [];
+    expect(routes.map(route => route.path)).toEqual(["/settings/content-types"]);
+    expect(routes.some(route => route.public === true)).toBe(false);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
   });

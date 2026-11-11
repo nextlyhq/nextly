@@ -45,6 +45,7 @@ import {
 } from "@admin/components/features/entries/EntryForm/DocumentActionsContext";
 import { DocumentBanners } from "@admin/components/features/entries/EntryForm/DocumentBanners";
 import { DocumentBar } from "@admin/components/features/entries/EntryForm/DocumentBar";
+import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import {
   DOCUMENT_COLUMN_INSET,
   DocumentEditorLayout,
@@ -1886,7 +1887,14 @@ export function SingleForm({
                                 }
                               >
                                 {/* Main column */}
-                                <div className="flex-1 min-w-0 flex flex-col">
+                                {/* The measure lives on the FIELD column, as
+                                    the entry editor's does: the panel is a
+                                    fixed-width sibling, and the page, an
+                                    Editor page, has no cap of its own. */}
+                                <div
+                                  className="flex-1 min-w-0 flex flex-col mx-auto w-full"
+                                  style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+                                >
                                   <DocumentPlaceTabs
                                     place={documentPlace}
                                     // A plugin's tab writes through the same

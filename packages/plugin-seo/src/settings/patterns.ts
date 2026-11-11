@@ -66,3 +66,79 @@ export function unknownTokens(
   }
   return unknown;
 }
+
+/** A value as text a title can use: non-blank text, else nothing. */
+const textOfValue = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() !== "" ? value : undefined;
+
+/** Whether `title` already ends with the brand `siteName`, as a whole name. */
+function endsWithBrand(title: string, siteName: string): boolean {
+  const brand = siteName.trim().toLowerCase();
+  const text = title.trim().toLowerCase();
+  if (brand === "" || !text.endsWith(brand)) return false;
+  // A whole name: "Nextlyish" does not end with the brand "Nextly".
+  const before = text.slice(0, text.length - brand.length);
+  return before === "" || /[^a-z0-9]$/.test(before);
+}
+
+/**
+ * The separator and site name a pattern adds after the title, each found as
+ * `{Site name}` with the spaces and the one separator character before it.
+ */
+const SITE_NAME_AFTER_TITLE = /\s*[|\u2014\u2013\u00b7:,-]?\s*\{\s*site\s*name\s*\}/gi;
+
+/**
+ * `pattern` without the site name it would add after a title that already
+ * ends with it, so "{Title} | {Site name}" never gives "Pricing | Acme |
+ * Acme". A site name the pattern puts before the title stays.
+ */
+function withoutRepeatedBrand(
+  pattern: string,
+  values: { title?: string; siteName?: string }
+): string {
+  const { title, siteName } = values;
+  if (title === undefined || siteName === undefined) return pattern;
+  if (!endsWithBrand(title, siteName)) return pattern;
+  const titleAt = pattern.search(/\{\s*title\s*\}/i);
+  if (titleAt === -1) return pattern;
+  const head = pattern.slice(0, titleAt);
+  return head + pattern.slice(titleAt).replace(SITE_NAME_AFTER_TITLE, "");
+}
+
+/**
+ * `pattern` filled in from the page: `{Title}` and `{Site name}`, and any of
+ * the page's own text fields by name. Nothing where a token has no value, so
+ * the next level supplies the value rather than a pattern with a hole in it.
+ * The site's name is never added after a title that already ends with it.
+ *
+ * The one place a pattern becomes a title: the resolver's answer and the
+ * settings screen's preview both call it, so the two cannot disagree.
+ */
+export function fillPattern(
+  pattern: string,
+  values: { title?: string; siteName?: string },
+  document: Readonly<Record<string, unknown>>
+): string | undefined {
+  const fields = new Map(
+    Object.entries(document).map(([name, value]) => [tokenKey(name), value])
+  );
+  let missing = false;
+  const filled = withoutRepeatedBrand(pattern, values).replace(
+    /\{([^{}]+)\}/g,
+    (_, name: string) => {
+      const key = tokenKey(name);
+      const value =
+        key === "title"
+          ? values.title
+          : key === "sitename"
+            ? values.siteName
+            : (textOfValue(fields.get(key)) ??
+              (typeof fields.get(key) === "number"
+                ? String(fields.get(key))
+                : undefined));
+      if (value === undefined) missing = true;
+      return value ?? "";
+    }
+  );
+  return missing ? undefined : textOfValue(filled.trim());
+}
