@@ -60,12 +60,15 @@ const recentPostsWidget = defineWidget({
 });
 
 /**
- * The fixture's one collection, for its standalone panel: listed there, and
- * counted by its items. `state` is what the checks count.
+ * The fixture's one collection, counted by its panel's items. `state` is what
+ * the checks count. Hidden from the navigation, as a plugin's own library
+ * collections often are, so the panel's count is read for a collection the
+ * dashboard leaves out: reached through the panel's item alone.
  */
 const swatches = defineCollection({
   slug: SWATCHES_SLUG,
   labels: { singular: "Swatch", plural: "Swatches" },
+  admin: { hidden: true },
   fields: [
     text({ name: "title", label: "Title" }),
     text({ name: "state", label: "State" }),
