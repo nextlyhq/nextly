@@ -716,6 +716,7 @@ export type {
   HeldAddress,
   HeldAddressUpdate,
 } from "./domains/public-addresses/participants";
+export type { HeldDocument } from "./domains/public-addresses/held-listing";
 export type {
   ParticipantTransaction,
   PluginPublicAddresses,

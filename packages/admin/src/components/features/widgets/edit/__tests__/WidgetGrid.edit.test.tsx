@@ -33,7 +33,6 @@ import type {
 } from "@admin/types/dashboard/widgets";
 import { MAX_PLACEMENTS } from "nextly/config";
 
-import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { FrameState } from "../../frame/card-state";
 import { WidgetGrid } from "../../WidgetGrid";
@@ -51,12 +50,6 @@ let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
 let layoutRejects = false;
 
-// The header's New button reads collections and permissions of its own,
-// which this test does not set up; it is a marker here.
-vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
-  NewMenu: () => <div data-testid="dashboard-new" />,
-}));
-
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
   useAppName: () => "Acme Site",
@@ -68,11 +61,6 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
-}));
-// The page's header beside the grid holds Customize: its own reads stubbed.
-vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
-  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
-  useDashboardSummary: () => ({ data: undefined }),
 }));
 vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => ({
@@ -193,10 +181,10 @@ function renderGrid() {
   return {
     client,
     ...render(
-      <DashboardChromeProvider>
+      <>
         <WelcomeHeader />
         <WidgetGrid />
-      </DashboardChromeProvider>,
+      </>,
       { wrapper: Wrapper }
     ),
   };
@@ -258,6 +246,23 @@ async function beginEditing() {
   await user.click(await screen.findByTestId("dashboard-edit-begin"));
   await screen.findAllByTestId("card-actions");
   return user;
+}
+
+/**
+ * Leaves customise mode from the bar's Cancel, agreeing to discard when the
+ * mode asks first (it asks only while there are unsaved changes).
+ */
+async function cancelEditing(
+  user: ReturnType<typeof userEvent.setup>
+): Promise<void> {
+  await user.click(screen.getByTestId("dashboard-edit-cancel"));
+  const ask = screen.queryByTestId("dashboard-leave-ask");
+  if (ask !== null) {
+    await user.click(
+      within(ask).getByRole("button", { name: "Discard changes" })
+    );
+  }
+  await screen.findByTestId("dashboard-edit-begin");
 }
 
 /** The order the grid draws its cells in, by widget id. */
@@ -1270,7 +1275,7 @@ describe("cancelling", () => {
 
     await choose(user, "Widget core/a", "Move later");
     await choose(user, "Widget core/c", "Remove");
-    await user.click(screen.getByTestId("dashboard-edit-cancel"));
+    await cancelEditing(user);
 
     expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
     expect(api.put).not.toHaveBeenCalled();
@@ -1288,7 +1293,7 @@ describe("cancelling", () => {
     await user.click(screen.getByTestId("dashboard-edit-save"));
     await screen.findByTestId("dashboard-edit-error");
 
-    await user.click(screen.getByTestId("dashboard-edit-cancel"));
+    await cancelEditing(user);
 
     await waitFor(() =>
       expect(screen.queryByTestId("dashboard-edit-error")).toBeNull()
@@ -1443,7 +1448,7 @@ describe("resetting to the default dashboard", () => {
       })
     );
 
-    await user.click(screen.getByTestId("dashboard-edit-cancel"));
+    await cancelEditing(user);
 
     expect(drawnOrder()).toEqual(["core/c", "core/a"]);
     expect(api.delete).not.toHaveBeenCalled();
@@ -1517,7 +1522,7 @@ describe("a stored dashboard the server could not read", () => {
   it("says so above the grid", async () => {
     renderGrid();
     expect(await screen.findByTestId("dashboard-unreadable")).toHaveTextContent(
-      "Your saved dashboard couldn't be loaded, so you're seeing the default. Saving from Customize replaces the saved one."
+      "Your saved dashboard couldn't be loaded, so you're seeing the default. Saving from Customize dashboard replaces the saved one."
     );
   });
 
@@ -1639,9 +1644,9 @@ describe("at one column", () => {
   it("offers customising at every width", async () => {
     stubDashboardWidth(390);
     renderGrid();
-    const offer = await screen.findByTestId("dashboard-edit-offer");
-    expect(offer).not.toHaveClass("hidden");
-    expect(offer).toContainElement(screen.getByTestId("dashboard-edit-begin"));
+    const begin = await screen.findByTestId("dashboard-edit-begin");
+    expect(begin).not.toHaveClass("hidden");
+    expect(begin).toHaveAccessibleName("Customize dashboard");
   });
 
   it("draws no handle, and leaves every move to the card menu", async () => {
