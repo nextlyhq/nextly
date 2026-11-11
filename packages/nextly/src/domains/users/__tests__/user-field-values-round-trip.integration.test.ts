@@ -149,7 +149,21 @@ describe.each(getConfiguredTestDialects())(
     }
 
     beforeAll(async () => {
-      t = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
+      // A PostgreSQL session hands a `TIMESTAMP WITH TIME ZONE` back in its
+      // own zone. In UTC a plain-timestamp decode happens to read the right
+      // instant, so the server's sessions are put five hours east, as a host
+      // outside UTC has them, where a wrong decode moves the date.
+      const serverUrl = process.env.TEST_POSTGRES_URL;
+      if (dialect === "postgresql" && serverUrl) {
+        const url = new URL(serverUrl);
+        url.searchParams.set("options", "-c timezone=Asia/Karachi");
+        process.env.TEST_POSTGRES_URL = url.toString();
+      }
+      try {
+        t = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
+      } finally {
+        if (serverUrl !== undefined) process.env.TEST_POSTGRES_URL = serverUrl;
+      }
       direct = t.nextly as unknown as Direct;
       const seeder = t.getService("permissionSeedService") as unknown as {
         seedSystemPermissions: () => Promise<unknown>;
@@ -160,7 +174,9 @@ describe.each(getConfiguredTestDialects())(
       ) as unknown as UserFieldDefinitionService;
       for (const field of FIELDS) {
         await definitions.createField(
-          field as Parameters<UserFieldDefinitionService["createField"]>[0]
+          field as unknown as Parameters<
+            UserFieldDefinitionService["createField"]
+          >[0]
         );
       }
       await provision();
@@ -273,7 +289,7 @@ describe.each(getConfiguredTestDialects())(
 
         // The column report names it as differing, and changes nothing.
         const definition: EntityDefinition = {
-          fields: FIELDS as EntityDefinition["fields"],
+          fields: FIELDS as unknown as EntityDefinition["fields"],
           localized: false,
           origin: "userFields",
         };
@@ -291,12 +307,53 @@ describe.each(getConfiguredTestDialects())(
         });
         const score = findings.find(
           finding =>
-            "column" in finding &&
-            String((finding as { column?: unknown }).column) === "score"
+            finding.location.table === "user_ext" &&
+            finding.location.column === "score"
         );
         expect(score?.kind).toBe("differs");
         expect(await typeOfScore()).toBe("real");
       }
     );
+
+    // Last in this file: it drops a column the other cases read and write.
+    it("refuses a write its custom fields cannot be stored by, and stores nothing of it", async () => {
+      const existing = (
+        await direct.users.create({
+          email: "before@example.com",
+          password: "Password123!",
+          data: { name: "Before", isActive: true },
+        })
+      ).item;
+      // A column the table should have and does not: a failure of the
+      // custom write that is not the table being absent.
+      const q = dialect === "mysql" ? "`" : '"';
+      await t.adapter.executeQuery(
+        `ALTER TABLE ${q}user_ext${q} DROP COLUMN ${q}tier${q}`
+      );
+
+      await expect(
+        direct.users.create({
+          email: "refused@example.com",
+          password: "Password123!",
+          data: { name: "Refused", isActive: true, tier: "alpha" },
+        })
+      ).rejects.toThrow();
+      // Not created without its custom fields: not created at all.
+      const [account] = await t.adapter.executeQuery<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM ${q}users${q} WHERE ${q}email${q} = 'refused@example.com'`
+      );
+      expect(Number(account?.n)).toBe(0);
+
+      await expect(
+        direct.users.update({
+          id: existing.id,
+          data: { name: "Renamed", tier: "alpha" },
+        })
+      ).rejects.toThrow();
+      // The account's own change was refused with it.
+      expect((await direct.users.findByID({ id: existing.id })).name).toBe(
+        "Before"
+      );
+    });
   }
 );
