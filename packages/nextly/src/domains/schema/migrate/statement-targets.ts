@@ -328,7 +328,14 @@ export function uniqueIndexesCreatedBy(
   statement: string,
   dialect: SupportedDialect
 ): UniqueIndexCreated[] | undefined {
-  const cursor = cursorOf(statement, dialect, EXACT);
+  // As `renamesIn` reads names: MySQL and SQLite compare them without regard to case, so a quoted
+  // `Person` there is the column it names; PostgreSQL keeps a quoted name's case, so there only
+  // the lower-case spelling is read.
+  const cursor = cursorOf(
+    statement,
+    dialect,
+    dialect === "postgresql" ? EXACT : {}
+  );
   const named = cursor.accept("CREATE", "UNIQUE", "INDEX")
     ? createdUniqueIndex(cursor)
     : cursor.accept("ALTER", "TABLE")

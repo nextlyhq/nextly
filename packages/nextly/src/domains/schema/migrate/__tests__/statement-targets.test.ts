@@ -604,6 +604,12 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
 describe("uniqueIndexesCreatedBy on mysql", () => {
   const read = (sql: string) => uniqueIndexesCreatedBy(sql, "mysql");
 
+  it("reads a quoted name in any letter case as the name MySQL compares it as", () => {
+    expect(
+      read("CREATE UNIQUE INDEX `UQ_Person` ON `Profiles` (`Person`)")
+    ).toEqual([{ table: "profiles", name: "uq_person", columns: ["person"] }]);
+  });
+
   it("reads a unique key a MySQL ALTER TABLE adds, named or not", () => {
     for (const sql of [
       "ALTER TABLE `dc_profiles` ADD UNIQUE INDEX `uq_dc_profiles_person` (`person`)",
@@ -627,6 +633,15 @@ describe("uniqueIndexesCreatedBy on mysql", () => {
 });
 
 describe("uniqueIndexesCreatedBy on postgresql", () => {
+  it("reads no quoted name in another case than lower, which PostgreSQL keeps as written", () => {
+    expect(
+      uniqueIndexesCreatedBy(
+        `CREATE UNIQUE INDEX "uq" ON "Profiles" ("person")`,
+        "postgresql"
+      )
+    ).toBeUndefined();
+  });
+
   it("reads an index created concurrently, and one on a parent table only", () => {
     const read = (sql: string) => uniqueIndexesCreatedBy(sql, "postgresql");
     const created = {
