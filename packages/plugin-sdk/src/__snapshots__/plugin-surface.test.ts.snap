@@ -542,6 +542,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PageMetadataValues (type)",
   "PaginatedResult (type)",
   "PaginationMeta (type)",
+  "ParticipantTransaction (type)",
   "PasswordCheck (type)",
   "PasswordHelper (type)",
   "PasswordRules (type)",

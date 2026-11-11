@@ -491,6 +491,58 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("a participant writes its own collection on the save's transaction", async () => {
+      const seen: { ctx?: PluginContext } = {};
+      const participant: PublicAddressParticipant = {
+        holderOf: () => Promise.resolve(null),
+        record: async (batch, { transaction }) => {
+          const ctx = seen.ctx;
+          if (!ctx) throw new Error("no context");
+          for (const update of batch) {
+            await ctx.services.collections.createEntryInTransaction(
+              transaction,
+              "addr_log",
+              { holder: `${update.holder.collection}:${update.holder.id}` }
+            );
+          }
+        },
+      };
+      const plugin = definePlugin({
+        name: "@test/address-log",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          collections: [
+            defineCollection({
+              slug: "addr_log",
+              fields: [text({ name: "holder" })],
+            }),
+          ],
+        },
+        init(ctx) {
+          seen.ctx = ctx;
+          ctx.publicAddresses.participate(participant);
+        },
+      });
+      current = await createTestNextly({
+        dialect,
+        plugins: [plugin],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+
+      const post = await publish(current, "hello");
+
+      const { items } = await current.nextly.find({ collection: "addr_log" });
+      expect(items.map(item => item.holder)).toEqual([`posts:${post}`]);
+    });
+
     it("withdraw stops the asking", async () => {
       const { record, participant } = asPluginParticipant();
       const { t, ctx } = await boot(dialect, participant);

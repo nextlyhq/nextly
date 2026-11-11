@@ -567,6 +567,7 @@ export type {
   AddressHolder,
   HeldAddress,
   HeldAddressUpdate,
+  ParticipantTransaction,
   PluginPublicAddresses,
   PublicAddressParticipant,
   RefusedAddressUpdate,
