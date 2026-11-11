@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 
+import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
 import { text } from "nextly";
 import type { FieldConfig } from "nextly";
 import { describe, expect, it } from "vitest";
@@ -85,7 +86,28 @@ describe("seoPlugin", () => {
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
       ["GET", "/settings/document", undefined, undefined],
+      // The Pages and addresses screen's list, and its save.
+      ["GET", "/pages", undefined, undefined],
+      ["POST", "/pages/seo", undefined, undefined],
     ]);
+  });
+
+  it("lists the site's addresses to readers of the SEO settings, and saves a page's SEO only for those who may change them", () => {
+    const routes = seoPlugin({ collections: ["pages"] }).contributes?.routes;
+    const permissionOf = (method: string, path: string) => {
+      const found = routes?.find(
+        route => route.method === method && route.path === path
+      )?.requiredPermission;
+      // The names a host that renamed nothing gives the plugin's own.
+      const scope: PluginRoutePermissionScope = {
+        plugin: "@nextlyhq/plugin-seo",
+        collection: (slug, action) => `${action}-${slug}`,
+        single: (slug, action) => `${action}-${slug}`,
+      };
+      return typeof found === "function" ? found(scope) : found;
+    };
+    expect(permissionOf("GET", "/pages")).toBe("read-seo-settings");
+    expect(permissionOf("POST", "/pages/seo")).toBe("update-seo-settings");
   });
 
   it("offers making a share image to a person who may add to the media library", () => {
@@ -107,6 +129,8 @@ describe("seoPlugin", () => {
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/pages",
+      "/pages/seo",
     ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
@@ -122,6 +146,8 @@ describe("seoPlugin", () => {
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/pages",
+      "/pages/seo",
     ]);
   });
 

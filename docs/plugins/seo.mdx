@@ -129,19 +129,20 @@ Overrides stay nested under `seo`: the example above reads at `entry.seo.focusKe
 
 ## Configuration
 
-| Option           | Type                                                             | Default            | What it does                                                                             |
-| ---------------- | ---------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------- |
-| `collections`    | `string[]`                                                       | required           | The collections that get the `seo` group                                                 |
-| `fields`         | `FieldConfig[]`                                                  | the five above     | The fields placed inside the group                                                       |
-| `baseUrl`        | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name          |
-| `sitemap`        | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                   |
-| `robots`         | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                   |
-| `aiCrawlers`     | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                          |
-| `hiddenTypes`    | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some            |
-| `structuredData` | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields |
-| `socialCard`     | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                |
-| `urlFor`         | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                |
-| `basePath`       | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                  |
+| Option           | Type                                                             | Default            | What it does                                                                                                     |
+| ---------------- | ---------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `collections`    | `string[]`                                                       | required           | The collections that get the `seo` group                                                                         |
+| `fields`         | `FieldConfig[]`                                                  | the five above     | The fields placed inside the group                                                                               |
+| `baseUrl`        | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name                                  |
+| `sitemap`        | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                                           |
+| `robots`         | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                                           |
+| `aiCrawlers`     | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                                                  |
+| `hiddenTypes`    | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some                                    |
+| `structuredData` | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields                         |
+| `socialCard`     | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                                        |
+| `nextBuildDir`   | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code) |
+| `urlFor`         | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                                        |
+| `basePath`       | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                                          |
 
 ## The sitemap and robots.txt
 
@@ -168,6 +169,10 @@ never disagree. A page is listed when all of these hold:
   site or off it, is that page's to list;
 - the page holds its address. Where a deploy leaves two pages declaring one address, the
   page that held it keeps it, and the other is left out until it is given another.
+
+A [page built in code](#pages-built-in-code) is listed too, once its route calls
+`seoMetadata` and unless it is hidden from search: its head and its sitemap entry are then
+built from the same answer.
 
 A content type that declares no public address has no page in the sitemap, and nothing is
 guessed for it. Declare one with `publicAddress` on the collection or Single:
@@ -678,6 +683,82 @@ export default async function NotFound() {
 ```
 
 `logNotFound` never throws, and logs nothing for a request the Proxy did not pass on.
+
+## Pages built in code
+
+A page a route renders from its own code, such as `/pricing` in `app/pricing/page.tsx`, has
+no entry to hold its SEO. Its SEO is set by address instead, on the **Pages and addresses**
+screen, under SEO in the admin. The screen lists every public address the site knows of:
+each entry's, each route with no variable part (`/pricing`), and each address a route with
+one declares through `generateStaticParams` (`/integrations/wordpress`). Choose **Edit SEO**
+on a page built in code to set its title, description, visibility and share image.
+
+What is set there reaches the page once its route adds one line, calling `seoMetadata` with
+its address:
+
+```tsx
+// src/app/pricing/page.tsx
+import { seoMetadata } from "@nextlyhq/plugin-seo";
+
+export const generateMetadata = () =>
+  seoMetadata("/pricing", {
+    metadata: { title: "Pricing", description: "Plans for every team." },
+  });
+
+export default function PricingPage() {
+  return <h1>Pricing</h1>;
+}
+```
+
+A route with a variable part calls it for the address it is serving:
+
+```tsx
+// src/app/integrations/[name]/page.tsx
+import { seoMetadata } from "@nextlyhq/plugin-seo";
+
+export const generateStaticParams = () => [
+  { name: "wordpress" },
+  { name: "webflow" },
+];
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ name: string }>;
+}) {
+  const { name } = await params;
+  return seoMetadata(`/integrations/${name}`);
+}
+
+export default function IntegrationPage() {
+  return <h1>Integration</h1>;
+}
+```
+
+The page is answered by the same order of who wins as every page with an entry:
+
+- what a person set on the screen wins;
+- the route's own title, description and social values come next. Anything else the route
+  sets, such as keywords, is kept as it is;
+- then the site's [title pattern](#title-patterns) with the page's name, taken from its
+  address (`/thank-you` is "Thank you") or given as `name`, and the site's defaults.
+
+Visibility and the canonical come only from the answer, never from the route: the canonical
+is the page's own address, and a page is hidden only from the screen. A save on the screen
+reaches the page from its next visit, a page built ahead of time included.
+
+The screen marks **Not connected** each route that has not called `seoMetadata`. What is set
+for its address is kept, and reaches the page once the line is in. A route records that it is
+connected when it renders: while `next build` renders the site, or later for an address the
+site knows of. A request for any other address records nothing.
+
+<Callout type="info">
+**The list of routes comes from the build.** The plugin reads the routes and the addresses
+they declared from what `next build` wrote, so the full list is that of a production build.
+Under `next dev`, it holds only the routes compiled so far. If `next.config` sets `distDir`,
+pass the same directory as `nextBuildDir`.
+
+</Callout>
 
 ## Next steps
 

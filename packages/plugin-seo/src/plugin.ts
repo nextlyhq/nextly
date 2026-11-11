@@ -24,6 +24,11 @@ import {
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
+import { codePagesCollection } from "./code-pages/collection";
+import { PAGES_PAGE, PAGES_PAGE_HREF } from "./code-pages/contract";
+import { keepCodeRoutes } from "./code-pages/metadata";
+import { codePageRoutes } from "./code-pages/route";
+import { readCodeRoutes, type CodeRoute } from "./code-pages/routes";
 import { defaultSeoFields } from "./fields";
 import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
@@ -204,6 +209,13 @@ export interface SeoPluginOptions {
    * since a network reading the card needs its full address.
    */
   socialCard?: SocialCardOptions;
+  /**
+   * @experimental Where `next build` writes, relative to the app's
+   * directory: `.next` unless the app's `next.config` sets `distDir`. The
+   * pages the site's routes render from their own code are read from it,
+   * for the Pages and addresses screen and the sitemap.
+   */
+  nextBuildDir?: string;
 }
 
 /**
@@ -309,7 +321,8 @@ function sitemapConfig(
 function rootFilesConfig(
   options: SeoPluginOptions,
   readRules: ReadRules,
-  collections: readonly string[] | undefined
+  collections: readonly string[] | undefined,
+  codeRoutes: () => readonly CodeRoute[]
 ): RootFilesConfig {
   const sitemap = sitemapConfig(options, collections);
   const origin =
@@ -319,6 +332,7 @@ function rootFilesConfig(
   return {
     ...(origin === undefined ? {} : { origin }),
     readRules,
+    codeRoutes,
     ...(sitemap === undefined ? {} : { sitemap }),
     ...(options.robots === false
       ? {}
@@ -334,9 +348,10 @@ function rootFilesConfig(
 function siteFileRoutes(
   options: SeoPluginOptions,
   readRules: ReadRules,
-  collections: readonly string[] | undefined
+  collections: readonly string[] | undefined,
+  codeRoutes: () => readonly CodeRoute[]
 ): PluginRoute[] {
-  const config = rootFilesConfig(options, readRules, collections);
+  const config = rootFilesConfig(options, readRules, collections, codeRoutes);
   const routes = rootFileRoutes(config);
   const { sitemap } = config;
   if (sitemap !== undefined) {
@@ -384,6 +399,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
 
   const sitemapSubset = subsetOf(options.sitemap, targets);
   const readRules = rulesReader(options);
+  // The pages the site's routes render from their own code, read from the
+  // build each time they are asked for, so a new deploy is read as it is.
+  const codeRoutes = () =>
+    readCodeRoutes(
+      options.nextBuildDir === undefined
+        ? {}
+        : { buildDir: options.nextBuildDir }
+    );
 
   // Checked here, so a misspelled type or detail fails when the site starts.
   const readStructuredDataRules = rulesFromOptions(
@@ -408,6 +431,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       addressRecordCollection(),
       redirectsCollection(),
       notFoundCollection(),
+      // The SEO of each page a route renders from its own code, by address.
+      codePagesCollection(),
     ],
     // Every page's head, worked out by the one order of who wins, with its
     // links to its other languages, its social card completed, and its
@@ -431,6 +456,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           listPages(ctx, {
             origin,
             readRules,
+            codeRoutes,
             ...(sitemapSubset === undefined
               ? {}
               : { collections: sitemapSubset }),
@@ -451,6 +477,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       clientConfig: { aiCrawlers: options.aiCrawlers ?? "all" },
       menu: [
         {
+          label: "Pages and addresses",
+          to: PAGES_PAGE_HREF,
+          icon: "FileText",
+          requiredPermission: `read-${SEO_SETTINGS_SLUG}`,
+        },
+        {
           label: "Settings",
           to: SETTINGS_PAGE_HREF,
           icon: "Settings",
@@ -459,6 +491,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       ],
       pages: [
         { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
+        { ...PAGES_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
       ],
     },
   };
@@ -479,12 +512,22 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   }
 
   routes.push(
-    ...siteFileRoutes(options, readRules, sitemapSubset),
+    ...siteFileRoutes(options, readRules, sitemapSubset, codeRoutes),
     shareImageRoute(options.baseUrl),
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
     contentTypesRoute(targets),
-    settingsDocumentRoute()
+    settingsDocumentRoute(),
+    // The Pages and addresses screen's list, and its save of a page with no
+    // entry's SEO.
+    ...codePageRoutes({
+      readRules,
+      routes: codeRoutes,
+      origin: () =>
+        options.baseUrl === undefined
+          ? undefined
+          : resolveBaseOrigin(options.baseUrl),
+    })
   );
 
   return definePlugin({
@@ -541,8 +584,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // asked on every save, and told what each document holds after it.
       ctx.publicAddresses.participate(addressRecord(ctx));
       releaseOnCollectionDelete(ctx);
-      // Kept for the site's not-found page, which logs through it.
+      // Kept for the site's not-found page, which logs through it, and for
+      // the pages built in code, which read their SEO through it.
       keepSeoContext(ctx);
+      keepCodeRoutes(codeRoutes);
     },
     onReady(ctx) {
       // Started, not awaited: it waits for the boot to finish, and brings the

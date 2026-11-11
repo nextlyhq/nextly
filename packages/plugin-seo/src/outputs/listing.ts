@@ -29,6 +29,9 @@ import {
   addressHolders,
   withAddressHolders,
 } from "../address-record/participant";
+import { codePages } from "../code-pages/answers";
+import { codePagesSlug } from "../code-pages/collection";
+import type { CodeRoute } from "../code-pages/routes";
 import { languageLinks } from "../languages/links";
 import {
   absolute,
@@ -89,6 +92,13 @@ export interface ListingOptions {
   readRules?: ReadRules;
   /** Only these collections, where given; Singles are listed either way. */
   collections?: readonly string[];
+  /**
+   * The pages the site's routes render from their own code. Each whose
+   * route calls the plugin's metadata function is listed as an entry is,
+   * from the same answer as its head; the others are not, since nothing
+   * here would reach their head and the two could disagree.
+   */
+  codeRoutes?: () => readonly CodeRoute[];
 }
 
 /** How many documents one read takes. */
@@ -98,7 +108,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** One document of a type, with the key its address is held under. */
-interface Candidate {
+export interface Candidate {
   type: PublicAddressType;
   holder: AddressHolder;
   document: Record<string, unknown>;
@@ -169,7 +179,7 @@ async function covered(
 }
 
 /** Every page of the site that may be listed, a read at a time. */
-async function* candidates(
+export async function* candidates(
   ctx: PluginContext,
   options: ListingOptions
 ): AsyncGenerator<Candidate[]> {
@@ -229,7 +239,50 @@ export async function listPages(
       found
     );
   }
+  if (options.codeRoutes !== undefined) {
+    await listCodePages(
+      ctx,
+      options.codeRoutes(),
+      { origin: options.origin, language, readRules },
+      found
+    );
+  }
   return found;
+}
+
+/**
+ * The pages built in code whose route calls the metadata function, listed
+ * into `found` in the site's language where their answer lets search
+ * engines index them at their own address. An address an entry already
+ * holds is the entry's.
+ */
+async function listCodePages(
+  ctx: PluginContext,
+  routes: readonly CodeRoute[],
+  options: { origin: string; language: string; readRules?: ReadRules },
+  found: { pages: ListedPage[]; problems: ListingProblem[] }
+): Promise<void> {
+  const taken = new Set([
+    ...found.pages.map(page => page.path),
+    ...found.problems.map(problem => problem.path),
+  ]);
+  for (const { route, row, answer } of await codePages(
+    ctx,
+    routes,
+    options.readRules,
+    taken
+  )) {
+    if (row?.connected !== true) continue;
+    const at = standingOf(answer, options.origin, route.path);
+    if (at === null || at === "lost") continue;
+    found.pages.push({
+      loc: at.loc,
+      path: route.path,
+      language: options.language,
+      holder: { collection: codePagesSlug(ctx), id: row.id },
+      images: ownImage(answer, options.origin),
+    });
+  }
 }
 
 /** A version of a page that stands for itself, as it would be listed. */
