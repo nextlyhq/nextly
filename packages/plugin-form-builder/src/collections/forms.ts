@@ -21,6 +21,7 @@ import {
   relationship,
 } from "nextly";
 
+import { FORM_EDITOR_VIEW } from "../form-pages";
 import type { ResolvedFormBuilderConfig } from "../types";
 import {
   documentReachability,
@@ -1025,7 +1026,7 @@ export function formsCollection(
         views: {
           // Replace default edit view with visual Form Builder
           Edit: {
-            Component: "@nextlyhq/plugin-form-builder/admin#FormBuilderView",
+            Component: FORM_EDITOR_VIEW,
           },
         },
       },

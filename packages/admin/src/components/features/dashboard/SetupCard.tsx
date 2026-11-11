@@ -1,37 +1,28 @@
 "use client";
 
 /**
- * "Set up your project": the setup steps left on a new project, as one row of tiles, for a
+ * "Set up your project": the setup steps left on a new project, as a vertical checklist, for a
  * super-admin.
  *
  * A declared widget's view (`core/setup`): the frame draws the title, loading and a failed load,
- * and this draws what `load` answered, in one of four states:
+ * and this draws what `load` answered, in one of three states:
  * - setup could not be checked: says so with Retry, and never a step shown open on that basis;
  * - every step done: "You're all set", said once (the server has recorded it, so the next load
- *   leaves the card out);
- * - collapsed: one line, the frame's header alone, "Set up your project N of M done" with Expand
- *   and Dismiss beside the card's menu, the whole card one grid row tall (`frame/collapse`), kept
- *   per reader on the server;
+ *   leaves the card out), with Hide setup;
  * - the steps: "N of M done" in the frame's header beside the title, and in the body a thin
- *   progress bar over one row of compact tiles at every width, scrolling sideways inside the card
- *   where the body is too narrow for each to read in full (`SETUP_ROW`). At the card's size,
- *   12 × 2, that is all the body holds (`setup/measures`), at any width, so the card is drawn at
- *   its stored rows from its first paint and the dashboard loads with nothing moving.
+ *   progress bar over one line per step.
  *
- * Each tile is a step: its number or a tick, its name, and one hint line holding what the reader
- * can do about it ("Add", "2 of 5 · Open · Skip", "Invite · Skip"), its words short so a tile
- * reads in full at narrow widths, and read in full to assistive technology ("2 of 5 filled in").
+ * Each line is a step: a tick once it is done, a dashed circle once it is skipped and an empty one
+ * while it is open; its name and one hint line; and its buttons on the right, which drop under the
+ * hint where the card is too narrow for both, so the card never scrolls sideways at any width.
  * Skip is offered on "Fill in your Singles" and "Invite a teammate" only, and Restore on a step
- * skipped. The Singles are one tile;
- * choosing it opens a short list of them, each with its state and link, and only then, the
- * reader's own action, does the card grow in place. Sample content
- * is the first tile, with its load and decline in its hint line and a load's progress and outcome
- * in full under the tiles (`setup/SampleContentStep`), and is left out where the project's
- * sample-content route says it cannot be loaded by this reader.
+ * skipped. Show on the Singles' line lists them inside that line, each with its state and a
+ * "Fill in" button. Sample content is the first line while it is open, with its load and decline
+ * as its buttons and a load's progress and outcome in full under the steps
+ * (`setup/SampleContentStep`); once anyone on the site has answered it the line goes, and it is
+ * left out where the project's sample-content route says this reader cannot load it.
  *
- * Collapse and Dismiss sit in the card's header, beside its menu, while the card is expanded
- * (`frame/header-slot`), so the tiles take the body's whole width; collapsed, at the end of its one
- * line. Dismissing removes the card and keeps that on the server for this reader.
+ * The card's own hiding is the frame's: its menu offers Hide setup in place of Remove.
  *
  * @module components/features/dashboard/SetupCard
  */
@@ -51,18 +42,9 @@ import {
 } from "nextly/config";
 import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
-import {
-  Fragment,
-  useContext,
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
-import { Check, ChevronDown, ChevronUp, X } from "@admin/components/icons";
+import { Check } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { useSingles } from "@admin/hooks/queries/useSingles";
 import { WIDGET_QUERIES_KEY } from "@admin/hooks/queries/widget-queries-key";
@@ -70,30 +52,22 @@ import { isApiError } from "@admin/lib/api/parseApiError";
 import { cn } from "@admin/lib/utils";
 
 import { FrameState } from "../widgets/frame/card-state";
-import { useCardCollapsed } from "../widgets/frame/collapse";
-import { CardGrowContext } from "../widgets/frame/grow";
-import { CardHeaderContent } from "../widgets/frame/header-slot";
 import { useCardTitleCount } from "../widgets/frame/title-count";
 
-import {
-  SETUP_GAP,
-  SETUP_ROW,
-  SETUP_TILE,
-  SETUP_TILE_LINES,
-} from "./setup/measures";
 import { useRetirementRefusals } from "./setup/retirement-refusals";
 import {
-  SampleContentHint,
+  SampleContentActions,
   SampleContentPanel,
+  sampleHint,
 } from "./setup/SampleContentStep";
+import { STEP_BUTTON, STEP_GHOST_BUTTON } from "./setup/step-buttons";
 import {
   filledIn,
   singleHref,
   stepPresentation,
   type StepPresentation,
 } from "./setup/step-presentation";
-import { StepRow } from "./setup/StepRow";
-import { useSampleRun } from "./setup/useSampleRun";
+import { useSampleRun, type SampleRunState } from "./setup/useSampleRun";
 import { useSetupState, type SetupStateWrite } from "./setup/useSetupState";
 
 /** The sidebar's own Singles request, so the card shares its answer for their labels. */
@@ -112,7 +86,7 @@ function useSingleLabels(): ReadonlyMap<string, string> {
   );
 }
 
-/** What a screen reader hears for each status, which the tick and styling only show. */
+/** What a screen reader hears for each status, which the mark and styling only show. */
 const STATUS_TEXT: Record<SetupStep["status"], string> = {
   done: "done",
   skipped: "skipped",
@@ -124,8 +98,7 @@ const STATUS_TEXT: Record<SetupStep["status"], string> = {
  * server's, less sample content where the project's route says this reader cannot load it. A step
  * already answered stays, since someone on this site loaded or declined it, and so does one this
  * reader has answered here (`answeredHere`), drawn done once the route confirmed it, while the
- * card asks for its steps again. Counted over what is drawn, so "N of M done" counts the tiles
- * shown.
+ * card asks for its steps again. Counted over what is drawn.
  */
 function drawnSteps(
   steps: readonly SetupStep[],
@@ -259,15 +232,16 @@ function progressText(done: number, total: number): string {
   return `${done} of ${total} done`;
 }
 
-/** The bar is the picture; the text beside it is the answer, read once. */
+/** The bar is the picture; the header's "N of M done" is the answer, read once. */
 function ProgressBar({ done, total }: { done: number; total: number }) {
   return (
     <div
-      className="h-1 w-full overflow-hidden rounded-full bg-muted"
+      className="mt-0.5 mb-1.5 h-1 w-full overflow-hidden rounded-full bg-secondary"
       aria-hidden="true"
+      data-setup-progress=""
     >
       <div
-        className="h-full rounded-full bg-success"
+        className="h-full rounded-full bg-success-solid transition-[width] duration-300 motion-reduce:transition-none"
         style={{
           width: `${total === 0 ? 0 : Math.round((done / total) * 100)}%`,
         }}
@@ -277,339 +251,157 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
 }
 
 /**
- * Collapse or expand, and dismiss: the card's two controls, in the frame's header beside the
- * card's menu whether it is expanded or collapsed, and drawn as the menu is: 28 px each, over the
- * 24 px a target may be at least.
+ * A step's mark, in its own shape: a tick on the success colour once it is done, a dashed circle
+ * once it is skipped, and an empty circle while it is open.
  */
-function CardControls({
-  collapsed,
-  write,
-  onToggle,
-}: {
-  collapsed: boolean;
-  write: SetupStateWrite;
-  onToggle: () => void;
-}) {
-  // Beside the card's menu in the header, the menu's own size and colour.
-  const inHeader = "size-7 text-muted-foreground hover:text-foreground";
-  return (
-    <span className="flex shrink-0 items-center gap-1">
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className={inHeader}
-        aria-expanded={!collapsed}
-        onClick={onToggle}
-        disabled={write.isWriting}
-      >
-        {collapsed ? (
-          <ChevronDown className="h-4 w-4" aria-hidden="true" />
-        ) : (
-          <ChevronUp className="h-4 w-4" aria-hidden="true" />
-        )}
-        <span className="sr-only">
-          {collapsed ? "Expand setup" : "Collapse setup"}
-        </span>
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className={inHeader}
-        onClick={write.dismiss}
-        disabled={write.isWriting}
-      >
-        <X className="h-4 w-4" aria-hidden="true" />
-        <span className="sr-only">Dismiss setup</span>
-      </Button>
-    </span>
-  );
-}
-
-/** A tile's action, as a word in its hint line: "Open", "Skip", "Load". */
-function HintAction({
-  children,
-  onClick,
-  disabled,
-  ...aria
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  "aria-expanded"?: boolean;
-  "aria-controls"?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="font-medium text-foreground underline decoration-primary/40 underline-offset-2 hover:decoration-primary focus-visible:decoration-primary disabled:opacity-50"
-      {...aria}
-    >
-      {children}
-    </button>
-  );
-}
-
-/**
- * "·" between two parts of a hint, for the eye only. Spaced by padding, not by spaces: the hint
- * line lays its parts out as flex items, which drop a space at either end of their text.
- */
-function Dot() {
-  return (
-    <span aria-hidden="true" className="px-1">
-      ·
-    </span>
-  );
-}
-
-/** A tile's mark: a tick once its step is done or skipped, its number while it is open. */
-function TileMark({ step, position }: { step: SetupStep; position: number }) {
+function StepMark({ status }: { status: SetupStep["status"] }) {
   return (
     <span
       aria-hidden="true"
+      data-setup-mark={status}
       className={cn(
-        "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-border text-[10px] leading-none text-muted-foreground",
-        step.status === "done" && "border-success bg-success text-background"
+        "flex size-5 shrink-0 items-center justify-center rounded-full border-[1.5px] border-control-border",
+        status === "done" &&
+          "border-success-solid bg-success-solid text-success-foreground",
+        status === "skipped" && "border-dashed"
       )}
     >
-      {stepFinished(step) ? <Check className="h-2.5 w-2.5" /> : position}
+      {status === "done" && <Check className="size-3" strokeWidth={3} />}
     </span>
   );
 }
 
-/** The step's own link, while it is open and has one. */
-function stepLink(
-  step: SetupStep,
-  { label, href, action }: StepPresentation
-): React.ReactNode {
-  if (step.status !== "open" || href === undefined || action === undefined) {
-    return null;
-  }
-  return (
-    <Link
-      href={href}
-      className="font-medium text-foreground underline decoration-primary/40 underline-offset-2 hover:decoration-primary focus-visible:decoration-primary"
-    >
-      {action}
-      <span className="sr-only">: {label}</span>
-    </Link>
-  );
-}
-
-/** Open or Hide on the Singles step's tile, for the short list under the row. */
-function singlesToggle(
-  step: SetupStep,
-  label: string,
-  { open, listId, onToggle }: SinglesListControl
-): React.ReactNode {
-  if (step.kind !== "singles") return null;
-  return (
-    <HintAction aria-expanded={open} aria-controls={listId} onClick={onToggle}>
-      {open ? "Hide" : "Open"}
-      <span className="sr-only">: {label}</span>
-    </HintAction>
-  );
-}
-
-/** Skip on an open step of a skippable kind, Restore on a skipped one, and nothing on any other. */
-function skipToggle(
-  step: SetupStep,
-  label: string,
-  write: SetupStateWrite
-): React.ReactNode {
-  if (!isSkippableKind(step.kind) || step.status === "done") return null;
-  const { kind } = step;
-  const skip = step.status === "open";
-  return (
-    <HintAction
-      disabled={write.isWriting}
-      onClick={() => write.setSkipped(kind, skip)}
-    >
-      {skip ? "Skip" : "Restore"}
-      <span className="sr-only">: {label}</span>
-    </HintAction>
-  );
-}
-
-/** Whether the Singles' list is open, and what opens it, as the Singles tile's toggle needs. */
+/** Whether the Singles' list is open, and what opens it, as the Singles' line needs. */
 interface SinglesListControl {
   open: boolean;
   listId: string;
   onToggle: () => void;
 }
 
-/**
- * What the hint line says before its actions, drawn and read aloud: "Skipped" on a skipped step,
- * else the step's detail; nothing where its actions say it all ("Invite · Skip").
- */
-function hintWords(
+/** The hint under a step's name: Done or Skipped once it is, else what it asks or how far it is. */
+function hintOf(
   step: SetupStep,
-  { detail, spoken }: StepPresentation
-): { shown: string; spoken: string } | undefined {
-  if (step.status === "skipped") return { shown: "Skipped", spoken: "Skipped" };
-  if (detail === undefined) return undefined;
-  return { shown: detail, spoken: spoken ?? detail };
-}
-
-/**
- * What the hint line says before its actions: the sample offer while open, whole, as it is its
- * actions; else the step's words, which a tile is always wide enough to show (`SETUP_ROW`), read
- * in full where they are drawn short ("2 of 5", read "2 of 5 filled in").
- */
-function HintText({
-  step,
-  words,
-  sample,
-}: {
-  step: SetupStep;
-  words: { shown: string; spoken: string } | undefined;
-  sample: React.ReactNode;
-}) {
-  if (step.kind === "sample" && step.status === "open") {
-    return <span className="flex shrink-0 items-center">{sample}</span>;
+  { detail }: StepPresentation,
+  sample: SampleRunState
+): { words: string; failed: boolean } {
+  if (step.status === "done") return { words: "Done", failed: false };
+  if (step.status === "skipped") return { words: "Skipped", failed: false };
+  if (step.kind === "sample") {
+    return sampleHint(sample.view) ?? { words: detail, failed: false };
   }
-  if (words === undefined) return null;
-  return (
-    // Its whole words on hover, should a tile ever be drawn narrower than they are.
-    <span className="min-w-0 truncate" title={words.spoken}>
-      {words.shown === words.spoken ? (
-        words.shown
-      ) : (
-        <>
-          <span aria-hidden="true">{words.shown}</span>
-          <span className="sr-only">{words.spoken}</span>
-        </>
-      )}
-    </span>
-  );
+  return { words: detail, failed: false };
 }
 
 /**
- * A tile's actions, "·" between each, and before the first only where words come before it, so a
- * step whose actions say it all reads "Invite · Skip", never "· Invite · Skip".
+ * A step's own button while it is open: its link, the Singles' Show or Hide, or the sample load.
+ * Each is named with its step ("Show: Fill in your Singles"), its visible word first, so a list of
+ * the page's controls says which step each belongs to.
  */
-function HintActions({
-  actions,
-  afterWords,
-}: {
-  actions: readonly React.ReactNode[];
-  afterWords: boolean;
-}) {
-  return (
-    <span className="flex shrink-0 items-center" data-setup-actions="">
-      {actions.map((action, index) => (
-        // The actions are fixed for a step, in a fixed order, so the position is their identity.
-        <Fragment key={index}>
-          {(index > 0 || afterWords) && <Dot />}
-          {action}
-        </Fragment>
-      ))}
-    </span>
-  );
-}
-
-/**
- * One step's tile: its number or a tick, its name, and one hint line holding what the reader can
- * do about it, in a fixed height so the row is one tile high (`SETUP_TILE`).
- */
-function StepTile({
+function OwnAction({
   step,
-  position,
-  write,
+  presentation: { label, href, action },
   singles,
   sample,
 }: {
   step: SetupStep;
-  position: number;
-  write: SetupStateWrite;
+  presentation: StepPresentation;
   singles: SinglesListControl;
-  sample: React.ReactNode;
-}) {
-  const presentation = stepPresentation(step);
-  const { label } = presentation;
-  const words = hintWords(step, presentation);
-  const actions = [
-    stepLink(step, presentation),
-    singlesToggle(step, label, singles),
-    skipToggle(step, label, write),
-  ].filter(action => action !== null);
-  // Words or the sample offer come before the actions; "·" then leads them.
-  const afterWords =
-    words !== undefined || (step.kind === "sample" && step.status === "open");
+  sample: SampleRunState;
+}): React.ReactNode {
+  if (step.status !== "open") return null;
+  if (step.kind === "sample") return <SampleContentActions sample={sample} />;
+  if (step.kind === "singles") {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className={STEP_BUTTON}
+        aria-expanded={singles.open}
+        aria-controls={singles.listId}
+        onClick={singles.onToggle}
+        aria-label={`${singles.open ? "Hide" : "Show"}: ${label}`}
+      >
+        {singles.open ? "Hide" : "Show"}
+      </Button>
+    );
+  }
+  if (href === undefined || action === undefined) return null;
   return (
-    <li
-      data-setup-step={step.kind}
-      data-status={step.status}
-      className={cn(
-        SETUP_TILE.className,
-        SETUP_ROW.tile,
-        "flex min-w-0 items-center gap-1 overflow-hidden rounded-md border border-border px-1.5 py-0.5",
-        step.status === "done" && "border-success bg-success/5"
-      )}
-    >
-      <TileMark step={step} position={position} />
-      <span className="grid min-w-0">
-        <span
-          className={cn(
-            SETUP_TILE_LINES.label,
-            "truncate font-semibold text-foreground"
-          )}
-          // Its whole name on hover, should a tile ever be drawn narrower than it is.
-          title={label}
-        >
-          {label}
-          <span className="sr-only"> — {STATUS_TEXT[step.status]}</span>
-        </span>
-        {/* One line, as wide as its words and actions: the row is never narrower (`SETUP_ROW`). */}
-        <span
-          className={cn(
-            SETUP_TILE_LINES.hint,
-            "flex min-w-0 items-center whitespace-nowrap text-muted-foreground"
-          )}
-        >
-          <HintText step={step} words={words} sample={sample} />
-          <HintActions actions={actions} afterWords={afterWords} />
-        </span>
-      </span>
-    </li>
+    <Button asChild variant="outline" size="sm" className={STEP_BUTTON}>
+      <Link href={href} aria-label={`${action}: ${label}`}>
+        {action}
+      </Link>
+    </Button>
   );
 }
 
-/** One Single in the list: its state, and the link that fills it in. */
+/** Skip on an open step of a skippable kind, Restore on a skipped one, and nothing on any other. */
+function SkipToggle({
+  step,
+  label,
+  write,
+}: {
+  step: SetupStep;
+  label: string;
+  write: SetupStateWrite;
+}): React.ReactNode {
+  const { kind } = step;
+  if (!isSkippableKind(kind) || step.status === "done") return null;
+  const skip = step.status === "open";
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className={STEP_GHOST_BUTTON}
+      disabled={write.isWriting}
+      onClick={() => write.setSkipped(kind, skip)}
+      aria-label={`${skip ? "Skip" : "Restore"}: ${label}`}
+    >
+      {skip ? "Skip" : "Restore"}
+    </Button>
+  );
+}
+
+/** One Single in the list: its state, and the button that fills it in while it is not. */
 function SingleRow({ single, label }: { single: SetupSingle; label: string }) {
   return (
     <li
       data-setup-single={single.slug}
-      className="flex min-h-6 items-center justify-between gap-2"
+      className="flex min-h-10 items-center gap-2 border-t border-border px-2.5 py-1.5 first:border-t-0"
     >
-      <span className="flex items-center gap-2">
-        {single.filledIn ? (
-          <Check className="h-3 w-3 text-success" aria-hidden="true" />
-        ) : (
-          <span
-            aria-hidden="true"
-            className="h-3 w-3 rounded-full border border-border"
-          />
+      <span
+        aria-hidden="true"
+        className={cn(
+          "size-1.5 shrink-0 rounded-full",
+          single.filledIn ? "bg-success-solid" : "bg-control-border"
         )}
-        <span className="text-foreground">{label}</span>
-        <span className="text-muted-foreground">
-          {single.filledIn ? "Filled in" : "Not filled in yet"}
-        </span>
+      />
+      {/* Cut short where the line is too narrow, its whole name on hover. */}
+      <span className="min-w-0 flex-1 truncate text-foreground" title={label}>
+        {label}
       </span>
-      {/* A 24 px target, the least a pointer is given. */}
-      <Link
-        href={singleHref(single.slug)}
-        className="inline-flex min-h-6 items-center font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:decoration-primary"
-      >
-        {single.filledIn ? "Edit" : "Fill in"}
-        <span className="sr-only">: {label}</span>
-      </Link>
+      {single.filledIn ? (
+        <span className="text-muted-foreground">Filled in</span>
+      ) : (
+        <>
+          <span className="sr-only">Not filled in yet</span>
+          <Button asChild variant="outline" size="sm" className={STEP_BUTTON}>
+            <Link
+              href={singleHref(single.slug)}
+              aria-label={`Fill in: ${label}`}
+            >
+              Fill in
+            </Link>
+          </Button>
+        </>
+      )}
     </li>
   );
 }
 
-/** The Singles, each with its state and the link that fills it in. */
+/** The Singles, each with its state and the button that fills it in, inside their step's line. */
 function SinglesList({
   step,
   id,
@@ -623,7 +415,8 @@ function SinglesList({
     <ul
       id={id}
       aria-label={`Your Singles, ${done} of ${total} filled in`}
-      className="grid rounded-md border border-border px-2.5 py-1.5 text-xs"
+      // One column no wider than the line: a long name is cut short, never widening the list.
+      className="mt-2 grid grid-cols-[minmax(0,1fr)] rounded-lg border border-border text-[12.5px]"
     >
       {step.singles.map(single => (
         <SingleRow
@@ -637,48 +430,115 @@ function SinglesList({
 }
 
 /**
- * Asks the frame to grow the card only while the reader has asked to see more of it: the Singles'
- * list open, which is their own action, or a sample-content load's progress or outcome on show
- * under the tiles. At rest the steps are one row at every width (`SETUP_ROW`), which fits 12 × 2
- * (`SETUP_ROW_BODY_PX`), so the card asks for nothing and is drawn at its own rows from its first
- * paint: a card that grew at rest would be painted at its rows first and grow a frame later,
- * moving every card under it. Measured after every draw; drawn at its own rows again once the list
- * closes or the steps are not drawn.
+ * One step's line: its mark, its name and hint, the Singles' list where it is open, and its
+ * buttons on the right. Where the card is too narrow for the name and the buttons side by side
+ * the buttons wrap under them, still on the right, so the line never scrolls sideways.
  */
-function useGrowToFit(
-  drawn: boolean,
-  showingMore: boolean,
-  content: React.RefObject<HTMLDivElement | null>
-): void {
-  const report = useContext(CardGrowContext);
-  useLayoutEffect(() => {
-    report?.(drawn && showingMore ? content.current?.offsetHeight : undefined);
-  });
-  useEffect(() => () => report?.(undefined), [report]);
+function StepLine({
+  step,
+  write,
+  singles,
+  sample,
+}: {
+  step: SetupStep;
+  write: SetupStateWrite;
+  singles: SinglesListControl;
+  sample: SampleRunState;
+}) {
+  const presentation = stepPresentation(step);
+  const { label } = presentation;
+  const hint = hintOf(step, presentation, sample);
+  const finished = stepFinished(step);
+  const own = (
+    <OwnAction
+      step={step}
+      presentation={presentation}
+      singles={singles}
+      sample={sample}
+    />
+  );
+  const skip = <SkipToggle step={step} label={label} write={write} />;
+  return (
+    <li
+      data-setup-step={step.kind}
+      data-status={step.status}
+      className="flex flex-wrap items-start gap-x-3 gap-y-2 border-t border-border py-2.5 first:border-t-0"
+    >
+      <StepMark status={step.status} />
+      <div className="min-w-36 flex-1">
+        <p
+          className={cn(
+            "text-[13.5px] leading-5 break-words",
+            finished ? "text-muted-foreground" : "font-medium text-foreground"
+          )}
+        >
+          {label}
+          <span className="sr-only"> — {STATUS_TEXT[step.status]}</span>
+        </p>
+        <p
+          className={cn(
+            "text-[12.5px] leading-[18px] text-muted-foreground",
+            hint.failed && "text-danger-text"
+          )}
+          data-setup-hint=""
+        >
+          {hint.words}
+        </p>
+        {step.kind === "singles" && step.status === "open" && singles.open && (
+          <SinglesList step={step} id={singles.listId} />
+        )}
+      </div>
+      <StepButtons>
+        {own}
+        {skip}
+      </StepButtons>
+    </li>
+  );
 }
 
+/**
+ * A line's buttons, on the right beside its name or, where they no longer fit there, wrapped under
+ * it. Hidden while empty: a line whose step has nothing to press takes no room for buttons.
+ */
+function StepButtons({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-1.5 empty:hidden"
+      data-setup-actions=""
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * "You're all set": the server has recorded it, so the card will not be drawn again after this
+ * visit; Hide setup takes it off now.
+ */
 function AllSet({ write }: { write: SetupStateWrite }) {
   return (
     <div
-      className="flex items-start justify-between gap-3"
+      className="flex flex-wrap items-center gap-x-3.5 gap-y-2"
       data-testid="setup-all-set"
     >
-      <div className="grid gap-1">
-        <p className="text-sm font-semibold text-foreground">
-          You&apos;re all set.
+      <StepMark status="done" />
+      <div className="min-w-36 flex-1">
+        <p className="text-sm font-medium text-foreground">
+          You&apos;re all set
         </p>
-        <p className="text-sm text-muted-foreground">
-          Every step is done. This card won&apos;t show again.
+        <p className="text-[12.5px] text-muted-foreground">
+          Every step is done or skipped.
         </p>
       </div>
       <Button
-        variant="ghost"
+        type="button"
+        variant="outline"
         size="sm"
+        className={cn(STEP_BUTTON, "ml-auto")}
         onClick={write.dismiss}
         disabled={write.isWriting}
       >
-        <X className="h-4 w-4" aria-hidden="true" />
-        <span className="sr-only">Dismiss setup</span>
+        Hide setup
       </Button>
     </div>
   );
@@ -704,13 +564,13 @@ function AllSetAfterOutcome({
   );
 }
 
-/** A known answer, as the card draws its tiles from. */
+/** A known answer, as the card draws its steps from. */
 type CountedSetup = Extract<SetupAnswer, { known: true }>;
 
 /**
- * Whether the card is all set, and the steps it draws as tiles while it is not. All set when the
+ * Whether the card is all set, and the steps it draws while it is not. All set when the
  * host found it so, or when every step the card draws is done though the host could not tell
- * (`drawnSetup`) and the host has since recorded it (`useRetirement`); until then the tiles are
+ * (`drawnSetup`) and the host has since recorded it (`useRetirement`); until then the steps are
  * drawn, every one done.
  */
 function useDrawnSetup(
@@ -746,151 +606,79 @@ function SaveFailure({ message }: { message: string | undefined }) {
 }
 
 /**
- * The collapsed card: the frame's header is its one line, the title and "N of M done" beside it,
- * so the body draws only its controls, into that header beside the card's menu.
+ * The steps the checklist lists: those the card draws, less sample content once anyone on the
+ * site has answered it, whose line then goes rather than staying as a step done. Counted over
+ * what is listed, so "N of M done" counts the lines shown. Whether setup is all set is judged
+ * over the drawn steps before this (`useDrawnSetup`), so the line going changes no verdict.
  */
-function CollapsedSetup({
-  failure,
-  controls,
-}: {
-  failure: React.ReactNode;
-  controls: React.ReactNode;
-}) {
-  return (
-    <>
-      {failure}
-      <CardHeaderContent>{controls}</CardHeaderContent>
-    </>
+function listedSteps(counted: CountedSetup): CountedSetup {
+  // Counted by the host's own tally, the one "You're all set" is judged by, so the two never
+  // count differently.
+  const listed = talliedSetup(
+    counted.steps.filter(
+      step => !(step.kind === "sample" && step.status === "done")
+    )
   );
+  // A tally is always a known answer; the type cannot say so.
+  return listed.known ? listed : counted;
 }
 
 /**
- * The expanded card: the bar, one row of tiles across the body's whole width, and the Singles'
- * list; its controls are drawn in the frame's header, beside the card's menu.
+ * The checklist: the bar, one line per step, and sample content's load or outcome under them
+ * while one is on show.
  */
-function ExpandedSetup({
-  content,
-  counted,
+function Checklist({
+  listed,
   write,
-  singles: singlesList,
+  singles,
   sample,
   samplePanel,
-  failure,
-  controls,
 }: {
-  content: React.RefObject<HTMLDivElement | null>;
-  counted: CountedSetup;
+  listed: CountedSetup;
   write: SetupStateWrite;
   singles: SinglesListControl;
-  sample: React.ReactNode;
-  /** Sample content's load or outcome in full, under the tiles, while one is on show. */
+  sample: SampleRunState;
   samplePanel: React.ReactNode;
-  failure: React.ReactNode;
-  controls: React.ReactNode;
 }) {
-  const singles = counted.steps.find(
-    (step): step is Extract<SetupStep, { kind: "singles" }> =>
-      step.kind === "singles"
-  );
   return (
+    // Its one column is the card's width whatever a line holds (`minmax(0, 1fr)`): a grid's own
+    // column would grow to the widest line's unbroken words and run past the card's edge.
     <div
-      ref={content}
-      // Its width is the card's, whatever its tiles' widths: the row scrolls inside it.
-      className={cn("@container grid", SETUP_GAP.className)}
+      className="grid min-w-0 grid-cols-[minmax(0,1fr)]"
       data-testid="setup-card"
     >
-      <CardHeaderContent>{controls}</CardHeaderContent>
-      <ProgressBar done={counted.done} total={counted.total} />
-      {failure}
-      {/* One row of tiles across the body's whole width, at every width: sharing it where each
-          reads in full, scrolling sideways inside the card where the body is narrower. */}
-      <StepRow label="Setup steps">
-        {counted.steps.map((step, index) => (
-          <StepTile
+      <ProgressBar done={listed.done} total={listed.total} />
+      <SaveFailure message={write.failed} />
+      <ol
+        aria-label="Setup steps"
+        className="grid min-w-0 grid-cols-[minmax(0,1fr)]"
+      >
+        {listed.steps.map(step => (
+          <StepLine
             key={step.kind}
             step={step}
-            position={index + 1}
             write={write}
-            singles={singlesList}
+            singles={singles}
             sample={sample}
           />
         ))}
-      </StepRow>
+      </ol>
       {samplePanel}
-      {singles !== undefined && singlesList.open && (
-        <SinglesList step={singles} id={singlesList.listId} />
-      )}
     </div>
   );
 }
 
 /**
- * Collapsed as the server says, then as the reader sets it here while the write lands and the
- * card's data is read again. Once the write has landed and that read has answered (`refreshing`
- * went on and off again), or an answer after it already holds what the reader set, the server's
- * answer is drawn again, whatever it says: a change another device made meanwhile wins over this
- * one, never masked by it. A write that fails puts back what was drawn before it, which is what
- * the server still holds, and the header says the change was not saved.
- */
-function useCollapsedHere(
-  stored: boolean,
-  refreshing: boolean,
-  write: SetupStateWrite
-): { collapsed: boolean; toggle: () => void } {
-  const [here, setHere] = useState<boolean | undefined>();
-  // The reader's write has landed, and the card's data is being asked for again.
-  const [landed, setLanded] = useState(false);
-  // Whether that read has started since the write landed, so its end is the fresh answer.
-  const readStarted = useRef(false);
-  useEffect(() => {
-    if (!landed) return;
-    if (refreshing) {
-      readStarted.current = true;
-      return;
-    }
-    if (!readStarted.current && here !== stored) return;
-    readStarted.current = false;
-    setLanded(false);
-    setHere(undefined);
-  }, [landed, refreshing, here, stored]);
-  const collapsed = here ?? stored;
-  return {
-    collapsed,
-    toggle: () => {
-      const before = here;
-      readStarted.current = false;
-      setLanded(false);
-      setHere(!collapsed);
-      write.setCollapsed(!collapsed, {
-        onDone: () => setLanded(true),
-        onFailed: () => setHere(before),
-      });
-    },
-  };
-}
-
-/**
- * The card in its frame: "N of M done" in the header beside the title, so the body holds the bar
- * and the tiles alone (a change that could not be saved says so there instead, where it is seen);
- * grown only while the reader is shown more than the steps (`showingMore`); and one grid row
- * while collapsed, whose line is then the whole card. Answers the count's words while steps are
- * drawn.
+ * "N of M done" in the frame's header beside the title, or the words of a change that could not
+ * be saved, where they are seen; answers the count's words while steps are listed.
  */
 function useSetupInFrame(
-  counted: CountedSetup | undefined,
-  collapsed: boolean,
-  failed: string | undefined,
-  showingMore: boolean,
-  content: React.RefObject<HTMLDivElement | null>
+  listed: CountedSetup | undefined,
+  failed: string | undefined
 ): string | undefined {
   const progress =
-    counted === undefined
-      ? undefined
-      : progressText(counted.done, counted.total);
-  const drawn = progress !== undefined;
+    listed === undefined ? undefined : progressText(listed.done, listed.total);
   useCardTitleCount(failed ?? progress);
-  useGrowToFit(drawn && !collapsed, showingMore, content);
-  useCardCollapsed(drawn && collapsed);
   return progress;
 }
 
@@ -917,48 +705,27 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
   // read that could not check setup keeps the last one that could, so the run stays on screen.
   const sample = useSampleRun(data as SetupCardData, retry, refreshing);
   const { card } = sample;
-  const { collapsed, toggle } = useCollapsedHere(
-    card.collapsed,
-    refreshing,
-    write
-  );
   const [singlesOpen, setSinglesOpen] = useState(false);
   const singlesListId = useId();
-  const content = useRef<HTMLDivElement>(null);
   const { allSet, counted } = useDrawnSetup(card, sample, write);
-  const progress = useSetupInFrame(
-    counted,
-    collapsed,
-    write.failed,
-    singlesOpen || sample.panelShown || sample.refreshFailed,
-    content
-  );
+  const listed = counted === undefined ? undefined : listedSteps(counted);
+  const progress = useSetupInFrame(listed, write.failed);
 
   if (!card.setup.known) return <NotKnown retry={retry} />;
   if (allSet) {
     return <AllSetAfterOutcome sample={sample} write={write} retry={retry} />;
   }
-  if (counted === undefined || progress === undefined) return null;
-  const controls = (
-    <CardControls collapsed={collapsed} write={write} onToggle={toggle} />
-  );
-  const failure = <SaveFailure message={write.failed} />;
-  if (collapsed) {
-    return <CollapsedSetup failure={failure} controls={controls} />;
-  }
+  if (listed === undefined || progress === undefined) return null;
   return (
-    <ExpandedSetup
-      content={content}
-      counted={counted}
+    <Checklist
+      listed={listed}
       write={write}
       singles={{
         open: singlesOpen,
         listId: singlesListId,
         onToggle: () => setSinglesOpen(open => !open),
       }}
-      failure={failure}
-      controls={controls}
-      sample={<SampleContentHint sample={sample} />}
+      sample={sample}
       samplePanel={<SampleContentPanel sample={sample} retry={retry} />}
     />
   );

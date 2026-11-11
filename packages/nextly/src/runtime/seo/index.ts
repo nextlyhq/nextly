@@ -11,3 +11,19 @@ export type {
   MetadataEntry,
   SeoMetaInput,
 } from "./build-metadata";
+
+// The page-metadata contract a plugin provides.
+export {
+  PAGE_METADATA_CAPABILITY,
+  PAGE_METADATA_SERVICE,
+} from "./page-metadata-contract";
+export type {
+  PageMetadataAnswer,
+  PageMetadataImage,
+  PageMetadataInput,
+  PageMetadataResolver,
+  PageMetadataSource,
+  PageMetadataValues,
+  StructuredDataNode,
+  StructuredDataValue,
+} from "./page-metadata-contract";

@@ -27,6 +27,7 @@ import {
   type EveryLanguageVersion,
 } from "../lib/document-version";
 
+import { withListOwner, type ListOwner } from "./list-owner";
 import type {
   PublishAllLanguageOutcome,
   PublishAllPreview,
@@ -57,9 +58,11 @@ const buildQuery = (params: TableParams): string => {
  * Fetch Singles with pagination and filters.
  */
 export const fetchSingles = async (
-  params: TableParams
+  params: TableParams,
+  // The site's Singles or the plugins'; none lists both.
+  owner?: ListOwner
 ): Promise<ListResponse<ApiSingle>> => {
-  const query = buildQuery(params);
+  const query = withListOwner(buildQuery(params), owner);
   const url = `/singles${query ? `?${query}` : ""}`;
   return fetcher<ListResponse<ApiSingle>>(url, {}, true);
 };

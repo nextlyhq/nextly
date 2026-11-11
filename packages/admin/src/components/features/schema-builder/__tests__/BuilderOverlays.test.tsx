@@ -5,7 +5,7 @@
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import { render, screen } from "@admin/__tests__/utils";
 
 import { BuilderOverlays, type ActiveOverlay } from "../BuilderOverlays";
 import type { BuilderConfig } from "../builder-config";
@@ -349,54 +349,21 @@ describe("BuilderOverlays", () => {
 
   // A nested row is clickable in the field list, so the edit overlay has to
   // resolve its id anywhere in the tree, not just among top-level fields.
-  it("opens the editor on a nested field", () => {
-    renderOverlays({ kind: "edit", fieldId: "field_caption" });
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    // The sheet's own description names the field it resolved.
-    expect(
-      screen.getByText(/settings for the caption field/i)
-    ).toBeInTheDocument();
-  });
-
-  it("renders nothing for an edit whose field is gone", () => {
+  // The settings panel is docked beside the field list, not laid over it, so
+  // the overlays draw nothing for an edit. What the panel does there (finding
+  // a nested field, each edit reaching the builder, the delete confirmation)
+  // is pinned in BuilderFieldSettings.test.tsx.
+  it("draws nothing for an edit, which the layout docks beside the list", () => {
     const { container } = renderOverlays({
       kind: "edit",
-      fieldId: "field_missing",
+      fieldId: "field_caption",
     });
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("applies an edit through the builder and closes", async () => {
-    const user = userEvent.setup();
-    const { builder, onActiveChange } = renderOverlays({
-      kind: "edit",
-      fieldId: "field_body",
-    });
-
-    await user.click(screen.getByRole("button", { name: /^apply$/i }));
-
-    expect(builder.handleFieldUpdate).toHaveBeenCalledTimes(1);
-    expect(onActiveChange).toHaveBeenCalledWith({ kind: "none" });
-  });
-
-  it("deletes the edited field once the deletion is confirmed", async () => {
-    const user = userEvent.setup();
-    const { builder } = renderOverlays({
-      kind: "edit",
-      fieldId: "field_body",
-    });
-
-    await user.click(screen.getByRole("button", { name: /delete field/i }));
-    // The header icon and the confirmation share a label, so scope the second
-    // click to the dialog the first one opened.
-    const confirm = within(screen.getByRole("alertdialog"));
-    await user.click(confirm.getByRole("button", { name: /delete field/i }));
-
-    expect(builder.handleFieldDelete).toHaveBeenCalledWith("field_body");
-  });
-  // A component's own fields cannot hold a field group directly: no write stores it there. Held in
-  // a group or a repeater it is stored in that container's value, so it is offered there.
-  it("offers a field group in a component only inside a group or repeater", () => {
+  // A field group's own fields hold a field group directly as well: its instances are rows of
+  // their own, under the instance holding them. It is offered there as inside a group or repeater.
+  it("offers a field group in a field group at its top level and inside a group or repeater", () => {
     const component: BuilderConfig = { ...config, kind: "field-group" };
 
     const top = renderOverlays(
@@ -405,8 +372,8 @@ describe("BuilderOverlays", () => {
     );
     expect(screen.getByRole("option", { name: /^Text/ })).toBeInTheDocument();
     expect(
-      screen.queryByRole("option", { name: /Field group/ })
-    ).not.toBeInTheDocument();
+      screen.getByRole("option", { name: /Field group/ })
+    ).toBeInTheDocument();
     top.unmount();
 
     renderOverlays(

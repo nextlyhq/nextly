@@ -44,6 +44,7 @@ import {
   ATTENTION_SOURCE_ID,
   CONTENT_SOURCE_ID,
   CONTINUE_SOURCE_ID,
+  TEAM_PEOPLE_SOURCE_ID,
   TEAM_SOURCE_ID,
 } from "../../domains/widgets/system-source-ids";
 import { defineWidget } from "../../domains/widgets/declaration/define-widget";
@@ -99,6 +100,7 @@ describe("resetWidgetRegistries", () => {
         CONTINUE_SOURCE_ID,
         RELEASES_SOURCE_ID,
         TEAM_SOURCE_ID,
+        TEAM_PEOPLE_SOURCE_ID,
         VERSIONS_SOURCE_ID,
       ].sort()
     );
@@ -258,6 +260,7 @@ describe("resetWidgetRegistries", () => {
     for (const id of [
       CONTENT_SOURCE_ID,
       TEAM_SOURCE_ID,
+      TEAM_PEOPLE_SOURCE_ID,
       CONTINUE_SOURCE_ID,
       RELEASES_SOURCE_ID,
       ACTIVITY_SOURCE_ID,

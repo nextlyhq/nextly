@@ -574,7 +574,7 @@ export default defineConfig({
 
 - **Duplicate slugs.** Collection, single, and field group slugs must be unique across all three.
 - **Cross-type conflicts.** A single cannot share a slug with a collection or field group.
-- **Field group nesting.** Circular field group references and excessive nesting (max depth 3) are rejected.
+- **Field group nesting.** A field group placed inside itself, directly or through other field groups, is rejected; nesting has no depth limit.
 - **User config.** Only the allowed scalar field types are accepted.
 - **API-key bounds.** `apiKeys.rateLimit.requestsPerHour` and `apiKeys.rateLimit.windowMs` must be positive.
 

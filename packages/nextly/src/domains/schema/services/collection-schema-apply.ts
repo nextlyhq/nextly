@@ -62,6 +62,7 @@ import {
   type ApplyResult,
 } from "../pipeline/apply";
 import { RealClassifier } from "../pipeline/classifier/classifier";
+import { refuseCompanionRenameSwitch } from "../pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../pipeline/database-url";
 import { desiredCollectionTable } from "../pipeline/desired-collection-table";
 import {
@@ -642,6 +643,14 @@ async function applyHoldingSchemaLock(
       builtBy: "collection",
     }
   );
+  // A translated relation renamed and switched at once is refused: the companion's rename
+  // carries its values as they are.
+  refuseCompanionRenameSwitch({
+    rename: companionRename,
+    oldFields,
+    newFields: fields,
+    subject: `Collection '${slug}'`,
+  });
   // A Required or Unique field leaving translation is pushed without its setting first, and the
   // setting is pushed once the companion transition has copied its values in, before its companion
   // column is dropped.

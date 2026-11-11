@@ -2,8 +2,9 @@
 
 /**
  * The frame every schema-builder page draws: the sticky toolbar, the read-only
- * notice a code-first entity gets, the drag context around the field list, and
- * the overlays one of which may be open.
+ * notice a code-first entity gets, the drag context around the field list, the
+ * settings panel docked beside it while a field is edited, and the overlays
+ * one of which may be open.
  *
  * What the three kinds actually differ in is their config object, their copy,
  * and one region above the field list — collections and singles put plugin
@@ -15,21 +16,41 @@
  */
 import { DndContext, type DragEndEvent } from "@dnd-kit/core";
 import type { JSX, ReactNode } from "react";
+import { useMemo } from "react";
 
 import { PageContainer } from "@admin/components/layout/page-container";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { useMediaQuery } from "@admin/hooks/useMediaQuery";
+import { findFieldById } from "@admin/lib/builder";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
+import { moveWithinContainer } from "@admin/lib/builder/builder-rows";
+import { builderFieldErrors } from "@admin/lib/builder/field-validators";
+import {
+  flattenOutline,
+  nodePlacement,
+  type FieldGroupsLoad,
+  type LoadedFieldGroup,
+  type OutlineNode,
+} from "@admin/lib/builder/outline/outline-model";
+import { navigateTo } from "@admin/lib/navigation";
 
 import type { BuilderConfig } from "./builder-config";
-import { BuilderFieldList } from "./BuilderFieldList";
+import { BuilderFieldSettings } from "./BuilderFieldSettings";
 import { BuilderOverlays, type ActiveOverlay } from "./BuilderOverlays";
 import { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
 import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 import { BuilderToolbar } from "./BuilderToolbar";
+import { mayLeaveBuilder } from "./leave-builder";
+import { FormPreview } from "./outline/FormPreview";
+import { Outline, type OutlineCallbacks } from "./outline/Outline";
+import { useBuilderOutline } from "./outline/useBuilderOutline";
 import type { BuilderFieldsApi } from "./types";
 
 type Props = {
   config: BuilderConfig;
   builder: BuilderFieldsApi;
+  /** The entity's slug: what its outline's fold state is remembered under. */
+  entitySlug: string;
   /** Entity name shown in the toolbar. */
   name: string;
   /** True for a code-first entity: every editing affordance renders disabled. */
@@ -38,6 +59,8 @@ type Props = {
   configPath?: string | null;
   /** Drives the toolbar's Save enable state. */
   unsavedCount: number;
+  /** Fields saved before, whose names no longer follow their labels. */
+  savedFieldIds: ReadonlySet<string>;
   onSave: () => void;
   settings: BuilderSettingsValues;
   onSettingsChange: (next: BuilderSettingsValues) => void;
@@ -56,25 +79,24 @@ type Props = {
   children?: ReactNode;
 };
 
-export function BuilderPageLayout({
-  config,
-  builder,
-  name,
-  locked,
-  configPath,
-  unsavedCount,
-  onSave,
-  settings,
-  onSettingsChange,
-  active,
-  onActiveChange,
-  onDuplicateField,
-  onRowDragEnd,
-  beforeFieldList,
-  isSaving,
-  savingLabel,
-  children,
-}: Props): JSX.Element {
+export function BuilderPageLayout(props: Props): JSX.Element {
+  // Only what the frame itself draws is named here; the outline and the panel
+  // take the rest through the workspace.
+  const {
+    config,
+    builder,
+    name,
+    locked,
+    unsavedCount,
+    onSave,
+    settings,
+    onSettingsChange,
+    active,
+    onActiveChange,
+    isSaving,
+    savingLabel,
+    children,
+  } = props;
   return (
     <div className="flex flex-col min-h-screen bg-background">
       <BuilderToolbar
@@ -86,36 +108,7 @@ export function BuilderPageLayout({
         onOpenSettings={() => onActiveChange({ kind: "settings" })}
         onSave={onSave}
       />
-      <PageContainer className="flex-1 pb-0">
-        {locked && (
-          <BuilderReadOnlyNotice kind={config.kind} configPath={configPath} />
-        )}
-        {beforeFieldList}
-        <DndContext
-          sensors={builder.sensors}
-          onDragStart={builder.handleDragStart}
-          onDragEnd={onRowDragEnd}
-          accessibility={{
-            announcements: builderAnnouncements(builder.fields),
-          }}
-        >
-          {/* The kind reaches the list so its empty state names what is being
-              built rather than calling every entity a collection. */}
-          <BuilderFieldList
-            kind={config.kind}
-            fields={builder.fields}
-            readOnly={locked}
-            onAddAt={position => onActiveChange({ kind: "picker", position })}
-            onEditField={fieldId => onActiveChange({ kind: "edit", fieldId })}
-            onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
-            onDuplicateField={onDuplicateField}
-            onReorder={() => {
-              // Reorder is driven by onRowDragEnd above; the field state lives
-              // in useFieldBuilder, so there is nothing to notify here.
-            }}
-          />
-        </DndContext>
-      </PageContainer>
+      <BuilderWorkspace {...props} />
 
       <BuilderOverlays
         active={active}
@@ -138,5 +131,237 @@ export function BuilderPageLayout({
         {isSaving ? savingLabel : ""}
       </div>
     </div>
+  );
+}
+
+/**
+ * The outline and, while a field is edited, its settings, side by side. The
+ * outline is built once here, so the two read the same rows.
+ */
+function BuilderWorkspace(
+  props: Pick<
+    Props,
+    | "config"
+    | "builder"
+    | "entitySlug"
+    | "locked"
+    | "configPath"
+    | "beforeFieldList"
+    | "active"
+    | "onActiveChange"
+    | "onDuplicateField"
+    | "onRowDragEnd"
+    | "savedFieldIds"
+    | "settings"
+    | "unsavedCount"
+  >
+): JSX.Element {
+  const { outline, fieldGroups, fieldGroupsLoad } = useBuilderOutline(
+    props.builder.fields,
+    props.locked,
+    props.settings.i18n === true
+  );
+  // Leaves for a field group's own editor, where its fields are changed:
+  // asked first while there are unsaved changes, which leaving discards.
+  const openFieldGroup = (slug: string) => {
+    if (!mayLeaveBuilder(props.unsavedCount, props.config.kind)) return;
+    navigateTo(buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, { slug }));
+  };
+  return (
+    <div className="flex flex-1 items-start">
+      <FieldListRegion
+        {...props}
+        outline={outline}
+        fieldGroups={fieldGroups}
+        fieldGroupsLoad={fieldGroupsLoad}
+        openFieldGroup={openFieldGroup}
+      />
+      <EditedFieldSettings
+        {...props}
+        outline={outline}
+        openFieldGroup={openFieldGroup}
+      />
+    </div>
+  );
+}
+
+/** Wide enough to dock the settings panel beside the field list. */
+const DOCKED_PANEL_QUERY = "(min-width: 1024px)";
+
+/**
+ * The settings panel for the field being edited, if one is: docked beside the
+ * list, writing each change straight to the builder, and closing when its
+ * field is deleted.
+ */
+function EditedFieldSettings({
+  active,
+  onActiveChange,
+  config,
+  builder,
+  outline,
+  savedFieldIds,
+  locked,
+  openFieldGroup,
+}: Pick<
+  Props,
+  | "active"
+  | "onActiveChange"
+  | "config"
+  | "builder"
+  | "savedFieldIds"
+  | "locked"
+> & {
+  outline: readonly OutlineNode[];
+  openFieldGroup: (slug: string) => void;
+}): JSX.Element | null {
+  // Asked here, where the page keeps it from its first render, so the panel
+  // a field opens in is docked from its first frame on a wide screen.
+  const docked = useMediaQuery(DOCKED_PANEL_QUERY);
+  const byId = useMemo(
+    () => new Map(flattenOutline(outline).map(node => [node.id, node])),
+    [outline]
+  );
+  if (active.kind !== "edit") return null;
+  const close = () => onActiveChange({ kind: "none" });
+  const node = byId.get(active.fieldId);
+  return (
+    <BuilderFieldSettings
+      // Keyed by the field, so its tab and any half-typed list entry start
+      // fresh when another field is selected.
+      key={active.fieldId}
+      kind={config.kind}
+      fields={builder.fields}
+      fieldId={active.fieldId}
+      savedFieldIds={savedFieldIds}
+      readOnly={locked}
+      docked={docked}
+      // The outline's answer, so the panel and the row never disagree about
+      // whether a field can change; and for a field group's field, which the
+      // Builder does not hold, where the outline places it.
+      readOnlyReason={node?.readOnly}
+      fallbackPlacement={
+        node && !node.own ? nodePlacement(node, byId, outline) : undefined
+      }
+      onOpenFieldGroup={openFieldGroup}
+      onFieldChange={builder.handleFieldUpdate}
+      onFieldDelete={fieldId => {
+        builder.handleFieldDelete(fieldId);
+        close();
+      }}
+      onClose={close}
+    />
+  );
+}
+
+/**
+ * The field list and what sits above it: the read-only notice a code-first
+ * entity gets, the page's own region, and the drag context around the list.
+ */
+function FieldListRegion({
+  config,
+  builder,
+  entitySlug,
+  outline,
+  fieldGroups,
+  fieldGroupsLoad,
+  locked,
+  configPath,
+  beforeFieldList,
+  active,
+  onActiveChange,
+  onDuplicateField,
+  onRowDragEnd,
+  openFieldGroup,
+}: Pick<
+  Props,
+  | "config"
+  | "builder"
+  | "entitySlug"
+  | "locked"
+  | "configPath"
+  | "beforeFieldList"
+  | "active"
+  | "onActiveChange"
+  | "onDuplicateField"
+  | "onRowDragEnd"
+> & {
+  outline: readonly OutlineNode[];
+  fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
+  fieldGroupsLoad: FieldGroupsLoad;
+  openFieldGroup: (slug: string) => void;
+}): JSX.Element {
+  const selectedId = active.kind === "edit" ? active.fieldId : null;
+  // The same map the save's refusal is read from, so a row marked with an
+  // error is a row the save refuses.
+  const errors = useMemo(
+    () => builderFieldErrors(builder.fields.filter(field => !field.isSystem)),
+    [builder.fields]
+  );
+  const systemFields = useMemo(
+    () => builder.fields.filter(field => field.isSystem),
+    [builder.fields]
+  );
+
+  const callbacks: OutlineCallbacks = {
+    select: fieldId => onActiveChange({ kind: "edit", fieldId }),
+    addAt: position => onActiveChange({ kind: "picker", position }),
+    move: (fieldId, delta) =>
+      builder.setFields(prev => moveWithinContainer(prev, fieldId, delta)),
+    duplicate: onDuplicateField,
+    remove: fieldId => {
+      builder.handleFieldDelete(fieldId);
+      // A field deleted while its settings are open closes them too.
+      if (selectedId === fieldId) onActiveChange({ kind: "none" });
+    },
+    setHidden: (fieldId, hidden) => {
+      const field = findFieldById(builder.fields, fieldId);
+      if (!field) return;
+      builder.handleFieldUpdate({
+        ...field,
+        admin: { ...field.admin, hidden },
+      });
+    },
+    openFieldGroup,
+  };
+
+  const foldKey = `nextly:admin:builder-fold:${config.kind}:${entitySlug}`;
+
+  return (
+    <PageContainer className="flex-1 min-w-0 pb-0">
+      {locked && (
+        <BuilderReadOnlyNotice kind={config.kind} configPath={configPath} />
+      )}
+      {beforeFieldList}
+      <DndContext
+        sensors={builder.sensors}
+        onDragStart={builder.handleDragStart}
+        onDragEnd={onRowDragEnd}
+        accessibility={{
+          announcements: builderAnnouncements(builder.fields),
+        }}
+      >
+        {/* Keyed by the entity, so what is folded is read afresh for each
+            one rather than carried over from the last. */}
+        <Outline
+          key={foldKey}
+          kind={config.kind}
+          nodes={outline}
+          systemFields={systemFields}
+          errors={errors}
+          foldKey={foldKey}
+          selectedId={selectedId}
+          readOnly={locked}
+          callbacks={callbacks}
+          renderPreview={() => (
+            <FormPreview
+              kind={config.kind}
+              fields={builder.fields}
+              fieldGroups={fieldGroups}
+              fieldGroupsLoad={fieldGroupsLoad}
+            />
+          )}
+        />
+      </DndContext>
+    </PageContainer>
   );
 }

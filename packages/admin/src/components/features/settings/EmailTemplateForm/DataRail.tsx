@@ -95,7 +95,7 @@ export function DataRail({
         {check.undeclared.length > 0 ? (
           // Full-strength status border so the boundary is perceivable.
           <div
-            className="rounded-md border border-warning bg-warning/10 p-3"
+            className="rounded-md border border-warning-border bg-warning-surface p-3"
             data-testid="undeclared-variables"
           >
             <p className="text-xs text-foreground">Used but not declared:</p>
@@ -132,7 +132,7 @@ export function DataRail({
         ) : null}
         {check.missing.length > 0 ? (
           <div
-            className="rounded-md border border-warning bg-warning/10 p-3"
+            className="rounded-md border border-warning-border bg-warning-surface p-3"
             data-testid="missing-values"
           >
             <p className="text-xs text-foreground">

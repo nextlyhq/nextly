@@ -783,6 +783,26 @@ export interface CollectionConfig {
   fields: FieldConfig[];
 
   /**
+   * @experimental Where each entry is served on the site, as a path template
+   * with `{field}` placeholders: `"/blog/{slug}"`.
+   *
+   * One answer for every reader that needs an entry's public address, read
+   * through `publicAddressOf`. A collection without one is not public yet: it
+   * gets no address, never a guessed one.
+   *
+   * The template starts with `/`, has no trailing `/`, query or fragment, and
+   * names at least one placeholder. Each placeholder is a whole segment
+   * naming a field of the collection (or `id`); a slug of several segments
+   * (`db.slugPaths`) stands under one. Literal segments are spelled as a
+   * browser sends them, and nothing may sit under `/admin`, `/api` or another
+   * path the runtime keeps. A declaration breaking any of these is refused
+   * when the collection is defined.
+   *
+   * @example "/blog/{slug}", "/{slug}", "/docs/{category}/{slug}"
+   */
+  publicAddress?: string;
+
+  /**
    * @experimental Internal/private storage (D30). The collection stays in the
    * merged schema — relatable and accessible via `ctx.services` / `ctx.db.raw` —
    * but is hidden from the content-admin navigation (implies `admin.hidden`).

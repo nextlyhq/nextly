@@ -45,6 +45,7 @@ import {
   type WidgetSizeFacts,
 } from "../domains/widgets/canonical";
 import {
+  addedCardWithoutCollection,
   collectionSettingsToken,
   collectionWidgets,
   unreadableCollectionCard,
@@ -889,6 +890,35 @@ function refuseUnreadableCollections(
   });
 }
 
+/**
+ * Refuses a card the write adds that reads a collection, from a reader who may read none that the
+ * dashboard shows (`addedCardWithoutCollection`): the add panel offers none to them, so one here
+ * was sent around it.
+ */
+function refuseCollectionCardWithNone(
+  submitted: readonly WidgetPlacement[],
+  shown: readonly WidgetPlacement[],
+  widgets: readonly CanonicalWidget[],
+  readable: ReadonlySet<string>
+): void {
+  const added = addedCardWithoutCollection(
+    submitted,
+    collectionWidgets(widgets),
+    new Set(shown.map(placement => placement.id)),
+    publishableContentSources(readable).length > 0
+  );
+  if (added === undefined) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "placements",
+        code: "INVALID_VALUE",
+        message: "This card needs a collection you can read.",
+      },
+    ],
+  });
+}
+
 /** The collections a reader may read, each by the label its source is listed under. */
 function namedCollections(readable: ReadonlySet<string>): NamedCollection[] {
   return [...readable].map(slug => ({
@@ -1325,6 +1355,12 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     replaceUnreadable
   );
   const shown = visibleArrangement(stored.layout, view, notShown);
+  refuseCollectionCardWithNone(
+    submitted,
+    shown,
+    view.widgets,
+    view.audience.readableCollections
+  );
   refuseExtraCards(submitted, shown, sizesOf(view.widgets));
   refuseOverlongText(submitted, shown, view.widgets);
   refuseUnusableSettings(

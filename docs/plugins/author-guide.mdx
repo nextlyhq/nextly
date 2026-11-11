@@ -145,14 +145,27 @@ something newer.
 
 ### When each hook runs
 
-A write offers four timings, in this order:
+A write offers five timings, in this order:
 
 | When               | What runs                                                                           | How often                                    |
 | ------------------ | ----------------------------------------------------------------------------------- | -------------------------------------------- |
 | Before the write   | `beforeOperation`, `beforeCreate` / `beforeUpdate` / `beforeDelete`, `beforeChange` | once                                         |
 | In the transaction | `ctx.hooks.onInTransaction` handlers (`@experimental`)                              | once per attempt, so possibly more than once |
-| After the commit   | `afterCreate` / `afterUpdate` / `afterDelete`, and the collection events            | once                                         |
+| At the commit      | the collection events: `collection.<slug>.created`, `.updated` and `.deleted`       | once                                         |
+| After the commit   | `afterCreate` / `afterUpdate` / `afterDelete`                                       | once                                         |
 | After              | field `afterChange` hooks                                                           | once                                         |
+
+A collection event announces the commit, so it comes before the after-hooks.
+Before this release it came after them: a listener that relied on the
+after-hooks having run should do its work in an `after*` hook instead.
+
+Some writes run their after-hooks inline, inside a transaction, before it
+commits: one made inside a transaction its caller opened
+(`createEntryInTransaction`, `updateEntryInTransaction`,
+`deleteEntryInTransaction`), and each entry of the batch writes `createEntries`,
+`updateEntries` and `deleteEntries`. There the after-hooks come first, and the
+collection event is delivered once the outermost transaction commits, and never
+if it rolls back. Before this release these writes sent no collection event.
 
 An **in-transaction** handler runs last inside the write's own transaction: after the entry, its field groups, its version and its outbox event are written, and before the commit. It is handed the write and your `db`, bound to that transaction, so a row you write there commits or rolls back **with** the entry:
 

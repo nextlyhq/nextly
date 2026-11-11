@@ -87,7 +87,7 @@ those rows would break.
 
 ### Container fields and nesting
 
-Repeater, Group, and Component fields can themselves contain fields. Nesting is capped at 4 levels deep — `MAX_NESTING_DEPTH = 4` in `packages/admin/src/components/features/schema-builder/types.ts`. Each level renders with a progressively darker background to make the hierarchy visible.
+Repeater, Group, and Component fields can themselves contain fields, to any depth. Each level renders with a progressively darker background to make the hierarchy visible. A field group cannot be placed inside itself, directly or through other field groups: a save that would do so is refused, naming the field groups in the cycle (see [Field group nesting](/docs/configuration/field-groups#field-group-nesting)).
 
 A Component field embeds a reusable field group definition (created via the Field Groups Builder or `defineFieldGroup()`). It can target a single field group or a list of allowed field groups, and can be marked repeatable to act as an inline content zone.
 

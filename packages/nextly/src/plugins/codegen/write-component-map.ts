@@ -13,6 +13,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { PluginDefinition } from "../plugin-context";
 
 import {
@@ -52,7 +53,9 @@ export async function planComponentMapFiles(
    */
   config?: string | { import: string },
   /** The site config's `admin.dashboard`, whose own widgets the map lists beside the plugins'. */
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[]
 ): Promise<PlannedComponentMapFile[]> {
   const configImport =
     config === undefined || typeof config !== "string"
@@ -72,6 +75,7 @@ export async function planComponentMapFiles(
       typesOutputPath,
       configImport,
       siteDashboard,
+      siteCollections,
       unbacked
     ).map(async artifact => {
       const file = resolve(cwd, artifact.path);

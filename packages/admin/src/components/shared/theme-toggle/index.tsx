@@ -1,13 +1,13 @@
 "use client";
 
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
 } from "@nextlyhq/ui";
+import type React from "react";
 
-import { Check, Moon, Sun, Laptop } from "@admin/components/icons";
+import { Moon, Sun, Laptop } from "@admin/components/icons";
 import { useTheme } from "@admin/context/providers/ThemeProvider";
 
 const OPTIONS = [
@@ -16,48 +16,41 @@ const OPTIONS = [
   { value: "system" as const, label: "System", icon: Laptop },
 ];
 
+type ThemeValue = (typeof OPTIONS)[number]["value"];
+
+const isThemeValue = (value: string): value is ThemeValue =>
+  OPTIONS.some(option => option.value === value);
+
 /**
- * Theme Toggle
- *
- * Top-bar control to switch between light, dark, and system appearance. Selecting an option
- * applies and persists it immediately through the admin's theme provider. The trigger shows the active mode's
- * icon and matches the sibling header icon buttons.
+ * The admin's appearance (light, dark or the device's), as a choice inside the
+ * person's menu. A radio group rather than plain items, so the current choice
+ * is announced as checked. Selecting one applies and persists it at once
+ * through the admin's theme provider.
  */
-export function ThemeToggle(): React.ReactElement {
-  const { theme, setTheme, resolvedTheme } = useTheme();
-
-  // The trigger reflects the chosen mode: the device icon for "system", otherwise the
-  // resolved light/dark icon.
-  const TriggerIcon =
-    theme === "system" ? Laptop : resolvedTheme === "dark" ? Moon : Sun;
-
+export function ThemeChoice(): React.ReactElement {
+  const { theme, setTheme } = useTheme();
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
-          aria-label="Choose theme"
-          title="Choose theme"
-        >
-          {/* Muted foreground so this resting icon meets contrast; it brightens to
-              the foreground ink on hover, not to the action token. */}
-          <TriggerIcon className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-40">
+    <>
+      <DropdownMenuLabel className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
+        Theme
+      </DropdownMenuLabel>
+      <DropdownMenuRadioGroup
+        value={theme}
+        onValueChange={value => {
+          if (isThemeValue(value)) setTheme(value);
+        }}
+      >
         {OPTIONS.map(({ value, label, icon: Icon }) => (
-          <DropdownMenuItem
+          <DropdownMenuRadioItem
             key={value}
-            onClick={() => setTheme(value)}
-            className="cursor-pointer rounded-sm"
+            value={value}
+            className="cursor-pointer text-sm"
           >
-            <Icon className="h-4 w-4" />
-            <span>{label}</span>
-            {theme === value && <Check className="ml-auto h-4 w-4" />}
-          </DropdownMenuItem>
+            <Icon className="mr-2 h-4 w-4" aria-hidden="true" />
+            {label}
+          </DropdownMenuRadioItem>
         ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </DropdownMenuRadioGroup>
+    </>
   );
 }
