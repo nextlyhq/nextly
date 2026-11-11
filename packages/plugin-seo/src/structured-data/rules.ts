@@ -90,40 +90,43 @@ function checkedSource(where: string, source: unknown): void {
   refuse(`${where} must name a field, or give { value: "..." }.`);
 }
 
+/** One type's mapping as given, or a refusal naming what is wrong in it. */
+function checkMapping(where: string, type: string, mapping: unknown): void {
+  if (!isStructuredDataTypeKey(type)) refuse(`${where} is not a type offered.`);
+  if (!isRecord(mapping)) refuse(`${where} must be an object.`);
+  for (const [detail, source] of Object.entries(mapping)) {
+    if (!Object.hasOwn(DETAIL_LABELS, detail)) {
+      refuse(`${where}.${detail} is not a detail.`);
+    }
+    checkedSource(`${where}.${detail}`, source);
+  }
+}
+
+/** One content type's rule as given, or a refusal naming what is wrong. */
+function checkRule(where: string, rule: unknown): void {
+  if (!isRecord(rule)) refuse(`${where} must be an object.`);
+  if (rule.type !== undefined && !isStructuredDataTypeKey(rule.type)) {
+    refuse(`${where}.type ${JSON.stringify(rule.type)} is not a type offered.`);
+  }
+  if (rule.details === undefined) return;
+  if (!isRecord(rule.details)) refuse(`${where}.details must be an object.`);
+  for (const [type, mapping] of Object.entries(rule.details)) {
+    checkMapping(`${where}.details.${type}`, type, mapping);
+  }
+}
+
 /**
  * The types the plugin's options give, checked when the plugin is created so
  * a misspelled type or detail fails at start rather than describing every
  * page as nothing.
  */
-export function checkedTypeRules(
+function checkedTypeRules(
   types: unknown
 ): Record<string, StructuredDataTypeRule> {
   if (types === undefined) return {};
   if (!isRecord(types)) refuse("structuredData.types must be an object.");
   for (const [contentType, rule] of Object.entries(types)) {
-    const where = `structuredData.types.${contentType}`;
-    if (!isRecord(rule)) refuse(`${where} must be an object.`);
-    if (rule.type !== undefined && !isStructuredDataTypeKey(rule.type)) {
-      refuse(
-        `${where}.type ${JSON.stringify(rule.type)} is not a type offered.`
-      );
-    }
-    if (rule.details === undefined) continue;
-    if (!isRecord(rule.details)) refuse(`${where}.details must be an object.`);
-    for (const [type, mapping] of Object.entries(rule.details)) {
-      if (!isStructuredDataTypeKey(type)) {
-        refuse(`${where}.details.${type} is not a type offered.`);
-      }
-      if (!isRecord(mapping)) {
-        refuse(`${where}.details.${type} must be an object.`);
-      }
-      for (const [detail, source] of Object.entries(mapping)) {
-        if (!Object.hasOwn(DETAIL_LABELS, detail)) {
-          refuse(`${where}.details.${type}.${detail} is not a detail.`);
-        }
-        checkedSource(`${where}.details.${type}.${detail}`, source);
-      }
-    }
+    checkRule(`structuredData.types.${contentType}`, rule);
   }
   return types as Record<string, StructuredDataTypeRule>;
 }

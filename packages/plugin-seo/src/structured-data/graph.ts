@@ -262,58 +262,53 @@ interface PageFacts {
 type DetailValue = Json | undefined;
 
 /** Reads one detail of the page as the kind of fact it is. */
-async function detailValue(
+type DetailReader = (
   facts: PageFacts,
-  detail: StructuredDataDetail,
   read: DetailRead
-): Promise<DetailValue> {
-  const { ctx, input, answer, origin } = facts;
-  switch (detail) {
-    case "author":
-    case "person": {
-      const named = await namedOf(ctx, input, read, origin);
-      return named === undefined ? undefined : personNode(named);
-    }
-    case "itemReviewed": {
-      const named = await namedOf(ctx, input, read, origin);
-      return named?.name;
-    }
-    case "image": {
-      // The page's own share image, from the order of who wins, unless the
-      // content type maps another field.
-      const picture =
-        facts.mapping.image === undefined
-          ? answer.social?.image
-          : await pictureOf(ctx, read);
-      return imageNode(picture, origin);
-    }
-    case "datePublished":
-    case "startDate":
-    case "uploadDate":
-      return dateOf(read.value);
-    case "price":
-    case "rating":
-      return numberOf(read.value);
-    case "ratingCount":
-      return countOf(read.value);
-    case "currency":
-      return currencyOf(read.value);
-    case "availability":
-      return availabilityOf(read.value);
-    case "location":
-      return placeOf(read.value);
-    case "streetAddress":
-      return postalAddressOf(read.value);
-    case "openingHours":
-      return openingHoursOf(read.value);
-    case "videoFile":
-      return fileOf(read.value, origin);
-    case "itemType":
-      return itemTypeOf(read.value);
-    case "operatingSystem":
-      return textOf(read.value);
-  }
-}
+) => DetailValue | Promise<DetailValue>;
+
+/** A person the page names, as an author or the subject of a profile. */
+const personRead: DetailReader = async (facts, read) => {
+  const named = await namedOf(facts.ctx, facts.input, read, facts.origin);
+  return named === undefined ? undefined : personNode(named);
+};
+
+/** A detail read as a value of one kind, from the field's value alone. */
+const valueRead =
+  (of: (value: unknown) => DetailValue): DetailReader =>
+  (_, read) =>
+    of(read.value);
+
+/** How each detail is read, as the kind of fact it is. */
+const DETAIL_READERS: Readonly<Record<StructuredDataDetail, DetailReader>> = {
+  author: personRead,
+  person: personRead,
+  itemReviewed: async (facts, read) =>
+    (await namedOf(facts.ctx, facts.input, read, facts.origin))?.name,
+  // The page's own share image, from the order of who wins, unless the
+  // content type maps another field.
+  image: async (facts, read) =>
+    imageNode(
+      facts.mapping.image === undefined
+        ? facts.answer.social?.image
+        : await pictureOf(facts.ctx, read),
+      facts.origin
+    ),
+  datePublished: valueRead(dateOf),
+  startDate: valueRead(dateOf),
+  uploadDate: valueRead(dateOf),
+  price: valueRead(numberOf),
+  rating: valueRead(numberOf),
+  ratingCount: valueRead(countOf),
+  currency: valueRead(currencyOf),
+  availability: valueRead(availabilityOf),
+  location: valueRead(placeOf),
+  streetAddress: valueRead(postalAddressOf),
+  openingHours: valueRead(openingHoursOf),
+  videoFile: (facts, read) => fileOf(read.value, facts.origin),
+  itemType: valueRead(itemTypeOf),
+  operatingSystem: valueRead(textOf),
+};
 
 /** The details a type is described with, and the ones it is missing. */
 async function detailsOf(
@@ -332,7 +327,7 @@ async function detailsOf(
   for (const detail of [...needs, ...uses]) {
     const source = facts.mapping[detail];
     const read = readDetail(facts.document, detail, source);
-    const value = await detailValue(facts, detail, read);
+    const value = await DETAIL_READERS[detail](facts, read);
     if (value !== undefined) {
       values[detail] = value;
       continue;
@@ -421,10 +416,7 @@ function subjectNode(
         datePublished: details.datePublished,
         dateModified: links.modified,
         author: details.author,
-        publisher:
-          links.organization === undefined
-            ? undefined
-            : { "@id": links.organization },
+        publisher: ref(links.organization),
         inLanguage: links.language,
       });
     case "product":
@@ -499,6 +491,191 @@ function subjectNode(
   }
 }
 
+/** A reference to the node `id` names, or nothing where there is none. */
+function ref(id: string | undefined): { "@id": string } | undefined {
+  return id === undefined ? undefined : { "@id": id };
+}
+
+/** The site's own nodes, and the ids and name the page's nodes link to. */
+interface SiteNodes {
+  nodes: StructuredDataNode[];
+  organizationId?: string;
+  websiteId?: string;
+  siteName?: string;
+}
+
+/** The organisation that owns the site, from the brand facts. */
+function organizationNode(
+  rules: StructuredDataRules,
+  name: string,
+  id: string,
+  origin: string
+): StructuredDataNode {
+  const { brand } = rules;
+  // Only official accounts at an address are named.
+  const profiles = (brand.profiles ?? [])
+    .map(profile => profile.url)
+    .filter(url => originOf(url) !== undefined);
+  const otherNames = [...(brand.otherNames ?? [])];
+  return node({
+    "@type": "Organization",
+    "@id": id,
+    name,
+    alternateName: otherNames.length > 0 ? otherNames : undefined,
+    url: `${origin}/`,
+    logo: imageNode(brand.logo, origin),
+    sameAs: profiles.length > 0 ? profiles : undefined,
+  });
+}
+
+/**
+ * The organisation and the website, each where the site has a name for it:
+ * the brand's name for the organisation, the site's for the website.
+ */
+function siteNodesOf(
+  rules: StructuredDataRules,
+  answer: PageMetadataAnswer,
+  origin: string,
+  language: string | undefined
+): SiteNodes {
+  const siteName = answer.social?.siteName ?? rules.brand.name;
+  const brandName = rules.brand.name ?? siteName;
+  const home = `${origin}/`;
+  const site: SiteNodes = { nodes: [] };
+  if (brandName !== undefined) {
+    site.organizationId = `${home}#organization`;
+    site.nodes.push(
+      organizationNode(rules, brandName, site.organizationId, origin)
+    );
+  }
+  if (siteName !== undefined) {
+    site.siteName = siteName;
+    site.websiteId = `${home}#website`;
+    site.nodes.push(
+      node({
+        "@type": "WebSite",
+        "@id": site.websiteId,
+        url: home,
+        name: siteName,
+        publisher: ref(site.organizationId),
+        inLanguage: language,
+      })
+    );
+  }
+  return site;
+}
+
+/** The page being described: its address, text and language. */
+interface DescribedPage {
+  url: string;
+  title?: string;
+  description?: string;
+  language?: string;
+}
+
+/**
+ * The trail from the site's home, named by the site's name, to the page: a
+ * site with no name, a page with no title, or the home page itself has none.
+ */
+function breadcrumbOf(
+  page: DescribedPage,
+  site: SiteNodes,
+  origin: string
+): StructuredDataNode | undefined {
+  if (page.title === undefined || site.siteName === undefined) return undefined;
+  if (new URL(page.url).pathname === "/") return undefined;
+  return {
+    "@type": "BreadcrumbList",
+    "@id": `${page.url}#breadcrumb`,
+    itemListElement: [
+      {
+        "@type": "ListItem",
+        position: 1,
+        name: site.siteName,
+        item: `${origin}/`,
+      },
+      { "@type": "ListItem", position: 2, name: page.title },
+    ],
+  };
+}
+
+/** What is described about the page, as its chosen type has it. */
+interface Description {
+  type: StructuredDataTypeKey;
+  values: Partial<Record<StructuredDataDetail, Json>>;
+  /** Whether the type has every detail it needs. */
+  described: boolean;
+}
+
+/**
+ * The page's nodes: the page, as its own kind where it is described as one
+ * and has what it needs, else a web page; its trail; and its subject, where
+ * it is described as a thing and has what that needs.
+ */
+function pageNodesOf(
+  page: DescribedPage,
+  description: Description,
+  site: SiteNodes,
+  facts: Pick<PageFacts, "answer" | "document" | "origin">
+): StructuredDataNode[] {
+  const { type, values, described } = description;
+  const definition = STRUCTURED_DATA_TYPES[type];
+  const breadcrumb = breadcrumbOf(page, site, facts.origin);
+  const pageNode = node({
+    "@type": definition.page && described ? definition.schemaType : "WebPage",
+    "@id": page.url,
+    url: page.url,
+    name: page.title,
+    description: page.description,
+    isPartOf: ref(site.websiteId),
+    primaryImageOfPage: imageNode(facts.answer.social?.image, facts.origin),
+    breadcrumb: ref(breadcrumb?.["@id"] as string | undefined),
+    mainEntity: type === "profilePage" && described ? values.person : undefined,
+    inLanguage: page.language,
+  });
+  const nodes = breadcrumb === undefined ? [pageNode] : [pageNode, breadcrumb];
+  if (definition.page || !described) return nodes;
+  const modified = dateOf(facts.document.updatedAt);
+  return [
+    ...nodes,
+    subjectNode(type, values, page, {
+      ...(site.organizationId === undefined
+        ? {}
+        : { organization: site.organizationId }),
+      ...(page.language === undefined ? {} : { language: page.language }),
+      ...(modified === undefined ? {} : { modified }),
+    }),
+  ];
+}
+
+/** The details a type is missing, the title a described thing needs first. */
+async function describe(
+  facts: PageFacts,
+  type: StructuredDataTypeKey
+): Promise<Description & { missing: StructuredDataProblem[] }> {
+  const { values, missing } = await detailsOf(facts, type);
+  // A described thing is named by the page's title, as the head names it.
+  if (!STRUCTURED_DATA_TYPES[type].page && facts.answer.title === undefined) {
+    missing.unshift({
+      type,
+      detail: "title",
+      message: "Missing: title.",
+      fix: "content",
+    });
+  }
+  return { type, values, described: missing.length === 0, missing };
+}
+
+/** The problem a site with no address has: nothing can be written. */
+function noSiteAddress(type: StructuredDataTypeKey): StructuredDataProblem {
+  return {
+    type,
+    detail: "siteAddress",
+    message: "Missing: the site's address.",
+    fix: "settings",
+  };
+}
+
 /**
  * The page's structured data, worked out from its answer and its fields: the
  * organisation and website from the brand facts, the page, a breadcrumb trail
@@ -515,30 +692,18 @@ export async function buildStructuredData(
   const hidden = answer.robots?.index === false;
   const offered = structuredDataTypesFor({ hidden });
   const rule = rules.types[key];
-  // The site's address decides every absolute address; a language served on
-  // its own domain gives its own in the page's canonical.
-  const origin = originOf(rules.origin) ?? originOf(answer.canonical);
   const { type, chosen } = chosenType(
     { document },
     rule,
     offered,
     automaticType(document, hidden)
   );
+  const decided = { type, chosen, offered };
+  // The site's address decides every absolute address; a language served on
+  // its own domain gives its own in the page's canonical.
+  const origin = originOf(rules.origin) ?? originOf(answer.canonical);
   if (origin === undefined) {
-    return {
-      type,
-      chosen,
-      offered,
-      nodes: [],
-      problems: [
-        {
-          type,
-          detail: "siteAddress",
-          message: "Missing: the site's address.",
-          fix: "settings",
-        },
-      ],
-    };
+    return { ...decided, nodes: [], problems: [noSiteAddress(type)] };
   }
   const facts: PageFacts = {
     ctx,
@@ -548,61 +713,8 @@ export async function buildStructuredData(
     origin,
     mapping: rule?.details?.[type] ?? {},
   };
-  const { values, missing } = await detailsOf(facts, type);
-  // A described thing is named by the page's title, as the head names it.
-  if (!STRUCTURED_DATA_TYPES[type].page && answer.title === undefined) {
-    missing.unshift({
-      type,
-      detail: "title",
-      message: "Missing: title.",
-      fix: "content",
-    });
-  }
-  const described = missing.length === 0;
-  const definition = STRUCTURED_DATA_TYPES[type];
-
-  const siteName = answer.social?.siteName ?? rules.brand.name;
-  const brandName = rules.brand.name ?? siteName;
-  const home = `${origin}/`;
-  const organizationId =
-    brandName === undefined ? undefined : `${home}#organization`;
-  const websiteId = siteName === undefined ? undefined : `${home}#website`;
-  const language = input.locale;
-  const updated = dateOf(document.updatedAt);
-
-  const nodes: StructuredDataNode[] = [];
-  if (organizationId !== undefined && brandName !== undefined) {
-    const profiles = (rules.brand.profiles ?? [])
-      .map(profile => originOf(profile.url) && profile.url)
-      .filter((profile): profile is string => typeof profile === "string");
-    nodes.push(
-      node({
-        "@type": "Organization",
-        "@id": organizationId,
-        name: brandName,
-        alternateName:
-          (rules.brand.otherNames ?? []).length > 0
-            ? [...(rules.brand.otherNames ?? [])]
-            : undefined,
-        url: home,
-        logo: imageNode(rules.brand.logo, origin),
-        sameAs: profiles.length > 0 ? profiles : undefined,
-      })
-    );
-  }
-  if (websiteId !== undefined && siteName !== undefined) {
-    nodes.push(
-      node({
-        "@type": "WebSite",
-        "@id": websiteId,
-        url: home,
-        name: siteName,
-        publisher:
-          organizationId === undefined ? undefined : { "@id": organizationId },
-        inLanguage: language,
-      })
-    );
-  }
+  const { missing, ...description } = await describe(facts, type);
+  const site = siteNodesOf(rules, answer, origin, input.locale);
   // The page's address is its canonical as its answer gives it, by the one
   // rule every output follows for a valid canonical. A page with none, such
   // as one whose type declares no address, is given no guessed one: only the
@@ -611,75 +723,20 @@ export async function buildStructuredData(
     answer.canonical === undefined
       ? undefined
       : absolute(answer.canonical, origin);
-  if (url === undefined) return { type, chosen, offered, nodes, problems: [] };
-  const pagePath = new URL(url).pathname;
-  // A trail from the site's home, named by the site's name, to the page: a
-  // site with no name, or the home page itself, has none to show.
-  const breadcrumbId =
-    pagePath !== "/" && answer.title !== undefined && siteName !== undefined
-      ? `${url}#breadcrumb`
-      : undefined;
-  // The page node: its own kind where the page is described as one and has
-  // what it needs, else a web page.
-  const pageType =
-    definition.page && described ? definition.schemaType : "WebPage";
-  const image = imageNode(answer.social?.image, origin);
-  nodes.push(
-    node({
-      "@type": pageType,
-      "@id": url,
-      url,
-      name: answer.title,
-      description: answer.description,
-      isPartOf: websiteId === undefined ? undefined : { "@id": websiteId },
-      primaryImageOfPage: image,
-      breadcrumb:
-        breadcrumbId === undefined ? undefined : { "@id": breadcrumbId },
-      mainEntity:
-        type === "profilePage" && described ? values.person : undefined,
-      inLanguage: language,
-    })
-  );
-  if (
-    breadcrumbId !== undefined &&
-    answer.title !== undefined &&
-    siteName !== undefined
-  ) {
-    nodes.push({
-      "@type": "BreadcrumbList",
-      "@id": breadcrumbId,
-      itemListElement: [
-        {
-          "@type": "ListItem",
-          position: 1,
-          name: siteName,
-          item: home,
-        },
-        { "@type": "ListItem", position: 2, name: answer.title },
-      ],
-    });
+  if (url === undefined) {
+    return { ...decided, nodes: site.nodes, problems: [] };
   }
-  if (!definition.page && described) {
-    nodes.push(
-      subjectNode(
-        type,
-        values,
-        {
-          url,
-          ...(answer.title === undefined ? {} : { title: answer.title }),
-          ...(answer.description === undefined
-            ? {}
-            : { description: answer.description }),
-        },
-        {
-          ...(organizationId === undefined
-            ? {}
-            : { organization: organizationId }),
-          ...(language === undefined ? {} : { language }),
-          ...(updated === undefined ? {} : { modified: updated }),
-        }
-      )
-    );
-  }
-  return { type, chosen, offered, nodes, problems: missing };
+  const page: DescribedPage = {
+    url,
+    ...(answer.title === undefined ? {} : { title: answer.title }),
+    ...(answer.description === undefined
+      ? {}
+      : { description: answer.description }),
+    ...(input.locale === undefined ? {} : { language: input.locale }),
+  };
+  return {
+    ...decided,
+    nodes: [...site.nodes, ...pageNodesOf(page, description, site, facts)],
+    problems: missing,
+  };
 }

@@ -76,10 +76,10 @@ function atPath(
 
 /** Whether a value holds anything: not absent, blank or an empty list. */
 function present(value: unknown): boolean {
-  if (value === undefined || value === null) return false;
-  if (typeof value === "string") return value.trim() !== "";
   if (Array.isArray(value)) return value.length > 0;
-  return true;
+  return typeof value === "string"
+    ? value.trim() !== ""
+    : value !== undefined && value !== null;
 }
 
 /**
