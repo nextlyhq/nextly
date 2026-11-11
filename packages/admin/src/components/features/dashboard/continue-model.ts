@@ -68,7 +68,7 @@ const STATUS_LABELS: Record<string, string> = {
 export const CHANGED = "Changed";
 
 /**
- * What a row's status label means to the reader, as its pill's tone: a
+ * What a row's status label means to the reader, as its chip's tone: a
  * published document is done, one holding changes not yet published is
  * waiting on someone, and any other status asks nothing of them.
  */
