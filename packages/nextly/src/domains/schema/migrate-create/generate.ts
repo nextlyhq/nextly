@@ -29,6 +29,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import type { JoinRetries } from "../../i18n/migration/archive-preflight";
 import {
   type CompanionHistory,
   companionHistoryKey,
@@ -45,8 +46,10 @@ import {
   type LeavingTranslationRefusal,
   refusalsForFieldsJoiningTranslation,
   refusalsForFieldsLeavingTranslation,
+  refusalsForMovedJoinsNarrowed,
   refusalsForTranslatedFieldRenamedAndReshaped,
   storageDiffers,
+  type TranslationSurface,
 } from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import {
@@ -331,6 +334,21 @@ export interface GenerateArgs {
    * all in this file, so every database it reaches is settled the same way.
    */
   resolutions?: readonly ColumnResolution[];
+  /**
+   * How one entity's fields joining translation are judged, from a writer
+   * that knows more than the snapshots: the surface its refusals are worded
+   * for, and the retries its database shows (`joinRetries`), fields whose
+   * values an earlier apply of the same change already moved into the
+   * translations table. A retry the change narrows is refused with how to
+   * finish the earlier change; any other is written, its values copied into
+   * a column that holds them. Without it, every joining field is judged as
+   * joining for the first time, worded for code.
+   */
+  joiningJudgement?: {
+    slug: string;
+    surface: TranslationSurface;
+    retries: JoinRetries;
+  };
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -788,7 +806,8 @@ export async function generateMigration(
     previousSnapshot,
     args.dialect,
     args.defaultLocale ?? "en",
-    companionHistory
+    companionHistory,
+    args.joiningJudgement
   );
 
   // A file that moves existing values between a main table and its companion records the language
@@ -2465,7 +2484,8 @@ function planFieldsJoiningTranslation(
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
   defaultLocale: string,
-  history: TranslationRecords
+  history: TranslationRecords,
+  judgement: GenerateArgs["joiningJudgement"]
 ): FieldJoinsEntry[] {
   return entities.flatMap(entry => {
     const { entity: c, kind } = entry;
@@ -2486,7 +2506,8 @@ function planFieldsJoiningTranslation(
       { entity: { ...c, fields: oldFields }, kind },
       joining,
       prevMain,
-      dialect
+      dialect,
+      judgement?.slug === c.slug ? judgement : undefined
     );
     return [
       {
@@ -2713,7 +2734,8 @@ function assertFieldsMayJoinTranslation(
   asShared: TaggedConfigEntity,
   joining: readonly LeavingField[],
   prevMain: TableSpec | undefined,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  judgement: GenerateArgs["joiningJudgement"]
 ): void {
   const { entity: c, kind } = asShared;
   const sharedMain = buildDesiredSnapshotFromConfig(
@@ -2724,16 +2746,35 @@ function assertFieldsMayJoinTranslation(
   ).tables.find(t => t.name === c.tableName);
   const typeIn = (table: TableSpec | undefined, column: string) =>
     table?.columns.find(col => col.name === column)?.type;
+  const surface = judgement?.surface ?? "code";
+  const { moved, narrowed } = judgement?.retries ?? {
+    moved: new Set<string>(),
+    narrowed: new Set<string>(),
+  };
   const reshaped = joining
-    .filter(({ column }) => {
+    .filter(({ field, column }) => {
       const before = typeIn(prevMain, column.name);
-      return before !== undefined && before !== typeIn(sharedMain, column.name);
+      return (
+        !moved.has(field.name) &&
+        before !== undefined &&
+        before !== typeIn(sharedMain, column.name)
+      );
     })
     .map(({ field }) => field.name);
-  refuseMigration(
-    c,
-    refusalsForFieldsJoiningTranslation({ reshaped, surface: "code" })
-  );
+  refuseMigration(c, [
+    ...refusalsForFieldsJoiningTranslation({ reshaped, surface }),
+    // A field an earlier apply already moved is a retry, judged as the push's
+    // preflight judges it, by the field as it was and as it is: one the
+    // change narrows is refused with how to finish the earlier change; one
+    // whose new storage holds every old value is copied whole wherever the
+    // file runs.
+    ...refusalsForMovedJoinsNarrowed({
+      narrowed: joining
+        .map(({ field }) => field.name)
+        .filter(name => moved.has(name) && narrowed.has(name)),
+      surface,
+    }),
+  ]);
 }
 
 /**

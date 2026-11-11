@@ -31,4 +31,4 @@
 
 Adding a Required date field to a collection that already holds entries now fills those entries on PostgreSQL and MySQL too: the migration the Schema Builder writes for it no longer refuses the date it fills them with, and writes it as each database reads the same instant.
 
-Saving a translated collection again after an earlier change that made a field translated did not finish now names that unfinished change and how to complete it from the Schema Builder, instead of a first-time refusal worded for the command line.
+Saving a translated collection again, after an earlier change that made a field translated did not finish, is now judged by the migration the Schema Builder writes as it is by the save itself. A save that widens the field finishes that change. One that narrows it names the unfinished change and how to complete it from the Schema Builder. A field made translated while its type changes is refused in the Schema Builder's words, not the command line's.
