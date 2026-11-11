@@ -206,20 +206,37 @@ function textFrom(
 /** What the page's own content offers. */
 async function contentLevel(
   ctx: PluginContext,
-  document: Readonly<Record<string, unknown>>
+  document: Readonly<Record<string, unknown>>,
+  needImage: boolean
 ): Promise<Levels["content"]> {
-  const imageField = firstField(
-    document,
-    CONTENT_FIELDS.image,
-    v => v !== null && v !== undefined && v !== ""
-  );
-  const image = imageField && (await imageOf(ctx, imageField.value));
   return defined({
     title: textFrom(document, CONTENT_FIELDS.title),
     description: textFrom(document, CONTENT_FIELDS.description),
-    image: image && imageField && { value: image, field: imageField.field },
+    image: needImage ? await contentImage(ctx, document) : undefined,
   });
 }
+
+/**
+ * The first of the page's image fields that names an image there is: a field
+ * naming one that is gone gives way to the next. A lookup failing for any
+ * other reason is thrown, as every image lookup is.
+ */
+async function contentImage(
+  ctx: PluginContext,
+  document: Readonly<Record<string, unknown>>
+): Promise<{ value: PageMetadataImage; field: string } | undefined> {
+  for (const field of CONTENT_FIELDS.image) {
+    const value = document[field];
+    if (value === null || value === undefined || value === "") continue;
+    const image = await imageOf(ctx, value);
+    if (image !== undefined) return { value: image, field };
+  }
+  return undefined;
+}
+
+/** Whether a level's image has an address to load it from. */
+const hasImage = (image: PageMetadataImage | undefined) =>
+  textOf(image?.url) !== undefined;
 
 /** The content type's patterns, filled in from the page. */
 function patternLevel(
@@ -250,10 +267,18 @@ export async function levelsOf(
 ): Promise<Levels> {
   const { type, key, document } = typeOf(input);
   const seo = isRecord(document.seo) ? document.seo : {};
-  const content = await contentLevel(ctx, document);
+  // Looked up in the order of who wins, the page's own image first: an image
+  // a lower level would offer is not looked up once a higher one has one, so
+  // a lookup that would fail never costs the page an answer it has.
+  const page = await pageLevel(ctx, seo);
+  const higherImage =
+    hasImage(page.image) ||
+    hasImage(input.code.image) ||
+    hasImage(input.derived.image);
+  const content = await contentLevel(ctx, document, !higherImage);
   const address = await addressOf(type, document, input.locale);
   return {
-    page: await pageLevel(ctx, seo),
+    page,
     code: input.code,
     template: input.derived,
     pattern: patternLevel(

@@ -264,6 +264,46 @@ describe("what the answer depends on", () => {
     ).rejects.toThrow("connection reset");
   });
 
+  it("looks up no lower image once a higher level has one", async () => {
+    // The cover image's lookup would fail; the typed image wins first, so it
+    // is never asked for and the answer stands.
+    const answer = await resolveSeo(
+      context({ m1: { url: "/typed.jpg" } }, ["broken"]),
+      entryInput("pages", {
+        slug: "a",
+        seo: { ogImage: "m1", metaTitle: "Typed" },
+        coverImage: "broken",
+      })
+    );
+    expect(answer.image).toEqual({ value: { url: "/typed.jpg" }, from: "page" });
+    expect(answer.title).toEqual({ value: "Typed", from: "page" });
+    const fromCode = await resolveSeo(
+      context({}, ["broken"]),
+      entryInput(
+        "pages",
+        { slug: "a", coverImage: "broken" },
+        { code: { image: { url: "/code.jpg" } } }
+      )
+    );
+    expect(fromCode.image).toEqual({ value: { url: "/code.jpg" }, from: "code" });
+  });
+
+  it("goes on to the next content image where one names an image that is gone", async () => {
+    const answer = await resolveSeo(
+      context({ f1: { url: "/featured.jpg" } }),
+      entryInput("pages", {
+        slug: "a",
+        coverImage: "deleted",
+        featuredImage: "f1",
+      })
+    );
+    expect(answer.image).toEqual({
+      value: { url: "/featured.jpg" },
+      from: "content",
+      field: "featuredImage",
+    });
+  });
+
   it("names the media tags, so a changed or deleted image expires the head", () => {
     const tags = seoPageMetadata(context()).tags?.(
       entryInput("pages", { slug: "a", seo: { ogImage: "m1" } })
