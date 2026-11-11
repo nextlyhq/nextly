@@ -1569,19 +1569,23 @@ function tablesOfSettingsChanges(
  * column that has nowhere to land.
  */
 /**
- * Whether the translations table of an entity translated in `previous` held each language's own
- * `_status`. The snapshot records no translations table, so this is read from what it keeps: a
- * translated entity's translations table has `_status` exactly when the entity is Draft/Published,
- * which its main table's `status` column records.
+ * Whether an entity's translations table held each language's own `_status` in `previous`. The
+ * snapshot records no translations table, so this is read from what it keeps and from whether the
+ * entity is `translated`: its translations table has `_status` exactly when it publishes each
+ * language on its own (`publishesPerLanguage`), translated and Draft/Published, the latter recorded
+ * by its main table's `status` column. The snapshot's `localized` marker says only that the table
+ * exists: under per-language storage an untranslated entity keeps one with no `_status`.
  */
 function companionHadStatus(
   previous: NextlySchemaSnapshot,
-  mainTable: string
+  mainTable: string,
+  translated: boolean
 ): boolean {
   const main = previous.tables.find(t => t.name === mainTable);
-  return (
-    main?.localized === true && main.columns.some(col => col.name === "status")
-  );
+  return publishesPerLanguage({
+    localized: translated && main?.localized === true,
+    status: main?.columns.some(col => col.name === "status") === true,
+  });
 }
 
 function buildDisableSpec(
@@ -1877,7 +1881,8 @@ function disableEntryFor(
   // Each entry keeps the value its readers saw, as the runtime disable keeps it.
   disableSpec.liveness = copyLiveness(
     languageOrder,
-    companionHadStatus(previousSnapshot, mainTable)
+    // A disable turns off translation for an entity that was translated.
+    companionHadStatus(previousSnapshot, mainTable, true)
   );
   const plan = planCompanionMigration({
     spec: disableSpec,
@@ -2170,7 +2175,11 @@ function planFieldsLeavingTranslation(
           // records has one; otherwise every language of an entry is ranked as live.
           liveness: copyLiveness(
             languageOrder,
-            companionHadStatus(previousSnapshot, c.tableName)
+            companionHadStatus(
+              previousSnapshot,
+              c.tableName,
+              c.localized === true
+            )
           ),
           parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
           columns: leaving.map(l => l.column),

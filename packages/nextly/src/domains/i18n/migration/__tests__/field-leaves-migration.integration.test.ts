@@ -61,6 +61,10 @@ import {
   companionColumnNames,
   reconcileCompanionColumns,
 } from "../../runtime/companion-io";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../per-language-storage";
 import { stepFileOf } from "../step-windows";
 import {
   createScratchDatabase,
@@ -394,6 +398,41 @@ for (const entry of DIALECTS) {
           shared: "Bonjour",
           archived: ["de", "fr"],
         });
+      });
+
+      // Under per-language storage an entity that is not translated keeps its translatable fields
+      // in a translations table with no `_status`: it publishes as one document. Ranking its rows by
+      // a `_status` it does not have would stop the migration.
+      it("moves a field of an untranslated Draft/Published entity under per-language storage out, ranking no _status", async () => {
+        setPerLanguageStorage(true);
+        try {
+          const stored = { ...translated, localized: false, status: true };
+          await migrateCreateIn(stored, ["en", "es"]);
+          await migrate();
+          expect(await columnsOf(companion)).not.toContain("_status");
+          await adapter.executeQuery(
+            `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("status")}) VALUES ('e1', 'One', 'one', 'published')`
+          );
+          await adapter.executeQuery(
+            `INSERT INTO ${q(companion)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('e1', 'en', 'Hello')`
+          );
+
+          await migrateCreateIn(
+            {
+              ...stored,
+              fields: [
+                { name: "body", type: "text", localized: false },
+                { name: "price", type: "number" },
+              ],
+            },
+            ["en", "es"]
+          );
+          await migrate();
+
+          expect((await keptAndArchived()).shared).toBe("Hello");
+        } finally {
+          _resetPerLanguageStorage();
+        }
       });
 
       it("puts every language back where it was on the way down, the kept one included", async () => {

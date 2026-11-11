@@ -43,7 +43,10 @@ import {
   recordedBeforeOf,
 } from "../migration/recorded-before";
 import type { I18nTransitionKind } from "../migration/transition-state";
-import { storesPerLanguage } from "../per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../per-language-storage";
 
 import { companionColumnNames, liveCompanionShape } from "./companion-io";
 import {
@@ -62,6 +65,12 @@ export interface FieldsLeavingOnReload {
   slug: string;
   tableName: string;
   status: boolean;
+  /**
+   * Whether each language publishes on its own (`publishesPerLanguage`), so its translations table
+   * has `_status`: translated and Draft/Published. Under per-language storage an untranslated
+   * entity keeps a translations table with no `_status`.
+   */
+  perLanguageStatus: boolean;
   /** The entity's fields as the config declares them now. */
   newFields: readonly LeavingFieldLike[];
   /** The same fields before the reload: those leaving translation as the registry recorded them. */
@@ -292,6 +301,7 @@ async function leavingIn(
     slug: e.slug,
     tableName: e.tableName,
     status: e.entity.status === true,
+    perLanguageStatus: publishesPerLanguage(e.entity),
     newFields: fields,
     oldFields: fields.map(f =>
       leaving.has(f.name)
@@ -391,9 +401,9 @@ async function leavingRefusalsOnReload(
         adapter,
         tableName: e.tableName,
         defaultLocale,
-        // The values the move keeps: a translated Draft/Published entity's translations table
-        // holds each language's own state.
-        liveness: copyLiveness(appLanguageOrder(), e.status),
+        // The values the move keeps, ranked by each language's own state where its translations
+        // table holds one.
+        liveness: copyLiveness(appLanguageOrder(), e.perLanguageStatus),
         uniqueIndexed: e.uniqueIndexed,
       })),
     ];
