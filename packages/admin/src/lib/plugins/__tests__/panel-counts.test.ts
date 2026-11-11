@@ -1,13 +1,18 @@
 /**
- * A standalone plugin panel's numbers: the one batch that asks for them, and
- * each item's number read back from its answer.
+ * A standalone plugin panel's numbers: whether a plugin declares any, and
+ * each item's number read back from the server's answer by its place among
+ * the published items.
  */
-import { MAX_QUERIES_PER_REQUEST } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
 import type { PluginMenuItemMeta } from "@admin/types/branding";
 
-import { panelCountQueries, panelItemNumbers } from "../panel-counts";
+import {
+  declaresNumbers,
+  itemNumberSpoken,
+  itemNumberText,
+  panelNumbersByAddress,
+} from "../panel-counts";
 import { panelItemsByGroup } from "../panel-groups";
 
 const item = (
@@ -15,91 +20,58 @@ const item = (
   extra: Partial<PluginMenuItemMeta> = {}
 ): PluginMenuItemMeta => ({ label, to: `/admin/x/${label}`, ...extra });
 
-const count = (total: number) => ({ ok: true, result: { op: "count", total } });
-const digest = (items: unknown[]) => ({
-  ok: true,
-  result: { op: "list", items, total: items.length },
-});
-
-describe("panelCountQueries", () => {
-  it("asks for nothing when no item shows a number", () => {
-    expect(panelCountQueries([item("a"), item("b")])).toEqual([]);
-  });
-
-  it("asks each collection count once, and the digest once, first", () => {
-    const where = { status: { equals: "draft" } };
-    const queries = panelCountQueries([
-      item("a", { count: { collection: "patterns" } }),
-      item("b", { badge: { collection: "patterns" } }),
-      item("c", { count: { collection: "patterns", where } }),
-      item("d", { badge: { attention: "acme/one" } }),
-      item("e", { badge: { attention: "acme/two" } }),
-    ]);
-    expect(queries).toEqual([
-      { source: "system:attention", op: "list", limit: 50 },
-      { source: "collection:patterns", op: "count" },
-      { source: "collection:patterns", op: "count", where },
-    ]);
-  });
-
-  it("asks no more than one request carries", () => {
-    const many = Array.from({ length: MAX_QUERIES_PER_REQUEST + 5 }, (_, i) =>
-      item(`c${i}`, { count: { collection: `c${i}` } })
+describe("declaresNumbers", () => {
+  it("is true only where an item declares a count or a badge", () => {
+    expect(declaresNumbers(undefined)).toBe(false);
+    expect(declaresNumbers([item("a"), item("b", { group: "g" })])).toBe(false);
+    expect(
+      declaresNumbers([item("a"), item("b", { count: { collection: "c" } })])
+    ).toBe(true);
+    expect(declaresNumbers([item("a", { badge: { attention: "x" } })])).toBe(
+      true
     );
-    expect(panelCountQueries(many)).toHaveLength(MAX_QUERIES_PER_REQUEST);
   });
 });
 
-describe("panelItemNumbers", () => {
-  const items = [
-    item("Patterns", { count: { collection: "patterns" } }),
-    item("Layouts", { count: { collection: "layouts" } }),
-    item("Fix", { badge: { attention: "acme/fix" } }),
-    item("Quiet", { badge: { attention: "acme/quiet" } }),
-    item("Broken", { badge: { attention: "acme/broken" } }),
+describe("panelNumbersByAddress", () => {
+  const menu = [
     item("Plain"),
+    item("Patterns", { count: { collection: "patterns" } }),
+    item("Fix", { badge: { attention: "acme/fix" } }),
   ];
-  const queries = panelCountQueries(items);
 
-  it("reads each item's number by the query that answers it", () => {
-    const numbers = panelItemNumbers(items, queries, [
-      digest([
-        { id: "acme/fix", label: "Fix", count: 99, atLeast: true },
-        { id: "acme/broken", label: "Broken", count: 0, failed: true },
-      ]),
-      count(12),
-      count(0),
+  it("files each number under the address of the item at its place", () => {
+    const numbers = panelNumbersByAddress(menu, {
+      numbers: [
+        { index: 1, value: 0, atLeast: false },
+        { index: 2, value: 99, atLeast: true },
+      ],
+    });
+    expect([...numbers]).toEqual([
+      ["/admin/x/Patterns", { value: 0, atLeast: false }],
+      ["/admin/x/Fix", { value: 99, atLeast: true }],
     ]);
-    expect(numbers.get("/admin/x/Patterns")).toEqual({
-      value: 12,
-      atLeast: false,
-    });
-    // Zero is a number: a quiet count shows it.
-    expect(numbers.get("/admin/x/Layouts")).toEqual({
-      value: 0,
-      atLeast: false,
-    });
-    expect(numbers.get("/admin/x/Fix")).toEqual({ value: 99, atLeast: true });
-    // Left out of the digest: nothing is waiting for this reader.
-    expect(numbers.get("/admin/x/Quiet")).toEqual({ value: 0, atLeast: false });
-    // A count that failed has no number, rather than a 0 that claims one.
-    expect(numbers.has("/admin/x/Broken")).toBe(false);
-    expect(numbers.has("/admin/x/Plain")).toBe(false);
   });
 
-  it("gives a failed or refused slot no number", () => {
-    const numbers = panelItemNumbers(items, queries, [
-      { ok: false, error: "unavailable", code: "unavailable" },
-      { ok: false, error: "unavailable", code: "unavailable" },
-      count(3),
-    ]);
-    expect(numbers.has("/admin/x/Patterns")).toBe(false);
-    expect(numbers.has("/admin/x/Fix")).toBe(false);
-    expect(numbers.has("/admin/x/Quiet")).toBe(false);
-    expect(numbers.get("/admin/x/Layouts")).toEqual({
-      value: 3,
-      atLeast: false,
+  it("drops an entry that is not a number, or whose item declares none", () => {
+    const numbers = panelNumbersByAddress(menu, {
+      numbers: [
+        { index: 0, value: 4, atLeast: false },
+        { index: 9, value: 4, atLeast: false },
+        { index: 1, value: -1, atLeast: false },
+        { index: 2, value: "3" },
+        null,
+      ],
     });
+    expect(numbers.size).toBe(0);
+    expect(panelNumbersByAddress(menu, null).size).toBe(0);
+    expect(panelNumbersByAddress(menu, { numbers: "x" }).size).toBe(0);
+  });
+
+  it("draws and speaks a floor as one", () => {
+    expect(itemNumberText({ value: 99, atLeast: true })).toBe("99+");
+    expect(itemNumberSpoken({ value: 99, atLeast: true })).toBe("99 or more");
+    expect(itemNumberText({ value: 0, atLeast: false })).toBe("0");
   });
 });
 

@@ -1,37 +1,16 @@
 /**
- * The numbers a standalone plugin's panel shows beside its items: what one
- * batch asks the dashboard's query endpoint for, and how each item's number
- * is read back from its answer.
+ * The numbers a standalone plugin's panel shows beside its items, as the
+ * server answers them, and how each is drawn and spoken.
  *
- * One batch for the whole panel, through `POST /api/dashboard/query`, the
- * endpoint the dashboard's cards are read through, so each count is decided
- * by the same read access a card's is: a collection the reader may not read
- * answers no count, and the item draws no number. A count of a collection is
- * a `count` query of that collection; an attention item's number is read from
- * the attention digest (`system:attention`, `list`), asked once for every
- * attention item the panel shows, which is the answer the Needs your
- * attention card draws its rows from.
+ * The server reads them from the panel it published for the plugin
+ * (`GET /api/admin-meta/plugin-panel-numbers`), each keyed by its item's place
+ * among the plugin's published top-level menu items: the order of
+ * `PluginMetadata.menu`. Here each is filed under its item's address, which
+ * is what the panel draws its items by after it has filtered and sorted them.
  *
  * @module lib/plugins/panel-counts
  */
-import { isDrawnAttentionItem } from "nextly/attention-keys";
-import { MAX_QUERIES_PER_REQUEST, MAX_WIDGET_LIMIT } from "nextly/config";
-
-import type {
-  PluginItemCountMeta,
-  PluginMenuItemMeta,
-} from "@admin/types/branding";
-
-/**
- * The attention digest's source, as core registers it: the one the Needs
- * your attention card reads, answering its items for a `list`.
- */
-const ATTENTION_SOURCE = "system:attention";
-
-/** One query of the panel's batch, as the endpoint reads a widget query. */
-export type PanelCountQuery =
-  | { source: string; op: "count"; where?: Record<string, unknown> }
-  | { source: typeof ATTENTION_SOURCE; op: "list"; limit: number };
+import type { PluginMenuItemMeta } from "@admin/types/branding";
 
 /** The number one item shows, and whether it is a floor ("99+"). */
 export interface PanelItemNumber {
@@ -39,124 +18,45 @@ export interface PanelItemNumber {
   readonly atLeast: boolean;
 }
 
-/** The number a top-level item declares, a count or a badge, if either. */
-function declaredNumber(
-  item: PluginMenuItemMeta
-): PluginItemCountMeta | undefined {
-  return item.count ?? item.badge;
-}
-
-/** The query that answers a collection count, its `where` included. */
-function collectionQuery(
-  count: Extract<PluginItemCountMeta, { collection: string }>
-): PanelCountQuery {
-  return count.where === undefined
-    ? { source: `collection:${count.collection}`, op: "count" }
-    : {
-        source: `collection:${count.collection}`,
-        op: "count",
-        where: count.where,
-      };
-}
-
-/** The digest query, asked once however many attention items show. */
-const DIGEST_QUERY: PanelCountQuery = {
-  source: ATTENTION_SOURCE,
-  op: "list",
-  limit: MAX_WIDGET_LIMIT,
-};
-
-/**
- * The batch that answers every number `items` show: one count per distinct
- * collection and `where`, and the digest once when any item shows an
- * attention item's number. Empty when none shows a number, so a panel
- * declaring none sends nothing.
- *
- * At most the endpoint's limit per request: the digest first, then the
- * counts in the order the items list them. A count past the limit is not
- * asked, and its item draws no number.
- */
-export function panelCountQueries(
-  items: readonly PluginMenuItemMeta[]
-): PanelCountQuery[] {
-  const counts = new Map<string, PanelCountQuery>();
-  let digest = false;
-  for (const item of items) {
-    const number = declaredNumber(item);
-    if (number === undefined) continue;
-    if ("attention" in number) {
-      digest = true;
-      continue;
-    }
-    const query = collectionQuery(number);
-    counts.set(JSON.stringify(query), query);
-  }
-  const queries = [...(digest ? [DIGEST_QUERY] : []), ...counts.values()];
-  return queries.slice(0, MAX_QUERIES_PER_REQUEST);
-}
-
-/** A slot's answer, when the slot succeeded. */
-function answerOf(slot: unknown): Record<string, unknown> | undefined {
-  if (typeof slot !== "object" || slot === null) return undefined;
-  const { ok, result } = slot as { ok?: unknown; result?: unknown };
-  if (ok !== true || typeof result !== "object" || result === null) {
-    return undefined;
-  }
-  return result as Record<string, unknown>;
-}
-
-/** A count slot's total, or nothing for a slot that failed or is not one. */
-function countIn(slot: unknown): PanelItemNumber | undefined {
-  const answer = answerOf(slot);
-  const total = answer?.op === "count" ? answer.total : undefined;
-  return typeof total === "number" && Number.isInteger(total) && total >= 0
-    ? { value: total, atLeast: false }
-    : undefined;
-}
-
-/**
- * An attention item's number from the digest's answer: its count, a floor
- * where the digest says so; 0 where the digest holds no such item, since the
- * digest leaves out an item with nothing waiting for the reader; nothing for
- * an item whose count failed, or a digest that did not answer.
- */
-function attentionIn(slot: unknown, id: string): PanelItemNumber | undefined {
-  const answer = answerOf(slot);
-  if (answer?.op !== "list" || !Array.isArray(answer.items)) return undefined;
-  const item = answer.items.find(
-    entry => isDrawnAttentionItem(entry) && entry.id === id
+/** Whether any of a plugin's published items declares a number. */
+export function declaresNumbers(
+  menu: readonly PluginMenuItemMeta[] | undefined
+): boolean {
+  return (menu ?? []).some(
+    item => item.count !== undefined || item.badge !== undefined
   );
-  if (item === undefined) return { value: 0, atLeast: false };
-  const { count, failed, atLeast } = item as Record<string, unknown>;
-  if (failed === true || typeof count !== "number") return undefined;
-  return { value: count, atLeast: atLeast === true };
+}
+
+/** One number of the answer, if it is one. */
+function numberIn(
+  entry: unknown
+): { index: number; number: PanelItemNumber } | undefined {
+  if (typeof entry !== "object" || entry === null) return undefined;
+  const { index, value, atLeast } = entry as Record<string, unknown>;
+  const whole = (n: unknown): n is number =>
+    typeof n === "number" && Number.isInteger(n) && n >= 0;
+  if (!whole(index) || !whole(value)) return undefined;
+  return { index, number: { value, atLeast: atLeast === true } };
 }
 
 /**
- * Each item's number from the batch's answers, `slots[i]` answering
- * `queries[i]`, by the item's address. An item whose query was not asked, or
- * whose answer failed or was refused, has none.
+ * Each item's number from the server's answer, by the address of the item at
+ * the place it is keyed by. An entry that is not a number, or whose place
+ * holds no item declaring one, is dropped.
  */
-export function panelItemNumbers(
-  items: readonly PluginMenuItemMeta[],
-  queries: readonly PanelCountQuery[],
-  slots: readonly unknown[]
+export function panelNumbersByAddress(
+  menu: readonly PluginMenuItemMeta[],
+  answer: unknown
 ): ReadonlyMap<string, PanelItemNumber> {
-  const slotOf = (query: PanelCountQuery) => {
-    const index = queries.findIndex(
-      asked => JSON.stringify(asked) === JSON.stringify(query)
-    );
-    return index === -1 ? undefined : slots[index];
-  };
+  const entries = (answer as { numbers?: unknown } | null)?.numbers;
   const numbers = new Map<string, PanelItemNumber>();
-  for (const item of items) {
-    const number = declaredNumber(item);
-    if (number === undefined) continue;
-    const read =
-      "attention" in number
-        ? attentionIn(slotOf(DIGEST_QUERY), number.attention)
-        : countIn(slotOf(collectionQuery(number)));
-    if (read !== undefined) numbers.set(item.to, read);
+  if (!Array.isArray(entries)) return numbers;
+  for (const entry of entries) {
+    const read = numberIn(entry);
+    const item = read === undefined ? undefined : menu[read.index];
+    if (read === undefined || item === undefined) continue;
+    if (item.count === undefined && item.badge === undefined) continue;
+    numbers.set(item.to, read.number);
   }
   return numbers;
 }
