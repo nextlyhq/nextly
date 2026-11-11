@@ -423,7 +423,11 @@ async function visibleWidgets(auth: AuthContext) {
     // A card set to a collection this reader may not read, withheld as a card
     // of a widget they may not see is, judged by the Collection setting the
     // canonical summary carries from either channel.
-    withheld: unreadableCollectionCard(collectionWidgets(widgets), readable),
+    withheld: unreadableCollectionCard(
+      collectionWidgets(widgets),
+      readable,
+      audience.readsUsers
+    ),
     // Over everything that decides what is withheld: the widgets, the gates,
     // the collections this reader may read, and each Collection setting's
     // default, which decides a card that stores no value.
@@ -439,7 +443,12 @@ async function visibleWidgets(auth: AuthContext) {
       widgets.map(widget => widget.id),
       audience.heldActionGates,
       readable,
-      collectionSettingsToken(widgets),
+      [
+        ...collectionSettingsToken(widgets),
+        // Whether a card set to Users is this reader's, as the audience's own
+        // token holds it.
+        ...(audience.readsUsers ? ["reads-users"] : []),
+      ],
       notShown
     );
   }

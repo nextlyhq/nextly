@@ -39,3 +39,9 @@ export const CONTENT_SOURCE_ID = "system:content";
  * or other people's latest saves, one row per document this caller may read.
  */
 export const CONTINUE_SOURCE_ID = "system:continue";
+
+/**
+ * How many people have an account, and when they joined, for a reader who may
+ * read users: what a Count card set to Users reads.
+ */
+export const USERS_SOURCE_ID = "system:users";

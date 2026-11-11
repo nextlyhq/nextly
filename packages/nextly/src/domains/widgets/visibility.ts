@@ -33,6 +33,7 @@ import { holdsWidgetPermission, requiredPermissionSlugs } from "./gate";
 import { visibilityToken } from "./layout";
 import { keptOffBySite } from "./site-rules";
 import { listSources, sourceTarget } from "./sources";
+import { USERS_READ_PERMISSION } from "./users-gate";
 
 // Re-exported from its own module rather than moved-and-forgotten: this is
 // where every caller already reaches for the gate, and the decision now lives
@@ -100,6 +101,7 @@ async function decide(caller: ReadAccessCaller): Promise<{
   visible: CanonicalWidget[];
   verdicts: Map<string, boolean>;
   readableCollections: ReadonlySet<string>;
+  readsUsers: boolean;
 }> {
   // The same freshness on every surface that asks. Sources read on some
   // earlier request would offer a collection deleted since to a card's
@@ -114,8 +116,19 @@ async function decide(caller: ReadAccessCaller): Promise<{
     .filter(source => source.kind === "collection")
     .map(source => sourceTarget(source.id));
 
+  // Whether this reader may read users, asked beside the cards' own gates and
+  // only where a Collection setting offers Users: it decides whether a card
+  // set to Users is theirs, and whether their drawer offers it.
+  const offersUsers = all.some(
+    widget =>
+      widget.collectionSetting?.type === "collection" &&
+      widget.collectionSetting.users === true
+  );
   const verdicts = await permissionVerdicts(
-    all.map(widget => widget.requiredPermission),
+    [
+      ...all.map(widget => widget.requiredPermission),
+      ...(offersUsers ? [USERS_READ_PERMISSION] : []),
+    ],
     caller
   );
 
@@ -153,6 +166,7 @@ async function decide(caller: ReadAccessCaller): Promise<{
     readableCollections: new Set(
       offeredCollections.filter(slug => readable.has(slug))
     ),
+    readsUsers: offersUsers && verdicts.get(USERS_READ_PERMISSION) === true,
   };
 }
 
@@ -219,12 +233,21 @@ export interface WidgetAudience {
    * the collections themselves, the ones a card may be set to.
    */
   readableCollections: ReadonlySet<string>;
+  /**
+   * Whether this reader may read users, where a Collection setting offers
+   * Users (`users: true`); `false` where none does. From the same pass as
+   * `visible`: a card set to Users is withheld from a reader without it, a
+   * save adding one is refused, and the workspace payload tells them the
+   * setting without the offer.
+   */
+  readsUsers: boolean;
 }
 
 export async function widgetAudience(
   caller: ReadAccessCaller
 ): Promise<WidgetAudience> {
-  const { visible, verdicts, readableCollections } = await decide(caller);
+  const { visible, verdicts, readableCollections, readsUsers } =
+    await decide(caller);
   // Derived from `visible`, the one answer, so the payload's matching and the
   // layout's placing read the same set of ids.
   const declared = new Set(visible.map(widget => widget.id));
@@ -245,15 +268,20 @@ export async function widgetAudience(
       holdsWidgetPermission(requiredPermission, every),
     heldActionGates,
     readableCollections,
+    readsUsers,
     // Over what the workspace payload is built from beyond the ids and gates:
     // the readable collections, which decide the Collection defaults it ships,
-    // and each Collection setting whole, which the settings sheet draws. A
-    // change to either leaves every id and gate as it was.
+    // each Collection setting whole, which the settings sheet draws, and
+    // whether the reader may read users, which decides whether it offers
+    // Users. A change to any leaves every id and gate as it was.
     token: visibilityToken(
       visible.map(widget => widget.id),
       heldActionGates,
       readableCollections,
-      collectionSettingsToken(visible)
+      [
+        ...collectionSettingsToken(visible),
+        ...(readsUsers ? ["reads-users"] : []),
+      ]
     ),
   };
 }

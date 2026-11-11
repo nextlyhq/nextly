@@ -73,6 +73,7 @@ import { clearWidgets } from "../../domains/widgets/registry";
 import type { ResolverOptions } from "../../domains/widgets/resolved-sources";
 import type { WidgetResult } from "../../domains/widgets/result";
 import { registerSetupCard } from "../../domains/widgets/setup-card";
+import { registerUsersWidgetSource } from "../../domains/widgets/users-source";
 import {
   clearSiteDashboardRules,
   setSiteDashboardRules,
@@ -158,6 +159,8 @@ export function resetWidgetRegistries(
   registerSystemHealthSource();
   registerSummaryWidgetSources();
   registerContinueWidgetSource();
+  // A Count card's people, for a reader who may read users.
+  registerUsersWidgetSource();
   // Core's own cards read the sources above in their `load`, each as the
   // caller its read services were bound for: handed here, from the binding
   // the batch makes, so the widget list imports none of those services.
