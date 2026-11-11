@@ -956,10 +956,21 @@ export class FieldGroupSchemaService {
 
   // Returns a Drizzle column builder — typed as `unknown` to avoid
   // depending on Drizzle's internal column builder types from the public API.
-  private mapFieldToPostgresColumn(field: DataFieldConfig): unknown {
+  /** A field's column name and whether it is required, as every dialect's mapper reads them. */
+  private columnNaming(
+    field: DataFieldConfig
+  ): { colName: string; isRequired: boolean } | null {
     if (!("name" in field) || !field.name) return null;
-    const isRequired = "required" in field && field.required === true;
-    const colName = this.toSnakeCase(field.name);
+    return {
+      colName: this.toSnakeCase(field.name),
+      isRequired: "required" in field && field.required === true,
+    };
+  }
+
+  private mapFieldToPostgresColumn(field: DataFieldConfig): unknown {
+    const named = this.columnNaming(field);
+    if (named === null) return null;
+    const { colName, isRequired } = named;
 
     // A text field's column is the descriptor's (`canonicalColumn`).
     if (isEmailField(field) || isPasswordField(field)) {
@@ -1005,9 +1016,9 @@ export class FieldGroupSchemaService {
   }
 
   private mapFieldToMySQLColumn(field: DataFieldConfig): unknown {
-    if (!("name" in field) || !field.name) return null;
-    const isRequired = "required" in field && field.required === true;
-    const colName = this.toSnakeCase(field.name);
+    const named = this.columnNaming(field);
+    if (named === null) return null;
+    const { colName, isRequired } = named;
 
     // A text field's column is the descriptor's (`canonicalColumn`).
     if (isEmailField(field) || isPasswordField(field)) {
@@ -1061,9 +1072,9 @@ export class FieldGroupSchemaService {
   }
 
   private mapFieldToSQLiteColumn(field: DataFieldConfig): unknown {
-    if (!("name" in field) || !field.name) return null;
-    const isRequired = "required" in field && field.required === true;
-    const colName = this.toSnakeCase(field.name);
+    const named = this.columnNaming(field);
+    if (named === null) return null;
+    const { colName, isRequired } = named;
 
     // A text field's column is the descriptor's (`canonicalColumn`).
     if (

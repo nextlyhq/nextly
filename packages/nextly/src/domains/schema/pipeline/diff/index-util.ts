@@ -62,9 +62,7 @@ function canonical(
  * The cast context for one side's index expressions: its text-like columns,
  * the only ones PostgreSQL wraps in an inserted `::text` cast.
  */
-export function textColumnsOf(
-  columns: readonly ColumnSpec[]
-): ColumnCastContext {
+function textColumnsOf(columns: readonly ColumnSpec[]): ColumnCastContext {
   return {
     textColumns: new Set(
       columns
