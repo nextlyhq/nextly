@@ -31,7 +31,7 @@
         "unanswered": ["GET /admin/api/admin-meta/workspace"]
       },
       "signin": {
-        "requests": 18,
+        "requests": 16,
         "rounds": 8,
         "statements": 181,
         "kinds": {
@@ -48,8 +48,6 @@
           "GET /admin/api/admin-meta/workspace": 1,
           "GET /admin/api/me/permissions": 1,
           "GET /admin/api/me/capabilities": 1,
-          "GET /admin/api/dashboard/summary": 1,
-          "GET /admin/api/dashboard/setup": 1,
           "GET /admin/api/dashboard/layout": 1,
           "POST /admin/api/dashboard/query": 1,
           "HEAD /admin/api/seed": 1
@@ -58,7 +56,7 @@
         "unanswered": []
       },
       "dashboard": {
-        "requests": 16,
+        "requests": 14,
         "rounds": 5,
         "statements": 150,
         "kinds": {
@@ -73,9 +71,7 @@
           "GET /admin/api/admin-meta/workspace": 1,
           "GET /admin/api/me/permissions": 1,
           "GET /admin/api/me/capabilities": 1,
-          "GET /admin/api/dashboard/summary": 1,
           "GET /admin/api/dashboard/layout": 1,
-          "GET /admin/api/dashboard/setup": 1,
           "POST /admin/api/dashboard/query": 1,
           "HEAD /admin/api/seed": 1
         },
@@ -158,7 +154,7 @@
         "unanswered": []
       },
       "signin": {
-        "requests": 19,
+        "requests": 17,
         "rounds": 8,
         "statements": 182,
         "kinds": {
@@ -176,8 +172,6 @@
           "GET /admin/api/me/permissions": 1,
           "GET /admin/api/me/capabilities": 1,
           "GET /admin/api/schema/journal": 1,
-          "GET /admin/api/dashboard/summary": 1,
-          "GET /admin/api/dashboard/setup": 1,
           "GET /admin/api/dashboard/layout": 1,
           "POST /admin/api/dashboard/query": 1,
           "HEAD /admin/api/seed": 1
@@ -186,7 +180,7 @@
         "unanswered": []
       },
       "dashboard": {
-        "requests": 17,
+        "requests": 15,
         "rounds": 5,
         "statements": 165,
         "kinds": {
@@ -201,10 +195,8 @@
           "GET /admin/api/admin-meta/workspace": 1,
           "GET /admin/api/me/permissions": 1,
           "GET /admin/api/me/capabilities": 1,
-          "GET /admin/api/dashboard/summary": 1,
           "GET /admin/api/dashboard/layout": 1,
           "GET /admin/api/schema/journal": 1,
-          "GET /admin/api/dashboard/setup": 1,
           "POST /admin/api/dashboard/query": 1,
           "HEAD /admin/api/seed": 1
         },
@@ -289,7 +281,7 @@
         "unanswered": []
       },
       "signin": {
-        "requests": 19,
+        "requests": 17,
         "rounds": 8,
         "statements": 183,
         "kinds": {
@@ -307,8 +299,6 @@
           "GET /admin/api/me/permissions": 1,
           "GET /admin/api/me/capabilities": 1,
           "GET /admin/api/schema/journal": 1,
-          "GET /admin/api/dashboard/summary": 1,
-          "GET /admin/api/dashboard/setup": 1,
           "GET /admin/api/dashboard/layout": 1,
           "POST /admin/api/dashboard/query": 1,
           "HEAD /admin/api/seed": 1
@@ -317,7 +307,7 @@
         "unanswered": []
       },
       "dashboard": {
-        "requests": 17,
+        "requests": 15,
         "rounds": 5,
         "statements": 152,
         "kinds": {
@@ -332,10 +322,8 @@
           "GET /admin/api/admin-meta/workspace": 1,
           "GET /admin/api/me/permissions": 1,
           "GET /admin/api/me/capabilities": 1,
-          "GET /admin/api/dashboard/summary": 1,
           "GET /admin/api/dashboard/layout": 1,
           "GET /admin/api/schema/journal": 1,
-          "GET /admin/api/dashboard/setup": 1,
           "POST /admin/api/dashboard/query": 1,
           "HEAD /admin/api/seed": 1
         },
