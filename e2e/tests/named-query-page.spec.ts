@@ -36,6 +36,9 @@ import { fileAccount, test } from "./support/test";
 
 test.describe.configure({ mode: "serial", lock: [LOCK.homepage] });
 
+/** Whether the suite runs against a production build rather than `next dev`. */
+const PRODUCTION = process.env.E2E_SERVER === "production";
+
 const API = "/admin/api";
 const PAGES = `${API}/collections/block-pages/entries`;
 const POSTS = `${API}/collections/bound-entries/entries`;
@@ -210,6 +213,26 @@ test("a named query's page refreshes when a collection or a Single it reads chan
 
     // Still nothing the public may not read, after both refreshes.
     expect(await served()).not.toContain(SENTINEL);
+
+    // The control for both refreshes, checked after them so that each change
+    // above still lands straight after a render: on a production build the
+    // route is served from Next.js's cache, so the refreshes are tag
+    // expiries and not a route that renders on every request. A dev server
+    // caches nothing.
+    if (PRODUCTION) {
+      await expect
+        .poll(
+          async () => {
+            const response = await visitor.get(`/blocks/${PAGE_SLUG}`);
+            return (
+              response.headers()["x-nextjs-cache"] === "HIT" &&
+              (await response.text()).includes(HEADLINE_AFTER)
+            );
+          },
+          { timeout: 30_000 }
+        )
+        .toBe(true);
+    }
   } finally {
     await signedIn
       .patch(HOMEPAGE, {
