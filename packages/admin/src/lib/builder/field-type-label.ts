@@ -16,12 +16,42 @@
  * @module lib/builder/field-type-label
  */
 
-import type { FieldSurface } from "nextly/field-catalog";
+import {
+  FORM_FIELD_TYPE_CATALOG,
+  USER_FIELD_TYPE_CATALOG,
+  type FieldSurface,
+} from "nextly/field-catalog";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 import { useCallback } from "react";
 
 import { FIELD_TYPES_CATALOG } from "@admin/components/features/schema-builder/field-picker-modal/field-types-catalog";
 import { usePluginFieldTypeEntries } from "@admin/components/field-ui/usePluginFieldTypeEntries";
+
+/**
+ * The built-in types a surface adds to the entries catalog (a form's URL or
+ * file upload), named from that surface's own catalog.
+ */
+function surfaceCatalog(
+  surface: FieldSurface
+): readonly { type: string; label: string }[] {
+  if (surface === "forms") return FORM_FIELD_TYPE_CATALOG;
+  if (surface === "users") return USER_FIELD_TYPE_CATALOG;
+  return [];
+}
+
+/**
+ * Whether a type the entries catalog does not hold is one this surface builds
+ * in (a form's URL or file upload). Only the surface that offers it knows it
+ * as built in: on any other the same id is a plugin's, with that plugin's
+ * storage and settings. Every part of the settings panel asks this one
+ * question, so its tabs agree on which type a field is.
+ */
+export function isSurfaceBuiltInType(
+  surface: FieldSurface,
+  type: string
+): boolean {
+  return surfaceCatalog(surface).some(entry => entry.type === type);
+}
 
 /** A function from a type id to the name the picker shows for it. */
 export function useFieldTypeLabel(
@@ -36,8 +66,9 @@ export function useFieldTypeLabel(
           entry.type === type ||
           (isFieldGroupFieldType(type) && isFieldGroupFieldType(entry.type))
       )?.label ??
+      surfaceCatalog(surface).find(entry => entry.type === type)?.label ??
       pluginTypeEntries.find(entry => entry.type === type)?.label ??
       type,
-    [pluginTypeEntries]
+    [pluginTypeEntries, surface]
   );
 }

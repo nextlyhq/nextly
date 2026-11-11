@@ -48,8 +48,8 @@ const toast = vi.hoisted(() => ({
 
 // The header's New button reads collections and permissions of its own,
 // which this test does not set up; it is a marker here.
-vi.mock("@admin/components/features/dashboard/header/NewSplitButton", () => ({
-  NewSplitButton: () => <div data-testid="dashboard-new" />,
+vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
+  NewMenu: () => <div data-testid="dashboard-new" />,
 }));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
@@ -334,7 +334,7 @@ describe("Size in the card menu at rest", () => {
     const atRest = renderGrid();
     const user = userEvent.setup();
     // The first card, so a write that put the resized card anywhere else would differ.
-    await chooseWidthAtRest(user, "Styled", "Half width, 6 columns");
+    await chooseWidthAtRest(user, "Styled", "50% width");
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
     const rest = sent(0);
     const restPath = api.put.mock.calls[0]?.[0];
@@ -344,7 +344,7 @@ describe("Size in the card menu at rest", () => {
     vi.clearAllMocks();
     layoutResponse = layout();
     renderGrid();
-    await chooseWidthAndSave(user, "Styled", "Half width, 6 columns");
+    await chooseWidthAndSave(user, "Styled", "50% width");
     const saved = sent(0);
 
     expect(api.put.mock.calls[0]?.[0]).toBe(restPath);
@@ -358,10 +358,10 @@ describe("Size in the card menu at rest", () => {
   it("offers Undo, which puts the card back at the size it had", async () => {
     renderGrid();
     const user = userEvent.setup();
-    await chooseWidthAtRest(user, "Plain", "Half width, 6 columns");
+    await chooseWidthAtRest(user, "Plain", "50% width");
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(toast.success.mock.calls.at(-1)?.[0]).toBe(
-      "Plain: Size set to 6 columns by 3 rows."
+      "Plain: Size set to 50% wide."
     );
     pressUndo();
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2));
@@ -424,7 +424,7 @@ describe("what a card's own write says it is", () => {
     api.put.mockRejectedValue(new Error("network down"));
     renderGrid();
     const user = userEvent.setup();
-    await chooseWidthAtRest(user, "Drafts board", "Half width, 6 columns");
+    await chooseWidthAtRest(user, "Drafts board", "50% width");
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(toast.error.mock.calls.at(-1)?.[0]).toMatch(
       /^Could not save Drafts board's size/
@@ -546,79 +546,4 @@ describe("the More settings panel reached through the quick popover at rest", ()
       });
     }
   }
-});
-
-describe("Size at rest on the lone card of the pair, drawn across its row", () => {
-  /** Needs attention on a default that pairs it with Upcoming releases, which this reader is not handed. */
-  function pairBranding(): AdminBranding {
-    return {
-      widgets: [
-        {
-          id: "core/needs-attention",
-          title: "Needs attention",
-          archetype: "custom",
-          size: RESIZABLE,
-          component: "core#AtRestBody",
-        },
-      ],
-    } as unknown as AdminBranding;
-  }
-  const ATTENTION: WidgetPlacement = {
-    id: "core/needs-attention",
-    widgetId: "core/needs-attention",
-    w: 8,
-    h: 3,
-    removed: false,
-  };
-
-  it("saves its stored width with a new height, and Undo restores the stored size", async () => {
-    mockBranding = pairBranding();
-    layoutResponse = {
-      ...layout(),
-      placements: [ATTENTION],
-      defaultPlacements: [ATTENTION],
-      // The default as configured gives the pair a row of their own.
-      pairedRow: true,
-    };
-    // The server's answer to a write, for this one card: what was written, the next version.
-    api.put.mockImplementation((_path: string, body: unknown) => {
-      const write = body as { placements: WidgetPlacement[] };
-      const before = layoutResponse as DashboardLayoutResponse;
-      layoutResponse = {
-        ...before,
-        placements: write.placements,
-        version: before.version + 1,
-      };
-      return Promise.resolve({ message: "ok", item: {} });
-    });
-    renderGrid();
-    const user = userEvent.setup();
-    // The precondition: drawn across the row, its stored width eight.
-    const cell = await screen.findByTestId("widget-cell-core/needs-attention");
-    await waitFor(() => expect(cell).toHaveClass("col-span-12"));
-    expect(cell).not.toHaveClass("@min-[1024px]/dashboard:col-span-8");
-
-    const menu = await openMenu(user, "Needs attention");
-    await user.click(within(menu).getByRole("menuitem", { name: /Height/ }));
-    const heights = await waitFor(() => {
-      const menus = screen.getAllByRole("menu");
-      expect(menus.length).toBe(2);
-      return menus[1];
-    });
-    within(heights).getByRole("menuitemradio", { name: "4 rows" }).focus();
-    await user.keyboard("{Enter}");
-
-    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
-    // 🔴 The stored width, never the twelve it is drawn at.
-    expect(
-      sent(0)?.placements.find(p => p.id === "core/needs-attention")
-    ).toMatchObject({ w: 8, h: 4 });
-
-    await waitFor(() => expect(toast.success).toHaveBeenCalled());
-    pressUndo();
-    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2));
-    expect(
-      sent(1)?.placements.find(p => p.id === "core/needs-attention")
-    ).toMatchObject({ w: 8, h: 3 });
-  });
 });

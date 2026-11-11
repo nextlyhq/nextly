@@ -42,6 +42,7 @@ import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { SchemaOwnersRepository } from "../../ownership/schema-owners-repository";
 import { ensureSchemaEventsTable } from "../../events/schema-events-ddl";
 import { formatMigrationFile } from "../../migrate-create/format-file";
+import { NO_CONSENT, resolveDataLossConsent } from "../data-loss-consent";
 import {
   introspectLiveColumns,
   introspectLiveSnapshot,
@@ -76,6 +77,13 @@ describe.each(LOCK_DIALECTS)(
     let world: LockWorld;
     let adapter: DrizzleAdapter;
     let migrationsDir: string;
+    // MySQL has no statement that changes only a column's nullability: `MODIFY COLUMN` restates
+    // its type, which a run judges as it judges a type change, asking consent naming the column.
+    // A file here gets it as `--accept-data-loss=<table>.<column>` gives it, for each column its
+    // MODIFY restates. A MODIFY through a qualifier is a deletion nobody can name, which only
+    // `--accept-data-loss` without targets covers.
+    let restated: string[];
+    let acceptAll: boolean;
     const q = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
@@ -83,6 +91,8 @@ describe.each(LOCK_DIALECTS)(
       world = await lockWorld(dialect, { fresh: true });
       adapter = await world.connect();
       migrationsDir = mkdtempSync(join(tmpdir(), "nextly-required-column-"));
+      restated = [];
+      acceptAll = false;
       // Nextly's own tables, the registry among them, so the file is all a run has left to do.
       await migrate();
       await seedEntities();
@@ -105,6 +115,11 @@ describe.each(LOCK_DIALECTS)(
         lockMode: "wait",
         lockWaitMs: 30_000,
         ensureLedger: () => ensureSchemaEventsTable(adapter),
+        consent: acceptAll
+          ? resolveDataLossConsent({ flag: true, env: {} })
+          : restated.length === 0
+            ? NO_CONSENT
+            : resolveDataLossConsent({ flag: restated.join(","), env: {} }),
       });
     }
 
@@ -193,6 +208,7 @@ describe.each(LOCK_DIALECTS)(
         ];
       }
       if (dialect === "mysql") {
+        restated.push(`${table}.${column}`);
         return [
           `ALTER TABLE ${q(table)} MODIFY COLUMN ${q(column)} text NOT NULL`,
         ];
@@ -470,12 +486,15 @@ describe.each(LOCK_DIALECTS)(
     // A table named through a qualifier: counted as the table when the qualifier is the one an
     // unqualified name reaches (MySQL's current database, SQLite's `main`), refused before anything
     // runs through any other. PostgreSQL's schema guard refuses a qualified change first.
-    const makeRequiredThrough = (qualifier: string) =>
-      dialect === "mysql"
-        ? `ALTER TABLE ${q(qualifier)}.${q(POSTS)} MODIFY COLUMN ${q("subtitle")} text NOT NULL`
-        : dialect === "sqlite"
-          ? `ALTER TABLE ${qualifier}.${POSTS} ADD COLUMN ${q("code")} text NOT NULL`
-          : `ALTER TABLE ${q(qualifier)}.${q(POSTS)} ALTER COLUMN ${q("subtitle")} SET NOT NULL`;
+    const makeRequiredThrough = (qualifier: string) => {
+      if (dialect === "mysql") {
+        acceptAll = true;
+        return `ALTER TABLE ${q(qualifier)}.${q(POSTS)} MODIFY COLUMN ${q("subtitle")} text NOT NULL`;
+      }
+      return dialect === "sqlite"
+        ? `ALTER TABLE ${qualifier}.${POSTS} ADD COLUMN ${q("code")} text NOT NULL`
+        : `ALTER TABLE ${q(qualifier)}.${q(POSTS)} ALTER COLUMN ${q("subtitle")} SET NOT NULL`;
+    };
 
     it("counts a table named through the qualifier an unqualified name reaches", async () => {
       const own =

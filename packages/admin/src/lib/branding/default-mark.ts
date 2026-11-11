@@ -1,10 +1,9 @@
 /**
  * Default Nextly brand mark — single source of truth for the inline SVG used
- * as a fallback when no custom branding logo or favicon is configured.
+ * as a fallback when no custom branding logo is configured.
  *
  * Consumed by:
  * - components/shared/ThemeAwareLogo.tsx (logo fallback)
- * - context/providers/BrandingProvider.tsx (favicon fallback)
  */
 
 export const DEFAULT_MARK_VIEWBOX = "0 0 82 97";

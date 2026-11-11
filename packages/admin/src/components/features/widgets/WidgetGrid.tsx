@@ -78,7 +78,7 @@ import {
 } from "./hidden-while-empty";
 import { WidenLonePairContext, widensLonePair } from "./lone-pair";
 import { resolveDashboardWidgets } from "./resolve-widgets";
-import { cardRowStyle, drawnSize, GRID_CLASS } from "./sizes";
+import { drawnSize, GRID_CLASS } from "./sizes";
 import { DashboardWidthProvider, useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
@@ -132,16 +132,15 @@ function NothingToDraw({
       <section
         aria-label="Dashboard widgets"
         data-testid="widget-grid-loading"
-        // The grid the cards will be drawn on, on its fixed rows: the placeholders hold nothing a
-        // row could take its height from, so each takes the two rows a two-row card would.
+        // The grid the cards will be drawn on. The placeholders hold nothing a row could take its
+        // height from, so each is drawn at a short card's height.
         className={GRID_CLASS}
       >
         {[0, 1, 2].map(row => (
           <div
             key={row}
             aria-hidden
-            style={cardRowStyle(2)}
-            className="col-span-12 animate-pulse rounded-lg bg-muted"
+            className="col-span-12 h-[160px] animate-pulse rounded-lg bg-muted"
           />
         ))}
       </section>

@@ -40,13 +40,13 @@ import type { DocumentPlace } from "./document-place";
  * scrolls the editor where that is not the page: the translation mode's target
  * pane, which sits under the mode's own bar as well as the top bar. Where
  * nothing declares it, the editor scrolls with the page, whose scroll area is
- * the window less the admin's top bar (4rem). One rule for both, so the
+ * the window less the admin's top bar (`--admin-bar-height`). One rule for both, so the
  * panel's foot is reachable in either without scrolling the page past it.
  * Both are layout knobs rather than palette tokens, so they sit outside the
  * theme's `--nx-*` namespace, as `--sidebar-width` does.
  */
 export const DOCUMENT_PANEL_STICKY =
-  "@4xl/content:sticky @4xl/content:top-[var(--document-bar-height,3.25rem)] @4xl/content:h-[calc(var(--editor-scrollport,calc(100vh-4rem))-var(--document-bar-height,3.25rem))]";
+  "@4xl/content:sticky @4xl/content:top-[var(--document-bar-height,3.25rem)] @4xl/content:h-[calc(var(--editor-scrollport,calc(100vh-var(--admin-bar-height)))-var(--document-bar-height,3.25rem))]";
 
 /**
  * The field column's inset, shared by everything drawn in it above the fields
@@ -94,7 +94,7 @@ export function DocumentEditorLayout({
       ref={frameRef}
       {...{ [DOCUMENT_EDITOR_FRAME_ATTRIBUTE]: "" }}
       {...(panelMode === undefined ? {} : { "data-panel-mode": panelMode })}
-      className="flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[var(--editor-scrollport,calc(100vh-4rem))]"
+      className="flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[var(--editor-scrollport,calc(100vh-var(--admin-bar-height)))]"
     >
       <TargetSlot
         {...place}

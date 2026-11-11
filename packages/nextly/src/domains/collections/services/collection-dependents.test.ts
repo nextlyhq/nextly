@@ -5,6 +5,7 @@ import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-ele
 
 import {
   assertNothingDependsOn,
+  fieldGroupPlacementCounts,
   fieldsPlacing,
   fieldsPointingAt,
   findEntityDependents,
@@ -821,5 +822,109 @@ describe("keys the database holds that no configuration declares", () => {
     expect(refusal.publicMessage).toBe(
       `"seo" was not deleted, because the foreign keys the database holds into its tables could not be read, so whether anything depends on it is unknown. Nothing was removed. Fix the cause in the server log and try again.`
     );
+  });
+});
+
+describe("fieldGroupPlacementCounts", () => {
+  /** Field group "card" places "seo"; collection "pages" places both. */
+  const owners: FieldOwner[] = [
+    {
+      entityType: "fieldGroup",
+      entitySlug: "card",
+      fields: [{ name: "meta", type: "component", component: "seo" }],
+    },
+    {
+      entityType: "collection",
+      entitySlug: "pages",
+      fields: [
+        { name: "teaser", type: "component", component: "card" },
+        {
+          name: "blocks",
+          type: "repeater",
+          fields: [
+            { name: "either", type: "component", components: ["card", "seo"] },
+          ],
+        },
+        { name: "related", type: "relationship", relationTo: "seo" },
+      ],
+    },
+    { entityType: "single", entitySlug: "home", fields: [] },
+  ];
+
+  it("counts one field group's use of another when both are asked about together", async () => {
+    const counts = await fieldGroupPlacementCounts(
+      ["card", "seo", "unused"],
+      sources({ owners })
+    );
+    // card: pages.teaser and pages.blocks.either; seo: card.meta and
+    // pages.blocks.either. A delete of both together would leave card's use
+    // of seo out, as going with it; a list asks about each on its own.
+    expect(counts).toEqual(
+      new Map([
+        ["card", 2],
+        ["seo", 2],
+        ["unused", 0],
+      ])
+    );
+  });
+
+  it("gives each field group the number of fields its own delete refusal would name", async () => {
+    const counts = await fieldGroupPlacementCounts(
+      ["card", "seo"],
+      sources({ owners })
+    );
+    for (const slug of ["card", "seo"]) {
+      const alone = await findEntityDependents(
+        [{ kind: "fieldGroup", slug, tables: [] }],
+        sources({ owners })
+      );
+      expect(counts.get(slug)).toBe(alone.get(slug)?.fields.length ?? 0);
+    }
+  });
+
+  it("does not count a field group's reference to itself, as its own delete does not", async () => {
+    // "tree" places itself and is placed once by "pages"; its delete takes
+    // its own fields with it, so only the outside use refuses it.
+    const withSelf: FieldOwner[] = [
+      ...owners,
+      {
+        entityType: "fieldGroup",
+        entitySlug: "tree",
+        fields: [{ name: "children", type: "component", component: "tree" }],
+      },
+      {
+        entityType: "collection",
+        entitySlug: "menus",
+        fields: [{ name: "root", type: "component", component: "tree" }],
+      },
+    ];
+    const counts = await fieldGroupPlacementCounts(
+      ["tree"],
+      sources({ owners: withSelf })
+    );
+    const alone = await findEntityDependents(
+      [{ kind: "fieldGroup", slug: "tree", tables: [] }],
+      sources({ owners: withSelf })
+    );
+    expect(counts.get("tree")).toBe(1);
+    expect(counts.get("tree")).toBe(alone.get("tree")?.fields.length);
+  });
+
+  it("reads the field owners once, however many field groups it is asked about", async () => {
+    const fieldOwners = vi.fn(() => Promise.resolve(owners));
+    await fieldGroupPlacementCounts(["card", "seo", "unused"], {
+      ...sources({ owners }),
+      fieldOwners,
+    });
+    expect(fieldOwners).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects when the field owners cannot be read, leaving the caller to say so", async () => {
+    await expect(
+      fieldGroupPlacementCounts(
+        ["card"],
+        sources({ owners: new Error("down") })
+      )
+    ).rejects.toThrow("down");
   });
 });

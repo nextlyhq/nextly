@@ -99,6 +99,7 @@ import type {
 import { withForeignKeysLiftedForTypeChanges } from "../pipeline/foreign-key-lift";
 import {
   columnsByTable,
+  keptScopeFields,
   withKeptScopeFields,
 } from "../pipeline/kept-scope-fields";
 import { operationsToJudge } from "../pipeline/moved-to-companion";
@@ -113,7 +114,10 @@ import {
   type ColumnResolution,
 } from "../pipeline/sql-templates/resolution-statements";
 import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-rebuild";
-import type { ColumnOrigin } from "../services/field-column-descriptor";
+import {
+  columnsDeclaredBy,
+  type ColumnOrigin,
+} from "../services/field-column-descriptor";
 
 import {
   appStreamSnapshots,
@@ -225,6 +229,12 @@ export interface MinimalConfigEntity {
 export interface GenerateArgs {
   /** Slug-cased migration name (CLI's --name=<value>). */
   name: string;
+  /**
+   * Keep nothing a plugin's scope holds back from a type switched off: the
+   * migration drops the columns those fields kept. Set by `nextly prune` on a
+   * site that keeps migration files, once the data-loss consent agrees.
+   */
+  releaseHeldBack?: boolean;
   dialect: SupportedDialect;
   /** Absolute path to the `migrations/` directory. */
   migrationsDir: string;
@@ -409,15 +419,38 @@ function withKeptScopeFieldsOf(
   previous: NextlySchemaSnapshot | undefined
 ): GenerateArgs {
   const kept = columnsByTable(previous ?? EMPTY_SNAPSHOT, declared.dialect);
+  const keep = <T extends MinimalConfigEntity>(
+    kind: "collection" | "single",
+    entity: T
+  ): T => {
+    const fields = keptScopeFields(kind, entity, kept).filter(
+      field =>
+        declared.releaseHeldBack !== true ||
+        storedApartFrom(field, kept.names.get(entity.tableName))
+    );
+    return fields.length === 0
+      ? entity
+      : { ...entity, fields: [...entity.fields, ...fields] };
+  };
   return {
     ...declared,
-    collections: declared.collections.map(entity =>
-      withKeptScopeFields("collection", entity, kept)
-    ),
-    singles: declared.singles.map(entity =>
-      withKeptScopeFields("single", entity, kept)
-    ),
+    collections: declared.collections.map(entity => keep("collection", entity)),
+    singles: declared.singles.map(entity => keep("single", entity)),
   };
+}
+
+/**
+ * Whether none of `field`'s columns is on the type's own table, as a
+ * translated kept field's is in its translations table. Releasing what is
+ * held back drops only a type's own table's columns, since a migration never
+ * drops a translations table's column: such a field stays kept, or the
+ * snapshot would forget the column the database still holds.
+ */
+function storedApartFrom(
+  field: { name?: unknown; type?: unknown; options?: unknown },
+  main: ReadonlySet<string> | undefined
+): boolean {
+  return ![...columnsDeclaredBy([field])].some(column => main?.has(column));
 }
 
 /**
@@ -665,8 +698,7 @@ export async function generateMigration(
         args.collections,
         args.singles,
         args.components,
-        args.dialect,
-        previous?.data.snapshot
+        args.dialect
       ),
       args.tablesAsTheyStand
     ),

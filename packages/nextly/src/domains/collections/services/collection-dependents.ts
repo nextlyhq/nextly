@@ -471,6 +471,44 @@ const KIND_WORD: Record<EntityKind, string> = {
 };
 
 /**
+ * How many fields place each field group, as the field-group list shows it.
+ *
+ * The same answer a delete gives about one field group's fields
+ * (`findEntityDependents`), from the same walk over every stored field list,
+ * read once for the whole set. Each field group is asked about as if deleted
+ * on its own: its own fields go with it, so a reference to itself does not
+ * count, while one field group's use of another on the same page still does. Only fields are counted, not keys or
+ * other owners' elements, which a delete also weighs.
+ *
+ * Rejects when the field lists cannot be read, so the caller decides how to
+ * show a count it does not have.
+ *
+ * @param slugs the field groups to count, as fields name them
+ * @param sources where the stored field lists are read from
+ */
+export async function fieldGroupPlacementCounts(
+  slugs: readonly string[],
+  sources: Pick<DependentsSources, "fieldOwners">
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (slugs.length === 0) return counts;
+  const owners = await sources.fieldOwners();
+  for (const slug of slugs) {
+    // What goes with a delete of this field group alone, as the delete
+    // decides it: its own fields, so a reference to itself does not count.
+    const goingToo = fieldsGoingWith(
+      [{ kind: "fieldGroup", slug, tables: [] }],
+      {}
+    );
+    counts.set(
+      slug,
+      referencesAmong(owners, "fieldGroup", slug, goingToo).length
+    );
+  }
+  return counts;
+}
+
+/**
  * The keys the database holds into `own` from outside the operation that no
  * declared key accounts for. A key is told by the table it is on and the
  * table it points at, since the catalog does not name every key.

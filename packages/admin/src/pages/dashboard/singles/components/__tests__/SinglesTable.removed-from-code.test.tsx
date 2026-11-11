@@ -14,10 +14,19 @@ import SinglesTable from "../SinglesTable";
 const { useSingles } = vi.hoisted(() => ({ useSingles: vi.fn() }));
 
 vi.mock("@admin/hooks/queries", () => ({
-  useSingles: (params: unknown) => useSingles(params),
+  singleKeys: { lists: () => ["singles", "list"] },
   useDeleteSingle: () => ({ mutate: vi.fn(), isPending: false }),
   useBulkDeleteSingles: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+
+// The site's page as the list asks for it; no plugin Singles.
+vi.mock(
+  "../../../collection/components/entity-list/use-entity-lists-by-owner",
+  () => ({
+    useSiteEntityPage: (_key: unknown, params: unknown) => useSingles(params),
+    usePluginEntities: () => ({ data: [] }),
+  })
+);
 
 const row = (
   slug: string,

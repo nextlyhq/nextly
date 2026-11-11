@@ -14,7 +14,7 @@
  *
  * A row of seven icon buttons per card was seven Tab stops per card and a
  * header too crowded for a narrow card. One named button opens every action,
- * and the card's size is shown beside it in columns by rows, so the reader can
+ * and the card's width is shown beside it as a share of the row, so the reader can
  * see what the Width and Height submenus will change without opening them.
  *
  * ## Sizes within the widget's bounds, and only those
@@ -47,7 +47,6 @@ import {
   ArrowUp,
   ArrowUpToLine,
   MoveHorizontal,
-  MoveVertical,
   Settings,
   Trash2,
 } from "lucide-react";
@@ -58,11 +57,10 @@ import * as Icons from "@admin/components/icons";
 
 import type { MoveDirection } from "../layout-editor";
 import {
-  heightChoices,
-  rowsName,
   sizeName,
   widthChoiceName,
   widthChoices,
+  widthPercent,
 } from "../sizes";
 
 import { settingsIntent } from "./settings-sheet-code";
@@ -104,7 +102,7 @@ const MOVES: ReadonlyArray<{
 ];
 
 /**
- * The card's size as columns by rows, with its full name for a screen reader.
+ * The card's width as a share of the row ("50%"), with its full size for a screen reader.
  * Shown beside the menu button while customising.
  */
 export function CardSizeLabel({ size }: { size: GridSize }): JSX.Element {
@@ -113,11 +111,8 @@ export function CardSizeLabel({ size }: { size: GridSize }): JSX.Element {
       className="inline-flex h-6 min-w-6 items-center justify-center rounded border border-border px-1 text-xs tabular-nums text-muted-foreground"
       data-testid="card-size-label"
     >
-      {/* The glyphs are for sight; the name is what is read, so "6×4" is not
-          announced as "six times four" beside a menu that says "6 columns". */}
-      <span aria-hidden>
-        {size.w}×{size.h}
-      </span>
+      {/* The percentage is for sight; the whole size is what is read. */}
+      <span aria-hidden>{widthPercent(size.w)}</span>
       <span className="sr-only">{sizeName(size)}</span>
     </span>
   );
@@ -125,7 +120,7 @@ export function CardSizeLabel({ size }: { size: GridSize }): JSX.Element {
 
 /** One direction of the card's size: what it is called, its choices and how each reads. */
 export interface SizeAxis {
-  kind: "width" | "height";
+  kind: "width";
   label: string;
   icon: ComponentType<{ "aria-hidden"?: boolean; className?: string }>;
   /** The value the card is drawn at in this direction. */
@@ -227,9 +222,9 @@ export function AxisSection({
 }
 
 /**
- * The directions a card may be resized in: each whose bounds offer more than the one size it
- * has, so a widget of one fixed height offers no Height at all. The one reading of a card's size
- * choices for both card menus and the quick popover.
+ * The directions a card may be resized in: its width, where its bounds offer more than the one
+ * width it has. Never its height: a card is as tall as its content, and a stored `h` sets no
+ * height. The one reading of a card's size choices for both card menus and the quick popover.
  */
 export function sizeAxes(
   size: GridSize,
@@ -246,15 +241,6 @@ export function sizeAxes(
       name: widthChoiceName,
       // The other direction kept as drawn, which already lies within the bounds.
       choose: w => setSize({ w, h: size.h }),
-    },
-    {
-      kind: "height",
-      label: "Height",
-      icon: MoveVertical,
-      value: size.h,
-      choices: heightChoices(bounds),
-      name: h => ({ label: rowsName(h), spoken: rowsName(h) }),
-      choose: h => setSize({ w: size.w, h }),
     },
   ];
   return axes.filter(axis => axis.choices.length > 1);

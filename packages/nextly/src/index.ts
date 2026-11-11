@@ -563,6 +563,8 @@ export {
   type FrozenValue,
   type PluginEmailSettings,
   type PluginContext,
+  type PluginEmitOptions,
+  type PluginEvents,
   type PluginContributions,
   type PluginDatabase,
   type PluginRawDatabase,
@@ -687,6 +689,31 @@ export {
   type ContentTypeScope,
 } from "./plugins/content-type-scope";
 
+// Where an entry is served, as the site declares it: one answer for every
+// reader of a page's public address.
+// @experimental
+export {
+  publicAddressOf,
+  typesWithoutAddress,
+  type PublicAddress,
+  type PublicAddressType,
+} from "./domains/public-addresses/public-address";
+
+// Keeping every public address to one page: the record a plugin keeps, as
+// core asks it on each save (`ctx.publicAddresses`).
+// @experimental
+export type {
+  AddressHolder,
+  HeldAddress,
+  HeldAddressUpdate,
+} from "./domains/public-addresses/participants";
+export type {
+  ParticipantTransaction,
+  PluginPublicAddresses,
+  PublicAddressParticipant,
+  RefusedAddressUpdate,
+} from "./plugins/plugin-public-addresses";
+
 // The plugin limiter: `contributes.limits` rules and `ctx.limits`.
 // @experimental
 export type { LimitRule } from "./domains/limits/limit-rules";
@@ -755,6 +782,10 @@ export {
 // reads its `size` by to ask for no more rows than the card shows, by the formula core's own list
 // cards are drawn with. From the module the admin draws the frame by, which imports nothing more.
 export { rowsThatFit } from "./domains/widgets/card-geometry";
+// @experimental The rows a list card loads and shows for its "Number of entries" setting, and the
+// most that setting offers: what a widget's `load` reads its setting by, the rule core's own list
+// cards and the admin read alike. From `query-limits.ts`, which imports nothing.
+export { listEntries, MAX_WIDGET_ROWS } from "./domains/widgets/query-limits";
 // A setting's own editor component's props (experimental).
 export type { SettingEditorProps } from "./domains/widgets/result";
 // @experimental The check a site's generated admin component map applies, and what it reads:
@@ -1191,6 +1222,7 @@ export {
   type NavFilterContext,
   type ListQueryWhere,
   type ListQueryFilterContext,
+  type PublicAddressTemplateContext,
 } from "./filters";
 
 // ============================================================

@@ -339,7 +339,7 @@ test.describe("the quick popover and the card menu at rest", () => {
     // and can close the submenu under it, which no reader's pointer does.
     await menu.getByRole("menuitem", { name: /^Width/ }).press("ArrowRight");
     const half = page.getByRole("menuitemradio", {
-      name: "Half width, 6 columns",
+      name: "50% width",
     });
     await expect(half).toBeVisible();
     await half.press("Enter");
