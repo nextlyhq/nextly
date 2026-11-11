@@ -59,6 +59,11 @@ export interface DurableSubscribers {
   /** The handler registered under `key`, if any is. */
   handlerOf(key: string): DurableHandler | undefined;
   /**
+   * Whether `key` is retired within its grace: its plugin is expected back,
+   * so a delivery owed to it is looked at again soon rather than held.
+   */
+  isRetired(key: string): boolean;
+  /**
    * Retire every subscriber of `owner`, as when the plugin is torn down to be
    * registered again: none runs, each is still owed what is dispatched for
    * {@link DURABLE_SUBSCRIBER_GRACE_MS}, and registering its name again
@@ -126,6 +131,10 @@ export function createDurableSubscribers(
     handlerOf(key) {
       const entry = byKey.get(key);
       return entry?.retiredAt === undefined ? entry?.handler : undefined;
+    },
+    isRetired(key) {
+      const entry = byKey.get(key);
+      return entry?.retiredAt !== undefined && owed(entry, now());
     },
     retireOwner(owner) {
       const at = now();
