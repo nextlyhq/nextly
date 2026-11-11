@@ -351,14 +351,16 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toThrow();
     });
 
-    it("refuses a Required field while an entry has no English value, changing nothing", async () => {
-      await seed({ e1: { en: "Hello", es: "Hola" }, e2: { es: "Solo" } });
+    // An entry with a value in another language keeps that one, so only an entry with none in
+    // any language is left without a value.
+    it("refuses a Required field while an entry has no value in any language, changing nothing", async () => {
+      await seed({ e1: { en: "Hello", es: "Hola" }, e2: {} });
 
       loaded.config = configWith({ localized: false, required: true });
       await reloadNextlyConfig();
 
       // The refusal of the setting, not the terminal prompt for a required column.
-      expect(told()).toMatch(/no English body/);
+      expect(told()).toMatch(/would have no body once it is shared/);
       expect(told()).toMatch(/remove `required`.*save/s);
       expect(await columnsOf(TABLE)).not.toContain("body");
       expect(await columnsOf(COMPANION)).toContain("body");

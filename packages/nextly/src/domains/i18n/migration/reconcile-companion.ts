@@ -933,6 +933,15 @@ export function buildCompanionTransitionStatements(
     });
     // Nothing to restore (no companion, or the entity had no translatable columns).
     if (!spec || !companionExists) return none;
+    // Each entry keeps the value its readers saw, as when one field stops being translated: the
+    // copy and the archive both read this spec, so they choose the same row. Whether each language
+    // had its own `_status` is the history fact `wasStatus` where the caller read no physical
+    // shape, as a disable's callers don't: the companion of a translated Draft/Published entity
+    // carries one.
+    spec.liveness = copyLiveness(
+      args.languageOrder,
+      args.companionHasStatus ?? args.wasStatus
+    );
     return {
       statements: buildLocalizationDownStatements(spec, {
         existingMainColumns: args.existingMainColumns,

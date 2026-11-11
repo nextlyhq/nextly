@@ -326,18 +326,19 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       (await previewShared(leaving)).leavingTranslation?.[0]?.refusal
     ).toBe(undefined);
 
-    // One entry translated before it had an English row, as an older install may hold.
+    // One entry whose English heading is empty, as an older install may hold: English is the
+    // row it keeps, so it would be left without a heading.
     await query(
-      `DELETE FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
+      `UPDATE ${quote(dialect, "dc_posts_locales")} SET ${quote(dialect, "heading")} = NULL WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
     );
 
     expect(
       (await previewShared(leaving)).leavingTranslation?.[0]?.refusal
     ).toEqual({
       reason:
-        "1 entry has no English heading, and its English value becomes the shared one.",
+        "1 entry would have no heading once it is shared: the value it keeps is empty.",
       steps: [
-        "Give that entry an English heading, or turn off Required, and save again.",
+        "Give that entry a heading, or turn off Required, and save again.",
       ],
     });
   });

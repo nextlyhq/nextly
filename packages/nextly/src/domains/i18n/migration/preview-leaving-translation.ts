@@ -180,6 +180,8 @@ async function valueRefusals(args: PreviewLeavingArgs, leaving: string[]) {
       tableName: args.tableName,
       builtBy: args.builtBy,
       defaultLocale: args.defaultLocale,
+      // The values Apply judges: the ones its copy keeps.
+      liveness: copyLiveness(args.languageOrder, args.companionHasStatus),
       leaving: new Set(leaving),
       oldFields: args.oldFields,
       newFields: args.newFields,

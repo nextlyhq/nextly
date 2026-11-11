@@ -765,7 +765,8 @@ export async function generateMigration(
     args.dialect,
     args.defaultLocale ?? "en",
     companionHistory,
-    companionRenames
+    companionRenames,
+    args.languageOrder
   );
 
   // 3. Diff.
@@ -1567,6 +1568,22 @@ function tablesOfSettingsChanges(
  * type to restore and is skipped: its translations stay archived rather than emitting SQL for a
  * column that has nowhere to land.
  */
+/**
+ * Whether the translations table of an entity translated in `previous` held each language's own
+ * `_status`. The snapshot records no translations table, so this is read from what it keeps: a
+ * translated entity's translations table has `_status` exactly when the entity is Draft/Published,
+ * which its main table's `status` column records.
+ */
+function companionHadStatus(
+  previous: NextlySchemaSnapshot,
+  mainTable: string
+): boolean {
+  const main = previous.tables.find(t => t.name === mainTable);
+  return (
+    main?.localized === true && main.columns.some(col => col.name === "status")
+  );
+}
+
 function buildDisableSpec(
   entity: MinimalConfigEntity,
   kind: I18nTransitionKind,
@@ -1719,7 +1736,9 @@ function planCompanionMigrations(
   dialect: SupportedDialect,
   defaultLocale: string,
   history: TranslationRecords,
-  renames: ReadonlyMap<string, readonly CompanionRename[]> = new Map()
+  renames: ReadonlyMap<string, readonly CompanionRename[]> = new Map(),
+  /** The site's languages in order, which decides the value a disable keeps (`copyLiveness`). */
+  languageOrder?: readonly string[]
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
   for (const { entity: c, kind: entityKind } of entities) {
@@ -1748,7 +1767,8 @@ function planCompanionMigrations(
         spec?.mainTable ?? c.tableName,
         previousSnapshot,
         dialect,
-        defaultLocale
+        defaultLocale,
+        languageOrder
       );
       if (disable) entries.push(disable);
       continue;
@@ -1832,7 +1852,8 @@ function disableEntryFor(
   mainTable: string,
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
-  defaultLocale: string
+  defaultLocale: string,
+  languageOrder?: readonly string[]
 ): CompanionPlanEntry | undefined {
   const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
   if (prevMain?.localized !== true) return undefined;
@@ -1853,6 +1874,11 @@ function disableEntryFor(
     defaultLocale
   );
   if (!disableSpec) return undefined;
+  // Each entry keeps the value its readers saw, as the runtime disable keeps it.
+  disableSpec.liveness = copyLiveness(
+    languageOrder,
+    companionHadStatus(previousSnapshot, mainTable)
+  );
   const plan = planCompanionMigration({
     spec: disableSpec,
     prevMainColumnNames: [],
@@ -2144,9 +2170,7 @@ function planFieldsLeavingTranslation(
           // records has one; otherwise every language of an entry is ranked as live.
           liveness: copyLiveness(
             languageOrder,
-            previousSnapshot.tables
-              .find(t => t.name === `${c.tableName}_locales`)
-              ?.columns.some(col => col.name === "_status") === true
+            companionHadStatus(previousSnapshot, c.tableName)
           ),
           parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
           columns: leaving.map(l => l.column),

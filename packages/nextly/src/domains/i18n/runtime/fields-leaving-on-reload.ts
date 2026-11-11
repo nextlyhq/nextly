@@ -27,6 +27,7 @@ import {
   withoutLeavingConstraints,
 } from "../migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../migration/field-to-column-spec";
+import { copyLiveness } from "../migration/generate-down";
 import {
   applyCompanionStatements,
   dropHeldLeavingFields,
@@ -390,6 +391,9 @@ async function leavingRefusalsOnReload(
         adapter,
         tableName: e.tableName,
         defaultLocale,
+        // The values the move keeps: a translated Draft/Published entity's translations table
+        // holds each language's own state.
+        liveness: copyLiveness(appLanguageOrder(), e.status),
         uniqueIndexed: e.uniqueIndexed,
       })),
     ];

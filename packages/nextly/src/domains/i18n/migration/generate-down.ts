@@ -420,11 +420,13 @@ export function buildLocalizationDownStatements(
     )
   );
 
-  // 3. archive non-default translations
+  // 3. archive every translation but the one restored: the default language's, or, with the
+  // spec's ranking, the row its readers saw (`chosenRowOrder`), so nothing restored is archived
+  // and nothing archived is lost
   for (const c of columns) {
     stmts.push(
       buildArchiveNonDefaultStatement(
-        { dialect, companionTable, defaultLocale },
+        { dialect, companionTable, defaultLocale, liveness: spec.liveness },
         archiveOwnerOf(collection, kind),
         c.name
       )
