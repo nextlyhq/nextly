@@ -86,21 +86,45 @@ function notFoundRowOf(entry: unknown): NotFoundRow {
   };
 }
 
-/** The log's row for `path`, if it has one. */
-async function rowFor(
+/**
+ * Count one more request on the log's row for `key`, read and written under
+ * the row's lock on one transaction, so requests arriving at once each count.
+ * Answers whether the row was there.
+ */
+function bumpLogged(
   ctx: PluginContext,
-  path: string
-): Promise<NotFoundRow | undefined> {
-  const { data } = await ctx.services.ownCollections.listEntries(
-    notFoundSlug(ctx),
-    {
-      where: { pathKey: { equals: pathKey(path) } },
-      pagination: { limit: 1, page: 1 },
-      depth: 0,
-    }
-  );
-  const [row] = data as unknown[];
-  return row === undefined ? undefined : notFoundRowOf(row);
+  key: string,
+  lastSeen: string,
+  kind: NotFoundKind
+): Promise<boolean> {
+  const slug = notFoundSlug(ctx);
+  return ctx.services.collections.withTransaction(async transaction => {
+    const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
+      transaction,
+      slug,
+      {
+        where: { pathKey: { equals: key } },
+        pagination: { limit: 1, page: 1 },
+        depth: 0,
+      },
+      { lock: "update" }
+    );
+    const [entry] = data as unknown[];
+    if (entry === undefined) return false;
+    const row = notFoundRowOf(entry);
+    await ctx.services.collections.updateEntryInTransaction(
+      transaction,
+      slug,
+      row.id,
+      {
+        hits: row.hits + 1,
+        lastSeen,
+        ...(kind === "moved" ? { kind } : {}),
+        _overwrite: true,
+      }
+    );
+    return true;
+  });
 }
 
 /**
@@ -121,19 +145,11 @@ export async function recordNotFound(
   if (notAPageAddress(path)) return;
   const slug = notFoundSlug(ctx);
   const lastSeen = now.toISOString();
-  const bump = async (row: NotFoundRow) => {
-    await ctx.services.collections.updateEntry(slug, row.id, {
-      hits: row.hits + 1,
-      lastSeen,
-      ...(kind === "moved" ? { kind } : {}),
-      _overwrite: true,
-    });
-  };
-  const known = await rowFor(ctx, path);
-  if (known !== undefined) return bump(known);
+  const key = pathKey(path);
+  if (await bumpLogged(ctx, key, lastSeen, kind)) return;
   try {
     await ctx.services.collections.createEntry(slug, {
-      pathKey: pathKey(path),
+      pathKey: key,
       path,
       hits: 1,
       lastSeen,
@@ -142,8 +158,7 @@ export async function recordNotFound(
   } catch (error) {
     // Another request made the row first: count this one on it.
     if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
-    const made = await rowFor(ctx, path);
-    if (made !== undefined) await bump(made);
+    await bumpLogged(ctx, key, lastSeen, kind);
     return;
   }
   if (

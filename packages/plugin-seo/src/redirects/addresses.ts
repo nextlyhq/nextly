@@ -24,6 +24,15 @@ function trimmed(path: string): string {
 }
 
 /**
+ * The path a To address on this site sends a request to: without its query
+ * or fragment and a trailing slash, since a request is matched by its path
+ * alone. `/a?ref=1` is the address `/a`.
+ */
+export function pathOf(target: string): string {
+  return trimmed(target.split(/[?#]/, 1)[0] ?? target);
+}
+
+/**
  * Read a From address as a person typed it: refused with the reason to show
  * them, or the address it holds, a pattern as a range below its fixed part.
  */
@@ -80,7 +89,7 @@ export function checkTarget(target: string, source: string): string | null {
   const star = starProblem(to, source);
   if (star !== null) return star;
   if (to.startsWith("/")) {
-    return trimmed(to) === trimmed(source)
+    return pathOf(to) === trimmed(source)
       ? "That would send the address to itself."
       : null;
   }

@@ -15,6 +15,12 @@
  *
  * The page already holding an address keeps it, newer or not: content never
  * takes the site down, and visitors keep reaching what they reached before.
+ *
+ * Once every claim stands, each address a page let go of leaves a permanent
+ * redirect to the page's new one, as a save would: an old address another
+ * page now holds is refused rather than used as a step to a third page, and
+ * a page that lost its new address gets none. The route has already moved,
+ * so a redirect that cannot be saved lists the old address as a broken link.
  * The fingerprint is stored last, so a start interrupted part-way runs the
  * whole catch-up again.
  *
@@ -36,11 +42,7 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import {
-  redirectDeployMove,
-  takeBackLost,
-  type DeployRedirect,
-} from "../redirects/moves";
+import { redirectDeployMove } from "../redirects/moves";
 
 import { heldNow, recordSlug, rowOf, type RecordRow } from "./participant";
 
@@ -49,6 +51,12 @@ export interface LostAddress {
   holder: AddressHolder;
   address: HeldAddress;
   heldBy: AddressHolder;
+}
+
+/** A page whose deploy moved it, and the addresses it let go of. */
+interface Moved {
+  page: HeldAddressUpdate;
+  released: HeldAddress[];
 }
 
 /** What a catch-up did. */
@@ -355,7 +363,7 @@ async function keepWhatStands(
   pages: readonly HeldAddressUpdate[],
   was: ReadonlyMap<string, { holds: HeldAddress[] }>,
   expected: Expected,
-  made: DeployRedirect[]
+  moved: Moved[]
 ): Promise<Map<string, HeldAddress[]>> {
   const kept = new Map<string, HeldAddress[]>();
   for (const page of pages) {
@@ -373,12 +381,14 @@ async function keepWhatStands(
         expected
       );
       // The route has moved with the deploy: each address let go of leaves
-      // a redirect to the page's new one, made once the release commits.
+      // a redirect to the page's new one, once every claim stands.
       if (outcome !== "overtaken") {
-        const released = before.filter(
-          b => !keep.some(held => sameAddress(b, held))
-        );
-        await redirectDeployMove(ctx, page, released, made);
+        moved.push({
+          page,
+          released: before.filter(
+            b => !keep.some(held => sameAddress(b, held))
+          ),
+        });
       }
     }
   }
@@ -510,14 +520,19 @@ async function runCatchUp(
   const expected: Expected = new Map(
     [...was].map(([key, entry]) => [key, [...entry.holds]])
   );
-  const made: DeployRedirect[] = [];
-  const kept = await keepWhatStands(ctx, pages, was, expected, made);
+  const moved: Moved[] = [];
+  const kept = await keepWhatStands(ctx, pages, was, expected, moved);
   await letGoOfTheGone(ctx, was, kept, expected, {
     now: new Set(siteTypes),
     before: typesIn(record.siteTypes),
   });
   const { recorded, lost } = await claimTheNew(ctx, pages, kept, expected);
-  await takeBackLost(ctx, made, lost);
+  for (const { page, released } of moved) {
+    const lostHere = lost
+      .filter(each => holderKey(each.holder) === holderKey(page.holder))
+      .map(each => each.address);
+    await redirectDeployMove(ctx, page, released, lostHere);
+  }
   await storeMeta(
     ctx,
     record.siteTypes?.id,

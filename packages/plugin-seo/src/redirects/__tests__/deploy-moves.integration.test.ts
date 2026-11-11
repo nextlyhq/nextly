@@ -169,6 +169,25 @@ describe.each(getConfiguredTestDialects())("a deploy's moves (%s)", dialect => {
     });
   });
 
+  it("send a page's old address to that page, when another page moves on from its new one", async () => {
+    const t = await boot(dialect);
+    // After the deploy, A is at `/b`, and B, which was at `/b`, is at `/c`.
+    const a = await publish(t, "pages", "b");
+    const b = await publish(t, "posts", "c");
+    await restart();
+    await heldBeforeTheDeploy(t, { collection: "pages", id: a }, "/a");
+    await heldBeforeTheDeploy(t, { collection: "posts", id: b }, "/b");
+
+    await restart();
+
+    expect(await redirects(t)).toEqual({ "en|/a": "/b permanent automatic" });
+    expect(await held(t)).toEqual({
+      "en|/a": REDIRECTS_SLUG,
+      "en|/b": "pages",
+      "en|/c": "posts",
+    });
+  });
+
   it("list the old address as a broken link where its redirect cannot be saved", async () => {
     const t = await boot(dialect);
     const page = await publish(t, "pages", "new");

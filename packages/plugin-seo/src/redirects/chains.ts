@@ -9,6 +9,7 @@
  *
  * @module redirects/chains
  */
+import { pathOf } from "./addresses";
 
 /** Where a chain ends, and every address it passes on the way. */
 export type ChainEnd = { final: string; path: string[] } | { error: string };
@@ -27,25 +28,26 @@ export async function followChain(
   next: (path: string) => Promise<string | null>
 ): Promise<ChainEnd> {
   const path = [to];
-  const seen = new Set([to]);
+  const seen = new Set([pathOf(to)]);
   let current = to;
   while (current.startsWith("/") && !current.endsWith("/*")) {
-    if (current === from) {
+    // Requests are matched by their path, so `/a?ref=1` reaches `/a`.
+    if (pathOf(current) === from) {
       return { error: `That makes a loop: ${[from, ...path].join(" → ")}.` };
     }
-    const hop = await next(current);
+    const hop = await next(pathOf(current));
     if (hop === null) break;
-    if (hop === from) {
+    if (pathOf(hop) === from) {
       return {
         error: `That makes a loop: ${[from, ...path, hop].join(" → ")}.`,
       };
     }
-    if (seen.has(hop) || path.length >= LONGEST_CHAIN) {
+    if (seen.has(pathOf(hop)) || path.length >= LONGEST_CHAIN) {
       return {
         error: `${to} is already part of a loop. Fix that redirect first.`,
       };
     }
-    seen.add(hop);
+    seen.add(pathOf(hop));
     path.push(hop);
     current = hop;
   }

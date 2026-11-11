@@ -23,7 +23,7 @@ import {
 
 import { forgetNotFound } from "../not-found/log";
 
-import { checkTarget, parseSource, storedTarget } from "./addresses";
+import { checkTarget, parseSource, pathOf, storedTarget } from "./addresses";
 import { followChain } from "./chains";
 import { redirectsSlug } from "./collection";
 
@@ -103,7 +103,7 @@ export function redirectOf(entry: unknown): StoredRedirect {
 /** The key of a To address an exact redirect can be joined on, or null. */
 function targetKeyOf(locale: string, target: string): string | null {
   return target.startsWith("/") && !target.includes("*")
-    ? redirectKey(locale, target)
+    ? redirectKey(locale, pathOf(target))
     : null;
 }
 
@@ -316,29 +316,6 @@ export async function putRedirect(
     ? 0
     : await pointedOn(ctx, transaction, locale, from.source, end.final, saved);
   return { saved, chain: end.path, repointed };
-}
-
-/** Remove a redirect, and let go of the address it held. */
-export async function removeRedirect(
-  ctx: PluginContext,
-  transaction: Transaction,
-  id: string
-): Promise<StoredRedirect> {
-  const read = reads(ctx, transaction);
-  const found = await read.byId(id);
-  if (found === undefined) {
-    throw NextlyError.notFound({ logContext: { reason: "redirect-gone", id } });
-  }
-  await ctx.publicAddresses.move(
-    [{ holder: { collection: read.slug, id }, holds: [] }],
-    transaction
-  );
-  await ctx.services.collections.deleteEntryInTransaction(
-    transaction,
-    read.slug,
-    id
-  );
-  return found;
 }
 
 /**

@@ -15,7 +15,7 @@ import {
 
 import { recordNotFound } from "../not-found/log";
 
-import { putRedirect, removeRedirect, type RedirectInput } from "./store";
+import { putRedirect, type RedirectInput } from "./store";
 
 /**
  * The redirect a page holding `holds` now leaves from `old`, an address it
@@ -44,14 +44,6 @@ export function movedRedirect(
   };
 }
 
-/** A redirect a catch-up left, to take back if its page loses the address. */
-export interface DeployRedirect {
-  id: string;
-  holder: AddressHolder;
-  locale: string;
-  to: string;
-}
-
 /** List `old` as a broken link: its route moved, and no redirect could be saved. */
 async function listBroken(ctx: PluginContext, old: HeldAddress): Promise<void> {
   const served = await languageAddressOf(old.path, old.locale);
@@ -63,22 +55,32 @@ async function listBroken(ctx: PluginContext, old: HeldAddress): Promise<void> {
 }
 
 /**
- * Leave a redirect from each address `page` let go of in a deploy's move, each
- * on a transaction of its own after the release: the route has already
- * moved, so a redirect that cannot be saved does not keep the old address,
- * and the old address is listed as a broken link instead. A refusal because
- * another page serves the old address, or because the redirect would loop (as
- * two pages swapping addresses do, part-way through), leaves none. Each one
- * left is added to `made`.
+ * Leave a redirect from each address `page` let go of in a deploy's move,
+ * each on a transaction of its own, once every page's claim stands: an old
+ * address another page now holds is then refused, so it is never used as a
+ * step towards a third page. None goes to an address the page lost to the
+ * page already holding it (`lost`). The route has already moved, so a
+ * redirect that cannot be saved does not keep the old address; the old
+ * address is listed as a broken link instead. A refusal because another
+ * page serves the old address, or because it would loop, leaves none.
  */
 export async function redirectDeployMove(
   ctx: PluginContext,
   page: { holder: AddressHolder; holds: readonly HeldAddress[] },
   released: readonly HeldAddress[],
-  made: DeployRedirect[]
+  lost: readonly HeldAddress[]
 ): Promise<void> {
+  const kept = page.holds.filter(
+    held =>
+      !lost.some(
+        gone =>
+          gone.locale === held.locale &&
+          gone.path === held.path &&
+          (gone.range === true) === (held.range === true)
+      )
+  );
   for (const old of released) {
-    const input = movedRedirect(old, page.holds);
+    const input = movedRedirect(old, kept);
     if (input === undefined) continue;
     let outcome: Awaited<ReturnType<typeof putRedirect>>;
     try {
@@ -94,55 +96,8 @@ export async function redirectDeployMove(
       await listBroken(ctx, old);
       continue;
     }
-    if ("saved" in outcome) {
-      made.push({
-        id: outcome.saved.id,
-        holder: page.holder,
-        locale: old.locale,
-        to: input.target,
-      });
-    } else if (outcome.reason === "invalid") {
+    if ("refused" in outcome && outcome.reason === "invalid") {
       await listBroken(ctx, old);
-    }
-  }
-}
-
-/**
- * Take back the redirects a catch-up left to an address its page then lost to
- * another: a page left without an address gets no redirect to it.
- */
-export async function takeBackLost(
-  ctx: PluginContext,
-  made: readonly DeployRedirect[],
-  lost: readonly { holder: AddressHolder; address: HeldAddress }[]
-): Promise<void> {
-  for (const each of lost) {
-    const target =
-      each.address.range === true
-        ? `${each.address.path === "/" ? "" : each.address.path}/*`
-        : each.address.path;
-    for (const left of made) {
-      if (
-        left.holder.collection !== each.holder.collection ||
-        left.holder.id !== each.holder.id ||
-        left.locale !== each.address.locale ||
-        left.to !== target
-      ) {
-        continue;
-      }
-      try {
-        await ctx.services.collections.withTransaction(transaction =>
-          removeRedirect(ctx, transaction, left.id)
-        );
-      } catch (error) {
-        ctx.logger.warn(
-          "A redirect to a lost address could not be taken back",
-          {
-            redirect: left.id,
-            error,
-          }
-        );
-      }
     }
   }
 }

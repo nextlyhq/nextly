@@ -92,6 +92,8 @@ describe("a redirect's To address", () => {
     ],
     ["/old", "/old", "That would send the address to itself."],
     ["/old/*", "/old/*", "That would send the address to itself."],
+    ["/a?ref=1", "/a", "That would send the address to itself."],
+    ["/a/#top", "/a", "That would send the address to itself."],
   ])("refuses %j from %j", (target, source, message) => {
     expect(checkTarget(target, source)).toBe(message);
   });

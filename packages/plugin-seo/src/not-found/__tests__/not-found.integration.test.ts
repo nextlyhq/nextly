@@ -88,6 +88,16 @@ describe.each(getConfiguredTestDialects())(
       expect(await logged(t)).toEqual({ "/missing": 2, "/blog/feed.xml": 1 });
     });
 
+    it("counts every request for one address when they arrive at once", async () => {
+      const { t, seo } = await boot(dialect);
+
+      await Promise.all(
+        Array.from({ length: 8 }, () => recordNotFound(seo, "/busy"))
+      );
+
+      expect(await logged(t)).toEqual({ "/busy": 8 });
+    });
+
     it("leaves admin, API and asset requests out, whatever header a visitor sends", async () => {
       const { t } = await boot(dialect);
       const spoofed = {
