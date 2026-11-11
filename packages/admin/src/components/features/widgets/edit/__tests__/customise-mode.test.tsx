@@ -26,7 +26,11 @@ import type {
   WidgetLayoutFacts,
 } from "@admin/types/dashboard/widgets";
 
-import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
+import {
+  TopBarPlacesProvider,
+  TopBarPlaceTarget,
+} from "@admin/components/layout/header/TopBarPlaces";
+
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { WidgetGrid } from "../../WidgetGrid";
 import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
@@ -39,12 +43,6 @@ import { galleryFromLayout, isGalleryPath } from "./gallery-read";
 
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
-
-// The header's New button reads collections and permissions of its own,
-// which this test does not set up; it is a marker here.
-vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
-  NewMenu: () => <div data-testid="dashboard-new" />,
-}));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
@@ -64,11 +62,6 @@ vi.mock("@admin/hooks/useDashboardUser", () => ({
     isLoading: false,
     error: null,
   }),
-}));
-// The page's header beside the grid holds Customize: its own reads stubbed.
-vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
-  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
-  useDashboardSummary: () => ({ data: undefined }),
 }));
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: {
@@ -204,7 +197,12 @@ const DASHBOARD = "/admin";
 const CAME_FROM = "/admin/collections/posts";
 const ELSEWHERE = "/admin/media";
 
-function renderDashboard() {
+/**
+ * The dashboard as the page composes it. `inBar` draws it under the admin's
+ * top bar, whose two places the page fills; without it there is no bar, and
+ * the controls are drawn where they stand.
+ */
+function renderDashboard({ inBar = false }: { inBar?: boolean } = {}) {
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false, retryDelay: 0, gcTime: 0 },
@@ -215,11 +213,24 @@ function renderDashboard() {
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
   // The page's heading beside the grid, so the outline is the page's.
-  return render(
-    <DashboardChromeProvider>
+  const page = (
+    <>
       <WelcomeHeader />
       <WidgetGrid />
-    </DashboardChromeProvider>,
+    </>
+  );
+  return render(
+    inBar ? (
+      <TopBarPlacesProvider>
+        <header data-testid="top-bar">
+          <TopBarPlaceTarget name="start" />
+          <TopBarPlaceTarget name="end" />
+        </header>
+        <main>{page}</main>
+      </TopBarPlacesProvider>
+    ) : (
+      page
+    ),
     { wrapper: Wrapper }
   );
 }
@@ -279,7 +290,22 @@ async function beginEditing(): Promise<User> {
 }
 
 function bar(): HTMLElement {
-  return screen.getByRole("group", { name: "Customize your dashboard" });
+  return screen.getByRole("group", { name: "Customize dashboard" });
+}
+
+/**
+ * Leaves customise mode from the bar's Cancel, agreeing to discard when the
+ * mode asks first (it asks only while there are unsaved changes).
+ */
+async function cancelEditing(user: User): Promise<void> {
+  await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+  const ask = screen.queryByTestId("dashboard-leave-ask");
+  if (ask !== null) {
+    await user.click(
+      within(ask).getByRole("button", { name: "Discard changes" })
+    );
+  }
+  await screen.findByTestId("dashboard-edit-begin");
 }
 
 function drawnOrder(): string[] {
@@ -411,7 +437,7 @@ describe("customise mode writes nothing before Save", () => {
       const sizes = sizeLabels();
 
       await change(user);
-      await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+      await cancelEditing(user);
 
       expect(drawnOrder()).toEqual(order);
       expect(writes()).toBe(0);
@@ -495,37 +521,40 @@ describe("the card menu and the settings drawer while customising", () => {
 });
 
 describe("the bar", () => {
-  it("is a labelled group with a title, a hint, and Add widget, Reset, Cancel and Save", async () => {
+  it("is a labelled group of Reset, Add widget, Cancel and Save, in place of the cog", async () => {
     renderDashboard();
     await beginEditing();
 
-    expect(bar()).toHaveTextContent("Customizing your dashboard");
-    const status = within(bar()).getByTestId("dashboard-edit-status");
-    expect(status).toHaveTextContent("Only you see this layout.");
-    // The handle is named only where it is drawn: from the dashboard's one-column width up.
-    expect(
-      within(status).getByText("Drag a card by its handle, or use its menu.")
-    ).toHaveClass("hidden", "@min-[640px]/dashboard:inline");
-    expect(
-      within(status).getByText(
-        "Use a card's menu to move, resize or remove it."
-      )
-    ).toHaveClass("@min-[640px]/dashboard:hidden");
     expect(
       within(bar())
         .getAllByRole("button")
         .map(button => button.textContent)
-    ).toEqual(["Add widget", "Reset", "Cancel", "Save"]);
+    ).toEqual(["Reset", "Add widget", "Cancel", "Save"]);
     expect(
       within(bar()).getByRole("button", { name: "Reset to default" })
     ).toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
+    // No way to the widget previews page, in development as anywhere.
+    expect(screen.queryByText("Preview widgets")).toBeNull();
   });
 
-  it("stays at the top of the dashboard area while customising", async () => {
-    // jsdom lays nothing out; the cause is asserted, on the element it is on.
+  it("on a phone's bar, hides Reset and draws Add widget as its icon, keeping its name", async () => {
+    // jsdom lays nothing out; the bar's own width decides, through its container query.
     renderDashboard();
     await beginEditing();
-    expect(bar()).toHaveClass("sticky", "top-0");
+    expect(within(bar()).getByTestId("dashboard-edit-reset")).toHaveClass(
+      "@max-[37.5rem]/topbar:hidden"
+    );
+    const add = within(bar()).getByRole("button", { name: "Add widget" });
+    expect(add).toHaveClass("@max-[37.5rem]/topbar:size-[34px]");
+    expect(within(add).getByText("Add widget")).toHaveClass(
+      "@max-[37.5rem]/topbar:sr-only"
+    );
+    for (const name of ["Cancel", "Save"]) {
+      expect(
+        within(bar()).getByRole("button", { name }).className
+      ).not.toContain("@max-[37.5rem]/topbar:");
+    }
   });
 
   it("draws rows as tall as their cards at rest and while customising, no cell spanning rows or clipping its card", async () => {
@@ -547,24 +576,24 @@ describe("the bar", () => {
     drawnAsTallAsTheirCards();
   });
 
-  it("keeps exactly one level-one heading, the page's own", async () => {
+  it("keeps exactly one level-one heading, the greeting", async () => {
     renderDashboard();
     await beginEditing();
     const mains = screen.getAllByRole("heading", { level: 1 });
     expect(mains).toHaveLength(1);
-    expect(mains[0]).toHaveTextContent("Acme Site");
+    expect(mains[0]).toHaveAttribute("id", "dashboard-heading");
   });
 
-  it("marks unsaved changes only while there are some", async () => {
+  it("offers Save only while there are unsaved changes", async () => {
     renderDashboard();
     const user = await beginEditing();
-    expect(within(bar()).queryByText("Unsaved changes")).toBeNull();
+    expect(saveButton()).toBeDisabled();
 
     await choose(user, "Posts", "Move later");
-    expect(within(bar()).getByText("Unsaved changes")).toBeInTheDocument();
+    expect(saveButton()).toBeEnabled();
 
     await choose(user, "Posts", "Move earlier");
-    expect(within(bar()).queryByText("Unsaved changes")).toBeNull();
+    expect(saveButton()).toBeDisabled();
   });
 
   it("Add widget opens the add panel, with focus in its search", async () => {
@@ -581,7 +610,7 @@ describe("the bar", () => {
     );
   });
 
-  it("shows a failed save inside the bar, with Try again", async () => {
+  it("shows a failed save above the cards, with Try again", async () => {
     api.put.mockRejectedValueOnce(new Error("network"));
     renderDashboard();
     const user = await beginEditing();
@@ -589,12 +618,16 @@ describe("the bar", () => {
     await user.click(saveButton());
 
     const error = await screen.findByTestId("dashboard-edit-error");
-    expect(bar()).toContainElement(error);
+    expect(
+      error.compareDocumentPosition(
+        screen.getByLabelText("Dashboard widgets")
+      ) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     await user.click(within(error).getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2));
   });
 
-  it("shows a refused save inside the bar, with Reload", async () => {
+  it("shows a refused save above the cards, with Reload", async () => {
     api.put.mockRejectedValue(
       Object.assign(new Error("changed"), { status: 409 })
     );
@@ -604,10 +637,192 @@ describe("the bar", () => {
     await user.click(saveButton());
 
     const conflict = await screen.findByTestId("dashboard-edit-conflict");
-    expect(bar()).toContainElement(conflict);
     expect(
       within(conflict).getByRole("button", { name: "Reload" })
     ).toBeInTheDocument();
+  });
+});
+
+describe("in the admin's top bar", () => {
+  function topBar(): HTMLElement {
+    return screen.getByTestId("top-bar");
+  }
+
+  it("holds the breadcrumb and the cog at rest, and nothing of either in the page", async () => {
+    renderDashboard({ inBar: true });
+    const cog = await screen.findByTestId("dashboard-edit-begin");
+    expect(topBar()).toContainElement(cog);
+    expect(
+      within(topBar()).getByRole("navigation", { name: "Breadcrumb" })
+    ).toHaveTextContent(/^Dashboard$/);
+    expect(screen.getByRole("main")).not.toContainElement(cog);
+  });
+
+  it("the cog is named and tooltipped Customize dashboard", async () => {
+    renderDashboard({ inBar: true });
+    const user = userEvent.setup();
+    const cog = await screen.findByTestId("dashboard-edit-begin");
+    expect(cog).toHaveAccessibleName("Customize dashboard");
+    await user.hover(cog);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Customize dashboard"
+    );
+  });
+
+  it.each(["{Enter}", " "])(
+    "the cog is reached by Tab and opens customise mode on %s",
+    async key => {
+      renderDashboard({ inBar: true });
+      const user = userEvent.setup();
+      const cog = await screen.findByTestId("dashboard-edit-begin");
+      while (document.activeElement !== cog) {
+        await user.tab();
+        expect(document.activeElement).not.toBe(document.body);
+      }
+      await user.keyboard(key);
+      await waitFor(() => expect(bar()).toHaveFocus());
+      expect(topBar()).toContainElement(bar());
+    }
+  );
+
+  it("puts the mode's controls in the bar in place of the cog, and the breadcrumb says Customizing", async () => {
+    renderDashboard({ inBar: true });
+    await beginEditing();
+    expect(topBar()).toContainElement(bar());
+    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
+    const crumb = within(topBar()).getByRole("navigation", {
+      name: "Breadcrumb",
+    });
+    expect(crumb).toHaveTextContent("Dashboard");
+    expect(crumb).toHaveTextContent("Customizing");
+  });
+
+  it("the breadcrumb's Dashboard leaves at once with nothing changed", async () => {
+    renderDashboard({ inBar: true });
+    const user = await beginEditing();
+    await user.click(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    );
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+    expect(await screen.findByTestId("dashboard-edit-begin")).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveFocus()
+    );
+  });
+
+  it("the breadcrumb's Dashboard asks first with unsaved changes, as Cancel does", async () => {
+    renderDashboard({ inBar: true });
+    const user = await beginEditing();
+    const order = drawnOrder();
+    await choose(user, "Posts", "Move later");
+    await user.click(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    );
+    const ask = await screen.findByTestId("dashboard-leave-ask");
+    await user.click(within(ask).getByRole("button", { name: "Keep editing" }));
+    expect(bar()).toBeInTheDocument();
+
+    await user.click(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    );
+    await user.click(
+      within(await screen.findByTestId("dashboard-leave-ask")).getByRole(
+        "button",
+        { name: "Discard changes" }
+      )
+    );
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(drawnOrder()).toEqual(order);
+    expect(writes()).toBe(0);
+  });
+
+  it("offers no way out through the breadcrumb while a save is on its way, as Cancel offers none", async () => {
+    let land: (value: unknown) => void = () => undefined;
+    api.put.mockReturnValue(
+      new Promise(resolve => {
+        land = resolve;
+      })
+    );
+    renderDashboard({ inBar: true });
+    const user = await beginEditing();
+    await choose(user, "Posts", "Move later");
+    expect(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    ).toBeInTheDocument();
+    await user.click(saveButton());
+
+    await waitFor(() =>
+      expect(
+        within(bar()).getByRole("button", { name: "Cancel" })
+      ).toBeDisabled()
+    );
+    expect(
+      within(topBar()).queryByRole("button", { name: "Dashboard" })
+    ).toBeNull();
+    expect(
+      within(topBar()).getByRole("navigation", { name: "Breadcrumb" })
+    ).toHaveTextContent("Customizing");
+
+    // The save then lands, and with it the mode ends as a save does.
+    land({ message: "ok", item: {} });
+    expect(await screen.findByTestId("dashboard-edit-begin")).toBeVisible();
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+  });
+
+  it.each([true, false])(
+    "offers no Preview widgets, with the development server's previews %s",
+    async widgetPreviews => {
+      mockBranding = { ...branding(), widgetPreviews };
+      renderDashboard({ inBar: true });
+      await screen.findByTestId("dashboard-edit-begin");
+      expect(screen.queryByText("Preview widgets")).toBeNull();
+      await beginEditing();
+      expect(screen.queryByText("Preview widgets")).toBeNull();
+      expect(screen.queryByRole("link", { name: /preview/i })).toBeNull();
+    }
+  );
+});
+
+describe("leaving customise mode", () => {
+  it("Cancel with nothing changed leaves at once", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+    expect(await screen.findByTestId("dashboard-edit-begin")).toBeVisible();
+  });
+
+  it("Cancel with unsaved changes asks first; Keep editing stays, with the changes", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await choose(user, "Posts", "Move later");
+    const order = drawnOrder();
+    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+
+    const ask = await screen.findByTestId("dashboard-leave-ask");
+    expect(ask).toHaveTextContent("Discard your changes?");
+    await user.click(within(ask).getByRole("button", { name: "Keep editing" }));
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+    expect(bar()).toBeInTheDocument();
+    expect(drawnOrder()).toEqual(order);
+    expect(saveButton()).toBeEnabled();
+  });
+
+  it("Cancel with unsaved changes discards them once the reader agrees", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    const order = drawnOrder();
+    await choose(user, "Posts", "Move later");
+    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    await user.click(
+      within(await screen.findByTestId("dashboard-leave-ask")).getByRole(
+        "button",
+        { name: "Discard changes" }
+      )
+    );
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(drawnOrder()).toEqual(order);
+    expect(writes()).toBe(0);
   });
 });
 
@@ -618,38 +833,33 @@ describe("focus", () => {
     await waitFor(() => expect(bar()).toHaveFocus());
   });
 
-  it("returns to Customize after Cancel", async () => {
+  it("moves to the greeting after Cancel", async () => {
     renderDashboard();
     const user = await beginEditing();
-    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    await cancelEditing(user);
     await waitFor(() =>
-      expect(screen.getByTestId("dashboard-edit-begin")).toHaveFocus()
+      expect(screen.getByRole("heading", { level: 1 })).toHaveFocus()
     );
   });
 
-  it("returns to Customize once a save has landed", async () => {
+  it("moves to the greeting after discarding changes, not back to the question's Cancel", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await choose(user, "Posts", "Move later");
+    await cancelEditing(user);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveFocus()
+    );
+  });
+
+  it("moves to the greeting once a save has landed", async () => {
     renderDashboard();
     const user = await beginEditing();
     await choose(user, "Posts", "Move later");
     await user.click(saveButton());
     await waitFor(() =>
-      expect(screen.getByTestId("dashboard-edit-begin")).toHaveFocus()
+      expect(screen.getByRole("heading", { level: 1 })).toHaveFocus()
     );
-  });
-
-  it("keeps a card's controls clear of the sticky bar when they take focus", async () => {
-    // Scrolling a focused control into view honours its scroll margin, which
-    // is what keeps it out from under a bar stuck to the top.
-    renderDashboard();
-    await beginEditing();
-    for (const control of [
-      ...screen.getAllByTestId("widget-drag-handle"),
-      ...screen.getAllByRole("button", { name: /^Card actions for / }),
-    ]) {
-      expect(control.closest("[data-testid^='widget-cell-']")).toHaveClass(
-        "[&_button]:scroll-mt-40"
-      );
-    }
   });
 });
 
@@ -683,7 +893,7 @@ describe("the cards' own content while customising", () => {
     it(`gives ${kind}'s content back once customising ends`, async () => {
       renderDashboard();
       const user = await beginEditing();
-      await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+      await cancelEditing(user);
       expect(
         screen.getByRole("link", { name: link }).closest("[inert]")
       ).toBeNull();
@@ -704,7 +914,7 @@ describe("what customise mode says, through the grid's one live region", () => {
     renderDashboard();
     const user = await beginEditing();
     await choose(user, "Posts", "Move later");
-    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    await cancelEditing(user);
     expect(live()).toHaveTextContent("Changes discarded.");
   });
 
@@ -975,7 +1185,7 @@ describe("leaving with unsaved changes", () => {
     renderDashboard();
     const user = await beginEditing();
     await panelChanged(user);
-    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    await cancelEditing(user);
     // "Changes discarded" is true of the drawer too: it is closed, with no Save to press.
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Notes" })).toBeNull()
@@ -1140,7 +1350,7 @@ describe("leaving with unsaved changes", () => {
     expect(await screen.findByTestId("dashboard-edit-error")).toBeVisible();
     expect(window.location.pathname).toBe(DASHBOARD);
     expect(drawnOrder()).toEqual(["core/b", "core/a", "core/c"]);
-    expect(within(bar()).getByText("Unsaved changes")).toBeInTheDocument();
+    expect(saveButton()).toBeEnabled();
   });
 
   it("Save Changes during a save already on its way waits for it, and writes once", async () => {

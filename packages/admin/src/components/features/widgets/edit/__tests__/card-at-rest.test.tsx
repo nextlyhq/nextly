@@ -21,7 +21,6 @@ import {
   vi,
 } from "vitest";
 
-import { DashboardChromeProvider } from "@admin/components/features/dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
@@ -47,12 +46,6 @@ const toast = vi.hoisted(() => ({
   dismiss: vi.fn(),
 }));
 
-// The header's New button reads collections and permissions of its own,
-// which this test does not set up; it is a marker here.
-vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
-  NewMenu: () => <div data-testid="dashboard-new" />,
-}));
-
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
   useAppName: () => "Acme Site",
@@ -64,11 +57,6 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
-}));
-// The page's header beside the grid holds Customize: its own reads stubbed.
-vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
-  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
-  useDashboardSummary: () => ({ data: undefined }),
 }));
 vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => ({
@@ -199,10 +187,10 @@ function renderGrid() {
   // The page's header and grid, as the page composes them: the header holds the page's heading,
   // which a closed notice returns focus to, and Customize.
   return render(
-    <DashboardChromeProvider>
+    <>
       <WelcomeHeader />
       <WidgetGrid />
-    </DashboardChromeProvider>,
+    </>,
     { wrapper: Wrapper }
   );
 }

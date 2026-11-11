@@ -106,12 +106,12 @@ export interface DashboardArrangement {
   setCardSize: (placementId: string, size: GridSize) => void;
   /** Put the default dashboard in the draft, saying nothing is saved yet. */
   stageReset: () => void;
-  /** Open customise mode, with focus on its bar, saying what it means. */
+  /** Open customise mode, with focus on its controls in the top bar, saying what it means. */
   begin: () => void;
-  /** Leave customise mode unsaved, with focus back on Customize, saying so. */
+  /** Leave customise mode unsaved, with focus on the greeting, saying so. */
   cancel: () => void;
   /**
-   * Save the draft and say how that went; focus goes back to Customize once
+   * Save the draft and say how that went; focus goes to the greeting once
    * it has landed. A refused or failed save keeps the draft, and focus stays
    * where the reader left it.
    */
@@ -178,7 +178,7 @@ function useCustomiseLifecycle(
     discardOpenPanels();
     editor.cancel();
     announce.discarded();
-    focus.request({ kind: "customize" });
+    focus.request({ kind: "heading" });
   }, [editor, announce, focus]);
 
   const save = useCallback(
@@ -187,7 +187,7 @@ function useCustomiseLifecycle(
       announceSaveOutcome(announce, outcome);
       // Only a save that landed ends the mode; a refused or failed one leaves
       // the reader where they were, with their draft.
-      if (outcome === "saved") focus.request({ kind: "customize" });
+      if (outcome === "saved") focus.request({ kind: "heading" });
       return outcome;
     },
     [editor, announce, focus]
