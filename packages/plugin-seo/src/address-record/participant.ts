@@ -296,23 +296,37 @@ export async function heldNow(
 }
 
 /**
- * Who the record says holds the address `path`: in `locale`, one row read by
- * the address's unique key; with no language named, as a site with one
- * language is read, the holders at `path` in any. None where no page holds
- * it, as before the record has caught up with a site's content.
+ * The language a read that names none is in: the site's default language, or
+ * English on a site that configures none, as core records the addresses of a
+ * page read without one.
+ */
+function defaultLanguageOf(ctx: PluginContext): string {
+  const configured = ctx.config.localization?.defaultLocale;
+  return typeof configured === "string" && configured !== ""
+    ? configured
+    : "en";
+}
+
+/**
+ * Who the record says holds the address `path` in `locale`, or in the site's
+ * default language where the route named none: one row, read by the
+ * address's unique key, so a page that still holds `path` in another language
+ * is never taken for its holder here. None where no page holds it, as before
+ * the record has caught up with a site's content.
  */
 export async function addressHolders(
   ctx: PluginContext,
   path: string,
   locale: string | undefined
 ): Promise<AddressHolder[]> {
-  const where =
-    locale === undefined
-      ? { and: [{ kind: { equals: "address" } }, { path: { equals: path } }] }
-      : { claimKey: { equals: claimKey("address", locale, path) } };
+  const language = locale ?? defaultLanguageOf(ctx);
   const { data } = await ctx.services.ownCollections.listEntries(
     recordSlug(ctx),
-    { where, pagination: { limit: 20, page: 1 }, depth: 0 }
+    {
+      where: { claimKey: { equals: claimKey("address", language, path) } },
+      pagination: { limit: 1, page: 1 },
+      depth: 0,
+    }
   );
   return (data as unknown[]).flatMap(entry => rowOf(entry).holder ?? []);
 }

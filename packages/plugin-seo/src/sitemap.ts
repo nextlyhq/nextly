@@ -29,7 +29,7 @@
 // importing it never loads `next`, so the package's zero-`next` guarantee holds.
 import { slugToStaticParam } from "@nextlyhq/plugin-sdk/routing";
 
-import { typedCanonical } from "./canonical";
+import { productionAddressesOf, typedCanonical } from "./canonical";
 import type { CollectionReads } from "./collection-reads";
 
 /**
@@ -493,6 +493,8 @@ export async function buildSitemapUrls(
   // it, and a canonical on a different origin is dropped rather than mixed in.
   // Rejects a non-origin/relative baseUrl up front so `<loc>` is never invalid.
   const baseOrigin = resolveBaseOrigin(options.baseUrl);
+  // The other addresses the site is served from, read once for the walk.
+  const productionAddresses = productionAddressesOf(undefined);
   // Only `undefined` takes the default; a supplied value (including 0 or a
   // negative) is honored so the wrapper guard below rejects an impossible cap
   // rather than silently substituting the 50 MB default. A non-finite value
@@ -595,11 +597,13 @@ export async function buildSitemapUrls(
         // Decided by the one canonical rule the page's head follows: a typed
         // address off this origin counts only where the page is confirmed
         // to have first appeared elsewhere, and then the entry belongs to
-        // that site's sitemap, not this one.
+        // that site's sitemap, not this one. An address the site is also
+        // served from counts as the head counts it, so a page whose canonical
+        // is the copy at another of them is left to that address's sitemap.
         const canonical = typedCanonical(
           typeof seo?.canonical === "string" ? seo.canonical : undefined,
           {
-            productionAddresses: [baseOrigin],
+            productionAddresses: [baseOrigin, ...productionAddresses],
             elsewhere: seo?.canonicalElsewhere === true,
           }
         );

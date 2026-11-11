@@ -5,6 +5,8 @@
  * Core's address answers are stood in for: each type's declared address and
  * the language rule (every language but the default under its code).
  */
+import { createHash } from "node:crypto";
+
 import {
   NextlyError,
   type PageMetadataInput,
@@ -47,6 +49,13 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
  * answering a missing id as the media service does, and `failing` ids with
  * a fault that is not about the image at all.
  */
+/** The record's unique key of the address `path` in `locale`. */
+function addressKey(locale: string, path: string): string {
+  return createHash("sha256")
+    .update(`address:${locale}|${path}`, "utf8")
+    .digest("hex");
+}
+
 function context(
   media: Record<string, Record<string, unknown>> = {},
   failing: readonly string[] = [],
@@ -54,16 +63,19 @@ function context(
 ) {
   return {
     self: { collections: {} },
+    config: {},
     services: {
-      // The address record: who holds each path, read by its path.
+      // The address record: who holds each path in English, read by the
+      // address's unique key as the record stores it.
       ownCollections: {
         listEntries: async (
           _slug: string,
-          options: { where?: Record<string, unknown> }
+          options: { where?: { claimKey?: { equals?: string } } }
         ) => {
-          const path = JSON.stringify(options.where ?? {}).match(
-            /"path":\{"equals":"([^"]+)"\}/
-          )?.[1];
+          const key = options.where?.claimKey?.equals;
+          const path = Object.keys(holders).find(
+            held => addressKey("en", held) === key
+          );
           const held = path === undefined ? undefined : holders[path];
           return {
             data:

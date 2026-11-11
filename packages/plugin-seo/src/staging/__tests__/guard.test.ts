@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SiteRules } from "../../resolver/page-levels";
 import { PRODUCTION_ADDRESSES_ENV, originsFrom } from "../../canonical";
-import { keptOutOfSearch, stagingGuard } from "../guard";
+import { decideStanding, keptOutOfSearch, stagingGuard } from "../guard";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -141,5 +141,57 @@ describe("the Proxy handler", () => {
       await guard.handle(new Request("https://acme.example/"), ctx);
     }
     expect(reads.count).toBe(1);
+  });
+});
+
+/**
+ * A new plugin context with no standing recorded, whose one site type lists
+ * `pages` in turn, keeping the standing it records.
+ */
+function startingContext(pages: { holds: unknown[] }[][]) {
+  const recorded: Record<string, unknown>[] = [];
+  const ctx = {
+    self: { collections: {} },
+    publicAddresses: {
+      types: async () => ["authors"],
+      held: async ({ after }: { after?: string }) => {
+        const index = after === undefined ? 0 : Number(after);
+        const next = index + 1 < pages.length ? String(index + 1) : undefined;
+        return {
+          items: (pages[index] ?? []).map((item, n) => ({
+            holder: { collection: "authors", id: `${index}-${n}` },
+            ...item,
+          })),
+          ...(next === undefined ? {} : { next }),
+        };
+      },
+    },
+    services: {
+      ownCollections: { listEntries: async () => ({ data: [] }) },
+      collections: {
+        createEntry: async (_slug: string, data: Record<string, unknown>) => {
+          recorded.push(data);
+          return data;
+        },
+      },
+    },
+  } as unknown as PluginContext;
+  return { ctx, recorded };
+}
+
+describe("the standing a site starts with", () => {
+  it("is guarded where the stored documents hold no address", async () => {
+    // Authors, say: stored, but with no page of their own on the site.
+    const { ctx, recorded } = startingContext([[{ holds: [] }, { holds: [] }]]);
+    expect(await decideStanding(ctx)).toBe("guarded");
+    expect(recorded.map(row => row.path)).toEqual(["guarded"]);
+  });
+
+  it("is listable where a page holds an address, however far into the list", async () => {
+    const { ctx } = startingContext([
+      [{ holds: [] }],
+      [{ holds: [] }, { holds: [{ locale: "en", path: "/about" }] }],
+    ]);
+    expect(await decideStanding(ctx)).toBe("listable");
   });
 });

@@ -418,6 +418,32 @@ describe("buildSitemapUrls", () => {
     expect(urls.map(u => u.loc)).toEqual(["https://x.com/posts/b"]);
   });
 
+  it("drops an entry whose canonical is on another of the site's production addresses", async () => {
+    // The head takes a canonical on any address the site is served from, so
+    // the page is the copy at that address, which that address's sitemap
+    // lists: this one leaves it out.
+    vi.stubEnv("NEXTLY_PRODUCTION_ADDRESSES", "https://x.com,https://x.de");
+    try {
+      const services = stubServices({
+        posts: [
+          [
+            { slug: "a", seo: { canonical: "https://x.de/a" } },
+            { slug: "b" },
+          ],
+        ],
+      });
+
+      const urls = await buildSitemapUrls(services, {
+        collections: ["posts"],
+        baseUrl: "https://x.com",
+      });
+
+      expect(urls.map(u => u.loc)).toEqual(["https://x.com/posts/b"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("lists an entry at its own address where an off-host canonical is not confirmed", async () => {
     // An unconfirmed address on another host is not the page's canonical,
     // as the page's head ignores it too.

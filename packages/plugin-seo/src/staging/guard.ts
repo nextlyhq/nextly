@@ -83,11 +83,19 @@ async function readStanding(
   return value === "listable" || value === "guarded" ? value : undefined;
 }
 
-/** Whether the site has any page of a type with an address yet. */
+/**
+ * Whether any page holds an address on the site yet. A stored document is
+ * not enough: one of a type with no page of its own, or a draft, holds no
+ * address, so each type is walked until a document that holds one is found.
+ */
 async function hasPages(ctx: PluginContext): Promise<boolean> {
   for (const type of await ctx.publicAddresses.types()) {
-    const page = await ctx.publicAddresses.held({ type, limit: 1 });
-    if (page.items.length > 0) return true;
+    let after: string | undefined;
+    do {
+      const page = await ctx.publicAddresses.held({ type, after, limit: 100 });
+      if (page.items.some(item => item.holds.length > 0)) return true;
+      after = page.next;
+    } while (after !== undefined);
   }
   return false;
 }
