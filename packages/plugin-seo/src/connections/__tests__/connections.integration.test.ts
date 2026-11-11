@@ -56,7 +56,7 @@ import type { IndexNowNotice } from "../indexnow-send";
 /** What the stand-in IndexNow endpoint was sent, and how it answers. */
 const indexNow = vi.hoisted(() => ({
   notices: [] as IndexNowNotice[],
-  answer: 200 as number | "unreachable" | "held",
+  answer: 200 as number | "unreachable" | "held" | "rekeyed",
   release: () => {},
 }));
 
@@ -67,6 +67,19 @@ vi.mock("../indexnow-send", async importOriginal => {
     sendIndexNow: async (_fetch: unknown, notice: IndexNowNotice) => {
       indexNow.notices.push(notice);
       if (indexNow.answer === "unreachable") throw new Error("unreachable");
+      if (indexNow.answer === "rekeyed") {
+        // Another instance stored its own key meanwhile: the endpoint only
+        // takes the key the site now serves.
+        const { keptSeoContext } = await import("../../not-found/report");
+        const { readConnections, writeConnections } = await import("../store");
+        const seo = keptSeoContext();
+        if (seo === undefined) throw new Error("no SEO context");
+        const OTHER = "f".repeat(32);
+        if ((await readConnections(seo)).indexNowKey !== OTHER) {
+          await writeConnections(seo, { indexNowKey: OTHER });
+        }
+        return notice.key === OTHER ? 200 : 403;
+      }
       if (indexNow.answer === "held") {
         // Answers only once the test lets it, as a slow endpoint would.
         await new Promise<void>(resolve => {
@@ -550,6 +563,20 @@ describe.each(getConfiguredTestDialects())(
           draft: true,
         });
         expect(await told()).toEqual([]);
+      });
+
+      it("sends again with the stored key when another instance made the key first", async () => {
+        const { t, seo } = await boot(dialect);
+        await settings(t, { indexNow: true });
+        indexNow.answer = "rekeyed";
+        await publish(t, "pricing");
+        await t.events.settle();
+        await flushIndexNow();
+
+        expect(indexNow.notices.map(notice => notice.key).at(-1)).toBe(
+          "f".repeat(32)
+        );
+        expect((await tab(seo)).body.indexNow.last?.result).toBe("sent");
       });
 
       it("tells no one of a save that was undone", async () => {

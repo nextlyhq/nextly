@@ -34,7 +34,7 @@ import { isRecord } from "../plain-values";
 import { idOf } from "../problems/hooks";
 import type { ReadRules } from "../resolver/provider";
 
-import type { ConnectionResult } from "./contract";
+import type { ConnectionAttempt, ConnectionResult } from "./contract";
 import {
   sendIndexNow,
   type IndexNowNotice,
@@ -79,7 +79,20 @@ async function keyOf(ctx: PluginContext): Promise<string> {
   }
   const key = randomBytes(16).toString("hex");
   await writeConnections(ctx, { indexNowKey: key });
-  return key;
+  // Read back: where another instance made its own key at the same time,
+  // the one kept is the one served, so it is the one every notice names.
+  return (await readConnections(ctx)).indexNowKey ?? key;
+}
+
+/** The key now stored, where it is another than `used`. */
+async function replacedKey(
+  ctx: PluginContext,
+  used: string
+): Promise<string | undefined> {
+  const { indexNowKey } = await readConnections(ctx);
+  return indexNowKey !== undefined && indexNowKey !== used
+    ? indexNowKey
+    : undefined;
 }
 
 /** One address in a language, as the record keys it. */
@@ -116,6 +129,47 @@ async function urlsByHost(
     byHost.set(url.host, list);
   }
   return byHost;
+}
+
+/**
+ * One notice for each host's addresses, at most `MOST_URLS` at a time, sent
+ * with `key`: how the last went. A notice refused because another
+ * instance's key replaced this one before the search engines checked it is
+ * sent once more with the key the site now serves.
+ */
+async function tellHosts(
+  ctx: PluginContext,
+  fetch: OutboundFetch,
+  byHost: ReadonlyMap<string, readonly string[]>,
+  key: string
+): Promise<ConnectionAttempt> {
+  let using = key;
+  let last = attemptNow("sent", 0);
+  for (const [host, urls] of byHost) {
+    for (let at = 0; at < urls.length; at += MOST_URLS) {
+      const notice: IndexNowNotice = {
+        host,
+        key: using,
+        urlList: urls.slice(at, at + MOST_URLS),
+      };
+      let result = await sendOne(fetch, notice);
+      const stored =
+        result === "refused-key" ? await replacedKey(ctx, using) : undefined;
+      if (stored !== undefined) {
+        using = stored;
+        result = await sendOne(fetch, { ...notice, key: using });
+      }
+      last = attemptNow(result, notice.urlList.length);
+      // The key and the addresses stay out of the log.
+      if (result !== "sent") {
+        ctx.logger.warn("IndexNow did not take the site's notice", {
+          result,
+          host,
+        });
+      }
+    }
+  }
+  return last;
 }
 
 /** The notes taken since the last notice, and when the next one goes. */
@@ -223,26 +277,8 @@ function indexNowQueue(
         address => new URL(address).host
       )
     );
-    const key = await keyOf(ctx);
-    let last = attemptNow("sent", 0);
-    for (const [host, urls] of await urlsByHost(noted, origin, hosts)) {
-      for (let at = 0; at < urls.length; at += MOST_URLS) {
-        const notice: IndexNowNotice = {
-          host,
-          key,
-          urlList: urls.slice(at, at + MOST_URLS),
-        };
-        const result = await sendOne(fetch, notice);
-        last = attemptNow(result, notice.urlList.length);
-        if (result !== "sent") {
-          // The key and the addresses stay out of the log.
-          ctx.logger.warn("IndexNow did not take the site's notice", {
-            result,
-            host,
-          });
-        }
-      }
-    }
+    const byHost = await urlsByHost(noted, origin, hosts);
+    const last = await tellHosts(ctx, fetch, byHost, await keyOf(ctx));
     await writeConnections(ctx, { indexNowLast: last });
   }
 
