@@ -18,17 +18,12 @@ import { and, count, eq, gte, inArray, or } from "drizzle-orm";
 import { jobsTables } from "../../schemas/jobs";
 import type { JobState } from "../../schemas/jobs/types";
 
+import type { JobsHealth } from "./health-types";
+
+export type { JobsHealth } from "./health-types";
+
 /** The window "failed recently" counts. */
 const JOBS_FAILED_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-/** The jobs line. */
-export interface JobsHealth {
-  /** Waiting to run: due now, scheduled, or waiting to retry. */
-  queued: number;
-  running: number;
-  /** Failed for good within {@link JOBS_FAILED_WINDOW_MS}. */
-  failed: number;
-}
 
 /** The select chain this read makes, in the form all three dialects share. */
 interface JobsDb {
