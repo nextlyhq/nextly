@@ -15,7 +15,11 @@ import type {
   PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { seoPageMetadata, type ReadRules } from "../resolver/provider";
+import {
+  overAnswer,
+  seoPageMetadata,
+  type ReadRules,
+} from "../resolver/provider";
 
 import {
   buildStructuredData,
@@ -38,23 +42,17 @@ export function withStructuredData(
   resolver: PageMetadataResolver,
   readRules: ReadStructuredDataRules = noStructuredDataRules
 ): PageMetadataResolver {
-  return {
-    // The head's own cache tags: structured data reads nothing they miss
-    // but the entries a relationship names, which the page's route tags.
-    ...(resolver.tags === undefined
-      ? {}
-      : { tags: input => resolver.tags?.(input) ?? [] }),
-    async resolve(input) {
-      const answer = await resolver.resolve(input);
-      const { nodes } = await buildStructuredData(
-        ctx,
-        input,
-        answer,
-        await readRules(ctx, input.locale)
-      );
-      return nodes.length === 0 ? answer : { ...answer, structuredData: nodes };
-    },
-  };
+  // The head's own cache tags: structured data reads nothing they miss but
+  // the entries a relationship names, which the page's route tags.
+  return overAnswer(resolver, async (answer, input) => {
+    const { nodes } = await buildStructuredData(
+      ctx,
+      input,
+      answer,
+      await readRules(ctx, input.locale)
+    );
+    return nodes.length === 0 ? answer : { ...answer, structuredData: nodes };
+  });
 }
 
 /** Where a page's head and structured data read their rules from. */

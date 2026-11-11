@@ -35,6 +35,13 @@ export type {
   ListingProblem,
 } from "./outputs/listing";
 export type { AiCrawlerChoice } from "./outputs/robots";
+// Languages: the code each of the site's languages is named by in language
+// links and why one is left out, and a page's links to its other languages.
+export { hreflangCodes, hreflangOf } from "./languages/hreflang";
+export type { Hreflang, LanguageCodeProblem } from "./languages/hreflang";
+export { pageLanguageLinks } from "./languages/head";
+export type { PageLanguageLinks } from "./languages/head";
+export type { LanguageLink } from "./languages/links";
 export type {
   CollectionReads,
   EntriesPage,

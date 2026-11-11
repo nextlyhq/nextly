@@ -28,7 +28,7 @@ export type ReadRules = (
 ) => Promise<SiteRules>;
 
 /** No settings yet: the site's rules are empty. */
-export const noRules: ReadRules = async () => NO_RULES;
+export const noRules: ReadRules = () => Promise.resolve(NO_RULES);
 
 /**
  * The one resolution of a page: its answer, every value with its source,
@@ -72,6 +72,28 @@ export function answerOf(
     ...(answer.canonical ? { canonical: answer.canonical.value } : {}),
     robots: answer.robots.value,
     ...(Object.keys(social).length > 0 ? { social } : {}),
+  };
+}
+
+/**
+ * `resolver` with `add` worked out over each page's answer, for a part of the
+ * head derived from it, such as its language links or structured data. The
+ * answer's own cache tags are kept: what is added reads nothing they miss.
+ */
+export function overAnswer(
+  resolver: PageMetadataResolver,
+  add: (
+    answer: PageMetadataAnswer,
+    input: PageMetadataInput
+  ) => Promise<PageMetadataAnswer>
+): PageMetadataResolver {
+  return {
+    ...(resolver.tags === undefined
+      ? {}
+      : { tags: input => resolver.tags?.(input) ?? [] }),
+    async resolve(input) {
+      return add(await resolver.resolve(input), input);
+    },
   };
 }
 
