@@ -201,8 +201,9 @@ export function DraggableWidgetCell({
           !held &&
           "rounded-lg ring-2 ring-primary ring-offset-2 ring-offset-background motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-300",
         // The held card keeps its place and its size, drawn as its outline only: the card
-        // itself is under the pointer.
-        held && `[&>:not([${OUTLINE_ATTRIBUTE}])]:invisible`
+        // itself is under the pointer. Spelled out in full, not built from `OUTLINE_ATTRIBUTE`:
+        // Tailwind generates only the classes it finds written in the source.
+        held && "[&>:not([data-cell-outline])]:invisible"
       )}
     >
       {draggable ? (

@@ -52,7 +52,13 @@ export function CardControlsSpace(): JSX.Element {
  * starts after it.
  */
 export function CardHandleSpace(): JSX.Element {
-  return <span aria-hidden className="block h-7 w-6" />;
+  return (
+    <span
+      aria-hidden
+      data-testid="card-handle-space"
+      className="block h-7 w-6"
+    />
+  );
 }
 
 /**
