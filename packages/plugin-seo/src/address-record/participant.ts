@@ -115,19 +115,28 @@ export function rowOf(entry: unknown): RecordRow {
 }
 
 /**
+ * The record's slug as this site has it: the plugin's own, or the name the
+ * site renamed it to with the plugin's `rename`.
+ */
+export function recordSlug(ctx: PluginContext): string {
+  return ctx.self.collections[ADDRESS_RECORD_SLUG] ?? ADDRESS_RECORD_SLUG;
+}
+
+/**
  * Let go of every address a deleted collection's entries held, inside the
  * delete's own transaction: a collection deleted whole removes its entries
  * without a save of each, so no save would release them, and an address left
  * held by a document that no longer exists could never be taken again.
  */
 export function releaseOnCollectionDelete(ctx: PluginContext): void {
+  const record = recordSlug(ctx);
   ctx.hooks.onCollectionDelete({
     inTransaction: async ({ slug, transaction }) => {
       for (;;) {
         const { data } =
           await ctx.services.ownCollections.listEntriesInTransaction(
             transaction,
-            ADDRESS_RECORD_SLUG,
+            record,
             {
               where: { holderCollection: { equals: slug } },
               pagination: { limit: READ_PAGE, page: 1 },
@@ -139,7 +148,7 @@ export function releaseOnCollectionDelete(ctx: PluginContext): void {
         for (const row of rows) {
           await ctx.services.collections.deleteEntryInTransaction(
             transaction,
-            ADDRESS_RECORD_SLUG,
+            record,
             row.id
           );
         }
@@ -152,6 +161,7 @@ export function releaseOnCollectionDelete(ctx: PluginContext): void {
 
 /** The participant, bound to the SEO plugin's context. */
 export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
+  const slug = recordSlug(ctx);
   const collections = ctx.services.collections;
   const reads = ctx.services.ownCollections;
 
@@ -165,7 +175,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     for (let page = 1; ; page++) {
       const { data } = await reads.listEntriesInTransaction(
         transaction,
-        ADDRESS_RECORD_SLUG,
+        slug,
         {
           where,
           pagination: { limit: READ_PAGE, page },
@@ -196,11 +206,12 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     let [row] = await rowsWhere(transaction, byKey, "update");
     if (row === undefined) {
       try {
-        await collections.createEntryInTransaction(
-          transaction,
-          ADDRESS_RECORD_SLUG,
-          { claimKey: key, kind: "lock", locale, path }
-        );
+        await collections.createEntryInTransaction(transaction, slug, {
+          claimKey: key,
+          kind: "lock",
+          locale,
+          path,
+        });
         return;
       } catch (error) {
         if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
@@ -212,12 +223,10 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
         });
       }
     }
-    await collections.updateEntryInTransaction(
-      transaction,
-      ADDRESS_RECORD_SLUG,
-      row.id,
-      { kind: "lock", _overwrite: true }
-    );
+    await collections.updateEntryInTransaction(transaction, slug, row.id, {
+      kind: "lock",
+      _overwrite: true,
+    });
   }
 
   /**
@@ -311,11 +320,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
         still.add(key);
         continue;
       }
-      await collections.deleteEntryInTransaction(
-        transaction,
-        ADDRESS_RECORD_SLUG,
-        row.id
-      );
+      await collections.deleteEntryInTransaction(transaction, slug, row.id);
     }
     return still;
   }
@@ -328,19 +333,15 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   ): Promise<void> {
     const key = claimKey(kindOf(held), held.locale, held.path);
     try {
-      await collections.createEntryInTransaction(
-        transaction,
-        ADDRESS_RECORD_SLUG,
-        {
-          claimKey: key,
-          kind: kindOf(held),
-          locale: held.locale,
-          path: held.path,
-          holderCollection: update.holder.collection,
-          holderId: update.holder.id,
-          holderLabel: update.holder.label ?? null,
-        }
-      );
+      await collections.createEntryInTransaction(transaction, slug, {
+        claimKey: key,
+        kind: kindOf(held),
+        locale: held.locale,
+        path: held.path,
+        holderCollection: update.holder.collection,
+        holderId: update.holder.id,
+        holderLabel: update.holder.label ?? null,
+      });
     } catch (error) {
       if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
       const [other] = await rowsWhere(

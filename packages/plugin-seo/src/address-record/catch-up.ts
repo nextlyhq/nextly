@@ -31,8 +31,7 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { ADDRESS_RECORD_SLUG } from "./collection";
-import { rowOf, type RecordRow } from "./participant";
+import { recordSlug, rowOf, type RecordRow } from "./participant";
 
 /** A page left without an address another page holds. */
 export interface LostAddress {
@@ -115,7 +114,7 @@ async function readRecord(ctx: PluginContext): Promise<{
   let fingerprint: { id: string; value: unknown } | undefined;
   for (let page = 1; ; page++) {
     const { data } = await ctx.services.ownCollections.listEntries(
-      ADDRESS_RECORD_SLUG,
+      recordSlug(ctx),
       {
         where: { kind: { in: ["address", "range", "meta"] } },
         pagination: { limit: PAGE, page },
@@ -290,14 +289,14 @@ async function storeFingerprint(
   fingerprint: string
 ): Promise<void> {
   if (id === undefined) {
-    await ctx.services.collections.createEntry(ADDRESS_RECORD_SLUG, {
+    await ctx.services.collections.createEntry(recordSlug(ctx), {
       claimKey: FINGERPRINT_KEY,
       kind: "meta",
       path: fingerprint,
     });
     return;
   }
-  await ctx.services.collections.updateEntry(ADDRESS_RECORD_SLUG, id, {
+  await ctx.services.collections.updateEntry(recordSlug(ctx), id, {
     path: fingerprint,
     _overwrite: true,
   });

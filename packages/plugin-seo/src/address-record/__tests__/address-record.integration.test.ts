@@ -131,6 +131,36 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("keeps its record under the name a site renames it to", async () => {
+      current = await createTestNextly({
+        dialect,
+        plugins: [
+          seoPlugin({ collections: ["pages"] }).rename({
+            [ADDRESS_RECORD_SLUG]: "seo_addresses",
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "pages",
+            status: true,
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/{slug}",
+          }),
+        ],
+      });
+
+      const page = await publish(current, "pages", "hello");
+
+      const { items } = await current.nextly.find({
+        collection: "seo_addresses",
+      });
+      expect(
+        (items as Record<string, unknown>[])
+          .filter(row => row.kind === "address")
+          .map(row => `${row.path}:${row.holderId}`)
+      ).toEqual([`/hello:${page}`]);
+    });
+
     it("saving a holder again leaves the same rows", async () => {
       const { t } = await boot(dialect);
       const page = await publish(t, "pages", "hello");
