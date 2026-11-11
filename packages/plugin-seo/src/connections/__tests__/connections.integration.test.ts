@@ -703,6 +703,50 @@ describe.each(getConfiguredTestDialects())(
         expect(stored).toContain("sara@acme.example");
       });
 
+      it("lets a stale or stray callback leave the sign-in under way untouched", async () => {
+        const { t, seo } = await boot(dialect);
+        await settings(t, {});
+        const google: Google = { asked: [], failing: {} };
+        const started = await call(
+          seo,
+          google,
+          "POST",
+          "/connections/search-console/connect"
+        );
+        const state =
+          new URL(
+            (started.json as SearchConsoleConnectBody).url
+          ).searchParams.get("state") ?? "";
+        // A callback from an earlier attempt, and one with no state at all.
+        await call(
+          seo,
+          google,
+          "GET",
+          "/connections/search-console/callback",
+          "?state=older&code=c"
+        );
+        await call(
+          seo,
+          google,
+          "GET",
+          "/connections/search-console/callback",
+          "?code=c"
+        );
+
+        const back = await call(
+          seo,
+          google,
+          "GET",
+          "/connections/search-console/callback",
+          `?state=${encodeURIComponent(state)}&code=c`
+        );
+        expect(back.status).toBe(303);
+        expect((await tab(seo)).body.searchConsole.connected).toEqual({
+          email: "sara@acme.example",
+          property: `${SITE}/`,
+        });
+      });
+
       it("shows clicks, searches and where Google chose another official address, from Google's answers", async () => {
         const { t, seo } = await boot(dialect);
         await settings(t, {});

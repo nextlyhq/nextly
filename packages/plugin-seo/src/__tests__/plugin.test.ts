@@ -513,6 +513,13 @@ describe("the optional connections the plugin declares", () => {
     );
   });
 
+  it("declares the event a committed save's addresses are announced on", () => {
+    const plugin = seoPlugin({ collections: ["pages"] });
+    expect(plugin.contributes?.events).toContainEqual({
+      name: "nextlyhq-plugin-seo.addresses-moved",
+    });
+  });
+
   it("refuses a Search Console sign-in with a blank client id or secret", () => {
     expect(() =>
       seoPlugin({

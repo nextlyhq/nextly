@@ -25,6 +25,7 @@ import {
 import { startCatchUp } from "./address-record/catch-up";
 import { addressRecordCollection } from "./address-record/collection";
 import {
+  ADDRESSES_MOVED,
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
@@ -643,6 +644,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Changed only by whoever manages site-wide SEO, through core's own
     // settings route as through the plugin's.
     settingsPermission: MANAGE_SEO_PERMISSION,
+    // The event the address record announces each committed save's
+    // addresses on, which IndexNow takes its notes from.
+    events: [{ name: ADDRESSES_MOVED }],
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what

@@ -269,14 +269,13 @@ async function finish(
 ): Promise<void> {
   const stored = await readConnections(ctx);
   const pending = stored.searchConsolePending;
-  // The sign-in is used once, whatever happens next.
-  await writeConnections(ctx, { searchConsolePending: null });
   const state = url.searchParams.get("state") ?? "";
-  if (
-    pending === undefined ||
-    !sameSecret(state, pending.state) ||
-    Date.parse(pending.expiresAt) < Date.now()
-  ) {
+  // A callback that is not the sign-in under way, a stale one or a stray
+  // one, leaves that sign-in as it is, so it can still finish.
+  const matches = pending !== undefined && sameSecret(state, pending.state);
+  // The sign-in it is is used once, whatever happens next.
+  if (matches) await writeConnections(ctx, { searchConsolePending: null });
+  if (!matches || Date.parse(pending.expiresAt) < Date.now()) {
     await keepFailure(
       ctx,
       "The Google sign-in expired or did not match. Connect Search Console again."
