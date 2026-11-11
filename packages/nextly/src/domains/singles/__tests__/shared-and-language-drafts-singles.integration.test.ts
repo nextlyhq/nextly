@@ -46,6 +46,9 @@ const NESTED = "partnestsite";
 /** Translated, with a shared field no caller but a trusted one may update. */
 const FIELD_GUARDED = "partfieldsite";
 const EDITOR = "part-site-editor";
+/** Translated, with a translated component holding a shared sub-field. */
+const BANNERED = "partbannersite";
+const BANNER = "partsitebanner";
 const TRANSLATABLE = ["title", "tagline"];
 const SHARED = ["views"];
 
@@ -111,6 +114,17 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
         ],
       }),
       defineSingle({
+        slug: BANNERED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "banner", component: BANNER }),
+        ],
+      }),
+      defineSingle({
         slug: FIELD_GUARDED,
         localized: true,
         status: true,
@@ -124,6 +138,15 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
     ],
     fieldGroups: [
       defineFieldGroup({ slug: HERO, fields: [text({ name: "heading" })] }),
+      // Kept per language, with a shared sub-field.
+      defineFieldGroup({
+        slug: BANNER,
+        localized: true,
+        fields: [
+          text({ name: "words" }),
+          text({ name: "code", localized: false }),
+        ],
+      }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
   });
@@ -513,6 +536,67 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       expect((live.data as { views?: unknown }).views).toBe(10);
+    }, 90_000);
+
+    // A translated component's shared sub-field rides in each language's
+    // draft. English's draft holding the value Spanish has since replaced is
+    // out of date: a publish of every language refuses it, or keeps Spanish's
+    // value, and never puts the old one back.
+    it("never puts back a component's shared value another language published since", async () => {
+      const singles = await boot(dialect);
+      for (const locale of ["en", "es"]) {
+        const saved = await singles.update(
+          BANNERED,
+          {
+            _overwrite: true,
+            title: `${locale} title`,
+            banner: { words: `${locale} words`, code: "c1" },
+            status: "published",
+          },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+      // English holds an edit of its words, with the shared code it began from.
+      const held = await singles.update(
+        BANNERED,
+        { _overwrite: true, banner: { words: "en words 2", code: "c1" } },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(held.success, JSON.stringify(held)).toBe(true);
+      // Spanish then publishes a new shared code.
+      const spanish = await singles.update(
+        BANNERED,
+        {
+          _overwrite: true,
+          banner: { words: "es words 2", code: "c2" },
+          status: "published",
+        },
+        { locale: "es", overrideAccess: true }
+      );
+      expect(spanish.success, JSON.stringify(spanish)).toBe(true);
+      const codeIn = async (locale: string) =>
+        (
+          (await read(singles, locale, false, BANNERED)).banner as {
+            code?: unknown;
+          } | null
+        )?.code;
+      // The control: Spanish's publish put its new code live.
+      expect(await codeIn("es")).toBe("c2");
+
+      const published = await singles
+        .publishAllLocales(BANNERED, {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        })
+        .then(
+          () => ({ ok: true as const }),
+          (error: { statusCode?: number }) => ({ ok: false as const, error })
+        );
+
+      if (!published.ok) expect(published.error.statusCode).toBe(409);
+      // Whichever: Spanish's published code is never replaced by the old one.
+      expect(await codeIn("es")).toBe("c2");
     }, 90_000);
   }
 );

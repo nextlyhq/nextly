@@ -246,16 +246,21 @@ export async function judgeSharedValues(
 ): Promise<SharedVerdict> {
   const { live, shared, views, byHand } = document;
   const outOfDate = new Map<string | null, readonly string[]>();
-  // Kept by part (`part-drafts`), no change can be behind live on a shared
-  // value: the shared draft is the shared change itself, and each language's
-  // change carries the shared draft's values rather than a copy of the live
-  // ones it began from. So none records a base to be judged against, and none
-  // is out of date, as a language's own publish judges it.
-  for (const draft of draftsKeptByPart() ? [] : pending) {
+  // Kept by part (`part-drafts`), the shared draft is the shared change
+  // itself, and each language's change carries the shared draft's values
+  // rather than a copy of the live ones it began from, so neither is judged on
+  // them. What a language's draft does keep a copy of is a translated
+  // component's shared parts (`byHand`): those are judged against the base its
+  // draft began from, so a copy another language has since published past is
+  // out of date rather than put back.
+  const kept = draftsKeptByPart();
+  for (const draft of kept
+    ? pending.filter(change => change.locale !== SHARED_DRAFT_SLOT)
+    : pending) {
     const fields = await outOfDateSharedFields(tx, {
       ref,
       locale: draft.locale,
-      shared,
+      shared: kept ? shared.filter(name => byHand.has(name)) : shared,
       live,
       pending: snapshotRecord(draft.snapshot),
       views,
