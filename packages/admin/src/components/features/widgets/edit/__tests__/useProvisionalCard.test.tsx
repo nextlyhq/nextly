@@ -136,6 +136,17 @@ describe("closing its settings", () => {
     expect(discard).not.toHaveBeenCalled();
     expect([...result.current.ids]).toEqual(["new"]);
   });
+
+  it("keeps each card on probation until its own drawer settles it, one added while another is open", () => {
+    const { result, discard } = renderProvisional();
+    // A second copy added while the first's drawer is open: opening its drawer closes the first.
+    act(() => result.current.start("newer"));
+    act(() => result.current.closed("new"));
+    expect(discard).toHaveBeenCalledWith("new");
+    expect([...result.current.ids]).toEqual(["newer"]);
+    act(() => result.current.closed("newer"));
+    expect(discard).toHaveBeenLastCalledWith("newer");
+  });
 });
 
 describe("the dashboard's Save", () => {
