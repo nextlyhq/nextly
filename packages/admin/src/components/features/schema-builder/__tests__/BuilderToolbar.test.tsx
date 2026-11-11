@@ -158,31 +158,16 @@ describe("BuilderToolbar", () => {
     ).toHaveAttribute("href", "/admin/builder/collections");
   });
 
-  it("asks before leaving with unsaved changes, and not when clean", () => {
-    // No builder page mounts a navigation guard, so the crumb — the page's
-    // only exit — must stand in front of unsaved work itself.
+  // The page's guard asks before every way out — this link, the browser's
+  // back, a reload, closing the tab — so the crumb does not ask again itself:
+  // one question, not two.
+  it("leaves the question to the page's guard rather than asking itself", () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-    const { rerender } = render(
+    render(
       <BuilderToolbar
         config={collectionConfig}
         name="Posts"
         unsavedCount={2}
-        pending={noPending}
-        onAddField={vi.fn()}
-        onOpenSettings={vi.fn()}
-        onSave={vi.fn()}
-      />
-    );
-    fireEvent.click(screen.getByRole("link", { name: /back to collections/i }));
-    expect(confirmSpy).toHaveBeenCalledOnce();
-    expect(confirmSpy.mock.calls[0][0]).toMatch(/unsaved changes/i);
-
-    confirmSpy.mockClear();
-    rerender(
-      <BuilderToolbar
-        config={collectionConfig}
-        name="Posts"
-        unsavedCount={0}
         pending={noPending}
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}
