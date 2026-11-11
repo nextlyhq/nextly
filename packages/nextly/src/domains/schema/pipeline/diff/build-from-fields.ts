@@ -29,6 +29,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
+import { fieldGroupStructuralDefaults } from "../../../field-groups/services/field-group-schema-service";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
   assertIndexBuildable,
@@ -794,6 +795,16 @@ export function buildDesiredTableFromComponentFields(
       nullable: false,
       default: undefined,
     });
+  }
+
+  // The defaults the field group's creator gives its system columns
+  // (`fieldGroupStructuralDefaults`), declared from the same answer. Left out, every table the
+  // creator made read as carrying defaults the schema did not, and its first save dropped them, so
+  // an insert that leaves `_order` or a timestamp to the database stored NULL or failed NOT NULL.
+  const structuralDefaults = fieldGroupStructuralDefaults(dialect);
+  for (const column of columns) {
+    const columnDefault = structuralDefaults.get(column.name);
+    if (columnDefault !== undefined) column.default = columnDefault;
   }
 
   // Component tables have no slug. They get a composite index on the parent-link

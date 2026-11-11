@@ -103,6 +103,7 @@ import {
 } from "../pipeline/kept-scope-fields";
 import { operationsToJudge } from "../pipeline/moved-to-companion";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
+import { builtByFor } from "../pipeline/registered-collections";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { refuseSwitchesWithRename } from "../pipeline/several-references-refusal";
@@ -2749,9 +2750,9 @@ function columnOriginOf(
   entity: MinimalConfigEntity,
   kind: I18nTransitionKind
 ): ColumnOrigin {
-  return kind === "collection" && entity.settings?.source === "builder"
-    ? "collection"
-    : "codeFirst";
+  // The rule the push applies (`builtByFor`), so a Builder Single's or field group's table is
+  // described as its Builder creator made it, here too, and no file plans narrowing its columns.
+  return builtByFor(kind, entity.settings?.source === "builder");
 }
 
 /**

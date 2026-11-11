@@ -10,6 +10,7 @@ import {
   int as mysqlInt,
   boolean as mysqlBoolean,
   timestamp as mysqlTimestamp,
+  datetime as mysqlDatetime,
   json as mysqlJson,
   varchar as mysqlVarchar,
   double as mysqlDouble,
@@ -82,6 +83,7 @@ import {
 import {
   MAX_INDEX_NAME_LENGTH,
   columnTypeIsIndexable,
+  indexNameForColumn,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
 import {
@@ -176,6 +178,29 @@ const TIMESTAMP_DEFAULT: Record<SupportedDialect, string> = {
  */
 function timestampDefaultValue(dialect: SupportedDialect): string {
   return TIMESTAMP_DEFAULT[dialect].replace(/^DEFAULT\s+/, "");
+}
+
+/**
+ * The DEFAULT expression each SYSTEM column of a field group's table is created with, by column
+ * name: `structuralColumnDefaults` below, as a function of the dialect alone, so the desired schema
+ * a save and `migrate:create` plan from declares the defaults the table is created with.
+ */
+export function fieldGroupStructuralDefaults(
+  dialect: SupportedDialect
+): ReadonlyMap<string, string> {
+  // The timestamp keyword carries its own `DEFAULT ` prefix in the DDL table; the VALUE is what a
+  // comparison needs, so the prefix is stripped once, in `timestampDefaultValue`.
+  const timestamp = timestampDefaultValue(dialect);
+  return new Map([
+    [STORAGE_FORMAT.columns.order, "0"],
+    ["created_at", timestamp],
+    ["updated_at", timestamp],
+  ]);
+}
+
+/** The name of the index on a field group's `created_at`, as the desired schema names it. */
+function createdAtIndexName(tableName: string): string {
+  return indexNameForColumn(tableName, "created_at");
 }
 
 /**
@@ -301,6 +326,18 @@ export class FieldGroupSchemaService {
         `CREATE INDEX IF NOT EXISTS ${this.q}${parentIndexName}${this.q} ON ${this.q}${tableName}${this.q}(${parentColumns});`
       );
     }
+
+    // The index the desired schema has always declared on `created_at`, which a save and
+    // `migrate:create` plan from. Left out here, every table this made read as missing it, and its
+    // first save added it.
+    indexStatements.push(
+      this.createIndexSql(
+        createdAtIndexName(tableName),
+        tableName,
+        "created_at",
+        types.timestamp
+      )
+    );
 
     // A plain index on every column that references one entry, then on every
     // other column a field asks to index — one per column either way, by the
@@ -521,6 +558,9 @@ export class FieldGroupSchemaService {
         parentIdx: pgIndex(
           `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
         ).on(table._parent_id, table._parent_table, table._parent_field),
+        createdAtIdx: pgIndex(createdAtIndexName(tableName)).on(
+          table.created_at
+        ),
       })
     );
   }
@@ -546,8 +586,15 @@ export class FieldGroupSchemaService {
       [STORAGE_FORMAT.columns.type]: mysqlVarchar(typeColumn, {
         length: 255,
       }),
-      created_at: mysqlTimestamp("created_at").defaultNow().notNull(),
-      updated_at: mysqlTimestamp("updated_at").defaultNow().notNull(),
+      // DATETIME, as the CREATE makes them and the desired schema declares them. Declared as
+      // TIMESTAMP here, any save that reached drizzle-kit converted both columns, taking on
+      // TIMESTAMP's 2038 limit and its time-zone conversion.
+      created_at: mysqlDatetime("created_at")
+        .default(sql.raw(timestampDefaultValue("mysql")))
+        .notNull(),
+      updated_at: mysqlDatetime("updated_at")
+        .default(sql.raw(timestampDefaultValue("mysql")))
+        .notNull(),
     };
 
     this.addFieldColumns(columns, fields, contributed);
@@ -560,6 +607,9 @@ export class FieldGroupSchemaService {
         parentIdx: mysqlIndex(
           `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
         ).on(table._parent_id, table._parent_table, table._parent_field),
+        createdAtIdx: mysqlIndex(createdAtIndexName(tableName)).on(
+          table.created_at
+        ),
       })
     );
   }
@@ -599,6 +649,9 @@ export class FieldGroupSchemaService {
         parentIdx: sqliteIndex(
           `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
         ).on(table._parent_id, table._parent_table, table._parent_field),
+        createdAtIdx: sqliteIndex(createdAtIndexName(tableName)).on(
+          table.created_at
+        ),
         // The contributed enum checks, keyed by their names: SQLite creates
         // a check only with the table, so the definition a rebuild uses
         // must carry them — as an entity table's does.
@@ -712,14 +765,7 @@ export class FieldGroupSchemaService {
    * ask about and the ones the table actually gets are one expression.
    */
   structuralColumnDefaults(): ReadonlyMap<string, string> {
-    // The timestamp keyword carries its own `DEFAULT ` prefix in the DDL table; the VALUE is what a
-    // comparison needs, so the prefix is stripped once, in `timestampDefaultValue`.
-    const timestamp = timestampDefaultValue(this.dialect);
-    return new Map([
-      [STORAGE_FORMAT.columns.order, "0"],
-      ["created_at", timestamp],
-      ["updated_at", timestamp],
-    ]);
+    return fieldGroupStructuralDefaults(this.dialect);
   }
 
   /**
@@ -968,7 +1014,16 @@ export class FieldGroupSchemaService {
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
 
-    if (isTextField(field) || isEmailField(field) || isPasswordField(field)) {
+    // A text field's column as the CREATE makes it (`getColumnType`): bounded by its own
+    // `maxLength`, and TEXT when it states none. Declared `varchar(255)` here, any save that reached
+    // drizzle-kit narrowed a TEXT column, which MySQL refuses once a value is longer.
+    if (isTextField(field)) {
+      const column = field.maxLength
+        ? mysqlVarchar(colName, { length: field.maxLength })
+        : mysqlText(colName);
+      return isRequired ? column.notNull() : column;
+    }
+    if (isEmailField(field) || isPasswordField(field)) {
       return isRequired
         ? mysqlVarchar(colName, { length: 255 }).notNull()
         : mysqlVarchar(colName, { length: 255 });
