@@ -8,7 +8,7 @@ import {
   normalizeCheckExpression,
   normalizeExpressionList,
 } from "./normalize-check";
-import type { ColumnSpec, IndexSpec } from "./types";
+import type { ColumnSpec, IndexSpec, TableSpec } from "./types";
 
 /**
  * A stable logical key for matching desired vs live indexes.
@@ -153,4 +153,43 @@ export function resolveDeclaredIndexName<
     kind: "refused",
     message: `Index names the field "${fieldName}", which this entity does not declare. An index may name a top-level field or ${[...SYSTEM_INDEX_NAMES].join(", ")}.`,
   };
+}
+
+/**
+ * The live indexes the diff counts as declared ones under another name: on a table in both
+ * snapshots, a live index whose key (`indexKey`: columns, uniqueness, predicate, expression)
+ * equals a desired index's, while its name is not that index's.
+ *
+ * The diff plans nothing for such an index, since it already reads as the declared one, so it is
+ * the only thing holding that index's guarantee: a unique one is the field's uniqueness. Anything
+ * that removes it must be a planned `drop_index`, never a side effect, or the declared index is
+ * left missing with nothing to put it back. An index whose key no desired index has is not
+ * returned: whether such a one goes is the diff's to decide.
+ */
+export function liveIndexesStandingInForDeclared(
+  desired: readonly TableSpec[],
+  live: readonly TableSpec[]
+): { tableName: string; indexName: string }[] {
+  const liveByName = new Map(live.map(table => [table.name, table]));
+  const found: { tableName: string; indexName: string }[] = [];
+  for (const table of desired) {
+    const liveTable = liveByName.get(table.name);
+    if (liveTable === undefined) continue;
+    // Each side read against its own column types, as the diff reads them.
+    const declared = new Map(
+      (table.indexes ?? []).map(index => [
+        indexKey(index, textColumnsOf(table.columns)),
+        index.name,
+      ])
+    );
+    for (const index of liveTable.indexes ?? []) {
+      const declaredName = declared.get(
+        indexKey(index, textColumnsOf(liveTable.columns))
+      );
+      if (declaredName !== undefined && declaredName !== index.name) {
+        found.push({ tableName: table.name, indexName: index.name });
+      }
+    }
+  }
+  return found;
 }
