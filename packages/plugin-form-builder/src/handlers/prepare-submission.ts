@@ -246,5 +246,8 @@ export function prepareSubmission({
     };
   }
 
-  return { data: result.data };
+  // The answers as transformed, with the schema's parse over them: a field
+  // left out of the checks (one a condition hid) keeps the answer it was sent,
+  // since the parse only returns the fields it checked.
+  return { data: { ...transformed, ...result.data } };
 }

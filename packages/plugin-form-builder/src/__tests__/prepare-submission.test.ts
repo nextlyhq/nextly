@@ -856,3 +856,42 @@ describe("prepareSubmission with a required field a condition hides", () => {
     expect(prepared.validationErrors).toHaveProperty("role");
   });
 });
+
+describe("prepareSubmission with a condition on a later field", () => {
+  // Role comes first and is shown once Company, below it, is answered.
+  const fields = [
+    {
+      type: "text",
+      name: "role",
+      label: "Your role",
+      required: true,
+      conditionalLogic: {
+        enabled: true,
+        action: "show",
+        operator: "AND",
+        conditions: [{ field: "company", comparison: "isNotEmpty" }],
+      },
+    },
+    { type: "text", name: "company", label: "Company" },
+  ] as AnyFormField[];
+
+  it("asks for the field once a later answer shows it", () => {
+    const prepared = prepareSubmission({
+      data: { company: "Acme" },
+      fields,
+      validate: true,
+    });
+    expect(prepared.validationErrors).toHaveProperty("role");
+  });
+
+  it("keeps an answer to a field a condition hid, as before", () => {
+    // What is stored does not change: only the checks skip the hidden field.
+    const prepared = prepareSubmission({
+      data: { company: "", role: "CTO" },
+      fields,
+      validate: true,
+    });
+    expect(prepared.validationErrors).toBeUndefined();
+    expect(prepared.data).toMatchObject({ role: "CTO" });
+  });
+});
