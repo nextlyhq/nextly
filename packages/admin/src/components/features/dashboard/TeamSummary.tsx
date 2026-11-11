@@ -33,6 +33,7 @@ import {
   CardFooterContent,
 } from "../widgets/frame/footer-slot";
 import { countSpoken, countText } from "../widgets/frame/list-card";
+import { useRowsDrawn } from "../widgets/frame/tier";
 import { WidgetList } from "../widgets/kit/list";
 
 import { STEP_BUTTON } from "./setup/step-buttons";
@@ -56,8 +57,18 @@ export function TeamSummary({ data, settings }: TeamSummaryProps): JSX.Element {
       ? settings.role
       : undefined;
   const showLastActive = settings.lastActive !== false;
+  // The reader's "Number of people": the list draws that many, and the footer counts the
+  // people drawn by the same rule, so "All users" never stands under a cut list.
+  const limit = typeof settings.limit === "number" ? settings.limit : undefined;
+  const drawn = useRowsDrawn(limit);
   const { people, total } = data;
-  const footer = <TeamFooter role={role} total={total} shown={people.length} />;
+  const footer = (
+    <TeamFooter
+      role={role}
+      total={total}
+      shown={Math.min(people.length, drawn)}
+    />
+  );
   if (people.length === 0) {
     return (
       <>
@@ -80,6 +91,7 @@ export function TeamSummary({ data, settings }: TeamSummaryProps): JSX.Element {
     <>
       <WidgetList<TeamPersonData>
         rows={people}
+        {...(limit === undefined ? {} : { limit })}
         title={nameOf}
         meta={person => (person.name === undefined ? [] : [person.email])}
         leading={person => <Initials person={person} />}

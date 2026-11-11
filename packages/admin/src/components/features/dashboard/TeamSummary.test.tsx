@@ -92,6 +92,28 @@ describe("the team card's people", () => {
     );
   });
 
+  it("draws as many people as its Number of people, past the default five", () => {
+    const eight = Array.from({ length: 8 }, (_, index) => ({
+      name: `Person ${index + 1}`,
+      email: `p${index + 1}@example.com`,
+    }));
+    draw({ people: eight, total: 8 }, { limit: 10 });
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(8);
+    expect(screen.getByTestId("team-view-all")).toHaveTextContent("All users");
+  });
+
+  it("counts the footer by the rows drawn, not the rows sent", () => {
+    const seven = Array.from({ length: 7 }, (_, index) => ({
+      name: `Person ${index + 1}`,
+      email: `p${index + 1}@example.com`,
+    }));
+    draw({ people: seven, total: 7 }, { limit: 5 });
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
+    expect(screen.getByTestId("team-view-all")).toHaveTextContent(
+      "View all (7)"
+    );
+  });
+
   it("names a person with no name by their email alone, and says when no sign-in is on record", () => {
     draw({ people: PEOPLE, total: 3 });
     const row = within(screen.getAllByTestId("entity-row")[2]!);
