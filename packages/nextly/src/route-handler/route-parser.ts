@@ -1581,8 +1581,8 @@ function parseComponentRoutes(
   subresource?: string,
   subId?: string
 ): ParsedRoute | null {
-  // A schema action is matched by verb and action; any other path under
-  // `schema` falls through to the routes below, as it always has.
+  // A schema action is matched by verb and action. Any other path under
+  // `schema` matches none of the routes below, which take a bare slug only.
   const schemaRoute =
     id === "schema" && subresource && subId
       ? parseComponentSchemaRoute(subresource, subId, httpMethod, routeParams)
@@ -1604,6 +1604,10 @@ function parseComponentRoutes(
       ? componentRoute(route.operation, route.method, routeParams)
       : null;
   }
+  // The field group itself is a bare slug. A path going further names
+  // something else, so it is no route here rather than the field group: an
+  // unmatched `DELETE /field-groups/<slug>/<anything>` must not delete it.
+  if (subresource !== undefined) return null;
   const route = COMPONENT_ROUTES[httpMethod];
   if (!route) return null;
   routeParams.slug = id;

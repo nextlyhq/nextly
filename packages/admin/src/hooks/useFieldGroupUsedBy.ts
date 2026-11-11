@@ -35,5 +35,11 @@ export function useFieldGroupUsedBy(
       return result.items;
     },
     enabled: Boolean(slug),
+    // Read afresh each time the editor opens, and kept no longer. A save to a
+    // collection or Single that places the field group refreshes their own
+    // keys, not this one, so an answer kept from an earlier visit could name
+    // the old holders, or none.
+    staleTime: 0,
+    gcTime: 0,
   });
 }

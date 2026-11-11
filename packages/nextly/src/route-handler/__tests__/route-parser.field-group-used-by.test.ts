@@ -35,14 +35,25 @@ describe("the field-group used-by route", () => {
     });
   });
 
-  it("does not claim another verb or a deeper path", () => {
-    expect(
-      parseRestRoute(["field-groups", "seo", "used-by"], "POST")?.method
-    ).not.toBe("getComponentUsedBy");
-    expect(
-      parseRestRoute(["field-groups", "seo", "used-by", "x"], "GET")?.method
-    ).not.toBe("getComponentUsedBy");
-  });
+  it.each([
+    ["POST", ["field-groups", "seo", "used-by"]],
+    ["PATCH", ["field-groups", "seo", "used-by"]],
+    ["PUT", ["field-groups", "seo", "used-by"]],
+    ["DELETE", ["field-groups", "seo", "used-by"]],
+    ["GET", ["field-groups", "seo", "used-by", "x"]],
+    ["DELETE", ["field-groups", "seo", "used-by", "x"]],
+    ["GET", ["field-groups", "seo", "anything"]],
+    ["PATCH", ["field-groups", "seo", "anything"]],
+    ["DELETE", ["field-groups", "seo", "anything"]],
+  ] as const)(
+    "answers %s /%s with no route, rather than another field-group route",
+    (verb, segments) => {
+      // No route, not a fall-through to the field group itself: a delete or
+      // update aimed at a path that is not one must not reach the field group.
+      // An unknown route is answered as `{}`, which the handler refuses.
+      expect(parseRestRoute([...segments], verb)).toEqual({});
+    }
+  );
 
   it("is for a signed-in user, with no specific permission, and never public", () => {
     expect(isPublicEndpoint("field-groups", "getComponentUsedBy")).toBe(false);

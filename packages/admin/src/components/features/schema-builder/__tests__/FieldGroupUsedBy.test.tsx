@@ -3,6 +3,7 @@
  * use it, each linked to its own editor, and that a change here reaches all
  * of them; and says so when it does not know, rather than showing nothing.
  */
+import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -94,5 +95,37 @@ describe("FieldGroupUsedBy", () => {
       await screen.findByText(/could not be read, so it is not known/)
     ).toBeInTheDocument();
     expect(screen.queryByText(/not used anywhere/)).toBeNull();
+  });
+
+  it("reads afresh on each visit, never showing the answer from an earlier one", async () => {
+    // The admin's own defaults: an answer is fresh for minutes and kept longer.
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: 5 * 60_000, gcTime: 10 * 60_000 },
+      },
+    });
+    get.mockResolvedValueOnce({ items: [], meta: { total: 0 } });
+    const first = render(<FieldGroupUsedBy slug="seo" />, { queryClient });
+    expect(
+      await screen.findByText("This field group is not used anywhere yet.")
+    ).toBeInTheDocument();
+    first.unmount();
+    // Let a dropped answer go before the next visit.
+    await act(() => new Promise(resolve => setTimeout(resolve, 0)));
+
+    // A collection now places it; its save refreshed only its own keys.
+    get.mockResolvedValueOnce({
+      items: [
+        { entityType: "collection", entitySlug: "posts", fieldPath: "seo" },
+      ],
+      meta: { total: 1 },
+    });
+    render(<FieldGroupUsedBy slug="seo" />, { queryClient });
+    expect(screen.queryByText(/not used anywhere/)).toBeNull();
+    expect(
+      await screen.findByText(
+        "Used by 1 place. A change here reaches all of them."
+      )
+    ).toBeInTheDocument();
   });
 });
