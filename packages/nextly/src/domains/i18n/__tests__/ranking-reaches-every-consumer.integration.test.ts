@@ -189,6 +189,25 @@ describeEachDialect(
       expect(await kept(id)).toEqual({ shared: "Bonjour", archived: [] });
     });
 
+    // Readers of a published row whose field is empty saw nothing there; a draft with a value is
+    // not what they saw, so it is not made public.
+    it("keeps a published English that is empty rather than a draft that has the field", async () => {
+      const { handler, id } = await seeded();
+      await companionSql(
+        `UPDATE ${q("dc_posts_locales")} SET ${q("_status")} = 'draft' WHERE ${q("_locale")} = 'fr'`
+      );
+      await companionSql(
+        `INSERT INTO ${q("dc_posts_locales")} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("heading")}) VALUES ('${id}', 'en', 'published', NULL)`
+      );
+
+      await makeHeadingShared(handler);
+
+      expect(await kept(id)).toEqual({
+        shared: null,
+        archived: ["de", "fr"],
+      });
+    });
+
     it("keeps the published French when the whole collection stops being translated", async () => {
       const { handler, id } = await seeded();
 

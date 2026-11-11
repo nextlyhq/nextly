@@ -136,8 +136,9 @@ export function buildDefaultLocaleRestoreStatements(
  * the row {@link chosenRowOrder} ranks first, which is what the entry's readers saw where the
  * spec says which rows are live, and otherwise the default language's row, else the first by
  * language code. Where the spec says which rows are live, a row whose `source` is blank (NULL or
- * empty, as `isBlank` reads it) ranks after every row that has one, as a reader of that language
- * is shown the next language that has the field: so each field is judged on its own, and two
+ * empty, as `isBlank` reads it) ranks after every row of the same reach that has one, as a reader
+ * of that language is shown the next language that has the field, but never after a row no reader
+ * reaches: so each field is judged on its own, and two
  * fields of one entry may come from different rows. Without that, one row per parent, the same
  * for every column.
  *
@@ -186,8 +187,9 @@ export function copyLiveness(
  * language's row, else the first by language code.
  *
  * `row` names the translation row: a table or an alias. With `value`, the field being chosen for,
- * a row where it is blank (NULL or empty) ranks after every row where it is not, as a reader is
- * shown the next language that has it.
+ * a row where it is blank (NULL or empty) ranks after every row of the same reach where it is not,
+ * as a reader is shown the next language that has it: a blank live row still ranks before any row
+ * no reader reaches.
  */
 export function chosenRowOrder(
   spec: Pick<CompanionCopyRef, "dialect" | "defaultLocale" | "liveness">,
@@ -218,10 +220,12 @@ export function chosenRowOrder(
           .map((code, index) => `WHEN ${lit(code)} THEN ${index}`)
           .join(" ")} ELSE ${liveness.languageOrder.length} END, `
       : "";
+  // Reachable rows first, and a blank one only within them: a published row whose field is empty
+  // showed its readers nothing, which is kept rather than a draft's value no reader saw.
   return (
+    `CASE WHEN ${isLive} THEN 0 ELSE 1 END, ` +
     blankLast +
-    `CASE WHEN ${isLive} AND ${isDefault} THEN 0 WHEN ${isLive} THEN 1 ` +
-    `WHEN ${isDefault} THEN 2 ELSE 3 END, ${siteOrder}${locale} ASC`
+    `CASE WHEN ${isDefault} THEN 0 ELSE 1 END, ${siteOrder}${locale} ASC`
   );
 }
 
