@@ -9,7 +9,9 @@
  * marked in this process read at once and answered with the new version
  * rather than the one before it. A read or reload slower than the interval
  * still answers, and schedules only later reads; a reload that failed leaves
- * the served version where it was and is tried again.
+ * the served version where it was and is tried again, and while it has not
+ * loaded no metadata read is tagged, so no tag answers "unchanged" for a
+ * schema this copy's definitions do not hold.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -40,6 +42,17 @@ vi.mock("../../init/reload-dynamic-tables", () => ({
 vi.mock("../../di/service-access", () => ({
   isServicesRegistered: () => true,
 }));
+// The permission version and the caller's roles, as a metadata tag reads
+// them: settled, so a tag depends on the schema version alone here.
+vi.mock("../../services/lib/rbac-epoch", () => ({
+  refreshEpoch: () => Promise.resolve("g:1"),
+  epochIsTrustworthy: () => true,
+  currentEpoch: () => "g:1",
+}));
+vi.mock("../../services/lib/permissions", () => ({
+  resolveUserRoles: () =>
+    Promise.resolve({ roleIds: new Set(["r"]), validUntil: undefined }),
+}));
 
 /** The one statement the reader sends, `select … from … where … limit`. */
 const database = {
@@ -66,6 +79,7 @@ import { container } from "../../di/container";
 // Loaded before any case, so the reload the module under test imports on
 // first use is the stub.
 import "../../init/reload-dynamic-tables";
+import { metadataEtag } from "../metadata-etag";
 import {
   bumpSchemaVersion,
   SCHEMA_VERSION_READ_INTERVAL_MS,
@@ -200,6 +214,34 @@ describe("the schema version a server copy serves", () => {
     vi.advanceTimersByTime(SCHEMA_VERSION_READ_INTERVAL_MS + 1);
     expect(await servedSchemaVersion()).toBe(2);
     expect(reloads.count).toBe(3);
+  });
+
+  it("tags no metadata read while a reload has not loaded, and tags again once it has", async () => {
+    const tag = async () =>
+      metadataEtag(new Request("http://localhost/admin/api/collections"), {
+        service: "collections",
+        method: "getCollection",
+        caller: {
+          userId: "u",
+          permissions: [],
+          roles: [],
+          authMethod: "session",
+        },
+        schemaVersion: await servedSchemaVersion(),
+        config: null,
+      });
+    expect(await tag()).toMatch(/^W\//);
+
+    read.seq = 2;
+    reloads.loads = false;
+    vi.advanceTimersByTime(SCHEMA_VERSION_READ_INTERVAL_MS + 1);
+    // The served version stays where it was, and no tag stands for it.
+    expect(await servedSchemaVersion()).toBe(1);
+    expect(await tag()).toBeUndefined();
+
+    reloads.loads = true;
+    vi.advanceTimersByTime(SCHEMA_VERSION_READ_INTERVAL_MS + 1);
+    expect(await tag()).toMatch(/^W\//);
   });
 
   it("starts afresh on another database connection", async () => {

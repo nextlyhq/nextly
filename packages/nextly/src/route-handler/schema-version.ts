@@ -69,6 +69,12 @@ interface ServedSchema {
   readAt: number | undefined;
   /** Set by {@link bumpSchemaVersion}: the next request reads again. */
   stale: boolean;
+  /**
+   * Whether the definitions were loaded at `seq`: false from a reload that did
+   * not register every entity until one does. While false, the version served
+   * may be one the database has moved past.
+   */
+  inSync: boolean;
   /** The read (and any reload after it) every concurrent request waits on. */
   inFlight: Promise<void> | null;
 }
@@ -85,6 +91,7 @@ function served(): ServedSchema {
     seq: undefined,
     readAt: undefined,
     stale: false,
+    inSync: true,
     inFlight: null,
   };
   return globalForSchema.__nextly_servedSchema;
@@ -161,9 +168,13 @@ async function followStoredVersion(
     // No stored version: no registry write has recorded one yet.
     const seq = stored.present ? (stored.version?.seq ?? 0) : 0;
     // A reload that did not register every entity leaves the version served
-    // where it was, so the next read, seeing it still differ, tries again.
-    if (seq === known || (await loadDefinitionsAgain())) state.seq = seq;
-    else if (state.database !== adapter) state.seq = undefined;
+    // where it was and marks the definitions out of step, so the next read
+    // tries again, whether or not the stored version moved meanwhile.
+    if (seq !== known || !state.inSync) {
+      state.inSync = await loadDefinitionsAgain();
+      if (state.inSync) state.seq = seq;
+      else if (state.database !== adapter) state.seq = undefined;
+    }
   } catch {
     // The version could not be read (a database `nextly migrate` has not
     // prepared, a dropped connection): this copy keeps serving what it has.
@@ -192,6 +203,17 @@ async function loadDefinitionsAgain(): Promise<boolean> {
   }
   handler?.forgetCollectionSchemas();
   return loaded;
+}
+
+/**
+ * Whether this copy's definitions were loaded at the version it serves: false
+ * after a reload that did not register every entity, until one does. An
+ * answer that stands for the current schema (a metadata read's tag) is not
+ * given while it is false, since the rows a read returns may already be newer
+ * than the version served.
+ */
+export function schemaDefinitionsInSync(): boolean {
+  return served().inSync;
 }
 
 /**

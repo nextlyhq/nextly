@@ -15,6 +15,10 @@
  *   the roles in force for the caller now, and the soonest expiry among
  *   them, are part of it too: read through the permission layer's own cache
  *   (`resolveUserRoles`), which keeps them no longer than that expiry;
+ * - for a list, which collections or Singles the caller may read: the shared
+ *   visibility decision (`readableSlugAllowlist`, with the caller the list
+ *   handlers build), asked here as they ask it, since a code-defined read rule
+ *   may decide on state no version follows (the time, another service);
  * - the running configuration (plugins' admin views, the "removed from code"
  *   marks), which changes only with a new configuration: a deploy, or a
  *   development reload, each a new configuration object here;
@@ -22,21 +26,30 @@
  * The tag hashes all of them, so it names none of them, and a tag one caller
  * holds never answers another's request.
  *
- * Nothing is tagged where a version is unknown: the schema version not yet
- * read, or a permission version this process cannot trust
- * (`epochIsTrustworthy`). The answer is then sent in full, as before.
+ * Nothing is tagged where a version is unknown or cannot be trusted: the
+ * schema version not yet read, definitions a failed reload left behind it
+ * (`schemaDefinitionsInSync`), or a permission version this process cannot
+ * trust (`epochIsTrustworthy`). The answer is then sent in full, as before.
+ *
+ * Asked inside the request's dispatch context, so the visibility decision
+ * reads the caller every handler reads.
  *
  * @module route-handler/metadata-etag
  */
 import { createHash, randomUUID } from "node:crypto";
 
 import type { AuthContext } from "../auth/middleware";
+import { readAccessCallerForDispatch } from "../dispatcher/handlers/read-access-caller";
+import { readAuthenticatedUser } from "../dispatcher/helpers/authenticated-user";
 import { resolveUserRoles } from "../services/lib/permissions";
 import {
   currentEpoch,
   epochIsTrustworthy,
   refreshEpoch,
 } from "../services/lib/rbac-epoch";
+import { readableSlugAllowlist } from "../services/lib/readable-slug-allowlist";
+
+import { schemaDefinitionsInSync } from "./schema-version";
 
 /**
  * The metadata reads an "unchanged" answer may stand for, as
@@ -51,6 +64,15 @@ const METADATA_READS: ReadonlySet<string> = new Set([
   "field-groups.listComponents",
   "field-groups.getComponent",
 ]);
+
+/**
+ * The lists whose rows are the entities the caller may read, by the kind the
+ * shared visibility decision names.
+ */
+const LIST_KINDS: Readonly<Record<string, "collection" | "single">> = {
+  "collections.listCollections": "collection",
+  "singles.listSingles": "single",
+};
 
 /**
  * An identity per running configuration object, so a new configuration (a
@@ -96,8 +118,10 @@ export async function metadataEtag(
   if (req.method !== "GET") return undefined;
   if (!METADATA_READS.has(`${service}.${method}`)) return undefined;
   if (caller === undefined || schemaVersion === undefined) return undefined;
+  if (!schemaDefinitionsInSync()) return undefined;
   let permissionVersion: string;
   let roles: { roleIds: string[]; validUntil: number | undefined };
+  let visible: string[] | undefined;
   try {
     await refreshEpoch();
     if (!epochIsTrustworthy()) return undefined;
@@ -109,8 +133,18 @@ export async function metadataEtag(
       roleIds: [...resolved.roleIds].sort(),
       validUntil: resolved.validUntil,
     };
+    // A list's rows: what the shared decision admits now, as its handler asks.
+    const kind = LIST_KINDS[`${service}.${method}`];
+    if (kind !== undefined) {
+      const reader = readAuthenticatedUser();
+      visible = await readableSlugAllowlist(
+        reader ? readAccessCallerForDispatch(reader) : undefined,
+        kind
+      );
+    }
   } catch {
-    // The permission version or the roles could not be read: answered in full.
+    // The permission version, the roles or what the caller may read could not
+    // be read: answered in full.
     return undefined;
   }
   const url = new URL(req.url);
@@ -129,6 +163,7 @@ export async function metadataEtag(
         caller.keyHoldsSuperAdmin ?? null,
         roles.roleIds,
         roles.validUntil ?? null,
+        visible === undefined ? null : [...visible].sort(),
         identityOf(config),
         url.pathname,
         url.search,

@@ -1848,21 +1848,9 @@ async function serveServiceRequest(
     request: req, // Pass request for accessing headers (IP, user-agent, etc.)
   };
 
-  // The admin's metadata reads answer "unchanged" from the versions they
-  // depend on, decided here, after the gate above and before any of the read
-  // runs: a caller already holding the current answer is not sent it again.
-  const etag = await metadataEtag(req, {
-    service,
-    method,
-    caller: authorizedUser,
-    schemaVersion: await servedSchemaVersion(),
-    config: getHandlerConfig(),
-  });
-  if (etag !== undefined && holdsCurrentTag(req, etag)) {
-    return new Response(null, { status: 304, headers: { ETag: etag } });
-  }
-
   const dispatcher = await getDispatcher();
+  // The tag a metadata read is answered under, set inside the dispatch below.
+  let etag: string | undefined;
   // The key's own scope is pinned for the whole dispatch rather than serialized
   // into route params beside it. The params carry strings, so the scope written
   // there was a lossy copy: it held the stored permission slugs and neither the
@@ -1876,14 +1864,35 @@ async function serveServiceRequest(
       : undefined,
     () =>
       runWithRequestCaller(caller, () =>
-        runAsRoleChangeCaller(roleChangeCallerFor(authorizedUser), () =>
-          dispatcher.dispatch(dispatchRequest)
-        )
+        runAsRoleChangeCaller(roleChangeCallerFor(authorizedUser), async () => {
+          // The admin's metadata reads answer "unchanged" from what they
+          // depend on, decided after the gate above and before any of the
+          // read runs, inside this context so a list's visibility is decided
+          // for the caller its handler would decide it for. A caller already
+          // holding the current answer is not sent it again.
+          etag = await metadataEtag(req, {
+            service,
+            method,
+            caller: authorizedUser,
+            schemaVersion: await servedSchemaVersion(),
+            config: getHandlerConfig(),
+          });
+          if (etag !== undefined && holdsCurrentTag(req, etag)) {
+            return { success: true, status: 304 };
+          }
+          return dispatcher.dispatch(dispatchRequest);
+        })
       )
   );
 
   if (result.status === 204 || result.status === 205 || result.status === 304) {
-    return new Response(null, { status: result.status });
+    // An "unchanged" answer names the tag it stands for.
+    return new Response(null, {
+      status: result.status,
+      ...(result.status === 304 && etag !== undefined
+        ? { headers: { ETag: etag } }
+        : {}),
+    });
   }
 
   // Build response headers with schema version for cross-flow notification.

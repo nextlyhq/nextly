@@ -15,7 +15,10 @@
  * - once a role the caller held lapses (an assignment's expiry passes, which
  *   moves neither version), the old tag gets the full answer;
  * - `If-None-Match: *` never answers "unchanged", so a missing schema is
- *   still answered 404.
+ *   still answered 404;
+ * - a list whose visibility a code-defined read rule decides on state no
+ *   version follows (here a flag the rule reads) is answered in full once the
+ *   rule answers differently.
  * The startup request, which answers several reads at once, never answers a
  * part "unchanged", whatever it is sent.
  */
@@ -41,6 +44,9 @@ import { createDynamicHandlers } from "../../routeHandler";
 import type { ServiceContainer } from "../../services";
 
 const NOTES = "unchanged_notes";
+const GATED = "unchanged_gated";
+/** What the gated collection's read rule reads: state no version follows. */
+const gate = { open: true };
 const TAGS = "unchanged_tags";
 const HOME = "unchanged_home";
 const EDITOR = "unchanged-editor";
@@ -118,6 +124,11 @@ describe.each(getConfiguredTestDialects())(
         dialect,
         collections: [
           defineCollection({ slug: NOTES, fields: [text({ name: "title" })] }),
+          defineCollection({
+            slug: GATED,
+            access: { read: () => gate.open },
+            fields: [text({ name: "title" })],
+          }),
         ],
         singles: [
           defineSingle({ slug: HOME, fields: [text({ name: "heading" })] }),
@@ -230,6 +241,30 @@ describe.each(getConfiguredTestDialects())(
       expect(missing.status).toBe(404);
       const present = await get(EDITOR, `/collections/schema/${NOTES}`, "*");
       expect(present.status).toBe(200);
+    }, 300_000);
+
+    it("answers a list in full once a read rule answers differently", async () => {
+      const t = await boot();
+      gate.open = true;
+      await userWhoMay(t, READER, "read", [NOTES, GATED]);
+      const slugs = async (response: Response) =>
+        ((await response.json()) as { items: { slug: string }[] }).items.map(
+          item => item.slug
+        );
+      const first = await get(READER, LIST);
+      const tag = first.headers.get("etag") ?? "";
+      expect(await slugs(first)).toContain(GATED);
+      expect((await get(READER, LIST, tag)).status).toBe(304);
+
+      // The rule now refuses: no version moved, and the list is different.
+      gate.open = false;
+      try {
+        const after = await get(READER, LIST, tag);
+        expect(after.status).toBe(200);
+        expect(await slugs(after)).not.toContain(GATED);
+      } finally {
+        gate.open = true;
+      }
     }, 300_000);
 
     it("answers another caller in full, whatever tag it sends", async () => {
