@@ -6,7 +6,7 @@
  * document keeps its own sticky bar, as the other DocumentBar tests cover.
  */
 import { FormProvider, useForm } from "react-hook-form";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 import { DashboardHeader } from "@admin/components/layout/header/DashboardHeader";
@@ -42,6 +42,8 @@ function Editor() {
             onSaveDraft={vi.fn()}
             onPublish={vi.fn()}
             onSaveChanges={vi.fn()}
+            onToggleRail={vi.fn()}
+            isRailCollapsed={false}
           />
         }
         banners={<div role="status">Scheduled for tomorrow</div>}
@@ -102,5 +104,55 @@ describe("an open document inside the admin's shell", () => {
     for (const group of bar.querySelectorAll("div")) {
       expect(group.className).not.toMatch(/(^|\s)flex-wrap(\s|$)/);
     }
+  });
+});
+
+/** A stand-in observer that reports one width for whatever it observes. */
+function reportBarWidth(width: number) {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        this.callback(
+          [
+            {
+              target,
+              contentRect: { width },
+            } as unknown as ResizeObserverEntry,
+          ],
+          this as unknown as ResizeObserver
+        );
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+  );
+}
+
+describe("an open document's controls in a narrow bar", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("folds the panel toggle into the document's menu where the bar's right part is narrow", () => {
+    reportBarWidth(400);
+    renderInShell();
+    const banner = screen.getByRole("banner");
+    expect(
+      within(banner).queryByRole("button", { name: /document panel/i })
+    ).toBeNull();
+    // The document's own verbs stay on the bar.
+    expect(within(banner).getByRole("button", { name: /save/i })).toBeTruthy();
+  });
+
+  it("keeps the panel toggle on the bar where there is room for it", () => {
+    reportBarWidth(900);
+    renderInShell();
+    expect(
+      within(screen.getByRole("banner")).getByRole("button", {
+        name: /document panel/i,
+      })
+    ).toBeTruthy();
   });
 });

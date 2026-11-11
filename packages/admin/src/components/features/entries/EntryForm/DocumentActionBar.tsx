@@ -335,7 +335,9 @@ export function DocumentActionBar({
     <div
       className={cn(
         "flex min-w-0 max-w-full items-center justify-end gap-1.5",
-        inTopBar ? "flex-nowrap" : "flex-wrap",
+        // In the bar it also keeps its own width, so its buttons never spill
+        // over the controls before them.
+        inTopBar ? "shrink-0 flex-nowrap" : "flex-wrap",
         className
       )}
     >
