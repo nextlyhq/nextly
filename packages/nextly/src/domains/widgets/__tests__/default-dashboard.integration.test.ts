@@ -37,14 +37,14 @@ import { setDefaultLayoutPlan } from "../default-layout";
 import { listWidgets } from "../registry";
 
 /**
- * The agreed default after the onboarding card, in grid order, each at its agreed size, `w` by
- * `h` in grid units: Needs attention beside Upcoming releases, Continue beside Content, then Team
- * activity (beside the form-builder plugin's card, where the plugin is installed). Team and
+ * The agreed default after the setup card, in grid order, each at its agreed size, `w` by
+ * `h` in grid units, every one half the row: Needs attention, Upcoming releases, Continue,
+ * Content, then Team activity (beside the form-builder plugin's card, where the plugin is installed). Team and
  * Create are not on the default, even for a person they are offered to.
  */
 const AGREED = [
-  ["core/needs-attention", "8x4"],
-  ["core/upcoming-releases", "4x4"],
+  ["core/needs-attention", "6x4"],
+  ["core/upcoming-releases", "6x4"],
   ["core/continue", "6x4"],
   ["core/content-table", "6x4"],
   ["core/team-activity", "6x4"],
@@ -201,7 +201,7 @@ describe.each(getConfiguredTestDialects())(
       // the card, not the layout, that leaves the dashboard while nothing waits for its reader;
       // Continue and Team activity are not, since neither has anything it may draw.
       expect(await defaultFor(nobody)).toEqual([
-        ["core/needs-attention", "8x4"],
+        ["core/needs-attention", "6x4"],
       ]);
     });
 
@@ -330,7 +330,7 @@ describe.each(getConfiguredTestDialects())(
       // No content the dashboard lists and no release made yet: Needs attention alone (placed for
       // everyone), with no Content, Continue or Team activity.
       expect(await defaultFor(admin)).toEqual([
-        ["core/needs-attention", "8x4"],
+        ["core/needs-attention", "6x4"],
       ]);
     });
   }
