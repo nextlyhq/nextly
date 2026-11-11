@@ -260,6 +260,10 @@ function normalizeBasePath(basePath: string): string {
  * that answer and this does not treat it as one. A site that does serve its
  * root lists it with a custom `urlFor`. Omitting a URL costs a listing;
  * advertising one that 404s costs indexing.
+ *
+ * @deprecated Lists entries by the address `urlFor` or `basePath` gives them,
+ * not by each page's answer. The plugin serves the site's sitemap at
+ * `/sitemap.xml`, listing each page at the address its type declares.
  */
 export function defaultUrlForEntry(
   entry: Record<string, unknown>,
@@ -342,7 +346,7 @@ function resolveOnOrigin(path: string, baseOrigin: string): string | null {
 }
 
 /** Normalize a stored timestamp to ISO-8601, or undefined when unusable. */
-function toLastModified(value: unknown): string | undefined {
+export function toLastModified(value: unknown): string | undefined {
   if (value === null || value === undefined || value === "") return undefined;
   if (
     typeof value !== "string" &&
@@ -448,6 +452,23 @@ export function resolveBaseOrigin(baseUrl: string): string {
 }
 
 /**
+ * The filter that keeps a collection's published entries: `status` is
+ * published where the collection has the built-in lifecycle, and nothing
+ * where it has none. A status-less collection has no unpublished state, and
+ * it may define an ordinary `status` field (e.g. "active"/"closed"), so a
+ * blanket `status = published` filter there would wrongly drop live rows.
+ */
+export async function publishedWhere(
+  services: SitemapServices,
+  collection: string
+): Promise<Record<string, unknown> | undefined> {
+  const meta = await services.collections.getCollection(collection, {});
+  return isRecord(meta) && meta.status === true
+    ? { status: { equals: "published" } }
+    : undefined;
+}
+
+/**
  * List every configured collection's PUBLISHED entries and map them to sitemap
  * URLs. Reads as system (a sitemap is public derived data), and pages through
  * ALL matches by advancing the 1-indexed `page` — no silent cap — so a large
@@ -461,6 +482,10 @@ export function resolveBaseOrigin(baseUrl: string): string {
  * entry — all of which are live — is listed; the filter is skipped there rather
  * than applied to a same-named ordinary field. That mirrors the core's own
  * status handling (filter only when the lifecycle column exists).
+ *
+ * @deprecated Lists entries by the address `urlFor` or `basePath` gives them,
+ * not by each page's answer. The plugin serves the site's sitemap at
+ * `/sitemap.xml`, listing each page at the address its type declares.
  */
 export async function buildSitemapUrls(
   services: SitemapServices,
@@ -535,15 +560,7 @@ export async function buildSitemapUrls(
     // Discarded on purpose — this call is the check, not the value.
     if (collectionBasePath !== undefined) normalizeBasePath(collectionBasePath);
 
-    // Apply the published filter ONLY to collections with the built-in
-    // lifecycle. A status-less collection has no unpublished state, and it may
-    // even define an ordinary `status` field (e.g. "active"/"closed"), so a
-    // blanket `status = published` filter there would wrongly drop live rows.
-    const meta = await services.collections.getCollection(collection, {});
-    const hasLifecycle = isRecord(meta) && meta.status === true;
-    const where = hasLifecycle
-      ? { status: { equals: "published" } }
-      : undefined;
+    const where = await publishedWhere(services, collection);
 
     // 1-indexed: the managed service reads by `page`, not `offset`, so the loop
     // MUST advance `page` — advancing an ignored `offset` would re-read page 1
@@ -642,13 +659,25 @@ export async function buildSitemapUrls(
   return urls;
 }
 
-/** Serialize resolved URLs into a sitemaps.org `<urlset>` document. */
+/**
+ * Serialize resolved URLs into a sitemaps.org `<urlset>` document.
+ *
+ * @deprecated Lists entries by the address `urlFor` or `basePath` gives them,
+ * not by each page's answer. The plugin serves the site's sitemap at
+ * `/sitemap.xml`, listing each page at the address its type declares.
+ */
 export function serializeSitemap(urls: SitemapUrl[]): string {
   const body = urls.map(serializeUrlEntry).join("\n");
   return `${XML_HEADER}${body}${XML_FOOTER}`;
 }
 
-/** Build the full sitemap XML for the configured collections. */
+/**
+ * Build the full sitemap XML for the configured collections.
+ *
+ * @deprecated Lists entries by the address `urlFor` or `basePath` gives them,
+ * not by each page's answer. The plugin serves the site's sitemap at
+ * `/sitemap.xml`, listing each page at the address its type declares.
+ */
 export async function generateSitemap(
   services: SitemapServices,
   options: SitemapOptions

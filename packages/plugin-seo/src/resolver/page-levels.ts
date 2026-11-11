@@ -35,6 +35,11 @@ export interface SiteRules {
   description?: string;
   image?: PageMetadataImage;
   patterns: Record<string, { title?: string; description?: string }>;
+  /**
+   * The content types hidden from search as a whole, keyed as `patterns`
+   * are: every page of one is served `noindex` and left out of the sitemap.
+   */
+  hiddenTypes?: readonly string[];
 }
 
 /** No rules set: every value comes from the page, its route or its content. */
@@ -358,5 +363,6 @@ export async function levelsOf(
       productionAddresses: productionAddressesOf(rules.productionAddresses),
     }),
     ...(address === undefined ? {} : { address }),
+    ...(rules.hiddenTypes?.includes(key) === true ? { typeHidden: true } : {}),
   };
 }
