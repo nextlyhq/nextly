@@ -20,12 +20,7 @@ import { resolveLocaleChain } from "../i18n/resolve-locale";
 import { getCachedNextly } from "../../init";
 import { PAGINATION_DEFAULTS } from "../../types/pagination";
 
-import {
-  addressLanguages,
-  heldIn,
-  readEveryLanguage,
-  type LanguageVersion,
-} from "./held-addresses";
+import { addressLanguages, heldIn, readEveryLanguage } from "./held-addresses";
 import type { HeldAddressUpdate } from "./participants";
 import {
   declaredFor,
@@ -59,6 +54,30 @@ function labelOf(document: Readonly<Record<string, unknown>>) {
 }
 
 /**
+ * What `document` holds now, read as a save reads it (`readEveryLanguage`),
+ * on a short transaction of its own.
+ */
+async function heldNow(
+  type: PublicAddressType,
+  collection: string,
+  id: string,
+  document: Record<string, unknown>
+) {
+  return container.get<DrizzleAdapter>("adapter").transaction(async tx =>
+    heldIn(
+      type,
+      await readEveryLanguage(tx, {
+        collection,
+        id,
+        data: document,
+        operation: "update",
+      }),
+      tx
+    )
+  );
+}
+
+/**
  * A Single's one update: its fixed address in each language it is published
  * in, read as a save reads it, on a transaction of its own.
  */
@@ -74,20 +93,7 @@ async function singleHeld(
   } as never)) as Record<string, unknown> | null;
   if (single === null) return [];
   const id = String(single.id);
-  const holds = await container
-    .get<DrizzleAdapter>("adapter")
-    .transaction(async tx =>
-      heldIn(
-        type,
-        await readEveryLanguage(tx, {
-          collection: `single:${type.slug}`,
-          id,
-          data: single,
-          operation: "update",
-        }),
-        tx
-      )
-    );
+  const holds = await heldNow(type, `single:${type.slug}`, id, single);
   return [
     {
       holder: { collection: `single:${type.slug}`, id, ...labelOf(single) },
@@ -126,43 +132,15 @@ export async function heldPage(args: {
   } as never);
   const documents = (page.items as Record<string, unknown>[]).slice(0, limit);
   if (documents.length === 0) return { items: [] };
-  const ids = documents.map(document => String(document.id));
 
-  // Each language's published versions of this page's documents.
-  const publishedIn = new Map<string, Map<string, Record<string, unknown>>>();
-  for (const language of addressLanguages()) {
-    const published = await nextly.find({
-      collection: type.slug,
-      where: { id: { in: ids } },
-      locale: language,
-      status: "published",
-      limit,
-    } as never);
-    publishedIn.set(
-      language,
-      new Map(
-        (published.items as Record<string, unknown>[]).map(document => [
-          String(document.id),
-          document,
-        ])
-      )
-    );
-  }
-
+  // Each document read exactly as a save reads it, so a catch-up records
+  // what the save path would, never what a read reaches through fallback.
   const items: HeldAddressUpdate[] = [];
   for (const document of documents) {
     const id = String(document.id);
-    const perLanguage = new Map<string, LanguageVersion>();
-    for (const [language, byId] of publishedIn) {
-      const version = byId.get(id);
-      perLanguage.set(language, {
-        published: version !== undefined,
-        document: version ?? document,
-      });
-    }
     items.push({
       holder: { collection: type.slug, id, ...labelOf(document) },
-      holds: await heldIn(type, perLanguage),
+      holds: await heldNow(type, type.slug, id, document),
     });
   }
   const more = page.items.length > limit;
@@ -198,8 +176,10 @@ export async function addressFingerprint(): Promise<string> {
       (row.fields ?? []) as Parameters<typeof resolveLocalizedFieldNames>[0],
       row.localized === true
     );
+    // Whether it has Draft/Published decides which documents hold at all.
     parts.push(
-      `${type.kind}:${type.slug}|translated:${[...translated].sort().join(",")}`
+      `${type.kind}:${type.slug}|translated:${[...translated].sort().join(",")}`,
+      `${type.kind}:${type.slug}|status:${row.status === true}`
     );
     for (const language of languages) {
       const declared = await declaredFor(type, language, row);

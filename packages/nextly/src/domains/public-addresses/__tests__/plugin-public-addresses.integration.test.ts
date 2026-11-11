@@ -438,6 +438,59 @@ describe.each(getConfiguredTestDialects())(
       expect(translated).not.toBe(shared);
     });
 
+    it("fingerprint changes when a type gains or loses Draft/Published", async () => {
+      const fingerprintWith = async (status: boolean) => {
+        const { plugin, seen } = recordPlugin(undefined);
+        current = await createTestNextly({
+          dialect,
+          plugins: [plugin],
+          collections: [
+            defineCollection({
+              slug: "posts",
+              status,
+              fields: [text({ name: "title" }), text({ name: "slug" })],
+              publicAddress: "/blog/{slug}",
+            }),
+          ],
+        });
+        const fingerprint = await seen.ctx?.publicAddresses.fingerprint();
+        await current.destroy();
+        current = undefined;
+        return fingerprint;
+      };
+
+      const withDrafts = await fingerprintWith(true);
+      const withoutDrafts = await fingerprintWith(false);
+
+      expect(withoutDrafts).not.toBe(withDrafts);
+    });
+
+    it("fingerprint changes when a type gains or loses Draft/Published", async () => {
+      const fingerprintWith = async (status: boolean) => {
+        const { plugin, seen } = recordPlugin(undefined);
+        current = await createTestNextly({
+          dialect,
+          plugins: [plugin],
+          collections: [
+            defineCollection({
+              slug: "posts",
+              status,
+              fields: [text({ name: "title" }), text({ name: "slug" })],
+              publicAddress: "/blog/{slug}",
+            }),
+          ],
+        });
+        const fingerprint = await seen.ctx?.publicAddresses.fingerprint();
+        await current.destroy();
+        current = undefined;
+        return fingerprint;
+      };
+
+      expect(await fingerprintWith(false)).not.toBe(
+        await fingerprintWith(true)
+      );
+    });
+
     it("withdraw stops the asking", async () => {
       const { record, participant } = asPluginParticipant();
       const { t, ctx } = await boot(dialect, participant);

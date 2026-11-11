@@ -73,7 +73,14 @@ Every participant is asked about each update with the whole batch in view, and t
 A participant installed on a site that already has content starts with an empty record, and a deploy can move addresses without any save. Bring the record up to date at start, from work your `init` or `onReady` starts but does not await: `held` and `fingerprint` wait for the boot to finish, and the boot waits for those hooks, so awaiting them there never finishes.
 
 ```ts
-import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  type PluginContext,
+  type PublicAddressParticipant,
+} from "@nextlyhq/plugin-sdk";
+
+// The participant from "Taking part" above.
+declare const participant: PublicAddressParticipant;
 
 async function catchUp(ctx: PluginContext): Promise<void> {
   const fingerprint = await ctx.publicAddresses.fingerprint();

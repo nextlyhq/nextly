@@ -24,6 +24,14 @@ vi.mock("../../../di/service-access", () => ({
 vi.mock("../held-addresses", () => ({
   addressLanguages: () => [],
   heldIn: () => Promise.resolve([]),
+  readEveryLanguage: () => Promise.resolve(new Map()),
+}));
+vi.mock("../../../di", () => ({
+  container: {
+    get: () => ({
+      transaction: (work: (tx: unknown) => Promise<unknown>) => work({}),
+    }),
+  },
 }));
 
 import { heldPage } from "../held-listing";

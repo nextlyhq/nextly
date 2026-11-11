@@ -485,6 +485,59 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("lists an entry the way a save records it, not through fallback", async () => {
+      const t = await boot(dialect, true);
+      const record = join(memoryParticipant());
+      const article = await create(
+        t,
+        "articles",
+        { title: "Hello", slug: "hello", status: "published" },
+        "en"
+      );
+
+      const { items } = await heldPage({
+        type: { kind: "collection", slug: "articles" },
+      });
+
+      // French was never published: a read in French may fall back to the
+      // English slug, but the entry holds nothing there.
+      expect(items.map(item => item.holds)).toEqual([
+        [{ locale: "en", path: "/articles/hello" }],
+      ]);
+      expect(record.held()).toEqual({
+        "en|/articles/hello": `articles:${article}`,
+      });
+    });
+
+    it("lists an entry in only the languages a save says it holds", async () => {
+      const t = await boot(dialect, true);
+      const record = join(memoryParticipant());
+      const article = await create(
+        t,
+        "articles",
+        { title: "Hello", slug: "hello", status: "published" },
+        "en"
+      );
+      await update(
+        t,
+        "articles",
+        article,
+        { slug: "bonjour", status: "draft" },
+        { locale: "fr" }
+      );
+
+      const { items } = await heldPage({
+        type: { kind: "collection", slug: "articles" },
+      });
+
+      expect(items.map(item => item.holds)).toEqual([
+        [{ locale: "en", path: "/articles/hello" }],
+      ]);
+      expect(record.held()).toEqual({
+        "en|/articles/hello": `articles:${article}`,
+      });
+    });
+
     it("keeps a published language's address while another language is saved as a draft", async () => {
       const t = await boot(dialect, true);
       const record = join(memoryParticipant());
