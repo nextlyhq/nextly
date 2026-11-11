@@ -85,6 +85,17 @@ export function startCatchUp(ctx: PluginContext): Promise<CatchUpReport> {
   return run;
 }
 
+/** How many catch-ups are under way. */
+let running = 0;
+
+/**
+ * Whether a catch-up is under way, so the record may not yet say what each
+ * page holds: an output that lists addresses from it answers as not ready.
+ */
+export function catchingUp(): boolean {
+  return running > 0;
+}
+
 /** The last catch-up started, to wait for. */
 export function lastCatchUp(): Promise<CatchUpReport> | undefined {
   return started?.run;
@@ -124,6 +135,7 @@ async function caughtUp(
   ctx: PluginContext,
   options: CatchUpOptions = {}
 ): Promise<CatchUpReport> {
+  running += 1;
   try {
     return await runCatchUp(ctx, options);
   } catch (error) {
@@ -131,6 +143,8 @@ async function caughtUp(
       error,
     });
     return NOTHING;
+  } finally {
+    running -= 1;
   }
 }
 

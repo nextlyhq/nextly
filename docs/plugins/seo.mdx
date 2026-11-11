@@ -183,6 +183,13 @@ export default defineConfig({
 });
 ```
 
+On a site with several languages, each page is listed at the address its default language
+is served at, such as `/en/blog/hello`, as its canonical names it.
+
+While the address record catches up at start, the sitemap answers `503` with
+`Retry-After: 120` and `cache-control: no-store`, so no crawler or cache keeps a list that
+leaves out pages whose addresses are not recorded yet.
+
 Each entry carries:
 
 - `<loc>`, the page's absolute address, made from `baseUrl`;
@@ -233,8 +240,9 @@ A Single is named `single:<slug>`.
 
 ### robots.txt and AI crawlers
 
-`/robots.txt` lets search engines read every page but the admin and the API, and names the
-sitemap by its absolute address:
+`/robots.txt` lets search engines read every page but the admin and the API, the same paths
+`nextlyRobots` keeps out (both read `FRAMEWORK_CRAWL_EXCLUSIONS` from `nextly`), and names
+the sitemap by its absolute address:
 
 ```txt
 User-agent: *
@@ -281,7 +289,9 @@ holds their address, through the plugin's `listedPages` service. Its `list(origi
 ### Before the sitemap reached the root
 
 The sitemap is still served at its earlier address,
-`/admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml`, with the same content.
+`/admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml`, with the same pages. Where it is an
+index, the files it names are at that same address (`?page=<n>`), so it works without the
+root rewrite.
 
 `urlFor` and `basePath` no longer shape it. A sitemap that guessed a page's address could
 name one the page is not served at, and disagree with the page's own canonical. The plugin

@@ -29,7 +29,8 @@ import {
 } from "nextly/runtime";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 
-import { lastCatchUp } from "../address-record/catch-up";
+import { catchUp, lastCatchUp } from "../address-record/catch-up";
+import { ADDRESS_RECORD_SLUG } from "../address-record/collection";
 import type { ListedPagesService } from "../outputs/listing";
 import { seoPlugin, type SeoPluginOptions } from "../plugin";
 
@@ -80,11 +81,20 @@ const open = { read: () => true };
 
 async function boot(
   dialect: TestDialect,
-  options: Partial<SeoPluginOptions> = {}
+  options: Partial<SeoPluginOptions> = {},
+  languages?: string[]
 ) {
   const { plugin, seen } = contextOf();
   current = await createTestNextly({
     dialect,
+    ...(languages === undefined
+      ? {}
+      : {
+          localization: {
+            locales: languages,
+            defaultLocale: languages[0] ?? "en",
+          },
+        }),
     plugins: [
       seoPlugin({
         collections: ["pages", "posts", "tags"],
@@ -153,6 +163,7 @@ async function rootFile(file: string, query = "") {
     status: response.status,
     type: response.headers.get("content-type"),
     cacheControl: response.headers.get("cache-control"),
+    retryAfter: response.headers.get("retry-after"),
     body: await response.text(),
   };
 }
@@ -193,6 +204,23 @@ async function image(t: TestNextly, name: string) {
     file: { data: PNG, name, mimetype: "image/png", size: PNG.length },
   });
   return { id: String(uploaded.id), url: String(uploaded.url) };
+}
+
+/** Forget the fingerprint of the last catch-up, as a changed template would. */
+async function forgetFingerprint(t: TestNextly) {
+  const { items } = await t.nextly.find({
+    collection: ADDRESS_RECORD_SLUG,
+    limit: 500,
+  });
+  for (const row of items as Record<string, unknown>[]) {
+    // The fingerprint alone; the list of site types beside it stays.
+    if (row.kind === "meta" && !String(row.path).startsWith("[")) {
+      await t.nextly.delete({
+        collection: ADDRESS_RECORD_SLUG,
+        id: String(row.id),
+      });
+    }
+  }
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -265,6 +293,17 @@ describe.each(getConfiguredTestDialects())(
       const { status, type } = await rootFile("sitemap.xml");
       expect(status).toBe(200);
       expect(type).toBe("application/xml; charset=utf-8");
+    });
+
+    it("lists a page at the address its language is served at", async () => {
+      // Several languages and no rule declared: every language under its code.
+      const { t } = await boot(dialect, {}, ["en", "fr"]);
+      await create(t, "posts", {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+      });
+      expect(await listed()).toEqual([`${SITE}/en/blog/hello`]);
     });
 
     it("hiding a page leaves the sitemap and serves noindex in one change", async () => {
@@ -451,6 +490,68 @@ describe.each(getConfiguredTestDialects())(
         expect((await rootFile("sitemap.xml", "?page=3")).status).toBe(404);
       }
     );
+
+    it("answers the sitemap as not ready while the address record catches up, and lets nothing cache it", async () => {
+      const { t } = await boot(dialect);
+      await create(t, "posts", {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+      });
+      await forgetFingerprint(t);
+      let reached!: () => void;
+      const listing = new Promise<void>(resolve => {
+        reached = resolve;
+      });
+      let release!: () => void;
+      const held = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      // A deploy's catch-up, held once it has read every page.
+      const run = catchUp({
+        afterListing: () => {
+          reached();
+          return held;
+        },
+      });
+      await listing;
+
+      const busy = await rootFile("sitemap.xml");
+      expect(busy.status).toBe(503);
+      expect(busy.cacheControl).toBe("no-store");
+      expect(busy.retryAfter).toBe("120");
+
+      release();
+      await run;
+      expect(await listed()).toEqual([`${SITE}/blog/hello`]);
+    });
+
+    it("names its own files in the index it serves at the plugin's own address", async () => {
+      await boot(dialect, { sitemap: { maxUrlsPerFile: 2 } });
+      const t = current as TestNextly;
+      for (const slug of ["a", "b", "c"]) {
+        await create(t, "posts", { title: slug, slug, status: "published" });
+      }
+      const own = "/admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml";
+      const read = async (query = "") => {
+        const response = await createDynamicHandlers().GET(
+          new Request(`http://localhost${own}${query}`),
+          {
+            params: Promise.resolve({
+              params: ["plugins", "@nextlyhq", "plugin-seo", "sitemap.xml"],
+            }),
+          }
+        );
+        return { status: response.status, body: await response.text() };
+      };
+      const index = await read();
+      expect(index.body).toContain(`<loc>${SITE}${own}?page=1</loc>`);
+      expect(index.body).toContain(`<loc>${SITE}${own}?page=2</loc>`);
+      expect(index.body).not.toContain(`${SITE}/sitemap.xml?page=`);
+      const second = await read("?page=2");
+      expect(second.status).toBe(200);
+      expect(second.body).toContain("<urlset ");
+    });
 
     it("serves robots.txt naming the sitemap by its absolute address", async () => {
       await boot(dialect, { aiCrawlers: "search" });

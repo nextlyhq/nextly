@@ -3,6 +3,8 @@
  * allowed, the admin kept out, the AI crawlers each choice names asked to stay
  * away, and the sitemap named by its absolute address.
  */
+import { FRAMEWORK_CRAWL_EXCLUSIONS } from "nextly";
+import { nextlyRobots } from "nextly/runtime";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -97,5 +99,17 @@ describe("robots.txt for each AI crawler choice", () => {
     const agents = shutOut(file);
     expect(new Set(agents).size).toBe(agents.length);
     expect(file).toContain("User-agent: GPTBot\nDisallow: /\n");
+  });
+
+  it("keeps crawlers out of the paths nextlyRobots keeps them out of, read from one list", () => {
+    const file = robotsTxt({ aiCrawlers: "all" });
+    const kept = file
+      .split("\n")
+      .filter(line => line.startsWith("Disallow: "))
+      .map(line => line.slice("Disallow: ".length));
+    expect(kept).toEqual([...FRAMEWORK_CRAWL_EXCLUSIONS]);
+    expect(nextlyRobots()().rules).toMatchObject({
+      disallow: [...FRAMEWORK_CRAWL_EXCLUSIONS],
+    });
   });
 });

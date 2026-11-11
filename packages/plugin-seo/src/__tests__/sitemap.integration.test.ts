@@ -18,6 +18,7 @@ import { defineCollection, text } from "nextly";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { lastCatchUp } from "../address-record/catch-up";
 import { seoPlugin } from "../plugin";
 import { buildSitemapUrls, type SitemapServices } from "../sitemap";
 
@@ -51,6 +52,9 @@ afterEach(async () => {
 async function fetchSitemap(
   host = "localhost"
 ): Promise<{ status: number; body: string; cacheControl: string | null }> {
+  // The address record's catch-up at start, finished: the sitemap answers
+  // as not ready until it is.
+  await lastCatchUp();
   const handlers = createDynamicHandlers();
   const res = await handlers.GET(
     new Request(`http://${host}/api/plugins/@nextlyhq/plugin-seo/sitemap.xml`),

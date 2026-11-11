@@ -7,6 +7,9 @@
  *
  * @module outputs/robots
  */
+// The admin and the API, kept out by the one list every robots.txt of a
+// Nextly site reads, `nextlyRobots` among them.
+import { FRAMEWORK_CRAWL_EXCLUSIONS } from "nextly";
 
 /**
  * What AI crawlers are asked: `all` lets every one read the site, `search`
@@ -48,14 +51,6 @@ export const AI_SEARCH_CRAWLERS: readonly string[] = [
   "meta-externalfetcher",
 ];
 
-/**
- * The admin and the API, on a path boundary: the trailing-slash form covers
- * everything below, `$` pins the bare root where a crawler reads it, and `?`
- * covers the root with a query. None takes `/administration`, which is a page
- * a site may serve. The same paths `nextlyRobots` keeps out.
- */
-const KEPT_OUT = ["/admin/", "/admin$", "/admin?", "/api/", "/api$", "/api?"];
-
 /** The crawlers a choice asks to stay away, in the order the file names them. */
 function shutOut(choice: AiCrawlerChoice): readonly string[] {
   if (choice === "search") return AI_TRAINING_CRAWLERS;
@@ -74,7 +69,11 @@ export function robotsTxt(options: {
   aiCrawlers: AiCrawlerChoice;
 }): string {
   const groups = [
-    ["User-agent: *", "Allow: /", ...KEPT_OUT.map(path => `Disallow: ${path}`)],
+    [
+      "User-agent: *",
+      "Allow: /",
+      ...FRAMEWORK_CRAWL_EXCLUSIONS.map(path => `Disallow: ${path}`),
+    ],
     // A group of its own for each crawler: a crawler that finds its own name
     // reads that group alone, and some read a group naming several poorly.
     ...shutOut(options.aiCrawlers).map(agent => [

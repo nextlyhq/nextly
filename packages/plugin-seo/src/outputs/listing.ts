@@ -76,7 +76,11 @@ const RECORD_PAGE = 500;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** `address` as an absolute http(s) address on `origin`'s terms, or null. */
+/**
+ * `address` resolved against `origin` into an absolute address, or null where
+ * it is not a web address at all. Resolution only: whether a canonical is
+ * usable is the answer's to say, and it is taken as answered.
+ */
 function absolute(address: string, origin: string): string | null {
   try {
     const url = new URL(address, origin);
@@ -148,6 +152,14 @@ async function holderOfPath(
     }
   );
   return (data as unknown[]).map(rowOf)[0]?.holder ?? undefined;
+}
+
+/** The site's default language, where it has languages. */
+function defaultLanguage(ctx: PluginContext): string | undefined {
+  const localization = ctx.config.localization;
+  return localization !== undefined && localization.locales.length > 0
+    ? localization.defaultLocale
+    : undefined;
 }
 
 /** A Single's published document, or null where it has none. */
@@ -235,23 +247,26 @@ async function* candidates(
 }
 
 /**
- * A page left out because the record does not give it its address: which
- * page holds the address instead, where one does.
+ * A page left out because it does not hold its own address: which page holds
+ * it instead, where one does.
  */
 async function problemOf(
   ctx: PluginContext,
-  page: ListedPage
+  holder: AddressHolder,
+  path: string
 ): Promise<ListingProblem> {
-  const heldBy = await holderOfPath(ctx, page.path);
-  const holder = { collection: page.holder.collection, id: page.holder.id };
+  const heldBy = await holderOfPath(ctx, path);
+  const page = { collection: holder.collection, id: holder.id };
   return heldBy === undefined
-    ? { kind: "not-recorded", holder, path: page.path }
-    : { kind: "held-by-another", holder, path: page.path, heldBy };
+    ? { kind: "not-recorded", holder: page, path }
+    : { kind: "held-by-another", holder: page, path, heldBy };
 }
 
 /**
  * The site's listable pages, in type order and then by id, and the pages left
- * out because the record does not give them their address.
+ * out because they do not hold their own address: one whose answer has no
+ * canonical although its type declares it an address, or one the record
+ * does not give the address it is listed at.
  */
 export async function listPages(
   ctx: PluginContext,
@@ -266,10 +281,14 @@ export async function listPages(
       batch.map(candidate => candidate.holder.id)
     );
     for (const candidate of batch) {
-      const page = await listed(ctx, candidate, options);
-      if (page === null) continue;
-      if (held.get(page.holder.id)?.has(page.path) === true) pages.push(page);
-      else problems.push(await problemOf(ctx, page));
+      const outcome = await listed(ctx, candidate, options);
+      if (outcome === null) continue;
+      const { holder, path } = "lost" in outcome ? outcome.lost : outcome.page;
+      if ("page" in outcome && held.get(holder.id)?.has(path) === true) {
+        pages.push(outcome.page);
+      } else {
+        problems.push(await problemOf(ctx, holder, path));
+      }
     }
   }
   return { pages, problems };
@@ -283,33 +302,42 @@ function ownImage(answer: SeoAnswer, origin: string): string[] {
 }
 
 /**
- * The absolute address `candidate` is listed at, where its answer lets it be:
- * indexed, with its canonical its own declared address, within the
- * protocol's length for one address. Null otherwise.
+ * Where `candidate` is listed, from its answer: at its canonical as the
+ * answer gives it, where that is its own address. A canonical typed to
+ * another page is that page's to list. Null where the page is hidden, has no
+ * declared address, or names an address past the protocol's length;
+ * `lost` where its type declares it an address but its answer has no
+ * canonical, so another page holds it.
  */
 async function listedAt(
   candidate: Candidate,
   answer: SeoAnswer,
   origin: string
-): Promise<{ loc: string; path: string } | null> {
-  if (!answer.robots.value.index || answer.canonical === undefined) return null;
+): Promise<{ loc: string; path: string } | { lost: string } | null> {
+  if (!answer.robots.value.index) return null;
   const own = await publicAddressOf(candidate.type, candidate.document);
   if (own.status !== "resolved") return null;
-  const loc = absolute(own.path, origin);
-  // A canonical elsewhere, on the site or off it, is that page's to list.
-  const canonical = absolute(answer.canonical.value, origin);
-  if (loc === null || canonical !== loc || loc.length > MAX_LOC_LENGTH) {
-    return null;
-  }
+  if (answer.canonical === undefined) return { lost: own.path };
+  const loc = absolute(answer.canonical.value, origin);
+  const elsewhere =
+    answer.canonical.from !== "address" && loc !== absolute(own.path, origin);
+  if (loc === null || elsewhere || loc.length > MAX_LOC_LENGTH) return null;
   return { loc, path: own.path };
 }
 
-/** The page `candidate` is, as it would be listed, or null where it is not. */
+/**
+ * The page `candidate` is, as it would be listed, the address it lost where
+ * it lost its own, or null where it is not listed at all.
+ */
 async function listed(
   ctx: PluginContext,
   candidate: Candidate,
   options: ListingOptions
-): Promise<ListedPage | null> {
+): Promise<
+  | { page: ListedPage }
+  | { lost: { holder: AddressHolder; path: string } }
+  | null
+> {
   const { type, document, holder } = candidate;
   const answer = await resolveSeo(
     ctx,
@@ -320,16 +348,25 @@ async function listed(
           : { kind: "entry", collection: type.slug, entry: document },
       code: {},
       derived: {},
+      // A site with languages serves each page under its language's address:
+      // the page as read, in the default language, is listed where that
+      // language serves it. Its other languages' addresses are its own.
+      ...(defaultLanguage(ctx) === undefined
+        ? {}
+        : { locale: defaultLanguage(ctx) }),
     },
     options.readRules
   );
   const at = await listedAt(candidate, answer, options.origin);
   if (at === null) return null;
+  if ("lost" in at) return { lost: { holder, path: at.lost } };
   const lastModified = toLastModified(document.updatedAt);
   return {
-    ...at,
-    holder,
-    images: ownImage(answer, options.origin),
-    ...(lastModified === undefined ? {} : { lastModified }),
+    page: {
+      ...at,
+      holder,
+      images: ownImage(answer, options.origin),
+      ...(lastModified === undefined ? {} : { lastModified }),
+    },
   };
 }
