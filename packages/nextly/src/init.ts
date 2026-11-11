@@ -336,6 +336,15 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
     if (mismatch) consoleLogger.warn(`[nextly] ${mismatch}`);
   }
 
+  // An instance kept from a start whose services were since shut down without
+  // it (`shutdownServices` alone, as a test harness tears down) is not a
+  // started Nextly: dropped, so this call starts again rather than handing out
+  // an instance with nothing registered behind it. A request now begins a
+  // start through this function, so it meets such an instance too.
+  if (globalForInit.__nextly_cachedInstance && !isServicesRegistered()) {
+    globalForInit.__nextly_cachedInstance = null;
+  }
+
   // Fast path: return already-initialised instance immediately.
   if (globalForInit.__nextly_cachedInstance) {
     // F1 PR 2: drain HMR reload flag before returning cached instance.

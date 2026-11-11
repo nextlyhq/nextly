@@ -510,10 +510,9 @@ async function initializeServicesOnce(): Promise<void> {
     if (nextlyConfig && !reregistering) {
       const { getNextly } = await import("../init");
       await getNextly(requestPathStartOptions(nextlyConfig));
-      // Registered unless `getNextly` answered from an instance it kept
-      // whose services were shut down without it (a test harness tearing
-      // down the services alone): then this pass registers them, below, as
-      // it always has.
+      // Registered once the start has run. Checked rather than assumed, so a
+      // start that answered without registering anything is met by this pass
+      // registering them, below, as it always has.
       if (isServicesRegistered()) {
         logRequestPathStart(nextlyConfig);
         return;
