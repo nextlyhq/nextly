@@ -5,7 +5,12 @@
  *
  * @module code-pages/store
  */
-import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type PageMetadataImage,
+  type PageMetadataValues,
+  type PluginContext,
+} from "@nextlyhq/plugin-sdk";
 
 import { sha256 } from "../address-record/rows";
 import { isRecord, textOf } from "../plain-values";
@@ -22,8 +27,8 @@ export interface CodePageRow {
   ogImage?: string;
   noindex: boolean;
   connected: boolean;
-  codeTitle?: string;
-  codeDescription?: string;
+  /** What the route's code supplied when it last called, as its head used it. */
+  code: PageMetadataValues;
 }
 
 /** The longest address kept; a longer one is not a page anyone links to. */
@@ -56,6 +61,50 @@ export function nameOfAddress(path: string): string {
   return words === "" ? "Home" : words[0].toUpperCase() + words.slice(1);
 }
 
+/** A stored image, every part checked. */
+function imageOf(value: unknown): PageMetadataImage | undefined {
+  if (!isRecord(value)) return undefined;
+  const url = textOf(value.url);
+  if (url === undefined) return undefined;
+  return {
+    url,
+    ...(typeof value.width === "number" ? { width: value.width } : {}),
+    ...(typeof value.height === "number" ? { height: value.height } : {}),
+    ...(textOf(value.alt) === undefined ? {} : { alt: String(value.alt) }),
+  };
+}
+
+/** Stored code values read back, each one checked rather than trusted. */
+function codeValuesOf(value: unknown): PageMetadataValues {
+  const stored = isRecord(value) ? value : {};
+  const values: PageMetadataValues = {};
+  for (const name of [
+    "title",
+    "description",
+    "socialTitle",
+    "socialDescription",
+  ] as const) {
+    const text = textOf(stored[name]);
+    if (text !== undefined) values[name] = text;
+  }
+  const image = imageOf(stored.image);
+  if (image !== undefined) values.image = image;
+  return values;
+}
+
+/** JSON with object keys sorted, so equal values are equal text. */
+function sortedJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    isRecord(inner)
+      ? Object.fromEntries(
+          Object.entries(inner).sort(([left], [right]) =>
+            left < right ? -1 : left > right ? 1 : 0
+          )
+        )
+      : inner
+  );
+}
+
 /** A row read back. */
 function codePageRowOf(entry: unknown): CodePageRow {
   const row = isRecord(entry) ? entry : {};
@@ -72,8 +121,7 @@ function codePageRowOf(entry: unknown): CodePageRow {
     ...optional("ogImage", row.ogImage),
     noindex: row.noindex === true,
     connected: row.connected === true,
-    ...optional("codeTitle", row.codeTitle),
-    ...optional("codeDescription", row.codeDescription),
+    code: codeValuesOf(row.codeValues),
   };
 }
 
@@ -183,8 +231,8 @@ async function upsert(
 /** What a route's call says about the page it serves. */
 export interface Connection {
   name?: string;
-  codeTitle?: string;
-  codeDescription?: string;
+  /** The values the route's code supplied, as the page's head reads them. */
+  code: PageMetadataValues;
 }
 
 /** Whether `row` already says what `connection` would record. */
@@ -196,8 +244,7 @@ export function recorded(
     row !== undefined &&
     row.connected &&
     row.name === connection.name &&
-    row.codeTitle === connection.codeTitle &&
-    row.codeDescription === connection.codeDescription
+    sortedJson(row.code) === sortedJson(codeValuesOf(connection.code))
   );
 }
 
@@ -216,8 +263,7 @@ export async function recordConnection(
   await upsert(ctx, path, {
     connected: true,
     name: connection.name ?? null,
-    codeTitle: connection.codeTitle ?? null,
-    codeDescription: connection.codeDescription ?? null,
+    codeValues: codeValuesOf(connection.code),
   });
 }
 

@@ -274,7 +274,13 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       const owner = await personWith(t, "owner", "all");
       await seoMetadata("/contact", { metadata: { title: "Contact us" } });
-      await seoMetadata("/integrations/webflow");
+      await seoMetadata("/integrations/webflow", {
+        metadata: {
+          openGraph: {
+            images: [{ url: "https://cdn.example/webflow.png", width: 1200 }],
+          },
+        },
+      });
 
       const { status, items } = await addressesFor(owner);
 
@@ -325,6 +331,14 @@ describe.each(getConfiguredTestDialects())(
       expect(contact?.seo?.automatic.title).toEqual({
         value: "Contact us",
         from: "code",
+      });
+      // The share image the route's code gave, as the page's head serves it.
+      expect(
+        items?.find(item => item.path === "/integrations/webflow")?.seo?.image
+      ).toEqual({
+        url: "https://cdn.example/webflow.png",
+        width: 1200,
+        own: false,
       });
       expect(items?.find(item => item.path === "/about")?.entry).toMatchObject({
         kind: "collection",

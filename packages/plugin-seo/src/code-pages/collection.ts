@@ -14,6 +14,7 @@ import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import {
   checkbox,
   defineCollection,
+  json,
   text,
   textarea,
   type CollectionConfig,
@@ -50,10 +51,10 @@ export function codePagesCollection(): CollectionConfig {
       text({ name: "ogImage", label: "Share image" }),
       checkbox({ name: "noindex", label: "Hidden from search" }),
       // Whether the route serving the address has called the metadata
-      // function, and what its code supplied when it did.
+      // function, and the values its code supplied when it did, as the
+      // page's head was answered with them.
       checkbox({ name: "connected", label: "Connected" }),
-      textarea({ name: "codeTitle", label: "Title in code" }),
-      textarea({ name: "codeDescription", label: "Description in code" }),
+      json({ name: "codeValues", label: "Values in code" }),
     ],
     access: {
       // Constants rather than bare `false`: access rules are validated as

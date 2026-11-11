@@ -38,12 +38,7 @@ export function resolveCodePage(
         entry: codePageDocument(path, row, undefined),
       },
       // What the route's code supplied when it last called, at its level.
-      code: {
-        ...(row?.codeTitle === undefined ? {} : { title: row.codeTitle }),
-        ...(row?.codeDescription === undefined
-          ? {}
-          : { description: row.codeDescription }),
-      },
+      code: row?.code ?? {},
       derived: {},
     },
     readRules

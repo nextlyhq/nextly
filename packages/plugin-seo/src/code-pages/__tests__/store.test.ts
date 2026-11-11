@@ -43,7 +43,7 @@ const ROW: CodePageRow = {
   metaTitle: "Plans and prices",
   noindex: true,
   connected: true,
-  codeTitle: "Pricing",
+  code: { title: "Pricing" },
 };
 
 describe("the page the resolver reads", () => {
@@ -67,16 +67,30 @@ describe("the page the resolver reads", () => {
 });
 
 describe("what a route's call records", () => {
-  it("is nothing where the row already says it", () => {
-    expect(recorded(ROW, { codeTitle: "Pricing" })).toBe(true);
+  it("is nothing where the row already says it, however its values are ordered", () => {
+    expect(recorded(ROW, { code: { title: "Pricing" } })).toBe(true);
+    const image = { url: "/og.png", width: 1200 };
+    expect(
+      recorded(
+        { ...ROW, code: { image, title: "Pricing" } },
+        { code: { title: "Pricing", image: { width: 1200, url: "/og.png" } } }
+      )
+    ).toBe(true);
   });
 
   it("is the call where the route's code or its name changed, or it never called", () => {
-    expect(recorded(ROW, { codeTitle: "Prices" })).toBe(false);
-    expect(recorded(ROW, { codeTitle: "Pricing", name: "Plans" })).toBe(false);
+    expect(recorded(ROW, { code: { title: "Prices" } })).toBe(false);
     expect(
-      recorded({ ...ROW, connected: false }, { codeTitle: "Pricing" })
+      recorded(ROW, {
+        code: { title: "Pricing", image: { url: "/og.png" } },
+      })
     ).toBe(false);
-    expect(recorded(undefined, {})).toBe(false);
+    expect(recorded(ROW, { name: "Plans", code: { title: "Pricing" } })).toBe(
+      false
+    );
+    expect(
+      recorded({ ...ROW, connected: false }, { code: { title: "Pricing" } })
+    ).toBe(false);
+    expect(recorded(undefined, { code: {} })).toBe(false);
   });
 });

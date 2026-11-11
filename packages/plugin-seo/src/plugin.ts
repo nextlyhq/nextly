@@ -27,8 +27,11 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { codePagesCollection } from "./code-pages/collection";
+import {
+  keepCodeRoutes,
+  withCodePageConnections,
+} from "./code-pages/connections";
 import { PAGES_PAGE, PAGES_PAGE_HREF } from "./code-pages/contract";
-import { keepCodeRoutes } from "./code-pages/metadata";
 import { codePageRoutes } from "./code-pages/route";
 import { readCodeRoutes, type CodeRoute } from "./code-pages/routes";
 import { defaultSeoFields } from "./fields";
@@ -503,9 +506,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // The SEO of each page a route renders from its own code, by address.
       codePagesCollection(),
     ],
-    // Every page's head, as worked out above.
+    // Every page's head, as worked out above, each page built in code
+    // recorded as connected as its route asks for its head.
     services: {
-      pageMetadata,
+      pageMetadata: ctx => withCodePageConnections(ctx, pageMetadata(ctx)),
       // The pages the site lists and the problems that left any out, read by
       // the same rules as the head: one reading for every listing output.
       listedPages: (ctx): ListedPagesService => ({

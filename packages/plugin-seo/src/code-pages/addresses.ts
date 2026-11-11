@@ -18,7 +18,7 @@ import {
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
 
-import { absolute, resolveIn } from "../languages/versions";
+import { absolute, onceEach, resolveIn } from "../languages/versions";
 import { candidates, type Candidate } from "../outputs/listing";
 import { isRecord, textOf } from "../plain-values";
 import type { SeoAnswer, Sourced } from "../resolver/order";
@@ -256,19 +256,18 @@ export async function siteAddresses(
     readRules?: ReadRules;
   }
 ): Promise<SiteAddress[]> {
-  const entries = await entryAddresses(ctx, options.origin, options.readRules);
+  // The site's rules are read once per language for the whole listing, as
+  // the sitemap reads them, not once a page.
+  const readRules =
+    options.readRules === undefined ? undefined : onceEach(options.readRules);
+  const entries = await entryAddresses(ctx, options.origin, readRules);
   const entryPaths = new Set(entries.map(entry => entry.path));
-  const pages = await codePages(
-    ctx,
-    options.routes,
-    options.readRules,
-    entryPaths
-  );
-  const rules = await options.readRules?.(ctx, undefined);
+  const pages = await codePages(ctx, options.routes, readRules, entryPaths);
+  const rules = await readRules?.(ctx, undefined);
   const site = { origin: options.origin, name: rules?.siteName };
   const code: SiteAddress[] = [];
   for (const page of pages) {
-    code.push(await codeAddressOf(ctx, page, site, options.readRules));
+    code.push(await codeAddressOf(ctx, page, site, readRules));
   }
   return [...entries, ...code].sort((left, right) =>
     left.path < right.path ? -1 : left.path > right.path ? 1 : 0

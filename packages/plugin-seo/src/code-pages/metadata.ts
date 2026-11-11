@@ -26,19 +26,16 @@ import {
 import type { contentPageMetadata } from "nextly/runtime";
 
 import { keptSeoContext } from "../not-found/report";
-import { isRecord, textOf } from "../plain-values";
+import { textOf } from "../plain-values";
 import { SEO_PLUGIN_NAME } from "../settings/contract";
 
 import { CODE_PAGES_CACHE_PART, codePagesSlug } from "./collection";
-import type { CodeRoute } from "./routes";
 import {
   codeAddressOf,
   codePageDocument,
+  nameOfAddress,
   readCodePage,
-  recordConnection,
-  recorded,
   type CodePageRow,
-  type Connection,
 } from "./store";
 
 /** A route's metadata, as Next.js reads it from `generateMetadata`. */
@@ -63,20 +60,6 @@ export interface SeoMetadataOptions {
   locale?: string;
 }
 
-/**
- * The code routes the running site has, as the plugin was configured to
- * read them, on `globalThis` so a route's module reaches the reader whatever
- * module the plugin started in.
- */
-const shared = globalThis as unknown as {
-  __nextly_seoCodeRoutes?: () => CodeRoute[];
-};
-
-/** Keep the started plugin's reader of the site's code routes. */
-export function keepCodeRoutes(read: () => CodeRoute[]): void {
-  shared.__nextly_seoCodeRoutes = read;
-}
-
 /** The started plugin's context, starting Nextly first where nothing has. */
 async function seoContext(): Promise<PluginContext | undefined> {
   const kept = keptSeoContext();
@@ -90,39 +73,6 @@ async function seoContext(): Promise<PluginContext | undefined> {
   return keptSeoContext();
 }
 
-/** Whether this is `next build` rendering the site's own pages. */
-const building = () => process.env.NEXT_PHASE === "phase-production-build";
-
-/**
- * Whether a call for `path` may record that its route is connected: during
- * the build, which renders only the site's own addresses, or for an address
- * the site already knows of. A request for any other address must not make
- * a row, or each made-up address a visitor asks for would add one.
- */
-function mayRecord(path: string, row: CodePageRow | undefined): boolean {
-  if (building() || row !== undefined) return true;
-  const read = shared.__nextly_seoCodeRoutes;
-  return read !== undefined && read().some(route => route.path === path);
-}
-
-/** What the route's call says about the page it serves. */
-function connectionOf(options: SeoMetadataOptions): Connection {
-  const code = options.metadata;
-  // A title as text: a plain one, or the page's own of a template.
-  const title: unknown = code?.title;
-  const text = isRecord(title)
-    ? (textOf(title.absolute) ?? textOf(title.default))
-    : textOf(title);
-  const name = textOf(options.name);
-  const codeTitle = textOf(text);
-  const codeDescription = textOf(code?.description ?? undefined);
-  return {
-    ...(name === undefined ? {} : { name }),
-    ...(codeTitle === undefined ? {} : { codeTitle }),
-    ...(codeDescription === undefined ? {} : { codeDescription }),
-  };
-}
-
 /** The row of an address, and the collection it is read from. */
 interface CodePageRead {
   collection: string;
@@ -130,21 +80,14 @@ interface CodePageRead {
 }
 
 /**
- * The row holding `address`'s SEO, the route's call recorded first where it
- * says something the row does not and may be recorded; null where the SEO
- * plugin is not running. Plain data, so the site's cache can keep it.
+ * The row holding `address`'s SEO, and the collection it is read from; null
+ * where the SEO plugin is not running. Plain data, so the site's cache can
+ * keep it.
  */
-async function readAndRecord(
-  address: string,
-  connection: Connection
-): Promise<CodePageRead | null> {
+async function readRow(address: string): Promise<CodePageRead | null> {
   const ctx = await seoContext();
   if (ctx === undefined) return null;
-  let row = await readCodePage(ctx, address);
-  if (!recorded(row, connection) && mayRecord(address, row)) {
-    await recordConnection(ctx, address, row, connection);
-    row = await readCodePage(ctx, address);
-  }
+  const row = await readCodePage(ctx, address);
   return { collection: codePagesSlug(ctx), row: row ?? null };
 }
 
@@ -171,7 +114,6 @@ export async function seoMetadata(
   }
   const own = options.metadata ?? {};
   const runtime = await import("nextly/runtime");
-  const connection = connectionOf(options);
   // The plugin's own tag, which a save on the screen expires.
   const tags = [pluginCacheTag(SEO_PLUGIN_NAME, CODE_PAGES_CACHE_PART)];
   let found: CodePageRead | null;
@@ -179,11 +121,10 @@ export async function seoMetadata(
     // Read through the site's cache, as a content route reads its entry, so
     // a page built ahead of time reads it while it is built, Nextly started
     // inside the read where nothing has started it, and is expired by a
-    // save. The route's call is recorded on a miss: with what it says in
-    // the key, a call saying something new is a miss, and one saying the
-    // same again writes nothing.
-    found = await runtime.cachedFind(() => readAndRecord(address, connection), {
-      keyParts: ["nextly-seo-code-page", address, JSON.stringify(connection)],
+    // save. Whether the route is connected is recorded as its head is
+    // answered (`code-pages/connections`).
+    found = await runtime.cachedFind(() => readRow(address), {
+      keyParts: ["nextly-seo-code-page", address],
       tags,
     });
   } catch (error) {
@@ -204,7 +145,12 @@ export async function seoMetadata(
       // next visit, a page built ahead of time included.
       tags,
     },
-    codePageDocument(address, row, textOf(options.name)),
+    // Named as the route names it now, never as a call once recorded it.
+    codePageDocument(
+      address,
+      row,
+      textOf(options.name) ?? nameOfAddress(address)
+    ),
     {
       collection: found.collection,
       slug: address.slice(1),
