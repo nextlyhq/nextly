@@ -371,14 +371,18 @@ function mysqlSteps(request: ConversionRequest): string[][] {
     ? { characterSet: "left-out" as const }
     : {};
   const to = renderedType(request.to);
+  // Each statement states how it runs while others use the table, as the report says it does:
+  // a type change copies the table and lets reads continue, a nullability change runs in place.
+  // MySQL refuses one it cannot run that way rather than run it another way.
   if (request.referenceList === true) {
     return [
-      restatedColumn(table, column, { type: "text" }),
+      restatedColumn(table, column, { type: "text", online: "copy" }),
       [mysqlReferenceListRewrite(table, column)],
       restatedColumn(table, column, {
         type: to,
         ...nullability,
         ...characterSet,
+        online: "copy",
       }),
     ];
   }
@@ -388,11 +392,12 @@ function mysqlSteps(request: ConversionRequest): string[][] {
         type: to,
         ...nullability,
         ...characterSet,
+        online: "copy",
       }),
     ];
   }
   return "nullable" in nullability
-    ? [restatedColumn(table, column, nullability)]
+    ? [restatedColumn(table, column, { ...nullability, online: "in-place" })]
     : [];
 }
 

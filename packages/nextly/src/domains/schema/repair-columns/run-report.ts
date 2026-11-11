@@ -18,12 +18,14 @@ import type { SupportedDialect } from "../services/field-column-descriptor";
 
 import { findColumnDifferences } from "./find-differences";
 import { NO_RUN_FACTS, type TableLockFacts } from "./outcome";
+import { readUnfinishedRepairs, type RecordedProgress } from "./record";
 import {
   formatRecord,
   formatSummary,
   formatTableLock,
   repairRecord,
   tableLocks,
+  type RepairRecord,
 } from "./report";
 import {
   reportDocument,
@@ -33,7 +35,15 @@ import {
   type RepairColumnsDocument,
   type SchemaLockState,
 } from "./report-json";
-import type { RepairEntity } from "./types";
+import {
+  isAt,
+  liveStateFor,
+  liveStepOf,
+  noStepReason,
+  progressFinding,
+  stepName,
+} from "./resume";
+import type { ColumnFinding, RepairEntity } from "./types";
 
 /** The warning a report made while another schema change held the lock carries. */
 function schemaLockWarning(holder: string): DocumentProblem {
@@ -130,25 +140,79 @@ export async function dryRunReport(args: {
     entities: args.entities,
   });
   const readMs = Date.now() - started;
+  const unfinished = await unfinishedRecords(args, findings);
   return reportDocument({
     nextlyVersion: args.nextlyVersion,
     mode: "dry-run",
     dialect,
     schemaLock,
-    records: findings.map(finding =>
-      repairRecord(
-        finding,
-        finding.kind === "definition-unreadable"
-          ? {
-              ...NO_RUN_FACTS,
-              lock: heldDatabaseLock(finding.location.table, readMs),
-            }
-          : NO_RUN_FACTS,
-        "dry-run"
-      )
-    ),
+    records: [
+      ...unfinished.records,
+      ...findings
+        .filter(
+          finding =>
+            !(
+              finding.kind === "differs" &&
+              unfinished.places.some(p => isAt(finding, p.table, p.column))
+            )
+        )
+        .map(finding =>
+          repairRecord(
+            finding,
+            finding.kind === "definition-unreadable"
+              ? {
+                  ...NO_RUN_FACTS,
+                  lock: heldDatabaseLock(finding.location.table, readMs),
+                }
+              : NO_RUN_FACTS,
+            "dry-run"
+          )
+        ),
+    ],
     warnings,
   });
+}
+
+/**
+ * Each conversion an earlier `--apply` run left at a recorded step, reported as interrupted with
+ * the step its record names and the step its live column has reached. Read only: a dry run
+ * finishes nothing.
+ */
+async function unfinishedRecords(
+  args: {
+    adapter: DrizzleAdapter;
+    dialect: SupportedDialect;
+    entities: readonly RepairEntity[];
+  },
+  findings: readonly ColumnFinding[]
+): Promise<{ records: RepairRecord[]; places: RecordedProgress[] }> {
+  const db = args.adapter.getDrizzle();
+  const places = await readUnfinishedRepairs(db, args.dialect);
+  const records: RepairRecord[] = [];
+  for (const progress of places) {
+    const live = liveStateFor(progress, findings);
+    const reached = await liveStepOf(db, args.dialect, progress, live);
+    records.push(
+      repairRecord(
+        progressFinding(progress, findings, args.entities, live),
+        {
+          ...NO_RUN_FACTS,
+          progress: {
+            recordedStep: stepName(progress.step, progress.steps),
+            liveStep:
+              reached === null ? null : stepName(reached, progress.steps),
+          },
+          // A column matching no step of its conversion is failed, and left to its owner.
+          failure:
+            reached === null
+              ? { reason: noStepReason(progress, live), heldStep: null }
+              : null,
+        },
+        "dry-run"
+      )
+    );
+  }
+  return { records, places };
 }
 
 /** One printed block of the text report, and whether it is a finding that needs attention. */
