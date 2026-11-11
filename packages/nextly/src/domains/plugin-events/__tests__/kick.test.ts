@@ -6,8 +6,18 @@
  *
  * @module domains/plugin-events/__tests__/kick.test
  */
+import { AsyncResource } from "node:async_hooks";
+
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  currentCallerScope,
+  currentRequestCaller,
+  currentRouteActor,
+  runWithCallerScope,
+  runWithRequestCaller,
+  runWithRouteActor,
+} from "../../../auth/caller-scope";
 import { DurableEventsKick } from "../kick";
 import { createDurableSubscribers } from "../subscribers";
 
@@ -140,5 +150,38 @@ describe("DurableEventsKick", () => {
     });
     expect(() => loaderThrows.offer()).not.toThrow();
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("runs the pass detached from the request that emitted, as the scheduled dispatch runs", async () => {
+    // Next's after() runs its callback in the context it was registered
+    // from: the emitting request's, with its caller, scope and route actor.
+    const callbacks: Array<() => void | Promise<void>> = [];
+    const loadAfter = () => (callback: () => void | Promise<void>) => {
+      callbacks.push(AsyncResource.bind(callback));
+    };
+    const seen: unknown[] = [];
+    const dispatch = vi.fn(async () => {
+      seen.push({
+        scope: currentCallerScope(),
+        caller: currentRequestCaller(),
+        actor: currentRouteActor(),
+      });
+    });
+    const kick = new DurableEventsKick({ ...base, loadAfter, dispatch });
+    runWithCallerScope({ actorType: "apiKey", permissions: [] }, () =>
+      runWithRequestCaller(
+        { userId: "u1", actor: { type: "user", id: "u1" } },
+        () =>
+          runWithRouteActor(
+            { userId: "u1", actor: { type: "apiKey", id: "key-1" } },
+            () => kick.offer()
+          )
+      )
+    );
+    await Promise.all(callbacks.map(callback => callback()));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([
+      { scope: undefined, caller: undefined, actor: undefined },
+    ]);
   });
 });

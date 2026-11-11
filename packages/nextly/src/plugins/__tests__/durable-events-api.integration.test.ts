@@ -196,9 +196,12 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(res.status, await res.clone().text()).toBe(200);
       const recorded = await rows();
-      expect(recorded.map(row => JSON.parse(row.payload)).sort()).toEqual(
-        [{ from: "job" }, { from: "route" }].sort()
-      );
+      // In no promised order: the two rows may share a timestamp.
+      expect(
+        recorded
+          .map(row => (JSON.parse(row.payload) as { from: string }).from)
+          .sort()
+      ).toEqual(["job", "route"]);
       await pass();
       await pass();
       expect(delivered).toHaveLength(4);
@@ -230,11 +233,44 @@ describe.each(getConfiguredTestDialects())(
       expect(await rows()).toEqual([]);
     });
 
-    it("a plugin's durable subscribers go when it is torn down", async () => {
-      await boot();
-      expect(getDurableSubscribers().forEvent(PAID)).toHaveLength(2);
+    it("a plugin torn down for a re-registration stops running, and is still owed what is dispatched meanwhile", async () => {
+      const { orders, adapter, pass, delivered } = await boot();
       clearPluginSubscriptions(LOYALTY);
-      expect(getDurableSubscribers().forEvent(PAID)).toEqual([]);
+      expect(getDurableSubscribers().handlerOf(`${LOYALTY}:award`)).toBe(
+        undefined
+      );
+      // Dispatched in the gap before the plugin registers again: the event
+      // is owed to both of its subscribers, not finished without them.
+      const { id } = await orders.events.emitDurable(PAID, { order: "o-10" });
+      await pass();
+      expect(delivered).toEqual([]);
+      const owed = await adapter.select<{ subscriber: string }>(
+        "nextly_plugin_event_deliveries",
+        {}
+      );
+      expect(owed.map(row => row.subscriber).sort()).toEqual([
+        `${LOYALTY}:award`,
+        `${LOYALTY}:receipt`,
+      ]);
+      const [event] = await adapter.select<{ id: string; finishedAt: unknown }>(
+        "nextly_plugin_events",
+        {}
+      );
+      expect(event?.id).toBe(id);
+      expect(event?.finishedAt ?? null).toBeNull();
+    });
+
+    it("an emit its transaction's callback did not wait for is recorded, and its commit offers the prompt dispatch", async () => {
+      const { orders, rows } = await boot();
+      const offer = vi.spyOn(getDurableEventsKick(), "offer");
+      let emitted: Promise<{ id: string }> | undefined;
+      await orders.db.transaction(async tx => {
+        // Not awaited: the transaction ends as soon as the write lands.
+        emitted = orders.events.emitDurable(PAID, { order: "o-11" }, { tx });
+      });
+      const recorded = await emitted;
+      expect((await rows()).map(row => row.id)).toEqual([recorded?.id]);
+      expect(offer).toHaveBeenCalledTimes(1);
     });
 
     it("a committed durable event offers the prompt dispatch, and one that rolled back does not", async () => {

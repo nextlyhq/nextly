@@ -8,7 +8,10 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { createDurableSubscribers } from "../subscribers";
+import {
+  createDurableSubscribers,
+  DURABLE_SUBSCRIBER_GRACE_MS,
+} from "../subscribers";
 
 const noop = () => undefined;
 
@@ -66,5 +69,40 @@ describe("durable subscribers", () => {
     expect(() =>
       subscribers.register("@acme/email", "acme-orders.paid", "receipt", noop)
     ).not.toThrow();
+  });
+
+  it("keeps a torn-down plugin's subscribers owed, without running them, until they register again or the grace ends", () => {
+    let clock = 0;
+    const subscribers = createDurableSubscribers({ now: () => clock });
+    subscribers.register("@acme/loyalty", "acme-orders.paid", "award", noop);
+    subscribers.register("@acme/email", "acme-orders.paid", "receipt", noop);
+    subscribers.register("@acme/email", "acme-orders.paid", "notice", noop);
+    const keys = () =>
+      subscribers.forEvent("acme-orders.paid").map(entry => entry.key);
+
+    // Torn down for a re-registration: an event dispatched before the plugin
+    // registers again still owes its subscribers, or it would be finished
+    // without them for good. Their handlers are gone, so nothing runs them.
+    subscribers.retireOwner("@acme/email");
+    expect(keys()).toEqual([
+      "@acme/loyalty:award",
+      "@acme/email:receipt",
+      "@acme/email:notice",
+    ]);
+    expect(subscribers.handlerOf("@acme/email:receipt")).toBeUndefined();
+
+    // Registered again under the same name: the new handler is the one.
+    const receipt = () => "receipt";
+    subscribers.register("@acme/email", "acme-orders.paid", "receipt", receipt);
+    expect(subscribers.handlerOf("@acme/email:receipt")).toBe(receipt);
+    expect(() =>
+      subscribers.register("@acme/email", "acme-orders.paid", "receipt", noop)
+    ).toThrow(NextlyError);
+
+    // One never registered again is owed no new event once the grace ends.
+    clock += DURABLE_SUBSCRIBER_GRACE_MS - 1;
+    expect(keys()).toContain("@acme/email:notice");
+    clock += 1;
+    expect(keys()).toEqual(["@acme/loyalty:award", "@acme/email:receipt"]);
   });
 });

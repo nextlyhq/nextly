@@ -7,9 +7,12 @@
  *
  * @module domains/plugin-events/__tests__/durable-events.test
  */
-import { describe, expect, it } from "vitest";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { PluginTransaction } from "../../../plugins/database/plugin-database";
+import { linkPluginTransaction } from "../../../plugins/database/plugin-transaction-link";
 import {
   createDurableEventRecorder,
   durableEventNames,
@@ -115,5 +118,50 @@ describe("recording a durable event", () => {
     );
     expect(error.code).toBe("INVALID_INPUT");
     expect(uses).toEqual([]);
+  });
+
+  it("holds the commit's effect while its write is still tracked, so a transaction that ends as the write lands still runs it", async () => {
+    // A plugin transaction whose handle closes the moment its last tracked
+    // statement settles, as one does when its callback returned without
+    // awaiting the emit: nothing may be asked of it after that.
+    let open = true;
+    const held: Array<() => unknown> = [];
+    const handle = {} as PluginTransaction;
+    const tx = { insert: async () => undefined } as unknown as TransactionContext;
+    linkPluginTransaction(
+      handle,
+      tx,
+      {
+        assertOpen: () => {
+          if (!open) throw new Error("plugin-transaction-finished");
+        },
+        track: <R>(work: PromiseLike<R>) =>
+          Promise.resolve(work).finally(() => {
+            open = false;
+          }),
+        started: () => 0,
+        quiet: () => true,
+        quiesce: async () => {},
+        fail: () => {},
+      },
+      effect => held.push(effect)
+    );
+    const offer = vi.fn();
+    const events = createDurableEventRecorder({
+      owner: OWNER,
+      durable: durableEventNames([{ name: "test-orders.paid", durable: true }]),
+      adapter: () => {
+        throw new Error("not used: the event is written on the handle");
+      },
+      kick: () => ({ offer }),
+    });
+
+    await expect(
+      events.record("test-orders.paid", { order: "o-1" }, { tx: handle })
+    ).resolves.toMatchObject({ id: expect.any(String) });
+    expect(held).toHaveLength(1);
+    expect(offer).not.toHaveBeenCalled();
+    held[0]?.();
+    expect(offer).toHaveBeenCalledTimes(1);
   });
 });
