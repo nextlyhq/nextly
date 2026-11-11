@@ -333,7 +333,7 @@ async function holdKeyWrite(
   if (keyVersionOf(key) !== (settings.oneResponseVersion ?? 0)) {
     throw changedRefusal(formId);
   }
-  // An edit that gives the submission another answer or address: while
+  // An edit that gives the submission another answer, address or form: while
   // earlier submissions are still without keys for this version, the index
   // cannot see theirs, so their answers are compared as a new submission's
   // are. A key change with the same value is not compared: the plugin's own
@@ -360,14 +360,22 @@ function changedKeyOf(
   return formId === undefined ? undefined : { key, formId };
 }
 
-/** Whether an update left a submission's answers and address as they were. */
+/**
+ * Whether an update left a submission's answers, address and form as they
+ * were. A submission moved to another form joins that form's responses, so a
+ * move is compared as an edit is.
+ */
 function sameValue(write: InTransactionContext): boolean {
   const after = write.data as Record<string, unknown> | undefined;
   const before = write.originalData as Record<string, unknown> | undefined;
   const same = (field: string) =>
     JSON.stringify(after?.[field] ?? null) ===
     JSON.stringify(before?.[field] ?? null);
-  return same("data") && same("ipAddress");
+  return (
+    same("data") &&
+    same("ipAddress") &&
+    formIdOf(after?.form) === formIdOf(before?.form)
+  );
 }
 
 /** Hold every form's closing on the submissions this plugin stores. */

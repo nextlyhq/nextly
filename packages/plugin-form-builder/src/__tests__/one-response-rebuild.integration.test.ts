@@ -329,6 +329,55 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("refuses a move onto a form whose earlier answer is not keyed yet", async () => {
+      const { nextly, submit, saveSettings, rows, gate, sweep, formId } =
+        await boot({ oneResponse: "off" });
+      expect((await submit({ email: "ada@example.com" })).success).toBe(true);
+      // Another form, taking several responses, with the same address.
+      const other = await nextly.create({
+        collection: "forms",
+        data: {
+          name: "Other",
+          slug: "other",
+          status: "published",
+          fields: FIELDS,
+          settings: { oneResponse: "off" },
+        },
+      });
+      const moved = await nextly.create({
+        collection: "form-submissions",
+        data: { form: other.item.id, data: { email: "ADA@example.com" } },
+      });
+
+      gate.hold();
+      const saving = saveSettings({
+        oneResponse: "email",
+        oneResponseField: "email",
+      });
+      // Held at its first write: ada's submission has no key yet.
+      await gate.reached();
+      await expect(
+        nextly.update({
+          collection: "form-submissions",
+          id: String(moved.item.id),
+          data: { form: formId, _overwrite: true },
+        })
+      ).rejects.toThrow();
+      gate.open();
+      await saving;
+      await sweep();
+      // `form` reads as the id or as the populated form.
+      const formOf = (row: unknown) => {
+        const form = (row as { form?: unknown }).form;
+        return typeof form === "object" && form !== null
+          ? String((form as { id?: unknown }).id)
+          : String(form);
+      };
+      const meetup = (await rows()).filter(row => formOf(row) === formId);
+      expect(meetup).toHaveLength(1);
+      expect(meetup[0]?.responseKey).toMatch(/^v1:/);
+    });
+
     it("keeps the form's other settings when it records the keys made", async () => {
       const { submit, saveSettings, form } = await boot({
         oneResponse: "off",
