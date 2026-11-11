@@ -19,6 +19,12 @@ import { Pagination } from "../index";
 
 afterEach(cleanup);
 
+/** The page-number button showing `label`, found by what it shows. */
+const numberedButton = (label: string) =>
+  screen
+    .queryAllByRole("button")
+    .find(button => button.textContent?.trim() === label);
+
 /** Page 41 of a list of more than 1,000 entries, 25 to a page. */
 const capped = {
   currentPage: 40,
@@ -61,13 +67,28 @@ describe("a pager whose total is capped", () => {
     expect(next.hasAttribute("disabled")).toBe(false);
     const last = screen.getAllByRole("button", { name: /last/i });
     expect(last.every(button => button.hasAttribute("disabled"))).toBe(true);
-    // No numbered button for a last page nobody counted.
-    expect(screen.queryByRole("button", { name: "42" })).toBeNull();
     expect(screen.queryByText(/of 42/)).toBeNull();
 
     // End does nothing either.
     fireEvent.keyDown(next, { key: "End" });
     expect(onPageChange).not.toHaveBeenCalled();
+  });
+
+  it("draws no numbered button for a last page nobody counted", () => {
+    // Page 11 of at least 42: the window (pages 9 to 13) stops well short of
+    // the last page, which an exact total would draw as its own button.
+    render(<Pagination {...capped} currentPage={10} totalCapped />);
+
+    expect(numberedButton("42")).toBeUndefined();
+    // The window itself is still drawn.
+    expect(numberedButton("11")).toBeDefined();
+  });
+
+  it("draws that numbered button when the total is exact", () => {
+    // The control: the same query finds the last page's button.
+    render(<Pagination {...capped} currentPage={10} totalItems={1050} />);
+
+    expect(numberedButton("42")).toBeDefined();
   });
 
   it("still offers the last page when the total is exact", () => {
