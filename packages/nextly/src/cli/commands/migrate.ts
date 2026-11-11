@@ -120,6 +120,10 @@ import {
   registryDisagreementLines,
 } from "../../domains/schema/migrate/registry-consistency";
 import {
+  refuseRenamesOntoTakenTargets,
+  renamesOntoTakenTargets,
+} from "../../domains/schema/migrate/rename-preflight";
+import {
   previewRequiredColumns,
   refuseRequiredColumnsOverNulls,
 } from "../../domains/schema/migrate/required-column-guard";
@@ -1022,6 +1026,14 @@ export async function previewMigrate(args: {
     logger,
     pendingModules.length > 0
   );
+  // The renames a real run would refuse before any statement, from the same check.
+  for (const { file, message } of await renamesOntoTakenTargets(
+    pendingFiles.map(file => fileUnit(file, dialect)),
+    db,
+    dialect
+  )) {
+    logger.info(`  ✖ a real run would refuse ${file}: ${message}`);
+  }
   await previewOldBuilderFiles({ ...args, logger });
   if (hasLedger) await previewChangedFiles(rows, args, logger);
   await previewAppHistory(args, logger);
@@ -2292,6 +2304,13 @@ async function judgeFileDeletions(
   const fileUnits = listed.flatMap(({ file }) =>
     plan.runs.has(file) ? [fileUnit(file, deps.dialect)] : []
   );
+  // A file renaming a column or a table onto one already there is refused here, before any
+  // statement and before anyone is asked to consent to the run: on MySQL, which commits each
+  // schema statement as it runs, the database's own refusal would stop the file part-way. Asked
+  // with this judgement both times, so again under the lock against the database as it stands.
+  // A rename after another change to the same table in the run is left to the runner's failure
+  // (`renamesOntoTakenTargets`).
+  await refuseRenamesOntoTakenTargets(fileUnits, deps.db, deps.dialect);
   const units = [...(await moduleUnits(deps)), ...fileUnits];
   for (const { unit, deletions } of await pendingRunDeletions(
     units,
