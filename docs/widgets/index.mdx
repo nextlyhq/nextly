@@ -93,7 +93,8 @@ tallest of them; nothing inside a card is cut off or scrolls. `h` no longer sets
 it is kept in the declaration and in saved layouts, and `rowsThatFit` still reads it for how many
 list rows a load asks for (below). Columns follow the dashboard's own width rather than the
 window's: from 640 to 1,023 pixels a card of 6 columns or fewer is drawn at 6 and a wider one at
-12, and below 640 pixels every card is drawn at the full width. A reader can arrange the
+12, and below 640 pixels a card of 3 columns (25%) or fewer is drawn at half the width, so two
+share a row, and every other card at the full width. A reader can arrange the
 dashboard at every width.
 Where it shows more than one column, a card is dragged by its handle, with the pointer or the
 keyboard, and a line shows where it will land; below 640 pixels, where every card is full width,

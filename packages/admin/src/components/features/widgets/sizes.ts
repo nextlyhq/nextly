@@ -17,7 +17,7 @@
  * |----------------|---------------------------------------|
  * | >= 1,024 px    | `w`                                   |
  * | 640-1,023 px   | 6 for a `w` of 6 or less, else 12     |
- * | < 640 px       | 12: one column, in the saved order    |
+ * | < 640 px       | 6 for a `w` of 3 or less, else 12     |
  *
  * A widget's minimum `w` holds on the twelve-column band only; in the narrower
  * bands a card takes the width the band gives it, and its body adapts through
@@ -91,9 +91,9 @@ export const GRID_COLUMNS_CLASS =
  * answer at every band edge.
  */
 export const SPAN_CLASSES: Readonly<Record<number, string>> = Object.freeze({
-  1: "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-1",
-  2: "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-2",
-  3: "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-3",
+  1: "col-span-6 @min-[1024px]/dashboard:col-span-1",
+  2: "col-span-6 @min-[1024px]/dashboard:col-span-2",
+  3: "col-span-6 @min-[1024px]/dashboard:col-span-3",
   4: "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-4",
   5: "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-5",
   6: "col-span-12 @min-[640px]/dashboard:col-span-6",

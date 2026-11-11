@@ -145,7 +145,8 @@ const CASES: Array<[number, number, string]> = [
   [900, 6, "medium"],
   [900, 8, "large"],
   [900, 12, "large"],
-  [358, 3, "medium"],
+  // A quarter card pairs with another at half the row below 640 px, about 171 px wide.
+  [358, 3, "small"],
   [358, 6, "medium"],
   [358, 12, "medium"],
 ];
