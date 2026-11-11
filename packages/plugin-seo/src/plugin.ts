@@ -42,13 +42,19 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
+import {
+  CHECK_SEO_PERMISSION,
+  holdsPageSeo,
+  MANAGE_SEO_PERMISSION,
+  seoPermissionDeclarations,
+} from "./permissions";
 import { PROBLEMS_PAGE, PROBLEMS_PAGE_HREF } from "./problems/contract";
 import { watchSaves } from "./problems/hooks";
 import { problemRoutes } from "./problems/route";
 import { problemsCollection } from "./problems/store";
 import { RECEIVED_PAGE, RECEIVED_PAGE_HREF } from "./received/contract";
 import { receivedRoutes } from "./received/route";
-import { REDIRECTS_SLUG, redirectsCollection } from "./redirects/collection";
+import { redirectsCollection } from "./redirects/collection";
 import { REDIRECTS_PAGE } from "./redirects/contract";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
 import { redirectRoutes } from "./redirects/routes";
@@ -58,7 +64,6 @@ import {
   settingsDocumentRoute,
 } from "./settings/content-types-route";
 import {
-  SEO_SETTINGS_SLUG,
   SETTINGS_PAGE,
   SEO_ADMIN_SLUG,
   SETTINGS_PAGE_HREF,
@@ -227,6 +232,19 @@ export interface SeoPluginOptions {
    * needs its full address.
    */
   socialCard?: SocialCardOptions;
+  /**
+   * @experimental Give a page's SEO a permission of its own, one per content
+   * type SEO is added to: `edit-seo-<slug>`, such as `edit-seo-posts`. A
+   * role that may update a type's pages changes their SEO only while it also
+   * holds that type's permission; without it the rest of each page is saved
+   * and its SEO stays as it was, and the SEO tab shows it read-only.
+   *
+   * Off by default: whoever may edit a page changes its SEO, as before. The
+   * built-in Editor and Author roles never hold a plugin's permissions, so a
+   * site that turns this on gives the people who should change SEO a role
+   * of its own that holds it. Admin and Super Admin hold every one.
+   */
+  pagePermissions?: boolean;
 }
 
 /**
@@ -390,6 +408,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Always nest the fields (default or custom) under a single `seo` group so
   // every project exposes SEO consistently at `entry.seo.*`.
   const seoFields = options.fields ?? defaultSeoFields();
+  const pagePermissions = options.pagePermissions === true;
   const seoGroup = group({
     name: "seo",
     label: "SEO",
@@ -398,6 +417,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // has its own title, description and canonical; on a type that is not
     // translated, one value as before.
     localized: true,
+    // Where a page's SEO has its own permission, a write of it by anyone
+    // without that permission for the page's type keeps the stored SEO, and
+    // the rest of the page is saved. Reading it is the page's own read.
+    ...(pagePermissions
+      ? { access: { create: holdsPageSeo, update: holdsPageSeo } }
+      : {}),
   });
 
   // Dedupe once: a repeated slug would make the schema-extend fold add `seo`
@@ -428,6 +453,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     readRules,
     readStructuredDataRules,
     readSocialCardRules,
+    pagePermissions,
   });
 
   // Every page's head, worked out by the one order of who wins, with its
@@ -469,6 +495,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: [...targets, ...singleTargets], fields: [seoGroup] }],
+    // Site-wide SEO, the check of what search engines received, and, where
+    // the site asks for it, each content type's page SEO.
+    permissions: seoPermissionDeclarations({
+      types: [...targets, ...singleTargets],
+      pagePermissions,
+    }),
     // The record that keeps each public address to one page, the redirects
     // whose From addresses it holds, the log of addresses not found, and
     // what the problem list's checks found.
@@ -518,32 +550,38 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // Shown to everyone in the admin: the list answers each person with
         // the pages of the types they may read, and says so where none.
         { label: "Problems", to: PROBLEMS_PAGE_HREF, icon: "AlertTriangle" },
+        // The site-wide screens, gated on the plugin's own permissions,
+        // whose names no host renames. The settings also need the Single's
+        // own read, which an entry can't ask beside this one: someone
+        // holding `manage-seo` without it opens the screen and is refused
+        // its contents by the routes.
         {
           label: "Redirects",
           to: REDIRECTS_PAGE_HREF,
           icon: "Route",
-          requiredPermission: `read-${REDIRECTS_SLUG}`,
+          requiredPermission: MANAGE_SEO_PERMISSION,
         },
-        // Shown to everyone in the admin: the check fetches only the site's
-        // own public pages, and compares only those whose type the person
-        // may read.
+        // The check has the server fetch the site's own pages, so it is
+        // its own permission, and compares only the pages whose type the
+        // person may read.
         {
           label: "What search engines received",
           to: RECEIVED_PAGE_HREF,
           icon: "Eye",
+          requiredPermission: CHECK_SEO_PERMISSION,
         },
         {
           label: "Settings",
           to: SETTINGS_PAGE_HREF,
           icon: "Settings",
-          requiredPermission: `read-${SEO_SETTINGS_SLUG}`,
+          requiredPermission: MANAGE_SEO_PERMISSION,
         },
       ],
       pages: [
         PROBLEMS_PAGE,
-        { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
-        { ...REDIRECTS_PAGE, requiredPermission: `read-${REDIRECTS_SLUG}` },
-        RECEIVED_PAGE,
+        { ...SETTINGS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        { ...REDIRECTS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        { ...RECEIVED_PAGE, requiredPermission: CHECK_SEO_PERMISSION },
       ],
     },
   };
