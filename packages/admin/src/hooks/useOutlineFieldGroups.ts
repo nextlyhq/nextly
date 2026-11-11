@@ -2,9 +2,10 @@
 
 /**
  * The field groups a Builder outline shows beneath the fields that use them,
- * read in one request: every field group's definition at once, whatever
- * fields name them and however deep, rather than one request per field group
- * and another round for each field group a loaded one uses.
+ * read as one list: every field group's definition, whatever fields name them
+ * and however deep, rather than one request per field group and another round
+ * for each field group a loaded one uses. The list is read to its last page,
+ * so a field group past the first page is not taken for a missing one.
  *
  * Under the field-group list's own key, so creating, saving or deleting a
  * field group, which refreshes that list, refreshes the outline too.
@@ -17,8 +18,26 @@ import type {
   LoadedFieldGroup,
 } from "@admin/lib/builder/outline/outline-model";
 import { fieldGroupApi } from "@admin/services/fieldGroupApi";
+import type { ApiFieldGroup } from "@admin/types/entities";
 
 import { fieldGroupKeys } from "./queries/useFieldGroups";
+
+/** Field groups asked for per request: one request on most sites. */
+const PAGE_SIZE = 100;
+
+/** Every field group, page by page until the list says there is no more. */
+async function readEveryFieldGroup(): Promise<ApiFieldGroup[]> {
+  const every: ApiFieldGroup[] = [];
+  for (let page = 0; ; page += 1) {
+    const { items, meta } = await fieldGroupApi.fetchComponents({
+      pagination: { page, pageSize: PAGE_SIZE },
+    });
+    every.push(...items);
+    // An empty page ends it too, so a list that misreports its pages
+    // cannot keep the outline asking.
+    if (!meta.hasNext || items.length === 0) return every;
+  }
+}
 
 export function useOutlineFieldGroups(): {
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
@@ -26,7 +45,7 @@ export function useOutlineFieldGroups(): {
 } {
   const query = useQuery({
     queryKey: [...fieldGroupKeys.lists(), "every-definition"],
-    queryFn: () => fieldGroupApi.list(),
+    queryFn: readEveryFieldGroup,
   });
   const fieldGroups = useMemo(() => {
     const map = new Map<string, LoadedFieldGroup>();

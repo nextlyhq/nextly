@@ -5,10 +5,37 @@
 // them, and the live region speaks only while a save is in flight.
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 import { convertToFieldDefinition } from "@admin/lib/builder";
+import {
+  buildOutline,
+  flattenOutline,
+} from "@admin/lib/builder/outline/outline-model";
+import type { FieldDefinition } from "@admin/types/collection";
+
+// Where an exit would take the page, watched rather than followed.
+const navigateTo = vi.hoisted(() => vi.fn());
+vi.mock("@admin/lib/navigation", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/lib/navigation")>()),
+  navigateTo,
+}));
+
+// The field groups the outline reads: one, "seo", with one field.
+const seoFields = [
+  { name: "meta_title", label: "Meta title", type: "text" },
+] as FieldDefinition[];
+vi.mock("@admin/services/fieldGroupApi", () => ({
+  fieldGroupApi: {
+    fetchComponents: vi.fn(() =>
+      Promise.resolve({
+        items: [{ slug: "seo", label: "SEO", fields: seoFields }],
+        meta: { hasNext: false },
+      })
+    ),
+  },
+}));
 
 import { BuilderPageLayout } from "../BuilderPageLayout";
 import type { BuilderConfig } from "../builder-config";
@@ -258,5 +285,81 @@ describe("BuilderPageLayout", () => {
     expect(hidden).toMatchObject({ id: "u1", admin: { hidden: true } });
     // Kept by what a save sends.
     expect(convertToFieldDefinition(hidden).admin?.hidden).toBe(true);
+  });
+
+  describe("opening a field group, which leaves the page", () => {
+    const seo: BuilderField = {
+      id: "u2",
+      name: "seo",
+      label: "SEO",
+      type: "component",
+      component: "seo",
+      validation: {},
+      admin: { width: "100%" },
+    } as BuilderField;
+    const withSeo = (unsavedCount: number) =>
+      renderLayout({
+        builder: { ...makeBuilder(), fields: [...fields, seo] },
+        unsavedCount,
+      });
+    const openFromMenu = async () => {
+      const user = userEvent.setup();
+      screen.getByTestId("field-row-seo").focus();
+      await user.keyboard("{Shift>}{F10}{/Shift}");
+      await user.click(
+        await screen.findByRole("menuitem", { name: /Open the field group/ })
+      );
+    };
+
+    beforeEach(() => navigateTo.mockClear());
+    afterEach(() => vi.restoreAllMocks());
+
+    it("asks first while there are unsaved changes, and stays when declined", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      withSeo(2);
+      await openFromMenu();
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(confirm.mock.calls[0][0]).toContain("unsaved changes");
+      expect(navigateTo).not.toHaveBeenCalled();
+    });
+
+    it("leaves once the editor agrees", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      withSeo(2);
+      await openFromMenu();
+      expect(navigateTo).toHaveBeenCalledTimes(1);
+      expect(navigateTo.mock.calls[0][0]).toContain("seo");
+    });
+
+    it("leaves without asking when nothing is unsaved", async () => {
+      const confirm = vi.spyOn(window, "confirm");
+      withSeo(0);
+      await openFromMenu();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(navigateTo).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks first from the settings panel too", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      // The id the outline gives the field group's own field.
+      const metaTitle = flattenOutline(
+        buildOutline([...fields, seo], {
+          entityReadOnly: false,
+          fieldGroups: new Map([
+            ["seo", { slug: "seo", label: "SEO", fields: seoFields }],
+          ]),
+        })
+      ).find(node => node.path === "seo/meta_title");
+      renderLayout({
+        builder: { ...makeBuilder(), fields: [...fields, seo] },
+        unsavedCount: 1,
+        active: { kind: "edit", fieldId: metaTitle?.id ?? "" },
+      });
+      await userEvent.click(
+        await screen.findByRole("button", { name: /Open the field group/ })
+      );
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(navigateTo).not.toHaveBeenCalled();
+    });
   });
 });

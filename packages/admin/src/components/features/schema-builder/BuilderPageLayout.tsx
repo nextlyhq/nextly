@@ -40,6 +40,7 @@ import { BuilderOverlays, type ActiveOverlay } from "./BuilderOverlays";
 import { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
 import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 import { BuilderToolbar } from "./BuilderToolbar";
+import { mayLeaveBuilder } from "./leave-builder";
 import { FormPreview } from "./outline/FormPreview";
 import { Outline, type OutlineCallbacks } from "./outline/Outline";
 import { useBuilderOutline } from "./outline/useBuilderOutline";
@@ -152,6 +153,7 @@ function BuilderWorkspace(
     | "onRowDragEnd"
     | "savedFieldIds"
     | "settings"
+    | "unsavedCount"
   >
 ): JSX.Element {
   const { outline, fieldGroups, fieldGroupsLoad } = useBuilderOutline(
@@ -159,6 +161,12 @@ function BuilderWorkspace(
     props.locked,
     props.settings.i18n === true
   );
+  // Leaves for a field group's own editor, where its fields are changed:
+  // asked first while there are unsaved changes, which leaving discards.
+  const openFieldGroup = (slug: string) => {
+    if (!mayLeaveBuilder(props.unsavedCount, props.config.kind)) return;
+    navigateTo(buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, { slug }));
+  };
   return (
     <div className="flex flex-1 items-start">
       <FieldListRegion
@@ -166,8 +174,13 @@ function BuilderWorkspace(
         outline={outline}
         fieldGroups={fieldGroups}
         fieldGroupsLoad={fieldGroupsLoad}
+        openFieldGroup={openFieldGroup}
       />
-      <EditedFieldSettings {...props} outline={outline} />
+      <EditedFieldSettings
+        {...props}
+        outline={outline}
+        openFieldGroup={openFieldGroup}
+      />
     </div>
   );
 }
@@ -188,6 +201,7 @@ function EditedFieldSettings({
   outline,
   savedFieldIds,
   locked,
+  openFieldGroup,
 }: Pick<
   Props,
   | "active"
@@ -196,7 +210,10 @@ function EditedFieldSettings({
   | "builder"
   | "savedFieldIds"
   | "locked"
-> & { outline: readonly OutlineNode[] }): JSX.Element | null {
+> & {
+  outline: readonly OutlineNode[];
+  openFieldGroup: (slug: string) => void;
+}): JSX.Element | null {
   // Asked here, where the page keeps it from its first render, so the panel
   // a field opens in is docked from its first frame on a wide screen.
   const docked = useMediaQuery(DOCKED_PANEL_QUERY);
@@ -236,11 +253,6 @@ function EditedFieldSettings({
   );
 }
 
-/** A field group's own editor, where its fields are changed. */
-function openFieldGroup(slug: string): void {
-  navigateTo(buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, { slug }));
-}
-
 /**
  * The field list and what sits above it: the read-only notice a code-first
  * entity gets, the page's own region, and the drag context around the list.
@@ -259,6 +271,7 @@ function FieldListRegion({
   onActiveChange,
   onDuplicateField,
   onRowDragEnd,
+  openFieldGroup,
 }: Pick<
   Props,
   | "config"
@@ -275,6 +288,7 @@ function FieldListRegion({
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
   fieldGroupsLoad: FieldGroupsLoad;
+  openFieldGroup: (slug: string) => void;
 }): JSX.Element {
   const selectedId = active.kind === "edit" ? active.fieldId : null;
   // The same map the save's refusal is read from, so a row marked with an
