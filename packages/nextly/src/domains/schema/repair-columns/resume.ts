@@ -13,6 +13,7 @@
 import { sql } from "drizzle-orm";
 
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
+import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import type { SupportedDialect } from "../services/field-column-descriptor";
 import { parseColumnType } from "../value-conversion/column-type";
 
@@ -112,21 +113,46 @@ export function isAt(
 }
 
 /**
- * The live column at an unfinished repair's place, from this run's findings: the live state of its
- * difference, the state its field names where it no longer differs, or null where it does not
- * exist.
+ * The live column at an unfinished repair's place, read from the database itself, or null where it
+ * does not exist. Never inferred from what the run's findings say of the place: a column no entity
+ * names any more, or one whose field now carries a pending change, still holds whatever step its
+ * conversion reached.
  */
-export function liveStateFor(
-  progress: RecordedProgress,
-  findings: readonly ColumnFinding[]
-): ColumnState | null {
-  const here = findings.filter(f => isAt(f, progress.table, progress.column));
-  const differs = here.find((f): f is DiffersFinding => f.kind === "differs");
-  if (differs !== undefined) return differs.live;
-  if (here.some(f => f.kind === "not-migrated")) return null;
-  // No difference from its field: the column is what the field names, which is where the
-  // conversion was going.
-  return progress.to;
+export async function readLiveState(
+  db: unknown,
+  dialect: SupportedDialect,
+  progress: RecordedProgress
+): Promise<ColumnState | null> {
+  const snapshot = await introspectLiveColumns(db, dialect, [progress.table]);
+  const found = snapshot.tables
+    .find(t => t.name.toLowerCase() === progress.table.toLowerCase())
+    ?.columns.find(c => c.name.toLowerCase() === progress.column.toLowerCase());
+  if (found === undefined) return null;
+  return {
+    type: found.type,
+    nullable: found.nullable,
+    ...(found.typeModifier !== undefined
+      ? { typeModifier: found.typeModifier }
+      : {}),
+  };
+}
+
+/**
+ * The findings a run reports on their own: every one except the difference of a column with
+ * unfinished progress, which is reported once, on its progress, ahead of the rest. The dry run and
+ * the apply list the same columns this way.
+ */
+export function notResumed(
+  findings: readonly ColumnFinding[],
+  unfinished: readonly RecordedProgress[]
+): ColumnFinding[] {
+  return findings.filter(
+    finding =>
+      !(
+        finding.kind === "differs" &&
+        unfinished.some(p => isAt(finding, p.table, p.column))
+      )
+  );
 }
 
 /**

@@ -53,10 +53,11 @@ import { repairRecord, type RepairRecord } from "./report";
 import { reportDocument, type RepairColumnsDocument } from "./report-json";
 import {
   isAt,
-  liveStateFor,
   liveStepOf,
   noStepReason,
+  notResumed,
   progressFinding,
+  readLiveState,
   stepName,
 } from "./resume";
 import type { ColumnFinding, DiffersFinding, RepairEntity } from "./types";
@@ -223,16 +224,14 @@ class ApplyRun {
     const records: RepairRecord[] = [];
     // Each unfinished conversion first, before any other column converts.
     for (const progress of unfinished) {
-      const done = await this.resume(progress, findings);
+      const done = await this.resumeGuarded(progress, findings);
       records.push(repairRecord(done.finding, done.facts, "apply"));
     }
-    for (const finding of findings) {
-      const resumed =
-        finding.kind === "differs" &&
-        unfinished.some(p => isAt(finding, p.table, p.column));
-      if (resumed) continue;
+    for (const finding of notResumed(findings, unfinished)) {
       const done = await this.columnOutcome(finding);
-      records.push(repairRecord(done.finding, done.facts, "apply"));
+      if (done !== null) {
+        records.push(repairRecord(done.finding, done.facts, "apply"));
+      }
     }
     return reportDocument({
       nextlyVersion: this.args.nextlyVersion,
@@ -245,8 +244,13 @@ class ApplyRun {
     });
   }
 
-  /** One column of this run: converted where it is safe, otherwise reported as it is. */
-  private async columnOutcome(finding: ColumnFinding): Promise<Converted> {
+  /**
+   * One column of this run: converted where it is safe, otherwise reported as it is. Null where the
+   * column no longer differs by the time its turn comes.
+   */
+  private async columnOutcome(
+    finding: ColumnFinding
+  ): Promise<Converted | null> {
     if (!convertible(finding)) return { finding, facts: NO_RUN_FACTS };
     if (this.databaseHeld) {
       return {
@@ -255,10 +259,17 @@ class ApplyRun {
       };
     }
     try {
+      // Planned again from the table as the conversions before it in this run left it: a plan
+      // read at the start could restate a table another column's conversion has since changed,
+      // and on SQLite rebuild it as it first stood.
+      const fresh = await this.refreshed(finding);
+      if (fresh === null) return null;
+      if (!convertible(fresh)) return { finding: fresh, facts: NO_RUN_FACTS };
+      // Made only once a column is still safe to convert.
       await this.ensureRepairsTable();
       return this.dialect === "mysql"
-        ? await this.convertInSteps(finding)
-        : await this.convertInTransaction(finding);
+        ? await this.convertInSteps(fresh)
+        : await this.convertInTransaction(fresh);
     } catch (error) {
       // Anything that stops the column before its first step, such as its progress record
       // being refused, fails that column alone, which is exactly as it was.
@@ -270,6 +281,32 @@ class ApplyRun {
         },
       };
     }
+  }
+
+  /**
+   * The column's difference read again, under the lock, from the live table: its state, its plan
+   * and its class. Null where it no longer differs.
+   */
+  private async refreshed(
+    finding: DiffersFinding
+  ): Promise<ColumnFinding | null> {
+    const { kind, slug } = finding.location;
+    const entity = this.args.entities.find(
+      e => e.kind === kind && e.slug === slug
+    );
+    if (entity === undefined) return finding;
+    const now = await findColumnDifferences({
+      db: this.db,
+      dialect: this.dialect,
+      entities: [entity],
+    });
+    return (
+      now.find(
+        f =>
+          f.kind === "differs" &&
+          isAt(f, finding.location.table, finding.location.column)
+      ) ?? null
+    );
   }
 
   private async ensureRepairsTable(): Promise<void> {
@@ -382,11 +419,17 @@ class ApplyRun {
     await this.adapter.executeQuery(
       `PRAGMA busy_timeout = ${String(this.tryMs)}`
     );
-    return async () => {
-      await this.adapter.executeQuery(
-        `PRAGMA busy_timeout = ${String(Number.isFinite(previous) ? previous : 0)}`
-      );
-    };
+    // Putting the wait back is best effort: the conversion has already committed or rolled back,
+    // and a failure here must not turn its outcome into another.
+    return () =>
+      this.adapter
+        .executeQuery(
+          `PRAGMA busy_timeout = ${String(Number.isFinite(previous) ? previous : 0)}`
+        )
+        .then(
+          () => undefined,
+          () => undefined
+        );
   }
 
   /**
@@ -419,9 +462,13 @@ class ApplyRun {
     try {
       await this.adapter.withSession(
         async session => {
-          // One bounded try for the table's metadata lock, for every statement of this session.
+          // One bounded try for the table, for every statement of this session: the metadata
+          // lock a schema statement waits for, and the row locks the list conversion's rewrite
+          // waits for.
+          const seconds = String(Math.max(1, Math.ceil(this.tryMs / 1000)));
+          await session.execute(`SET SESSION lock_wait_timeout = ${seconds}`);
           await session.execute(
-            `SET SESSION lock_wait_timeout = ${String(Math.max(1, Math.ceil(this.tryMs / 1000)))}`
+            `SET SESSION innodb_lock_wait_timeout = ${seconds}`
           );
           for (let index = from; index < total; index++) {
             await this.step(finding, index);
@@ -497,6 +544,31 @@ class ApplyRun {
   }
 
   /**
+   * `resume`, with anything that stops it failing that column alone: the run goes on with the
+   * others and still reports, and the column and its record are left as they are.
+   */
+  private async resumeGuarded(
+    progress: RecordedProgress,
+    findings: readonly ColumnFinding[]
+  ): Promise<Converted> {
+    try {
+      return await this.resume(progress, findings);
+    } catch (error) {
+      return {
+        finding: progressFinding(progress, findings, this.args.entities, null),
+        facts: {
+          ...NO_RUN_FACTS,
+          progress: {
+            recordedStep: stepName(progress.step, progress.steps),
+            liveStep: null,
+          },
+          failure: { reason: reasonOf(error), heldStep: null },
+        },
+      };
+    }
+  }
+
+  /**
    * Finish a conversion an earlier run left at a recorded step, from the step its live column has
    * reached.
    */
@@ -504,7 +576,7 @@ class ApplyRun {
     progress: RecordedProgress,
     findings: readonly ColumnFinding[]
   ): Promise<Converted> {
-    const live = liveStateFor(progress, findings);
+    const live = await readLiveState(this.db, this.dialect, progress);
     const finding = progressFinding(
       progress,
       findings,

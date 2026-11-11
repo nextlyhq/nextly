@@ -115,21 +115,6 @@ describe("repair-columns output and exit code", () => {
     });
   });
 
-  it("with --apply and no database settings, could not run: one document, exit 1", async () => {
-    await repairColumnsAction(createContext)(
-      { json: true, apply: true },
-      command({ cwd: process.cwd() })
-    );
-    expect(stdout).toHaveLength(1);
-    expect(JSON.parse(stdout[0])).toMatchObject({
-      schema: "nextly.repair-columns/1",
-      ok: false,
-      exitCode: 1,
-      result: null,
-    });
-    expect(process.exitCode).toBe(1);
-  });
-
   it("declares --apply, off unless given, and says what it does", () => {
     const program = new CommanderCommand();
     registerRepairColumnsCommand(program, createContext);

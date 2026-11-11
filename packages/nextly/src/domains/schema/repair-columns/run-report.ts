@@ -36,11 +36,11 @@ import {
   type SchemaLockState,
 } from "./report-json";
 import {
-  isAt,
-  liveStateFor,
   liveStepOf,
   noStepReason,
+  notResumed,
   progressFinding,
+  readLiveState,
   stepName,
 } from "./resume";
 import type { ColumnFinding, RepairEntity } from "./types";
@@ -148,26 +148,18 @@ export async function dryRunReport(args: {
     schemaLock,
     records: [
       ...unfinished.records,
-      ...findings
-        .filter(
-          finding =>
-            !(
-              finding.kind === "differs" &&
-              unfinished.places.some(p => isAt(finding, p.table, p.column))
-            )
+      ...notResumed(findings, unfinished.places).map(finding =>
+        repairRecord(
+          finding,
+          finding.kind === "definition-unreadable"
+            ? {
+                ...NO_RUN_FACTS,
+                lock: heldDatabaseLock(finding.location.table, readMs),
+              }
+            : NO_RUN_FACTS,
+          "dry-run"
         )
-        .map(finding =>
-          repairRecord(
-            finding,
-            finding.kind === "definition-unreadable"
-              ? {
-                  ...NO_RUN_FACTS,
-                  lock: heldDatabaseLock(finding.location.table, readMs),
-                }
-              : NO_RUN_FACTS,
-            "dry-run"
-          )
-        ),
+      ),
     ],
     warnings,
   });
@@ -190,7 +182,7 @@ async function unfinishedRecords(
   const places = await readUnfinishedRepairs(db, args.dialect);
   const records: RepairRecord[] = [];
   for (const progress of places) {
-    const live = liveStateFor(progress, findings);
+    const live = await readLiveState(db, args.dialect, progress);
     const reached = await liveStepOf(db, args.dialect, progress, live);
     records.push(
       repairRecord(
