@@ -44,10 +44,15 @@ import {
   type ReconcileRepo,
 } from "../drift-reconcile";
 import { assertRunnableStatements, statementRefusals } from "../split-sql";
+import {
+  refuseConstructsTheServerCannotHold,
+  type ServerConstructCapabilities,
+} from "../../extension/build-extension-schema";
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
 
 import {
   assertAppliedUnchanged,
+  assertModuleForeignKeysResolve,
   assertModuleIntact,
   moduleSql,
   orderedMigrations,
@@ -86,6 +91,15 @@ export interface RunPluginMigrationsDeps {
   dialect: SupportedDialect;
   /** Applied `file_apply` rows keyed by qualified filename. */
   appliedShas: ReadonlyMap<string, string | null>;
+  /**
+   * The connected server's construct capabilities, from the adapter's
+   * `getCapabilities()`. Set by callers with a server behind them, so a
+   * shipped module whose snapshot declares a check the server will not
+   * enforce, or an expression index it cannot build, is refused before any
+   * module runs — the apply-side judgement for modules generated for every
+   * dialect with no one server to ask at generation.
+   */
+  serverConstructs?: ServerConstructCapabilities;
   /**
    * Every plugin the configuration declares, a plugin whose list is empty
    * included, so a module the ledger records applied for it is found missing
@@ -275,6 +289,34 @@ export async function runPluginMigrations(
     appliedShas: deps.appliedShas,
     declaredPlugins: deps.declaredPlugins,
   });
+  // The same whole-history discipline for the chain's own order: a module's
+  // key may not reach a table only one of the plugin's LATER modules
+  // creates, and finding that after earlier modules ran is finding it too
+  // late. Asked over each plugin's modules in run order, before any of them
+  // executes; a target no module of the owner names is another owner's or
+  // one the database already held, judged for reach at the declaration
+  // compile rather than by arrival.
+  for (const set of sets) {
+    assertModuleForeignKeysResolve(
+      set.pluginName,
+      orderedMigrations(set.migrations)
+    );
+  }
+  // And for what the server itself can hold: a module generated for every
+  // dialect had no one server to be judged against, so its snapshot is
+  // judged here, against the one about to run it — before any module of any
+  // plugin applies a check this server ignores or an expression index it
+  // cannot build.
+  if (deps.serverConstructs !== undefined) {
+    for (const set of sets) {
+      for (const migration of orderedMigrations(set.migrations)) {
+        refuseConstructsTheServerCannotHold(
+          migration.snapshot[deps.dialect].tables,
+          deps.serverConstructs
+        );
+      }
+    }
+  }
   const result: PluginMigrationRunResult = {
     applied: 0,
     adopted: 0,

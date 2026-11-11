@@ -512,3 +512,107 @@ export function assertModulesInNameOrder(
     });
   }
 }
+
+/**
+ * Refuse a module chain whose foreign keys reach a table none of the owner's
+ * earlier modules creates.
+ *
+ * A module's statements run against what the modules before it left, so a key
+ * whose target arrives only in a LATER module fails at the earlier module's
+ * run — against the database, which names neither the module nor the key.
+ * Asked wherever the chain is decided: where a module is generated, over the
+ * shipped chain plus the module about to join it, and before a run executes
+ * any module, over the chain as shipped.
+ *
+ * Three targets pass. One an earlier module of the same owner created, by
+ * snapshot. One the SAME module creates: the renderer emits a table's create
+ * before a constraint that names it, and splits the one shape it cannot so
+ * order — two tables keying each other — into creates followed by constraint
+ * adds (`withCyclicForeignKeysSplit`), so a same-module target is ordered by
+ * construction. And one no module of this owner ever names — a core table, a
+ * dependency's, a table the database already held — which the declaration
+ * compile judges for reach, and which no ordering question reaches here.
+ */
+export function assertModuleForeignKeysResolve(
+  pluginName: string,
+  migrations: readonly PluginMigration[]
+): void {
+  // Per dialect: a schema hook may add a table on one dialect only, so a
+  // key's target may travel on the dialect it fails on.
+  for (const dialect of DIALECTS) {
+    resolveChainPerDialect(pluginName, migrations, dialect);
+  }
+}
+
+/**
+ * One dialect's walk, in run order, refusing the first key that arrives
+ * before its target. What this owner's modules have created so far is the
+ * running set; the tables that exist after a module are its snapshot's — a
+ * table a middle module dropped leaves the set, so one a later module
+ * recreates is judged by arrival again rather than remembered forever.
+ */
+function resolveChainPerDialect(
+  pluginName: string,
+  migrations: readonly PluginMigration[],
+  dialect: (typeof DIALECTS)[number]
+): void {
+  let created = new Set<string>();
+  for (const [at, migration] of migrations.entries()) {
+    const after = migration.snapshot[dialect].tables;
+    const createdHere = new Set(
+      after.map(table => table.name).filter(name => !created.has(name))
+    );
+    refuseKeysArrivingEarly(
+      pluginName,
+      migrations,
+      dialect,
+      at,
+      created,
+      createdHere
+    );
+    created = new Set(after.map(table => table.name));
+  }
+}
+
+/**
+ * Refuse this module's keys whose target neither an earlier module nor this
+ * one creates, when a later module creates it — the ordering defect. A
+ * target no module of the owner names is another owner's or one the database
+ * already held, judged for reach at the declaration compile, not by arrival.
+ */
+function refuseKeysArrivingEarly(
+  pluginName: string,
+  migrations: readonly PluginMigration[],
+  dialect: (typeof DIALECTS)[number],
+  at: number,
+  created: ReadonlySet<string>,
+  createdHere: ReadonlySet<string>
+): void {
+  const migration = migrations[at];
+  for (const table of migration.snapshot[dialect].tables) {
+    for (const key of table.foreignKeys ?? []) {
+      const target = key.referencesTable;
+      if (created.has(target) || createdHere.has(target)) continue;
+      // The first later module holding the target is its creator: one that
+      // merely carried it would have received it from a module before that,
+      // which this walk reached first.
+      const later = migrations
+        .slice(at + 1)
+        .find(laterMigration =>
+          laterMigration.snapshot[dialect].tables.some(
+            laterTable => laterTable.name === target
+          )
+        );
+      if (later === undefined) continue;
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `${migration.name}.snapshot.${dialect}.${table.name}.foreignKeys.${key.name}`,
+            code: "INVALID",
+            message: `Module "${migration.name}" declares foreign key "${key.name}" on "${table.name}" referencing "${target}", which no earlier module of plugin "${pluginName}" creates (module "${later.name}" creates it later). Reorder the modules, or let the key travel with the module that creates its target.`,
+          },
+        ],
+      });
+    }
+  }
+}

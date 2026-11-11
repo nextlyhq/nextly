@@ -27,6 +27,7 @@ import { generateStatements } from "../../pipeline/sql-templates/index";
 
 import { withCyclicForeignKeysSplit } from "../cyclic-foreign-keys";
 import { buildInverseOperations } from "../down-generator";
+import { NextlyError } from "../../../../errors/nextly-error";
 import {
   buildBlankPluginMigration,
   buildPluginMigration,
@@ -857,5 +858,96 @@ describe("formatHandSealedPluginMigrationModule", () => {
     // No literal checksum to go stale when the SQL is edited.
     expect(text).not.toContain(blank.checksum);
     expect(text).toContain('"transaction": false');
+  });
+});
+
+describe("module chain order", () => {
+  it("refuses the generation whose module creates a table an earlier shipped module already keys to", async () => {
+    // The shipped module keys fx__child at fx__parents, which nothing in the
+    // chain creates yet; the module being generated brings the table. Written,
+    // the pair would fail at the earlier module's run, against a database
+    // naming neither the module nor the key — so the generation names both.
+    const child: TableSpec = {
+      name: "fx__child",
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "ref", type: "varchar(36)", nullable: false },
+      ],
+      indexes: [],
+      foreignKeys: [
+        {
+          name: "fk_fx__child_ref",
+          columns: ["ref"],
+          referencesTable: "fx__parents",
+          referencesColumns: ["id"],
+          onDelete: "restrict",
+          onUpdate: "restrict",
+        },
+      ],
+    };
+    const both: TableSpec[] = [
+      child,
+      {
+        name: "fx__parents",
+        columns: [
+          {
+            name: "id",
+            type: "varchar(36)",
+            nullable: false,
+            primaryKey: true,
+          },
+        ],
+        indexes: [],
+      },
+    ];
+    const shipped = buildPluginMigration({
+      pluginName: "fixture",
+      schemaVersion: 1,
+      name: "keyed",
+      now: new Date("2026-09-23T10:45:00Z"),
+      tablesByDialect: {
+        postgresql: [child],
+        mysql: [child],
+        sqlite: [child],
+      },
+      existing: [],
+    })!.module;
+
+    // A real temp dir, not a name that cannot exist: the refusal must come
+    // BEFORE any write, and the dir staying empty is the second assertion —
+    // a gate that stops refusing fails here on the files it left, rather
+    // than on a refusal message that is no longer thrown.
+    const dir = await mkdtemp(join(tmpdir(), "nextly-plugin-migrations-"));
+    try {
+      let refused: unknown;
+      try {
+        await generatePluginMigration({
+          pluginName: "fixture",
+          schemaVersion: 2,
+          name: "parents",
+          now: new Date("2026-09-23T11:00:00Z"),
+          tablesByDialect: {
+            postgresql: both,
+            mysql: both,
+            sqlite: both,
+          },
+          existing: [shipped],
+          migrationsDir: dir,
+        });
+      } catch (error) {
+        refused = error;
+      }
+      expect(refused).toBeInstanceOf(NextlyError);
+      const message = (refused as NextlyError).publicData as {
+        errors?: { message: string }[];
+      };
+      expect(message.errors?.[0]?.message).toContain("keyed");
+      expect(message.errors?.[0]?.message).toContain("fk_fx__child_ref");
+      expect(message.errors?.[0]?.message).toContain("fx__parents");
+      expect(message.errors?.[0]?.message).toContain("parents");
+      expect(await readdir(dir)).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

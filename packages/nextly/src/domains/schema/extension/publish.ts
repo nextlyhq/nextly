@@ -31,6 +31,7 @@ import {
   buildExtensionSchema,
   clearActiveExtensionSchema,
   type ExtensionSchema,
+  type ServerConstructCapabilities,
   setActiveExtensionSchema,
 } from "./build-extension-schema";
 import type { SeedEntityTable } from "./draft";
@@ -58,6 +59,14 @@ interface PublishInput {
     db?: unknown;
   };
   logger: { warn: (message: string) => void; debug?: (m: string) => void };
+  /**
+   * The connected server's construct capabilities, from the adapter's
+   * `getCapabilities()`. Set by callers with a server behind them — the
+   * boot's push and the migration commands — so a declared check or
+   * expression index the server cannot hold is refused at the compile,
+   * before anything applies it. Absent when there is no server to ask.
+   */
+  server?: ServerConstructCapabilities;
 }
 
 /**
@@ -279,6 +288,7 @@ export async function compileExtensionSchema(
     dialect: input.dialect,
     coreTableNames: CORE_TABLE_NAMES,
     entities,
+    ...(input.server !== undefined ? { server: input.server } : {}),
     // This schema is pushed, so a hook whose output moves between builds
     // would plan a change on every push: refused at boot, naming it.
     refuseNondeterministicHooks: true,

@@ -170,6 +170,23 @@ export interface DatabaseCapabilities {
    * @experimental
    */
   functionalIndexes?: boolean;
+
+  /**
+   * Whether the server enforces CHECK constraints, not merely accepts the
+   * syntax: MySQL from 8.0.16, always on PostgreSQL and SQLite, and reported
+   * as not enforcing on the MySQL-compatible variants. Absent means unknown.
+   *
+   * @experimental
+   */
+  enforcesCheckConstraints?: boolean;
+
+  /**
+   * The server's own version string, as it answered `version()`, so a refusal
+   * that depends on the version can name the server that answered.
+   *
+   * @experimental
+   */
+  serverVersion?: string;
 }
 
 /**

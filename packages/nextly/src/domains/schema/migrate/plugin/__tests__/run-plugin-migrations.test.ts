@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../../../errors/nextly-error";
 import type { NextlySchemaSnapshot } from "../../../pipeline/diff/types";
 import type { ColumnSpec, TableSpec } from "../../../pipeline/diff/types";
 import type { SchemaEventRow } from "../../../events/schema-events-repository";
@@ -232,6 +233,108 @@ describe("runPluginMigrations", () => {
     );
     expect(result).toEqual({ applied: 2, adopted: 0, skipped: 0 });
     expect(h.started).toEqual(["plugin:a/001", "plugin:b/001"]);
+  });
+
+  it("refuses a shipped module's declared check on a server that will not enforce it, before any module runs", async () => {
+    // A module generated for every dialect had no one server to be judged
+    // against; the apply is where the server answers. The module's snapshot
+    // carries the declaration, and the refusal names the server's version.
+    const withCheck: TableSpec = {
+      name: "fx__scores",
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false },
+        { name: "score", type: "int", nullable: false },
+      ],
+      indexes: [],
+      checks: [{ name: "ck_fx__scores_score", sql: "score >= 0" }],
+    };
+    const h = deps();
+    await expect(
+      runPluginMigrations(
+        [
+          {
+            pluginName: "a",
+            pluginVersion: "1.0.0",
+            migrations: [
+              module({
+                name: "001",
+                schemaVersion: 1,
+                before: [],
+                target: [withCheck],
+              }),
+            ],
+          },
+        ],
+        {
+          ...h.deps,
+          serverConstructs: {
+            enforcesCheckConstraints: false,
+            functionalIndexes: true,
+            serverVersion: "8.0.14",
+          },
+        }
+      )
+    ).rejects.toThrow(NextlyError);
+    expect(h.started).toEqual([]);
+    expect(h.executed).toEqual([]);
+  });
+
+  it("refuses before running anything when an earlier module keys to a table only a later one creates", async () => {
+    // 001 keys fx__child at fx__parents; 002 is what creates fx__parents.
+    // Judged after 001 ran, the database would answer for a table that does
+    // not exist, naming neither the module nor the key — the walk answers
+    // first, over the whole chain, before any module executes.
+    const keyed: TableSpec = {
+      name: "fx__child",
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false },
+        { name: "ref", type: "varchar(36)", nullable: false },
+      ],
+      indexes: [],
+      foreignKeys: [
+        {
+          name: "fk_fx__child_ref",
+          columns: ["ref"],
+          referencesTable: "fx__parents",
+          referencesColumns: ["id"],
+          onDelete: "restrict",
+          onUpdate: "restrict",
+        },
+      ],
+    };
+    const parents: TableSpec = {
+      name: "fx__parents",
+      columns: [{ name: "id", type: "varchar(36)", nullable: false }],
+      indexes: [],
+    };
+    const h = deps();
+    await expect(
+      runPluginMigrations(
+        [
+          {
+            pluginName: "a",
+            pluginVersion: "1.0.0",
+            migrations: [
+              module({
+                name: "001",
+                schemaVersion: 1,
+                before: [],
+                target: [keyed],
+              }),
+              module({
+                name: "002",
+                schemaVersion: 2,
+                before: [keyed],
+                target: [keyed, parents],
+              }),
+            ],
+          },
+        ],
+        h.deps
+      )
+    ).rejects.toThrow(NextlyError);
+    expect(h.started).toEqual([]);
+    expect(h.executed).toEqual([]);
   });
 
   it("skips a module the ledger already records, without touching the database", async () => {

@@ -502,6 +502,10 @@ export async function runMigrate(
         dialect,
         plugins: configResult.config.plugins ?? [],
         config: configResult.config,
+        // The connected server's limits: a declared check it will not enforce
+        // or an expression index it cannot build is refused at the compile,
+        // before any migration applies it.
+        server: (adapter as unknown as DrizzleAdapter).getCapabilities(),
         logger: { warn: m => logger.warn(m) },
       });
       const { applied, pluginModulesApplied, metadata } = await migrateCore({
@@ -1581,6 +1585,10 @@ export async function runPluginPhase(
     dialect: deps.dialect,
     appliedShas,
     declaredPlugins: deps.declaredPlugins,
+    // The server about to run the modules judges their snapshots: a check it
+    // ignores or an expression index it cannot build is refused before any
+    // module applies one.
+    serverConstructs: dz.getCapabilities(),
     // `--step` counts plugin modules first, as they run first; see
     // `appStepAfter` for the app files' share.
     limit: deps.step,

@@ -1493,3 +1493,232 @@ describe("a NextlyError thrown inside a hook", () => {
     });
   });
 });
+
+describe("foreign key streams", () => {
+  /** A table keying `ref` at `target`'s id. */
+  const keying = (target: string) =>
+    defineTable(
+      "child",
+      { id: col.id(), ref: col.shortText() },
+      {
+        foreignKeys: [
+          { columns: ["ref"], references: { table: target, columns: ["id"] } },
+        ],
+      }
+    );
+
+  /** The message the build refused with, or "" when it succeeded. */
+  const messageOf = async (input: ExtensionSchemaInput): Promise<string> => {
+    try {
+      await buildExtensionSchema(input);
+      return "";
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as { errors?: { message: string }[] };
+      return data.errors?.[0]?.message ?? "";
+    }
+  };
+
+  it("refuses a plugin's key to an app collection's table", async () => {
+    // dc_posts is the collection base() seeds: created by the app's stream.
+    const message = await messageOf(
+      base([
+        { owner: { kind: "plugin", id: "a" }, tables: [keying("dc_posts")] },
+      ])
+    );
+    expect(message).toContain("app's migration stream");
+    expect(message).toContain("dc_posts");
+  });
+
+  it("refuses a plugin's key to the app's own table", async () => {
+    // The app takes no prefix: its table's SQL name is "orders".
+    const message = await messageOf(
+      base(
+        [{ owner: { kind: "plugin", id: "a" }, tables: [keying("orders")] }],
+        { owner: { kind: "app" }, tables: [tableFor("orders")] }
+      )
+    );
+    expect(message).toContain("app's migration stream");
+    expect(message).toContain("orders");
+  });
+
+  it("refuses a plugin's key to another plugin's table without a declared dependency", async () => {
+    const message = await messageOf(
+      base([
+        { owner: { kind: "plugin", id: "a" }, tables: [tableFor("parents")] },
+        { owner: { kind: "plugin", id: "b" }, tables: [keying("a__parents")] },
+      ])
+    );
+    expect(message).toContain('plugin "a" creates');
+    expect(message).toContain("does not declare a dependency");
+  });
+
+  it("refuses a declared dependency that the enabled order still runs after the key", async () => {
+    // b depends on a, but a runs AFTER b here (an optional dependency does
+    // not force the order), so the target table does not exist when b's
+    // module runs.
+    const message = await messageOf({
+      ...base([
+        { owner: { kind: "plugin", id: "b" }, tables: [keying("a__parents")] },
+        { owner: { kind: "plugin", id: "a" }, tables: [tableFor("parents")] },
+      ]),
+      dependencies: new Map([["b", new Set(["a"])]]),
+    });
+    expect(message).toContain('after plugin "b" runs');
+  });
+
+  it("accepts a key to a dependency's table, and to the plugin's own", async () => {
+    const selfKeying = defineTable(
+      "own-child",
+      { id: col.id(), ref: col.shortText() },
+      {
+        foreignKeys: [
+          {
+            columns: ["ref"],
+            references: { table: "a__parents", columns: ["id"] },
+          },
+        ],
+      }
+    );
+    const schema = await buildExtensionSchema({
+      ...base([
+        {
+          owner: { kind: "plugin", id: "a" },
+          tables: [tableFor("parents"), selfKeying],
+        },
+        { owner: { kind: "plugin", id: "b" }, tables: [keying("a__parents")] },
+      ]),
+      dependencies: new Map([["b", new Set(["a"])]]),
+    });
+    // Both keys compiled: the dependency's table and the plugin's own.
+    const keys = schema.tables
+      .flatMap(table => table.foreignKeys ?? [])
+      .map(key => key.referencesTable);
+    expect(keys).toEqual(expect.arrayContaining(["a__parents", "a__parents"]));
+  });
+
+  it("lets the app key to a plugin's table and to a collection's", async () => {
+    const appKeying = defineTable(
+      "app-child",
+      { id: col.id(), ref: col.shortText(), post: col.shortText() },
+      {
+        foreignKeys: [
+          {
+            columns: ["ref"],
+            references: { table: "a__parents", columns: ["id"] },
+          },
+          {
+            columns: ["post"],
+            references: { table: "dc_posts", columns: ["id"] },
+          },
+        ],
+      }
+    );
+    const schema = await buildExtensionSchema(
+      base(
+        [{ owner: { kind: "plugin", id: "a" }, tables: [tableFor("parents")] }],
+        { owner: { kind: "app" }, tables: [appKeying] }
+      )
+    );
+    expect(schema.tables.map(table => table.name)).toContain("app-child");
+  });
+
+  it("lets a plugin key to a table the app adopted, which no stream creates", async () => {
+    const legacy = defineTable("legacy_orders", { id: col.id() });
+    const message = await messageOf(
+      base(
+        [
+          {
+            owner: { kind: "plugin", id: "a" },
+            tables: [keying("legacy_orders")],
+          },
+        ],
+        {
+          owner: { kind: "app" },
+          extend: [({ schema }) => schema.adoptTable(legacy)],
+        }
+      )
+    );
+    expect(message).toBe("");
+  });
+});
+
+describe("server construct gates", () => {
+  /** A table with one check over its score column. */
+  const checked = defineTable(
+    "scores",
+    { id: col.id(), score: col.integer() },
+    {
+      checks: [{ name: "score_nonnegative", sql: "score >= 0" }],
+    }
+  );
+
+  /** A table with one expression index over its email column. */
+  const expressed = defineTable(
+    "people",
+    { id: col.id(), email: col.shortText() },
+    {
+      indexes: [
+        { columns: [], expression: "lower(email)", name: "idx_a_lower" },
+      ],
+    }
+  );
+
+  const messageOf = async (
+    tables: ReturnType<typeof tableFor>[],
+    server: Record<string, unknown>
+  ): Promise<string> => {
+    try {
+      await buildExtensionSchema({
+        ...base([{ owner: { kind: "plugin", id: "a" }, tables }]),
+        ...(server !== undefined ? { server } : {}),
+      });
+      return "";
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as { errors?: { message: string }[] };
+      return data.errors?.[0]?.message ?? "";
+    }
+  };
+
+  it("refuses a declared check on a server that accepts CHECK without enforcing it, naming the version", async () => {
+    const message = await messageOf([checked], {
+      enforcesCheckConstraints: false,
+      functionalIndexes: true,
+      serverVersion: "8.0.14",
+    });
+    expect(message).toContain("8.0.14");
+    expect(message).toContain("score_nonnegative");
+    expect(message).toContain("a__scores");
+    expect(message).toContain("8.0.16");
+  });
+
+  it("refuses a declared expression index on a server without functional key parts, naming the version", async () => {
+    const message = await messageOf([expressed], {
+      enforcesCheckConstraints: true,
+      functionalIndexes: false,
+      serverVersion: "8.0.12",
+    });
+    expect(message).toContain("8.0.12");
+    expect(message).toContain("a__people");
+    expect(message).toContain("8.0.13");
+  });
+
+  it("passes the same declarations on a server that holds them, and with no server reported", async () => {
+    // An explicit true: the gate is satisfied. Absent flags: no server was
+    // asked (a stub, or a compile for every dialect), and nothing refuses.
+    expect(
+      await messageOf([checked, expressed], {
+        enforcesCheckConstraints: true,
+        functionalIndexes: true,
+        serverVersion: "8.0.33",
+      })
+    ).toBe("");
+    expect(
+      await messageOf([checked, expressed], {
+        enforcesCheckConstraints: undefined,
+        functionalIndexes: undefined,
+      })
+    ).toBe("");
+  });
+});

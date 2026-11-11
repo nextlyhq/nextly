@@ -408,6 +408,8 @@ export class MySqlAdapter extends DrizzleAdapter {
    */
   private sharedRowLock: boolean | undefined;
   private functionalIndexes: boolean | undefined;
+  private enforcesCheckConstraints: boolean | undefined;
+  private serverVersion: string | undefined;
 
   /**
    * Creates a new MySQL adapter instance.
@@ -476,21 +478,27 @@ export class MySqlAdapter extends DrizzleAdapter {
       const connection = await this.pool.getConnection();
       try {
         await connection.query("SELECT 1");
-        const { variant, functionalIndexes } = await checkDialectVersion(
-          connection,
-          "mysql",
-          {
-            // Why: route variant warnings through the adapter's logger so
-            // users see a single, consistent log surface.
-            onWarning: msg => this.config.logger?.warn?.(msg),
-          }
-        );
+        const {
+          variant,
+          functionalIndexes,
+          enforcesCheckConstraints,
+          serverVersion,
+        } = await checkDialectVersion(connection, "mysql", {
+          // Why: route variant warnings through the adapter's logger so
+          // users see a single, consistent log surface.
+          onWarning: msg => this.config.logger?.warn?.(msg),
+        });
         // MariaDB and TiDB connect through this adapter too, and reject
         // `FOR SHARE`; the capability tells callers which lock they can take.
         this.sharedRowLock = acceptsForShare(variant);
         // Whether a unique index may key on an expression, which per-language uniqueness of a
         // translated value does.
         this.functionalIndexes = functionalIndexes;
+        // Whether a declared CHECK holds anything on this server, and the
+        // version string a refusal names: MySQL before 8.0.16 parses a CHECK
+        // and ignores it, and the variants are not spoken for.
+        this.enforcesCheckConstraints = enforcesCheckConstraints;
+        this.serverVersion = serverVersion;
         this.connected = true;
 
         if (this.config.logger?.info) {
@@ -866,6 +874,8 @@ export class MySqlAdapter extends DrizzleAdapter {
       maxIdentifierLength: 64, // MySQL limit
       sharedRowLock: this.sharedRowLock, // Known once connected
       functionalIndexes: this.functionalIndexes, // Known once connected
+      enforcesCheckConstraints: this.enforcesCheckConstraints, // Known once connected
+      serverVersion: this.serverVersion, // Known once connected
     };
   }
 
