@@ -3,7 +3,6 @@
 import type { JSX, ReactNode } from "react";
 
 import { useSuppressedChrome } from "./ChromeSuppression";
-import { CONTENT_PAGE_MEASURE } from "./content-measure";
 import { PageContainer } from "./page-container";
 
 interface MeasuredPageFrameProps {

@@ -25,7 +25,6 @@ import { useCallback } from "react";
 import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
-import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
 import {
   isRemovedFromCode,
   removedEntityHasNoTable,
@@ -37,7 +36,12 @@ import {
   SingleForm,
   type SingleSchema,
 } from "@admin/components/features/singles";
-import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
+import {
+  CONTENT_MEASURE_LENGTH,
+  CONTENT_PAGE_MEASURE,
+} from "@admin/components/layout/content-measure";
+import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
+import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -63,6 +67,7 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { staleVersionOf } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
+import { cn } from "@admin/lib/utils";
 
 // ============================================================================
 // Types
@@ -85,20 +90,29 @@ interface SingleEditPageProps {
  */
 function SingleEditPageSkeleton() {
   return (
-    <PageContainer width={CONTENT_PAGE_MEASURE}>
+    <PageContainer type="editor">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading...
       </div>
 
-      {/* Cancels the page's vertical inset only. The horizontal half would
-          pull this skeleton past the measured column, and the editor that
-          replaces it would then jump 64px narrower. */}
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-var(--admin-bar-height))] items-stretch lg:-my-8">
+      {/* An Editor page has no padding, as the editor that replaces this
+          does: its banners and panel start directly under the bar. */}
+      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-var(--admin-bar-height))] items-stretch">
         {/* Main Content */}
         {/* `min-w-0` as the editor that replaces this carries it: without it
             this pane will not shrink and pushes the rail past the column. */}
-        <div className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6">
+        <div
+          className={cn(
+            "flex-1 min-w-0 space-y-6 pt-6 lg:pt-8 mx-auto w-full",
+            // The editor's field column inset, so nothing moves sideways when
+            // the editor replaces this.
+            DOCUMENT_COLUMN_INSET
+          )}
+          // The editor that replaces this measures its FIELD column, not the
+          // page, so the skeleton measures the same column.
+          style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+        >
           {/* Breadcrumbs skeleton */}
           <div className="mb-6">
             <Skeleton className="h-5 w-64" />

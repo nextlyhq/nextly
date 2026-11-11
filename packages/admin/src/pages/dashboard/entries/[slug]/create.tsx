@@ -18,12 +18,13 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
-import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
 import {
   CONTENT_MEASURE_LENGTH,
   CONTENT_PAGE_MEASURE,
 } from "@admin/components/layout/content-measure";
+import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
+import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -37,6 +38,7 @@ import {
   getComponent,
   type CustomEditViewProps,
 } from "@admin/lib/plugins/component-registry";
+import { cn } from "@admin/lib/utils";
 
 // ============================================================================
 // Types
@@ -83,22 +85,25 @@ function CreateEntryBreadcrumbs({
  */
 function CreateEntryPageSkeleton() {
   return (
-    <PageContainer width="full">
+    <PageContainer type="editor">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading collection...
       </div>
 
-      {/* Cancels the page's vertical inset only.
-          The horizontal half would pull this skeleton past the measured
-          column, and the editor that replaces it would then jump 64px
-          narrower. */}
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-var(--admin-bar-height))] items-stretch lg:-my-8">
+      {/* An Editor page has no padding, as the editor that replaces this
+          does: its banners and panel start directly under the bar. */}
+      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-var(--admin-bar-height))] items-stretch">
         {/* Main Content */}
         {/* `min-w-0` as the editor that replaces this carries it: without it
             this pane will not shrink and pushes the rail past the column. */}
         <div
-          className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6 mx-auto w-full"
+          className={cn(
+            "flex-1 min-w-0 space-y-6 pt-6 lg:pt-8 mx-auto w-full",
+            // The editor's field column inset, so nothing moves sideways when
+            // the editor replaces this.
+            DOCUMENT_COLUMN_INSET
+          )}
           // The form that replaces this bounds its FIELD column, not the
           // page, so a skeleton bounded at the page moves every field
           // sideways the moment data arrives.
