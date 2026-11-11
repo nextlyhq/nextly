@@ -55,6 +55,7 @@ import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/databa
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
+import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -1333,6 +1334,23 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               tableName,
             });
           }
+          // A field renamed onto a column that is already there is refused before anything
+          // changes. In this dialog such a change is never offered as a rename, only as the old
+          // column dropped beside a field kept on the column that is there, so it is found from
+          // the field lists.
+          await refuseRenamedFieldOntoTakenColumn(
+            adapter,
+            {
+              previousFields: single.fields as unknown as FieldDefinition[],
+              fields: fields as unknown as FieldDefinition[],
+              mainTable: tableName,
+              wasLocalized: layout.wasStored,
+              isLocalized: layout.isStored,
+              dialect: adapter.dialect,
+              builtBy: "collection",
+            },
+            { single: slug }
+          );
           // The dialog's answer on a translated field's rename, refused when it does not say,
           // before anything changes. This and the preflights below ask where the values are stored
           // (`layout.wasStored`/`isStored`), not whether the Single is translated: an untranslated

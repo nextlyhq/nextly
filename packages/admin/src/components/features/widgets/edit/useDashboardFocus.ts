@@ -41,16 +41,14 @@ export type FocusTarget =
   | { kind: "dismiss"; placementId: string }
   /** The Undo button on the removal notice. */
   | { kind: "undo" }
-  /** The bar's Add widget button. */
+  /** The top bar's Add widget button. */
   | { kind: "add" }
   /** The region that holds the cards. */
   | { kind: "grid" }
-  /** The dashboard's one level-one heading. */
+  /** The dashboard's one level-one heading, as customise mode closes. */
   | { kind: "heading" }
-  /** The customise bar, as customise mode opens. */
-  | { kind: "bar" }
-  /** The Customize button, as customise mode closes. */
-  | { kind: "customize" };
+  /** The customise controls in the top bar, as customise mode opens. */
+  | { kind: "bar" };
 
 /** A ref callback that files an element under one key. */
 type Register = (element: HTMLElement | null) => void;
@@ -64,10 +62,8 @@ export interface DashboardFocus {
   dismissRef: (placementId: string) => Register;
   /** Registers the notice's Undo button. */
   undoRef: Register;
-  /** Registers the customise bar. */
+  /** Registers the customise controls in the top bar. */
   barRef: Register;
-  /** Registers the Customize button. */
-  customizeRef: Register;
   /** The bar's Add widget button. */
   addRef: RefObject<HTMLElement | null>;
   /** Registers the bar's Add widget button as the `add` target. */
@@ -151,7 +147,6 @@ export function useDashboardFocus(): DashboardFocus {
       dismissRef: (placementId: string) => register(`dismiss:${placementId}`),
       undoRef: register("undo"),
       barRef: register("bar"),
-      customizeRef: register("customize"),
       addRef,
       addWidgetRef,
       gridRef,

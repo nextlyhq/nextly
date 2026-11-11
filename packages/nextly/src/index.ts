@@ -689,6 +689,17 @@ export {
   type ContentTypeScope,
 } from "./plugins/content-type-scope";
 
+// The later pages of a paginated list's address (`/news/page/2`): one
+// spelling per page, read the way the content routes read them.
+// @experimental
+export { listPageNumber, listPageOf } from "./runtime/routing/slug-param";
+
+// The cache tags a read of a collection, or of one entry in it, carries:
+// what a write to it expires. For code that caches an answer built from
+// those reads, such as a plugin's page metadata.
+// @experimental
+export { nextlyTags } from "./runtime/cache/nextly-tags";
+
 // Where an entry is served, as the site declares it: one answer for every
 // reader of a page's public address.
 // @experimental
@@ -716,6 +727,7 @@ export type {
   HeldAddress,
   HeldAddressUpdate,
 } from "./domains/public-addresses/participants";
+export type { HeldDocument } from "./domains/public-addresses/held-listing";
 export type {
   ParticipantTransaction,
   PluginPublicAddresses,

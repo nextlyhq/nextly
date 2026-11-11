@@ -588,6 +588,7 @@ export type {
   AddressHolder,
   HeldAddress,
   HeldAddressUpdate,
+  HeldDocument,
   ParticipantTransaction,
   PluginPublicAddresses,
   PublicAddressParticipant,
@@ -764,6 +765,23 @@ export { getCachedNextly } from "nextly";
  * be stable once a first-party plugin expires its pages through `ctx.cache`.
  */
 export { pluginCacheTag } from "nextly";
+
+/**
+ * @experimental The cache tags a read of a collection, or of one of its
+ * entries, carries, which a write to it expires: for a plugin whose cached
+ * answer is built from those reads, such as page metadata naming the media
+ * it shows. Intended to be stable with the page-metadata contract.
+ */
+export { nextlyTags } from "nextly";
+
+/**
+ * @experimental How the content routes read a later page of a paginated list
+ * (`news/page/2`): `listPageOf` splits a path into the address it is a page
+ * of and the page's segment, and `listPageNumber` reads the one spelling of
+ * a page number. For a plugin naming a later page's own address. Intended to
+ * be stable with the page-metadata contract.
+ */
+export { listPageNumber, listPageOf } from "nextly";
 
 /**
  * @experimental The canonical response envelopes, and the trusted-client-IP

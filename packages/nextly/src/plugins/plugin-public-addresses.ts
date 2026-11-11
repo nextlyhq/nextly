@@ -13,6 +13,7 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import type { HeldDocument } from "../domains/public-addresses/held-listing";
 import {
   addParticipant,
   firstHolder,
@@ -23,7 +24,11 @@ import {
   type HeldAddressUpdate,
   type ParticipantRunner,
 } from "../domains/public-addresses/participants";
-import type { PublicAddressType } from "../domains/public-addresses/public-address";
+import {
+  siteTypes,
+  type PublicAddressType,
+} from "../domains/public-addresses/public-address";
+import { whenServicesRegistered } from "../di/service-access";
 import type { HookOwner } from "../hooks/types";
 
 import type { PluginTransaction } from "./database/plugin-database";
@@ -98,8 +103,10 @@ export interface PluginPublicAddresses {
     transaction: PluginCollectionTransaction
   ): Promise<{ refused: RefusedAddressUpdate[] }>;
   /**
-   * One page of a type's documents, oldest first, each with every address it
-   * holds now; `next` is the cursor of the following page.
+   * One page of a type's documents, in id order, each with every address it
+   * holds now and when it was made; `next` is the cursor of the following
+   * page. Paged by id, so documents deleted or made meanwhile never move one
+   * not yet read behind the cursor.
    *
    * Waits for the boot to finish, so call it from work `init` or `onReady`
    * starts without awaiting: awaited inside them, which the boot waits for,
@@ -109,12 +116,18 @@ export interface PluginPublicAddresses {
     type: PublicAddressType;
     after?: string;
     limit?: number;
-  }): Promise<{ items: HeldAddressUpdate[]; next?: string }>;
+  }): Promise<{ items: HeldDocument[]; next?: string }>;
   /**
    * Changes when any address template, the language list or the fallback
    * settings do.
    */
   fingerprint(): Promise<string>;
+  /**
+   * The site's own content types, declared in code or made in the Schema
+   * Builder, never a plugin's own or the system's: what a catch-up walks
+   * with `held`. Waits for the boot to finish, as `held` does.
+   */
+  types(): Promise<PublicAddressType[]>;
 }
 
 /** What the plugin context hands this surface. */
@@ -193,6 +206,10 @@ export function pluginPublicAddresses(
     },
     held: async args => (await heldListing()).heldPage(args),
     fingerprint: async () => (await heldListing()).addressFingerprint(),
+    types: async () => {
+      await whenServicesRegistered();
+      return (await siteTypes()).map(({ type }) => type);
+    },
   };
 }
 

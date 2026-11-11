@@ -110,6 +110,7 @@ import { loadConfig } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
 import { commandRun } from "./command-run";
+import { isPluginDefinition } from "./plugin-definition-shape";
 
 // ============================================================================
 // Types
@@ -842,21 +843,6 @@ export function missingExtendTarget(error: unknown): string | undefined {
     if (match) return match[1];
   }
   return undefined;
-}
-
-/** Whether a module export is a plugin definition rather than, say, a table. */
-function isPluginDefinition(
-  value: unknown
-): value is Partial<PluginDefinition> {
-  // `name` alone is not enough: a `defineTable` result carries a name too.
-  // `version` is required of every plugin and of no table.
-  const candidate = value as { name?: unknown; version?: unknown } | null;
-  return (
-    typeof candidate === "object" &&
-    candidate !== null &&
-    typeof candidate.name === "string" &&
-    typeof candidate.version === "string"
-  );
 }
 
 /**
