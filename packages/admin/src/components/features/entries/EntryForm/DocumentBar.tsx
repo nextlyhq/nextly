@@ -863,8 +863,15 @@ function DocumentBarState({
   saveState: React.ReactNode;
 }) {
   // Each part decides its own case and draws nothing where it does not apply.
+  // In the admin's top bar, which is one row tall, the parts stay on that row.
+  const inTopBar = useInTopBar();
   return (
-    <div className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-[13px] leading-[18px] text-muted-foreground">
+    <div
+      className={cn(
+        "flex flex-1 items-center gap-x-3 gap-y-1 text-[13px] leading-[18px] text-muted-foreground",
+        inTopBar ? "min-w-0 flex-nowrap" : "flex-wrap"
+      )}
+    >
       <BarStatusPill documentStatus={hasStatus ? documentStatus : undefined} />
       {saveState}
       <EditingLanguageChip code={languageCode} />

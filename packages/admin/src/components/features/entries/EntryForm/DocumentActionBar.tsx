@@ -34,6 +34,7 @@ import {
 import { ChevronDown, Loader2, MoreHorizontal } from "lucide-react";
 import { Fragment, type JSX } from "react";
 
+import { useInTopBar } from "@admin/components/layout/header/TopBarPlaces";
 import { cn } from "@admin/lib/utils";
 
 import {
@@ -301,6 +302,7 @@ export function DocumentActionBar({
   className,
   narrowItems = [],
 }: DocumentActionBarProps): JSX.Element {
+  const inTopBar = useInTopBar();
   const { available, primary } = wiredActions(actions, bindings);
   const toolbar = bound(actionsAt(available, "toolbar"), bindings);
   const groups = menuGroups(available);
@@ -327,10 +329,13 @@ export function DocumentActionBar({
   return (
     // Wraps within the width it is given rather than past it, as the header's
     // cluster around it does: a preview pane can narrow the editor on a wide
-    // screen, and the document's own verbs must stay inside it.
+    // screen, and the document's own verbs must stay inside it. In the admin's
+    // top bar, which is one row tall, the verbs stay on that row: Save, its
+    // arrow and More together never split across two lines.
     <div
       className={cn(
-        "flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5",
+        "flex min-w-0 max-w-full items-center justify-end gap-1.5",
+        inTopBar ? "flex-nowrap" : "flex-wrap",
         className
       )}
     >

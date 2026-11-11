@@ -446,7 +446,7 @@ export default function SingleEditPage({
           component reacts to that. A page that declared its own measure here
           would keep the two-pane translation surface inside the content
           measure while the entry editor beside it took the whole panel. */}
-        <MeasuredPageFrame>
+        <MeasuredPageFrame contentCarriesMeasure>
           {schedule.dialog}
           <SingleForm
             /* Under the editor's header, for the reason the entry editor
