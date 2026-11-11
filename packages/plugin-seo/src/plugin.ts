@@ -15,6 +15,7 @@ import {
   type FieldConfig,
   type PluginContributions,
   type PluginDefinition,
+  type PluginRoute,
 } from "@nextlyhq/plugin-sdk";
 
 import { startCatchUp } from "./address-record/catch-up";
@@ -31,6 +32,12 @@ import {
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
+import {
+  socialCardRulesFromOptions,
+  withSocialCard,
+  type SocialCardOptions,
+} from "./social/card";
+import { shareImageRoute } from "./social/route";
 import { withStructuredData } from "./structured-data/provider";
 import {
   rulesFromOptions,
@@ -133,6 +140,23 @@ export interface SeoPluginOptions {
    * needed for any to be served.
    */
   structuredData?: StructuredDataOptions;
+  /**
+   * @experimental What every page's social card states beyond the page,
+   * until the SEO settings hold it: the site's name, and the language of a
+   * page the route read in no particular language, as a language tag.
+   *
+   * ```ts
+   * seoPlugin({
+   *   collections: ["posts"],
+   *   baseUrl: "https://example.com",
+   *   socialCard: { siteName: "Example", language: "en-US" },
+   * });
+   * ```
+   *
+   * A share image stored with a path from the root is stated on `baseUrl`,
+   * since a network reading the card needs its full address.
+   */
+  socialCard?: SocialCardOptions;
 }
 
 /**
@@ -199,18 +223,32 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options.baseUrl,
     options.structuredData
   );
+  const readSocialCardRules = socialCardRulesFromOptions(
+    options.baseUrl,
+    options.socialCard
+  );
+
+  // The sitemap where it is on, and the action that makes a share image of
+  // the right size; both added below.
+  const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
     // The record that keeps each public address to one page.
     collections: [addressRecordCollection()],
-    // Every page's head, worked out by the one order of who wins, and its
-    // structured data, worked out from that same answer.
+    // Every page's head, worked out by the one order of who wins, its
+    // social card completed, and its structured data, worked out from that
+    // same answer.
     services: {
       pageMetadata: ctx =>
-        withStructuredData(ctx, seoPageMetadata(ctx), readStructuredDataRules),
+        withStructuredData(
+          ctx,
+          withSocialCard(ctx, seoPageMetadata(ctx), readSocialCardRules),
+          readStructuredDataRules
+        ),
     },
+    routes,
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -235,42 +273,41 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // The document is generated per request (agnostic, no `next`); ISR caching
     // of the canonical `/sitemap.xml` belongs to the Next delivery layer, and
     // headless consumers cache at their edge.
-    contributes.routes = [
-      {
-        method: "GET",
-        path: "/sitemap.xml",
-        public: true,
-        handler: async (req, ctx) => {
-          // A single-origin deployment can rely on the request origin; a
-          // proxied one must configure `baseUrl` so `<loc>` uses the public
-          // host rather than the internal one.
-          const configuredBaseUrl = options.baseUrl;
-          const baseUrl = configuredBaseUrl ?? new URL(req.url).origin;
-          const xml = await generateSitemap(ctx.services, {
-            collections: sitemapTargets,
-            baseUrl,
-            urlFor: options.urlFor,
-            // Spread rather than assigned: `basePath` distinguishes absent from
-            // `""`, and a present-but-undefined key would read as the declared
-            // root mount and start emitting a URL for every empty slug.
-            ...(options.basePath === undefined
-              ? {}
-              : { basePath: options.basePath }),
-          });
-          const headers: Record<string, string> = {
-            "content-type": "application/xml; charset=utf-8",
-          };
-          if (!configuredBaseUrl) {
-            // The origin came from the (spoofable) request Host — keep an
-            // intermediary from caching a host-derived document and serving it
-            // for a different host. Configure `baseUrl` for a cacheable sitemap.
-            headers["cache-control"] = "no-store";
-          }
-          return new Response(xml, { headers });
-        },
+    routes.push({
+      method: "GET",
+      path: "/sitemap.xml",
+      public: true,
+      handler: async (req, ctx) => {
+        // A single-origin deployment can rely on the request origin; a
+        // proxied one must configure `baseUrl` so `<loc>` uses the public
+        // host rather than the internal one.
+        const configuredBaseUrl = options.baseUrl;
+        const baseUrl = configuredBaseUrl ?? new URL(req.url).origin;
+        const xml = await generateSitemap(ctx.services, {
+          collections: sitemapTargets,
+          baseUrl,
+          urlFor: options.urlFor,
+          // Spread rather than assigned: `basePath` distinguishes absent from
+          // `""`, and a present-but-undefined key would read as the declared
+          // root mount and start emitting a URL for every empty slug.
+          ...(options.basePath === undefined
+            ? {}
+            : { basePath: options.basePath }),
+        });
+        const headers: Record<string, string> = {
+          "content-type": "application/xml; charset=utf-8",
+        };
+        if (!configuredBaseUrl) {
+          // The origin came from the (spoofable) request Host — keep an
+          // intermediary from caching a host-derived document and serving it
+          // for a different host. Configure `baseUrl` for a cacheable sitemap.
+          headers["cache-control"] = "no-store";
+        }
+        return new Response(xml, { headers });
       },
-    ];
+    });
   }
+  routes.push(shareImageRoute(options.baseUrl));
 
   return definePlugin({
     name: "@nextlyhq/plugin-seo",
