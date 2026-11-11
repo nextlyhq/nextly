@@ -371,7 +371,7 @@ export {
   effectiveWidgetSettings,
   // How many fields a Fields setting may choose: the settings sheet stops at it.
   MAX_CHOSEN_FIELDS,
-  // How many settings a widget may mark quick: the card's quick popover holds that many.
+  // How many settings a widget may mark quick: the card's header draws the first it can.
   MAX_QUICK_SETTINGS,
   naturalGroupBy,
   resolveWidgetSettings,
@@ -469,6 +469,7 @@ export {
   LIST_DENSITIES,
   type ListDensity,
   effectiveWidgetLimit,
+  listEntries,
 } from "./domains/widgets/query-limits";
 // The VALUE as well as the type. A widget result names each column's kind, and
 // the admin has to decide which kinds it can present -- deriving that from this

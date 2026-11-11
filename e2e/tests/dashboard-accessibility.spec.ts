@@ -1,10 +1,10 @@
 /**
  * The dashboard held to WCAG 2.2 AA across its surfaces (dashboard-experience R-23): an axe scan
  * of the whole page at rest, in customise mode, with the add gallery open, at its add step and
- * with a card's quick popover open, with its More settings panel open, and the header with its
+ * with a card's settings drawer open, at rest and while customising, and the header with its
  * New menu open, in light and in dark; a keyboard-only visit that adds a collection widget
- * through its add step, changes its quick setting and saves, then retitles the card from its More
- * settings panel, with focus back on the control that opened each menu, panel and popover as it
+ * through its add step, changes its settings in the drawer and saves, then retitles the card
+ * from its drawer, with focus back on the control that opened each menu and drawer as it
  * closes, drawn with a ring that can be seen (3:1 against what is behind it); the New menu by
  * keyboard; and the gallery's count, said for the chip and the search that are on.
  *
@@ -370,7 +370,7 @@ async function placeOverTime(page: Page): Promise<string> {
 }
 
 for (const theme of ["light", "dark"] as Theme[]) {
-  test(`every surface passes axe (${theme}): at rest, customising, the gallery, its add step, the quick popover, More settings`, async ({
+  test(`every surface passes axe (${theme}): at rest, customising, the gallery, its add step, the settings drawer`, async ({
     page,
   }) => {
     await gotoAdmin(page, "/", theme);
@@ -381,27 +381,23 @@ for (const theme of ["light", "dark"] as Theme[]) {
     await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     await scan(page, "at rest");
 
-    // The quick popover at rest, opened from the card's title.
-    await cell.getByTestId("card-title-button").click();
-    const popover = page.getByTestId("card-quick-popover");
-    await expect(popover).toBeVisible();
-    await scan(page, "quick popover at rest");
-
-    // Its More settings panel, opened from the popover, beside the dashboard it changes.
-    await popover.getByRole("button", { name: "More settings" }).click();
-    const settings = page.getByRole("dialog", { name: /settings$/ });
-    await expect(settings).toBeVisible();
-    await expect(settings.getByLabel("Title", { exact: true })).toBeVisible();
-    await scan(page, "More settings panel");
-    await settings.getByRole("button", { name: "Cancel" }).click();
-    await expect(settings).toBeHidden();
-
     // The card's menu at rest.
     await cell.getByTestId("card-menu").click();
     await expect(page.getByRole("menu")).toBeVisible();
     await scan(page, "card menu at rest");
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("menu")).toHaveCount(0);
+
+    // Its settings drawer, opened from Settings… in that menu, beside the dashboard it changes:
+    // the preview, then Content, Display and Size, all open.
+    await page.getByRole("menuitem", { name: "Settings…" }).click();
+    const settings = page.getByTestId("widget-settings-drawer");
+    await expect(settings).toBeVisible();
+    await expect(settings.getByLabel("Title", { exact: true })).toBeVisible();
+    await expect(
+      settings.getByRole("radiogroup", { name: "Width" })
+    ).toBeVisible();
+    await scan(page, "settings drawer at rest");
+    await settings.getByRole("button", { name: "Cancel" }).click();
+    await expect(settings).toBeHidden();
 
     await page.getByTestId("dashboard-edit-begin").click();
     await expect(bar(page)).toBeVisible();
@@ -414,13 +410,15 @@ for (const theme of ["light", "dark"] as Theme[]) {
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menu")).toHaveCount(0);
 
-    // The quick popover while customising, opened from Settings in the card's menu.
+    // The settings drawer while customising, opened from Settings… in the card's menu.
     await cell.getByTestId("card-actions").click();
-    await page.getByRole("menuitem", { name: "Settings" }).click();
-    await expect(popover).toBeVisible();
-    await scan(page, "quick popover in customise mode");
+    await page.getByRole("menuitem", { name: "Settings…" }).click();
+    await expect(
+      settings.getByRole("radiogroup", { name: "Width" })
+    ).toBeVisible();
+    await scan(page, "settings drawer in customise mode");
     await page.keyboard.press("Escape");
-    await expect(popover).toBeHidden();
+    await expect(settings).toBeHidden();
 
     await bar(page).getByRole("button", { name: "Add widget" }).click();
     const panel = gallery(page);
@@ -493,7 +491,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
   });
 }
 
-test("a keyboard alone adds a collection card through its add step, changes its quick setting and saves, focus coming back each time", async ({
+test("a keyboard alone adds a collection card through its add step, changes its settings in the drawer and saves, focus coming back each time", async ({
   page,
 }) => {
   await dashboardAtRest(page, "light");
@@ -562,17 +560,17 @@ test("a keyboard alone adds a collection card through its add step, changes its 
   await expect(page.getByRole("menu")).toHaveCount(0);
   await expectVisibleFocus(actions);
 
-  // Settings from the menu: the quick popover, focus inside it.
+  // Settings… from the menu: the settings drawer, focus inside it.
   await page.keyboard.press("Enter");
-  const settings = page.getByRole("menuitem", { name: "Settings" });
+  const settings = page.getByRole("menuitem", { name: "Settings…" });
   await expect(settings).toBeFocused();
   await page.keyboard.press("Enter");
-  const popover = page.getByTestId("card-quick-popover");
-  await expect(popover).toBeVisible();
-  await expect.poll(() => focusIsIn(popover)).toBe(true);
+  const drawer = page.getByTestId("widget-settings-drawer");
+  await expect(drawer).toBeVisible();
+  await expect.poll(() => focusIsIn(drawer)).toBe(true);
 
   // Its Date range changed from the keyboard: the list opened, the next range chosen.
-  const range = popover.getByRole("combobox", { name: "Date range" });
+  const range = drawer.getByRole("combobox", { name: "Date range" });
   await tabTo(page, range);
   const was = (await range.textContent())?.trim();
   await page.keyboard.press("Enter");
@@ -586,14 +584,26 @@ test("a keyboard alone adds a collection card through its add step, changes its 
   await page.keyboard.press("Enter");
   await expect(page.getByRole("listbox")).toHaveCount(0);
   await expect(range).not.toHaveText(was ?? "");
+  // A select marks focus by its border, judged against the drawer's other select.
   await expectVisibleFocus(
     range,
-    popover.getByRole("combobox", { name: "Collection" })
+    drawer.getByRole("combobox", { name: "Collection" })
   );
 
-  // Closed with Escape: focus back on the menu button it was opened from.
-  await page.keyboard.press("Escape");
-  await expect(popover).toBeHidden();
+  // Its width, a radio group: the arrows choose the next width.
+  const widths = drawer.getByRole("radiogroup", { name: "Width" });
+  const chosenWidth = widths.getByRole("radio", { checked: true });
+  await tabTo(page, chosenWidth);
+  const wasWidth = await chosenWidth.getAttribute("aria-label");
+  await page.keyboard.press("ArrowRight");
+  await expect(
+    widths.getByRole("radio", { checked: true })
+  ).not.toHaveAttribute("aria-label", wasWidth ?? "");
+
+  // Saved in the drawer: staged with the session's changes, focus back on the menu button.
+  await tabTo(page, drawer.getByRole("button", { name: "Save" }));
+  await page.keyboard.press("Enter");
+  await expect(drawer).toBeHidden();
   await expectVisibleFocus(actions);
 
   // Saved from the bar: customise mode closes, focus on Customize.
@@ -611,16 +621,10 @@ test("a keyboard alone adds a collection card through its add step, changes its 
   expect(saved?.config?.["dateRange"]).toBeDefined();
   expect(saved?.config?.["dateRange"]).not.toBe("30d");
 
-  // At rest: the popover from the card's title, and the card menu, each back on its opener.
-  const title = cell.getByTestId("card-title-button");
-  await tabTo(page, title);
-  await page.keyboard.press("Enter");
-  await expect(popover).toBeVisible();
-  await expect.poll(() => focusIsIn(popover)).toBe(true);
-  await page.keyboard.press("Escape");
-  await expect(popover).toBeHidden();
-  await expectVisibleFocus(title);
-
+  // At rest: the card's title is no control, and the card menu hands focus back to its button.
+  await expect(
+    cell.getByRole("heading", { level: 2 }).getByRole("button")
+  ).toHaveCount(0);
   const menu = cell.getByTestId("card-menu");
   await tabTo(page, menu);
   await page.keyboard.press("Enter");
@@ -629,25 +633,23 @@ test("a keyboard alone adds a collection card through its add step, changes its 
   await expect(page.getByRole("menu")).toHaveCount(0);
   await expectVisibleFocus(menu);
 
-  // More settings, from the popover the title opens: focus into the sheet, the card retitled
-  // there, Done, and focus back on the title the popover was opened from.
-  await tabTo(page, title);
+  // Settings… at rest: focus into the drawer, the card retitled there, Save, and focus back on
+  // the menu button it was opened from.
   await page.keyboard.press("Enter");
-  await expect(popover).toBeVisible();
-  await tabTo(page, popover.getByRole("button", { name: "More settings" }));
+  await expect(page.getByRole("menuitem", { name: "Settings…" })).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(popover).toBeHidden();
-  const sheet = page.getByRole("dialog", { name: /settings$/ });
-  await expect(sheet).toBeVisible();
-  await expect.poll(() => focusIsIn(sheet)).toBe(true);
-  const ownTitle = sheet.getByLabel("Title", { exact: true });
+  await expect(drawer).toBeVisible();
+  await expect.poll(() => focusIsIn(drawer)).toBe(true);
+  const ownTitle = drawer.getByLabel("Title", { exact: true });
   await tabTo(page, ownTitle);
   await page.keyboard.type("Keyboard card");
-  await tabTo(page, sheet.getByRole("button", { name: "Done" }));
+  await tabTo(page, drawer.getByRole("button", { name: "Save" }));
   await page.keyboard.press("Enter");
-  await expect(sheet).toBeHidden();
-  await expectVisibleFocus(title);
-  await expect(title).toHaveText(/Keyboard card/);
+  await expect(drawer).toBeHidden();
+  await expectVisibleFocus(menu);
+  await expect(cell.getByRole("heading", { level: 2 })).toHaveText(
+    /Keyboard card/
+  );
   await expect
     .poll(
       async () =>
