@@ -186,7 +186,9 @@ permissions as no longer declared in the same transaction that records it uninst
 and logs each with the roles that hold it. It changes no grant: the permissions leave
 the role editor and the preset roles' choices and enforce nothing, but a role that held
 one still holds it. Installing the plugin again clears the marks, and the grants are as
-they were.
+they were. A `nextly migrate` with the plugin still in your config leaves them
+as they are: it adds the permissions and roles only of plugins recorded installed, and of
+plugins no install or uninstall has recorded yet.
 
 In production (any mode but development), both commands refuse, before changing
 anything, when the database records that a newer Nextly release set the preset grants:
