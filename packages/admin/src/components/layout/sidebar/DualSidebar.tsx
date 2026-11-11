@@ -23,7 +23,6 @@ import {
 } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useRouter } from "@admin/hooks/useRouter";
-import { useSettingsLanding } from "@admin/hooks/useSettingsLanding";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
 import {
   isMultilingual,
@@ -82,6 +81,7 @@ import type {
   RailItemId,
 } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
+import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { SubSidebarPanel } from "./SubSidebarPanel";
 
 /** Whether each rail entry's section has something to show, keyed by entry id. */
@@ -484,9 +484,14 @@ export function DualSidebar({
   // table and not to the chain became unreachable from the rail. Background
   // Jobs was exactly that — the entry appeared, the link fell through every
   // arm, and a jobs-only operator landed on General Settings, which answers to
-  // manage-settings and returns 403. The same hook places the Settings crumb
-  // of the pages inside the panel, so the two cannot disagree.
-  const settingsHref = useSettingsLanding();
+  // manage-settings and returns 403. The Settings crumb of the pages inside
+  // the panel asks the same function (`useSettingsLanding`), so the two
+  // cannot disagree.
+  const settingsHref = resolveSettingsLanding({
+    hasPermission,
+    canAccessApiKeys: apiKeysReachable,
+    canAccessWebhooks: webhooksReachable,
+  });
 
   const resolveItemHref = (item: MainMenuItem): string =>
     resolveItemHrefHelper(
