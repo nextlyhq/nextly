@@ -47,6 +47,14 @@ export async function followChain(
     }
     const hop = await next(pathOf(current));
     if (hop === null) break;
+    // A hop to another site ends the chain there: its path is that site's,
+    // never one of this site's addresses.
+    if (!hop.startsWith("/")) {
+      const carried = withQueryOf(hop, current);
+      path.push(carried);
+      current = carried;
+      break;
+    }
     if (pathOf(hop) === from) {
       return {
         error: `That makes a loop: ${[from, ...path, hop].join(" → ")}.`,

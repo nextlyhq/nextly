@@ -33,6 +33,7 @@ import {
   respondDoc,
   respondList,
   respondMutation,
+  withSessionCacheHeaders,
 } from "../../api/response-shapes";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { container } from "../../di/container";
@@ -55,7 +56,9 @@ import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
+import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
@@ -73,8 +76,7 @@ import {
   applyPluginAdminViews,
   type CollectionWithAdmin,
 } from "../../plugins/admin-views";
-import { getHandlerConfig } from "../../route-handler/auth-handler";
-import { withSessionCacheHeaders } from "../../routeHandler";
+import { bumpSchemaVersion } from "../../route-handler/schema-version";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -520,7 +522,7 @@ const COLLECTIONS_METHODS: Record<
       );
       // The site's own collections or the plugins', as conditions on the
       // same query: the plugins' list only narrows what the reader may read.
-      const slugLists = slugListsForOwner(owner, "collections", readable);
+      const slugLists = await slugListsForOwner(owner, "collections", readable);
 
       const result = await svc.listCollections({
         page: toNumber(p.page),
@@ -588,7 +590,13 @@ const COLLECTIONS_METHODS: Record<
       });
       // Fold plugin view overrides (contributes.admin.views, D23) onto the
       // collection so the list page's injection slots resolve. Collection slots
-      // win; plugin fills empties (see applyPluginAdminViews).
+      // win; plugin fills empties (see applyPluginAdminViews). The route
+      // handler's config store is loaded here, not imported at the top: it
+      // reaches the auth routes and every plugin's context, several hundred
+      // modules the other collection operations never need.
+      const { getHandlerConfig } = await import(
+        "../../route-handler/auth-handler"
+      );
       const config = getHandlerConfig();
       const [collectionWithViews] = applyPluginAdminViews(
         [collection as CollectionWithAdmin],
@@ -989,11 +997,6 @@ const COLLECTIONS_METHODS: Record<
           const acknowledgedConversions = (
             body as { acknowledgedConversions?: string[] }
           ).acknowledgedConversions;
-          // A translated collection, or one turning translation on or off,
-          // keeps its push in development, which carries values across the
-          // change; the writer writes its migration and records it once the
-          // push has run.
-          const translated = wasLocalized || isLocalized;
           const change: Parameters<typeof applyCollectionSchemaChange>[0] = {
             slug: p.collectionName,
             collection,
@@ -1014,7 +1017,27 @@ const COLLECTIONS_METHODS: Record<
             pushedSummary = (await applyCollectionSchemaChange(change)).summary;
           };
           const written = await saveThroughWriter({
-            ...(translated ? { appliedBy: push } : {}),
+            appliedBy: push,
+            // Whether the push applies the change in development, the writer recording its
+            // migration once the push has run: a translated collection, or one turning
+            // translation on or off, whose push carries its values across the change; and a change
+            // reaching a relation's storage (`reachesRelationStorage`), which the push plans from
+            // the live table, where the file alone, written from the newest snapshot, does not.
+            pushWhen: async () =>
+              wasLocalized ||
+              isLocalized ||
+              reachesRelationStorage({
+                before: collection.fields ?? [],
+                after: fields as unknown as FieldDefinition[],
+                liveTable: async () =>
+                  (
+                    await introspectLiveSnapshot(
+                      adapter.getDrizzle(),
+                      dialect,
+                      [tableName]
+                    )
+                  ).tables[0],
+              }),
             slug: p.collectionName,
             collection: writerRowOf(collection),
             fields: fields as unknown as FieldDefinition[],
@@ -1192,12 +1215,7 @@ const COLLECTIONS_METHODS: Record<
           // successful pipeline apply. The bump only matters for UI-first
           // applies (sets the X-Schema-Version response header so admin tabs
           // know to refetch); HMR and boot paths don't need it.
-          try {
-            const { bumpSchemaVersion } = await import("../../routeHandler");
-            bumpSchemaVersion();
-          } catch {
-            // routeHandler may be unavailable in non-server contexts (tests).
-          }
+          bumpSchemaVersion();
 
           // applySchemaChanges is a non-CRUD mutation: there's no "item" to
           // surface. The action result carries the new schema version (so
@@ -1832,14 +1850,26 @@ async function saveThroughWriter(
   change: WriterChange & {
     /** Applies the change in development instead of the file (`writeCollectionSave`). */
     appliedBy?: () => Promise<void>;
+    /**
+     * Whether `appliedBy` applies this change rather than the file. Asked only where the
+     * answer is used, a save the writer runs in development, so a production save or one with
+     * no writer reads nothing for it. Absent, `appliedBy` applies whenever it is given.
+     */
+    pushWhen?: () => Promise<boolean>;
   }
 ): Promise<{ fields: FieldDefinition[]; applied: boolean } | undefined> {
   const prepared = await writerSaveOf(change);
   if (prepared === undefined) return undefined;
+  const viaPush =
+    change.appliedBy !== undefined &&
+    prepared.deps.applies &&
+    (change.pushWhen === undefined || (await change.pushWhen()));
   const result = await writeCollectionSave(
     prepared.deps,
     prepared.save,
-    change.appliedBy === undefined ? {} : { appliedBy: change.appliedBy }
+    viaPush && change.appliedBy !== undefined
+      ? { appliedBy: change.appliedBy }
+      : {}
   );
   return { fields: prepared.fields, applied: result.applied };
 }

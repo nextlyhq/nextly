@@ -33,6 +33,7 @@ export {
 
 export {
   contentPageMetadata,
+  contentPageStructuredData,
   createContentRoute,
   createPublicContentRoute,
 } from "./content-route";

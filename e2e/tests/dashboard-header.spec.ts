@@ -11,7 +11,7 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
 import { LOCK } from "./support/locks";
@@ -69,8 +69,12 @@ for (const theme of ["light", "dark"] as const) {
     // Nothing else above the cards: no project name, badge, summary or freshness line.
     const main = page.locator("main");
     await expect(main).not.toContainText("Nextly Playground");
-    await expect(page.getByTestId("dashboard-summary-slot")).toHaveCount(0);
-    await expect(page.getByTestId("dashboard-environment")).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByTestId("dashboard-summary-slot")
+    ).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByTestId("dashboard-environment")
+    ).toHaveCount(0);
     await expect(main.getByText(/^Updated .* ago/)).toHaveCount(0);
     await expect(main.getByText("Resume setup")).toHaveCount(0);
 

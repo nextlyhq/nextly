@@ -52,6 +52,21 @@ describe("following a redirect's To address to the end of its chain", () => {
     ).toEqual({ final: "/c?ref=y", path: ["/b?campaign=x", "/c?ref=y"] });
   });
 
+  it("ends a chain at a hop to another site, whatever its path", async () => {
+    expect(
+      await followChain("/a", "/b", hops({ "/b": "https://elsewhere.example/a" }))
+    ).toEqual({
+      final: "https://elsewhere.example/a",
+      path: ["/b", "https://elsewhere.example/a"],
+    });
+    expect(
+      await followChain("/a", "/b", hops({ "/b": "https://elsewhere.example/b" }))
+    ).toEqual({
+      final: "https://elsewhere.example/b",
+      path: ["/b", "https://elsewhere.example/b"],
+    });
+  });
+
   it("refuses a To address already caught in a loop of its own", async () => {
     expect(
       await followChain("/a", "/b", hops({ "/b": "/c", "/c": "/b" }))

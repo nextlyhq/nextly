@@ -9,7 +9,7 @@
  */
 
 import { isLocaleSelector } from "@nextlyhq/plugin-sdk";
-import { formAvailability, NextlyError, NO_SUCH_FORM } from "nextly";
+import { NextlyError, NO_SUCH_FORM } from "nextly";
 import type { PluginContext } from "nextly";
 
 import { asFormDocument, asSubmissionDocument } from "../document-shapes";
@@ -18,6 +18,7 @@ import type {
   SubmissionDocument,
   ResolvedFormBuilderConfig,
 } from "../types";
+import { closedMessageOf, formAvailabilityNow } from "../utils/form-closing";
 import { normalizeFormSettings } from "../utils/form-settings";
 import type { ValidationIssue } from "../utils/generate-schema";
 import {
@@ -29,6 +30,7 @@ import {
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
 
+import { isFormClosed } from "./form-closing-hold";
 import { asPluginSubmission, prepareSubmission } from "./prepare-submission";
 import { checkSpam } from "./spam-detection";
 
@@ -282,10 +284,17 @@ export async function submitForm(
     const redirectFor = () =>
       resolveRedirectUrl(form, pluginConfig, pluginContext, targetRead);
 
+    // Settings come through the one canonical reader: stored settings may
+    // carry legacy keys from earlier builder versions.
+    const settings = normalizeFormSettings(form.settings);
+
     // 2. Check form status. The same reading the HTTP and Direct API paths do,
     // so what a visitor is told does not depend on which entry point their
-    // client used.
-    const availability = formAvailability(form);
+    // client used, then the form's closing time. Its limit is judged where
+    // the submission is stored, under the lock that makes it exact.
+    const availability = formAvailabilityNow(form, settings, {
+      now: new Date(),
+    });
     if (availability.kind !== "open") {
       logger.info?.("Form submission rejected - form not accepting", {
         formSlug,
@@ -305,10 +314,6 @@ export async function submitForm(
       };
     }
 
-    // 2b. Settings come through the one canonical reader — stored settings
-    // may carry legacy keys from earlier builder versions.
-    const settings = normalizeFormSettings(form.settings);
-
     // 2c. Single-submission forms: the same visitor (by IP) submits once.
     // Checked before spam so a repeat visitor gets the honest message
     // instead of an inexplicable success that stored nothing new. This is a
@@ -316,7 +321,10 @@ export async function submitForm(
     // and the check-then-create pair is not atomic, so two truly concurrent
     // submissions can both pass — an airtight version needs a partial
     // unique index the portable field config cannot express yet.
-    if (settings.allowMultipleSubmissions === false && !metadata?.ipAddress) {
+    // One per network address is the one-response check this path makes; the
+    // other modes are not checked here.
+    const onePerAddress = settings.oneResponse === "ip";
+    if (onePerAddress && !metadata?.ipAddress) {
       // Without an identifier there is nothing to deduplicate on. Failing
       // closed would block every server-to-server integration, so the gate
       // stays open — loudly.
@@ -325,7 +333,7 @@ export async function submitForm(
         { formSlug }
       );
     }
-    if (settings.allowMultipleSubmissions === false && metadata?.ipAddress) {
+    if (onePerAddress && metadata?.ipAddress) {
       const existing = await collections.count(
         pluginConfig.formSubmissionOverrides.slug,
         {
@@ -459,6 +467,19 @@ export async function submitForm(
         { ...access, ...(request ? { request } : {}) }
       );
     } catch (error) {
+      // The form's closing is held again where the submission is stored, the
+      // limit under a lock that makes it exact (`form-closing-hold`): the last place
+      // went to a submission stored first, or the closing time passed since
+      // the check above, and this one is told what a visitor to a closed
+      // form is told.
+      if (isFormClosed(error)) {
+        logger.info?.("Form submission refused (form closed)", { formSlug });
+        return {
+          success: false,
+          outcome: "closed",
+          error: closedMessageOf(form),
+        };
+      }
       // The seam refuses a submission over the limit, and refuses it the same
       // way at every door. This answers its own caller with a success anyway: a
       // browser is on the other end of it, and a bot told it was limited learns

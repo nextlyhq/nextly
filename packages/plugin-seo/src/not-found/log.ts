@@ -153,6 +153,10 @@ export async function recordNotFound(
   }
 ): Promise<void> {
   if (notAPageAddress(address.path)) return;
+  // `/gone/` is the address `/gone`, as redirects and the Proxy read it.
+  if (address.path.length > 1 && address.path.endsWith("/")) {
+    address = { ...address, path: address.path.slice(0, -1) };
+  }
   const slug = notFoundSlug(ctx);
   const lastSeen = now.toISOString();
   const key = pathKey(address);

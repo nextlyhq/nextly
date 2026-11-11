@@ -18,6 +18,9 @@ import {
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
 
+import { addressHolders } from "../address-record/participant";
+import { productionAddressesOf } from "../canonical";
+
 import type { Levels } from "./order";
 
 /**
@@ -27,9 +30,16 @@ import type { Levels } from "./order";
  */
 export interface SiteRules {
   siteName?: string;
+  /** Where the site itself is served: bare origins, such as `https://example.com`. */
+  productionAddresses?: readonly string[];
   description?: string;
   image?: PageMetadataImage;
   patterns: Record<string, { title?: string; description?: string }>;
+  /**
+   * The content types hidden from search as a whole, keyed as `patterns`
+   * are: every page of one is served `noindex` and left out of the sitemap.
+   */
+  hiddenTypes?: readonly string[];
 }
 
 /** No rules set: every value comes from the page, its route or its content. */
@@ -109,7 +119,7 @@ function asImage(media: unknown): PageMetadataImage | undefined {
  * A media value as a share image: a populated media document, or an id
  * looked up as the system.
  */
-async function imageOf(
+export async function imageOf(
   ctx: PluginContext,
   value: unknown
 ): Promise<PageMetadataImage | undefined> {
@@ -167,14 +177,20 @@ function firstField(
  * rule forms it where the route read it in one, root-relative or on the
  * language's own domain. None where its type declares no address.
  */
-async function addressOf(
-  type: PublicAddressType,
+export async function addressOf(
+  ctx: PluginContext,
+  page: { type: PublicAddressType; key: string },
   document: Readonly<Record<string, unknown>>,
   locale: string | undefined,
   served: string | undefined
 ): Promise<string | undefined> {
-  const address = await publicAddressOf(type, document, locale);
+  const address = await publicAddressOf(page.type, document, locale);
   if (address.status !== "resolved") return undefined;
+  // An address another page holds is that page's: this one lost it in a
+  // clash and has no canonical until it is given a new address.
+  if (await heldByAnother(ctx, page.key, document, address.path, locale)) {
+    return undefined;
+  }
   let origin = "";
   let path = address.path;
   if (locale !== undefined) {
@@ -184,6 +200,22 @@ async function addressOf(
     path = inLanguage.path;
   }
   return `${origin}${laterListPage(path, served) ?? path}`;
+}
+
+/** Whether the record says a page other than this one holds `path`. */
+async function heldByAnother(
+  ctx: PluginContext,
+  key: string,
+  document: Readonly<Record<string, unknown>>,
+  path: string,
+  locale: string | undefined
+): Promise<boolean> {
+  const holders = await addressHolders(ctx, path, locale);
+  const id = String(document.id ?? "");
+  return (
+    holders.length > 0 &&
+    !holders.some(holder => holder.collection === key && holder.id === id)
+  );
 }
 
 /**
@@ -218,6 +250,7 @@ async function pageLevel(
     socialDescription: textOf(seo.socialDescription),
     image: await imageOf(ctx, seo.ogImage),
     canonical: textOf(seo.canonical),
+    canonicalElsewhere: seo.canonicalElsewhere === true ? true : undefined,
     hidden: seo.noindex === true ? true : undefined,
   });
 }
@@ -304,7 +337,13 @@ export async function levelsOf(
     hasImage(input.code.image) ||
     hasImage(input.derived.image);
   const content = await contentLevel(ctx, document, !higherImage);
-  const address = await addressOf(type, document, input.locale, input.path);
+  const address = await addressOf(
+    ctx,
+    { type, key },
+    document,
+    input.locale,
+    input.path
+  );
   return {
     page,
     code: input.code,
@@ -319,7 +358,11 @@ export async function levelsOf(
       title: rules.siteName,
       description: rules.description,
       image: rules.image,
+      // The environment's addresses win over the settings', as the staging
+      // guard reads them, so the two never disagree about the site's own.
+      productionAddresses: productionAddressesOf(rules.productionAddresses),
     }),
     ...(address === undefined ? {} : { address }),
+    ...(rules.hiddenTypes?.includes(key) === true ? { typeHidden: true } : {}),
   };
 }

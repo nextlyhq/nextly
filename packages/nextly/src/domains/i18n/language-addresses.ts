@@ -91,9 +91,18 @@ export function addressLanguagesOf(
   localization: SanitizedLocalizationConfig | undefined
 ): string[] {
   const codes = localization?.locales.map(language => language.code) ?? [];
-  if (codes.length > 0) return codes;
+  return codes.length > 0 ? codes : [defaultAddressLanguageOf(localization)];
+}
+
+/**
+ * The language an address read with none named is kept in: the site's
+ * default language, or `"en"` where it names none.
+ */
+export function defaultAddressLanguageOf(
+  localization: SanitizedLocalizationConfig | undefined
+): string {
   const fallback = localization?.defaultLocale;
-  return [fallback !== undefined && fallback !== "" ? fallback : "en"];
+  return fallback !== undefined && fallback !== "" ? fallback : "en";
 }
 
 /**

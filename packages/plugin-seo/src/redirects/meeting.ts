@@ -17,12 +17,7 @@ import type {
   PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import {
-  claimKey,
-  pathsAbove,
-  recordSlug,
-  rowOf,
-} from "../address-record/rows";
+import { keysHolding, recordSlug, rowOf } from "../address-record/rows";
 
 import { pickRedirect, type HeldRow } from "./addresses";
 import { redirectsSlug } from "./collection";
@@ -41,10 +36,7 @@ export async function redirectMeeting(
   skip?: string
 ): Promise<string | null> {
   const { locale, path } = address;
-  const keys = [
-    claimKey("address", locale, path),
-    ...[path, ...pathsAbove(path)].map(at => claimKey("range", locale, at)),
-  ];
+  const keys = keysHolding(locale, path);
   const query = {
     where: { claimKey: { in: keys } },
     pagination: { limit: keys.length, page: 1 },

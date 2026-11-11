@@ -83,6 +83,17 @@ export function recordSlug(ctx: PluginContext): string {
 }
 
 /**
+ * The claim keys of the rows that hold `path` in `locale`: the address
+ * itself, held exactly or as a range, and every range above it.
+ */
+export function keysHolding(locale: string, path: string): string[] {
+  return [
+    claimKey("address", locale, path),
+    ...[path, ...pathsAbove(path)].map(at => claimKey("range", locale, at)),
+  ];
+}
+
+/**
  * Whether `path` is the range `range` or below it, by whole path parts:
  * `/old/x` is below `/old`, `/older` is not. The one rule every reader of a
  * range asks: the record's claims, the redirects a pattern matches, and the

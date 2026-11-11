@@ -238,7 +238,7 @@ function nextSteps(
   return [
     ...installStep(project),
     `Make it yours: ${rel(paths.declaration)}${paths.component ? ` and ${rel(paths.component)}` : ""}.`,
-    "See it before it has data: start your dev server and open /admin/dev/widget-previews.",
+    "See it before it has data: its test draws the card from its preview case.",
     project.hasVitest
       ? `Run its test: npx vitest run ${rel(paths.test)}`
       : `Run its test once Vitest is installed (${ADD_DEV[project.manager]} vitest): npx vitest run ${rel(paths.test)}`,

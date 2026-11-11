@@ -110,7 +110,7 @@ export function SettingEditorControl({
         errorFallback={<EditorUnavailable label={label} />}
       />
       {problem === undefined ? null : (
-        <p role="alert" className="mt-1 text-sm text-destructive">
+        <p role="alert" className="mt-1 text-sm text-danger-text">
           {problem}
         </p>
       )}

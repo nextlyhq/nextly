@@ -20,7 +20,10 @@ import {
   resolveLocalizedValue,
 } from "../i18n/companion-join";
 import { appLocalization } from "../i18n/configured-locales";
-import { addressLanguagesOf } from "../i18n/language-addresses";
+import {
+  addressLanguagesOf,
+  defaultAddressLanguageOf,
+} from "../i18n/language-addresses";
 import {
   publishesPerLanguage,
   storesPerLanguage,
@@ -57,6 +60,15 @@ export interface LanguageVersion {
  */
 export function addressLanguages(): string[] {
   return addressLanguagesOf(appLocalization());
+}
+
+/**
+ * The language an address read with none named is held in: the site's
+ * default language as it is now, a choice made in Settings included, or
+ * `"en"` where it names none.
+ */
+export function defaultAddressLanguage(): string {
+  return defaultAddressLanguageOf(appLocalization());
 }
 
 /** The type a write names: `single:<slug>` is a Single, anything else a collection. */

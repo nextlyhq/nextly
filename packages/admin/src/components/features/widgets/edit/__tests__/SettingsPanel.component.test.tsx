@@ -539,6 +539,10 @@ describe("the settings sheet with a note", () => {
     expect(text).toHaveAccessibleDescription(
       expect.stringContaining("1 character over the limit")
     );
+    // Past the bound, in the danger status's text colour, not a destructive action's.
+    expect(screen.getByTestId("setting-left-text")).toHaveClass(
+      "text-danger-text"
+    );
   });
 
   it("keeps a note of five characters that take ten UTF-16 units", async () => {
