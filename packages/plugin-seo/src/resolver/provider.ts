@@ -29,7 +29,7 @@ export type ReadRules = (
 ) => Promise<SiteRules>;
 
 /** No settings yet: the site's rules are empty. */
-export const noRules: ReadRules = () => Promise.resolve(NO_RULES);
+const noRules: ReadRules = () => Promise.resolve(NO_RULES);
 
 /**
  * The one resolution of a page: its answer, every value with its source,
