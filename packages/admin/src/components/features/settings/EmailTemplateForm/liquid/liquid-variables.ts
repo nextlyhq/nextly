@@ -50,6 +50,12 @@ interface OutputRange {
   hasDefault: boolean;
   /** The default filters' arguments' token ranges, literals and variables. */
   defaultArgs: Array<{ begin: number; end: number }>;
+  /**
+   * The argument token ranges of every non-default filter: a variable written
+   * as a filter argument (`{{ text | append: suffix }}`) is read by the filter,
+   * not rendered as the output's value, so it is not a written output use.
+   */
+  filterArgs: Array<{ begin: number; end: number }>;
 }
 
 /** The templates a block tag renders: its branches, body and else. */
@@ -74,20 +80,23 @@ function outputsOf(templates: Template[]): OutputRange[] {
       const defaults = node.value.filters.filter(
         filter => filter.name === "default"
       );
+      // Each argument is a token at runtime; the parsed type does not say
+      // so, so its offsets are read where they are.
+      const argTokens = (filter: { args?: unknown[] }) =>
+        (filter.args ?? []).flatMap(arg => {
+          const token = arg as { begin?: number; end?: number };
+          return token.begin !== undefined && token.end !== undefined
+            ? [{ begin: token.begin, end: token.end }]
+            : [];
+        });
       outputs.push({
         begin: node.token.begin,
         end: node.token.end,
         hasDefault: defaults.length > 0,
-        // Each argument is a token at runtime; the parsed type does not say
-        // so, so its offsets are read where they are.
-        defaultArgs: defaults.flatMap(filter =>
-          (filter.args ?? []).flatMap(arg => {
-            const token = arg as { begin?: number; end?: number };
-            return token.begin !== undefined && token.end !== undefined
-              ? [{ begin: token.begin, end: token.end }]
-              : [];
-          })
-        ),
+        defaultArgs: defaults.flatMap(argTokens),
+        filterArgs: node.value.filters
+          .filter(filter => filter.name !== "default")
+          .flatMap(argTokens),
       });
     }
     pending.push(...blockChildren(node));
@@ -172,9 +181,15 @@ function writtenAt(
 } {
   const outputIndex = enclosingOutput(outputs, at);
   const output = outputIndex === -1 ? undefined : outputs[outputIndex];
+  // A variable written as an ordinary filter argument (e.g. `| append: v`) is
+  // consumed by the filter, not rendered as the output's value: it is not a
+  // "written" use and must not be reported blank.
+  const inFilterArg =
+    output?.filterArgs.some(range => range.begin <= at && at < range.end) ??
+    false;
   return {
-    output,
-    outputIndex: outputIndex === -1 ? null : outputIndex,
+    output: inFilterArg ? undefined : output,
+    outputIndex: inFilterArg || outputIndex === -1 ? null : outputIndex,
     inDefaultArg:
       output?.defaultArgs.some(range => range.begin <= at && at < range.end) ??
       false,

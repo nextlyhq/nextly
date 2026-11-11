@@ -139,6 +139,18 @@ describe("what renders blank", () => {
     ).toEqual([]);
   });
 
+  it("does not mark a filter argument as a written output use", () => {
+    // `suffix` is consumed by `append`, not rendered as the output's value:
+    // it must not be reported blank when it has no sample value.
+    const source =
+      '{% unless closed %}{{ "Hello " | append: suffix }}{% endunless %}';
+    expect(missingValues(source, {}).map(u => u.path)).toEqual([]);
+    // `name` is the output's own value and renders blank when absent.
+    expect(missingValues("{{ name | upcase }}", {}).map(u => u.path)).toEqual([
+      "name",
+    ]);
+  });
+
   it("reads list properties as Liquid does", () => {
     const data = { order: { lines: [{ title: "Tea" }, { title: "Cake" }] } };
     expect(valueAt(data, ["order", "lines", "size"])).toBe(2);
