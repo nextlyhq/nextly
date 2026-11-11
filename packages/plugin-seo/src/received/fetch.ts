@@ -51,11 +51,11 @@ export interface ResolvedAddress {
 /** Looks a name up: every address it answers. */
 export type Resolve = (name: string) => Promise<ResolvedAddress[]>;
 
-/** One request, to be made to exactly `ip`. */
+/** One request, to be made to the addresses checked for it alone. */
 export interface TransportRequest {
   url: URL;
-  ip: string;
-  family: 4 | 6;
+  /** Every address the name was checked to answer, in the order it gave. */
+  addresses: readonly [ResolvedAddress, ...ResolvedAddress[]];
   headers: Record<string, string>;
   signal: AbortSignal;
   maxBytes: number;
@@ -150,8 +150,8 @@ function unpacked(message: IncomingMessage): Readable {
 }
 
 /**
- * The transport the check uses: Node's own HTTP client, connected to the
- * address it is given whatever the name would resolve to, with a fresh
+ * The transport the check uses: Node's own HTTP client, connected only to
+ * the addresses it is given whatever the name would resolve to, with a fresh
  * connection each time so none is shared with another address. The name
  * still travels as the request's host and, over https, as the name the
  * certificate is checked against.
@@ -161,9 +161,11 @@ export function nodeTransport(
 ): Promise<TransportAnswer> {
   const pinned: LookupFunction = (_name, options, callback) => {
     if (options.all === true) {
-      callback(null, [{ address: request.ip, family: request.family }]);
+      // Every checked address, so the client tries the next where one
+      // can't be reached, as it would for a name it looked up itself.
+      callback(null, [...request.addresses]);
     } else {
-      callback(null, request.ip, request.family);
+      callback(null, request.addresses[0].address, request.addresses[0].family);
     }
   };
   const send = request.url.protocol === "https:" ? httpsRequest : httpRequest;
@@ -291,7 +293,7 @@ async function addressFor(
   origins: readonly string[],
   resolve: Resolve,
   signal: AbortSignal
-): Promise<ResolvedAddress | Refusal | undefined> {
+): Promise<[ResolvedAddress, ...ResolvedAddress[]] | Refusal | undefined> {
   const host = url.hostname.replace(/^\[|\]$/g, "");
   const literal = kindOfIp(host) !== undefined;
   const answers = literal
@@ -302,7 +304,8 @@ async function addressFor(
     const refused = mayConnect(url, answer.address, origins);
     if (refused !== undefined) return refused;
   }
-  return answers[0];
+  const [first, ...rest] = answers;
+  return first === undefined ? undefined : [first, ...rest];
 }
 
 /** The headers a crawler sends. */
@@ -344,15 +347,14 @@ async function hop(
       started
     );
   }
-  if ("reason" in address) {
+  if (!Array.isArray(address)) {
     return refusedHop(address, url, redirects, started);
   }
   const transport = options.transport ?? nodeTransport;
   return until(
     transport({
       url,
-      ip: address.address,
-      family: address.family,
+      addresses: address,
       headers: crawlerHeaders(userAgent),
       signal,
       maxBytes: limits.maxBytes,

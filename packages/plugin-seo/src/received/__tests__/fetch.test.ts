@@ -223,9 +223,11 @@ describe("fetching a page as a crawler", () => {
     });
     expect(fetched).toMatchObject({ kind: "received", status: 200 });
     expect(resolve).toHaveBeenCalledTimes(1);
-    expect(transport.asked.map(request => request.ip)).toEqual([
-      "93.184.216.34",
-    ]);
+    expect(
+      transport.asked.map(request =>
+        request.addresses.map(({ address }) => address)
+      )
+    ).toEqual([["93.184.216.34"]]);
   });
 
   it("follows 5 redirects and stops at the sixth", async () => {
@@ -321,6 +323,26 @@ describe("fetching a page as a crawler", () => {
 });
 
 describe("the connection", () => {
+  it("tries each address it checked in turn, where the first can't be reached", async () => {
+    // The site answers on IPv4 alone; its name answers IPv6 first, as many
+    // names do for a server with no IPv6 route.
+    const origin = await serve((_req, res) => {
+      res.writeHead(200).end("<title>Reached</title>");
+    });
+    const port = new URL(origin).port;
+    const answer = await nodeTransport({
+      url: new URL(`http://dual.invalid:${port}/`),
+      addresses: [
+        { address: "::1", family: 6 },
+        { address: "127.0.0.1", family: 4 },
+      ],
+      headers: { "user-agent": GOOGLEBOT },
+      signal: AbortSignal.timeout(5_000),
+      maxBytes: 1_000,
+    });
+    expect(answer).toMatchObject({ kind: "answer", status: 200 });
+  });
+
   it("goes to the address it is given, never looking the name up again", async () => {
     let host: string | undefined;
     const origin = await serve((req, res) => {
@@ -331,8 +353,7 @@ describe("the connection", () => {
     // `.invalid` never resolves: only the pinned address can be reached.
     const answer = await nodeTransport({
       url: new URL(`http://pinned.invalid:${port}/`),
-      ip: "127.0.0.1",
-      family: 4,
+      addresses: [{ address: "127.0.0.1", family: 4 }],
       headers: { "user-agent": GOOGLEBOT },
       signal: AbortSignal.timeout(5_000),
       maxBytes: 1_000,
