@@ -76,11 +76,12 @@ describe("seoPlugin", () => {
 
   it("omits the sitemap route when sitemap is disabled", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
-    // No public enumeration route when the sitemap is turned off: the one
-    // route left is the settings screen's, which asks for a signed-in reader.
+    // No public enumeration route when the sitemap is turned off: the routes
+    // left are the settings screen's, which ask for a signed-in reader.
     const routes = plugin.contributes?.routes ?? [];
     expect(routes.map(route => route.path)).toEqual([
       "/settings/content-types",
+      "/settings/document",
     ]);
     expect(routes.some(route => route.public === true)).toBe(false);
     // The SEO fields are still contributed.

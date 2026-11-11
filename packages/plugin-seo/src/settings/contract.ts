@@ -24,6 +24,17 @@ export type AiCrawlerChoice = (typeof AI_CRAWLER_CHOICES)[number];
 /** First-time setup's three steps; this many done means it is finished. */
 export const SETUP_STEPS = 3;
 
+/**
+ * Where the settings screen asks which Single holds the settings: its slug
+ * as the host registered it, which a host's rename changes.
+ */
+export const SETTINGS_DOCUMENT_ROUTE_PATH = "/settings/document";
+
+/** What the settings document route answers. */
+export interface SettingsDocumentBody {
+  single: string;
+}
+
 /** Where the settings screen reads its content types, under the plugin's routes. */
 export const CONTENT_TYPES_ROUTE_PATH = "/settings/content-types";
 

@@ -6,7 +6,9 @@
  * @module settings/content-types-route
  */
 import {
+  NextlyError,
   publicAddressOf,
+  respondDoc,
   respondList,
   typesWithoutAddress,
   type PluginRoute,
@@ -18,6 +20,8 @@ import { isRecord, textOf } from "../plain-values";
 import {
   CONTENT_TYPES_ROUTE_PATH,
   SEO_SETTINGS_SLUG,
+  SETTINGS_DOCUMENT_ROUTE_PATH,
+  type SettingsDocumentBody,
   type PatternExample,
   type PatternField,
   type SeoContentType,
@@ -53,22 +57,33 @@ function labelOf(slug: string, meta: Record<string, unknown>): string {
   );
 }
 
-/** The newest entry of `slug`, read as the system, or none. */
+/**
+ * The newest entry of `slug` the person asking may read, read as them, so
+ * the collection's row and field rules decide what the preview shows; none
+ * where they may read none.
+ */
 async function newestEntry(
   ctx: PluginRouteContext,
   slug: string
 ): Promise<Record<string, unknown> | undefined> {
-  const page = await ctx.services.collections.listEntries(
-    slug,
-    {
-      depth: 0,
-      sort: { field: "updatedAt", direction: "desc" },
-      pagination: { limit: 1, page: 1 },
-    },
-    { as: "system" }
-  );
-  const first: unknown = (page as { data?: unknown[] }).data?.[0];
-  return isRecord(first) ? first : undefined;
+  if (ctx.user === null) return undefined;
+  try {
+    const page = await ctx.services.collections.listEntries(
+      slug,
+      {
+        depth: 0,
+        sort: { field: "updatedAt", direction: "desc" },
+        pagination: { limit: 1, page: 1 },
+      },
+      { as: "user", user: ctx.user }
+    );
+    const first: unknown = (page as { data?: unknown[] }).data?.[0];
+    return isRecord(first) ? first : undefined;
+  } catch (error) {
+    // A reader refused the type's entries gets no preview page, not an error.
+    if (NextlyError.isCode(error, "FORBIDDEN")) return undefined;
+    throw error;
+  }
 }
 
 /** One content type as the screen lists it, for this reader. */
@@ -89,10 +104,9 @@ async function contentTypeOf(
       : []
   );
   const isPublic = !withoutAddress.has(slug);
-  // An example only for a reader who may read the type's entries: the
+  // An example only from what the reader may read of the type's entries: the
   // settings permission alone must not show them a page's title.
-  const mayRead = (await ctx.caller?.can("read", slug)) === true;
-  const entry = mayRead ? await newestEntry(ctx, slug) : undefined;
+  const entry = await newestEntry(ctx, slug);
   let example: PatternExample | undefined;
   if (entry !== undefined) {
     example = exampleOf(entry, fields);
@@ -138,6 +152,24 @@ export function contentTypesRoute(collections: readonly string[]): PluginRoute {
         hasNext: false,
         hasPrev: false,
       });
+    },
+  };
+}
+
+/**
+ * The route that names the Single holding the settings, as the host
+ * registered it, so the screen reads and saves the renamed one.
+ */
+export function settingsDocumentRoute(): PluginRoute {
+  return {
+    method: "GET",
+    path: SETTINGS_DOCUMENT_ROUTE_PATH,
+    requiredPermission: ({ single }) => single(SEO_SETTINGS_SLUG, "read"),
+    handler: (_req, ctx) => {
+      const body: SettingsDocumentBody = {
+        single: ctx.self.singles[SEO_SETTINGS_SLUG] ?? SEO_SETTINGS_SLUG,
+      };
+      return Promise.resolve(respondDoc(body));
     },
   };
 }

@@ -41,6 +41,8 @@ export interface SetupDialogProps extends TabProps {
   types: readonly SeoContentType[];
   /** Saves the draft as it stands, and resolves once it is stored. */
   save: (next: SettingsDraft) => Promise<boolean>;
+  /** Why the last save failed, said in the dialog too; null when none did. */
+  failure: string | null;
   /** Closes the dialog; `tab` is where to land after the last step. */
   close: (tab?: TabId) => void;
 }
@@ -319,6 +321,7 @@ export function SetupDialog({
   change,
   types,
   save,
+  failure,
   close,
 }: SetupDialogProps): JSX.Element {
   const [step, setStep] = useState<Step>(firstStep);
@@ -342,14 +345,14 @@ export function SetupDialog({
     if (saved) setStep(nextOf(from));
   };
 
-  /** Close part-way: keep the answers given, and offer setup again later. */
+  /**
+   * Close part-way: keep the answers given, and offer setup again later. It
+   * closes whether or not that is saved, so a person who may only read the
+   * settings is never kept in it.
+   */
   const finishLater = async () => {
-    if (step === "done") {
-      close();
-      return;
-    }
-    const saved = await save({ ...draft, setupDismissed: true });
-    if (saved) close();
+    close();
+    if (step !== "done") await save({ ...draft, setupDismissed: true });
   };
 
   return (
@@ -376,6 +379,11 @@ export function SetupDialog({
           </div>
         )}
         <div className="nx-seo-dlg-body">
+          {failure === null ? null : (
+            <p className="nx-seo-error" role="alert">
+              Not saved. {failure}
+            </p>
+          )}
           <StepBody
             step={step}
             draft={draft}

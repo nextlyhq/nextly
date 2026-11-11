@@ -51,9 +51,16 @@ const CASES: SeoContentType = {
   public: false,
 };
 
-function serving(document: Record<string, unknown>): void {
+/** How the fake server answers a save: at once, unless a test holds it. */
+let answerSave: (body: Record<string, unknown>) => Promise<void>;
+
+function serving(
+  document: Record<string, unknown>,
+  single = "seo-settings"
+): void {
   stored = { id: "s1", updatedAt: "", ...document };
   sent = [];
+  answerSave = () => Promise.resolve();
   const refetch = vi.fn(async () => ({ data: stored }));
   vi.mocked(useSingleDocument).mockImplementation(
     () =>
@@ -66,6 +73,7 @@ function serving(document: Record<string, unknown>): void {
       ({
         mutateAsync: vi.fn(async (body: Record<string, unknown>) => {
           sent.push(body);
+          await answerSave(body);
           const { _rev: _read, _overwrite: _replace, ...values } = body;
           const revision = Number(stored._rev ?? 0) + 1;
           stored = { ...stored, ...values, _rev: String(revision) };
@@ -73,13 +81,18 @@ function serving(document: Record<string, unknown>): void {
         }),
       }) as unknown as ReturnType<typeof useUpdateSingleDocument>
   );
-  vi.mocked(usePluginRoute).mockReturnValue({
-    data: { items: [POSTS, CASES] },
-    pending: false,
-    error: null,
-    refetch: () => {},
-    fetching: false,
-  });
+  vi.mocked(usePluginRoute).mockImplementation(
+    request =>
+      ({
+        data: request.path.endsWith("/document")
+          ? { single }
+          : { items: [POSTS, CASES] },
+        pending: false,
+        error: null,
+        refetch: () => {},
+        fetching: false,
+      }) as ReturnType<typeof usePluginRoute>
+  );
 }
 
 /** Waits for every pending save and the re-read after it. */
@@ -358,5 +371,66 @@ describe("a brand fact", () => {
         _rev: "3",
       },
     ]);
+  });
+});
+
+describe("saving", () => {
+  it("keeps what was typed while a save was on its way", async () => {
+    serving({ _rev: "2", siteName: "Acme", setupStep: 3 });
+    let finish = () => {};
+    answerSave = () =>
+      new Promise<void>(resolve => {
+        finish = resolve;
+      });
+    render(<SeoSettingsPage />);
+    fireEvent.click(screen.getByRole("tab", { name: "General" }));
+
+    fireEvent.change(screen.getByLabelText("Site name"), {
+      target: { value: "Acme Ltd" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+    fireEvent.change(screen.getByLabelText("Default description"), {
+      target: { value: "Typed while saving" },
+    });
+    finish();
+    await settle();
+
+    expect(sent).toEqual([{ siteName: "Acme Ltd", _rev: "2" }]);
+    expect(
+      (screen.getByLabelText("Default description") as HTMLTextAreaElement)
+        .value
+    ).toBe("Typed while saving");
+    // Still unsaved, so it can be saved next.
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
+      "disabled",
+      false
+    );
+  });
+
+  it("reads and saves the Single under the name the host gave it", async () => {
+    serving({ _rev: "1", setupStep: 3 }, "site-seo");
+    render(<SeoSettingsPage />);
+
+    expect(vi.mocked(useSingleDocument).mock.calls.at(-1)?.[0]).toBe(
+      "site-seo"
+    );
+    expect(vi.mocked(useUpdateSingleDocument).mock.calls.at(-1)?.[0]).toBe(
+      "site-seo"
+    );
+  });
+
+  it("lets a person who may not save close first-time setup", async () => {
+    serving({});
+    answerSave = () =>
+      Promise.reject(new Error("You may not change these settings."));
+    render(<SeoSettingsPage />);
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    await settle();
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText("Finish setting up SEO.")).toBeTruthy();
   });
 });

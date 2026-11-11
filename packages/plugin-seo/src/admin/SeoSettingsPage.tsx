@@ -17,8 +17,9 @@ import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import {
   CONTENT_TYPES_ROUTE_PATH,
   SEO_PLUGIN_NAME,
-  SEO_SETTINGS_SLUG,
+  SETTINGS_DOCUMENT_ROUTE_PATH,
   SETUP_STEPS,
+  type SettingsDocumentBody,
   type SeoContentType,
 } from "../settings/contract";
 
@@ -66,7 +67,15 @@ interface ContentTypesBody {
 
 /** The SEO settings screen, as the admin mounts it. */
 export function SeoSettingsPage(): JSX.Element {
-  const settings = useSingleDocument(SEO_SETTINGS_SLUG);
+  // The Single as the host registered it: a host may rename it.
+  const where = usePluginRoute<SettingsDocumentBody>({
+    plugin: SEO_PLUGIN_NAME,
+    path: SETTINGS_DOCUMENT_ROUTE_PATH,
+  });
+  const slug = where.data?.single;
+  const settings = useSingleDocument(slug, {
+    queryOptions: { enabled: slug !== undefined },
+  });
   const types = usePluginRoute<ContentTypesBody>({
     plugin: SEO_PLUGIN_NAME,
     path: CONTENT_TYPES_ROUTE_PATH,
@@ -74,14 +83,19 @@ export function SeoSettingsPage(): JSX.Element {
     staleTime: 0,
   });
 
+  const failed = where.error ?? settings.error;
   let body: JSX.Element;
-  if (settings.error) {
+  if (failed) {
     body = (
       <p className="nx-seo-alert" role="alert">
-        The SEO settings could not be read. {apiErrorMessage(settings.error)}
+        The SEO settings could not be read. {apiErrorMessage(failed)}
       </p>
     );
-  } else if (settings.data === undefined || types.pending) {
+  } else if (
+    slug === undefined ||
+    settings.data === undefined ||
+    types.pending
+  ) {
     body = (
       <p className="nx-seo-state" role="status">
         Loading the SEO settings…
@@ -90,6 +104,7 @@ export function SeoSettingsPage(): JSX.Element {
   } else {
     body = (
       <SettingsScreen
+        slug={slug}
         stored={settings.data}
         types={types.data?.items ?? []}
         typesFailed={types.error !== null}
@@ -107,10 +122,11 @@ export function SeoSettingsPage(): JSX.Element {
 
 /** The draft, the settings it is compared with, and how a save goes. */
 function useSettingsSave(
+  slug: string,
   initial: StoredSettings,
   reread: () => Promise<StoredSettings | undefined>
 ) {
-  const update = useUpdateSingleDocument(SEO_SETTINGS_SLUG);
+  const update = useUpdateSingleDocument(slug);
   // The settings as last read or saved, which the draft is compared with.
   const [stored, setStored] = useState(initial);
   const [draft, setDraft] = useState<SettingsDraft>(() => draftOf(initial));
@@ -130,7 +146,9 @@ function useSettingsSave(
         const fresh = await reread();
         if (fresh !== undefined) {
           setStored(fresh);
-          setDraft(draftOf(fresh));
+          // Edits made while the save was on its way are kept: only a draft
+          // nobody touched since is replaced by what was stored.
+          setDraft(current => (current === next ? draftOf(fresh) : current));
         }
         return true;
       } catch (error) {
@@ -280,19 +298,60 @@ function SettingsPanel({
   );
 }
 
+/** The heading, and the one button that saves every tab. */
+function SettingsHeader({
+  unsavedProblem,
+  canSave,
+  saving,
+  save,
+}: {
+  /** What stops unsaved changes being saved, if anything does. */
+  unsavedProblem: string | null;
+  canSave: boolean;
+  saving: boolean;
+  save: () => void;
+}): JSX.Element {
+  return (
+    <header className="nx-seo-head">
+      <div>
+        <h1>SEO settings</h1>
+        <p>Rules for the whole site. A page&apos;s own values always win.</p>
+      </div>
+      <div className="nx-seo-acts">
+        {unsavedProblem === null ? null : (
+          <span className="nx-seo-help">{unsavedProblem}</span>
+        )}
+        <Button type="button" disabled={!canSave} onClick={save}>
+          {saving ? "Saving…" : "Save changes"}
+        </Button>
+      </div>
+    </header>
+  );
+}
+
+/** The step setup opens on: the first not yet answered, else the first. */
+function firstSetupStep(stepsDone: number): 1 | 2 | 3 {
+  return stepsDone >= SETUP_STEPS
+    ? 1
+    : (Math.min(stepsDone + 1, SETUP_STEPS) as 1 | 2 | 3);
+}
+
 /** The screen once the settings are read. */
 function SettingsScreen({
+  slug,
   stored: initial,
   types,
   typesFailed,
   reread,
 }: {
+  slug: string;
   stored: StoredSettings;
   types: readonly SeoContentType[];
   typesFailed: boolean;
   reread: () => Promise<StoredSettings | undefined>;
 }): JSX.Element {
   const { stored, draft, setDraft, save, saving, failure } = useSettingsSave(
+    slug,
     initial,
     reread
   );
@@ -327,24 +386,12 @@ function SettingsScreen({
           reopen={() => setSetupOpen(true)}
         />
       ) : null}
-      <header className="nx-seo-head">
-        <div>
-          <h1>SEO settings</h1>
-          <p>Rules for the whole site. A page&apos;s own values always win.</p>
-        </div>
-        <div className="nx-seo-acts">
-          {changes !== null && problem !== null ? (
-            <span className="nx-seo-help">{problem}</span>
-          ) : null}
-          <Button
-            type="button"
-            disabled={changes === null || problem !== null || saving}
-            onClick={saveChanges}
-          >
-            {saving ? "Saving…" : "Save changes"}
-          </Button>
-        </div>
-      </header>
+      <SettingsHeader
+        unsavedProblem={changes !== null ? problem : null}
+        canSave={changes !== null && problem === null && !saving}
+        saving={saving}
+        save={saveChanges}
+      />
       {failure === null ? null : (
         <p className="nx-seo-alert" role="alert">
           Not saved. {failure}
@@ -366,15 +413,12 @@ function SettingsScreen({
       {setupOpen ? (
         <SetupDialog
           open
-          firstStep={
-            finished
-              ? 1
-              : (Math.min(draft.setupStep + 1, SETUP_STEPS) as 1 | 2 | 3)
-          }
+          firstStep={firstSetupStep(draft.setupStep)}
           draft={draft}
           change={tabProps.change}
           types={types}
           save={save}
+          failure={failure}
           close={landOn => {
             setSetupOpen(false);
             if (landOn !== undefined) choose(landOn);

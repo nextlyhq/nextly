@@ -27,6 +27,7 @@ import type { SeoContentType } from "../contract";
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
 const POSTS = "seoc_posts";
 const CASES = "seoc_cases";
+const NOTES = "seoc_notes";
 
 let current: TestNextly | undefined;
 
@@ -38,10 +39,18 @@ afterEach(async () => {
 describe.each(getConfiguredTestDialects())(
   "the content types the SEO settings list (%s)",
   (dialect: TestDialect) => {
-    async function boot() {
+    async function boot(withNotes = false) {
+      const notes = defineCollection({
+        slug: NOTES,
+        labels: { singular: "Note", plural: "Notes" },
+        // Everyone who may read notes reads the open team's only.
+        access: { read: () => ({ team: { equals: "open" } }) },
+        fields: [text({ name: "title" }), text({ name: "team" })],
+      });
       const t = await createTestNextly({
         dialect,
         collections: [
+          ...(withNotes ? [notes] : []),
           defineCollection({
             slug: POSTS,
             labels: { singular: "Blog post", plural: "Blog posts" },
@@ -59,7 +68,11 @@ describe.each(getConfiguredTestDialects())(
             fields: [text({ name: "name" })],
           }),
         ],
-        plugins: [seoPlugin({ collections: [POSTS, CASES] })],
+        plugins: [
+          seoPlugin({
+            collections: withNotes ? [NOTES] : [POSTS, CASES],
+          }),
+        ],
       });
       current = t;
       return t;
@@ -197,6 +210,28 @@ describe.each(getConfiguredTestDialects())(
       ]);
 
       expect((await listFor(t, nobody)).status).toBe(403);
+    });
+
+    it("shows a reader only a page their own read rules let them see", async () => {
+      const t = await boot(true);
+      await personWith(t, "owner", []);
+      await t.nextly.create({
+        collection: NOTES,
+        data: { title: "Open note", team: "open" },
+      });
+      await t.nextly.create({
+        collection: NOTES,
+        data: { title: "Closed note", team: "closed" },
+      });
+      const reader = await personWith(t, "note-reader", [
+        "read-seo-settings",
+        `read-${NOTES}`,
+      ]);
+
+      const { status, items } = await listFor(t, reader);
+
+      expect(status).toBe(200);
+      expect(items?.[0]?.example?.title).toBe("Open note");
     });
   }
 );

@@ -25,7 +25,10 @@ import {
 } from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
 import { seoPageMetadata } from "./resolver/provider";
-import { contentTypesRoute } from "./settings/content-types-route";
+import {
+  contentTypesRoute,
+  settingsDocumentRoute,
+} from "./settings/content-types-route";
 import {
   SEO_SETTINGS_SLUG,
   SETTINGS_PAGE,
@@ -229,7 +232,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // What the settings screen lists: the types SEO is added to.
-    routes: [contentTypesRoute(targets)],
+    routes: [contentTypesRoute(targets), settingsDocumentRoute()],
     // The SEO settings screen, for whoever may read the settings.
     admin: {
       menu: [
