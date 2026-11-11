@@ -53,6 +53,10 @@ import {
   resolveDeclaredSchema,
   type ResolvedEntity,
 } from "../../domains/schema/migrate/resolved-schema";
+import {
+  compileAppStreamTables,
+  type AppStreamTables,
+} from "../../domains/schema/migrate-create/app-stream";
 import { withCyclicForeignKeysSplit } from "../../domains/schema/migrate-create/cyclic-foreign-keys";
 import {
   formatMigrationFile,
@@ -66,7 +70,10 @@ import {
 } from "../../domains/schema/migrate-create/snapshot-io";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
-import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
+import type {
+  ContributedElements,
+  NextlySchemaSnapshot,
+} from "../../domains/schema/pipeline/diff/types";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import {
   isCompanionTable,
@@ -122,18 +129,10 @@ interface BaselineOptions {
  * in it. A permissions error swallowed into `[]` would report "nothing to
  * adopt" and leave the operator believing their schema was already recorded.
  */
-async function listManagedTables(
-  adapter: CLIDatabaseAdapter,
-  knownJunctions: ReadonlySet<string>
-): Promise<string[]> {
-  const names = await (
+async function listTableNames(adapter: CLIDatabaseAdapter): Promise<string[]> {
+  return (
     adapter as unknown as { listTables: () => Promise<string[]> }
   ).listTables();
-  // A custom `options.junctionTable` name need not carry a managed prefix, and
-  // the production DDL uses it verbatim — so filtering on the prefix alone
-  // drops an existing relationship table from adoption entirely, and a fresh
-  // environment rebuilt from the baseline has nowhere to write links.
-  return names.filter(n => isManagedTable(n) || knownJunctions.has(n));
 }
 
 /**
@@ -397,6 +396,19 @@ export interface BaselineCoreDeps {
    * undeclared table and emit `DROP TABLE`, taking the relationship rows.
    */
   knownJunctions?: ReadonlySet<string>;
+  /**
+   * The app's extension schema, compiled exactly as `migrate:create` compiles
+   * it (`compileAppStreamTables`).
+   *
+   * Without it a table the app declares through `db.schema.extend` carries no
+   * managed prefix, so it is neither adopted into the snapshot nor written
+   * into the migration's body — and the next `migrate:create`, which compiles
+   * the stream on its own, re-emits the `CREATE TABLE` for a table that is
+   * already standing. An element the app contributes to another owner's table
+   * has the same failure one step removed: the contribution is recorded
+   * nowhere, so it is diffed as new.
+   */
+  appStream?: AppStreamTables;
   /** What the declared schema names, which old Builder files are judged against. */
   declared?: DeclaredNames;
   /**
@@ -464,6 +476,8 @@ interface PlannedAdoption {
   sqlContent: string;
   metaDir: string;
   snapshot: NextlySchemaSnapshot;
+  /** The app's contributed elements, by table, for the snapshot to record. */
+  contributions: Record<string, ContributedElements>;
 }
 
 /** The outcome of planning: an adoption to carry out, or why there is none. */
@@ -538,6 +552,53 @@ async function derivedTableStatements(
 }
 
 /**
+ * Fold the app's extension schema into the adopted snapshot, and name the
+ * elements that were the app's to migrate.
+ *
+ * A table the app owns is adopted from the database like every other table —
+ * its name reaches the adoption filter, and introspection records it. A table
+ * it only contributes an element to is another owner's — a plugin's or a core
+ * table — so it never enters the adoption SQL, whose lifecycle belongs to the
+ * owner's own stream. But the snapshot still has to record it: the next
+ * `migrate:create` diffs such a table over its owner's current declaration
+ * plus the elements the app's last snapshot credited to it, and a baseline
+ * that recorded neither makes that generation re-emit every element the app
+ * contributed — against a database that already has them.
+ *
+ * The copy is the compiled schema's, never an introspected one: the app's
+ * elements are picked out of it by name, from the `contributions` record
+ * written beside it, so the two must describe the same table. The record is
+ * written only for a table standing in the database — one the app contributes
+ * to that is not there has its elements still to arrive, and they must stay
+ * free to arrive through the app's first migration after this baseline.
+ */
+function withAppStreamTables(
+  snapshot: NextlySchemaSnapshot,
+  appStream: AppStreamTables | undefined,
+  standing: ReadonlySet<string>
+): {
+  snapshot: NextlySchemaSnapshot;
+  contributions: Record<string, ContributedElements>;
+} {
+  if (appStream === undefined) return { snapshot, contributions: {} };
+  const present = new Set(snapshot.tables.map(table => table.name));
+  const tables = [...snapshot.tables];
+  const contributions: Record<string, ContributedElements> = {};
+  for (const [name, { spec, elements }] of appStream.contributed) {
+    if (!standing.has(name)) continue;
+    // Core tables are already adopted whole by the managed-prefix filter; a
+    // plugin's table is not, and enters here for the first time. Either way
+    // the copy that stands in the snapshot is one the reader can trust.
+    if (!present.has(name)) {
+      tables.push(spec);
+      present.add(name);
+    }
+    contributions[name] = elements;
+  }
+  return { snapshot: { ...snapshot, tables }, contributions };
+}
+
+/**
  * What adopting the database would write, decided from the database and the migrations folder:
  * the migration's text, where it and its snapshot go, or the reason there is nothing to adopt.
  * Reads only, so a run calls it under the migrate lock and a dry run calls it alone.
@@ -554,7 +615,20 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   );
 
   const known = deps.knownJunctions ?? new Set<string>();
-  const managed = await listManagedTables(adapter, known);
+  // The app's own extension tables carry no managed prefix, so only the
+  // compiled schema can name them: `db.schema.extend` rides the app's
+  // migration stream, and graduating it is what this command is for.
+  const appOwned = new Set(
+    (deps.appStream?.owned ?? []).map(spec => spec.name)
+  );
+  const names = await listTableNames(adapter);
+  // A custom `options.junctionTable` name need not carry a managed prefix, and
+  // the production DDL uses it verbatim — so filtering on the prefix alone
+  // drops an existing relationship table from adoption entirely, and a fresh
+  // environment rebuilt from the baseline has nowhere to write links.
+  const managed = names.filter(
+    n => isManagedTable(n) || known.has(n) || appOwned.has(n)
+  );
   // A companion is excluded from the SNAPSHOT for the same reason drift
   // excludes it: it is derived, never declared by config, and adopting it
   // as a first-class table would make the next diff want to drop it. It is
@@ -566,11 +640,13 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   // still needs it built. The same exclusion runs in `migrate`'s drift
   // check, from the same helper, because a live snapshot that includes a
   // junction cannot match a recorded one that never could have held it.
-  // The config's own tables, so a collection whose resolved name happens
-  // to look like a junction is not mistaken for one.
-  const declared = new Set(
-    (deps.localizedEntities ?? []).map(e => e.tableName)
-  );
+  // The config's own tables, so a collection — or an app-owned extension
+  // table — whose resolved name happens to look like a junction is not
+  // mistaken for one.
+  const declared = new Set([
+    ...(deps.localizedEntities ?? []).map(e => e.tableName),
+    ...appOwned,
+  ]);
   const junctionTables = junctionTablesAmong(managed, declared, known);
   const snapshotTables = snapshotComparableTables(managed, declared, known);
 
@@ -662,13 +738,22 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
     entitiesAreScoped: false,
   });
 
+  // The app's extension tables and contributed elements, recorded so the
+  // first `migrate:create` after adoption owes nothing (`withAppStreamTables`).
+  const folded = withAppStreamTables(
+    plan.snapshot,
+    deps.appStream,
+    new Set(names)
+  );
+
   return {
     kind: "adopt",
     baseName,
     sqlPath: resolve(migrationsDir, `${baseName}.sql`),
     sqlContent,
     metaDir,
-    snapshot: annotateLocalization(plan.snapshot, companionSql.columnsByMain),
+    snapshot: annotateLocalization(folded.snapshot, companionSql.columnsByMain),
+    contributions: folded.contributions,
   };
 }
 
@@ -738,7 +823,11 @@ export async function baselineCore(
         planned.metaDir,
         baseName,
         planned.snapshot,
-        sqlContent
+        sqlContent,
+        // What the app contributed to other owners' tables, as every snapshot
+        // writer records it, so the next diff can tell the app's elements from
+        // the owner's own after this file becomes the latest snapshot.
+        planned.contributions
       );
 
       // The ledger is bootstrapped out of band by `migrate`, which has never
@@ -873,6 +962,18 @@ export async function runMigrateBaseline(
       deferredExtends: configResult.deferredExtends,
     });
 
+    // The app stream's extension schema, compiled exactly as `migrate:create`
+    // and `migrate:check` compile it. The starting point this command records
+    // is the schema the next generation will diff against, so it has to be
+    // built from the same one compiled schema rather than from the entities
+    // alone — otherwise everything the app declared or contributed arrives
+    // after the baseline as pending change.
+    const appStream = await compileAppStreamTables({
+      config,
+      dialect,
+      logger: { warn: m => logger.warn(m) },
+    });
+
     // A dry run reports a history refusal as the real run's, and exits 0.
     const result = await baselineCore({
       adapter,
@@ -888,6 +989,7 @@ export async function runMigrateBaseline(
       defaultLocale: config.localization?.defaultLocale,
       ttlSeconds: config.db.migrateLockTtlSeconds,
       knownJunctions: resolved.knownJunctions,
+      appStream,
       declared: {
         junctions: resolved.junctionsByEntity,
         tables: resolved.declaredTables,

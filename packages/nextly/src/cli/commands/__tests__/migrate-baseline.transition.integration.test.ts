@@ -41,10 +41,19 @@ import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import { toMinimalEntities } from "../../../domains/schema/migrate-create/config-entities";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { generateMigration } from "../../../domains/schema/migrate-create/generate";
+import { compileAppStreamTables } from "../../../domains/schema/migrate-create/app-stream";
+import { clearActiveExtensionSchema } from "../../../domains/schema/extension/active-schema";
+import type { SchemaHook } from "../../../domains/schema/extension/draft";
+import { col, defineTable } from "../../../domains/schema/extension/dsl";
+import { definePlugin } from "../../../plugins/plugin-context";
 import { resolveCollectionTableName } from "../../../domains/schema/utils/resolve-table-name";
 import { createLogger } from "../../utils/logger";
 import { baselineCore } from "../migrate-baseline";
-import { ensureLocalizedCompanions, syncCollections } from "../dev-build";
+import {
+  ensureLocalizedCompanions,
+  publishExtensionSchema,
+  syncCollections,
+} from "../dev-build";
 import { ensureCoreTables } from "../dev-server";
 import { runFileMigrations, splitSqlStatements } from "../migrate";
 import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database";
@@ -101,6 +110,55 @@ const localizedConfig = defineConfig({
       fields: [text({ name: "title", localized: true })],
     }),
   ],
+});
+
+/**
+ * A plugin with a table of its own, and an app hook that declares a table of
+ * the app's and contributes a column and an index to the plugin's — the shape
+ * `db.schema.extend` really arrives in, and the one a baseline has to graduate.
+ */
+const notesPlugin = definePlugin({
+  name: "fx",
+  version: "0.0.0",
+  nextly: "*",
+  contributes: {
+    schema: {
+      prefix: "fx",
+      tables: [
+        defineTable("notes", {
+          id: col.id(),
+          title: col.shortText(),
+        }),
+      ],
+    },
+  },
+});
+
+/** The app's own table, named per run so nothing else can hold it. */
+const APP_TABLE = `app_notes_${RUN_ID}`;
+
+/** The app hook: one table of the app's own, one contribution to the plugin's. */
+const extendsSchema: SchemaHook = ({ schema }) => {
+  schema.addTable(
+    defineTable(APP_TABLE, { id: col.id(), note: col.shortText() })
+  );
+  schema.extendTable("fx__notes", {
+    columns: { appRef: col.shortText({ nullable: true }) },
+    indexes: [{ columns: ["app_ref"], name: "idx_fx_notes_app_ref" }],
+  });
+  // And one to a core table, whose copy the baseline already holds by
+  // introspection: only the contribution has to be named there.
+  schema.extendTable("users", {
+    columns: { nickname: col.shortText({ nullable: true }) },
+    indexes: [{ columns: ["nickname"] }],
+  });
+};
+
+/** The config a `db:sync` project with that extension schema runs on. */
+const extensionConfig = defineConfig({
+  plugins: [notesPlugin],
+  collections: [],
+  db: { schema: { extend: [extendsSchema] } },
 });
 
 const logger = createLogger({ quiet: true });
@@ -213,10 +271,18 @@ async function runDbSync(h: Harness, config: LoadConfigResult["config"]) {
 
   const options = { cwd: "", autoSync: true } as ResolvedDevOptions;
   await ensureCoreTables(h.adapter, options, context);
-  // The real command's order: the transition copy runs BEFORE the pushes,
-  // while an entity gaining localization still has the translatable columns on
-  // its main table for the copy to read, and the companion creation after.
+  // The transition copy runs BEFORE the pushes, while an entity gaining
+  // localization still has the translatable columns on its main table for
+  // the copy to read, and the companion creation after.
   await ensureLocalizedCompanions(config, h.adapter, context, "beforeApply");
+  // As `db:sync` does: published before the syncs, which plan plugin tables
+  // and contributed elements from it. For a config that declares none this
+  // publishes nothing, so the other tests' pushes are unchanged.
+  await publishExtensionSchema(
+    { config } as LoadConfigResult,
+    h.adapter,
+    context
+  );
   await syncCollections(
     { config } as LoadConfigResult,
     h.adapter,
@@ -325,6 +391,9 @@ function runSuite(dialect: SupportedDialect): void {
 
   afterEach(async () => {
     await h.dispose();
+    // A test that published an extension schema leaves it active for the
+    // process, and the pushes the other tests run would plan from it.
+    clearActiveExtensionSchema();
     // Integration files share one fork, so an environment left set here would
     // be read by every file that follows.
     if (previousDialect === undefined) delete process.env.DB_DIALECT;
@@ -435,6 +504,97 @@ function runSuite(dialect: SupportedDialect): void {
     // The column the baseline adopted is still there: adopting recorded the
     // schema, it did not rebuild it.
     expect(await hasColumn(h, "title")).toBe(true);
+  });
+
+  it("adopts the app's extension schema, so migrate:create owes nothing after it", async () => {
+    // The graduation the one compiled schema asks of a baseline: a db:sync
+    // database carrying a table the app declared through `db.schema.extend`
+    // and an element it contributed to a plugin's table. A baseline that
+    // never compiled the app stream left the app's table out of the snapshot
+    // (it carries no managed prefix) and recorded the contribution nowhere,
+    // so the first `migrate:create` after adopting re-created the one and
+    // re-emitted the other against a database that already had both.
+    await runDbSync(h, extensionConfig);
+
+    const appStream = await compileAppStreamTables({
+      config: extensionConfig,
+      dialect: h.dialect,
+      logger: { warn: () => {} },
+    });
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream,
+    });
+    if (adopted.kind !== "baselined")
+      throw new Error(`expected a baseline, got ${adopted.kind}`);
+
+    // The app's table is adopted like any other, from the database; the
+    // plugin's enters the snapshot as the compiled schema has it, with the
+    // app's elements named beside it, as every snapshot writer records them.
+    const recorded = JSON.parse(
+      await readFile(adopted.snapshotPath, "utf-8")
+    ) as {
+      snapshot: { tables: { name: string }[] };
+      contributions?: Record<
+        string,
+        {
+          columns: string[];
+          indexes: string[];
+          foreignKeys: string[];
+          checks: string[];
+        }
+      >;
+    };
+    const names = recorded.snapshot.tables.map(table => table.name);
+    expect(names).toContain(APP_TABLE);
+    expect(names).toContain("fx__notes");
+    expect(names).toContain("users");
+    expect(recorded.contributions?.fx__notes).toEqual({
+      columns: ["app_ref"],
+      indexes: ["idx_fx_notes_app_ref"],
+      foreignKeys: [],
+      checks: [],
+    });
+    expect(recorded.contributions?.users).toEqual({
+      columns: ["nickname"],
+      indexes: ["idx_users_nickname"],
+      foreignKeys: [],
+      checks: [],
+    });
+
+    // The body rebuilds the app's own table on a fresh environment. Neither
+    // the plugin's table nor the core's is ever this stream's to build —
+    // their lifecycles ride the plugin's migrations and the core's own ensure.
+    const up = splitSqlStatements(
+      parseSqlSections(await readFile(adopted.sqlPath, "utf-8")).upSql
+    );
+    /** The CREATE TABLE statements naming `table`, whichever dialect's quotes. */
+    const createsOf = (table: string): string[] =>
+      up.filter(statement => {
+        const named = /^CREATE TABLE\s+(?:"|`)([^"`]+)(?:"|`)/i.exec(statement);
+        return named?.[1] === table;
+      });
+    expect(createsOf(APP_TABLE)).not.toEqual([]);
+    expect(createsOf("fx__notes")).toEqual([]);
+    expect(createsOf("users")).toEqual([]);
+
+    // The graduation itself: with the origin recorded from the same compiled
+    // schema the generation reads, nothing is pending after the baseline.
+    const pending = await generateMigration({
+      name: "after_baseline",
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      collections: [],
+      singles: [],
+      components: [],
+      appStream,
+      nonInteractive: true,
+    });
+    expect(pending).toBeNull();
   });
 
   it("carries a localized companion into the baseline SQL, but not the snapshot", async () => {
