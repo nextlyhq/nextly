@@ -12,18 +12,9 @@
 
 import { installedPackageVersion } from "../../shared/lib/installed-package-version";
 
-/** The runtime line of Details. */
-export interface RuntimeHealth {
-  node: string;
-  next?: string;
-  react?: string;
-}
+import type { RuntimeHealth, PluginHealth } from "./health-types";
 
-/** One plugin, as Details lists it. */
-export interface PluginHealth {
-  name: string;
-  version: string;
-}
+export type { RuntimeHealth, PluginHealth } from "./health-types";
 
 /** The runtime, read from the app at `appRoot`. */
 export function readRuntimeHealth(appRoot: string): RuntimeHealth {

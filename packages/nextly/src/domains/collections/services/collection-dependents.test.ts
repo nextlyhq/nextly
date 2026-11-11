@@ -549,6 +549,22 @@ describe("a field group's and a Single's dependents", () => {
     ]);
   });
 
+  it("names a field group and a collection of the same slug deleted together each with its own dependents", async () => {
+    const found = await findEntityDependents(
+      [SEO, { slug: "seo", tables: ["dc_seo"] }],
+      sources({ owners: [pages] })
+    );
+
+    expect([...found.keys()]).toEqual(["seo", "seo (collection)"]);
+    expect(found.get("seo")?.fields.map(field => field.fieldPath)).toEqual([
+      "meta",
+      "blocks.hero.either",
+    ]);
+    expect(
+      found.get("seo (collection)")?.fields.map(field => field.fieldPath)
+    ).toEqual(["related"]);
+  });
+
   it("does not count a host deleted in the same operation, but counts a Single of the same slug that stays", async () => {
     await expect(
       findEntityDependents(

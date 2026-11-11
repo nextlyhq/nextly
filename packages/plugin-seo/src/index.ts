@@ -71,3 +71,18 @@ export type {
   StructuredDataRules,
   StructuredDataTypeRule,
 } from "./structured-data/rules";
+// Social cards: the size a share image shows in full and why a picture does
+// not, a page's share image problems, and the action that makes a share image
+// of the right size.
+export {
+  SHARE_IMAGE,
+  SHARE_IMAGE_ROUTE_PATH,
+  shareImageSizeProblem,
+} from "./social/contract";
+export type {
+  MadeShareImageItem,
+  MakeShareImageRequest,
+} from "./social/contract";
+export { shareImageProblems } from "./social/problems";
+export type { ShareImageProblem, ShareImageReaders } from "./social/problems";
+export type { SocialCardOptions } from "./social/card";

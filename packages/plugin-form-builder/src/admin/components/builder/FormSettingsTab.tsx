@@ -35,6 +35,7 @@ import type {
 import { parseRedirectReference } from "../../../utils/redirect-reference";
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
+import { ClosingTimeRow, SubmissionLimitRow } from "./ClosingRows";
 import { RedirectPagePicker } from "./RedirectPagePicker";
 import {
   type Choice,
@@ -342,6 +343,8 @@ function AvailabilitySection(): React.JSX.Element {
           }
         />
       </SettingRow>
+      <ClosingTimeRow />
+      <SubmissionLimitRow />
       <SettingRow
         label="Message when closed"
         htmlFor="settings-closed-message"

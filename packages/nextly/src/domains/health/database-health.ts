@@ -17,21 +17,9 @@
 
 import type { ConnectionInspection } from "@nextlyhq/adapter-drizzle/types";
 
-/** The database line, as the card, Details and the report read it. */
-export interface DatabaseHealth {
-  dialect: "postgresql" | "mysql" | "sqlite";
-  /** The server's version ("17.2"), or SQLite's library version; absent when unread. */
-  serverVersion?: string;
-  /** How long one small query took, in whole milliseconds; absent when it failed. */
-  roundTripMs?: number;
-  /** Whether the connection is encrypted, from the session; "unknown" is never a pass. */
-  encryption: ConnectionInspection["encryption"];
-  /**
-   * Whether the connection crosses a network a site must protect: production,
-   * and a database on another machine. Never the address itself.
-   */
-  exposed: boolean;
-}
+import type { DatabaseHealth } from "./health-types";
+
+export type { DatabaseHealth } from "./health-types";
 
 /** What an adapter can be asked about its connection. */
 export interface InspectableAdapter {
