@@ -27,6 +27,27 @@ function presentationalChildren(field: FieldConfig): FieldConfig[] | null {
 }
 
 /**
+ * The fields that hold a value of their own, in form order: a nameless
+ * container's children stand in for it, since they store their values at its
+ * level. One walk for every reading of a version into the form.
+ */
+export function formFieldsOf(fields: FieldConfig[]): FieldConfig[] {
+  const named: FieldConfig[] = [];
+  const visit = (list: FieldConfig[]): void => {
+    for (const field of list) {
+      const children = presentationalChildren(field);
+      if (children) {
+        visit(children);
+        continue;
+      }
+      if (field.name) named.push(field);
+    }
+  };
+  visit(fields);
+  return named;
+}
+
+/**
  * Snapshot values keyed the way the form reads them.
  *
  * A field the snapshot has no value for is left OUT rather than set to null:
@@ -44,24 +65,12 @@ export function snapshotToFormValues(
       : {};
 
   const values: Record<string, unknown> = {};
-
-  const visit = (list: FieldConfig[]): void => {
-    for (const field of list) {
-      // A nameless container — a tab set, a row, a presentational group —
-      // holds no value of its own and stores its children beside it, so its
-      // children are read against the same object.
-      const children = presentationalChildren(field);
-      if (children) {
-        visit(children);
-        continue;
-      }
-      if (!field.name) continue;
-
-      const normalized = normalizeStoredValue(field, stored[field.name]);
-      if (normalized !== null) values[field.name] = normalized;
-    }
-  };
-
-  visit(fields);
+  // A nameless container — a tab set, a row, a presentational group — holds no
+  // value of its own and stores its children beside it, so its children are
+  // read against the same object.
+  for (const field of formFieldsOf(fields)) {
+    const normalized = normalizeStoredValue(field, stored[field.name]);
+    if (normalized !== null) values[field.name] = normalized;
+  }
   return values;
 }
