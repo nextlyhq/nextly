@@ -205,3 +205,43 @@ describe("the create pages", () => {
     });
   }
 });
+
+// Each user fields page, rendered as exported: its own `UserFieldsGuard` refuses
+// a role holding every settings grant but not read-users, the grant the Users
+// page (their only entry) asks. Dropping the wrapper from a page fails its case.
+describe("the user fields pages ask read-users as well", () => {
+  const ALL_SETTINGS = [
+    "read-settings",
+    "create-settings",
+    "update-settings",
+    "delete-settings",
+  ];
+
+  it.each([
+    ["the list", UserFieldsPage],
+    ["the edit page", EditUserFieldPage],
+    ["the create page", CreateUserFieldPage],
+  ])(
+    "%s refuses a role with every settings grant but no read-users",
+    (_what, Page) => {
+      holding(...ALL_SETTINGS);
+      render(<Page />);
+      expect(
+        screen.getByText("You don't have access to this page")
+      ).toBeInTheDocument();
+    }
+  );
+
+  it.each([
+    ["the list", UserFieldsPage],
+    ["the edit page", EditUserFieldPage],
+    ["the create page", CreateUserFieldPage],
+  ])("%s opens with read-users beside the settings grants", (_what, Page) => {
+    // The control: the same page and grants, plus read-users.
+    holding(...ALL_SETTINGS, "read-users");
+    render(<Page />);
+    expect(
+      screen.queryByText("You don't have access to this page")
+    ).not.toBeInTheDocument();
+  });
+});
