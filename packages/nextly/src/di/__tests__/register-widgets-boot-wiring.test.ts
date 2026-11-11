@@ -98,6 +98,7 @@ describe("widget-registry reset at boot", () => {
       "system:continue",
       "system:releases",
       "system:team",
+      "system:team-people",
       "system:versions",
     ]);
     // The previous boot's widget is gone; core's own cards are what boot

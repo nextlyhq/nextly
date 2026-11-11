@@ -33,7 +33,7 @@ import {
   CONTENT_SOURCE_ID,
   CONTINUE_SOURCE_ID,
   RELEASES_SOURCE_ID,
-  TEAM_SOURCE_ID,
+  TEAM_PEOPLE_SOURCE_ID,
 } from "../system-source-ids";
 import { clearSystemResolvers, registerSystemSource } from "../system-sources";
 
@@ -56,7 +56,7 @@ function standInSources(): void {
   clearSystemResolvers();
   for (const id of [
     CONTENT_SOURCE_ID,
-    TEAM_SOURCE_ID,
+    TEAM_PEOPLE_SOURCE_ID,
     CONTINUE_SOURCE_ID,
     RELEASES_SOURCE_ID,
     ACTIVITY_SOURCE_ID,
@@ -129,7 +129,7 @@ describe("core's cards answered by a system source", () => {
     await loadCard(teamActivityWidget, {}, KEY, { size: FIVE_ROWS });
     expect(asked.map(each => each.query.source)).toEqual([
       CONTENT_SOURCE_ID,
-      TEAM_SOURCE_ID,
+      TEAM_PEOPLE_SOURCE_ID,
       CONTINUE_SOURCE_ID,
       RELEASES_SOURCE_ID,
       ACTIVITY_SOURCE_ID,
@@ -225,14 +225,59 @@ describe("what each card makes of its answer", () => {
     });
   });
 
-  it("hands Team the counts its source sent, and never a count it left out", async () => {
-    answers[TEAM_SOURCE_ID] = {
+  it("hands Team the people its source sent, and how many the role has in all", async () => {
+    answers[TEAM_PEOPLE_SOURCE_ID] = {
       op: "list",
-      items: [{ figure: "users", count: 12 }],
+      items: [
+        {
+          name: "Ana",
+          email: "ana@example.test",
+          role: "Editor",
+          lastActiveAt: new Date("2026-11-10T09:00:00.000Z"),
+        },
+        // No name, no role and no last active: each stays out, never drawn as a blank.
+        { email: "bo@example.test" },
+        // A row with no email names no one, and is left out.
+        { name: "Nobody" },
+      ],
+      total: 14,
     };
     await expect(
       loadCard(teamWidget, {}, KEY, { size: FIVE_ROWS })
-    ).resolves.toEqual({ users: 12 });
+    ).resolves.toEqual({
+      people: [
+        {
+          name: "Ana",
+          email: "ana@example.test",
+          role: "Editor",
+          lastActiveAt: "2026-11-10T09:00:00.000Z",
+        },
+        { email: "bo@example.test" },
+      ],
+      total: 14,
+    });
+  });
+
+  it("asks Team's source for the role its filter names, and for everyone under All roles", async () => {
+    await loadCard(teamWidget, { role: "editor", limit: 10 }, KEY, {
+      size: FIVE_ROWS,
+    });
+    await loadCard(teamWidget, {}, KEY, { size: FIVE_ROWS });
+    expect(asked.map(each => each.query)).toEqual([
+      {
+        source: TEAM_PEOPLE_SOURCE_ID,
+        op: "list",
+        select: ["name", "email", "role", "lastActiveAt"],
+        where: { role: "editor" },
+        limit: 10,
+      },
+      {
+        source: TEAM_PEOPLE_SOURCE_ID,
+        op: "list",
+        select: ["name", "email", "role", "lastActiveAt"],
+        limit: 5,
+      },
+    ]);
   });
 
   it("leaves Upcoming releases off the dashboard while its answer is empty", () => {
@@ -308,15 +353,15 @@ describe("as core publishes them", () => {
     expect(widgetGateHolds(gate, slug => slug === "read-posts")).toBe(false);
   });
 
-  it("offer Team to a reader who may read people and add or change them, and to no one else", () => {
+  it("offer Team to a reader who may read people, and to no one else", () => {
     resetWidgetRegistries([]);
     const gate = getWidget("core/team")?.requiredPermission;
     const holding = (...slugs: string[]) =>
       widgetGateHolds(gate, slug => slugs.includes(slug));
-    expect(holding("read-users", "update-users")).toBe(true);
+    expect(holding("read-users")).toBe(true);
     expect(holding("read-users", "create-users")).toBe(true);
-    // Each half alone is not enough.
-    expect(holding("read-users")).toBe(false);
+    // Adding or changing people without reading them is not enough.
     expect(holding("create-users", "update-users")).toBe(false);
+    expect(holding("read-posts")).toBe(false);
   });
 });
