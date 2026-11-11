@@ -13,6 +13,8 @@ import {
   definePlugin,
   group,
   type FieldConfig,
+  type PageMetadataResolver,
+  type PluginContext,
   type PluginContributions,
   type PluginDefinition,
   type PluginRoute,
@@ -40,6 +42,8 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
+import { RECEIVED_PAGE, RECEIVED_PAGE_HREF } from "./received/contract";
+import { receivedRoutes } from "./received/route";
 import { redirectsCollection } from "./redirects/collection";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
@@ -413,8 +417,26 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     readSocialCardRules,
   });
 
+  // Every page's head, worked out by the one order of who wins, with its
+  // links to its other languages, its social card completed, and its
+  // structured data, worked out from that same answer and the settings'
+  // brand facts, with the plugin's options where the settings say nothing.
+  // What the site's routes are answered, and what the check of what search
+  // engines received compares each page with.
+  const pageMetadata = (ctx: PluginContext): PageMetadataResolver =>
+    withStructuredData(
+      ctx,
+      withSocialCard(
+        ctx,
+        withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
+        readSocialCardRules
+      ),
+      structuredDataFromSettings(readStructuredDataRules)
+    );
+
   // The site's sitemap and robots.txt, the action that makes a share image
-  // of the right size, and the SEO tab's own; all added below.
+  // of the right size, the check of what search engines received, and the
+  // SEO tab's own; all added below.
   const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
@@ -427,21 +449,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       redirectsCollection(),
       notFoundCollection(),
     ],
-    // Every page's head, worked out by the one order of who wins, with its
-    // links to its other languages, its social card completed, and its
-    // structured data, worked out from that same answer and the settings'
-    // brand facts, with the plugin's options where the settings say nothing.
+    // Every page's head, as worked out above.
     services: {
-      pageMetadata: ctx =>
-        withStructuredData(
-          ctx,
-          withSocialCard(
-            ctx,
-            withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
-            readSocialCardRules
-          ),
-          structuredDataFromSettings(readStructuredDataRules)
-        ),
+      pageMetadata,
       // The pages the site lists and the problems that left any out, read by
       // the same rules as the head: one reading for every listing output.
       listedPages: (ctx): ListedPagesService => ({
@@ -469,6 +479,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       ...tab.admin,
       clientConfig: { aiCrawlers: options.aiCrawlers ?? "all" },
       menu: [
+        // Shown to everyone in the admin: the check fetches only the site's
+        // own public pages, and compares only those whose type the person
+        // may read.
+        {
+          label: "What search engines received",
+          to: RECEIVED_PAGE_HREF,
+          icon: "Eye",
+        },
         {
           label: "Settings",
           to: SETTINGS_PAGE_HREF,
@@ -478,6 +496,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       ],
       pages: [
         { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
+        RECEIVED_PAGE,
       ],
     },
   };
@@ -504,6 +523,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Single holds the settings.
     contentTypesRoute(targets),
     settingsDocumentRoute(),
+    // What the "What search engines received" screen reads and checks.
+    ...receivedRoutes({
+      collections: targets,
+      singles: singleTargets,
+      ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+      readRules,
+      pageMetadata,
+    }),
     ...tab.routes
   );
 

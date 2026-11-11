@@ -87,6 +87,10 @@ describe("seoPlugin", () => {
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
       ["GET", "/settings/document", undefined, undefined],
+      // What search engines received: the pages it offers, and the check,
+      // for anyone signed in.
+      ["GET", "/received/pages", undefined, undefined],
+      ["POST", "/received", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
     ]);
   });
@@ -110,6 +114,8 @@ describe("seoPlugin", () => {
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/received/pages",
+      "/received",
       "/resolve",
     ]);
     // The SEO fields are still contributed.
@@ -126,6 +132,8 @@ describe("seoPlugin", () => {
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/received/pages",
+      "/received",
       "/resolve",
     ]);
   });

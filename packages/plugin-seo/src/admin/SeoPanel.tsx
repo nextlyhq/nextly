@@ -10,6 +10,7 @@
  *
  * @module admin/SeoPanel
  */
+import { navigateTo } from "@nextlyhq/plugin-sdk/admin";
 import { Input, Textarea } from "@nextlyhq/ui";
 import { EyeOff } from "lucide-react";
 import { useId, type ReactNode } from "react";
@@ -72,6 +73,11 @@ export interface SeoPanelProps {
   onGoToField?: ((field: string) => void) | undefined;
   /** Whether Advanced starts open. Closed on a real page. */
   defaultAdvancedOpen?: boolean;
+  /**
+   * Where this page's check of what search engines received is, where it
+   * has an address to check; no link is offered without one.
+   */
+  receivedHref?: string | undefined;
   /**
    * Which document and language the values are of: another one lets go of
    * what was being typed under Advanced and not stored yet.
@@ -156,6 +162,35 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
         onMakeShareImage={props.onMakeShareImage}
         onGoToField={props.onGoToField}
       />
+      {props.receivedHref === undefined ? null : (
+        <ReceivedLink href={props.receivedHref} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The way to the page's check of what search engines received, opened
+ * within the admin like any of its own links.
+ */
+function ReceivedLink({ href }: { href: string }): ReactNode {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 text-xs leading-normal text-muted-foreground">
+      <span>
+        Want to see what Google and LinkedIn actually received for this page?
+      </span>
+      <a
+        href={href}
+        className="text-xs font-semibold text-foreground underline underline-offset-2 hover:decoration-2"
+        onClick={event => {
+          // A new tab or window is the browser's to open.
+          if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+          event.preventDefault();
+          navigateTo(href);
+        }}
+      >
+        Check what search engines received
+      </a>
     </div>
   );
 }
