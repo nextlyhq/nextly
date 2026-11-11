@@ -39,10 +39,28 @@ import {
 } from "@admin/components/icons";
 import { TopBarPlace } from "@admin/components/layout/header/TopBarPlaces";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { Breadcrumbs } from "@admin/components/shared/breadcrumbs";
 import { cn } from "@admin/lib/utils";
 
 import { LOADING_FRAME_TIMES, useDelayedReveal } from "./delayed-reveal";
 import { useReportScreenWait } from "./screen-wait";
+
+/**
+ * The empty shape of a control (an input, a search box, a toolbar button): its
+ * border on the card's surface, at a control's height, with nothing in it.
+ * Read against the page in both themes, where a filled bar on the page's own
+ * surface would vanish.
+ */
+function ControlOutline({ className }: { className?: string }): JSX.Element {
+  return (
+    <div
+      className={cn(
+        "h-[var(--nx-control-height)] rounded-md border border-border bg-card",
+        className
+      )}
+    />
+  );
+}
 
 /** One still bar of an outline; `soft` for the lighter, secondary parts (a date, a value). */
 function OutlineBar({
@@ -106,15 +124,20 @@ function PageFrame({
 
 /**
  * A page head with its real title, or a bar where the title is not known yet,
- * an empty subtitle line, and outlines of its action buttons.
+ * and outlines of its action buttons. A subtitle line is kept empty only where
+ * the screen's head draws one: an admin list's head has none, and an empty
+ * line there would leave the parts below to jump up when the head arrives.
  */
 function PageHeadOutline({
   title,
   actions = [],
+  subtitle = false,
 }: {
   title?: string;
   /** The widths of the head's action buttons, in pixels. */
   actions?: readonly number[];
+  /** Whether the real head has a subtitle line under its title. */
+  subtitle?: boolean;
 }): JSX.Element {
   return (
     <PageHeader
@@ -127,7 +150,7 @@ function PageHeadOutline({
       }
       // The subtitle's line is kept empty, so the parts below sit where they
       // will sit under a real one.
-      description={<span>&nbsp;</span>}
+      description={subtitle ? <span>&nbsp;</span> : undefined}
       actions={
         actions.length > 0 ? (
           <div className="flex items-center gap-2">
@@ -145,6 +168,13 @@ function PageHeadOutline({
     />
   );
 }
+
+/**
+ * A column past the second steps aside on a narrow content column, as the
+ * phone's lists show their title and status first.
+ */
+const NARROW_HIDDEN = (index: number): string | undefined =>
+  index >= 2 ? "hidden @lg/content:table-cell" : undefined;
 
 /** The widths of an outline row's title bars, in order. */
 const ROW_TITLE_WIDTHS = [200, 240, 160, 130, 110] as const;
@@ -166,7 +196,10 @@ export function TableOutline({
         <TableHeader>
           <TableRow>
             {columns.map((header, index) => (
-              <TableHead key={index} className="py-3">
+              <TableHead
+                key={index}
+                className={cn("py-3", NARROW_HIDDEN(index))}
+              >
                 {header ?? (
                   <OutlineBar
                     soft
@@ -181,7 +214,10 @@ export function TableOutline({
           {ROW_TITLE_WIDTHS.map((width, row) => (
             <TableRow key={row} className="border-b border-border">
               {columns.map((_, index) => (
-                <TableCell key={index} className="h-12 py-3">
+                <TableCell
+                  key={index}
+                  className={cn("h-12 py-3", NARROW_HIDDEN(index))}
+                >
                   {index === 0 ? (
                     <OutlineBar
                       className="block h-3 max-w-full"
@@ -221,7 +257,18 @@ export function ListOutline({
       <PageFrame framed={framed}>
         <div className="flex flex-col gap-8">
           <PageHeadOutline title={title} actions={actions} />
-          <TableOutline headers={headers} />
+          {/* The list's toolbar (its search, then Filter and Columns) above
+              the table, at the list's own spacing. */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <ControlOutline className="w-full max-w-[384px]" />
+              <div className="flex gap-2 max-sm:hidden">
+                <ControlOutline className="w-[106px]" />
+                <ControlOutline className="w-[130px]" />
+              </div>
+            </div>
+            <TableOutline headers={headers} />
+          </div>
         </div>
       </PageFrame>
     </ScreenOutline>
@@ -272,20 +319,27 @@ export function DashboardCardsOutline(): JSX.Element {
  */
 export function DashboardOutline(): JSX.Element {
   return (
-    <ScreenOutline>
-      <PageContainer>
-        <div className="mx-auto max-w-[1600px] @container/dashboard">
-          <div className="mb-[18px] flex min-h-[34px] items-center">
-            <OutlineBar className="h-5 w-56 max-w-full" />
+    <>
+      {/* The bar's crumb, as the dashboard draws it, at once with the frame. */}
+      <Breadcrumbs items={[{ label: "Dashboard" }]} />
+      <ScreenOutline>
+        <PageContainer>
+          <div className="mx-auto max-w-[1600px] @container/dashboard">
+            <div className="mb-[18px] flex min-h-[34px] items-center">
+              <OutlineBar className="h-5 w-56 max-w-full" />
+            </div>
+            <DashboardCardsOutline />
           </div>
-          <DashboardCardsOutline />
-        </div>
-      </PageContainer>
-    </ScreenOutline>
+        </PageContainer>
+      </ScreenOutline>
+    </>
   );
 }
 
-/** One field's outline: its label, then its input, `tall` for a long text. */
+/**
+ * One field's outline: its label, then its input as a soft filled box, the
+ * way the editor's inputs sit on their card. `tall` for a long text.
+ */
 function FieldOutline({
   labelWidth,
   tall = false,
@@ -294,23 +348,23 @@ function FieldOutline({
   tall?: boolean;
 }): JSX.Element {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-2">
       <OutlineBar className="h-3" style={{ width: labelWidth }} />
       <OutlineBar
         soft
-        className={cn("w-full rounded-lg", tall ? "h-[180px]" : "h-[38px]")}
+        className={cn("w-full rounded-md", tall ? "h-20" : "h-10")}
       />
     </div>
   );
 }
 
-/** The fields of a form: two short inputs and a long one. */
+/** The fields of a form on their card: a long text, then two short inputs. */
 function FieldsOutline(): JSX.Element {
   return (
-    <div className="space-y-4">
-      <FieldOutline labelWidth={40} />
-      <FieldOutline labelWidth={32} />
-      <FieldOutline labelWidth={36} tall />
+    <div className="space-y-6 rounded-lg border border-border bg-card p-6">
+      <FieldOutline labelWidth={56} tall />
+      <FieldOutline labelWidth={72} />
+      <FieldOutline labelWidth={96} />
     </div>
   );
 }
@@ -329,9 +383,7 @@ export function FormOutline({
       <PageFrame framed={framed}>
         <div className="flex flex-col gap-8">
           <PageHeadOutline title={title} />
-          <div className="rounded-lg border border-border bg-card p-6">
-            <FieldsOutline />
-          </div>
+          <FieldsOutline />
         </div>
       </PageFrame>
     </ScreenOutline>
@@ -364,10 +416,16 @@ function BarButton({
   children,
   primary = false,
   label,
+  joined,
+  narrow = false,
 }: {
   children: ReactNode;
   primary?: boolean;
   label?: string;
+  /** Which half of a split button this is. */
+  joined?: "start" | "end";
+  /** An icon on the bar's tight padding, as More and the panel toggle are. */
+  narrow?: boolean;
 }): JSX.Element {
   return (
     <Button
@@ -377,7 +435,13 @@ function BarButton({
       disabled
       aria-disabled="true"
       aria-label={label}
-      className={cn("gap-1.5", label !== undefined && "px-2")}
+      className={cn(
+        "gap-1.5",
+        narrow && "px-2",
+        joined === "start" && "rounded-r-none",
+        joined === "end" &&
+          "rounded-l-none border-l border-primary-foreground/20 px-2"
+      )}
     >
       {children}
     </Button>
@@ -399,26 +463,31 @@ function EditorBarOutline(): JSX.Element {
       >
         <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
         <div className="ml-auto flex min-w-0 items-center justify-end gap-1.5">
+          {/* History and Preview as the bar draws them beside a document's
+              trail: their icons, their words stepped aside. */}
           <span className="contents max-lg:hidden">
-            <BarButton>
+            <BarButton label="History">
               <History className="h-4 w-4" aria-hidden="true" />
-              History
             </BarButton>
-            <BarButton>
+            <BarButton label="Preview">
               <Eye className="h-4 w-4" aria-hidden="true" />
-              Preview
             </BarButton>
           </span>
-          <BarButton primary>
-            Publish
-            <ChevronDown className="h-4 w-4" aria-hidden="true" />
-          </BarButton>
-          <BarButton label="More">
+          {/* The primary action and its menu, joined as the real split is. */}
+          <span className="flex">
+            <BarButton primary joined="start">
+              Publish
+            </BarButton>
+            <BarButton primary joined="end" label="More publishing actions">
+              <ChevronDown className="h-4 w-4" aria-hidden="true" />
+            </BarButton>
+          </span>
+          <BarButton label="More" narrow>
             <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
           </BarButton>
           <span className="contents max-lg:hidden">
             <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-            <BarButton label="Document panel">
+            <BarButton label="Document panel" narrow>
               <PanelRight className="h-4 w-4" aria-hidden="true" />
             </BarButton>
           </span>
@@ -459,7 +528,13 @@ export function EditorOutline({
               )}
               style={columnStyle}
             >
-              <FieldsOutline />
+              {/* The document's title line and its address under it, then
+                  its fields' card, as the editor draws them. */}
+              <OutlineBar className="h-10 w-2/3 max-w-[480px]" />
+              <OutlineBar soft className="mt-3 h-3 w-48" />
+              <div className="mt-8">
+                <FieldsOutline />
+              </div>
             </div>
             <div
               className="flex w-full shrink-0 flex-col border-t border-border bg-card p-6 lg:border-t-0 lg:border-l lg:w-(--editor-side-width)"

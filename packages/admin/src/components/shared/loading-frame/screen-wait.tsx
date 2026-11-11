@@ -91,7 +91,9 @@ export function ScreenWaitSigns(): JSX.Element | null {
           role="status"
           data-testid="screen-wait-status"
           className={cn(
-            "absolute bottom-6 left-1/2 z-40 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-2.5",
+            // Centred by its two insets rather than a half-width shift, so on a
+            // phone it takes the column's width before it wraps its words.
+            "absolute inset-x-4 bottom-6 z-40 mx-auto flex w-fit max-w-[calc(100%-2rem)] items-center gap-2.5",
             "rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground shadow-lg"
           )}
         >

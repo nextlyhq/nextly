@@ -172,14 +172,16 @@ export function PanelGhostRows({
 }
 
 /**
- * A panel's body before the session is confirmed: where its search and its
- * links will be, at the Content panel's own padding.
+ * A panel's body before the session is confirmed: where its Collections and
+ * Singles switch, its search and its links will be, at the Content panel's own
+ * padding and spacing.
  */
 export function PanelGhostBody(): JSX.Element {
   return (
     <div aria-hidden="true" className="space-y-4 px-4 py-6">
+      <Skeleton still className="mx-2 h-10 rounded-md" />
       <div className="px-2 pb-2">
-        <Skeleton still className="h-[var(--nx-control-height)] w-full" />
+        <Skeleton still className="h-9 w-full" />
       </div>
       <div className="flex flex-col gap-1">
         <PanelGhostRows />
