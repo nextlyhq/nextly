@@ -150,6 +150,21 @@ describe("rich text as Markdown", () => {
     );
   });
 
+  it("fences code with more backticks than the code holds, so a fence inside it stays code", () => {
+    const value = rich({
+      type: "code",
+      language: "md",
+      children: [
+        text_("```js"),
+        { type: "linebreak" },
+        text_("x"),
+        { type: "linebreak" },
+        text_("```"),
+      ],
+    });
+    expect(markdownOfRichText(value)).toBe("````md\n```js\nx\n```\n````");
+  });
+
   it("answers nothing for a value that is not rich text", () => {
     expect(markdownOfRichText("plain words")).toBe("");
     expect(markdownOfRichText({ root: "no" })).toBe("");

@@ -188,6 +188,20 @@ function itemsOf(
     .join(between);
 }
 
+/**
+ * A code block, as written, fenced with more backticks than any run inside
+ * it, so a fence the code holds stays part of the code.
+ */
+function codeBlock(node: Node): string {
+  const code = rawInline(childrenOf(node));
+  const longest = Math.max(
+    0,
+    ...(code.match(/`+/g) ?? []).map(run => run.length)
+  );
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}${textOf(node.language) ?? ""}\n${code}\n${fence}`;
+}
+
 /** Text that shows no words is nothing; anything else is `drawn` from it. */
 const unlessBlank = (words: string, drawn: string): string =>
   words.trim() === "" ? "" : drawn;
@@ -204,8 +218,7 @@ const BLOCK_WRITERS: Readonly<Record<string, (node: Node) => string>> = {
     return unlessBlank(words, prefixed(words, "> "));
   },
   list,
-  code: node =>
-    `\`\`\`${textOf(node.language) ?? ""}\n${rawInline(childrenOf(node))}\n\`\`\``,
+  code: codeBlock,
   horizontalrule: () => "---",
   image,
   gallery: node => itemsOf(node.images, image, "\n"),

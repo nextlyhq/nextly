@@ -115,8 +115,9 @@ export async function llmsTxtOf(
       ? pages.map(page => copyAddressOf(page.loc))
       : [];
   const taken = await copiesTaken(ctx, copies);
+  const copySet = new Set(copies);
   const literal = new Set(
-    pages.map(page => `${page.loc}.md`).filter(copy => copies.includes(copy))
+    pages.map(page => `${page.loc}.md`).filter(copy => copySet.has(copy))
   );
   const linked = (at: number): string | undefined => {
     const copy = copies[at];
