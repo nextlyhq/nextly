@@ -55,10 +55,6 @@ export interface ListedPage extends SitemapPage {
   path: string;
   /** The language this version of the page is in, as the site spells it. */
   language: string;
-  /** The title the page's head carries, where it has one. */
-  title?: string;
-  /** The description the page's head carries, where it has one. */
-  description?: string;
 }
 
 /**
@@ -400,10 +396,6 @@ async function listed(
       holder,
       images: ownImage(answer, options.origin),
       ...(lastModified === undefined ? {} : { lastModified }),
-      ...(answer.title === undefined ? {} : { title: answer.title.value }),
-      ...(answer.description === undefined
-        ? {}
-        : { description: answer.description.value }),
     },
   };
 }

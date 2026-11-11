@@ -53,7 +53,7 @@ async function boot(dialect: TestDialect) {
     seedPublic: true,
     plugins: [
       seoPlugin({
-        collections: ["posts", "members"],
+        collections: ["posts", "members", "guides"],
         singles: ["home"],
         baseUrl: SITE,
       }),
@@ -73,6 +73,18 @@ async function boot(dialect: TestDialect) {
           textarea({ name: "internal", access: { read: () => false } }),
         ],
         publicAddress: "/blog/{slug}",
+      }),
+      // Pages whose title the public may not read.
+      defineCollection({
+        slug: "guides",
+        status: true,
+        access: open,
+        fields: [
+          text({ name: "title", access: { read: () => false } }),
+          text({ name: "slug" }),
+          textarea({ name: "excerpt" }),
+        ],
+        publicAddress: "/guides/{slug}",
       }),
       // Pages the public may not read at all, though they have an address.
       defineCollection({
@@ -391,6 +403,39 @@ describe.each(getConfiguredTestDialects())(
       const links = await llmsLinks();
       expect(links).toContain(`${SITE}/index.html.md`);
       expect(links).toContain(`${SITE}/`);
+    });
+
+    it("tells the public nothing it may not read, in llms.txt or a copy's heading", async () => {
+      const t = await boot(dialect);
+      await t.nextly.create({
+        collection: "members",
+        data: {
+          title: "Secret plans",
+          slug: "plans",
+          status: "published",
+          seo: { metaDescription: "Hidden words" },
+        },
+      });
+      await t.nextly.create({
+        collection: "guides",
+        data: {
+          title: "Secret title",
+          slug: "start",
+          excerpt: "Open words.",
+          status: "published",
+        },
+      });
+      await switches(t, { llmsTxt: true, plainTextCopies: true });
+
+      const file = (await rootFile("llms.txt")).body;
+      // Listed by address, as the sitemap lists them, and nothing more.
+      expect(file).toContain(`(${SITE}/members/plans)`);
+      expect(file).not.toContain("Secret plans");
+      expect(file).not.toContain("Hidden words");
+      expect(file).not.toContain("Secret title");
+      const copy = await ask("/guides/start.md");
+      expect(copy.body).toContain("Open words.");
+      expect(copy.body).not.toContain("Secret title");
     });
   }
 );

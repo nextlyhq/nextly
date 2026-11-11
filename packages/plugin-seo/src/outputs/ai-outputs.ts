@@ -15,6 +15,7 @@ import {
   getCachedNextly,
   NextlyError,
   type PluginContext,
+  type PublicAddressType,
   type PluginProxyHandler,
 } from "@nextlyhq/plugin-sdk";
 
@@ -26,6 +27,8 @@ import {
   addressHolders,
   withAddressHolders,
 } from "../address-record/participant";
+import { resolveIn, servedAt } from "../languages/versions";
+import { originOf } from "../origin";
 import { isRecord, textOf } from "../plain-values";
 import type { SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
@@ -128,14 +131,27 @@ export async function llmsTxtOf(
       ? undefined
       : copy;
   };
-  const entries: LlmsEntry[] = pages.map((page, at) => ({
-    section: sections.get(page.holder.collection) ?? SINGLES_SECTION,
-    title: page.title ?? page.path,
-    url: linked(at) ?? page.loc,
-    ...(page.description === undefined
-      ? {}
-      : { description: page.description }),
-  }));
+  // Each page's title and description as the public may read them; a page
+  // the public may not read is listed by its address alone, as the sitemap
+  // lists it.
+  const readable = await publicDocuments(pages);
+  const entries: LlmsEntry[] = [];
+  for (const [at, page] of pages.entries()) {
+    const document = readable.get(readingKey(page));
+    const head =
+      document === undefined
+        ? {}
+        : await publicHead(ctx, page, document, config.readRules);
+    entries.push({
+      section: sections.get(page.holder.collection) ?? SINGLES_SECTION,
+      title: head.title ?? page.path,
+      // A page the public may not read has no copy to link.
+      url: (document === undefined ? undefined : linked(at)) ?? page.loc,
+      ...(head.description === undefined
+        ? {}
+        : { description: head.description }),
+    });
+  }
   return llmsTxt({
     name: rules.siteName ?? new URL(origin).host,
     ...(rules.description === undefined
@@ -165,51 +181,131 @@ async function fieldsOf(
     : undefined;
 }
 
-/**
- * The published page a listed page is, read as a visitor with no session
- * reads it: the type's and each field's read access decide what is in it,
- * so a copy never holds more than the public may read. None where the
- * public may not read the page at all.
- */
-async function documentOf(
-  page: ListedPage
-): Promise<Record<string, unknown> | undefined> {
-  const { collection, id } = page.holder;
-  try {
-    const nextly = await getCachedNextly();
-    if (collection.startsWith("single:")) {
-      const document: unknown = await nextly.findSingle({
-        slug: collection.slice("single:".length),
-        createIfMissing: false,
-        overrideAccess: false,
-        status: "published",
-        depth: 1,
-        locale: page.language,
-      });
-      return isRecord(document) ? document : undefined;
-    }
+/** A page refused to the public, or no longer found, has no public reading. */
+function refusedToPublic(error: unknown): boolean {
+  return (
+    NextlyError.isCode(error, "FORBIDDEN") ||
+    NextlyError.isCode(error, "AUTH_REQUIRED") ||
+    NextlyError.isCode(error, "NOT_FOUND")
+  );
+}
+
+/** How many of a type's pages one public read takes. */
+const PUBLIC_READ = 100;
+
+/** The key a page's public reading is kept under. */
+const readingKey = (page: ListedPage): string =>
+  `${page.holder.collection}|${page.holder.id}|${page.language}`;
+
+/** The Direct API every public reading is made through. */
+type Reader = Awaited<ReturnType<typeof getCachedNextly>>;
+
+/** A Single's published document, as the public reads it, into `found`. */
+async function publicSingle(
+  nextly: Reader,
+  page: ListedPage,
+  found: Map<string, Record<string, unknown>>
+): Promise<void> {
+  const document: unknown = await nextly.findSingle({
+    slug: page.holder.collection.slice("single:".length),
+    createIfMissing: false,
+    overrideAccess: false,
+    status: "published",
+    depth: 1,
+    locale: page.language,
+  });
+  if (isRecord(document)) found.set(readingKey(page), document);
+}
+
+/** A collection's published pages in one language, as the public reads them. */
+async function publicEntries(
+  nextly: Reader,
+  pages: readonly ListedPage[],
+  found: Map<string, Record<string, unknown>>
+): Promise<void> {
+  const [first] = pages;
+  if (first === undefined) return;
+  const { collection } = first.holder;
+  for (let at = 0; at < pages.length; at += PUBLIC_READ) {
+    const ids = pages.slice(at, at + PUBLIC_READ).map(page => page.holder.id);
     const result = await nextly.find({
       collection,
-      where: { id: { equals: id } },
+      where: { id: { in: ids } },
       overrideAccess: false,
       status: "published",
       depth: 1,
-      limit: 1,
-      locale: page.language,
+      limit: ids.length,
+      locale: first.language,
     });
-    const [document] = (result.items as unknown[]).filter(isRecord);
-    return document;
-  } catch (error) {
-    // A page the public may not read, or no longer finds, has no copy.
-    if (
-      NextlyError.isCode(error, "FORBIDDEN") ||
-      NextlyError.isCode(error, "AUTH_REQUIRED") ||
-      NextlyError.isCode(error, "NOT_FOUND")
-    ) {
-      return undefined;
+    for (const document of (result.items as unknown[]).filter(isRecord)) {
+      found.set(
+        `${collection}|${String(document.id)}|${first.language}`,
+        document
+      );
     }
-    throw error;
   }
+}
+
+/**
+ * The published documents of `pages`, read as a visitor with no session
+ * reads them: the Public role's grants, the type's read rule and each
+ * field's read rule decide what is in each, so nothing an output publishes
+ * holds more than the public may read. A page the public may not read has
+ * none. One read per type and language, a hundred pages at a time.
+ */
+async function publicDocuments(
+  pages: readonly ListedPage[]
+): Promise<Map<string, Record<string, unknown>>> {
+  const found = new Map<string, Record<string, unknown>>();
+  const groups = new Map<string, ListedPage[]>();
+  for (const page of pages) {
+    const group = `${page.holder.collection}|${page.language}`;
+    groups.set(group, [...(groups.get(group) ?? []), page]);
+  }
+  const nextly = await getCachedNextly();
+  for (const group of groups.values()) {
+    const [first] = group;
+    if (first === undefined) continue;
+    try {
+      await (first.holder.collection.startsWith("single:")
+        ? publicSingle(nextly, first, found)
+        : publicEntries(nextly, group, found));
+    } catch (error) {
+      if (!refusedToPublic(error)) throw error;
+    }
+  }
+  return found;
+}
+
+/** The type a listed page is of. */
+const typeOfPage = (page: ListedPage): PublicAddressType =>
+  page.holder.collection.startsWith("single:")
+    ? { kind: "single", slug: page.holder.collection.slice("single:".length) }
+    : { kind: "collection", slug: page.holder.collection };
+
+/**
+ * The title and description a page's head carries, worked out from what
+ * the public may read of it, so a value kept from the public is never told.
+ */
+async function publicHead(
+  ctx: PluginContext,
+  page: ListedPage,
+  document: Record<string, unknown>,
+  readRules: ReadRules
+): Promise<{ title?: string; description?: string }> {
+  const answer = await resolveIn(
+    ctx,
+    typeOfPage(page),
+    document,
+    page.language,
+    readRules
+  );
+  return {
+    ...(answer.title === undefined ? {} : { title: answer.title.value }),
+    ...(answer.description === undefined
+      ? {}
+      : { description: answer.description.value }),
+  };
 }
 
 /**
@@ -239,17 +335,20 @@ async function pageAddressesAsked(
 /** A listed page's plain-text copy, from its published document. */
 async function copyOf(
   ctx: PluginContext,
-  page: ListedPage
+  page: ListedPage,
+  readRules: ReadRules
 ): Promise<string | null> {
-  const document = await documentOf(page);
+  const document = (await publicDocuments([page])).get(readingKey(page));
   if (document === undefined) return null;
   // The page's own title, as the page shows it, and the field it is in;
-  // its head's where it has none.
+  // else its head's, worked out from what the public may read.
   const titleField = TITLE_FIELDS.find(
     name => textOf(document[name]) !== undefined
   );
   const title =
-    titleField === undefined ? page.title : textOf(document[titleField]);
+    titleField === undefined
+      ? (await publicHead(ctx, page, document, readRules)).title
+      : textOf(document[titleField]);
   const fields = await fieldsOf(ctx, page.holder.collection);
   return plainCopyOf({
     ...(title === undefined ? {} : { title }),
@@ -306,10 +405,13 @@ async function plainCopyAt(
   if (rules.plainTextCopies !== true) return null;
   // A page of the site's at the copy's address is served there instead.
   if ((await copiesTaken(ctx, [url.href])).size > 0) return null;
-  const origin = (await siteOriginFor(url.origin, ctx, config)) ?? url.origin;
+  const site = (await siteOriginFor(url.origin, ctx, config)) ?? url.origin;
   // The first listed page whose own copy this is: the page the name says
   // literally before the folder's own page, as llms.txt links them.
   for (const address of await pageAddressesAsked(url)) {
+    // A language served on a domain of its own is listed on that domain.
+    const own = originOf(await servedAt("/", address.locale));
+    const origin = own === url.origin ? url.origin : site;
     const page = await listedPageAt(ctx, address.path, address.locale, {
       origin,
       readRules: config.readRules,
@@ -323,7 +425,7 @@ async function plainCopyAt(
     ) {
       continue;
     }
-    const body = await copyOf(ctx, page);
+    const body = await copyOf(ctx, page, config.readRules);
     return body === null ? null : { body, page };
   }
   return null;

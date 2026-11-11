@@ -5,7 +5,7 @@
  * copies until something else asks.
  */
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const record = vi.hoisted(() => ({ ready: false, retried: 0 }));
 
@@ -17,6 +17,10 @@ vi.mock("../../address-record/catch-up", () => ({
 }));
 
 import { plainCopyProxyHandler } from "../ai-outputs";
+
+beforeEach(() => {
+  record.retried = 0;
+});
 
 describe("a copy asked for before the address record is ready", () => {
   it("passes to the site and tries a failed catch-up again", async () => {
@@ -43,6 +47,6 @@ describe("a copy asked for before the address record is ready", () => {
       new Request("https://acme.example/blog/hello"),
       {} as PluginContext
     );
-    expect(record.retried).toBe(1);
+    expect(record.retried).toBe(0);
   });
 });
