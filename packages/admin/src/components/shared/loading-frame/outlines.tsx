@@ -170,11 +170,11 @@ function PageHeadOutline({
 }
 
 /**
- * A column past the second steps aside on a narrow content column, as the
- * phone's lists show their title and status first.
+ * Every column past the title steps aside on a narrow content column, where
+ * a list draws each row as a card under its title.
  */
 const NARROW_HIDDEN = (index: number): string | undefined =>
-  index >= 2 ? "hidden @lg/content:table-cell" : undefined;
+  index >= 1 ? "hidden @lg/content:table-cell" : undefined;
 
 /** The widths of an outline row's title bars, in order. */
 const ROW_TITLE_WIDTHS = [200, 240, 160, 130, 110] as const;
@@ -531,13 +531,15 @@ export function EditorOutline({
               {/* The document's title line and its address under it, then
                   its fields' card, as the editor draws them. */}
               <OutlineBar className="h-10 w-2/3 max-w-[480px]" />
-              <OutlineBar soft className="mt-3 h-3 w-48" />
+              <OutlineBar className="mt-3 h-3 w-48" />
               <div className="mt-8">
                 <FieldsOutline />
               </div>
             </div>
             <div
-              className="flex w-full shrink-0 flex-col border-t border-border bg-card p-6 lg:border-t-0 lg:border-l lg:w-(--editor-side-width)"
+              // Beside the fields from the wide layout up; below it the
+              // editor folds its panel into a sheet, so none is drawn.
+              className="hidden w-full shrink-0 flex-col border-border bg-card p-6 lg:flex lg:w-(--editor-side-width) lg:border-l"
               style={
                 { "--editor-side-width": `${sideWidth}px` } as CSSProperties
               }
