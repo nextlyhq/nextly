@@ -371,7 +371,7 @@ async function refuseReshapedJoins(
   const [
     { introspectLiveSnapshot },
     { typesDiffer },
-    { isWideningChange },
+    { copiesEveryValue },
     { renderedType },
     { getColumnDescriptor, getComponentRowColumnDescriptor },
     { refusalsForFieldsJoiningTranslation },
@@ -416,7 +416,7 @@ async function refuseReshapedJoins(
       }) &&
       // Reshaped only where the new column cannot hold every value the live one holds: a widening
       // (a longer varchar, varchar to text, a wider number) copies each value as it is.
-      !isWideningChange(renderedType(column), shared.dialectType, args.dialect)
+      !copiesEveryValue(renderedType(column), shared.dialectType, args.dialect)
     );
   });
   if (reshaped.length === 0) return;

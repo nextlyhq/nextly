@@ -607,6 +607,39 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(await columnsOf("dc_posts_locales")).not.toContain("heading");
   });
 
+  // An integer moved into a float column is stored as a floating-point number, which keeps no
+  // integer past 2^53: SQLite would copy 9007199254740993 as 9007199254740992, and no other dialect
+  // counts the change as a widening either.
+  it("refuses a code-first apply that makes an integer a float as it becomes translated, and changes nothing", async () => {
+    const id = await seedCollection();
+    // SQLite's INTEGER holds 64 bits; elsewhere the column is a 32-bit integer and keeps the 7 seeded.
+    const views = dialect === "sqlite" ? "9007199254740993" : "7";
+    if (dialect === "sqlite") {
+      await query(
+        `UPDATE ${quote(dialect, "dc_posts")} SET ${quote(dialect, "views")} = ${views} WHERE ${quote(dialect, "id")} = '${id}'`
+      );
+    }
+
+    const applied = await applyCodeFirst([
+      { name: "heading", type: "text", localized: false },
+      {
+        name: "views",
+        type: "number",
+        localized: true,
+        options: { format: "float" },
+      },
+    ]);
+
+    expect(applied.success).toBe(false);
+    expect(JSON.stringify(applied)).toMatch(/RESHAPED_FIELD_JOINS_TRANSLATION/);
+    expect(await columnsOf("dc_posts_locales")).not.toContain("views");
+    const [row] = await query<{ views: unknown }>(
+      // Read as text: a JavaScript number keeps no integer past 2^53 either.
+      `SELECT CAST(${quote(dialect, "views")} AS ${dialect === "mysql" ? "CHAR" : "TEXT"}) AS views FROM ${quote(dialect, "dc_posts")} WHERE ${quote(dialect, "id")} = '${id}'`
+    );
+    expect(String(row?.views)).toBe(views);
+  });
+
   // SQLite keeps no length on a text column, so a narrower bound changes nothing it stores.
   it.skipIf(dialect === "sqlite")(
     "refuses a code-first apply that narrows a field's length as it becomes translated, and changes nothing",

@@ -4,7 +4,11 @@
 
 import { describe, it, expect } from "vitest";
 
-import { isWideningChange, stringNarrowingLimit } from "../type-widening";
+import {
+  copiesEveryValue,
+  isWideningChange,
+  stringNarrowingLimit,
+} from "../type-widening";
 
 describe("isWideningChange — Postgres", () => {
   it("varchar(50) -> varchar(255) is widening", () => {
@@ -170,5 +174,28 @@ describe("stringNarrowingLimit", () => {
   });
   it("is null on SQLite, which never enforces a declared length", () => {
     expect(stringNarrowingLimit("text", "varchar(255)", "sqlite")).toBeNull();
+  });
+});
+
+// Copying values into a new column of another type, as a field joining translation does: a widening,
+// except on SQLite into REAL storage, where an integer is stored as a float.
+describe("copiesEveryValue", () => {
+  it("is not a copy of every value on SQLite from integer into REAL storage", () => {
+    expect(copiesEveryValue("integer", "real", "sqlite")).toBe(false);
+    expect(copiesEveryValue("numeric", "double", "sqlite")).toBe(false);
+  });
+  it("copies every value on SQLite out of REAL storage, or between integer types", () => {
+    expect(copiesEveryValue("real", "integer", "sqlite")).toBe(true);
+    expect(copiesEveryValue("integer", "bigint", "sqlite")).toBe(true);
+  });
+  it("follows the widening rule elsewhere", () => {
+    expect(copiesEveryValue("varchar(255)", "text", "mysql")).toBe(true);
+    expect(copiesEveryValue("varchar(10)", "varchar(5)", "postgresql")).toBe(
+      false
+    );
+    expect(copiesEveryValue("integer", "double precision", "postgresql")).toBe(
+      false
+    );
+    expect(copiesEveryValue("int", "double", "mysql")).toBe(false);
   });
 });

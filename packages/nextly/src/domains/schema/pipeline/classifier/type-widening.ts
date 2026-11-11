@@ -151,6 +151,33 @@ export function isWideningChange(
   return false;
 }
 
+/** Whether a SQLite declared type has REAL affinity, by SQLite's own rules (an `INT` match first). */
+function sqliteRealAffinity(type: string): boolean {
+  const lower = type.toLowerCase();
+  return !lower.includes("int") && /real|floa|doub/.test(lower);
+}
+
+/**
+ * Whether copying every value of a column of `fromType` into a new column of `toType` keeps each
+ * one as it is: a widening (`isWideningChange`), derived from it. On SQLite one widening in place
+ * is not one across a copy: a value written into a column with REAL affinity is stored as a
+ * floating-point number, so an integer moved there from another affinity past 2^53 loses its last
+ * digits. A copy out of REAL keeps its values, since SQLite converts there only where it loses
+ * nothing.
+ */
+export function copiesEveryValue(
+  fromType: string,
+  toType: string,
+  dialect: SupportedDialect
+): boolean {
+  if (!isWideningChange(fromType, toType, dialect)) return false;
+  return (
+    dialect !== "sqlite" ||
+    sqliteRealAffinity(fromType) ||
+    !sqliteRealAffinity(toType)
+  );
+}
+
 /**
  * Whether a type change keeps every stored value of a string column without a check of the data:
  * `varchar(n)` to `text` or to `varchar(m)` with m >= n, and either type restated. A narrower

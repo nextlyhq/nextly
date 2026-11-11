@@ -79,7 +79,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
-import { isWideningChange } from "../pipeline/classifier/type-widening";
+import { copiesEveryValue } from "../pipeline/classifier/type-widening";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -2734,7 +2734,7 @@ function assertFieldsMayJoinTranslation(
       return (
         before !== undefined &&
         before !== after &&
-        (after === undefined || !isWideningChange(before, after, dialect))
+        (after === undefined || !copiesEveryValue(before, after, dialect))
       );
     })
     .map(({ field }) => field.name);
