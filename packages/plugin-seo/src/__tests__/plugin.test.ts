@@ -114,6 +114,14 @@ describe("seoPlugin", () => {
       // The Pages and addresses screen's list, and its save.
       ["GET", "/pages", undefined, undefined],
       ["POST", "/pages/seo", undefined, undefined],
+      // The bulk edit table, for a signed-in reader of each type.
+      ["GET", "/bulk/types", undefined, undefined],
+      ["GET", "/bulk/rows", undefined, undefined],
+      ["POST", "/bulk/save", undefined, undefined],
+      // The import, for whoever holds site-wide SEO.
+      ["GET", "/import/groups", undefined, undefined],
+      ["POST", "/import/dry-run", undefined, undefined],
+      ["POST", "/import/apply", undefined, undefined],
     ]);
   });
 
@@ -196,6 +204,12 @@ describe("seoPlugin", () => {
       "/problems/check",
       "/pages",
       "/pages/seo",
+      "/bulk/types",
+      "/bulk/rows",
+      "/bulk/save",
+      "/import/groups",
+      "/import/dry-run",
+      "/import/apply",
     ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
@@ -231,6 +245,12 @@ describe("seoPlugin", () => {
       "/problems/check",
       "/pages",
       "/pages/seo",
+      "/bulk/types",
+      "/bulk/rows",
+      "/bulk/save",
+      "/import/groups",
+      "/import/dry-run",
+      "/import/apply",
     ]);
   });
 

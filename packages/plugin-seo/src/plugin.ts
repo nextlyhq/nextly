@@ -29,6 +29,7 @@ import {
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
+import { bulkRoutes } from "./bulk/route";
 import { codePagesCollection } from "./code-pages/collection";
 import {
   keepCodeRoutes,
@@ -49,6 +50,7 @@ import {
 } from "./connections/search-console-send";
 import { CONNECTION_SECRETS, connectionSettings } from "./connections/store";
 import { defaultSeoFields } from "./fields";
+import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
 import { keepSeoContext } from "./not-found/report";
@@ -758,6 +760,19 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         options.baseUrl === undefined
           ? undefined
           : resolveBaseOrigin(options.baseUrl),
+    }),
+    // The bulk edit table, and the import beside it.
+    ...bulkRoutes({
+      targets,
+      readRules,
+      checks: problemChecks,
+      pagePermissions,
+    }),
+    ...importRoutes({
+      targets,
+      readRules,
+      checks: problemChecks,
+      pagePermissions,
     })
   );
 
