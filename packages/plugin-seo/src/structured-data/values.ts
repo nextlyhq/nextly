@@ -3,13 +3,15 @@
  * to each detail, or else the first field named like it, each value taken as
  * the kind of fact the detail is (text, a date, a number, a person).
  *
- * Only what the page holds is read, so structured data states nothing the
- * page does not. A relationship holding only an id is read through to the
- * entry it names, since the id is not the fact the page shows.
+ * Only what the route read for the page is used, so structured data states
+ * nothing the page could not show: a relationship is named only where the
+ * route read the entry it holds, never read again here, so the route's own
+ * access, language and cache tags govern it as they govern the page.
  *
  * @module structured-data/values
  */
 import {
+  addressableFields,
   NextlyError,
   type PageMetadataImage,
   type PageMetadataInput,
@@ -135,38 +137,72 @@ function nameIn(record: Record<string, unknown>): string | undefined {
   );
 }
 
-/**
- * The collection a relationship field points at, where the page's field is
- * one with a single target; nothing for any other field or a Single's.
- */
-async function relationTarget(
+/** The fields the page's content type declares, or none where it is gone. */
+async function declaredFields(
   ctx: PluginContext,
-  input: PageMetadataInput,
-  field: string | undefined
-): Promise<string | undefined> {
-  if (input.source.kind !== "entry" || field === undefined) return undefined;
-  if (field.includes(".")) return undefined;
+  input: PageMetadataInput
+): Promise<unknown> {
+  const { source } = input;
   try {
-    const collection: unknown = await ctx.services.collections.getCollection(
-      input.source.collection,
-      {}
-    );
-    const fields = isRecord(collection)
-      ? atPath(collection, "schemaDefinition.fields")
-      : undefined;
-    if (!Array.isArray(fields)) return undefined;
-    const declared: unknown = fields.find(
-      candidate => isRecord(candidate) && candidate.name === field
-    );
-    if (!isRecord(declared)) return undefined;
-    return declared.type === "relationship" &&
-      typeof declared.relationTo === "string"
-      ? declared.relationTo
-      : undefined;
+    if (source.kind === "entry") {
+      const collection: unknown = await ctx.services.collections.getCollection(
+        source.collection,
+        {}
+      );
+      return isRecord(collection)
+        ? atPath(collection, "schemaDefinition.fields")
+        : undefined;
+    }
+    const singles = await ctx.services.singles.list({
+      slugAllowlist: [source.slug],
+    });
+    return singles.data.find(single => single.slug === source.slug)?.fields;
   } catch (error) {
     if (NextlyError.isCode(error, "NOT_FOUND")) return undefined;
     throw error;
   }
+}
+
+/** A relationship field as declared, and the one collection it targets. */
+interface Relation {
+  /** The collection it holds entries of, where it targets only one. */
+  target?: string;
+}
+
+/**
+ * The relationship a field at a dotted path is, where it is one: each step
+ * read among the fields its level stores, groups' children included.
+ */
+function relationAt(fields: unknown, path: string): Relation | undefined {
+  let level: unknown = fields;
+  const parts = path.split(".");
+  for (const [at, part] of parts.entries()) {
+    const field: unknown = addressableFields(level).find(
+      candidate => isRecord(candidate) && candidate.name === part
+    );
+    if (!isRecord(field)) return undefined;
+    if (at < parts.length - 1) {
+      level = field.fields;
+      continue;
+    }
+    if (field.type !== "relationship" && field.type !== "upload") {
+      return undefined;
+    }
+    return typeof field.relationTo === "string"
+      ? { target: field.relationTo }
+      : {};
+  }
+  return undefined;
+}
+
+/** The relationship the page's field holding a detail is, where it is one. */
+async function relationOf(
+  ctx: PluginContext,
+  input: PageMetadataInput,
+  field: string | undefined
+): Promise<Relation | undefined> {
+  if (field === undefined) return undefined;
+  return relationAt(await declaredFields(ctx, input), field);
 }
 
 /** An entry of `collection` with its own public address, where it has one. */
@@ -192,10 +228,15 @@ async function namedEntry(
     : { name, url: new URL(address, `${origin}/`).href };
 }
 
+/** A detail's value, the first of a list where the field holds several. */
+function firstOf(read: DetailRead): unknown {
+  return Array.isArray(read.value) ? read.value[0] : read.value;
+}
+
 /**
- * The person or thing a detail names: text as the name, a populated entry or
- * group by its name, and an entry a relationship holds only the id of, read.
- * The first of a list where the field holds several.
+ * The person or thing a detail names: text as the name, and an entry or a
+ * group by its name, an entry linked to its own page. A relationship the
+ * route read without the entry it holds names nobody: its id is not a name.
  */
 export async function namedOf(
   ctx: PluginContext,
@@ -203,60 +244,50 @@ export async function namedOf(
   read: DetailRead,
   origin: string
 ): Promise<Named | undefined> {
-  const value: unknown = Array.isArray(read.value) ? read.value[0] : read.value;
+  const value = firstOf(read);
   if (isRecord(value)) {
     // A relationship to several collections holds `{ relationTo, value }`.
     const inner = value.value;
     if (typeof value.relationTo === "string" && inner !== undefined) {
-      if (isRecord(inner)) {
-        return namedEntry(ctx, value.relationTo, inner, input.locale, origin);
-      }
-      return typeof inner === "string"
-        ? entryById(ctx, value.relationTo, inner, input.locale, origin)
+      return isRecord(inner)
+        ? namedEntry(ctx, value.relationTo, inner, input.locale, origin)
         : undefined;
+    }
+    const target = (await relationOf(ctx, input, read.field))?.target;
+    if (target !== undefined) {
+      return namedEntry(ctx, target, value, input.locale, origin);
     }
     const name = nameIn(value);
     return name === undefined ? undefined : { name };
   }
   const text = textOf(value);
   if (text === undefined) return undefined;
-  const target = await relationTarget(ctx, input, read.field);
-  return target === undefined
+  return (await relationOf(ctx, input, read.field)) === undefined
     ? { name: text }
-    : entryById(ctx, target, text, input.locale, origin);
+    : undefined;
 }
 
-/** The entry `id` of `collection`, by its name; nothing where it is gone. */
-async function entryById(
+/**
+ * Whether a detail is held by a relationship the route read without the
+ * entry it names: the page has it, but not in a form that can be stated.
+ */
+export async function heldUnread(
   ctx: PluginContext,
-  collection: string,
-  id: string,
-  locale: string | undefined,
-  origin: string
-): Promise<Named | undefined> {
-  let entry: unknown;
-  try {
-    // Read as a visitor reads it, in the page's language: an entry a visitor
-    // may not see, or one not yet published, is not named on a public page,
-    // as a relationship expanded by the route would withhold it.
-    entry = await ctx.services.collections.findEntryById(collection, id, {
-      as: "public",
-      ...(locale === undefined ? {} : { locale }),
-    });
-  } catch (error) {
-    // A removed or withheld entry names nobody, so the detail is missing.
-    if (
-      NextlyError.isCode(error, "NOT_FOUND") ||
-      NextlyError.isCode(error, "FORBIDDEN") ||
-      NextlyError.isCode(error, "AUTH_REQUIRED")
-    ) {
-      return undefined;
-    }
-    throw error;
-  }
-  return isRecord(entry)
-    ? namedEntry(ctx, collection, entry, locale, origin)
-    : undefined;
+  input: PageMetadataInput,
+  read: DetailRead
+): Promise<boolean> {
+  const value = firstOf(read);
+  const unread =
+    typeof value === "string" ||
+    typeof value === "number" ||
+    (isRecord(value) &&
+      typeof value.relationTo === "string" &&
+      !isRecord(value.value));
+  return (
+    unread &&
+    String(isRecord(value) ? value.value : value).trim() !== "" &&
+    (await relationOf(ctx, input, read.field)) !== undefined
+  );
 }
 
 /** The image a detail names: a media value read as the share image is. */

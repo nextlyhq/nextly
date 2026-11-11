@@ -398,10 +398,12 @@ chooses its pages' type, and a page can choose another in its `seo.structuredDat
 hidden from search is offered only Web page and Collection page.
 
 Each detail is read from the field the content type maps to it, or else from the first field named
-like it (`author`, `publishedAt`, `price`, `startDate` and so on). A relationship that holds only an
-id is read through to the entry it names, as a visitor would read it and in the page's language, so
-an unpublished or private entry is never named. An author with a public address of their own is
-linked to it.
+like it (`author`, `publishedAt`, `price`, `startDate` and so on). Structured data states only what the route
+read for the page, so a relationship names someone only where the route read the entry it holds:
+give a route that shows its author `depth: 1`. The route's own access rules, language and cache
+tags then govern the author as they govern the page, so an unpublished or private author is never
+named. An author with a public address of their own is linked to it. A relationship read at
+`depth: 0` holds only an id, which is not a name, and the problem says the route is the fix.
 
 ```ts
 seoPlugin({
@@ -424,7 +426,7 @@ seoPlugin({
 **A type missing a detail it needs is left out**, rather than sending search engines a description
 they would reject; the page and the site are still described. `structuredDataProblems(ctx, input)`
 lists one problem per missing detail, such as `Missing: author.`, saying whether the page's field is
-empty or no field holds it yet. A page with no canonical address is given no guessed one: only the
+empty, no field holds it yet, or the route read its relationship without the entry. A page with no canonical address is given no guessed one: only the
 site is described.
 
 The route helpers hand the page's render the structured data as `context.structuredData`, text

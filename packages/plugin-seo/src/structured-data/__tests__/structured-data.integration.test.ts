@@ -1,8 +1,8 @@
 /**
  * A page's structured data reaches its render through the route helpers, on
  * every configured dialect: built from the same answer as its head, with an
- * author a relationship holds by id read through, as a visitor reads it, to
- * the author's own page,
+ * author the route read through its relationship, as a visitor reads it,
+ * linked to the author's own page,
  * written so that no value can end its script element, and a page's own
  * choice of type stored with the page.
  */
@@ -79,6 +79,9 @@ async function renderedWith(
   const route = createPublicContentRoute({
     collections: ["posts"],
     nextly: t.nextly,
+    // The post's author read with it, as a page that shows its author reads
+    // it: judged as a visitor, since the route trusts only its own posts.
+    depth: 1,
     render: (_: ContentEntry, context) => context.structuredData,
     // The share image the route's code sets, which the article shows, and a
     // title, which the route's code sets as it likes: what a person saves is

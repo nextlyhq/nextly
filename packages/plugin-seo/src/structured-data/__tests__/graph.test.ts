@@ -13,7 +13,6 @@
  * - with no site address, nothing is generated, and that is the problem.
  */
 import {
-  NextlyError,
   type PageMetadataAnswer,
   type PageMetadataInput,
   type PluginContext,
@@ -45,16 +44,10 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   }),
 }));
 
-/** The authors a relationship names by id; `hidden` is one visitors may not read. */
-const AUTHORS: Record<string, Record<string, unknown>> = {
-  a1: { id: "a1", name: "Sara Khan", slug: "sara-khan" },
-  hidden: { id: "hidden", name: "Not Public", slug: "not-public" },
-};
+/** An author as a route reads it populated, at `depth: 1`. */
+const SARA = { id: "a1", name: "Sara Khan", slug: "sara-khan" };
 
-/** How each related entry was asked for. */
-const reads: unknown[] = [];
-
-/** A context reading the authors and the posts' declared fields. */
+/** A context reading the posts' declared fields, and the `about` Single's. */
 function context(): PluginContext {
   return {
     services: {
@@ -69,20 +62,29 @@ function context(): PluginContext {
             ],
           },
         }),
-        findEntryById: async (
-          collection: string,
-          id: string,
-          opts?: { as?: string }
-        ) => {
-          reads.push(opts);
-          // The service refuses a visitor what visitors may not read.
-          if (id === "hidden" && opts?.as === "public") {
-            throw NextlyError.forbidden({});
-          }
-          const found = collection === "authors" ? AUTHORS[id] : undefined;
-          if (found === undefined) throw NextlyError.notFound({});
-          return found;
-        },
+      },
+      singles: {
+        list: async () => ({
+          total: 1,
+          data: [
+            {
+              slug: "about",
+              fields: [
+                {
+                  name: "details",
+                  type: "group",
+                  fields: [
+                    {
+                      name: "author",
+                      type: "relationship",
+                      relationTo: "authors",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
       },
     },
   } as unknown as PluginContext;
@@ -267,31 +269,14 @@ describe("a page's structured data", () => {
     expect(unheld).toEqual([]);
   });
 
-  it("names an author a relationship holds by id, at the author's own page", async () => {
+  it("names a related author the route read, at the author's own page in the page's language", async () => {
     const { nodes } = await buildStructuredData(
       context(),
-      postInput({ ...POST, writer: undefined, author: "a1" }),
+      postInput({ ...POST, writer: undefined, author: SARA }, "de"),
       ANSWER,
       rules()
     );
 
-    expect(nodeOf(nodes, "Article")?.author).toEqual({
-      "@type": "Person",
-      name: "Sara Khan",
-      url: `${ORIGIN}/authors/sara-khan`,
-    });
-  });
-
-  it("reads a related author as a visitor would, in the page's language, at its address there", async () => {
-    reads.length = 0;
-    const { nodes } = await buildStructuredData(
-      context(),
-      postInput({ ...POST, writer: undefined, author: "a1" }, "de"),
-      ANSWER,
-      rules()
-    );
-
-    expect(reads).toEqual([{ as: "public", locale: "de" }]);
     expect(nodeOf(nodes, "Article")?.author).toEqual({
       "@type": "Person",
       name: "Sara Khan",
@@ -299,17 +284,66 @@ describe("a page's structured data", () => {
     });
   });
 
-  it("names no author a visitor may not read", async () => {
+  it("names nobody for a relationship read without its entry, and says the route is the fix", async () => {
     const { nodes, problems } = await buildStructuredData(
       context(),
-      postInput({ ...POST, writer: undefined, author: "hidden" }),
+      postInput({ ...POST, writer: undefined, author: "a1" }),
       ANSWER,
       rules({ posts: { type: "article" } })
     );
 
+    // The id is not a name, and nothing is read beyond what the route read.
     expect(nodeOf(nodes, "Article")).toBeUndefined();
-    expect(JSON.stringify(nodes)).not.toContain("Not Public");
-    expect(problems.map(problem => problem.detail)).toEqual(["author"]);
+    expect(JSON.stringify(nodes)).not.toContain('"a1"');
+    expect(problems).toEqual([
+      {
+        type: "article",
+        detail: "author",
+        message: "Missing: author.",
+        fix: "route",
+        field: "author",
+      },
+    ]);
+  });
+
+  it("reads a Single's relationship in a group by its dotted path", async () => {
+    const about = (details: Record<string, unknown>): PageMetadataInput => ({
+      locale: "en",
+      source: {
+        kind: "single",
+        slug: "about",
+        document: { details, publishedAt: "2026-11-10" },
+      },
+      code: {},
+      derived: {},
+    });
+    const single = rules({
+      "single:about": {
+        type: "article",
+        details: { article: { author: "details.author" } },
+      },
+    });
+
+    const unread = await buildStructuredData(
+      context(),
+      about({ author: "a1" }),
+      ANSWER,
+      single
+    );
+    const read = await buildStructuredData(
+      context(),
+      about({ author: SARA }),
+      ANSWER,
+      single
+    );
+
+    expect(nodeOf(unread.nodes, "Article")).toBeUndefined();
+    expect(unread.problems.map(problem => problem.fix)).toEqual(["route"]);
+    expect(nodeOf(read.nodes, "Article")?.author).toEqual({
+      "@type": "Person",
+      name: "Sara Khan",
+      url: `${ORIGIN}/authors/sara-khan`,
+    });
   });
 
   it("leaves an Article out when its author is missing, naming the field to fill in", async () => {
@@ -356,18 +390,6 @@ describe("a page's structured data", () => {
         fix: "mapping",
       },
     ]);
-  });
-
-  it("reads a relationship whose entry is gone as a missing detail", async () => {
-    const { nodes, problems } = await buildStructuredData(
-      context(),
-      postInput({ ...POST, writer: undefined, author: "gone" }),
-      ANSWER,
-      rules({ posts: { type: "article" } })
-    );
-
-    expect(nodeOf(nodes, "Article")).toBeUndefined();
-    expect(problems.map(problem => problem.detail)).toEqual(["author"]);
   });
 
   it("addresses the page by its canonical as the answer gives it, never where it was served", async () => {

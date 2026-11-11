@@ -30,6 +30,7 @@ import {
 import type { DetailMapping, StructuredDataRules } from "./rules";
 import {
   dateOf,
+  heldUnread,
   isRecord,
   namedOf,
   numberOf,
@@ -59,10 +60,12 @@ export interface StructuredDataProblem {
   message: string;
   /**
    * Where it is fixed: on the page (`content`, the field is empty), in the
-   * content type's mapping (`mapping`, no field holds it), or in the SEO
-   * settings (`settings`, the site's address).
+   * content type's mapping (`mapping`, no field holds it), by the route
+   * (`route`, it reads the relationship holding it without the entry it
+   * names, as at `depth: 0`), or in the SEO settings (`settings`, the site's
+   * address).
    */
-  fix: "content" | "mapping" | "settings";
+  fix: "content" | "mapping" | "route" | "settings";
   /** The page's field the detail is read from, where one is. */
   field?: string;
 }
@@ -310,6 +313,22 @@ const DETAIL_READERS: Readonly<Record<StructuredDataDetail, DetailReader>> = {
   operatingSystem: valueRead(textOf),
 };
 
+/**
+ * Where a missing detail is fixed: the page's field to fill in, the route
+ * where the page holds it in a relationship the route did not read, or the
+ * mapping where no field holds it. The share image is the page's own, so it
+ * is filled in on the page.
+ */
+async function fixFor(
+  facts: PageFacts,
+  detail: StructuredDataDetail,
+  read: DetailRead
+): Promise<StructuredDataProblem["fix"]> {
+  if (read.field === undefined)
+    return detail === "image" ? "content" : "mapping";
+  return (await heldUnread(facts.ctx, facts.input, read)) ? "route" : "content";
+}
+
 /** The details a type is described with, and the ones it is missing. */
 async function detailsOf(
   facts: PageFacts,
@@ -333,14 +352,11 @@ async function detailsOf(
       continue;
     }
     if (!needs.includes(detail)) continue;
-    // A field to fill in on the page, or none mapped to read it from. The
-    // share image is the page's own, so it is filled in on the page.
-    const onPage = read.field !== undefined || detail === "image";
     missing.push({
       type,
       detail,
       message: `Missing: ${DETAIL_LABELS[detail]}.`,
-      fix: onPage ? "content" : "mapping",
+      fix: await fixFor(facts, detail, read),
       ...(read.field === undefined ? {} : { field: read.field }),
     });
   }
