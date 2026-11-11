@@ -233,8 +233,8 @@ interface NamedRemovedCollection extends RemovedCollectionSeed {
 
 /**
  * Each removed table with the slug it is called by: the gone slug whose table
- * it is, where one is, else one read off the table, which no field is
- * matched against.
+ * it is, where one is, else one read off the table (the table itself where it
+ * has no prefix), which no field is matched against.
  *
  * @param tableOf the table a slug of this kind of entity resolves to
  * @param prefix the prefix every table of this kind starts with
@@ -253,7 +253,13 @@ function namedRemovedTables(
     }
   }
   return removedTables.map(tableName => ({
-    slug: slugOfTable.get(tableName) ?? tableName.slice(prefix.length),
+    // A field group named through its old `dbName` has no prefix to read a slug from: it is called
+    // by its table.
+    slug:
+      slugOfTable.get(tableName) ??
+      (tableName.startsWith(prefix)
+        ? tableName.slice(prefix.length)
+        : tableName),
     tableName,
     namedBy: slugOfTable.get(tableName) ?? null,
   }));

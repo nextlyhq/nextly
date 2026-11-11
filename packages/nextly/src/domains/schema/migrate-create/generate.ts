@@ -3185,10 +3185,33 @@ export interface RemovedEntityTables {
 }
 
 /**
+ * Whether a table is a field group's: named with the field-group prefix, or
+ * carrying the parent columns every field-group table has. A field group named
+ * through the `dbName` it once accepted keeps the table its author chose, which
+ * no prefix gives away, but its columns do: no collection or Single can have
+ * them, since a field name starts with a letter.
+ */
+function isFieldGroupTable(table: TableSpec): boolean {
+  if (table.name.startsWith(STORAGE_FORMAT.tablePrefix)) return true;
+  if (
+    table.name.startsWith(COLLECTION_TABLE_PREFIX) ||
+    table.name.startsWith(SINGLE_TABLE_PREFIX)
+  ) {
+    return false;
+  }
+  const columns = new Set(table.columns.map(column => column.name));
+  return (
+    columns.has(STORAGE_FORMAT.columns.parentId) &&
+    columns.has(STORAGE_FORMAT.columns.parentTable)
+  );
+}
+
+/**
  * The entity tables the latest snapshot holds that the configuration no
  * longer declares: the tables the next migration would drop, each by the
- * prefix its kind of entity names it with. A removed entity's translation
- * and junction tables are among them, under the same prefix.
+ * prefix its kind of entity names it with, and a field group's by its columns
+ * where its name has no prefix (`isFieldGroupTable`). A removed entity's
+ * translation and junction tables are among them, under the same prefix.
  */
 export function removedEntityTables(input: {
   previous: NextlySchemaSnapshot;
@@ -3205,17 +3228,16 @@ export function removedEntityTables(input: {
       input.dialect
     ).tables.map(table => table.name)
   );
-  const removed = input.previous.tables
-    .map(table => table.name)
-    .filter(name => !desired.has(name));
+  const removed = input.previous.tables.filter(
+    table => !desired.has(table.name)
+  );
+  const names = (tables: readonly TableSpec[]) => tables.map(t => t.name);
   return {
-    collections: removed.filter(name =>
-      name.startsWith(COLLECTION_TABLE_PREFIX)
+    collections: names(
+      removed.filter(t => t.name.startsWith(COLLECTION_TABLE_PREFIX))
     ),
-    singles: removed.filter(name => name.startsWith(SINGLE_TABLE_PREFIX)),
-    fieldGroups: removed.filter(name =>
-      name.startsWith(STORAGE_FORMAT.tablePrefix)
-    ),
+    singles: names(removed.filter(t => t.name.startsWith(SINGLE_TABLE_PREFIX))),
+    fieldGroups: names(removed.filter(isFieldGroupTable)),
   };
 }
 
