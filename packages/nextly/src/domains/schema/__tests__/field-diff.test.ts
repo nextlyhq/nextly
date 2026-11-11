@@ -193,4 +193,55 @@ describe("computeFieldDiff", () => {
     expect(diff.changed[0].name).toBe("status");
     expect(diff.unchanged).toEqual(["title"]);
   });
+
+  // A field made through the REST API, the Direct API or code may store neither flag, while the
+  // Builder always sends both as booleans: a missing flag is the same as false.
+  it.each([
+    ["saved unchanged", {}],
+    ["saved with only its label changed", { label: "Summary text" }],
+  ])(
+    "finds no change in a field stored without required, unique or hasMany, %s",
+    (_case, edit) => {
+      const stored: FieldDefinition[] = [
+        { name: "summary", type: "text" },
+        { name: "author", type: "relationship", relationTo: "users" },
+      ];
+      const fromBuilder: FieldDefinition[] = [
+        {
+          name: "summary",
+          type: "text",
+          required: false,
+          unique: false,
+          ...edit,
+        },
+        {
+          name: "author",
+          type: "relationship",
+          relationTo: "users",
+          required: false,
+          unique: false,
+          hasMany: false,
+        },
+      ];
+
+      const diff = computeFieldDiff(stored, fromBuilder);
+
+      expect(diff.changed).toEqual([]);
+      expect(diff.hasChanges).toBe(false);
+    }
+  );
+
+  it("still finds a field made required that was stored without the flag", () => {
+    const diff = computeFieldDiff(
+      [{ name: "summary", type: "text" }],
+      [{ name: "summary", type: "text", required: true }]
+    );
+
+    expect(diff.changed).toEqual([
+      expect.objectContaining({
+        name: "summary",
+        reason: "constraint_changed",
+      }),
+    ]);
+  });
 });

@@ -104,10 +104,11 @@ function getChangeReason(
   | "options_changed"
   | "relation_changed" {
   if (oldField.type !== newField.type) return "type_changed";
-  if (oldField.required !== newField.required) return "constraint_changed";
+  if (isSet(oldField.required) !== isSet(newField.required))
+    return "constraint_changed";
   if (
     oldField.relationTo !== newField.relationTo ||
-    oldField.hasMany !== newField.hasMany
+    isSet(oldField.hasMany) !== isSet(newField.hasMany)
   )
     return "relation_changed";
   return "options_changed";
@@ -119,8 +120,8 @@ function hasFieldChanged(
   newField: FieldDefinition
 ): boolean {
   if (oldField.type !== newField.type) return true;
-  if (oldField.required !== newField.required) return true;
-  if (oldField.unique !== newField.unique) return true;
+  if (isSet(oldField.required) !== isSet(newField.required)) return true;
+  if (isSet(oldField.unique) !== isSet(newField.unique)) return true;
 
   // Compare field options for select/radio fields
   if (
@@ -132,7 +133,15 @@ function hasFieldChanged(
 
   // Compare relationship config
   if (oldField.relationTo !== newField.relationTo) return true;
-  if (oldField.hasMany !== newField.hasMany) return true;
+  if (isSet(oldField.hasMany) !== isSet(newField.hasMany)) return true;
 
   return false;
+}
+
+// Whether a yes-or-no setting is on. A field made through the REST API, the Direct API or code may
+// store no `required`, `unique` or `hasMany` at all, while the Builder always sends each as a
+// boolean, so a missing setting is read as off: compared as stored, every Builder save of such a
+// field read as a change, even one that only relabelled it.
+function isSet(value: boolean | undefined): boolean {
+  return value === true;
 }
