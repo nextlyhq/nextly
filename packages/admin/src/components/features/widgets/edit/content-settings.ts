@@ -20,6 +20,8 @@ import {
 
 import { canonicalJson } from "@admin/lib/canonical-json";
 
+import { USERS_SOURCE } from "../widget-as-asked";
+
 import { filterFieldNames } from "./content-filter";
 
 /** A content setting that works over a Collection setting of the widget. */
@@ -325,10 +327,15 @@ export function collectionOptions(
   setting: Extract<ContentSetting, { type: "collection" }>,
   sources: readonly PublishedContentSource[]
 ): { label: string; value: string }[] {
-  const options = sources.map(source => ({
-    label: source.label,
-    value: source.collection,
-  }));
+  const options = [
+    ...sources.map(source => ({
+      label: source.label,
+      value: source.collection,
+    })),
+    // The people, after the collections, where the setting offers them: the server tells the
+    // setting with the offer only to a reader who may read users.
+    ...(setting.users === true ? [{ label: "Users", value: USERS_SOURCE }] : []),
+  ];
   const fallback = setting.defaultValue;
   if (
     fallback === undefined ||

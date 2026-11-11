@@ -23,29 +23,40 @@ export interface SegmentedOption {
   label: string;
   /** What a screen reader says for it, where the label alone is too short ("50% width"). */
   spoken?: string;
+  /** Whether it cannot be chosen while the others can: drawn struck through, and skipped. */
+  disabled?: boolean;
 }
 
 /**
  * Where a key moves the choice in a group of `count`, from `index`, as a radio group moves:
- * the arrows to the next or previous choice, wrapping, and Home and End to the first and last.
- * `undefined` for any other key.
+ * the arrows to the next or previous choice, wrapping, and Home and End to the first and last,
+ * each passing over a choice that cannot be chosen (`skip`). `undefined` for any other key, or
+ * where no other choice can be chosen.
  */
 function segmentFor(
   key: string,
   index: number,
-  count: number
+  count: number,
+  skip: (index: number) => boolean = () => false
 ): number | undefined {
+  const step = (from: number, by: 1 | -1): number | undefined => {
+    for (let moved = 1; moved <= count; moved += 1) {
+      const at = (from + by * moved + count * count) % count;
+      if (!skip(at)) return at;
+    }
+    return undefined;
+  };
   switch (key) {
     case "ArrowRight":
     case "ArrowDown":
-      return (index + 1) % count;
+      return step(index, 1);
     case "ArrowLeft":
     case "ArrowUp":
-      return (index - 1 + count) % count;
+      return step(index, -1);
     case "Home":
-      return 0;
+      return step(count - 1, 1);
     case "End":
-      return count - 1;
+      return step(0, -1);
     default:
       return undefined;
   }
@@ -93,12 +104,16 @@ export function SegmentedChoice({
 }: SegmentedChoiceProps): JSX.Element {
   const radios = useRef<(HTMLButtonElement | null)[]>([]);
   const chosen = options.findIndex(option => option.value === value);
-  const tabbable = chosen === -1 ? 0 : chosen;
+  const firstOpen = Math.max(
+    0,
+    options.findIndex(option => option.disabled !== true)
+  );
+  const tabbable = chosen === -1 ? firstOpen : chosen;
   const classes = SIZES[size];
 
   const choose = (index: number) => {
     const option = options[index];
-    if (option === undefined) return;
+    if (option === undefined || option.disabled === true) return;
     radios.current[index]?.focus();
     if (option.value !== value) onSelect(option.value);
   };
@@ -106,7 +121,12 @@ export function SegmentedChoice({
     event: KeyboardEvent<HTMLButtonElement>,
     index: number
   ) => {
-    const next = segmentFor(event.key, index, options.length);
+    const next = segmentFor(
+      event.key,
+      index,
+      options.length,
+      at => options[at]?.disabled === true
+    );
     if (next === undefined) return;
     event.preventDefault();
     choose(next);
@@ -133,7 +153,7 @@ export function SegmentedChoice({
             aria-checked={checked}
             aria-label={option.spoken}
             tabIndex={index === tabbable ? 0 : -1}
-            disabled={disabled}
+            disabled={disabled || option.disabled === true}
             data-value={option.value}
             onClick={() => choose(index)}
             onKeyDown={event => onKeyDown(event, index)}
@@ -141,6 +161,7 @@ export function SegmentedChoice({
               "whitespace-nowrap transition-colors motion-reduce:transition-none",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               "disabled:cursor-not-allowed disabled:opacity-50",
+              option.disabled === true && "line-through",
               classes.radio,
               checked
                 ? "bg-background font-semibold text-foreground shadow-sm"
