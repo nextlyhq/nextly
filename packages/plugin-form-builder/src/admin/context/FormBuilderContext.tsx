@@ -40,6 +40,12 @@ import {
   normalizeFormSettings,
 } from "../../utils/form-settings";
 
+import { generateFieldName } from "./field-names";
+import { useChangeHistory } from "./use-change-history";
+import { useFieldIdentity } from "./use-field-identity";
+
+export { generateFieldName } from "./field-names";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -62,7 +68,11 @@ export interface FormBuilderState {
   fields: AnyFormField[];
   /** Currently selected field ID (name) */
   selectedFieldId: string | null;
-  /** Active tab: builder, preview, settings, or notifications */
+  /**
+   * Active tab: builder, preview, settings, or notifications.
+   * @deprecated The editor shows the page its address names; this is no
+   * longer what it shows, and is kept for hosts that read it.
+   */
   activeTab: "builder" | "preview" | "settings" | "notifications";
   /** Whether form has unsaved changes */
   isDirty: boolean;
@@ -97,7 +107,10 @@ export interface FormBuilderActions {
   duplicateField: (fieldName: string) => void;
   /** Select a field */
   selectField: (fieldName: string | null) => void;
-  /** Set active tab */
+  /**
+   * Set active tab.
+   * @deprecated The editor's tabs are links to each page's address.
+   */
   setActiveTab: (
     tab: "builder" | "preview" | "settings" | "notifications"
   ) => void;
@@ -158,6 +171,35 @@ export interface FieldBookkeeping {
   markFieldsSaved: (names: readonly string[]) => void;
   /** Whether a colleague holds the form, so nothing in it may change. */
   readOnly: boolean;
+  /**
+   * How many unsaved changes the form holds, across every tab: typing into
+   * one input counts once while the keystrokes keep coming. `isDirty` is this
+   * above zero.
+   */
+  changeCount: number;
+  /** Take the last unsaved change back, on any tab. */
+  undo: () => void;
+  /**
+   * How many times Undo has restored the form: the key for an editor that
+   * keeps its own copy of a value, so it rereads the restored one.
+   */
+  restored: number;
+  /**
+   * The key a field is known by while it is edited, whatever its name
+   * becomes: the list's row key and the settings panel's field id.
+   */
+  fieldKey: (name: string) => string;
+  /**
+   * Replace `field` with its edited definition: a name another field has is
+   * made unique, and references move from the name the form knows the field
+   * by, even through an empty one. Kept here, not in the list, so a rename
+   * finished after a trip to another page still moves them.
+   */
+  editField: (
+    field: AnyFormField,
+    next: AnyFormField,
+    fields: readonly AnyFormField[]
+  ) => void;
 }
 
 export type FormBuilderInternalValue = FormBuilderContextValue &
@@ -201,11 +243,79 @@ export interface FormBuilderProviderProps {
  */
 const READS_ONLY = new Set([
   "selectField",
+  "fieldKey",
   "setActiveTab",
   "markAsSaved",
   "beginSave",
   "markFieldsSaved",
 ]);
+
+/** What Undo restores: the form, and which of its fields are stored. */
+interface FormDocument {
+  fields: AnyFormField[];
+  formData: FormBuilderState["formData"];
+  settings: FormSettings;
+  notifications: FormNotification[];
+  savedFieldNames: ReadonlySet<string>;
+}
+
+/**
+ * The metadata keys typed into, whose keystrokes join one change. A status
+ * picked from a menu is a change of its own every time.
+ */
+const TYPED_FORM_DATA = new Set([
+  "name",
+  "slug",
+  "description",
+  "closedMessage",
+]);
+
+/** What an edit to the form's metadata edited, when it may join the next. */
+function formDataKey(
+  updates: Partial<FormBuilderState["formData"]>
+): string | null {
+  const keys = Object.keys(updates);
+  return keys.length > 0 && keys.every(key => TYPED_FORM_DATA.has(key))
+    ? `form:${keys.sort().join(",")}`
+    : null;
+}
+
+/**
+ * `record` with every field of it the server now stores counted as stored:
+ * which fields are stored is the server's to say, not an edit's to undo.
+ */
+function withStoredFields(
+  record: FormDocument,
+  stored: ReadonlySet<string>
+): FormDocument {
+  const named = record.fields
+    .map(field => field.name)
+    .filter(name => stored.has(name) && !record.savedFieldNames.has(name));
+  return named.length === 0
+    ? record
+    : {
+        ...record,
+        savedFieldNames: new Set([...record.savedFieldNames, ...named]),
+      };
+}
+
+/** The open field's name, while that field is still among `fields`. */
+function keptSelection(
+  selected: string | null,
+  fields: readonly AnyFormField[]
+): string | null {
+  return selected !== null && fields.some(field => field.name === selected)
+    ? selected
+    : null;
+}
+
+/**
+ * What an edit to a field edited: its place in the list, which a rename does
+ * not move, so renaming one keystroke at a time is still one change.
+ */
+function fieldChangeKey(fields: readonly AnyFormField[], name: string): string {
+  return `field:${fields.findIndex(field => field.name === name)}`;
+}
 
 /** Default form settings (the canonical defaults from the settings reader) */
 export const DEFAULT_SETTINGS: FormSettings = DEFAULT_FORM_SETTINGS;
@@ -236,33 +346,6 @@ const FormBuilderContext = createContext<FormBuilderInternalValue | null>(null);
 // ============================================================================
 // Utilities
 // ============================================================================
-
-/**
- * Generate a readable unique field name: the type itself for the first
- * field of that type, then a numeric suffix (`email`, `email_2`, ...).
- * Names key submission data, so they should read like keys a developer
- * would have chosen, not timestamps.
- */
-export function generateFieldName(
-  type: FormFieldTypeId,
-  existingNames: readonly string[] = []
-): string {
-  // A plugin type id can be hyphenated (`star-rating`) or start with a digit,
-  // but a field name must match ^[a-zA-Z][a-zA-Z0-9_]*$ (it keys submission
-  // data). Normalize to a safe key; built-in type ids are already valid and
-  // pass through unchanged.
-  const base =
-    type
-      .replace(/[^a-zA-Z0-9]+/g, "_")
-      .replace(/^_+/, "")
-      .replace(/^([0-9])/, "field_$1")
-      .replace(/_+$/, "") || "field";
-  const taken = new Set(existingNames);
-  if (!taken.has(base)) return base;
-  let suffix = 2;
-  while (taken.has(`${base}_${suffix}`)) suffix += 1;
-  return `${base}_${suffix}`;
-}
 
 /**
  * Generate a human-readable label from field type, using the shared catalog
@@ -387,7 +470,6 @@ export function FormBuilderProvider({
   const [activeTab, setActiveTab] = useState<
     "builder" | "preview" | "settings" | "notifications"
   >("builder");
-  const [isDirty, setIsDirty] = useState(false);
   // The names that stopped meaning the field they named (deleted, or renamed
   // away) since the save under way began.
   const vacatedRef = useRef(new Set<string>());
@@ -412,24 +494,57 @@ export function FormBuilderProvider({
     initialData?.notifications || []
   );
 
-  // Actions
-  const setFields = useCallback((newFields: AnyFormField[]) => {
-    setFieldsState(newFields);
-    setIsDirty(true);
+  // The form as last rendered, which a change records as what it replaced.
+  // One object per render, so two writes in one event record it once.
+  const formDocument = useMemo<FormDocument>(
+    () => ({ fields, formData, settings, notifications, savedFieldNames }),
+    [fields, formData, settings, notifications, savedFieldNames]
+  );
+  // Puts a form back for Undo. The setters are stable, so this is too.
+  const restore = useCallback((previous: FormDocument) => {
+    setFieldsState(previous.fields);
+    setFormData(previous.formData);
+    setSettings(previous.settings);
+    setNotifications(previous.notifications);
+    setSavedFieldNames(previous.savedFieldNames);
+    setSelectedFieldId(selected => keptSelection(selected, previous.fields));
   }, []);
+  // Each of these is stable; the handle that carries them is not.
+  const {
+    changeCount,
+    restored,
+    record,
+    undo,
+    current: currentDocument,
+    markSaved: markAsSaved,
+    beginSave: historyBeginSave,
+    rebase: rebaseHistory,
+  } = useChangeHistory(formDocument, restore);
 
-  const addField = useCallback((field: AnyFormField, index?: number) => {
-    setFieldsState(prev => {
-      if (index !== undefined && index >= 0 && index <= prev.length) {
-        const newFields = [...prev];
-        newFields.splice(index, 0, field);
-        return newFields;
-      }
-      return [...prev, field];
-    });
-    setSelectedFieldId(field.name);
-    setIsDirty(true);
-  }, []);
+  // Actions
+  const setFields = useCallback(
+    (newFields: AnyFormField[]) => {
+      setFieldsState(newFields);
+      record(null);
+    },
+    [record]
+  );
+
+  const addField = useCallback(
+    (field: AnyFormField, index?: number) => {
+      setFieldsState(prev => {
+        if (index !== undefined && index >= 0 && index <= prev.length) {
+          const newFields = [...prev];
+          newFields.splice(index, 0, field);
+          return newFields;
+        }
+        return [...prev, field];
+      });
+      setSelectedFieldId(field.name);
+      record(null);
+    },
+    [record]
+  );
 
   /**
    * What a field's rename moves with it. The selection follows it, so the
@@ -456,10 +571,10 @@ export function FormBuilderProvider({
       setFieldsState(prev =>
         prev.map(f => (f.name === fieldName ? { ...f, ...updates } : f))
       );
+      record(fieldChangeKey(currentDocument().fields, fieldName));
       followRename(fieldName, updates.name);
-      setIsDirty(true);
     },
-    [followRename]
+    [followRename, record, currentDocument]
   );
 
   const replaceField = useCallback(
@@ -479,11 +594,13 @@ export function FormBuilderProvider({
           renameInNotifications(prev, referencesFrom, next.name)
         );
       }
+      record(fieldChangeKey(currentDocument().fields, fieldName));
       followRename(fieldName, next.name);
-      setIsDirty(true);
     },
-    [followRename]
+    [followRename, record, currentDocument]
   );
+
+  const { fieldKey, editField } = useFieldIdentity(replaceField);
 
   const deleteField = useCallback(
     (fieldName: string) => {
@@ -500,28 +617,31 @@ export function FormBuilderProvider({
       if (selectedFieldId === fieldName) {
         setSelectedFieldId(null);
       }
-      setIsDirty(true);
+      record(null);
     },
-    [selectedFieldId]
+    [selectedFieldId, record]
   );
 
-  const moveField = useCallback((fromIndex: number, toIndex: number) => {
-    setFieldsState(prev => {
-      if (
-        fromIndex < 0 ||
-        fromIndex >= prev.length ||
-        toIndex < 0 ||
-        toIndex >= prev.length
-      ) {
-        return prev;
-      }
-      const newFields = [...prev];
-      const [removed] = newFields.splice(fromIndex, 1);
-      newFields.splice(toIndex, 0, removed);
-      return newFields;
-    });
-    setIsDirty(true);
-  }, []);
+  const moveField = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      setFieldsState(prev => {
+        if (
+          fromIndex < 0 ||
+          fromIndex >= prev.length ||
+          toIndex < 0 ||
+          toIndex >= prev.length
+        ) {
+          return prev;
+        }
+        const newFields = [...prev];
+        const [removed] = newFields.splice(fromIndex, 1);
+        newFields.splice(toIndex, 0, removed);
+        return newFields;
+      });
+      record(null);
+    },
+    [record]
+  );
 
   const duplicateField = useCallback(
     (fieldName: string) => {
@@ -548,9 +668,9 @@ export function FormBuilderProvider({
 
       // Select the duplicated field so its card expands
       setSelectedFieldId(newFieldName);
-      setIsDirty(true);
+      record(null);
     },
-    [fields]
+    [fields, record]
   );
 
   const selectField = useCallback((fieldName: string | null) => {
@@ -560,44 +680,53 @@ export function FormBuilderProvider({
   const updateFormData = useCallback(
     (updates: Partial<FormBuilderState["formData"]>) => {
       setFormData(prev => ({ ...prev, ...updates }));
-      setIsDirty(true);
+      record(formDataKey(updates));
     },
-    []
+    [record]
   );
 
-  const updateSettings = useCallback((updates: Partial<FormSettings>) => {
-    setSettings(prev => ({ ...prev, ...updates }));
-    setIsDirty(true);
-  }, []);
+  const updateSettings = useCallback(
+    (updates: Partial<FormSettings>) => {
+      setSettings(prev => ({ ...prev, ...updates }));
+      record(`settings:${Object.keys(updates).sort().join(",")}`);
+    },
+    [record]
+  );
 
-  const addNotification = useCallback((notification: FormNotification) => {
-    setNotifications(prev => [...prev, notification]);
-    setIsDirty(true);
-  }, []);
+  const addNotification = useCallback(
+    (notification: FormNotification) => {
+      setNotifications(prev => [...prev, notification]);
+      record(null);
+    },
+    [record]
+  );
 
-  const duplicateNotification = useCallback((id: string) => {
-    // The non-deterministic id is generated outside the updater (updaters
-    // must stay pure and may re-run); the copy itself derives from `prev`
-    // so rapid duplications never work from a stale snapshot.
-    const copyId = `notif_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
-    setNotifications(prev => {
-      const index = prev.findIndex(n => n.id === id);
-      if (index === -1) return prev;
-      const source = prev[index];
-      const copy: FormNotification = {
-        ...source,
-        id: copyId,
-        name: `${source.name} (Copy)`,
-        // Copies start disabled so duplicating never doubles the emails a
-        // live rule sends until the copy is deliberately turned on.
-        enabled: false,
-      };
-      const next = [...prev];
-      next.splice(index + 1, 0, copy);
-      return next;
-    });
-    setIsDirty(true);
-  }, []);
+  const duplicateNotification = useCallback(
+    (id: string) => {
+      // The non-deterministic id is generated outside the updater (updaters
+      // must stay pure and may re-run); the copy itself derives from `prev`
+      // so rapid duplications never work from a stale snapshot.
+      const copyId = `notif_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+      setNotifications(prev => {
+        const index = prev.findIndex(n => n.id === id);
+        if (index === -1) return prev;
+        const source = prev[index];
+        const copy: FormNotification = {
+          ...source,
+          id: copyId,
+          name: `${source.name} (Copy)`,
+          // Copies start disabled so duplicating never doubles the emails a
+          // live rule sends until the copy is deliberately turned on.
+          enabled: false,
+        };
+        const next = [...prev];
+        next.splice(index + 1, 0, copy);
+        return next;
+      });
+      record(null);
+    },
+    [record]
+  );
 
   const seedNotifications = useCallback((rules: FormNotification[]) => {
     // Only fills an empty list, and does not mark the form dirty: the seed
@@ -610,29 +739,39 @@ export function FormBuilderProvider({
       setNotifications(prev =>
         prev.map(n => (n.id === id ? { ...n, ...updates } : n))
       );
-      setIsDirty(true);
+      record(`notification:${id}`);
     },
-    []
+    [record]
   );
 
-  const deleteNotification = useCallback((id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
-    setIsDirty(true);
-  }, []);
-
-  const markAsSaved = useCallback(() => {
-    setIsDirty(false);
-  }, []);
+  const deleteNotification = useCallback(
+    (id: string) => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+      record(null);
+    },
+    [record]
+  );
 
   const beginSave = useCallback(() => {
     vacatedRef.current = new Set();
-  }, []);
+    historyBeginSave();
+  }, [historyBeginSave]);
 
-  const markFieldsSaved = useCallback((names: readonly string[]) => {
-    // What was saved is what the stored form now holds.
-    const vacated = vacatedRef.current;
-    setSavedFieldNames(new Set(names.filter(name => !vacated.has(name))));
-  }, []);
+  const isDirty = changeCount > 0;
+
+  const markFieldsSaved = useCallback(
+    (names: readonly string[]) => {
+      // What was saved is what the stored form now holds.
+      const vacated = vacatedRef.current;
+      const stored = new Set(names.filter(name => !vacated.has(name)));
+      setSavedFieldNames(stored);
+      // A change kept after the save (made while it ran) holds the stored
+      // set from before it, so taking that change back would forget what the
+      // save stored and unfix a stored field's type.
+      rebaseHistory(record => withStoredFields(record, stored));
+    },
+    [rebaseHistory]
+  );
 
   // Memoized context value
   const value = useMemo<FormBuilderInternalValue>(
@@ -667,6 +806,11 @@ export function FormBuilderProvider({
       beginSave,
       markFieldsSaved,
       readOnly,
+      changeCount,
+      undo,
+      restored,
+      fieldKey,
+      editField,
     }),
     [
       fields,
@@ -696,6 +840,11 @@ export function FormBuilderProvider({
       beginSave,
       markFieldsSaved,
       readOnly,
+      changeCount,
+      undo,
+      restored,
+      fieldKey,
+      editField,
     ]
   );
 

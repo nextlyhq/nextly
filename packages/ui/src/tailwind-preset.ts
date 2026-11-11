@@ -79,6 +79,7 @@ type UiPreset = {
         destructive: {
           DEFAULT: string;
           solid: string;
+          hover: string;
           foreground: string;
         };
         success: {
@@ -227,6 +228,10 @@ const uiPreset: UiPreset = {
           DEFAULT: "var(--nx-destructive)",
           // Saturated fill for solid buttons, distinct from the text-tuned base.
           solid: "var(--nx-destructive-solid)",
+          // The solid button's hover, set per mode in the theme so its label
+          // keeps 4.5:1 with room to spare. Named, so no caller reaches for a
+          // shade.
+          hover: "var(--nx-destructive-hover)",
           foreground: "var(--nx-destructive-foreground)",
           ...tintScale("--nx-destructive"),
         },

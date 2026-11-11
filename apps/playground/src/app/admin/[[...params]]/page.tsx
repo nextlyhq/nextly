@@ -14,6 +14,9 @@ import "@nextlyhq/plugin-form-builder/admin";
 // Load the style-fixture plugin's admin component + its admin.styles
 // (side-effect: registerComponents + CSS import) for the plugin-styling e2e.
 import "../../../plugins/style-fixture/admin";
+// The widget check's page, for the e2e suite's widget accessibility check; its
+// board is fetched only when that page is drawn.
+import "../../../plugins/widget-check-fixture/admin";
 
 export default function AdminPage() {
   return <RootLayout />;

@@ -136,14 +136,6 @@ export interface WidgetCardProps {
   /** The card's one quick control, just before `headerAction`. */
   quick?: ReactNode;
   /**
-   * Draws the title as a control, handed the title: the dashboard's cards make it open their
-   * quick popover. The heading around it, and the name it gives the card's region, stay as
-   * they are. Absent, the title is text.
-   *
-   * @internal Set by the dashboard grid only, never part of the widget kit.
-   */
-  titleTrigger?: ((title: string) => ReactNode) | undefined;
-  /**
    * Customise mode: the body, footer and quick control become inert and dim, so their links and
    * controls are out of reach, while the title stays where it is.
    */
@@ -454,7 +446,6 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 quick={props.quick}
                 quickInert={flags.quickInert}
                 headerAction={props.headerAction}
-                titleTrigger={props.titleTrigger}
                 // Offered at rest only: in customise mode the body is out of reach.
                 headerSlotRef={customizing ? undefined : setHeaderSlot}
               />
@@ -643,24 +634,13 @@ function heldLayout(
   return fields === undefined ? undefined : rowsLayout(tier, fields);
 }
 
-/** The card's title inside its heading: as text, or as the control `trigger` draws it as. */
-function CardTitle({
-  title,
-  trigger,
-}: {
-  title: string;
-  trigger: WidgetCardProps["titleTrigger"];
-}): ReactNode {
-  return trigger ? trigger(title) : title;
-}
-
 /**
  * The card's header, one fixed height in every state, tier and mode.
  *
  * The title is one line, shortened with an ellipsis, its full text on hover and to assistive
  * technology (the heading's text is never cut, only its drawing). The subtitle beneath it is the
- * widget's own name, or, for a card given none, the line its body reports (`useCardSubtitle`). The quick control and the menu sit at the right end, always in that order,
- * so the menu is in the same place on every card. A body's own controls for the whole card
+ * widget's own name, or, for a card given none, the line its body reports (`useCardSubtitle`).
+ * The quick control and the menu sit at the right end, always in that order, so the menu is in the same place on every card. A body's own controls for the whole card
  * (`frame/header-slot`) come just before them, one header line high.
  */
 function WidgetCardHeader({
@@ -674,7 +654,6 @@ function WidgetCardHeader({
   quick,
   quickInert,
   headerAction,
-  titleTrigger,
   headerSlotRef,
 }: {
   titleId: string;
@@ -689,7 +668,6 @@ function WidgetCardHeader({
   quick?: ReactNode;
   quickInert: boolean;
   headerAction?: ReactNode;
-  titleTrigger?: WidgetCardProps["titleTrigger"];
   /** Registers the slot a body draws its card controls into; absent, no slot is drawn. */
   headerSlotRef?: ((element: HTMLElement | null) => void) | undefined;
 }) {
@@ -710,9 +688,7 @@ function WidgetCardHeader({
           title={title}
           className="flex min-w-0 items-baseline gap-1.5 text-sm font-semibold leading-5 tracking-tight text-foreground"
         >
-          <span className="truncate">
-            <CardTitle title={title} trigger={titleTrigger} />
-          </span>
+          <span className="truncate">{title}</span>
           <TitleCountMark count={titleCount} />
         </h2>
         {subtitle && (

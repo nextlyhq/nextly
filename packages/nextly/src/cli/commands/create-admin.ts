@@ -52,8 +52,6 @@ import {
 } from "../../auth/setup-token/setup-token";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
-import { seedPermissions } from "../../database/seeders/permissions";
-import { seedSuperAdmin } from "../../database/seeders/super-admin";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { MetaService } from "../../domains/meta/services/meta-service";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
@@ -228,7 +226,15 @@ export function firstAdminSetupFor(
     },
     async createAdministrator(details) {
       // The path web setup creates its administrator through. The permission
-      // rows first, which the role's grant needs.
+      // rows first, which the role's grant needs. The seeders are loaded
+      // here, with the services below: both reach the service graph, which
+      // every other CLI command would pay for at start.
+      const { seedPermissions } = await import(
+        "../../database/seeders/permissions"
+      );
+      const { seedSuperAdmin } = await import(
+        "../../database/seeders/super-admin"
+      );
       await seedPermissions(adapter, { silent: true });
       // Then the account, as setup's: it becomes the first administrator
       // through the grant made under the role row's lock, inside the insert's

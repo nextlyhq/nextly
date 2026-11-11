@@ -371,7 +371,7 @@ export {
   effectiveWidgetSettings,
   // How many fields a Fields setting may choose: the settings sheet stops at it.
   MAX_CHOSEN_FIELDS,
-  // How many settings a widget may mark quick: the card's quick popover holds that many.
+  // How many settings a widget may mark quick: the card's header draws the first it can.
   MAX_QUICK_SETTINGS,
   naturalGroupBy,
   resolveWidgetSettings,
