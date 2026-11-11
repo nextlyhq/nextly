@@ -767,6 +767,14 @@ export { getCachedNextly } from "nextly";
 export { pluginCacheTag } from "nextly";
 
 /**
+ * @experimental The cache tags a read of a collection, or of one of its
+ * entries, carries, which a write to it expires: for a plugin whose cached
+ * answer is built from those reads, such as page metadata naming the media
+ * it shows. Intended to be stable with the page-metadata contract.
+ */
+export { nextlyTags } from "nextly";
+
+/**
  * @experimental The canonical response envelopes, and the trusted-client-IP
  *   facade. Graduates per D55 once `plugin-form-builder`'s public form routes
  *   ship in a release.

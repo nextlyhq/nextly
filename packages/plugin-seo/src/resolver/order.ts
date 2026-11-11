@@ -93,6 +93,25 @@ function text(value: string | undefined): string | undefined {
   return value !== undefined && value.trim() !== "" ? value : undefined;
 }
 
+/**
+ * A typed canonical a search engine can follow: a path from the site's root,
+ * or an http(s) address, trimmed. Anything else (`mailto:`, `javascript:`,
+ * stray text) is no canonical, and the page's own address is used.
+ */
+function usableCanonical(value: string | undefined): string | undefined {
+  const typed = text(value)?.trim();
+  if (typed === undefined) return undefined;
+  if (typed.startsWith("/")) return typed;
+  try {
+    const url = new URL(typed);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? typed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** An image with an address to load it from. */
 function picture(
   value: PageMetadataImage | undefined
@@ -188,7 +207,7 @@ export function resolveOrder(levels: Levels): SeoAnswer {
   // choice, else listed and the page's own declared address. A page with no
   // declared address has no canonical rather than a guessed one.
   const canonical = first<string>([
-    { value: text(levels.page.canonical), from: "page" },
+    { value: usableCanonical(levels.page.canonical), from: "page" },
     { value: text(levels.address), from: "address" },
   ]);
   const robots: Sourced<{ index: boolean; follow: boolean }> =

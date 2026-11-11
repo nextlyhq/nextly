@@ -5,10 +5,11 @@
  * Core's address answers are stood in for: each type's declared address and
  * the language rule (every language but the default under its code).
  */
-import type {
-  PageMetadataInput,
-  PluginContext,
-  PublicAddressType,
+import {
+  NextlyError,
+  type PageMetadataInput,
+  type PluginContext,
+  type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
@@ -41,14 +42,24 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   }),
 }));
 
-/** A plugin context with the one service the resolver uses: media by id. */
-function context(media: Record<string, Record<string, unknown>> = {}) {
+/**
+ * A plugin context with the one service the resolver uses: media by id,
+ * answering a missing id as the media service does, and `failing` ids with
+ * a fault that is not about the image at all.
+ */
+function context(
+  media: Record<string, Record<string, unknown>> = {},
+  failing: readonly string[] = []
+) {
   return {
     services: {
       media: {
         findById: async (id: string) => {
+          if (failing.includes(id)) throw new Error("connection reset");
           const found = media[id];
-          if (found === undefined) throw new Error("not found");
+          if (found === undefined) {
+            throw NextlyError.notFound({ logContext: { id } });
+          }
           return found;
         },
       },
@@ -238,6 +249,52 @@ describe("one answer for each kind of page", () => {
       from: "content",
       field: "coverImage",
     });
+  });
+});
+
+describe("what the answer depends on", () => {
+  it("a lookup that fails for any reason but a missing image is not answered as no image", async () => {
+    // Answered, the head would be cached without the image until the page
+    // next changed; thrown, core serves the route's own head uncached.
+    await expect(
+      resolveSeo(
+        context({}, ["m1"]),
+        entryInput("pages", { slug: "a", seo: { ogImage: "m1" } })
+      )
+    ).rejects.toThrow("connection reset");
+  });
+
+  it("names the media tags, so a changed or deleted image expires the head", () => {
+    const tags = seoPageMetadata(context()).tags?.(
+      entryInput("pages", { slug: "a", seo: { ogImage: "m1" } })
+    );
+    expect(tags).toEqual(expect.arrayContaining(["nextly:media"]));
+  });
+});
+
+describe("a typed canonical", () => {
+  it.each(["mailto:hi@example.com", "javascript:alert(1)", "   "])(
+    "%s is not one: the page's own address is used",
+    async canonical => {
+      const answer = await resolveSeo(
+        context(),
+        entryInput("pages", { slug: "about", seo: { canonical } })
+      );
+      expect(answer.canonical).toEqual({ value: "/about", from: "address" });
+    }
+  );
+
+  it("is trimmed, and used where it is a web address or a path", async () => {
+    for (const [typed, used] of [
+      ["  https://example.com/original  ", "https://example.com/original"],
+      ["/elsewhere", "/elsewhere"],
+    ]) {
+      const answer = await resolveSeo(
+        context(),
+        entryInput("pages", { slug: "about", seo: { canonical: typed } })
+      );
+      expect(answer.canonical).toEqual({ value: used, from: "page" });
+    }
   });
 });
 

@@ -8,11 +8,12 @@
  *
  * @module resolver/provider
  */
-import type {
-  PageMetadataAnswer,
-  PageMetadataInput,
-  PageMetadataResolver,
-  PluginContext,
+import {
+  nextlyTags,
+  type PageMetadataAnswer,
+  type PageMetadataInput,
+  type PageMetadataResolver,
+  type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
 import { resolveOrder, type SeoAnswer } from "./order";
@@ -65,6 +66,9 @@ export function seoPageMetadata(
   readRules: ReadRules = noRules
 ): PageMetadataResolver {
   return {
+    // A share image is read from the media library, so any write to it
+    // expires the head that shows it, as a write to the page itself does.
+    tags: () => nextlyTags("media"),
     async resolve(input) {
       const rules = await readRules(ctx, input.locale);
       return answerOf(resolveOrder(await levelsOf(ctx, input, rules)), rules);

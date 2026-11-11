@@ -7,6 +7,7 @@
  * @module resolver/page-levels
  */
 import {
+  NextlyError,
   languageAddressOf,
   publicAddressOf,
   type PageMetadataImage,
@@ -80,9 +81,12 @@ async function mediaOf(ctx: PluginContext, value: unknown): Promise<unknown> {
   if (typeof value !== "string" || value === "") return value;
   try {
     return await ctx.services.media.findById(value, {});
-  } catch {
-    // A missing or unreadable image is no image: the next level supplies one.
-    return undefined;
+  } catch (error) {
+    // A missing image is no image: the next level supplies one. Any other
+    // failure is thrown, so the page's head is not answered, and cached,
+    // without an image it has.
+    if (NextlyError.isCode(error, "NOT_FOUND")) return undefined;
+    throw error;
   }
 }
 

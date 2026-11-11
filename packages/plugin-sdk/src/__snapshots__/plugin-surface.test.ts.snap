@@ -767,6 +767,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "mayDeleteEntry (value)",
   "mayWriteEntry (value)",
   "narrowScope (value)",
+  "nextlyTags (value)",
   "option (value)",
   "pluginAdminSlug (value)",
   "pluginCacheTag (value)",

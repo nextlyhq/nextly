@@ -689,6 +689,12 @@ export {
   type ContentTypeScope,
 } from "./plugins/content-type-scope";
 
+// The cache tags a read of a collection, or of one entry in it, carries:
+// what a write to it expires. For code that caches an answer built from
+// those reads, such as a plugin's page metadata.
+// @experimental
+export { nextlyTags } from "./runtime/cache/nextly-tags";
+
 // Where an entry is served, as the site declares it: one answer for every
 // reader of a page's public address.
 // @experimental
