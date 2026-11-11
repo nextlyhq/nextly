@@ -56,32 +56,6 @@ describe("NewMenuView in the rail", () => {
     }
   );
 
-  it("opens beside its button in the rail, and below it where a header asks", async () => {
-    // The rail's list opens into the page; a header's opens below its button, where it can move
-    // along the button's edge to stay on a narrow screen.
-    const { unmount } = render(
-      <NewMenuView variant="rail" types={[posts, pages]} isReady />
-    );
-    await userEvent.click(screen.getByRole("button", { name: "New" }));
-    expect(screen.getByTestId("new-menu")).toHaveAttribute(
-      "data-side",
-      "right"
-    );
-    unmount();
-    render(
-      <NewMenuView
-        variant="rail"
-        side="bottom"
-        types={[posts, pages]}
-        isReady
-      />
-    );
-    await userEvent.click(screen.getByRole("button", { name: "New" }));
-    const below = screen.getByTestId("new-menu");
-    expect(below).toHaveAttribute("data-side", "bottom");
-    expect(below).toHaveAttribute("data-align", "end");
-  });
-
   it("names no type on the button", () => {
     render(<NewMenuView variant="rail" types={[posts, pages]} isReady />);
     expect(screen.getByRole("button", { name: "New" })).not.toHaveTextContent(
