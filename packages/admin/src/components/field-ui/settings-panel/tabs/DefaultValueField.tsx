@@ -3,6 +3,7 @@
 // component keeps GeneralTab readable and the per-type renderer matrix
 // in one place.
 import {
+  Button,
   Input,
   Label,
   Select,
@@ -39,6 +40,14 @@ const SUPPORTED_TYPES = new Set([
   "json",
   "chips",
 ]);
+
+/**
+ * Whether this editor draws a default for the type: the one answer a surface
+ * asks before adding a default control of its own for a type it skips.
+ */
+export function drawsDefaultFor(type: string): boolean {
+  return SUPPORTED_TYPES.has(type);
+}
 
 type Value = string | number | boolean | null;
 
@@ -193,28 +202,14 @@ function renderEditor({
   }
 
   if (PICKER_TYPES.has(field.type)) {
-    // Why: Radix Select disallows empty-string values (reserved for "clear
-    // selection"). Brand-new options in SelectOptionsEditor start with
-    // value === "" until the user types a value. Filter them out so the
-    // default picker doesn't crash when a fresh option exists.
-    const opts = (field.options ?? []).filter(o => o.value !== "");
     return (
-      <Select
-        value={typeof value === "string" ? value : undefined}
-        disabled={readOnly}
-        onValueChange={v => onChange(v)}
-      >
-        <SelectTrigger id={inputId}>
-          <SelectValue placeholder="None" />
-        </SelectTrigger>
-        <SelectContent>
-          {opts.map(o => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <ChoiceDefault
+        field={field}
+        value={value}
+        inputId={inputId}
+        readOnly={readOnly}
+        onChange={onChange}
+      />
     );
   }
 
@@ -351,5 +346,61 @@ function StaleDefaultWarning({ field }: { field: BuilderField }) {
       Default {`"${field.defaultValue}"`} no longer matches any option. It will
       be cleared on save.
     </p>
+  );
+}
+
+/**
+ * A choice field's default: one of its options, or none. "Clear default" sits
+ * beside the list rather than in it: any value reserved inside the list for
+ * "none" is one an option could also have.
+ */
+function ChoiceDefault({
+  field,
+  value,
+  inputId,
+  readOnly,
+  onChange,
+}: {
+  field: BuilderField;
+  value: Value | undefined;
+  inputId: string;
+  readOnly: boolean;
+  onChange: (value: Value) => void;
+}): JSX.Element {
+  // Brand-new options start with value "" until a value is typed, which the
+  // Select cannot hold, so they are left out until they have one.
+  const opts = (field.options ?? []).filter(o => o.value !== "");
+  const chosen = typeof value === "string" ? value : undefined;
+  return (
+    <div className="flex items-center gap-2">
+      <Select
+        // "" is Radix Select's own "nothing chosen", which shows the
+        // placeholder again once the default is cleared.
+        value={chosen ?? ""}
+        disabled={readOnly}
+        onValueChange={v => onChange(v)}
+      >
+        <SelectTrigger id={inputId}>
+          <SelectValue placeholder="None" />
+        </SelectTrigger>
+        <SelectContent>
+          {opts.map(o => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {chosen !== undefined && !readOnly && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => onChange(null)}
+        >
+          Clear default
+        </Button>
+      )}
+    </div>
   );
 }

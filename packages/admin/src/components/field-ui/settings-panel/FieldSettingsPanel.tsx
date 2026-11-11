@@ -165,6 +165,7 @@ export function FieldSettingsPanel({
               deriveName={surface.deriveName}
               nameFixedReason={fixedReason(surface.fixed, "name", saved)}
               apiPath={fieldApiPath(ancestors, field)}
+              width={surface.widthSetting !== false}
               defining={
                 Defining && (
                   <TypeOwnSettings readOnly={readOnly}>
@@ -309,6 +310,13 @@ function TypeSettingsNote({
             Retry
           </Button>
         </div>
+      );
+    case "withheld":
+      return (
+        <p className="text-sm text-muted-foreground">
+          {typeLabel}&apos;s own settings cannot be set here; the settings every
+          field has are above and in the other tabs.
+        </p>
       );
     case "known":
       return lookup.settings === undefined ? (
