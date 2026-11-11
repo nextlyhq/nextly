@@ -30,6 +30,17 @@ describe("sample data from typed declarations", () => {
     expect(data.link).toBe("https://example.com");
   });
 
+  it("uses a known URL sample for a link variable whose name maps to one", () => {
+    const data = buildSampleData([
+      { name: "verifyLink", presentation: { type: "link" } },
+      { name: "resetLink", presentation: { type: "link" } },
+    ]);
+    expect(data.verifyLink).toBe(
+      "https://app.northwind.io/verify?token=8f2c1a"
+    );
+    expect(data.resetLink).toBe("https://app.northwind.io/reset?token=8f2c1a");
+  });
+
   it("fills a list with one row of its item fields, and an object with its fields", () => {
     const data = buildSampleData([
       {
@@ -51,6 +62,22 @@ describe("sample data from typed declarations", () => {
     // A field named `name` gets today's sample for that name, as a top-level
     // variable would.
     expect(data.buyer).toEqual({ name: "Priya Raman", verified: true });
+  });
+
+  it("falls back to a name-based string for a list with no field schema", () => {
+    const data = buildSampleData([
+      { name: "tags", presentation: { type: "list" } },
+      { name: "flags", presentation: { type: "list", fields: [] } },
+    ]);
+    expect(data.tags).toEqual(["Sample tags"]);
+    expect(data.flags).toEqual(["Sample flags"]);
+  });
+
+  it("produces an empty object for a typed object with no field schema", () => {
+    const data = buildSampleData([
+      { name: "meta", presentation: { type: "object" } },
+    ]);
+    expect(data.meta).toEqual({});
   });
 
   it("keeps today's name-based sample for a variable with no presentation", () => {
