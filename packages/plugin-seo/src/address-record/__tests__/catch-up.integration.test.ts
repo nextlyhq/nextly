@@ -155,6 +155,9 @@ describe.each(getConfiguredTestDialects())(
       const { t } = await boot(dialect);
       const page = await publish(t, "pages", "hello");
       await forget(t);
+      // Some databases keep creation times to the second: the second page is
+      // made in a later one, so which is older is beyond doubt.
+      await new Promise(resolve => setTimeout(resolve, 1_100));
       // A second page at the same address, made while nothing was recorded.
       const post = await publish(t, "posts", "hello");
       await forget(t);

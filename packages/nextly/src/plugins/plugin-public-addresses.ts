@@ -16,6 +16,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import {
   addressFingerprint,
   heldPage,
+  type HeldDocument,
 } from "../domains/public-addresses/held-listing";
 import {
   addParticipant,
@@ -117,7 +118,7 @@ export interface PluginPublicAddresses {
     type: PublicAddressType;
     after?: string;
     limit?: number;
-  }): Promise<{ items: HeldAddressUpdate[]; next?: string }>;
+  }): Promise<{ items: HeldDocument[]; next?: string }>;
   /**
    * Changes when any address template, the language list or the fallback
    * settings do.

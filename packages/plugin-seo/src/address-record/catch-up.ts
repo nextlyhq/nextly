@@ -27,6 +27,7 @@ import {
   type AddressHolder,
   type HeldAddress,
   type HeldAddressUpdate,
+  type HeldDocument,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
@@ -133,9 +134,12 @@ async function readRecord(ctx: PluginContext): Promise<{
   }
 }
 
-/** Every page of every site type, oldest first within each type. */
-async function everyPage(ctx: PluginContext): Promise<HeldAddressUpdate[]> {
-  const updates: HeldAddressUpdate[] = [];
+/**
+ * Every page of every site type, oldest first across all of them, by when
+ * each was made; pages made at the same moment keep the order listed.
+ */
+async function everyPage(ctx: PluginContext): Promise<HeldDocument[]> {
+  const updates: HeldDocument[] = [];
   for (const type of await ctx.publicAddresses.types()) {
     let after: string | undefined;
     do {
@@ -144,7 +148,12 @@ async function everyPage(ctx: PluginContext): Promise<HeldAddressUpdate[]> {
       after = page.next;
     } while (after !== undefined);
   }
-  return updates;
+  const madeAt = (page: HeldDocument) =>
+    page.createdAt === undefined
+      ? Number.POSITIVE_INFINITY
+      : Date.parse(page.createdAt);
+  // Array sort is stable, so a tie keeps the listing's own order.
+  return updates.sort((a, b) => madeAt(a) - madeAt(b));
 }
 
 /** Make `updates` on a transaction of their own, asking every participant. */

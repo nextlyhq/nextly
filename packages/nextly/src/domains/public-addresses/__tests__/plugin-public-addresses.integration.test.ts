@@ -306,6 +306,10 @@ describe.each(getConfiguredTestDialects())(
       expect(listed.map(item => item.holder.id)).toEqual(
         created.items.map(item => String(item.id))
       );
+      // Each carries when it was made, for ordering across types.
+      expect(
+        listed.every(item => typeof item.createdAt === "string")
+      ).toBe(true);
       const one = listed.find(item => item.holder.id === ids[0]);
       expect(one?.holds).toEqual([{ locale: "en", path: "/blog/one" }]);
     });

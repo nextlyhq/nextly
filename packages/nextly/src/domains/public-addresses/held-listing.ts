@@ -29,6 +29,23 @@ import {
 } from "./public-address";
 
 /**
+ * @experimental One page of a listing: what it holds now, and when it was
+ * made, so a caller walking several types can settle claims oldest first.
+ */
+export interface HeldDocument extends HeldAddressUpdate {
+  createdAt?: string;
+}
+
+/** When `document` was made, as ISO text, where it says. */
+function createdAtOf(document: Readonly<Record<string, unknown>>): {
+  createdAt?: string;
+} {
+  const made = document.createdAt;
+  if (made instanceof Date) return { createdAt: made.toISOString() };
+  return typeof made === "string" ? { createdAt: made } : {};
+}
+
+/**
  * The largest page {@link heldPage} hands back: one under the query's own
  * ceiling, so the extra row it reads to see whether another page follows is
  * never clamped away.
@@ -81,9 +98,7 @@ async function heldNow(
  * A Single's one update: its fixed address in each language it is published
  * in, read as a save reads it, on a transaction of its own.
  */
-async function singleHeld(
-  type: PublicAddressType
-): Promise<HeldAddressUpdate[]> {
+async function singleHeld(type: PublicAddressType): Promise<HeldDocument[]> {
   const nextly = await getCachedNextly();
   // Read only: a Single never saved has nothing to hold, and listing must
   // not create it.
@@ -97,6 +112,7 @@ async function singleHeld(
   return [
     {
       holder: { collection: `single:${type.slug}`, id, ...labelOf(single) },
+      ...createdAtOf(single),
       holds,
     },
   ];
@@ -112,7 +128,7 @@ export async function heldPage(args: {
   type: PublicAddressType;
   after?: string;
   limit?: number;
-}): Promise<{ items: HeldAddressUpdate[]; next?: string }> {
+}): Promise<{ items: HeldDocument[]; next?: string }> {
   // Started during the boot, not awaited, this waits for the boot to finish.
   await whenServicesRegistered();
   const { type } = args;
@@ -135,11 +151,12 @@ export async function heldPage(args: {
 
   // Each document read exactly as a save reads it, so a catch-up records
   // what the save path would, never what a read reaches through fallback.
-  const items: HeldAddressUpdate[] = [];
+  const items: HeldDocument[] = [];
   for (const document of documents) {
     const id = String(document.id);
     items.push({
       holder: { collection: type.slug, id, ...labelOf(document) },
+      ...createdAtOf(document),
       holds: await heldNow(type, type.slug, id, document),
     });
   }
