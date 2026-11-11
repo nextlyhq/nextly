@@ -408,7 +408,9 @@ function fieldsGoingWith(
 /**
  * Everything that depends on each entity, for those deleted together.
  *
- * Only entities something depends on are listed, in the order given.
+ * Only entities something depends on are listed, in the order given, each by its slug; one
+ * whose slug an entity of another kind listed before it has is listed by its slug and kind, as
+ * `seo (field group)`.
  * Throws the fail-closed refusal when any of the three records cannot be read.
  *
  * @param entities the collections, Singles and field groups being deleted, all in one operation
@@ -449,10 +451,24 @@ export async function findEntityDependents(
           : retainedKeysInto(own, records, new Set(records.tables)),
       elements: records.elements.filter(element => own.has(element.table)),
     };
-    if (hasAny(dependents)) found.set(entity.slug, dependents);
+    if (hasAny(dependents)) {
+      // Entities of different kinds may share a slug and be deleted together; a later one is
+      // named with its kind, so each is refused with its own dependents.
+      const name = found.has(entity.slug)
+        ? `${entity.slug} (${KIND_WORD[kind]})`
+        : entity.slug;
+      found.set(name, dependents);
+    }
   }
   return found;
 }
+
+/** What a refusal calls an entity's kind, beside a slug another kind of entity also has. */
+const KIND_WORD: Record<EntityKind, string> = {
+  collection: "collection",
+  single: "Single",
+  fieldGroup: "field group",
+};
 
 /**
  * How many fields place each field group, as the field-group list shows it.

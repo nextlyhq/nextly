@@ -1,6 +1,7 @@
 /**
  * `@nextlyhq/admin/testing`: a widget's card drawn as the dashboard draws it,
- * for tests. For tests; never imported by the admin itself.
+ * and the board of every widget's preview cases the browser tests check for
+ * accessibility. For tests; never imported by the admin itself.
  *
  * The card is resolved from the widget's published definition by the admin's
  * own `resolveDashboardWidgets` and drawn by its own `WidgetRenderer` inside
@@ -73,3 +74,13 @@ export function widgetCardElement(
     </div>
   );
 }
+
+/**
+ * Every widget the reader may see, drawn from its preview cases in each state,
+ * with an accessibility check of each drawn state. Drawn inside the admin by
+ * the browser tests' own page, on a development server, which alone serves its
+ * read.
+ *
+ * @experimental For tests; its markup is what the browser tests read.
+ */
+export { WidgetPreviewBoard } from "./components/features/widgets/preview/WidgetPreviewBoard";
