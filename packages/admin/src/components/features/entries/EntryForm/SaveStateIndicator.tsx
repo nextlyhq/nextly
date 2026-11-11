@@ -161,12 +161,12 @@ function FailedSaveState({
   return (
     <>
       <AlertCircle
-        className="h-4 w-4 shrink-0 text-destructive"
+        className="h-4 w-4 shrink-0 text-danger-text"
         aria-hidden="true"
       />
       <span
         className={cn(
-          "whitespace-nowrap text-destructive",
+          "whitespace-nowrap text-danger-text",
           WORDS_IN_NARROW_BAR
         )}
       >
