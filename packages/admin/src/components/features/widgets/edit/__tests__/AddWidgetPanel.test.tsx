@@ -428,6 +428,23 @@ describe("searching", () => {
     });
   });
 
+  it("says nothing while the list loads, then the count of a search typed before it landed", async () => {
+    const user = userEvent.setup();
+    const all = renderPanel({
+      gallery: { read: undefined, isError: false, retry: vi.fn() },
+    });
+    await user.type(search(), "note");
+    await new Promise(resolve => setTimeout(resolve, 700));
+    // Not "0 widgets": nothing has been counted yet.
+    expect(live()).toHaveTextContent("");
+    all.rerender(
+      <AddWidgetPanel {...all} gallery={{ ...all.gallery, read: READ }} />
+    );
+    await waitFor(() => expect(live()).toHaveTextContent("1 widget."), {
+      timeout: 2000,
+    });
+  });
+
   it("opens afresh: an earlier search is gone, and nothing is said", async () => {
     const user = userEvent.setup();
     const all = renderPanel();

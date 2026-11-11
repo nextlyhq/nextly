@@ -55,6 +55,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { resolveIconName } from "../archetypes/icon";
+import { settingsAsAsked } from "../widget-as-asked";
 
 import {
   canAdd,
@@ -126,10 +127,16 @@ const COUNT_ANNOUNCE_DELAY_MS = 500;
  * when it closed, would otherwise be said again on opening.
  *
  * The count is said once typing pauses, for each search the reader types, and when the read lands
- * under a search typed before it; never for the list the panel opens on, which the count line
- * under the search already describes.
+ * under a search typed before it (`ready`); never for the list the panel opens on, which the
+ * count line under the search already describes.
  */
-function usePanelVoice(count: string, query: string, open: boolean) {
+function usePanelVoice(
+  count: string,
+  query: string,
+  open: boolean,
+  /** Whether the read has answered: before it, the list is loading, not empty. */
+  ready: boolean
+) {
   const [spoken, setSpoken] = useState<Utterance>({ text: "", id: 0 });
   // Each sentence a new saying, even one equal to the last.
   const utter = useCallback(
@@ -148,11 +155,13 @@ function usePanelVoice(count: string, query: string, open: boolean) {
   // added) does not schedule one of its own.
   const sayCount = useEffectEvent(() => utter(`${count}.`));
   const searched = query.trim();
+  // Never while the read is on its way, which would say an empty list; once it lands under a
+  // search typed before it, the count is said then.
   useEffect(() => {
-    if (!open || searched === "") return undefined;
+    if (!open || !ready || searched === "") return undefined;
     pending.current = setTimeout(sayCount, COUNT_ANNOUNCE_DELAY_MS);
     return () => clearTimeout(pending.current);
-  }, [searched, open]);
+  }, [searched, open, ready]);
   // A sentence said on purpose (an add) cancels a count still waiting, which would otherwise land
   // on top of it.
   const say = useCallback(
@@ -503,7 +512,14 @@ function usePanelRows(
   const found = useMemo(() => searchRows(rows, query), [rows, query]);
   const collectionsOf = (widgetId: string) =>
     collectionsFor(widgetId, read?.collections ?? [], canAsk);
-  return { found, collectionsOf };
+  // The collection a card reads, as it is asked: its declared default where it stores none.
+  const collectionOf = (placement: WidgetPlacement, setting: string) => {
+    const widget = byId.get(placement.widgetId);
+    return widget === undefined
+      ? placement.config?.[setting]
+      : settingsAsAsked(widget, placement.config, sources)[setting];
+  };
+  return { found, collectionsOf, collectionOf };
 }
 
 /**
@@ -516,10 +532,12 @@ function useRowAdd({
   onAdd,
   onAddBack,
   collectionsOf,
+  collectionOf,
   say,
   keepFocus,
 }: Pick<AddWidgetPanelProps, "placements" | "onAdd" | "onAddBack"> & {
   collectionsOf: (widgetId: string) => ReturnType<typeof collectionsFor>;
+  collectionOf: (placement: WidgetPlacement, setting: string) => unknown;
   say: (sentence: string) => void;
   keepFocus: () => void;
 }) {
@@ -531,7 +549,12 @@ function useRowAdd({
       return;
     }
     const { tile } = row;
-    const start = startingCollection(tile, collectionsOf(tile.id), placements);
+    const start = startingCollection(
+      tile,
+      collectionsOf(tile.id),
+      placements,
+      collectionOf
+    );
     const settings = newCardSettings(tile, start?.slug);
     say(
       addedSentence(onAdd(tile.id, settings, start?.taken === true), "Added")
@@ -612,14 +635,20 @@ export function AddWidgetPanel({
   const searchRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const read = gallery.read;
-  const { found, collectionsOf } = usePanelRows(read, placements, byId, query);
+  const { found, collectionsOf, collectionOf } = usePanelRows(
+    read,
+    placements,
+    byId,
+    query
+  );
   const count = rowsCount(found.length);
-  const voice = usePanelVoice(count, query, open);
+  const voice = usePanelVoice(count, query, open, read !== undefined);
   const add = useRowAdd({
     placements,
     onAdd,
     onAddBack,
     collectionsOf,
+    collectionOf,
     say: voice.say,
     keepFocus: () => keepFocusInPanel(contentRef, searchRef),
   });

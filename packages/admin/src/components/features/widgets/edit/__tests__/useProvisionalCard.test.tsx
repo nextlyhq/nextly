@@ -79,7 +79,7 @@ function renderProvisional(placements = PLACEMENTS) {
 describe("refusal", () => {
   it("refuses settings that ask what another card asks, its defaults counted", () => {
     const { result } = renderProvisional();
-    expect(result.current.id).toBe("new");
+    expect([...result.current.ids]).toEqual(["new"]);
     // The Posts card stores no "show": its default, "change", is what it asks.
     expect(
       result.current.refusal("new", { collection: "posts", show: "change" }, "")
@@ -116,7 +116,7 @@ describe("closing its settings", () => {
     const { result, discard } = renderProvisional();
     act(() => result.current.closed("new"));
     expect(discard).toHaveBeenCalledWith("new");
-    expect(result.current.id).toBeNull();
+    expect(result.current.ids.size).toBe(0);
   });
 
   it("keeps the card once they were saved, as they close", () => {
@@ -127,37 +127,37 @@ describe("closing its settings", () => {
       result.current.closed("new");
     });
     expect(discard).not.toHaveBeenCalled();
-    expect(result.current.id).toBeNull();
+    expect(result.current.ids.size).toBe(0);
   });
 
   it("leaves another card's closing alone", () => {
     const { result, discard } = renderProvisional();
     act(() => result.current.closed("posts"));
     expect(discard).not.toHaveBeenCalled();
-    expect(result.current.id).toBe("new");
+    expect([...result.current.ids]).toEqual(["new"]);
   });
 });
 
 describe("the dashboard's Save", () => {
-  function renderSave(id: string | null) {
+  function renderSave(ids: readonly string[]) {
     const save = vi.fn(async (_options?: SaveOptions) => "saved" as const);
     const refusal = vi.fn((_: string, config: Record<string, unknown>) =>
       config.show === "split" ? undefined : MATCHES_A_CARD
     );
     const { result } = renderHook(() =>
-      useSaveLeavingOut(save, { id, refusal })
+      useSaveLeavingOut(save, { ids: new Set(ids), refusal })
     );
     return { save, run: result.current };
   }
 
   it("saves as asked with no card on probation", async () => {
-    const { save, run } = renderSave(null);
+    const { save, run } = renderSave([]);
     await run({ replaceUnreadable: true });
     expect(save).toHaveBeenCalledWith({ replaceUnreadable: true });
   });
 
   it("leaves the card out while its settings hold no change, or one that still matches", async () => {
-    const { save, run } = renderSave("new");
+    const { save, run } = renderSave(["new"]);
     await run();
     expect(save).toHaveBeenLastCalledWith({ leaveOut: ["new"] });
     const staged = [
@@ -167,8 +167,21 @@ describe("the dashboard's Save", () => {
     expect(save).toHaveBeenLastCalledWith({ staged, leaveOut: ["new"] });
   });
 
+  it("leaves out every card on probation that is not told apart", async () => {
+    const { save, run } = renderSave(["new", "newer"]);
+    const staged = [
+      {
+        placementId: "new",
+        config: { collection: "posts", show: "split" },
+        ownTitle: "",
+      },
+    ];
+    await run({ staged });
+    expect(save).toHaveBeenLastCalledWith({ staged, leaveOut: ["newer"] });
+  });
+
   it("saves the card with a change that tells it apart", async () => {
-    const { save, run } = renderSave("new");
+    const { save, run } = renderSave(["new"]);
     const staged = [
       {
         placementId: "new",

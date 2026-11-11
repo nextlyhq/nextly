@@ -209,6 +209,20 @@ describe("startingCollection", () => {
     ).toEqual({ slug: "posts", taken: true });
   });
 
+  it("reads a card's collection as it is asked, its declared default where it stores none", () => {
+    // A card storing no collection reads its widget's default, Posts.
+    const asked = (placement: WidgetPlacement, setting: string) =>
+      placement.config?.[setting] ?? "posts";
+    expect(
+      startingCollection(
+        COUNT,
+        READ.collections,
+        [card({ widgetId: "core/count" })],
+        asked
+      )
+    ).toEqual({ slug: "pages", taken: false });
+  });
+
   it("starts on none for a widget that reads none, or with none to start on", () => {
     expect(startingCollection(TEAM, READ.collections, [])).toBeUndefined();
     expect(startingCollection(COUNT, [], [])).toBeUndefined();

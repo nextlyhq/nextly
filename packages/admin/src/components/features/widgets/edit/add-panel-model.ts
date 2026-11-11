@@ -202,22 +202,27 @@ export function rowsCount(count: number): string {
 
 /**
  * The collection a new card of a widget starts on, of those it may be set to (`collections`):
- * the first that no card of the widget on the dashboard is set to yet, so a second Count counts
- * another collection. `taken` when every one has such a card already, and the first is given:
- * the new card then matches one the reader has, and its settings are opened to tell them apart.
- * `undefined` when there is none to start on.
+ * the first that no card of the widget on the dashboard reads yet, so a second Count counts
+ * another collection. A card's collection is the one it reads (`collectionOf`), its declared
+ * default where it stores none. `taken` when every one has such a card already, and the first is
+ * given: the new card then matches one the reader has, and its settings are opened to tell them
+ * apart. `undefined` when there is none to start on.
  */
 export function startingCollection(
   tile: GalleryTile,
   collections: readonly GalleryCollection[],
-  placements: readonly WidgetPlacement[]
+  placements: readonly WidgetPlacement[],
+  collectionOf: (placement: WidgetPlacement, setting: string) => unknown = (
+    placement,
+    setting
+  ) => placement.config?.[setting]
 ): { slug: string; taken: boolean } | undefined {
   const setting = tile.collectionSetting;
   if (setting === undefined) return undefined;
   const used = new Set(
     placements
       .filter(p => p.widgetId === tile.id && !p.removed)
-      .map(p => p.config?.[setting])
+      .map(p => collectionOf(p, setting))
   );
   const free = collections.find(collection => !used.has(collection.slug));
   if (free !== undefined) return { slug: free.slug, taken: false };

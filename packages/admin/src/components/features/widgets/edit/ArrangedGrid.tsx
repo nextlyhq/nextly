@@ -417,7 +417,7 @@ function provisionalFor(
   provisional: ProvisionalCard | undefined,
   placementId: string
 ): Pick<ArrangedCellProps, "provisional"> {
-  if (provisional === undefined || provisional.id !== placementId) return {};
+  if (provisional === undefined || !provisional.ids.has(placementId)) return {};
   return {
     provisional: {
       refusal: (config, ownTitle) =>

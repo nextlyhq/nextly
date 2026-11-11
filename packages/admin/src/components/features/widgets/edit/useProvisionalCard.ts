@@ -22,14 +22,21 @@ import { settingsAsAsked } from "../widget-as-asked";
 
 import type { SaveOptions, SaveOutcome } from "./useLayoutLifecycle";
 
+/** No card on probation. */
+const NONE: ReadonlySet<string> = new Set();
+
 /** What the drawer's Save says while the card still matches another one. */
 export const MATCHES_A_CARD =
   "This matches a card you already have. Change a setting first.";
 
-/** The card on probation, and what its drawer does with it. */
+/** The cards on probation, and what their drawers do with them. */
 export interface ProvisionalCard {
-  /** The card, while its drawer is first open; `null` otherwise. */
-  id: string | null;
+  /**
+   * The cards added as one the reader already has and neither kept nor taken off yet. Usually
+   * one; another can be added while the first's drawer is open, since that drawer leaves the
+   * dashboard usable, and each stays on probation until its own drawer settles it.
+   */
+  ids: ReadonlySet<string>;
   /** The add panel added `placementId` as one the reader already has. */
   start: (placementId: string) => void;
   /**
@@ -78,23 +85,28 @@ export function useProvisionalCard({
   /** Take the card out of the draft altogether. */
   discard: (placementId: string) => void;
 }): ProvisionalCard {
-  const [id, setId] = useState<string | null>(null);
-  // Read by the drawer's close, which runs in the same task as its Save: the state set by `keep`
+  const [ids, setIds] = useState<ReadonlySet<string>>(NONE);
+  // Read by a drawer's close, which runs in the same task as its Save: the state set by `keep`
   // has not been drawn yet, so the ref is what tells the two apart.
-  const pending = useRef<string | null>(null);
+  const pending = useRef<Set<string>>(new Set());
+  // Drawn from the ref, the one record of which cards are still on probation.
+  const publish = useCallback(() => setIds(new Set(pending.current)), []);
   // Customise mode ended (Save or Cancel): nothing is on probation any more. Adjusted during
   // render (React's pattern for state that follows a prop). A drawer still open past it, and
   // closed later, discards from no draft, which changes nothing.
   const [mode, setMode] = useState(isEditing);
   if (mode !== isEditing) {
     setMode(isEditing);
-    setId(null);
+    setIds(NONE);
   }
 
-  const start = useCallback((placementId: string) => {
-    pending.current = placementId;
-    setId(placementId);
-  }, []);
+  const start = useCallback(
+    (placementId: string) => {
+      pending.current.add(placementId);
+      publish();
+    },
+    [publish]
+  );
 
   const refusal = useCallback(
     (
@@ -118,44 +130,49 @@ export function useProvisionalCard({
     [placements, byId, sources]
   );
 
-  const keep = useCallback((placementId: string) => {
-    if (pending.current === placementId) pending.current = null;
-    setId(current => (current === placementId ? null : current));
-  }, []);
+  const keep = useCallback(
+    (placementId: string) => {
+      if (pending.current.delete(placementId)) publish();
+    },
+    [publish]
+  );
 
   const closed = useCallback(
     (placementId: string) => {
-      if (pending.current !== placementId) return;
-      pending.current = null;
-      setId(null);
+      if (!pending.current.delete(placementId)) return;
+      publish();
       discard(placementId);
     },
-    [discard]
+    [discard, publish]
   );
 
-  return { id, start, refusal, keep, closed };
+  return { ids, start, refusal, keep, closed };
 }
 
 /**
- * The dashboard's Save, leaving the provisional card out while it still matches another card:
- * its drawer is open, and either holds no change or holds one that still matches. A change that
- * tells it apart is saved with the rest, as the drawer's own Save would keep it.
+ * The dashboard's Save, leaving out each provisional card that still matches another card: its
+ * drawer holds no change, or one that still matches. A change that tells it apart is saved with
+ * the rest, as the drawer's own Save would keep it.
  */
 export function useSaveLeavingOut(
   save: (options?: SaveOptions) => Promise<SaveOutcome>,
-  provisional: Pick<ProvisionalCard, "id" | "refusal">
+  provisional: Pick<ProvisionalCard, "ids" | "refusal">
 ): (options?: SaveOptions) => Promise<SaveOutcome> {
-  const { id, refusal } = provisional;
+  const { ids, refusal } = provisional;
   return useCallback(
     (options?: SaveOptions) => {
-      if (id === null) return save(options);
-      const change = options?.staged?.find(each => each.placementId === id);
-      const told =
-        change !== undefined &&
-        refusal(id, change.config, change.ownTitle) === undefined;
-      return told ? save(options) : save({ ...options, leaveOut: [id] });
+      const leaveOut = [...ids].filter(id => {
+        const change = options?.staged?.find(each => each.placementId === id);
+        return (
+          change === undefined ||
+          refusal(id, change.config, change.ownTitle) !== undefined
+        );
+      });
+      return leaveOut.length === 0
+        ? save(options)
+        : save({ ...options, leaveOut });
     },
-    [save, id, refusal]
+    [save, ids, refusal]
   );
 }
 
