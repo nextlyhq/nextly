@@ -30,7 +30,7 @@ import type {
  * The steps of the list conversion: widen the column to text, rewrite each value as a list, retype
  * it as JSON. Every other conversion is one step.
  */
-const LIST_CONVERSION_STEPS = 3;
+export const LIST_CONVERSION_STEPS = 3;
 
 /** A step's name, as the report gives it: the state the column is in once that step committed. */
 export function stepName(step: number, steps: number): string {

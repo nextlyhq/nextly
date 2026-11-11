@@ -266,5 +266,69 @@ describe.each(dialects.filter(d => d === "mysql"))(
       expect(await tools.definition(TABLE)).toEqual(before);
       expect(document.exitCode).toBe(3);
     });
+
+    it("a late valid JSON scalar in a list column ends a one-item list, never a scalar", async () => {
+      const CARDS = "comp_rl_card";
+      await run(
+        `CREATE TABLE ${q(CARDS)} (${q("id")} varchar(36) PRIMARY KEY, ${q("related")} varchar(36))`
+      );
+      try {
+        await run(`INSERT INTO ${q(CARDS)} VALUES ('r1', 'u1'), ('r2', 'u2')`);
+        const definition = {
+          fields: [
+            f({
+              name: "related",
+              type: "relationship",
+              relationTo: "users",
+              options: { relationType: "manyToMany" },
+            }),
+          ],
+          localized: false,
+          origin: "fieldGroup" as const,
+        };
+        // Each value lands after the rewrite has made every row a list and before the retype:
+        // valid JSON, so strict mode accepts it, but a scalar where the field keeps a list.
+        const document = await applyRepairs({
+          adapter: handle.adapter,
+          dialect,
+          entities: [
+            {
+              kind: "fieldGroup",
+              slug: "rl-card",
+              table: CARDS,
+              applied: { ...definition, source: "snapshot" },
+              configured: definition,
+            },
+          ],
+          nextlyVersion: "test",
+          beforeStep: async ({ step }: { step: number }) => {
+            if (step !== 2) return;
+            await run(
+              `UPDATE ${q(CARDS)} SET ${q("related")} = '"u9"' WHERE ${q("id")} = 'r1'`
+            );
+            await run(
+              `UPDATE ${q(CARDS)} SET ${q("related")} = '7' WHERE ${q("id")} = 'r2'`
+            );
+          },
+        });
+        expect(recordOf(document.result?.records, "related").outcome).toBe(
+          "converted"
+        );
+        const values = await tools.values(CARDS, "related");
+        // The driver hands a JSON column's value back parsed; a list stays a list either way.
+        const read = (v: unknown): unknown => {
+          if (typeof v !== "string") return v;
+          try {
+            return JSON.parse(v);
+          } catch {
+            return v;
+          }
+        };
+        expect(read(values.r1)).toEqual(["u9"]);
+        expect(read(values.r2)).toEqual([7]);
+      } finally {
+        await run(`DROP TABLE IF EXISTS ${q(CARDS)}`);
+      }
+    });
   }
 );

@@ -326,9 +326,14 @@ export async function readUnfinishedRepairs(
   dialect: SupportedDialect
 ): Promise<RecordedProgress[]> {
   if (dialect !== "mysql") return [];
-  return (await readRepairs(db, dialect)).filter(
-    row => row.state === "in-progress"
+  if (!(await repairsTableExists(db, dialect))) return [];
+  // Only the unfinished rows are read: the table keeps every repair ever made.
+  const rows = await querySqlRows<RawRow>(
+    db,
+    dialect,
+    sql`SELECT ${id("id")}, ${id("table_name")}, ${id("column_name")}, ${id("from_type")}, ${id("from_nullable")}, ${id("to_type")}, ${id("to_nullable")}, ${id("class")}, ${id("consent")}, ${id("values_cleared")}, ${id("state")}, ${id("step")}, ${id("steps")} FROM ${id(COLUMN_REPAIRS_TABLE)} WHERE ${id("state")} = ${"in-progress"} ORDER BY ${id("started_at")}, ${id("id")}`
   );
+  return rows.map(rowOf);
 }
 
 /**

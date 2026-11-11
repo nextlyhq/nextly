@@ -24,7 +24,10 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { querySqlRows } from "../../pipeline/classifier/count-helpers";
-import { mysqlReferenceListRewrite } from "../../pipeline/reference-list-conversion";
+import {
+  mysqlReferenceListNormalise,
+  mysqlReferenceListRewrite,
+} from "../../pipeline/reference-list-conversion";
 import { isMysqlTextOrBlobType } from "../../pipeline/sql-templates/create-index";
 import { quoteIdent } from "../../pipeline/sql-templates/identifier-quoting";
 import { restatedColumn } from "../../pipeline/sql-templates/mysql-live-restate";
@@ -378,12 +381,17 @@ function mysqlSteps(request: ConversionRequest): string[][] {
     return [
       restatedColumn(table, column, { type: "text", online: "copy" }),
       [mysqlReferenceListRewrite(table, column)],
-      restatedColumn(table, column, {
-        type: to,
-        ...nullability,
-        ...characterSet,
-        online: "copy",
-      }),
+      // The retype, then any value written since the rewrite made a one-item list in the same
+      // step, so the step never ends with a scalar in the list column.
+      [
+        ...restatedColumn(table, column, {
+          type: to,
+          ...nullability,
+          ...characterSet,
+          online: "copy",
+        }),
+        mysqlReferenceListNormalise(table, column),
+      ],
     ];
   }
   if (typeChanges(request)) {

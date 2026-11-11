@@ -28,6 +28,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { executeTransaction } from "../migrate/migration-transaction";
+import { mysqlReferenceListNormalise } from "../pipeline/reference-list-conversion";
 import { withSchemaLock } from "../pipeline/schema-lock";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import type { SupportedDialect } from "../services/field-column-descriptor";
@@ -54,6 +55,7 @@ import { repairRecord, type RepairRecord } from "./report";
 import { reportDocument, type RepairColumnsDocument } from "./report-json";
 import {
   isAt,
+  LIST_CONVERSION_STEPS,
   liveStepOf,
   noStepReason,
   notResumed,
@@ -112,6 +114,8 @@ export async function applyRepairs(
       adapter: args.adapter,
       command: APPLY_COMMAND,
       whenHeld: "wait",
+      // A run stopped by a signal gives the lock back rather than hold it until its lease ends.
+      releaseOnInterrupt: true,
       ...(args.schemaLockWaitMs !== undefined
         ? { waitMs: args.schemaLockWaitMs }
         : {}),
@@ -288,6 +292,18 @@ class ApplyRun {
         ? await this.convertInSteps(fresh)
         : await this.convertInTransaction(fresh);
     } catch (error) {
+      // SQLite's one writer held past its try while the record table was made: the database is
+      // held, as for a conversion's own wait, so no further SQLite conversion tries this run.
+      if (this.dialect === "sqlite" && waitedOutTable(error)) {
+        this.databaseHeld = true;
+        return {
+          finding,
+          facts: {
+            ...NO_RUN_FACTS,
+            lock: this.lockFacts(finding, 1, this.tryMs),
+          },
+        };
+      }
       // Anything that stops the column before its first step, such as its progress record
       // being refused, fails that column alone, which is exactly as it was.
       return {
@@ -613,7 +629,19 @@ class ApplyRun {
       };
     }
     if (reached === progress.steps) {
-      // The column already holds its field's definition: only the record is behind.
+      // The column already holds its field's definition: only the record is behind. A list
+      // conversion stopped between its retype and the normalising that follows it can still
+      // hold a scalar written before the retype, so that is finished first.
+      if (progress.steps === LIST_CONVERSION_STEPS) {
+        await this.adapter.withSession(
+          async session => {
+            await session.execute(
+              mysqlReferenceListNormalise(progress.table, progress.column)
+            );
+          },
+          { strictSqlMode: true }
+        );
+      }
       await recordStep(
         this.db,
         this.dialect,
