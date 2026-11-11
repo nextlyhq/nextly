@@ -380,7 +380,7 @@ Optionally, add a health check for your load balancer or uptime monitor:
 export { GET, HEAD } from "nextly/api/health";
 ```
 
-Then start Nextly when the server starts. Next.js runs `register()` once per server instance and finishes it before the instance serves a request, so the health route above, and any code that reads through Nextly, finds it already running. Without it, Nextly starts on the first request that carries its config, and the health route answers 503 until then. Put the file beside `app/`: `src/instrumentation.ts`, or `instrumentation.ts` in the project root when there is no `src/` (then import `./nextly.config`). If the app already has one, add these lines to its `register()`:
+Then start Nextly when the server starts. Next.js runs `register()` once per server instance before the instance serves a request. `createRegister` begins Nextly's start there and returns without waiting for it, so pages that need no database, the admin page among them, are served while Nextly starts. The health route above, Nextly's own routes, and code that reads through `getNextly` or the `nextly` object wait for that start rather than beginning another; `requireNextly()`, which cannot wait, throws until it has finished. Without it, Nextly starts on the first request that carries its config, and the health route answers 503 until then. Put the file beside `app/`: `src/instrumentation.ts`, or `instrumentation.ts` in the project root when there is no `src/` (then import `./nextly.config`). If the app already has one, add these lines to its `register()`:
 
 ```typescript title="src/instrumentation.ts"
 export async function register(): Promise<void> {

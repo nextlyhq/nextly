@@ -698,13 +698,15 @@ export async function attemptQueuedEmail(
   // A sent email's message is cleared as it settles: nothing sends it again,
   // and it is not held a moment longer than that. A failed one keeps its
   // message until the row is pruned (`pruneQueuedEmails`).
-  const settle = (state: QueuedEmailState, failure?: EmailFailure) =>
-    record({
+  const settle = async (state: QueuedEmailState, failure?: EmailFailure) => {
+    await record({
       state,
       ...(failure ? { failure: storedFailure(failure) } : {}),
       ...(state === "sent" ? { message: null } : {}),
       settledAt: now,
     });
+    if (state === "failed" && failure) logQueuedEmailFailed(row.id, failure);
+  };
 
   await record({ state: "sending" });
   // Read again: an erasure that committed since the first read cancelled the
@@ -810,6 +812,22 @@ async function failExhausted(
       updatedAt: at.getTime(),
     })
     .where(and(eq(table.id, id), inArray(table.state, ATTEMPTABLE)));
+  logQueuedEmailFailed(id, failure);
+}
+
+/**
+ * Say that a queued email failed for good, and why: its sender learns only
+ * its id and state, so the reason reaches the operator here. The reason is
+ * the stored one, with no address in it.
+ */
+function logQueuedEmailFailed(queuedId: string, failure: EmailFailure): void {
+  getNextlyLogger().error({
+    kind: "queued-email-failed",
+    message: `A queued email failed and will not be sent: ${storableError(failure.reason)}`,
+    queuedId,
+    retryable: failure.retryable,
+    ...(failure.status !== undefined ? { status: failure.status } : {}),
+  });
 }
 
 /**
