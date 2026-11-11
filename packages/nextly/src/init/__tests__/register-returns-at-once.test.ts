@@ -132,3 +132,24 @@ describe("a reader after the start-up hook's start failed", () => {
     await expect(read).rejects.toThrow("still refused");
   });
 });
+
+describe("shutdownNextly during a start that then fails", () => {
+  it("leaves nothing for a later read to start again", async () => {
+    vi.spyOn(consoleLogger, "error").mockImplementation(() => {});
+    const { registerServices } = await import("../../di/register");
+    const { nextly } = await import("../../direct-api/nextly");
+
+    await createRegister(config, { cacheComponents: "true" })();
+    await vi.waitFor(() => expect(registration).not.toBeNull());
+    const stopped = shutdownNextly();
+    registration?.reject(new Error("the database refused the connection"));
+    registration = null;
+    await stopped;
+
+    // Refused as nothing started, not started again after the shutdown.
+    await expect(nextly.count({ collection: "posts" })).rejects.toThrow(
+      "Nextly services not initialized"
+    );
+    expect(registerServices).toHaveBeenCalledTimes(1);
+  });
+});

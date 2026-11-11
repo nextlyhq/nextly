@@ -840,6 +840,11 @@ export async function shutdownNextly(): Promise<void> {
   // reopening the database and plugins just shut down. Waited for, then shut
   // down with the rest.
   await awaitStartInFlight();
+  // Again after the wait: a start that failed while it was waited for has left
+  // its options for a retry, and a read after this shutdown must not make it.
+  // Stopped either way, so no read runs the app's registered start either.
+  globalForInit.__nextly_failedStartOptions = undefined;
+  globalForInit.__nextly_stopped = true;
   if (globalForInit.__nextly_cachedInstance) {
     await globalForInit.__nextly_cachedInstance.shutdown();
   }
