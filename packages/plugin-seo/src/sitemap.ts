@@ -66,6 +66,11 @@ export interface SitemapOptions {
   /** Collections whose published entries appear in the sitemap. */
   collections: string[];
   /**
+   * The production addresses the SEO settings hold, read as the page's head
+   * reads them: `NEXTLY_PRODUCTION_ADDRESSES` still wins where it is set.
+   */
+  productionAddresses?: readonly string[];
+  /**
    * Absolute site origin for `<loc>` (e.g. "https://example.com"). Must be an
    * origin only — no path, query, fragment, or credentials; per-entry paths come
    * from {@link UrlForEntry}. An invalid value throws.
@@ -520,7 +525,9 @@ export async function buildSitemapUrls(
   const baseOrigin = resolveBaseOrigin(options.baseUrl);
   // The addresses the site is served from, as the page's head reads them,
   // once for the walk: the sitemap's own origin counts only where it is one.
-  const productionAddresses = productionAddressesOf(undefined);
+  const productionAddresses = productionAddressesOf(
+    options.productionAddresses
+  );
   // Only `undefined` takes the default; a supplied value (including 0 or a
   // negative) is honored so the wrapper guard below rejects an impossible cap
   // rather than silently substituting the 50 MB default. A non-finite value

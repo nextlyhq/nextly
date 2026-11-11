@@ -568,13 +568,25 @@ export class SingleRegistryService extends BaseRegistryService<
    */
   async registerSingle(
     data: DynamicSingleInsert,
-    /**
-     * `seedPermissions: false` leaves the Single's permissions to a seeding the
-     * caller knows follows, as a start's does (`syncCodeFirstSingles`).
-     */
-    options: { seedPermissions?: boolean } = {}
+    options: {
+      /**
+       * `false` leaves the Single's permissions to a seeding the caller knows
+       * follows, as a start's does (`syncCodeFirstSingles`).
+       */
+      seedPermissions?: boolean;
+      /**
+       * Runs the row's write, for a caller that writes it in a transaction of
+       * its own (a Builder save, with the stored schema version beside it).
+       * The permissions are seeded after it returns, outside that
+       * transaction: their writes take connections of their own.
+       */
+      writeRow?: (
+        write: () => Promise<DynamicSingleRecord>
+      ) => Promise<DynamicSingleRecord>;
+    } = {}
   ): Promise<DynamicSingleRecord> {
-    const record = await this.insertSingle(data);
+    const write = () => this.insertSingle(data);
+    const record = await (options.writeRow ? options.writeRow(write) : write());
     // Seeded after the row is written; `seedPermissionsForSingle` logs and
     // swallows its own failures, so a seeding error never fails registration.
     if (options.seedPermissions !== false) {

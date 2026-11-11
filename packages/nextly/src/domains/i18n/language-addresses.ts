@@ -75,6 +75,102 @@ export function languageAddressFrom(
   };
 }
 
+/** @experimental A public address in the form it is kept: a language and a path. */
+export interface KeptAddress {
+  locale: string;
+  path: string;
+}
+
+/**
+ * The languages an address is kept in, by the site's localization: its
+ * languages, or the one it serves without localization, its default (`"en"`
+ * where none is named). The one rule for which language an address record
+ * keys a page's address by, and which a request is looked up in.
+ */
+export function addressLanguagesOf(
+  localization: SanitizedLocalizationConfig | undefined
+): string[] {
+  const codes = localization?.locales.map(language => language.code) ?? [];
+  return codes.length > 0 ? codes : [defaultAddressLanguageOf(localization)];
+}
+
+/**
+ * The language an address read with none named is kept in: the site's
+ * default language, or `"en"` where it names none.
+ */
+export function defaultAddressLanguageOf(
+  localization: SanitizedLocalizationConfig | undefined
+): string {
+  const fallback = localization?.defaultLocale;
+  return fallback !== undefined && fallback !== "" ? fallback : "en";
+}
+
+/**
+ * The language and kept path the request for `url` asks for, by `rule` over
+ * the site's languages, or undefined where no language serves that address.
+ * Pure: the configuration is handed in.
+ *
+ * Derived from {@link languageAddressFrom} rather than stated beside it: each
+ * language's root address is formed by that rule, the request is read under
+ * the longest root it falls within, and the answer is kept only where the
+ * rule forms the very address asked for from it. A request on a host no
+ * domain rule names is read in the default language, as a staging host is.
+ */
+export function addressFromRequest(
+  rule: LanguageAddressRule | undefined,
+  localization: SanitizedLocalizationConfig | undefined,
+  url: URL
+): KeptAddress | undefined {
+  const languages = addressLanguagesOf(localization);
+  const roots = languages.flatMap(locale => {
+    const root = languageAddressFrom(rule, localization, "/", locale);
+    return root.status === "resolved" ? [{ locale, ...root }] : [];
+  });
+  const named = roots.some(root => root.origin === url.origin);
+  const fallback = localization?.defaultLocale ?? languages[0];
+  // A language on a domain of its own is read only on that domain, and on a
+  // host no rule names, only the default language is.
+  const onThisHost = (root: (typeof roots)[number]) => {
+    if (root.origin === undefined) return true;
+    return named ? root.origin === url.origin : root.locale === fallback;
+  };
+  const candidates = roots
+    .filter(onThisHost)
+    .filter(
+      root =>
+        root.path === "/" ||
+        url.pathname === root.path ||
+        url.pathname.startsWith(`${root.path}/`)
+    )
+    .sort((a, b) => b.path.length - a.path.length);
+  for (const root of candidates) {
+    const rest =
+      root.path === "/" ? url.pathname : url.pathname.slice(root.path.length);
+    const path = rest === "" ? "/" : rest;
+    const formed = languageAddressFrom(rule, localization, path, root.locale);
+    if (formed.status === "resolved" && formed.path === url.pathname) {
+      return { locale: root.locale, path };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * @experimental The language and kept path a request for `url` asks for, by
+ * the site's rule, or undefined where no language serves it: the inverse of
+ * {@link languageAddressOf}, for a Proxy or a route that has a request and
+ * needs the address record's key.
+ */
+export async function addressOfRequest(
+  url: string | URL
+): Promise<KeptAddress | undefined> {
+  return addressFromRequest(
+    declaredRule(),
+    await languagesNow(),
+    typeof url === "string" ? new URL(url) : url
+  );
+}
+
 /** The rule the running site declares, if any. */
 function declaredRule(): LanguageAddressRule | undefined {
   if (!container.has("config")) return undefined;

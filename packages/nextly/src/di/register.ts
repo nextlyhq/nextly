@@ -1236,6 +1236,10 @@ async function registerServicesOnce(
         logger: resolvedLogger,
       });
 
+      // After the boot migrations, which store a new version where they run:
+      // the database's schema version against the build's, read once.
+      await reportStartSchemaVersion(adapter, adapterDrizzleDb, resolvedLogger);
+
       // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
       // this boot registered are published, unless the definition keeps them. After the migrations,
       // so the review states table is there to read where it exists at all.
@@ -2617,6 +2621,39 @@ async function runBootMigrations(
       bootMigrationsArgs(config.db, transformedConfig, deferredExtends, deps)
     );
   }
+}
+
+/**
+ * Layer 6.6: the database's schema version against the build's, in
+ * production only.
+ *
+ * One read of the stored version (`reportSchemaVersionAtStart`), and a
+ * warning where the database is behind the build, naming `nextly migrate`,
+ * or a note where it is ahead. Nothing is written and nothing refused: the
+ * app serves whichever way they stand. A development start reaches its schema
+ * through the Builder and the code-first sync as they change, and compares
+ * nothing here.
+ */
+async function reportStartSchemaVersion(
+  adapter: DrizzleAdapter,
+  adapterDrizzleDb: DatabaseInstance,
+  logger: Logger
+): Promise<void> {
+  if (process.env.NODE_ENV !== "production") return;
+  const [{ reportSchemaVersionAtStart }, { buildSchemaVersion }] =
+    await Promise.all([
+      import("../domains/schema/schema-version"),
+      import("../domains/schema/build-schema-version"),
+    ]);
+  await reportSchemaVersionAtStart({
+    db: adapterDrizzleDb,
+    dialect: adapter.dialect,
+    build: buildSchemaVersion(),
+    logger: {
+      warn: message => logger.warn(message),
+      info: message => logger.info(message),
+    },
+  });
 }
 
 /**

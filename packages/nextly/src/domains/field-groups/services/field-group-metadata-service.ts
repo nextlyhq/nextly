@@ -48,6 +48,7 @@ import {
 } from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { writeRegistryRowsWith } from "../../schema/schema-version";
 import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
@@ -247,10 +248,11 @@ export class FieldGroupMetadataService {
     const migrationStatus = await this.applyCreateDdl(input, migrationSQL);
 
     // 3. RECORD, with the outcome already known.
-    const record = await this.registry.registerComponent({
-      ...input,
-      migrationStatus,
-    });
+    // The row and the stored schema version in one transaction, so the
+    // version's count moves with the save it records (`writeRegistryRows`).
+    const record = await writeRegistryRowsWith(this.adapter, () =>
+      this.registry.registerComponent({ ...input, migrationStatus })
+    );
 
     // 4. BIND the runtime schema, and only now.
     //
@@ -458,26 +460,30 @@ export class FieldGroupMetadataService {
 
     // 3. RECORD, after the physical change succeeded.
     try {
-      const record = await this.registry.updateComponent(
-        input.slug,
-        {
-          ...(input.label !== undefined ? { label: input.label } : {}),
-          ...(input.description !== undefined
-            ? { description: input.description }
-            : {}),
-          ...(input.admin !== undefined ? { admin: input.admin } : {}),
-          ...(requestedLocalized !== undefined
-            ? { localized: requestedLocalized }
-            : {}),
-          ...(input.fields !== undefined
-            ? {
-                fields:
-                  input.fields as unknown as DynamicFieldGroupInsert["fields"],
-                schemaHash: await this.hashFields(input.fields),
-              }
-            : {}),
-        },
-        { source: input.source ?? "ui" }
+      // The row and the stored schema version in one transaction
+      // (`writeRegistryRows`).
+      const record = await writeRegistryRowsWith(this.adapter, async () =>
+        this.registry.updateComponent(
+          input.slug,
+          {
+            ...(input.label !== undefined ? { label: input.label } : {}),
+            ...(input.description !== undefined
+              ? { description: input.description }
+              : {}),
+            ...(input.admin !== undefined ? { admin: input.admin } : {}),
+            ...(requestedLocalized !== undefined
+              ? { localized: requestedLocalized }
+              : {}),
+            ...(input.fields !== undefined
+              ? {
+                  fields:
+                    input.fields as unknown as DynamicFieldGroupInsert["fields"],
+                  schemaHash: await this.hashFields(input.fields),
+                }
+              : {}),
+          },
+          { source: input.source ?? "ui" }
+        )
       );
 
       return { record };

@@ -43,6 +43,7 @@ import { recordRegisteredLocalization } from "./di/registered-localization";
 import { getService, isServicesRegistered } from "./di/service-access";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
+import { recordBuildSchemaVersion } from "./domains/schema/build-schema-version";
 import { NextlyError } from "./errors/nextly-error";
 import {
   markNotInLine,
@@ -788,11 +789,17 @@ export async function getCachedNextly(): Promise<Nextly> {
  *               it on, a cached read finding no `"use cache"` read function
  *               registered is said once, naming the file to add. With it off,
  *               or not passed, Nextly warns once at start: it supports only
- *               Cache Components on.
+ *               Cache Components on. `buildSchemaVersion` is the value
+ *               Next.js inlines there for
+ *               `process.env.NEXTLY_BUILD_SCHEMA_VERSION`, which `withNextly`
+ *               sets: the build's newest migration, which a production start
+ *               compares with the database's schema version. Not passed, the
+ *               start reads the variable from its own environment, which only
+ *               `next start` has.
  */
 export function createRegister(
   config: SanitizedNextlyConfig,
-  host: { cacheComponents?: string | boolean } = {}
+  host: RegisterHost = {}
 ): () => Promise<void> {
   // Not `async`: it awaits nothing, since it begins the start and returns.
   // Run inside the promise, so a throw from the steps before the start still
@@ -803,11 +810,14 @@ export function createRegister(
   };
 }
 
+/** What the app's `instrumentation.ts` tells `createRegister` about its build. */
+export interface RegisterHost {
+  cacheComponents?: string | boolean;
+  buildSchemaVersion?: string;
+}
+
 /** What `register()` does: record the host's settings, then begin the start. */
-function beginStart(
-  config: SanitizedNextlyConfig,
-  host: { cacheComponents?: string | boolean }
-): void {
+function beginStart(config: SanitizedNextlyConfig, host: RegisterHost): void {
   // Kept for the cached reads: under Cache Components they go through the
   // app's `"use cache"` function, and one that was never registered is said.
   // Nextly cannot read this itself: Next.js inlines the setting only into
@@ -817,6 +827,10 @@ function beginStart(
   recordCacheComponents(cacheComponentsEnabled(host.cacheComponents));
   // Before Nextly starts, so the line comes first in the server's output.
   warnIfRegisteredWithCacheComponentsOff(host.cacheComponents);
+  // Kept for the production start's schema version comparison, which reads
+  // it (`buildSchemaVersion`): Next.js inlines the value only into the app's
+  // own bundled code, as it does the Cache Components setting above.
+  recordBuildSchemaVersion(host.buildSchemaVersion);
   // Begun here and not waited for. Next.js serves nothing until `register()`
   // returns, so waiting would hold every request, the admin page and static
   // files among them, for the whole start: over a minute against a database

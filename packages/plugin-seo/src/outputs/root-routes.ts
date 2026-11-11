@@ -141,8 +141,10 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
           config,
           "text/plain; charset=utf-8"
         );
+        // The site's own choice where it has made one, else the plugin's.
+        const { aiCrawlers } = await config.readRules(ctx, undefined);
         const body = robotsTxt({
-          aiCrawlers: robots.aiCrawlers,
+          aiCrawlers: aiCrawlers ?? robots.aiCrawlers,
           ...(sitemap === undefined
             ? {}
             : { sitemap: `${origin}/sitemap.xml` }),
