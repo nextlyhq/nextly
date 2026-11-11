@@ -361,6 +361,20 @@ describe("owners and identities", () => {
     ]);
   });
 
+  it("names a plugin called app apart from the app itself", () => {
+    const changes = permissionChanges(
+      record([]),
+      record([
+        custom("app", "export", "reports"),
+        custom("app", "sync", "jobs", { source: "plugin" }),
+      ])
+    );
+    expect(changes.map(describePermissionChange)).toEqual([
+      "app: + export-reports",
+      "plugin app: + sync-jobs",
+    ]);
+  });
+
   it("names a permission whose action and resource changed under the same slug", () => {
     const before = record([custom(formBuilder, "export-data", "reports")]);
     const after = record([custom(formBuilder, "export", "data-reports")]);

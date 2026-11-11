@@ -29,6 +29,7 @@ import {
 } from "../../../plugins/permissions/collect-permissions";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { isSystemResource } from "../../../schemas/_zod/rbac";
+import { isPlainObject } from "../../../shared/lib/plain-copy";
 import {
   builtInEntityPermissions,
   workflowEntityPermissions,
@@ -120,10 +121,16 @@ function bySlug(
 export function permissionRecordOf(
   sources: DeclaredPermissionSources
 ): PermissionRecord {
-  const entities = (kind: "collection" | "single") =>
-    (kind === "collection" ? sources.collections : sources.singles)
+  // Each kind's slugs, read once: a system resource's permissions are Nextly's own list.
+  const slugs = {
+    collection: sources.collections
       .map(entity => entity.slug)
-      .filter(slug => !isSystemResource(slug));
+      .filter(slug => !isSystemResource(slug)),
+    single: sources.singles
+      .map(entity => entity.slug)
+      .filter(slug => !isSystemResource(slug)),
+  };
+  const entities = (kind: "collection" | "single") => slugs[kind];
   const builtIns = new Set(
     [
       ...entities("collection").flatMap(slug =>
@@ -213,7 +220,11 @@ function ownersOf(record: PermissionRecord): Map<string, Owner> {
     owners.set(`app\u0000`, { name: APP_OWNER, permissions: record.app });
   }
   for (const [name, permissions] of Object.entries(record.plugins)) {
-    owners.set(`plugin\u0000${name}`, { name, permissions });
+    // Named as a plugin where its name is the app's own, so a header tells the two apart.
+    owners.set(`plugin\u0000${name}`, {
+      name: name === APP_OWNER ? `plugin ${name}` : name,
+      permissions,
+    });
   }
   return owners;
 }
@@ -257,16 +268,20 @@ export function permissionChanges(
     previous === null ? new Map<string, Owner>() : ownersOf(previous);
   // The app first (its key sorts before any plugin's), then each plugin by name.
   const keys = [...new Set([...before.keys(), ...after.keys()])].sort();
-  return keys.flatMap(key => {
-    const was = before.get(key);
-    const now = after.get(key);
-    const name = (now ?? was)?.name ?? "";
-    const added = missingFrom(was?.permissions ?? {}, now?.permissions ?? {});
-    const removed = missingFrom(now?.permissions ?? {}, was?.permissions ?? {});
-    return added.length + removed.length === 0
-      ? []
-      : [{ kind: "owner" as const, owner: name, added, removed }];
-  });
+  return keys.flatMap(key => ownerChange(before.get(key), after.get(key)));
+}
+
+/** One owner's added and removed permissions, or none when it declares the same ones. */
+function ownerChange(
+  was: Owner | undefined,
+  now: Owner | undefined
+): PermissionChange[] {
+  const before = was?.permissions ?? {};
+  const after = now?.permissions ?? {};
+  const added = missingFrom(before, after);
+  const removed = missingFrom(after, before);
+  if (added.length + removed.length === 0) return [];
+  return [{ kind: "owner", owner: (now ?? was)?.name ?? "", added, removed }];
 }
 
 /**
@@ -349,11 +364,8 @@ export function describePermissionChange(change: PermissionChange): string {
   return `${change.owner}: ${each.join(", ")}`;
 }
 
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
-
 function isRecordedPermission(value: unknown): boolean {
-  if (!isObject(value)) return false;
+  if (!isPlainObject(value)) return false;
   const { action, resource, name, description, group, danger } = value;
   return (
     typeof action === "string" &&
@@ -366,15 +378,15 @@ function isRecordedPermission(value: unknown): boolean {
 }
 
 const isOwnerPermissions = (value: unknown): boolean =>
-  isObject(value) && Object.values(value).every(isRecordedPermission);
+  isPlainObject(value) && Object.values(value).every(isRecordedPermission);
 
 const isOwnerMap = (value: unknown): boolean =>
-  isObject(value) && Object.values(value).every(isOwnerPermissions);
+  isPlainObject(value) && Object.values(value).every(isOwnerPermissions);
 
 /** Structural check of a snapshot file's `permissions`, for the snapshot reader. */
 export function isPermissionRecord(value: unknown): value is PermissionRecord {
   return (
-    isObject(value) &&
+    isPlainObject(value) &&
     isOwnerPermissions(value.app) &&
     isOwnerMap(value.plugins) &&
     isOwnerMap(value.collections) &&

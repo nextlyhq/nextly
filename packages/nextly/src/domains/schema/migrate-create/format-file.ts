@@ -54,6 +54,15 @@ const SETTINGS_HEADER = "-- Settings:";
 const PERMISSIONS_HEADER = "-- Permissions:";
 
 /**
+ * `text` on one line. A settings or permissions header names what a config or a plugin declares,
+ * which may hold a line break; one would end the comment and leave the rest of the line as a
+ * statement `nextly migrate` runs. Each break becomes a space.
+ */
+function oneLine(text: string): string {
+  return text.replace(/[\r\n\u2028\u2029]+/g, " ");
+}
+
+/**
  * Marks a file whose entity headers name what the migration CHANGES.
  *
  * 🔴 Provenance, not decoration. Migrations generated before headers were
@@ -179,10 +188,10 @@ export function formatMigrationFile(args: FormatArgs): string {
   const scopeLine =
     args.entitiesAreScoped === false ? "" : `${SCOPED_ENTITIES_MARKER}\n`;
   const settingsLines = (args.settingsChanges ?? [])
-    .map(change => `${SETTINGS_HEADER} ${change}\n`)
+    .map(change => `${SETTINGS_HEADER} ${oneLine(change)}\n`)
     .join("");
   const permissionLines = (args.permissionChanges ?? [])
-    .map(change => `${PERMISSIONS_HEADER} ${change}\n`)
+    .map(change => `${PERMISSIONS_HEADER} ${oneLine(change)}\n`)
     .join("");
   // Each statement gets a trailing `;`. splitSqlStatements in migrate.ts
   // splits on `;` so statements MUST be terminated.

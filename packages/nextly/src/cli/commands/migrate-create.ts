@@ -79,6 +79,7 @@ import {
   type GeneratePluginMigrationResult,
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
+import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import type {
   ContributedElements,
   TableSpec,
@@ -485,9 +486,18 @@ export async function runMigrateCreate(
     collections,
     singles,
   });
+  // Either side counts: the config declaring one now, or the newest snapshot recording one the
+  // config no longer declares, whose removal is a change too.
+  const ownsAny = (record: { app: object; plugins: object } | undefined) =>
+    record !== undefined &&
+    (Object.keys(record.app).length > 0 ||
+      Object.keys(record.plugins).length > 0);
   const declaresPermissions =
-    Object.keys(permissions.app).length > 0 ||
-    Object.keys(permissions.plugins).length > 0;
+    ownsAny(permissions) ||
+    ownsAny(
+      (await loadLatestSnapshot(resolve(migrationsDir, "meta")))?.data
+        .permissions
+    );
   // A project with no tables has no translated field to record, and says so as any recording run
   // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
   if (nothing && options.recordSnapshot === true)

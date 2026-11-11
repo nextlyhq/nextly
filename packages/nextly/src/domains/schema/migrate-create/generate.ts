@@ -509,6 +509,25 @@ function streamInScope(
 }
 
 /**
+ * The one entity a scoped run saves, and whether it is still declared, as the permission record
+ * reads it (`permissionsForRun`); nothing for a run with no scope.
+ */
+function permissionScopeOf(args: GenerateArgs): {
+  scope?: { kind: GenerateScope["kind"]; slug: string; present: boolean };
+} {
+  const { scope } = args;
+  if (scope === undefined) return {};
+  const declared = [...args.collections, ...args.singles, ...args.components];
+  return {
+    scope: {
+      kind: scope.kind,
+      slug: scope.slug,
+      present: declared.some(entity => entity.slug === scope.slug),
+    },
+  };
+}
+
+/**
  * The settings record the run writes and the settings changes it names. With
  * a scope, every other entity keeps its entry in the record and is named in no
  * change: it is not among the run's entities, which would otherwise read as
@@ -848,19 +867,7 @@ export async function generateMigration(
     permissionsForRun({
       given: args.permissions,
       latest: previous === null ? null : previous.data.permissions,
-      ...(args.scope === undefined
-        ? {}
-        : {
-            scope: {
-              kind: args.scope.kind,
-              slug: args.scope.slug,
-              present: [
-                ...args.collections,
-                ...args.singles,
-                ...args.components,
-              ].some(entity => entity.slug === args.scope?.slug),
-            },
-          }),
+      ...permissionScopeOf(args),
     });
   // What a run writes a file for even when no table changes.
   const changesBeyondTables =

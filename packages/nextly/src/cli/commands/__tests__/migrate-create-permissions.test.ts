@@ -136,4 +136,14 @@ describe("an app with no table yet", () => {
       `-- Permissions: ${PLUGIN}: + archive-reports`
     );
   });
+
+  it("writes the removal of its last permission, which the newest snapshot still records", async () => {
+    expect(await migrateCreate(appWith(["export"]))).toBeUndefined();
+
+    expect(await migrateCreate(appWith([]))).toBeUndefined();
+    expect(migrations()).toHaveLength(2);
+    expect(migrations()[1]).toContain(
+      `-- Permissions: ${PLUGIN}: - export-reports`
+    );
+  });
 });
