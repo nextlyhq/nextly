@@ -1,0 +1,417 @@
+/**
+ * Where a field may move in the Builder, and why not where it may not: the one
+ * rule a drag, the menu's Move up, Move down and Move to…, and the outline's
+ * keys all ask, so every way of moving a field allows and refuses the same.
+ *
+ * A move takes a field out of its container (the top level, a group or
+ * repeating rows) and puts it into another at a chosen place. It is refused,
+ * with a sentence saying why, when:
+ * - the field, or the container it would enter, is read-only (built in, owned
+ *   by code or a plugin, or in a read-only entity), or the container holds no
+ *   fields of its own: a field group, whose fields change only in its own
+ *   editor, or a blocks field, whose blocks are declared in code;
+ * - it would go into itself, or leave repeating rows (each entry may hold
+ *   several rows of it, which one field outside cannot keep);
+ * - it is unique (a one-to-one among them) and would enter a group or
+ *   repeating rows, whose values are kept in one JSON value that cannot be
+ *   kept unique;
+ * - its name clashes with a field already there, or with one whose delete is
+ *   pending, by the server's own clash rule, or is reserved there.
+ *
+ * Which names clash and which fields are unique are the server's own rules
+ * (`nextly/config`), so the outline never offers a move a save refuses.
+ *
+ * @module lib/builder/move-rule
+ */
+import { builderColumnIsUnique, siblingNameClash } from "nextly/config";
+import type { SiblingClashKind } from "nextly/config";
+import { isFieldGroupFieldType } from "nextly/field-group-type";
+
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
+
+import { isReservedFieldName } from "./constants";
+import {
+  convertToFieldDefinition,
+  deleteFieldById,
+} from "./field-transformers";
+import { insertField, type FieldInsertPosition } from "./insert-field";
+import {
+  describeReadOnly,
+  placementReadOnlyReason,
+} from "./outline/outline-model";
+
+/** What a move needs to know beyond the fields themselves. */
+export interface MoveContext {
+  /** Whether the whole entity is read-only (code-first). */
+  entityReadOnly: boolean;
+  /** Whether the entity's top level reserves built-in names (a collection or a Single). */
+  topLevelReservesNames: boolean;
+  /**
+   * The names a container's pending deletes still hold until the save, keyed
+   * by the container's id, or `""` for the top level.
+   */
+  heldNames?: ReadonlyMap<string, readonly string[]>;
+  /** A field group's label and every place using it, for the refusal that names them. */
+  describeFieldGroup?: (
+    slug: string
+  ) => { label: string; usedBy: readonly string[] } | undefined;
+  /** Types the surface does not take, wherever they go. */
+  excludedTypes?: readonly string[];
+  /**
+   * For a row that is a field group's own field (shown beneath the field that
+   * uses it, never one of the entity's fields), the field using the group:
+   * moving it out is refused as moving into it is.
+   */
+  fieldGroupFieldHolding?: (rowId: string) => BuilderField | undefined;
+}
+
+/** Why a move is refused. */
+export type MoveRefusalReason =
+  | "not-found"
+  | "read-only"
+  | "into-itself"
+  | "not-a-container"
+  | "into-blocks"
+  | "into-field-group"
+  | "read-only-container"
+  | "out-of-repeating-rows"
+  | "unique-into-container"
+  | "excluded-type"
+  | "name-clash"
+  | "reserved-name";
+
+/** A move's answer: the fields after it, or why it is refused. */
+export type MoveVerdict =
+  | {
+      allowed: true;
+      fields: BuilderField[];
+      /**
+       * The repeating rows the field enters, outermost first: its value goes
+       * into the first row of each, the other rows hold its default or nothing.
+       */
+      repeatingRowsEntered: string[];
+    }
+  | { allowed: false; reason: MoveRefusalReason; message: string };
+
+/** A field's name as a sentence calls it. */
+function called(field: BuilderField): string {
+  return field.label || field.name || "This field";
+}
+
+/** The fields from the top level down to `fieldId`, itself last; null when absent. */
+function chainTo(
+  fields: readonly BuilderField[],
+  fieldId: string
+): BuilderField[] | null {
+  for (const field of fields) {
+    if (field.id === fieldId) return [field];
+    const below = field.fields ? chainTo(field.fields, fieldId) : null;
+    if (below) return [field, ...below];
+  }
+  return null;
+}
+
+/** The fields one container holds: the top level for none. */
+function siblingsIn(
+  fields: readonly BuilderField[],
+  container: BuilderField | null
+): readonly BuilderField[] {
+  return container ? (container.fields ?? []) : fields;
+}
+
+function refuse(reason: MoveRefusalReason, message: string): MoveVerdict {
+  return { allowed: false, reason, message };
+}
+
+/** Why the field itself may not move, if it may not. */
+function sourceRefusal(
+  chain: readonly BuilderField[],
+  ctx: MoveContext
+): MoveVerdict | null {
+  const field = chain[chain.length - 1];
+  const reason = field.isSystem
+    ? { kind: "code" as const }
+    : placementReadOnlyReason(field, chain.slice(0, -1), ctx.entityReadOnly);
+  return reason
+    ? refuse(
+        "read-only",
+        `${called(field)} cannot move: ${describeReadOnly(reason).toLowerCase()}.`
+      )
+    : null;
+}
+
+/** Why the container named may not take a field, if it may not. */
+function containerRefusal(
+  field: BuilderField,
+  target: readonly BuilderField[] | null,
+  ctx: MoveContext
+): MoveVerdict | null {
+  if (target === null) return null;
+  const container = target[target.length - 1];
+  if (container.id === field.id || target.some(each => each.id === field.id)) {
+    return refuse("into-itself", `${called(field)} cannot move into itself.`);
+  }
+  if (container.type === "blocks") {
+    return refuse(
+      "into-blocks",
+      `${called(container)} holds blocks declared in code, not fields.`
+    );
+  }
+  if (isFieldGroupFieldType(container.type)) {
+    return fieldGroupRefusal(container, ctx);
+  }
+  if (container.type !== "group" && container.type !== "repeater") {
+    return refuse("not-a-container", `${called(container)} holds no fields.`);
+  }
+  const reason = placementReadOnlyReason(
+    container,
+    target.slice(0, -1),
+    ctx.entityReadOnly
+  );
+  return reason
+    ? refuse(
+        "read-only-container",
+        `${called(container)} takes no fields here: ${describeReadOnly(reason).toLowerCase()}.`
+      )
+    : null;
+}
+
+/** The refusal of a move into a field group, naming it and every place that uses it. */
+function fieldGroupRefusal(
+  container: BuilderField,
+  ctx: MoveContext
+): MoveVerdict {
+  const slug = container.component ?? container.components?.[0] ?? "";
+  const described = ctx.describeFieldGroup?.(slug);
+  const name = described?.label ?? slug;
+  const usedBy =
+    described && described.usedBy.length > 0
+      ? ` It is used by ${described.usedBy.join(", ")}.`
+      : "";
+  return refuse(
+    "into-field-group",
+    `${called(container)} uses the field group ${name}, which is changed only in its own editor, where a change reaches every place that uses it.${usedBy}`
+  );
+}
+
+/** The repeating rows on a chain of containers, by id. */
+function repeatersOn(chain: readonly BuilderField[]): BuilderField[] {
+  return chain.filter(each => each.type === "repeater");
+}
+
+/** Why the field may not leave or enter the containers it would, if it may not. */
+function crossingRefusal(
+  field: BuilderField,
+  from: readonly BuilderField[],
+  into: readonly BuilderField[]
+): MoveVerdict | null {
+  const intoIds = new Set(into.map(each => each.id));
+  if (repeatersOn(from).some(repeater => !intoIds.has(repeater.id))) {
+    return refuse(
+      "out-of-repeating-rows",
+      `${called(field)} cannot leave its repeating rows: each entry may hold several rows of it, which one field outside them cannot keep. Add a new field there instead.`
+    );
+  }
+  const fromIds = new Set(from.map(each => each.id));
+  const entersContainer = into.some(each => !fromIds.has(each.id));
+  if (
+    entersContainer &&
+    builderColumnIsUnique(convertToFieldDefinition(field))
+  ) {
+    return refuse(
+      "unique-into-container",
+      `${called(field)} is unique, and a group or repeating rows keep their values in one JSON value, which cannot be kept unique. It can move there once it is no longer unique.`
+    );
+  }
+  return null;
+}
+
+const CLASH_WORDS: Record<SiblingClashKind, string> = {
+  "same-name": "the same name",
+  "same-name-ignoring-case": "the same name in other letter case",
+  "same-column": "a name that becomes the same column",
+};
+
+/** Where a field would arrive, as a sentence names it. */
+function placeName(container: BuilderField | null): string {
+  return container ? called(container) : "the top level";
+}
+
+/** A sibling already there whose name clashes with the field's, if one does. */
+function siblingClashRefusal(
+  field: BuilderField,
+  container: BuilderField | null,
+  siblings: readonly BuilderField[]
+): MoveVerdict | null {
+  for (const other of siblings) {
+    if (other.id === field.id) continue;
+    const kind = siblingNameClash(field.name, other.name);
+    if (kind) {
+      return refuse(
+        "name-clash",
+        `${called(other)} in ${placeName(container)} has ${CLASH_WORDS[kind]} as ${called(field)}. Rename one of them first.`
+      );
+    }
+  }
+  return null;
+}
+
+/** A name a pending delete there still holds that clashes with the field's, if one does. */
+function heldNameRefusal(
+  field: BuilderField,
+  container: BuilderField | null,
+  ctx: MoveContext
+): MoveVerdict | null {
+  for (const held of ctx.heldNames?.get(container?.id ?? "") ?? []) {
+    const kind = siblingNameClash(field.name, held);
+    if (kind) {
+      return refuse(
+        "name-clash",
+        `A deleted field in ${placeName(container)}, ${held}, keeps ${CLASH_WORDS[kind]} as ${called(field)} until the delete is saved. Rename ${called(field)} first.`
+      );
+    }
+  }
+  return null;
+}
+
+/** Why the field's name may not stand among the siblings it would join, if it may not. */
+function nameRefusal(
+  field: BuilderField,
+  container: BuilderField | null,
+  siblings: readonly BuilderField[],
+  ctx: MoveContext
+): MoveVerdict | null {
+  const reserved =
+    !container && ctx.topLevelReservesNames && isReservedFieldName(field.name);
+  return (
+    siblingClashRefusal(field, container, siblings) ??
+    heldNameRefusal(field, container, ctx) ??
+    (reserved
+      ? refuse(
+          "reserved-name",
+          `${field.name} is reserved at the top level. Rename ${called(field)} first.`
+        )
+      : null)
+  );
+}
+
+/**
+ * Whether `fieldId` may move to `target` (a container, the top level when it
+ * names none, and the sibling to go before, the end when none), and the
+ * fields after the move when it may.
+ */
+export function judgeMove(
+  fields: readonly BuilderField[],
+  fieldId: string,
+  target: FieldInsertPosition,
+  ctx: MoveContext
+): MoveVerdict {
+  const chain = chainTo(fields, fieldId);
+  if (!chain) {
+    const holder = ctx.fieldGroupFieldHolding?.(fieldId);
+    return holder
+      ? fieldGroupRefusal(holder, ctx)
+      : refuse("not-found", "That field is no longer here.");
+  }
+  const field = chain[chain.length - 1];
+  const from = chain.slice(0, -1);
+  const into = target.parentFieldId
+    ? chainTo(fields, target.parentFieldId)
+    : null;
+  if (target.parentFieldId && !into) {
+    return refuse("not-found", "That place is no longer here.");
+  }
+  const container = into ? into[into.length - 1] : null;
+  const refusal =
+    sourceRefusal(chain, ctx) ??
+    containerRefusal(field, into, ctx) ??
+    crossingRefusal(field, from, into ?? []) ??
+    ((ctx.excludedTypes ?? []).includes(field.type)
+      ? refuse("excluded-type", `${called(field)} cannot go here.`)
+      : null) ??
+    nameRefusal(field, container, siblingsIn(fields, container), ctx);
+  if (refusal) return refusal;
+  return {
+    allowed: true,
+    fields: placed(fields, field, target),
+    repeatingRowsEntered: repeatersOn(into ?? [])
+      .filter(repeater => !from.some(each => each.id === repeater.id))
+      .map(called),
+  };
+}
+
+/** `fields` with `field` taken from where it is and put at `target`. */
+function placed(
+  fields: readonly BuilderField[],
+  field: BuilderField,
+  target: FieldInsertPosition
+): BuilderField[] {
+  // Going before itself is staying put: anchor on the sibling after it.
+  const before =
+    target.beforeFieldId === field.id
+      ? nextSiblingId(fields, field.id)
+      : target.beforeFieldId;
+  const without = deleteFieldById([...fields], field.id);
+  return (
+    insertField(without, field, {
+      ...(target.parentFieldId ? { parentFieldId: target.parentFieldId } : {}),
+      ...(before ? { beforeFieldId: before } : {}),
+    }) ?? [...fields]
+  );
+}
+
+function nextSiblingId(
+  fields: readonly BuilderField[],
+  fieldId: string
+): string | undefined {
+  const chain = chainTo(fields, fieldId);
+  const container = chain && chain.length > 1 ? chain[chain.length - 2] : null;
+  const siblings = siblingsIn(fields, container);
+  return siblings[siblings.findIndex(each => each.id === fieldId) + 1]?.id;
+}
+
+/** One place a field could go, as Move to… lists it. */
+export interface MoveDestination {
+  /** The container: none for the top level. */
+  parentFieldId?: string;
+  /** The containers from the top level to it, outermost first; empty for the top level. */
+  path: BuilderField[];
+  /** Whether the field may go there, and why not when not. */
+  verdict: MoveVerdict;
+}
+
+/**
+ * Every container the field could be moved into, the top level first, each
+ * with this rule's answer for a move to its end, so Move to… lists the places
+ * it may go and says why of the ones it may not.
+ */
+export function moveDestinations(
+  fields: readonly BuilderField[],
+  fieldId: string,
+  ctx: MoveContext
+): MoveDestination[] {
+  const places: MoveDestination[] = [
+    { path: [], verdict: judgeMove(fields, fieldId, {}, ctx) },
+  ];
+  const walk = (list: readonly BuilderField[], path: BuilderField[]) => {
+    for (const field of list) {
+      if (field.id === fieldId) continue;
+      const here = [...path, field];
+      const holds =
+        field.type === "group" ||
+        field.type === "repeater" ||
+        field.type === "blocks" ||
+        isFieldGroupFieldType(field.type);
+      if (holds) {
+        places.push({
+          parentFieldId: field.id,
+          path: here,
+          verdict: judgeMove(fields, fieldId, { parentFieldId: field.id }, ctx),
+        });
+      }
+      if (field.fields) walk(field.fields, here);
+    }
+  };
+  walk(fields, []);
+  return places;
+}
