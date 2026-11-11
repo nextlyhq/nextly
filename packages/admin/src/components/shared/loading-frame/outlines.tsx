@@ -1,0 +1,497 @@
+"use client";
+
+/**
+ * Still outlines of the admin's main screens, drawn in the place their real
+ * parts take while the screen's data is on its way.
+ *
+ * Each is the outline of ONE screen, used by every state that waits for it:
+ * the frame while the session is checked, the route's code loading, and the
+ * screen's own first load. So an outline never gives way to a different
+ * outline of the same screen, and the real parts land where it drew them.
+ *
+ * Nothing here moves: the bars are `Skeleton`'s still variant, never a pulse
+ * or a shimmer. `ScreenOutline` holds every outline back for its first 0.4 s,
+ * so a fast server never shows one, and reports the wait to the frame, which
+ * draws the line under the bar and the slow-start message.
+ *
+ * @module components/shared/loading-frame/outlines
+ */
+
+import {
+  Button,
+  PageHeader,
+  Skeleton,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@nextlyhq/ui";
+import type { CSSProperties, JSX, ReactNode } from "react";
+
+import {
+  ChevronDown,
+  Eye,
+  History,
+  MoreHorizontal,
+  PanelRight,
+} from "@admin/components/icons";
+import { TopBarPlace } from "@admin/components/layout/header/TopBarPlaces";
+import { PageContainer } from "@admin/components/layout/page-container";
+import { cn } from "@admin/lib/utils";
+
+import { LOADING_FRAME_TIMES, useDelayedReveal } from "./delayed-reveal";
+import { useReportScreenWait } from "./screen-wait";
+
+/** One still bar of an outline; `soft` for the lighter, secondary parts (a date, a value). */
+function OutlineBar({
+  className,
+  soft = false,
+  style,
+}: {
+  className?: string;
+  soft?: boolean;
+  /** A bar's own width, where the outline gives each bar a different one. */
+  style?: CSSProperties;
+}): JSX.Element {
+  return (
+    <Skeleton
+      still
+      className={cn(soft && "bg-muted", className)}
+      style={style}
+    />
+  );
+}
+
+/**
+ * The wait of one screen (or one part of a screen): reported to the frame while
+ * mounted, and drawn as `children` from 0.4 s. Hidden from assistive technology,
+ * since the frame's status line is what speaks for a long wait.
+ */
+export function ScreenOutline({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}): JSX.Element {
+  useReportScreenWait(true);
+  const shown = useDelayedReveal(true, LOADING_FRAME_TIMES.outline);
+  return (
+    <div
+      data-testid="screen-outline"
+      data-outline-shown={shown ? "" : undefined}
+      aria-hidden="true"
+      className={className}
+    >
+      {shown ? children : null}
+    </div>
+  );
+}
+
+/**
+ * The page's container around an outline drawn in place of a whole screen;
+ * nothing around one a screen draws inside its own container.
+ */
+function PageFrame({
+  framed,
+  children,
+}: {
+  framed: boolean;
+  children: ReactNode;
+}): JSX.Element {
+  return framed ? <PageContainer>{children}</PageContainer> : <>{children}</>;
+}
+
+/**
+ * A page head with its real title, or a bar where the title is not known yet,
+ * an empty subtitle line, and outlines of its action buttons.
+ */
+function PageHeadOutline({
+  title,
+  actions = [],
+}: {
+  title?: string;
+  /** The widths of the head's action buttons, in pixels. */
+  actions?: readonly number[];
+}): JSX.Element {
+  return (
+    <PageHeader
+      className="m-0"
+      // A title not known yet keeps the title's line (a no-break space) with
+      // a bar beside it, in the head's own row for chips.
+      title={title ?? "\u00a0"}
+      meta={
+        title === undefined ? <OutlineBar className="h-6 w-40" /> : undefined
+      }
+      // The subtitle's line is kept empty, so the parts below sit where they
+      // will sit under a real one.
+      description={<span>&nbsp;</span>}
+      actions={
+        actions.length > 0 ? (
+          <div className="flex items-center gap-2">
+            {actions.map((width, index) => (
+              <OutlineBar
+                key={index}
+                className="h-[var(--nx-control-height)] rounded-md"
+                // A width per button, so the row keeps the real row's length.
+                style={{ width }}
+              />
+            ))}
+          </div>
+        ) : undefined
+      }
+    />
+  );
+}
+
+/** The widths of an outline row's title bars, in order. */
+const ROW_TITLE_WIDTHS = [200, 240, 160, 130, 110] as const;
+
+/**
+ * A table with its real head where its columns are known, and five outline
+ * rows: a title, then shorter, softer values in the other columns.
+ */
+export function TableOutline({
+  headers,
+}: {
+  /** The column heads, when the columns are known. */
+  headers?: readonly ReactNode[];
+}): JSX.Element {
+  const columns: readonly ReactNode[] = headers ?? [null, null, null];
+  return (
+    <div className="overflow-hidden rounded-md border border-border bg-card">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            {columns.map((header, index) => (
+              <TableHead key={index} className="py-3">
+                {header ?? (
+                  <OutlineBar
+                    soft
+                    className={cn("h-3", index === 0 ? "w-16" : "w-12")}
+                  />
+                )}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {ROW_TITLE_WIDTHS.map((width, row) => (
+            <TableRow key={row} className="border-b border-border">
+              {columns.map((_, index) => (
+                <TableCell key={index} className="h-12 py-3">
+                  {index === 0 ? (
+                    <OutlineBar
+                      className="block h-3 max-w-full"
+                      style={{ width }}
+                    />
+                  ) : (
+                    <OutlineBar
+                      soft
+                      className={cn("block h-3", index === 1 ? "w-16" : "w-11")}
+                    />
+                  )}
+                </TableCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+/** A collection's (or any list's) page: its head, then its table. */
+export function ListOutline({
+  title,
+  headers,
+  actions = [72, 112],
+  framed = true,
+}: {
+  title?: string;
+  headers?: readonly ReactNode[];
+  actions?: readonly number[];
+  /** `false` where the screen draws the outline inside its own container. */
+  framed?: boolean;
+}): JSX.Element {
+  return (
+    <ScreenOutline>
+      <PageFrame framed={framed}>
+        <div className="flex flex-col gap-8">
+          <PageHeadOutline title={title} actions={actions} />
+          <TableOutline headers={headers} />
+        </div>
+      </PageFrame>
+    </ScreenOutline>
+  );
+}
+
+/** The widths of the dashboard's recent-list rows, in order. */
+const RECENT_ROW_WIDTHS = [180, 220, 140, 160] as const;
+
+/**
+ * The dashboard's cards: four figures, then a list card and a smaller card
+ * beside it, on the dashboard's own twelve-column grid. Columns follow the
+ * dashboard's width: four figures in a row on a wide screen, two at laptop
+ * width, one on a phone.
+ */
+export function DashboardCardsOutline(): JSX.Element {
+  return (
+    <div className="grid grid-cols-12 gap-4 @min-[1280px]/dashboard:gap-x-6">
+      {[0, 1, 2, 3].map(tile => (
+        <div
+          key={tile}
+          className="col-span-12 flex min-h-24 flex-col gap-2 rounded-lg border border-border bg-card p-4 @min-[560px]/dashboard:col-span-6 @min-[1100px]/dashboard:col-span-3"
+        >
+          <OutlineBar className="h-[11px] w-14" />
+          <OutlineBar className="h-6 w-10" />
+        </div>
+      ))}
+      <div className="col-span-12 flex min-h-[220px] flex-col gap-3 rounded-lg border border-border bg-card p-4 @min-[1100px]/dashboard:col-span-8">
+        <OutlineBar className="h-3.5 w-[120px]" />
+        {RECENT_ROW_WIDTHS.map(width => (
+          <div key={width} className="flex min-h-[22px] items-center gap-3">
+            <OutlineBar className="h-3 max-w-[60%]" style={{ width }} />
+            <OutlineBar soft className="ml-auto h-3 w-12" />
+          </div>
+        ))}
+      </div>
+      <div className="col-span-12 flex min-h-[220px] flex-col gap-3 rounded-lg border border-border bg-card p-4 @min-[1100px]/dashboard:col-span-4">
+        <OutlineBar className="h-3.5 w-[60px]" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The dashboard: its greeting row, held at its real height with a bar where
+ * the greeting goes, then its cards. The page's own container and measure, so
+ * the real greeting and cards land on the outline's lines.
+ */
+export function DashboardOutline(): JSX.Element {
+  return (
+    <ScreenOutline>
+      <PageContainer>
+        <div className="mx-auto max-w-[1600px] @container/dashboard">
+          <div className="mb-[18px] flex min-h-[34px] items-center">
+            <OutlineBar className="h-5 w-56 max-w-full" />
+          </div>
+          <DashboardCardsOutline />
+        </div>
+      </PageContainer>
+    </ScreenOutline>
+  );
+}
+
+/** One field's outline: its label, then its input, `tall` for a long text. */
+function FieldOutline({
+  labelWidth,
+  tall = false,
+}: {
+  labelWidth: number;
+  tall?: boolean;
+}): JSX.Element {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <OutlineBar className="h-3" style={{ width: labelWidth }} />
+      <OutlineBar
+        soft
+        className={cn("w-full rounded-lg", tall ? "h-[180px]" : "h-[38px]")}
+      />
+    </div>
+  );
+}
+
+/** The fields of a form: two short inputs and a long one. */
+function FieldsOutline(): JSX.Element {
+  return (
+    <div className="space-y-4">
+      <FieldOutline labelWidth={40} />
+      <FieldOutline labelWidth={32} />
+      <FieldOutline labelWidth={36} tall />
+    </div>
+  );
+}
+
+/** A form page (settings, an account): its head, then a card of fields. */
+export function FormOutline({
+  title,
+  framed = true,
+}: {
+  title?: string;
+  /** `false` where the screen draws the outline inside its own container. */
+  framed?: boolean;
+}): JSX.Element {
+  return (
+    <ScreenOutline>
+      <PageFrame framed={framed}>
+        <div className="flex flex-col gap-8">
+          <PageHeadOutline title={title} />
+          <div className="rounded-lg border border-border bg-card p-6">
+            <FieldsOutline />
+          </div>
+        </div>
+      </PageFrame>
+    </ScreenOutline>
+  );
+}
+
+/** The media library: its head, then a grid of square tiles. */
+export function MediaOutline(): JSX.Element {
+  return (
+    <ScreenOutline>
+      <PageContainer>
+        <div className="flex flex-col gap-8">
+          <PageHeadOutline title="Media" actions={[112]} />
+          <div className="grid grid-cols-2 gap-4 @2xl/content:grid-cols-4 @5xl/content:grid-cols-6">
+            {Array.from({ length: 12 }, (_, tile) => (
+              <OutlineBar
+                key={tile}
+                className="aspect-square w-full rounded-lg"
+              />
+            ))}
+          </div>
+        </div>
+      </PageContainer>
+    </ScreenOutline>
+  );
+}
+
+/** A disabled control of the editor bar's outline. */
+function BarButton({
+  children,
+  primary = false,
+  label,
+}: {
+  children: ReactNode;
+  primary?: boolean;
+  label?: string;
+}): JSX.Element {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant={primary ? "default" : "outline"}
+      disabled
+      aria-disabled="true"
+      aria-label={label}
+      className={cn("gap-1.5", label !== undefined && "px-2")}
+    >
+      {children}
+    </Button>
+  );
+}
+
+/**
+ * The editor's bar while its document loads: the same right-hand controls the
+ * real bar draws (History, Preview, the Publish split, More, the panel toggle),
+ * disabled, so the bar keeps their width and nothing in it moves when the
+ * document arrives. Drawn at once, as part of the frame, not after 0.4 s.
+ */
+function EditorBarOutline(): JSX.Element {
+  return (
+    <TopBarPlace name="end">
+      <div
+        data-testid="editor-bar-outline"
+        className="flex min-w-0 flex-1 flex-nowrap items-center gap-x-3"
+      >
+        <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
+        <div className="ml-auto flex min-w-0 items-center justify-end gap-1.5">
+          <span className="contents max-lg:hidden">
+            <BarButton>
+              <History className="h-4 w-4" aria-hidden="true" />
+              History
+            </BarButton>
+            <BarButton>
+              <Eye className="h-4 w-4" aria-hidden="true" />
+              Preview
+            </BarButton>
+          </span>
+          <BarButton primary>
+            Publish
+            <ChevronDown className="h-4 w-4" aria-hidden="true" />
+          </BarButton>
+          <BarButton label="More">
+            <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+          </BarButton>
+          <span className="contents max-lg:hidden">
+            <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+            <BarButton label="Document panel">
+              <PanelRight className="h-4 w-4" aria-hidden="true" />
+            </BarButton>
+          </span>
+        </div>
+      </div>
+    </TopBarPlace>
+  );
+}
+
+/**
+ * A document editor (an entry, a new entry, a Single): its bar's controls at
+ * once, then from 0.4 s the field column and the side card beside it, at the
+ * editor's own geometry: the field column inset and measured as the editor's,
+ * the side panel at its width, so the fields land where the outline drew them.
+ */
+export function EditorOutline({
+  sideWidth = 320,
+  columnClassName,
+  columnStyle,
+}: {
+  /** The document panel's width beside the fields, in pixels. */
+  sideWidth?: number;
+  /** The editor's field column inset, from the editor itself. */
+  columnClassName?: string;
+  /** The editor's field column measure, from the editor itself. */
+  columnStyle?: CSSProperties;
+}): JSX.Element {
+  return (
+    <>
+      <EditorBarOutline />
+      <ScreenOutline>
+        <PageContainer type="editor">
+          <div className="flex flex-col items-stretch lg:min-h-[calc(100vh-var(--admin-bar-height))] lg:flex-row">
+            <div
+              className={cn(
+                "mx-auto w-full min-w-0 flex-1 pt-6 lg:pt-8",
+                columnClassName
+              )}
+              style={columnStyle}
+            >
+              <FieldsOutline />
+            </div>
+            <div
+              className="flex w-full shrink-0 flex-col border-t border-border bg-card p-6 lg:border-t-0 lg:border-l lg:w-(--editor-side-width)"
+              style={
+                { "--editor-side-width": `${sideWidth}px` } as CSSProperties
+              }
+            >
+              <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
+                <OutlineBar className="h-3.5 w-[60px]" />
+                <OutlineBar soft className="h-3 w-full" />
+                <OutlineBar soft className="h-3 w-4/5" />
+              </div>
+            </div>
+          </div>
+        </PageContainer>
+      </ScreenOutline>
+    </>
+  );
+}
+
+/** A screen with no outline of its own: a head and one card. */
+export function GenericOutline({ title }: { title?: string }): JSX.Element {
+  return (
+    <ScreenOutline>
+      <PageContainer>
+        <div className="flex flex-col gap-8">
+          <PageHeadOutline title={title} />
+          <div className="min-h-[220px] rounded-lg border border-border bg-card p-6">
+            <OutlineBar className="h-3.5 w-[120px]" />
+          </div>
+        </div>
+      </PageContainer>
+    </ScreenOutline>
+  );
+}
