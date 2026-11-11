@@ -3037,6 +3037,7 @@ export function createPluginContext(
       digests: createKeyedDigests({
         owner,
         store: () => getServiceFn("metaService"),
+        probe: () => getServiceFn("adapter"),
         // The keyed generations only: a key is sealed and opened with one.
         secrets: () =>
           secretGenerations(

@@ -84,12 +84,31 @@ describe.each(getConfiguredTestDialects())(
           owner,
           store: () => metaStore(),
           secrets: () => [process.env.NEXTLY_SECRET ?? ""],
+          probe: () => current!.adapter,
         });
       const [one, two] = await Promise.all([
         helper().digest("ip", "203.0.113.9"),
         helper().digest("ip", "203.0.113.9"),
       ]);
       expect(two).toBe(one);
+    });
+
+    it("refuse a first use inside a transaction, and work there once prepared", async () => {
+      const digests = await boot();
+      const adapter = current!.adapter;
+
+      // Made inside the transaction, the key would roll back with it while this
+      // process kept using it.
+      await expect(
+        adapter.transaction(() => digests.digest("email", "ada@example.com"))
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+      expect(await metaStore().get(digestKeyMetaKey(NAME))).toBeNull();
+
+      await digests.prepare();
+      const outside = await digests.digest("email", "ada@example.com");
+      await expect(
+        adapter.transaction(() => digests.digest("email", "ada@example.com"))
+      ).resolves.toBe(outside);
     });
 
     it("still match after a rotation, once the previous secret is gone", async () => {
@@ -120,6 +139,7 @@ describe.each(getConfiguredTestDialects())(
         owner: NAME,
         store: () => metaStore(),
         secrets: () => [ROTATED],
+        probe: () => current!.adapter,
       });
       expect(await afterwards.digest("email", "ada@example.com")).toBe(before);
     });

@@ -32,11 +32,18 @@ function memoryStore(): DigestKeyStore & { rows: Map<string, string> } {
       rows.set(key, JSON.stringify(next));
       return true;
     },
+    getAll: async () =>
+      Object.fromEntries(
+        [...rows].map(([key, value]) => [key, JSON.parse(value) as unknown])
+      ),
   } as DigestKeyStore & { rows: Map<string, string> };
 }
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
+
+/** Whether the calling flow is in a transaction, as a test sets it. */
+const flow = { inTransaction: false };
 
 function digests(
   store: DigestKeyStore,
@@ -47,6 +54,7 @@ function digests(
     owner,
     store: () => store,
     secrets: () => secrets,
+    probe: () => ({ transactionOpenInFlow: () => flow.inTransaction }),
   });
 }
 
@@ -98,18 +106,54 @@ describe("a plugin's keyed digests", () => {
     expect(await digests(store, [B]).digest("email", "x")).toBe(before);
   });
 
-  it("are sealed at start under the current secret, before the previous one goes", async () => {
+  it("are sealed at start under the current secret, a removed plugin's too", async () => {
     const store = memoryStore();
     const before = await digests(store, [A]).digest("email", "x");
-    await resealPluginDigestKeys(
-      [{ name: "@acme/forms" }, { name: "@never/used" }],
-      store,
-      [B, A]
+    // A plugin removed from the config that left its data and its key behind.
+    const retained = await digests(store, [A], "@removed/plugin").digest(
+      "ip",
+      "y"
     );
 
+    await resealPluginDigestKeys(store, [B, A]);
+
     expect(await digests(store, [B]).digest("email", "x")).toBe(before);
-    // A plugin that never asked for a digest is given no key here.
+    expect(await digests(store, [B], "@removed/plugin").digest("ip", "y")).toBe(
+      retained
+    );
+    // No key is made here for a plugin that never asked for one.
     expect(store.rows.has(digestKeyMetaKey("@never/used"))).toBe(false);
+  });
+
+  it("leave a key no secret opens as stored at start, rather than failing it", async () => {
+    const store = memoryStore();
+    await digests(store, [A]).digest("email", "x");
+    const stored = store.rows.get(digestKeyMetaKey("@acme/forms"));
+
+    await expect(resealPluginDigestKeys(store, [B])).resolves.toBeUndefined();
+    expect(store.rows.get(digestKeyMetaKey("@acme/forms"))).toBe(stored);
+  });
+
+  it("refuse a first use inside a transaction, and work there once prepared", async () => {
+    const store = memoryStore();
+    const helper = digests(store, [A]);
+
+    flow.inTransaction = true;
+    try {
+      // Made inside a transaction, the key could be rolled back while this
+      // process kept using it.
+      await expect(helper.digest("email", "x")).rejects.toMatchObject({
+        code: "INTERNAL_ERROR",
+      });
+      expect(store.rows.size).toBe(0);
+
+      flow.inTransaction = false;
+      await helper.prepare();
+      flow.inTransaction = true;
+      expect(await helper.digest("email", "x")).toMatch(/^[0-9a-f]{64}$/);
+    } finally {
+      flow.inTransaction = false;
+    }
   });
 
   it("keep the key made with no secret, and seal it once one is set", async () => {

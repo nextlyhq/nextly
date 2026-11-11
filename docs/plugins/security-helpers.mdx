@@ -227,6 +227,13 @@ function addressKey(digests: KeyedDigests, email: string) {
   secret at that start, and on its first read, so digests stored before the
   rotation still match once the old secret is removed.
 
+- The first use reads the key, and may make it, on its own connection, so it
+  is refused inside an open transaction. A plugin that takes digests inside
+  its own transactions or in-transaction hooks calls `prepare()` once at
+  start, in `init`; after that, `digest` works anywhere.
+- A rotation also re-seals the key of a plugin you have removed but whose data
+  you kept, so its digests still match if you install it again.
+
 ## One-purpose secrets
 
 `ctx.security.secrets` mints and spends secrets that do one thing once: a long

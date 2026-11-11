@@ -1272,10 +1272,10 @@ async function registerServicesOnce(
   // since rotated is sealed again under the current one while the previous
   // can still open it, so a message outlives any number of rotations.
   await resealQueuedMessagesAtBoot(adapter, pluginSettingsSecrets(env));
-  // And each plugin's digest key, for the same reason: a digest stored beside
-  // a plugin's records must match for as long as they are kept.
+  // And every plugin digest key stored, a removed plugin's included, for the
+  // same reason: a digest stored beside a plugin's records must match for as
+  // long as they are kept.
   await resealPluginDigestKeys(
-    transformedConfig.plugins,
     getService("metaService"),
     pluginSettingsSecrets(env)
   );

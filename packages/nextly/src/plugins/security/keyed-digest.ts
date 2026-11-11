@@ -18,7 +18,9 @@
  * under a secret the install now reads only as a previous one, it is sealed
  * again under the current secret on its first read, by a compare-and-set of
  * the value read, and at every start (`resealPluginDigestKeys`), before an
- * operator can remove the previous secret.
+ * operator can remove the previous secret. The first use commits on its own,
+ * so it is refused inside an open transaction: a plugin taking digests inside
+ * its transactions calls `prepare()` at start.
  *
  * Neither the key nor anything derived from it but the digest leaves this
  * module: never in a log, an error or a return value.
@@ -33,6 +35,10 @@ import {
   sealSetting,
 } from "../../domains/plugins/settings-crypto";
 import { NextlyError } from "../../errors/nextly-error";
+import {
+  assertNoOpenTransaction,
+  type OpenTransactionProbe,
+} from "../../shared/lib/open-transaction";
 
 /** @experimental Keyed one-way digests, under the plugin's own key. */
 export interface KeyedDigests {
@@ -45,12 +51,20 @@ export interface KeyedDigests {
    * the digest compares it exactly.
    */
   digest(purpose: string, value: string): Promise<string>;
+  /**
+   * Make and read the plugin's key now, outside any transaction. The first
+   * use reads the key on its own connection and may make it, which must
+   * commit on its own, so it is refused inside an open transaction: a
+   * plugin that takes digests inside its transactions calls this first, at
+   * start, after which `digest` works anywhere.
+   */
+  prepare(): Promise<void>;
 }
 
 /** What the helper needs of `nextly_meta`. */
 export type DigestKeyStore = Pick<
   MetaService,
-  "getEntry" | "insertIfAbsent" | "compareAndSet"
+  "getEntry" | "insertIfAbsent" | "compareAndSet" | "getAll"
 >;
 
 /** What the helper is built from. */
@@ -61,6 +75,8 @@ export interface KeyedDigestsOptions {
   store: () => DigestKeyStore;
   /** The install's secrets, current first, read per call so a rotation applies. */
   secrets: () => readonly string[];
+  /** Whether the calling flow is inside an open transaction. */
+  probe: () => OpenTransactionProbe;
 }
 
 /** Bytes of key material: the HMAC-SHA256 block's worth of entropy. */
@@ -69,9 +85,12 @@ const SEALED = "sealed:";
 const UNSEALED = "unsealed:";
 const PURPOSE = /^[a-z][a-z0-9.-]{0,63}$/;
 
+/** What every plugin's digest key is kept under in `nextly_meta`. */
+const KEY_PREFIX = "plugin.digestKey:";
+
 /** The `nextly_meta` key a plugin's digest key is kept under. */
 export function digestKeyMetaKey(owner: string): string {
-  return `plugin.digestKey:${owner}`;
+  return `${KEY_PREFIX}${owner}`;
 }
 
 /**
@@ -176,6 +195,13 @@ export function createKeyedDigests(options: KeyedDigestsOptions): KeyedDigests {
   // promise is dropped on a failure, so the next call tries again.
   let key: Promise<Buffer> | undefined;
   const keyOnce = () => {
+    // Made or read on its own connection, never inside the caller's
+    // transaction: on SQLite, which shares one connection, a key made there
+    // would be undone by a rollback while this process kept using it, and on
+    // a pool of one a read beside the transaction would wait for it.
+    if (key === undefined) {
+      assertNoOpenTransaction(options.probe(), "security.digests first use");
+    }
     key ??= loadKey(options.owner, options.store(), options.secrets()).catch(
       (error: unknown) => {
         key = undefined;
@@ -185,6 +211,9 @@ export function createKeyedDigests(options: KeyedDigestsOptions): KeyedDigests {
     return key;
   };
   return {
+    async prepare() {
+      await keyOnce();
+    },
     async digest(purpose, value) {
       if (!PURPOSE.test(purpose)) {
         throw NextlyError.validation({
@@ -206,25 +235,43 @@ export function createKeyedDigests(options: KeyedDigestsOptions): KeyedDigests {
 }
 
 /**
- * Seal every plugin's digest key again under the current secret where a
+ * Seal every stored plugin digest key again under the current secret where a
  * previous one opened it: run at start, so a key read only after an operator
- * has removed the previous secret is not left sealed under it. A plugin with
- * no key yet is skipped; none is made here.
+ * has removed the previous secret is not left sealed under it. Every stored
+ * key is visited, a plugin's no longer configured among them, since data a
+ * plugin left behind may be read again once it is installed again. No key is
+ * made here, and one no configured secret opens is left as stored: it fails
+ * where it is used, never at start.
  */
 export async function resealPluginDigestKeys(
-  plugins: readonly { name: string }[] | undefined,
   store: DigestKeyStore,
   secrets: readonly string[]
 ): Promise<void> {
-  for (const { name: owner } of plugins ?? []) {
-    const entry = await store.getEntry<string>(digestKeyMetaKey(owner));
-    if (!entry.present || typeof entry.value !== "string") continue;
-    const { key, stale } = openKey(owner, entry.value, secrets);
-    if (!stale) continue;
+  const entries = Object.entries(await store.getAll()).filter(([metaKey]) =>
+    metaKey.startsWith(KEY_PREFIX)
+  );
+  for (const [metaKey, stored] of entries) {
+    if (typeof stored !== "string") continue;
+    const owner = metaKey.slice(KEY_PREFIX.length);
+    const opened = tryOpenKey(owner, stored, secrets);
+    if (opened === undefined || !opened.stale) continue;
     await store.compareAndSet(
-      digestKeyMetaKey(owner),
-      entry.value,
-      storedForm(owner, key, secrets)
+      metaKey,
+      stored,
+      storedForm(owner, opened.key, secrets)
     );
+  }
+}
+
+/** {@link openKey}, or undefined when no configured secret opens the key. */
+function tryOpenKey(
+  owner: string,
+  stored: string,
+  secrets: readonly string[]
+): { key: Buffer; stale: boolean } | undefined {
+  try {
+    return openKey(owner, stored, secrets);
+  } catch {
+    return undefined;
   }
 }
