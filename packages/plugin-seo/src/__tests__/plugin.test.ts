@@ -88,6 +88,9 @@ describe("seoPlugin", () => {
       ["GET", "/settings/content-types", undefined, undefined],
       ["GET", "/settings/document", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
+      // The problem list, read and checked again by a signed-in reader.
+      ["GET", "/problems", undefined, undefined],
+      ["POST", "/problems/check", undefined, undefined],
     ]);
   });
 
@@ -111,6 +114,8 @@ describe("seoPlugin", () => {
       "/settings/content-types",
       "/settings/document",
       "/resolve",
+      "/problems",
+      "/problems/check",
     ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
@@ -127,6 +132,8 @@ describe("seoPlugin", () => {
       "/settings/content-types",
       "/settings/document",
       "/resolve",
+      "/problems",
+      "/problems/check",
     ]);
   });
 
