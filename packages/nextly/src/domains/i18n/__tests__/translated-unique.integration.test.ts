@@ -721,7 +721,8 @@ describeEachDialect("a translated unique field", dialect => {
 
   it("refuses a field group's own update that makes a translated field unique over duplicates, and changes nothing", async () => {
     // Declared 255 characters wide, so making it unique leaves its column as it is and the
-    // duplicates are what the update is refused for.
+    // duplicates are what the update is refused for. A field group's width is a top-level key.
+    const wide = { maxLength: 255 };
     await dispatchComponents(
       "createComponent",
       {},
@@ -729,7 +730,7 @@ describeEachDialect("a translated unique field", dialect => {
         slug: "banner",
         label: "Banner",
         localized: true,
-        fields: [{ name: "heading", type: "text", maxLength: 255 }],
+        fields: [{ name: "heading", type: "text", ...wide }],
       }
     );
     await writeBanner("b1", "en", "Sale");
@@ -742,7 +743,7 @@ describeEachDialect("a translated unique field", dialect => {
       .updateFieldGroup({
         slug: "banner",
         fields: [
-          { name: "heading", type: "text", unique: true, maxLength: 255 },
+          { name: "heading", type: "text", unique: true, ...wide },
           { name: "subtitle", type: "text" },
         ],
       })
