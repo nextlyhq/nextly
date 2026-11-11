@@ -12,7 +12,7 @@
 import type { AdminContribution } from "@nextlyhq/plugin-sdk";
 
 import { STRUCTURED_DATA_FIELD } from "./contract";
-import { SEO_GROUP, TYPED_SEO_FIELDS } from "./typed";
+import { SEO_GROUP } from "./typed";
 
 /** The tab's component, as the admin's component map names it. */
 export const SEO_TAB_COMPONENT = "@nextlyhq/plugin-seo/admin#SeoTab";
@@ -21,14 +21,38 @@ export const SEO_TAB_COMPONENT = "@nextlyhq/plugin-seo/admin#SeoTab";
 const LABEL = "SEO";
 
 /**
- * Every field of the `seo` group the tab has a control for: what a person
- * types for the page, and the page's choice of structured data type. A
- * control is offered only for the ones a group declares.
+ * Every field of the `seo` group the tab has a control for, and the field
+ * types that control writes: what a person types for the page, and the
+ * page's choice of structured data type. A control is offered only for the
+ * ones a group declares.
  */
-const TAB_FIELDS: readonly string[] = [
-  ...TYPED_SEO_FIELDS,
-  STRUCTURED_DATA_FIELD,
-];
+const TAB_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  metaTitle: ["text"],
+  metaDescription: ["text", "textarea"],
+  socialTitle: ["text"],
+  socialDescription: ["text", "textarea"],
+  ogImage: ["upload"],
+  canonical: ["text"],
+  canonicalElsewhere: ["checkbox"],
+  noindex: ["checkbox"],
+  [STRUCTURED_DATA_FIELD]: ["text"],
+};
+
+/**
+ * Whether the tab's control for a field writes what the field stores: a
+ * field of that type holding one value, not a list.
+ */
+function tabWrites(field: {
+  name?: unknown;
+  type?: unknown;
+  hasMany?: unknown;
+}): boolean {
+  if (typeof field.name !== "string" || field.hasMany === true) return false;
+  const types = Object.hasOwn(TAB_FIELDS, field.name)
+    ? TAB_FIELDS[field.name]
+    : undefined;
+  return types !== undefined && types.includes(String(field.type));
+}
 
 /**
  * Whether a field's own admin options limit how it is edited: read-only,
@@ -53,14 +77,18 @@ function isGated(admin: unknown): boolean {
  * added, stays among the page's own fields, where each can be edited.
  */
 export function tabEditsGroup(
-  fields: readonly { name?: unknown; admin?: unknown }[]
+  fields: readonly {
+    name?: unknown;
+    type?: unknown;
+    hasMany?: unknown;
+    admin?: unknown;
+  }[]
 ): boolean {
   const names = fields.map(field => field.name);
   return (
     names.includes("metaTitle") &&
     names.includes("metaDescription") &&
-    fields.every(field => !isGated(field.admin)) &&
-    names.every(name => typeof name === "string" && TAB_FIELDS.includes(name))
+    fields.every(field => !isGated(field.admin) && tabWrites(field))
   );
 }
 

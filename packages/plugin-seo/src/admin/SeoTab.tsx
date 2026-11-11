@@ -51,6 +51,15 @@ function documentOf(
   return null;
 }
 
+/** Which document and language the tab shows, as one key. */
+function documentKeyOf(
+  target: SeoTabDocument,
+  context: DocumentTabProps["context"]
+): string {
+  const entryId = "entryId" in context ? context.entryId : null;
+  return [target.kind, target.slug, entryId, target.locale].join(":");
+}
+
 /** The id a stored share image names: an id, or a read media document's. */
 function imageIdOf(value: unknown): string | undefined {
   if (typeof value === "string" && value !== "") return value;
@@ -184,6 +193,7 @@ export function SeoTab({
         onSet={(field, next) => {
           fields[field]?.set(next);
         }}
+        documentKey={documentKeyOf(target, context)}
         onChooseImage={() => setChoosing(true)}
       />
       <MediaPickerDialog

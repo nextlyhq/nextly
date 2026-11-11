@@ -49,6 +49,14 @@ export function useSeoTabContext(
   const kind = target?.kind;
   const slug = target?.slug;
   const locale = target?.locale ?? null;
+  // Another document or language: its levels are not this one's, so none
+  // are shown until its own are read.
+  const targetKey = `${kind ?? ""}\u0000${slug ?? ""}\u0000${locale ?? ""}`;
+  const [shownFor, setShownFor] = useState(targetKey);
+  if (shownFor !== targetKey) {
+    setShownFor(targetKey);
+    setState({ context: undefined, status: "loading" });
+  }
 
   useEffect(() => {
     if (kind === undefined || slug === undefined) return undefined;

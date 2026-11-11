@@ -14,7 +14,11 @@ import type { Levels } from "../../resolver/order";
 import type { SeoTabContext } from "../../tab/contract";
 import { seoProblems } from "../../tab/problems";
 import { SeoPanel } from "../SeoPanel";
-import { panelAnswers, type SeoPanelValues } from "../values";
+import {
+  panelAnswers,
+  type SeoPanelField,
+  type SeoPanelValues,
+} from "../values";
 
 afterEach(cleanup);
 
@@ -76,8 +80,12 @@ function Harness({
   reloaded,
   onWrite,
   context = CONTEXT,
+  documentKey,
+  errors,
 }: {
   context?: SeoTabContext;
+  documentKey?: string;
+  errors?: Partial<Record<SeoPanelField, string>>;
   initial?: SeoPanelValues;
   /** Values the form is reset to from outside, as a reload does. */
   reloaded?: SeoPanelValues;
@@ -107,6 +115,8 @@ function Harness({
         values={values}
         chosenImage={undefined}
         writable
+        {...(documentKey === undefined ? {} : { documentKey })}
+        {...(errors === undefined ? {} : { errors })}
         onSet={(field, next) => {
           onWrite?.(field, next);
           setValues(was => ({ ...was, [field]: next }));
@@ -345,6 +355,32 @@ describe("Advanced", () => {
     expect(
       screen.queryByRole("combobox", { name: "Structured data type" })
     ).toBeNull();
+  });
+
+  it("lets go of an unfinished address when another document or language is shown", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<Harness documentKey="posts:1:en" />);
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(
+      screen.getByRole("button", { name: "Use another address" })
+    );
+    await user.type(
+      screen.getByLabelText("Official address"),
+      "https://medium.com/p/1"
+    );
+    rerender(<Harness documentKey="posts:1:es" />);
+    expect(screen.queryByLabelText("Official address")).toBeNull();
+  });
+
+  it("opens Advanced on a value refused at save, and says why beside it", () => {
+    render(<Harness errors={{ canonical: "Enter a valid address." }} />);
+    expect(screen.getByRole("button", { name: /Advanced/ })).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Enter a valid address."
+    );
   });
 
   it("says why a typed address cannot be used", async () => {

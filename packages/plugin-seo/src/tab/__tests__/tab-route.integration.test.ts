@@ -267,15 +267,24 @@ describe.each(getConfiguredTestDialects())(
       expect(answer.levels.content.title?.value).toBe("Welcome");
     });
 
-    it("refuses a reader who may not edit the type, and a type the plugin does not extend", async () => {
-      const refused = await resolve(reader, {
+    it("answers a reader shown the page read-only, and refuses one who may not read the type", async () => {
+      const read = await resolve(reader, {
+        kind: "collection",
+        slug: "posts",
+        document: TYPED_POST,
+      });
+      expect(read.status, await read.clone().text()).toBe(200);
+
+      const refused = await resolve(singleEditor, {
         kind: "collection",
         slug: "posts",
         document: TYPED_POST,
       });
       expect(refused.status).toBe(403);
       expect(await refused.text()).not.toContain("Surfer");
+    });
 
+    it("refuses a type the plugin does not extend, and a malformed request", async () => {
       const elsewhere = await resolve(editor, {
         kind: "single",
         slug: "posts",

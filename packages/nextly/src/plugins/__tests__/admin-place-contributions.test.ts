@@ -225,6 +225,11 @@ describe("contributedAdminContributions", () => {
     ["fields that are not a list", { ...EDIT_TAB, fields: "sla" }],
     ["an empty list of fields", { ...EDIT_TAB, fields: [] }],
     [
+      "fields naming the title the page draws itself",
+      { ...EDIT_TAB, fields: ["seo", "title"] },
+    ],
+    ["fields naming the slug", { ...EDIT_TAB, fields: ["slug"] }],
+    [
       "a field that is not a top-level name",
       { ...EDIT_TAB, fields: ["sla.hours"] },
     ],

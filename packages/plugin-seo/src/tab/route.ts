@@ -13,8 +13,9 @@
  * the page's route. That level is left empty until the address record keeps
  * what each route supplies.
  *
- * Gated as editing the document is: the caller must be able to create or
- * update entries of the collection, or update the Single.
+ * Answered to anyone who may read the collection or the Single, an editor or
+ * a reader shown the page read-only. The page's images are looked up only for
+ * a caller who may read the media library.
  *
  * @module tab/route
  */
@@ -106,18 +107,50 @@ async function bodyOf(req: Request): Promise<ResolveBody> {
   return parsed.data;
 }
 
-/** Whether the caller may edit documents of this kind, as the editor asks. */
-async function mayEdit(
+/**
+ * Whether the caller may open documents of this kind: an editor, or a reader
+ * shown the page read-only, whose tab still shows what the page will use.
+ * What the route answers is worked out from the document the caller sends,
+ * and changes nothing.
+ */
+async function mayOpen(
   ctx: PluginRouteContext,
   body: ResolveBody
 ): Promise<boolean> {
   const caller = ctx.caller;
   if (caller === null) return false;
-  if (body.kind === "single") return caller.can("update", body.slug);
-  return (
-    (await caller.can("update", body.slug, { anyEntry: true })) ||
-    (await caller.can("create", body.slug, { anyEntry: true }))
-  );
+  if (body.kind === "single") return caller.can("read", body.slug);
+  return caller.can("read", body.slug, { anyEntry: true });
+}
+
+/**
+ * The context the page's images are looked up through: the plugin's own,
+ * where the caller may read the media library, and otherwise one that finds
+ * no media, so an id the caller sends never answers with a file they may not
+ * read.
+ */
+export function mediaReadFor<C extends PluginContext>(
+  ctx: C,
+  mayReadMedia: boolean
+): C {
+  if (mayReadMedia) return ctx;
+  return {
+    ...ctx,
+    services: {
+      ...ctx.services,
+      // The library's other reads kept, through its own object.
+      media: Object.create(ctx.services.media, {
+        findById: {
+          value: () =>
+            Promise.reject(
+              NextlyError.notFound({
+                logContext: { reason: "seo-resolve-media-not-readable" },
+              })
+            ),
+        },
+      }) as C["services"]["media"],
+    },
+  };
 }
 
 /** The type's declaration in the app's configuration, where it is there. */
@@ -231,7 +264,7 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
           logContext: { reason: "seo-resolve-not-a-target", slug: body.slug },
         });
       }
-      if (!(await mayEdit(ctx, body))) {
+      if (!(await mayOpen(ctx, body))) {
         throw NextlyError.forbidden({
           logContext: { reason: "seo-resolve-not-an-editor", slug: body.slug },
         });
@@ -247,8 +280,12 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
         code: {},
         derived: {},
       };
+      const reading = mediaReadFor(
+        ctx,
+        (await ctx.caller?.can("read", "media")) === true
+      );
       const rules = await readRules(ctx, locale);
-      const levels = await levelsOf(ctx, input, rules);
+      const levels = await levelsOf(reading, input, rules);
       const declaration = declarationOf(ctx, body);
       const answer: SeoTabContext = {
         levels,
@@ -260,7 +297,7 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
       if (setup.fields.includes(STRUCTURED_DATA_FIELD)) {
         // Read for the document as typed, its own choice of type included.
         answer.structuredData = await tabStructuredData(
-          ctx,
+          reading,
           {
             ...input,
             source:

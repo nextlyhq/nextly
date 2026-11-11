@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-import { text } from "nextly";
+import { select, text } from "nextly";
 import type { FieldConfig } from "nextly";
 import { describe, expect, it } from "vitest";
 
@@ -262,6 +262,23 @@ describe("the SEO tab and fields of a project's own", () => {
         ],
       });
       expect(plugin.contributes?.admin, JSON.stringify(admin)).toBeUndefined();
+    }
+  });
+
+  it("leaves a group whose fields are of another type than the tab writes", () => {
+    for (const metaTitle of [
+      select({
+        name: "metaTitle",
+        options: [{ label: "A", value: "a" }],
+      }),
+      text({ name: "metaTitle", hasMany: true }),
+    ]) {
+      const plugin = seoPlugin({
+        collections: ["pages"],
+        sitemap: false,
+        fields: [metaTitle, text({ name: "metaDescription" })],
+      });
+      expect(plugin.contributes?.admin).toBeUndefined();
     }
   });
 

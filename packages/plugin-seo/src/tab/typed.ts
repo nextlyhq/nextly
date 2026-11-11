@@ -21,7 +21,7 @@ import type { Levels } from "../resolver/order";
 export const SEO_GROUP = "seo";
 
 /** The `seo` group's values a person types, which make the page level. */
-export const TYPED_SEO_FIELDS = [
+const TYPED_SEO_FIELDS = [
   "metaTitle",
   "metaDescription",
   "socialTitle",

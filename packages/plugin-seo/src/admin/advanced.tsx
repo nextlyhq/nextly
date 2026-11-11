@@ -41,6 +41,8 @@ export interface AdvancedProps {
   names: SourceNames;
   chosenImage: ChosenImage | undefined;
   writable: boolean;
+  /** Why a value was refused when the page was saved, by field. */
+  errors: Partial<Record<SeoPanelField, string>>;
   /** How many of the page's problems are in this section. */
   problemCount: number;
   defaultOpen: boolean;
@@ -50,7 +52,15 @@ export interface AdvancedProps {
 }
 
 export function AdvancedSection(props: AdvancedProps): ReactNode {
-  const [open, setOpen] = useState(props.defaultOpen);
+  // A value refused at save is inside, so the section opens to show it.
+  const refused = Object.entries(props.errors).some(
+    ([field, message]) =>
+      Boolean(message) && field !== "metaTitle" && field !== "metaDescription"
+  );
+  const [open, setOpen] = useState(props.defaultOpen || refused);
+  useEffect(() => {
+    if (refused) setOpen(true);
+  }, [refused]);
   const id = useId();
   const rows = advancedRows(props);
   // Nothing to put under it where the group declares only the two fields.
@@ -158,6 +168,7 @@ function StructuredDataRow({
   values,
   context,
   writable,
+  errors,
   onSet,
 }: AdvancedProps): ReactNode {
   const id = useId();
@@ -166,6 +177,7 @@ function StructuredDataRow({
   const chosen = typedText(values.structuredDataType);
   return (
     <Row
+      error={errors.structuredDataType}
       label="Structured data type"
       labelId={`${id}-label`}
       help="Tells Google what kind of page this is, so it can show details like the author and date. Only types Google still shows are offered."
@@ -266,12 +278,15 @@ function Row({
   labelId,
   help,
   control,
+  error,
   children,
 }: {
   label: string;
   labelId?: string;
   help: string;
   control?: ReactNode;
+  /** Why the row's value was refused at save, where it was. */
+  error?: string | undefined;
   children?: ReactNode;
 }): ReactNode {
   return (
@@ -287,6 +302,14 @@ function Row({
       {control ?? <span />}
       {children === undefined ? null : (
         <div className="col-span-full grid gap-2">{children}</div>
+      )}
+      {error && (
+        <p
+          role="alert"
+          className="col-span-full m-0 text-xs font-medium text-danger-text"
+        >
+          {error}
+        </p>
       )}
     </div>
   );
@@ -316,10 +339,16 @@ function RowButton({
   );
 }
 
-function HideRow({ values, writable, onSet }: AdvancedProps): ReactNode {
+function HideRow({
+  values,
+  writable,
+  errors,
+  onSet,
+}: AdvancedProps): ReactNode {
   const label = "Hide this page from search";
   return (
     <Row
+      error={errors.noindex}
       label={label}
       help="Search engines won't list it, and it leaves the sitemap. Anyone with the link can still open it."
       control={
@@ -343,6 +372,7 @@ function OfficialAddressRow({
   values,
   context,
   writable,
+  errors,
   onSet,
 }: AdvancedProps): ReactNode {
   const typed = typedText(values.canonical);
@@ -371,6 +401,7 @@ function OfficialAddressRow({
   const own = context?.levels.address;
   return (
     <Row
+      error={errors.canonical ?? errors.canonicalElsewhere}
       label="Official address"
       help="The one address search engines should credit for this page. Leave it automatic unless the article first appeared on another site."
       control={
@@ -523,6 +554,7 @@ function SharedTitleRow({
   answer,
   context,
   writable,
+  errors,
   onSet,
 }: AdvancedProps): ReactNode {
   const has = (name: string) =>
@@ -547,6 +579,7 @@ function SharedTitleRow({
   const typed = typedText(values.socialTitle);
   return (
     <Row
+      error={errors.socialTitle ?? errors.socialDescription}
       label={label}
       help="Shared links use the Google title. Turn this on only if you want a different one on LinkedIn, Slack and others."
       control={
@@ -657,6 +690,7 @@ function ShareImageRow({
   chosenImage,
   names,
   writable,
+  errors,
   onSet,
   onChooseImage,
 }: AdvancedProps): ReactNode {
@@ -675,6 +709,7 @@ function ShareImageRow({
     );
   return (
     <Row
+      error={errors.ogImage}
       label="Share image"
       help="The picture shown when someone shares this page on LinkedIn, X, Slack and others."
       control={choose}

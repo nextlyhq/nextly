@@ -10,12 +10,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sent = vi.hoisted(() => [] as { body: unknown }[]);
 /** Whether the route answers at once, or never, as a slow read stays open. */
-const route = vi.hoisted(() => ({ answers: true }));
+const route = vi.hoisted(() => ({
+  answers: true,
+  value: undefined as unknown,
+}));
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute: (request: { body: unknown }) => {
     sent.push({ body: request.body });
     return route.answers
-      ? Promise.resolve(undefined)
+      ? Promise.resolve(route.value)
       : new Promise<undefined>(() => {});
   },
 }));
@@ -28,6 +31,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   sent.length = 0;
   route.answers = true;
+  route.value = undefined;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -80,5 +84,21 @@ describe("what the SEO tab asks its route", () => {
     await act(() => vi.advanceTimersByTimeAsync(300));
     expect(sent).toHaveLength(2);
     expect(sent[1]?.body).toMatchObject({ document: { title: "Post" } });
+  });
+
+  it("forgets another document's levels when it moves to a new one", async () => {
+    route.value = { levels: {}, typeLabel: "Post" };
+    const document = { title: "P" };
+    const { result, rerender } = renderHook(
+      ({ target }) => useSeoTabContext(target, document),
+      { initialProps: { target: TARGET } }
+    );
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(result.current.context).toEqual(route.value);
+
+    route.answers = false;
+    rerender({ target: { ...TARGET, locale: "es" } });
+    expect(result.current.context).toBeUndefined();
+    expect(result.current.status).toBe("loading");
   });
 });

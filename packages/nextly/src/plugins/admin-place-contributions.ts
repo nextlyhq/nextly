@@ -92,6 +92,9 @@ const ROUTE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 /** The edit pages, whose tabs may edit the document's own fields. */
 const DOCUMENT_PLACES = new Set(["collection.edit", "single.edit"]);
 
+/** The fields an edit page draws itself, whatever tab is open. */
+const PAGE_DRAWN = new Set(["title", "slug"]);
+
 /** A top-level field's name. */
 const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -238,9 +241,13 @@ function tabFieldsProblem(fields: unknown, place: unknown): string | undefined {
   const named = (fields as unknown[]).find(
     name => typeof name !== "string" || !FIELD_NAME.test(name)
   );
-  return named === undefined
+  if (named !== undefined) {
+    return `its \`fields\` names ${JSON.stringify(named)}, which is not a top-level field's name`;
+  }
+  const identity = (fields as string[]).find(name => PAGE_DRAWN.has(name));
+  return identity === undefined
     ? undefined
-    : `its \`fields\` names ${JSON.stringify(named)}, which is not a top-level field's name`;
+    : `its \`fields\` names "${identity}", which the edit page draws itself above its tabs`;
 }
 
 /** What makes `singles` unusable here, or `undefined`. */

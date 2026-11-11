@@ -63,6 +63,11 @@ export interface SeoPanelProps {
   onChooseImage?: () => void;
   /** Whether Advanced starts open. Closed on a real page. */
   defaultAdvancedOpen?: boolean;
+  /**
+   * Which document and language the values are of: another one lets go of
+   * what was being typed under Advanced and not stored yet.
+   */
+  documentKey?: string;
 }
 
 /** The values whose problems the Advanced section holds. */
@@ -113,6 +118,8 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
         onChange={next => onSet("metaDescription", next)}
       />
       <AdvancedSection
+        key={props.documentKey}
+        errors={errors ?? {}}
         values={values}
         answer={answer}
         context={context}

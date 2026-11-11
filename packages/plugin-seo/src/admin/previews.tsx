@@ -81,6 +81,12 @@ export function PreviewCard({
         aria-labelledby={`${id}-${kind}`}
         className="@container px-5 pt-[18px] pb-5"
       >
+        {status === "failed" && answer !== undefined ? (
+          <p className="m-0 mb-3 text-xs text-warning-text">
+            The automatic values could not be read again just now. This shows
+            the last ones read.
+          </p>
+        ) : null}
         {answer === undefined || site === undefined ? (
           <p className="m-0 text-[13px] text-muted-foreground">
             {status === "failed"
