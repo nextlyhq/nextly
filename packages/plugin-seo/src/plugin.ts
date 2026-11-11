@@ -25,6 +25,7 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
+import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
 import { keepSeoContext } from "./not-found/report";
 import { listPages, type ListedPagesService } from "./outputs/listing";
@@ -374,6 +375,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     name: "seo",
     label: "SEO",
     fields: seoFields,
+    // Kept per language wherever the content is translated, so each language
+    // has its own title, description and canonical; on a type that is not
+    // translated, one value as before.
+    localized: true,
   });
 
   // Dedupe once: a repeated slug would make the schema-extend fold add `seo`
@@ -423,17 +428,17 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       notFoundCollection(),
       problemsCollection(),
     ],
-    // Every page's head, worked out by the one order of who wins, its
-    // social card completed, and its structured data, worked out from that
-    // same answer and the settings' brand facts, with the plugin's options
-    // where the settings say nothing.
+    // Every page's head, worked out by the one order of who wins, with its
+    // links to its other languages, its social card completed, and its
+    // structured data, worked out from that same answer and the settings'
+    // brand facts, with the plugin's options where the settings say nothing.
     services: {
       pageMetadata: ctx =>
         withStructuredData(
           ctx,
           withSocialCard(
             ctx,
-            seoPageMetadata(ctx, readRules),
+            withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
             readSocialCardRules
           ),
           structuredDataFromSettings(readStructuredDataRules)
