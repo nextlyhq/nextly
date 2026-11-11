@@ -14,10 +14,7 @@
 import type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import {
-  BLOCKS_LIST_ALLOW_PARAM,
-  BLOCKS_LIST_ROUTE_PATH,
-} from "./blocks-list-contract";
+import { BLOCKS_LIST_ROUTE_PATH } from "./blocks-list-contract";
 import {
   blocksListRoute,
   listAcceptedBlocks,
@@ -191,16 +188,20 @@ describe("the route", () => {
     each => each.path === BLOCKS_LIST_ROUTE_PATH
   );
 
-  it("is contributed as a GET, for signed-in callers only", () => {
-    expect(route?.method).toBe("GET");
+  it("is contributed as a POST that changes nothing, for signed-in callers only", () => {
+    // A POST because the allow-list asked about need not fit in a URL.
+    expect(route?.method).toBe("POST");
     // Secure by default: not public, and no permission beyond signing in.
     expect(route?.public).not.toBe(true);
     expect(route?.requiredPermission).toBeUndefined();
   });
 
-  const ask = async (query: string) => {
+  const ask = async (body: unknown) => {
     const response = await blocksListRoute(registry).handler(
-      new Request(`http://localhost/x${query}`)
+      new Request("http://localhost/x", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
     );
     return (await response.json()) as {
       items: { name: string }[];
@@ -208,11 +209,8 @@ describe("the route", () => {
     };
   };
 
-  const allowQuery = (allow: unknown) =>
-    `?${BLOCKS_LIST_ALLOW_PARAM}=${encodeURIComponent(JSON.stringify(allow))}`;
-
-  it("reads the allow-list from its query, as a JSON array", async () => {
-    const body = await ask(allowQuery(["core/heading", "acme/*"]));
+  it("reads the allow-list from its body", async () => {
+    const body = await ask({ allow: ["core/heading", "acme/*"] });
     expect(body.items.map(item => item.name)).toEqual([
       "acme/hero",
       "core/heading",
@@ -220,29 +218,38 @@ describe("the route", () => {
     expect(body.meta.total).toBe(2);
   });
 
-  it("lists every block when the query names no allow-list, and none for an empty one", async () => {
-    expect((await ask("")).items).toHaveLength(4);
-    expect((await ask(allowQuery([]))).items).toEqual([]);
+  it("lists every block for a field naming no allow-list, and none for an empty one", async () => {
+    expect((await ask({ allow: null })).items).toHaveLength(4);
+    expect((await ask({ allow: [] })).items).toEqual([]);
   });
 
   it("keeps each entry as stored, splitting or trimming none, as a save judges it", async () => {
     // One entry holding a comma names no block, so a save keeps neither
     // heading nor hero: the listing must not read it as two.
-    expect((await ask(allowQuery(["core/heading,acme/hero"]))).items).toEqual(
+    expect((await ask({ allow: ["core/heading,acme/hero"] })).items).toEqual(
       []
     );
-    expect((await ask(allowQuery([" core/heading"]))).items).toEqual([]);
+    expect((await ask({ allow: [" core/heading"] })).items).toEqual([]);
   });
 
-  it("refuses an allow-list longer than it reads, or one that is not a list of names", async () => {
-    const tooMany = Array.from({ length: 201 }, (_, i) => `x/b${i}`);
-    for (const query of [
-      allowQuery(tooMany),
-      allowQuery("core/heading"),
-      allowQuery([1, 2]),
-      `?${BLOCKS_LIST_ALLOW_PARAM}=${encodeURIComponent("core/heading,acme/*")}`,
+  it("takes any allow-list the field may declare, however long", async () => {
+    // More entries, and longer ones, than a URL would carry.
+    const many = Array.from(
+      { length: 500 },
+      (_, i) => `x/${"b".repeat(300)}${i}`
+    );
+    const body = await ask({ allow: [...many, "core/heading"] });
+    expect(body.items.map(item => item.name)).toEqual(["core/heading"]);
+  });
+
+  it("refuses a body that is not an allow-list", async () => {
+    for (const body of [
+      {},
+      { allow: "core/heading" },
+      { allow: [1, 2] },
+      "core/heading",
     ]) {
-      await expect(ask(query)).rejects.toMatchObject({
+      await expect(ask(body)).rejects.toMatchObject({
         code: "VALIDATION_ERROR",
       });
     }

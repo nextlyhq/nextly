@@ -9,15 +9,21 @@
  * @module blocks-list-contract
  */
 
-/** Where the listing answers, under the plugin's own namespace. */
-export const BLOCKS_LIST_ROUTE_PATH = "/blocks";
+/**
+ * Where the listing answers, under the plugin's own namespace: a POST that
+ * changes nothing, because the allow-list it is asked about need not fit in a
+ * URL (a field may name any number of entries, each of any length).
+ */
+export const BLOCKS_LIST_ROUTE_PATH = "/blocks/accepted";
 
 /**
- * The one query parameter: a blocks field's allow-list as a JSON array of its
- * entries, sent exactly as stored, so the listing judges the policy a save
- * judges. Absent means the field accepts any block; `[]` means none.
+ * What the listing is asked: a blocks field's allow-list exactly as stored,
+ * or `null` for a field naming none, which accepts any block. An empty list
+ * accepts none.
  */
-export const BLOCKS_LIST_ALLOW_PARAM = "allow";
+export interface BlocksListRequest {
+  readonly allow: readonly string[] | null;
+}
 
 /** One prop of a block, as the editor's inspector names it. */
 export interface BlockListProp {

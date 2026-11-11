@@ -5,6 +5,11 @@
  * so any signed-in user or key may read it and nobody else, as with the
  * schema reads it sits beside. It answers code-defined block metadata only.
  *
+ * A POST that changes nothing: the allow-list it is asked about travels in
+ * the body because it need not fit in a URL. A field may name any number of
+ * entries, each of any length, and the listing takes whatever the field may
+ * declare, bounded only by the app's own request-body limit.
+ *
  * Which blocks a field accepts is decided by the engine's one reading of an
  * allow-list (`slotAdmits`), the same one the field's validator refuses a save
  * by, so the listing cannot offer a block a save would refuse, or hide one it
@@ -24,12 +29,11 @@ import { respondList } from "nextly";
 import { z } from "nextly/zod";
 
 import {
-  BLOCKS_LIST_ALLOW_PARAM,
   BLOCKS_LIST_ROUTE_PATH,
   type BlockListItem,
 } from "./blocks-list-contract";
+import { readBodyWith } from "./composition-route-kit";
 import { onePage } from "./loop-collections-route";
-import { parseRouteQuery } from "./route-query";
 
 /** What the listing reads: the running registry, unless a test hands its own. */
 export interface BlocksListReads {
@@ -42,33 +46,14 @@ const REGISTRY_READS: BlocksListReads = {
   sourceOf: getBlockSource,
 };
 
-/** At most this many allow-list entries, each at most this long. */
-const MAX_ENTRIES = 200;
-const MAX_ENTRY_LENGTH = 200;
-
-/** The entries of an allow-list, as a blocks field stores them. */
-const ALLOW_LIST = z.array(z.string().max(MAX_ENTRY_LENGTH)).max(MAX_ENTRIES);
-
 /**
- * The `allow` parameter: absent for "any block", else the field's allow-list
- * as a JSON array, read exactly as sent: no entry split, trimmed or dropped,
- * so the listing judges the very policy a save judges. Bounded, since it is
- * outside input; anything but an array of strings is refused.
+ * The body: the field's allow-list exactly as stored, or `null` for a field
+ * naming none. Read as sent, no entry split, trimmed or dropped, so the
+ * listing judges the very policy a save judges, and no cap of its own, so it
+ * takes every list the field accepts.
  */
-const QUERY_SCHEMA = z.object({
-  [BLOCKS_LIST_ALLOW_PARAM]: z
-    .string()
-    .max(MAX_ENTRIES * (MAX_ENTRY_LENGTH + 4) + 2)
-    .transform((value, ctx): unknown => {
-      try {
-        return JSON.parse(value) as unknown;
-      } catch {
-        ctx.addIssue({ code: "custom", message: "not a JSON array" });
-        return z.NEVER;
-      }
-    })
-    .pipe(ALLOW_LIST)
-    .optional(),
+const REQUEST_SCHEMA = z.object({
+  allow: z.array(z.string()).nullable(),
 });
 
 /**
@@ -111,21 +96,20 @@ export function listAcceptedBlocks(
 
 /** The route the plugin contributes. */
 export function blocksListRoute(reads: BlocksListReads = REGISTRY_READS): {
-  method: "GET";
+  method: "POST";
   path: string;
-  handler: (req: Request) => Response;
+  handler: (req: Request) => Promise<Response>;
 } {
   return {
-    method: "GET",
+    method: "POST",
     path: BLOCKS_LIST_ROUTE_PATH,
-    handler: req => {
-      const query = parseRouteQuery(
-        req.url,
-        [BLOCKS_LIST_ALLOW_PARAM],
-        QUERY_SCHEMA,
+    handler: async req => {
+      const { allow } = await readBodyWith(
+        req,
+        REQUEST_SCHEMA,
         "block listing"
       );
-      const items = listAcceptedBlocks(query[BLOCKS_LIST_ALLOW_PARAM], reads);
+      const items = listAcceptedBlocks(allow ?? undefined, reads);
       return respondList(items, onePage(items.length));
     },
   };

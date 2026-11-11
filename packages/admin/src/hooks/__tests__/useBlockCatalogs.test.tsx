@@ -1,7 +1,8 @@
 /**
- * The blocks each blocks field accepts are read from the Page Builder's
- * block listing: once per distinct allow-list, and a listing the admin cannot
- * reach is told apart from a read that failed.
+ * The blocks each blocks field accepts are asked of the Page Builder's block
+ * listing: once per distinct allow-list, sent exactly as stored; a listing the
+ * admin cannot reach is told apart from a read that failed, and an answer of
+ * another shape is never read as blocks.
  */
 import { QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -15,8 +16,10 @@ import {
 
 import { useBlockCatalogs } from "../useBlockCatalogs";
 
-const get = vi.hoisted(() => vi.fn());
-vi.mock("@admin/lib/api/protectedApi", () => ({ protectedApi: { get } }));
+const writePluginRoute = vi.hoisted(() => vi.fn());
+vi.mock("@admin/hooks/queries/usePluginRouteMutation", () => ({
+  writePluginRoute,
+}));
 
 function wrapper({ children }: { children: ReactNode }) {
   return (
@@ -31,38 +34,71 @@ function apiError(status: number): Error {
   return Object.assign(new Error(`status ${status}`), { status });
 }
 
+const states = (catalogs: ReadonlyMap<string, { state: string }>) =>
+  [...catalogs.values()].map(catalog => catalog.state).sort();
+
 describe("useBlockCatalogs", () => {
-  it("reads each allow-list once, and every block for a field naming none", async () => {
-    get.mockResolvedValue({ items: [], meta: { total: 0 } });
+  it("asks once per allow-list, exactly as stored, and for every block when a field names none", async () => {
+    writePluginRoute.mockResolvedValue({ items: [], meta: { total: 0 } });
     const lists = new Map<string, readonly string[] | undefined>([
       ["*", undefined],
-      ['["core/*","acme/hero"]', ["core/*", "acme/hero"]],
+      ['["core/heading,acme/hero"," x/y"]', ["core/heading,acme/hero", " x/y"]],
     ]);
     const { result } = renderHook(() => useBlockCatalogs(lists), { wrapper });
     await waitFor(() =>
-      expect([...result.current.values()].map(c => c.state)).toEqual([
-        "loaded",
-        "loaded",
+      expect(states(result.current)).toEqual(["loaded", "loaded"])
+    );
+    expect(writePluginRoute.mock.calls.map(([call]) => call)).toEqual(
+      expect.arrayContaining([
+        {
+          plugin: "@nextlyhq/plugin-page-builder",
+          path: "/blocks/accepted",
+          body: { allow: null },
+        },
+        {
+          plugin: "@nextlyhq/plugin-page-builder",
+          path: "/blocks/accepted",
+          body: { allow: ["core/heading,acme/hero", " x/y"] },
+        },
       ])
     );
-    expect(get.mock.calls.map(([path]) => path).sort()).toEqual([
-      "/plugins/@nextlyhq/plugin-page-builder/blocks",
-      `/plugins/@nextlyhq/plugin-page-builder/blocks?allow=${encodeURIComponent('["core/*","acme/hero"]')}`,
-    ]);
+    expect(writePluginRoute).toHaveBeenCalledTimes(2);
   });
 
   it("says the listing is not there, apart from a failed read", async () => {
-    get.mockRejectedValueOnce(apiError(404));
-    get.mockRejectedValueOnce(apiError(500));
+    writePluginRoute.mockReset();
+    writePluginRoute.mockRejectedValueOnce(apiError(404));
+    writePluginRoute.mockRejectedValueOnce(apiError(500));
     const lists = new Map<string, readonly string[] | undefined>([
       ['["a/x"]', ["a/x"]],
       ['["b/y"]', ["b/y"]],
     ]);
     const { result } = renderHook(() => useBlockCatalogs(lists), { wrapper });
     await waitFor(() =>
-      expect(
-        [...result.current.values()].map(catalog => catalog.state).sort()
-      ).toEqual(["failed", "unavailable"])
+      expect(states(result.current)).toEqual(["failed", "unavailable"])
     );
+  });
+
+  it("reads an answer of another shape as a listing that could not be read", async () => {
+    writePluginRoute.mockReset();
+    // A renamed field: no `matchedBy` on the item.
+    writePluginRoute.mockResolvedValueOnce({
+      items: [
+        {
+          name: "core/heading",
+          label: "Heading",
+          description: "",
+          source: null,
+          matches: [],
+          props: [],
+        },
+      ],
+      meta: { total: 1 },
+    });
+    const lists = new Map<string, readonly string[] | undefined>([
+      ['["core/heading"]', ["core/heading"]],
+    ]);
+    const { result } = renderHook(() => useBlockCatalogs(lists), { wrapper });
+    await waitFor(() => expect(states(result.current)).toEqual(["failed"]));
   });
 });
