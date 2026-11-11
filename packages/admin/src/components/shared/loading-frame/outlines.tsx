@@ -47,6 +47,7 @@ import {
 import { TopBarPlace } from "@admin/components/layout/header/TopBarPlaces";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared/breadcrumbs";
+import { MEDIA_GRID_CLASSES } from "@admin/constants/media";
 import { cn } from "@admin/lib/utils";
 
 import { LOADING_FRAME_TIMES, useDelayedReveal } from "./delayed-reveal";
@@ -429,7 +430,8 @@ export function MediaOutline(): JSX.Element {
       <PageContainer>
         <div className="flex flex-col gap-8">
           <PageHeadOutline title="Media" actions={[112]} />
-          <div className="grid grid-cols-2 gap-4 @2xl/content:grid-cols-4 @5xl/content:grid-cols-6">
+          {/* The media grid's own classes, so each tile stands where a real one lands. */}
+          <div className={MEDIA_GRID_CLASSES}>
             {Array.from({ length: 12 }, (_, tile) => (
               <OutlineBar
                 key={tile}
