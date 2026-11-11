@@ -18,16 +18,37 @@ import type { FieldValues, Path, UseFormReturn } from "react-hook-form";
 import { fieldAdminGates } from "../entries/fields/field-admin-gates";
 
 import type { EditorRestoreSurface } from "./document-history-context";
-import { createEditorRestore } from "./editor-restore";
+import { createEditorRestore, type EditorRestore } from "./editor-restore";
 import { formFieldsOf } from "./snapshot-to-form-values";
 
+/**
+ * The restore a form's values go back through: one per form, shared by the
+ * history that puts values in and the save that names where they came from.
+ */
+export function useFormRestore<T extends FieldValues>(
+  form: UseFormReturn<T>
+): EditorRestore {
+  return useMemo(
+    () =>
+      createEditorRestore({
+        getValues: () => form.getValues(),
+        setValue: (name, value, options) =>
+          form.setValue(name as Path<T>, value as T[Path<T>], options),
+      }),
+    [form]
+  );
+}
+
 export function useEditorRestoreSurface<T extends FieldValues>({
+  restore,
   form,
   fields,
   readOnly,
   localized,
   language,
 }: {
+  /** The form's restore; see `useFormRestore`. */
+  restore: EditorRestore;
   form: UseFormReturn<T>;
   /** The content type's fields, as the form draws them. */
   fields: FieldConfig[];
@@ -48,15 +69,6 @@ export function useEditorRestoreSurface<T extends FieldValues>({
   useEffect(() => {
     readOnlyNow.current = readOnly;
   }, [readOnly]);
-  const restore = useMemo(
-    () =>
-      createEditorRestore({
-        getValues: () => form.getValues(),
-        setValue: (name, value, options) =>
-          form.setValue(name as Path<T>, value as T[Path<T>], options),
-      }),
-    [form]
-  );
 
   return useMemo(() => {
     const named = new Map(

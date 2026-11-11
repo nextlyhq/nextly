@@ -413,6 +413,7 @@ export function EntryForm({
 
   const {
     form,
+    formRestore,
     defaultValues,
     handleSubmit: submitEntry,
     writeStatus,
@@ -656,6 +657,7 @@ export function EntryForm({
   const restoreReadOnly = useRef(false);
   const editingLanguage = getLocale(locale)?.label;
   const editorRestore = useEditorRestoreSurface({
+    restore: formRestore,
     form,
     fields: allFields,
     readOnly: () => restoreReadOnly.current,
