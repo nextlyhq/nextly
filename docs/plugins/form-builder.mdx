@@ -408,6 +408,8 @@ async function send(formSlug: string, answers: Record<string, unknown>) {
 
 The token must be 16 to 128 letters, digits, `-` or `_` (`crypto.randomUUID()` is one). It is never stored with the submission. A submission that comes without a token, or with a malformed one, is accepted without the check, as a browser that cleared its data would be, and the server logs a warning so a form whose script does not send it is noticed.
 
+**Changing the setting counts earlier responses.** Choosing one per network, or changing to it from another setting, counts the submissions already stored by their stored address. Earlier responses count for one per email address too, once Settings offers it. Of several earlier submissions with the same value, the earliest keeps it. One per browser counts from when it is chosen, since no earlier token was kept. A small form is brought up to date before the save finishes. A large one is finished by the plugin's background sweep (`form-builder:one-response-keys`), which the job runner carries on. Until then each new submission is compared with the earlier ones directly, so nobody gets a second response in the meantime.
+
 If a form's setting changes while a submission is on its way, the submission is refused with "This form's settings changed while your response was being sent. Please send it again." and is judged by the new setting when it is sent again.
 
 ### Validation

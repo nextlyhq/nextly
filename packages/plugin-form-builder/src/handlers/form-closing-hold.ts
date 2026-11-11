@@ -46,7 +46,14 @@ import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
 import { closedMessageOf, pastClosingTime } from "../utils/form-closing";
 import { normalizeFormSettings } from "../utils/form-settings";
 
-import { holdsKeyFor, type KeyedSubmission } from "./one-response";
+import {
+  ALREADY_RESPONDED,
+  holdsKeyFor,
+  type KeyedSubmission,
+  keysBehind,
+  keyVersionOf,
+  responseKeyOf,
+} from "./one-response";
 
 /** The mark on a refusal for a closed form, for the caller to recognise it. */
 const FORM_CLOSED = "form-builder:form-closed";
@@ -66,6 +73,12 @@ interface HoldDeps {
 
 /** The mark on a refusal for a setting changed while the write was in flight. */
 const SETTINGS_CHANGED_MARK = "form-builder:settings-changed";
+
+/** The mark on a refusal for a person who has responded already. */
+const RESPONDED_MARK = "form-builder:responded";
+
+/** Rows read at a time when earlier submissions are compared one by one. */
+const COMPARE_PAGE = 200;
 
 /** What a submission refused for a setting changed in flight is told. */
 export const SETTINGS_CHANGED =
@@ -156,7 +169,7 @@ async function holdFormClosing(
   if (submission.takesAPlace) {
     await holdLimit(deps.own, write, slugs, formId, locked);
   }
-  await holdResponseKey(deps.digests, write, formId, locked.settings);
+  await holdResponseKey(deps, write, slugs, formId, locked.settings);
 }
 
 /** Refuse a submission that takes the form past its limit, under the lock. */
@@ -201,25 +214,130 @@ function keyInPlay(settings: { oneResponse?: string }, row: unknown): boolean {
  * owed. The visitor sends it again, under the setting that applies.
  */
 async function holdResponseKey(
-  digests: Digests,
+  deps: HoldDeps,
   write: InTransactionContext,
+  slugs: FormLimitSlugs,
   formId: string,
   settings: Awaited<ReturnType<typeof formOf>>["settings"]
 ): Promise<void> {
-  if (
-    await holdsKeyFor(
-      () => digests,
-      settings,
-      write.data as KeyedSubmission & { responseKey?: unknown }
-    )
-  ) {
-    return;
+  const row = write.data as KeyedSubmission & { responseKey?: unknown };
+  if (!(await holdsKeyFor(() => deps.digests, settings, row))) {
+    throw changedRefusal(formId);
   }
-  throw NextlyError.conflict({
+  if (row.responseKey === null || row.responseKey === undefined) return;
+  await refuseEarlierResponse(deps, write, slugs, formId, settings);
+}
+
+/** The refusal for a key made under a setting the form has since left. */
+function changedRefusal(formId: string) {
+  return NextlyError.conflict({
     reason: "state",
     message: SETTINGS_CHANGED,
     logContext: { cause: SETTINGS_CHANGED_MARK, formId },
   });
+}
+
+/**
+ * Refuse a keyed submission when an earlier one holds its value without the
+ * key that would show it.
+ *
+ * One per network compares the stored address itself, every time: a form
+ * that took one response per network before keys were stored has earlier
+ * submissions with an address and no key. One per email compares the earlier
+ * answers while the form's keys are still being made for its current version
+ * (`keysBehind`), after a change of mode or Email field. Both run under the
+ * form's lock, so a submission stored meanwhile is counted.
+ */
+async function refuseEarlierResponse(
+  deps: HoldDeps,
+  write: InTransactionContext,
+  slugs: FormLimitSlugs,
+  formId: string,
+  settings: Awaited<ReturnType<typeof formOf>>["settings"]
+): Promise<void> {
+  const row = write.data as KeyedSubmission & { responseKey?: unknown };
+  const earlier = {
+    form: { equals: formId },
+    status: { not_equals: "spam" },
+    id: { not_equals: write.id },
+  };
+  const read = (where: Record<string, unknown>, limit: number, page = 1) =>
+    deps.own.listEntriesInTransaction(
+      write.transaction,
+      slugs.submissions,
+      { where, pagination: { limit, page }, depth: 0 },
+      { lock: "none" }
+    );
+  if (settings.oneResponse === "ip" && typeof row.ipAddress === "string") {
+    const { pagination } = await read(
+      { ...earlier, ipAddress: { equals: row.ipAddress } },
+      1
+    );
+    if (pagination.total > 0) throw respondedRefusal(formId);
+    return;
+  }
+  if (settings.oneResponse === "email" && keysBehind(settings)) {
+    await refuseEarlierEmail(deps, formId, settings, row.responseKey, page =>
+      read(earlier, COMPARE_PAGE, page)
+    );
+  }
+}
+
+/**
+ * Compare a new submission's key with the key each earlier submission's
+ * answer would have, a page at a time.
+ */
+async function refuseEarlierEmail(
+  deps: HoldDeps,
+  formId: string,
+  settings: Awaited<ReturnType<typeof formOf>>["settings"],
+  key: unknown,
+  page: (n: number) => Promise<{ data: unknown[] }>
+): Promise<void> {
+  for (let n = 1; ; n++) {
+    const { data } = await page(n);
+    for (const other of data as KeyedSubmission[]) {
+      if ((await responseKeyOf(() => deps.digests, settings, other)) === key) {
+        throw respondedRefusal(formId);
+      }
+    }
+    if (data.length < COMPARE_PAGE) return;
+  }
+}
+
+/** The refusal for a person who has responded to the form already. */
+function respondedRefusal(formId: string) {
+  return NextlyError.conflict({
+    reason: "state",
+    message: ALREADY_RESPONDED,
+    logContext: { cause: RESPONDED_MARK, formId },
+  });
+}
+
+/**
+ * Refuse a key written to a stored submission (an edit that moves its key,
+ * or the plugin giving it one) when the key was made for a version the form
+ * has left: the form's mode or Email field changed after it was made. The
+ * form's lock orders it after the change, so the version it reads is the one
+ * committed.
+ */
+async function holdKeyWrite(
+  own: OwnCollections,
+  write: InTransactionContext,
+  slugs: FormLimitSlugs
+): Promise<void> {
+  if (write.operation !== "update") return;
+  const key = (write.data as { responseKey?: unknown } | undefined)
+    ?.responseKey;
+  const before = (write.originalData as { responseKey?: unknown } | undefined)
+    ?.responseKey;
+  if (typeof key !== "string" || key === before) return;
+  const formId = formIdOf((write.data as { form?: unknown }).form);
+  if (formId === undefined) return;
+  const { settings } = await formOf(own, write, slugs, formId, "update");
+  if (keyVersionOf(key) !== (settings.oneResponseVersion ?? 0)) {
+    throw changedRefusal(formId);
+  }
 }
 
 /** Hold every form's closing on the submissions this plugin stores. */
@@ -231,22 +349,27 @@ export function registerFormClosing(
     own: ctx.services.ownCollections,
     digests: ctx.security.digests,
   };
-  ctx.hooks.onInTransaction(slugs.submissions, write =>
-    holdFormClosing(deps, write, slugs)
-  );
+  ctx.hooks.onInTransaction(slugs.submissions, async write => {
+    await holdFormClosing(deps, write, slugs);
+    await holdKeyWrite(deps.own, write, slugs);
+  });
 }
 
 /**
  * Which of the hold's refusals `error` is, or one it was made from: a closed
- * form's, or a setting changed while the submission was in flight.
+ * form's, a setting changed while the submission was in flight, or a person
+ * who has responded already.
  */
-export function heldRefusal(error: unknown): "closed" | "changed" | undefined {
+export function heldRefusal(
+  error: unknown
+): "closed" | "changed" | "responded" | undefined {
   let current: unknown = error;
   for (let depth = 0; depth < 10 && current; depth += 1) {
     if (current instanceof NextlyError) {
       const cause = current.logContext?.cause;
       if (cause === FORM_CLOSED) return "closed";
       if (cause === SETTINGS_CHANGED_MARK) return "changed";
+      if (cause === RESPONDED_MARK) return "responded";
     }
     current = (current as { cause?: unknown }).cause;
   }

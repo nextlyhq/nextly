@@ -38,6 +38,54 @@ export const BROWSER_TOKEN_FIELD = "nextly-browser-token";
  */
 const BROWSER_KEY_PREFIX = "browser:";
 
+/** The settings a submission's key is made under. */
+export type KeySettings = Pick<
+  FormSettings,
+  "oneResponse" | "oneResponseField" | "oneResponseVersion"
+>;
+
+/**
+ * What a key made under the form's one-response `version` starts with. The
+ * version moves on each time the form changes how it tells people apart (its
+ * mode, or the Email field it reads), so every key made before the change
+ * stops matching a new one without a write to any earlier submission; the
+ * keys of earlier submissions are then made again for the new version
+ * (`one-response-rebuild`). Version 0 has no prefix, so keys stored before
+ * versions were written keep matching.
+ */
+function keyPrefixOf(version: number | undefined): string {
+  return version !== undefined && version > 0 ? `v${version}:` : "";
+}
+
+/** The one-response version a stored key was made under. */
+export function keyVersionOf(key: string): number {
+  const match = /^v(\d+):/.exec(key);
+  return match ? Number(match[1]) : 0;
+}
+
+/**
+ * Whether the form's earlier submissions are still being given keys for its
+ * current version (`one-response-rebuild`). Unset reads as up to date: a form
+ * saved before the version was recorded has keys for version 0.
+ */
+export function keysBehind(
+  settings: Pick<FormSettings, "oneResponseVersion" | "oneResponseKeyedVersion">
+): boolean {
+  const keyed = settings.oneResponseKeyedVersion;
+  return keyed !== undefined && keyed < (settings.oneResponseVersion ?? 0);
+}
+
+/**
+ * What tells one person from another on a form: its mode, and for one per
+ * email the field it reads. A change to it is a change of version.
+ */
+export function oneResponseIdentityOf(
+  settings: Pick<FormSettings, "oneResponse" | "oneResponseField">
+): string {
+  const mode = settings.oneResponse ?? "off";
+  return mode === "email" ? `email:${settings.oneResponseField ?? ""}` : mode;
+}
+
 /**
  * A browser token as the form's script makes one: a random identifier
  * (`crypto.randomUUID()` is one), letters, digits, `-` and `_`. Anything else
@@ -70,9 +118,15 @@ export function publicOneResponse(
     : undefined;
 }
 
-/** Whether `key` was made for one response per browser. */
-function isBrowserKey(key: unknown): key is string {
-  return typeof key === "string" && key.startsWith(BROWSER_KEY_PREFIX);
+/** Whether `key` was made for one response per browser, under `version`. */
+function isBrowserKey(
+  key: unknown,
+  version: number | undefined
+): key is string {
+  return (
+    typeof key === "string" &&
+    key.startsWith(`${keyPrefixOf(version)}${BROWSER_KEY_PREFIX}`)
+  );
 }
 
 /** The parts of a submission its key is made from. */
@@ -126,14 +180,17 @@ function answerOf(data: unknown, field: string | undefined): unknown {
 export async function responseKeyOf(
   /** Read only when a key is made: most forms allow several responses. */
   digests: () => Digests,
-  settings: Pick<FormSettings, "oneResponse" | "oneResponseField">,
+  settings: KeySettings,
   submission: KeyedSubmission
 ): Promise<string | null> {
   if (submission.status === "spam") return null;
+  const prefix = keyPrefixOf(settings.oneResponseVersion);
   switch (settings.oneResponse) {
     case "ip": {
       const address = textOf(submission.ipAddress);
-      return address === undefined ? null : digests().digest("ip", address);
+      return address === undefined
+        ? null
+        : `${prefix}${await digests().digest("ip", address)}`;
     }
     case "email": {
       const email = textOf(
@@ -141,13 +198,13 @@ export async function responseKeyOf(
       );
       return email === undefined
         ? null
-        : digests().digest("email", email.toLowerCase());
+        : `${prefix}${await digests().digest("email", email.toLowerCase())}`;
     }
     case "browser": {
       const token = submission.browserToken;
       return token === undefined
         ? null
-        : `${BROWSER_KEY_PREFIX}${await digests().digest("browser", token)}`;
+        : `${prefix}${BROWSER_KEY_PREFIX}${await digests().digest("browser", token)}`;
     }
     default:
       return null;
@@ -163,12 +220,12 @@ export async function responseKeyOf(
  */
 export async function holdsKeyFor(
   digests: () => Digests,
-  settings: Pick<FormSettings, "oneResponse" | "oneResponseField">,
+  settings: KeySettings,
   row: KeyedSubmission & { responseKey?: unknown }
 ): Promise<boolean> {
   const key = row.responseKey ?? null;
   if (settings.oneResponse === "browser" && row.status !== "spam") {
-    return key === null || isBrowserKey(key);
+    return key === null || isBrowserKey(key, settings.oneResponseVersion);
   }
   return key === (await responseKeyOf(digests, settings, row));
 }
@@ -193,7 +250,7 @@ export function touchesResponseKey(patch: KeyedSubmission): boolean {
  */
 export async function responseKeyAfterUpdate(input: {
   digests: () => Digests;
-  settings: Pick<FormSettings, "oneResponse" | "oneResponseField">;
+  settings: KeySettings;
   patch: KeyedSubmission;
   stored: (KeyedSubmission & { responseKey?: unknown }) | undefined;
   /** Whether another submission of the form holds `key`. */
@@ -203,7 +260,11 @@ export async function responseKeyAfterUpdate(input: {
 }): Promise<string | null> {
   const { patch, stored } = input;
   if (input.settings.oneResponse === "browser") {
-    return browserKeyAfterUpdate(patch, stored);
+    return browserKeyAfterUpdate(
+      patch,
+      stored,
+      input.settings.oneResponseVersion
+    );
   }
   // What the update leaves out is as stored; what it clears (null) is gone.
   const after = (field: keyof KeyedSubmission) =>
@@ -244,10 +305,12 @@ export async function responseKeyAfterUpdate(input: {
  */
 function browserKeyAfterUpdate(
   patch: KeyedSubmission,
-  stored: (KeyedSubmission & { responseKey?: unknown }) | undefined
+  stored: (KeyedSubmission & { responseKey?: unknown }) | undefined,
+  version: number | undefined
 ): string | null {
   const status = patch.status === undefined ? stored?.status : patch.status;
   if (status === "spam") return null;
+  // A key from an earlier version compares with nothing now: not kept.
   const key = stored?.responseKey;
-  return isBrowserKey(key) ? key : null;
+  return isBrowserKey(key, version) ? key : null;
 }
