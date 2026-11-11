@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-Nextly loads the version comparison engine and the terminal prompt for column renames only when a request or a config reload uses them, so a server that serves neither loads less at start.
+Nextly loads less at start. The version comparison engine, the terminal prompt for column renames, the listing of every page's public address and the route handler's configuration load only when a request or a config reload uses them, and the CLI's `migrate:fresh` and `users:create-admin` load the database seeders only when they seed.

@@ -228,7 +228,11 @@ export const COMPONENTS_METHODS: Record<
       // The site's own field groups or the plugins', as conditions on the
       // same query. Field groups carry no per-reader allowlist, so the
       // plugins' list is the plugins' slugs.
-      const slugLists = slugListsForOwner(owner, "fieldGroups", undefined);
+      const slugLists = await slugListsForOwner(
+        owner,
+        "fieldGroups",
+        undefined
+      );
       const result = await svc.registry.listComponents({
         source: p.source as "code" | "ui" | undefined,
         // 🔴 Filtered by the DATABASE, not by the caller narrowing a page it was already sent.
