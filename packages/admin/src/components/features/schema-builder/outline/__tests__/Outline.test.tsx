@@ -15,6 +15,7 @@ import {
   nodePlacement,
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
+import type { FieldDefinition } from "@admin/types/collection";
 
 import {
   nestedFixtureFieldGroups,
@@ -203,11 +204,32 @@ describe("the outline of the nested fixture", () => {
     expect(on.setHidden).toHaveBeenCalledWith("f-internal-note", false);
   });
 
+  it("shows each accepted field group's own count, on its own row", () => {
+    renderOutline({
+      nodes: buildOutline(
+        [
+          {
+            id: "f-zone",
+            name: "zone",
+            label: "Zone",
+            type: "component",
+            components: ["seo", "social"],
+          } as BuilderField,
+        ],
+        { entityReadOnly: false, fieldGroups: nestedFixtureFieldGroups() }
+      ),
+    });
+    expect(row("zone/@seo")).toHaveTextContent("Shared · used in 3 places");
+    expect(row("zone/@social")).toHaveTextContent("Shared · used in 1 place");
+    // The field itself stands for neither, so it carries no count.
+    expect(row("zone")).not.toHaveTextContent("used in");
+  });
+
   it("a field group's fields, read-only, with its link", async () => {
     const { on } = renderOutline();
     const field = row("seo/meta_title") as HTMLElement;
     expect(field).toHaveTextContent("Defined in the field group SEO");
-    expect(row("seo")).toHaveTextContent("Shared");
+    expect(row("seo")).toHaveTextContent("Shared · used in 3 places");
     field.focus();
     await userEvent.keyboard("{Shift>}{F10}{/Shift}");
     await userEvent.click(
@@ -575,6 +597,55 @@ describe("the form preview's fields", () => {
       />
     );
     expect(screen.getByLabelText(/Banner text/)).toHaveValue("Welcome");
+  });
+
+  it("draws a field group placed directly inside another, as the entry form now does", () => {
+    const groups = new Map([
+      [
+        "seo",
+        {
+          slug: "seo",
+          label: "SEO",
+          fields: [
+            { name: "meta_title", label: "Meta title", type: "text" },
+            {
+              name: "social",
+              label: "Social",
+              type: "component",
+              component: "social",
+            },
+          ] as FieldDefinition[],
+        },
+      ],
+      [
+        "social",
+        {
+          slug: "social",
+          label: "Social",
+          fields: [
+            { name: "handle", label: "Handle", type: "text" },
+          ] as FieldDefinition[],
+        },
+      ],
+    ]);
+    render(
+      <FormPreview
+        kind="collection"
+        fields={[
+          {
+            id: "f-seo",
+            name: "seo",
+            label: "SEO",
+            type: "component",
+            component: "seo",
+          } as BuilderField,
+        ]}
+        fieldGroups={groups}
+        fieldGroupsLoad="loaded"
+      />
+    );
+    expect(screen.getByLabelText(/Meta title/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Handle/)).toBeInTheDocument();
   });
 
   it("says when the field groups it uses could not be loaded", () => {

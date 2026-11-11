@@ -29,15 +29,30 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk")>()),
   publicAddressOf: async () => ({ status: "resolved", path: "/blog/hello" }),
   languageAddressOf: async (path: string) => ({ status: "resolved", path }),
+  // The SEO settings as stored: nothing saved unless a test saves some, so
+  // the plugin's options answer.
+  getCachedNextly: async () => ({ findSingle: async () => savedSettings }),
 }));
 
-/** A context whose content types declare no relationships. */
+/** The SEO settings a test has saved. */
+let savedSettings: Record<string, unknown> = {};
+
+/**
+ * A context whose content types declare no relationships, on a site whose
+ * address record holds no page's address yet.
+ */
 const ctx = {
+  self: { collections: {} },
+  config: {},
+  publicAddresses: { defaultLanguage: async () => "en" },
   services: {
+    ownCollections: { listEntries: async () => ({ data: [] }) },
     collections: {
       getCollection: async () => ({ schemaDefinition: { fields: [] } }),
     },
   },
+  // The plugin's own Singles, none renamed by the host.
+  self: { singles: {}, collections: {} },
 } as unknown as PluginContext;
 
 const input: PageMetadataInput = {
@@ -140,6 +155,24 @@ describe("the SEO tab and the problem list", () => {
         problem => problem.message
       )
     ).toEqual(["Missing: price.", "Missing: availability."]);
+  });
+});
+
+describe("the problem list with no readers given", () => {
+  it("reads the type the SEO settings chose, as the page's own markup does", async () => {
+    savedSettings = {
+      productionAddresses: ["https://example.com"],
+      structuredData: { posts: { type: "product" } },
+    };
+    try {
+      expect(
+        (await structuredDataProblems(ctx, input)).map(
+          problem => problem.message
+        )
+      ).toEqual(["Missing: price.", "Missing: availability."]);
+    } finally {
+      savedSettings = {};
+    }
   });
 });
 

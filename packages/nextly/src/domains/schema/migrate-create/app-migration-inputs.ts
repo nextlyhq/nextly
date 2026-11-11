@@ -38,7 +38,7 @@ import {
   resolveComponentTableName,
 } from "../utils/resolve-table-name";
 
-import { assertMigrationAddresses } from "./addresses";
+import { assertMigrationAddresses, type JudgedEntity } from "./addresses";
 import {
   compileAppStreamTables,
   hasAppStreamTables,
@@ -46,7 +46,7 @@ import {
 } from "./app-stream";
 import { toMinimalEntities, withBuilderSettingsAll } from "./config-entities";
 import type { EntitySettingsRecord, SettingsObject } from "./entity-settings";
-import { removedCollectionTables, type MinimalConfigEntity } from "./generate";
+import { removedEntityTables, type MinimalConfigEntity } from "./generate";
 import { assertMigrationSiblingFields } from "./sibling-fields";
 import {
   EMPTY_SNAPSHOT,
@@ -82,21 +82,21 @@ export interface AppMigrationInputsArgs {
    */
   manifest?: UiSchemaManifest;
   /**
-   * Collections the database already holds that no snapshot records: a
-   * Schema Builder save adopting a table an earlier version made. Their
-   * addresses and sibling fields were there before those rules, so the checks
-   * judge them as recorded, as a database's own check judges a table it holds.
-   * `migrate:create` reads no database and passes none.
+   * Entities the database already holds that no snapshot records, each with
+   * its kind: a Schema Builder save adopting a table an earlier version made.
+   * Their addresses and sibling fields were there before those rules, so the
+   * checks judge them as recorded, as a database's own check judges a table it
+   * holds. `migrate:create` reads no database and passes none.
    */
-  held?: readonly UiSchemaEntity[];
+  held?: readonly HeldEntity[];
   /**
-   * The one collection a save writes its migration for: the address check
-   * judges it alone as new, against every other entity's address, and the
-   * sibling-field check judges its fields alone, since the migration changes
-   * nothing else. Absent, every entity is judged, as `migrate:create` judges
-   * them.
+   * The one entity a save writes its migration for, by kind and slug: the
+   * address check judges it alone as new, against every other entity's
+   * address, and the sibling-field check judges its fields alone, since the
+   * migration changes nothing else. Absent, every entity is judged, as
+   * `migrate:create` judges them.
    */
-  judged?: string;
+  judged?: JudgedEntity;
   /** Absolute path to the migrations folder. */
   migrationsDir: string;
   dialect: SupportedDialect;
@@ -236,26 +236,30 @@ export async function appMigrationInputs(
   const latest = await loadLatestSnapshot(resolve(input.migrationsDir, "meta"));
 
   // Before the app stream compiles: a plugin hook still extending a removed
-  // collection's table would stop that compile with a bare "does not exist",
-  // where this names what the hook adds. A drop of a collection something
-  // still depends on is refused with the message a delete gets. The check and
-  // its readers are loaded only when the migration would drop a collection,
-  // which most runs do not.
-  const removedTables = removedCollectionTables({
+  // collection's, Single's or field group's table would stop that compile with
+  // a bare "does not exist", where this names what the hook adds. A drop of an
+  // entity something still depends on is refused with the message a delete
+  // gets. The check and its readers are loaded only when the migration would
+  // drop one, which most runs do not.
+  const removed = removedEntityTables({
     previous: latest?.data.snapshot ?? EMPTY_SNAPSHOT,
     collections,
     singles,
     components,
     dialect,
   });
-  if (removedTables.length > 0) {
-    const [{ assertRemovedCollectionsUnused }, { compileExtensionSchemaWith }] =
+  if (
+    removed.collections.length > 0 ||
+    removed.singles.length > 0 ||
+    removed.fieldGroups.length > 0
+  ) {
+    const [{ assertRemovedEntitiesUnused }, { compileExtensionSchemaWith }] =
       await Promise.all([
         import("./removed-collections"),
         import("../../collections/services/collection-dependents-schema"),
       ]);
-    await assertRemovedCollectionsUnused({
-      removedTables,
+    await assertRemovedEntitiesUnused({
+      removed,
       collections,
       singles,
       components,
@@ -311,27 +315,45 @@ export async function appMigrationInputs(
   };
 }
 
-/** `merged` narrowed to the judged collection, or whole without one. */
-function onlyJudged<T extends { collections: { slug: string }[] }>(
-  merged: T,
-  judged: string | undefined
-): T {
+/** An entity the database already holds that no snapshot records, and its kind. */
+export interface HeldEntity {
+  kind: JudgedEntity["kind"];
+  entity: UiSchemaEntity;
+}
+
+/** Where a snapshot records each kind's settings. */
+const RECORDED_UNDER = {
+  collection: "collections",
+  single: "singles",
+  fieldGroup: "fieldGroups",
+} as const;
+
+/** `merged` narrowed to the judged entity, or whole without one. */
+function onlyJudged<
+  T extends {
+    collections: { slug: string }[];
+    singles: { slug: string }[];
+    components: { slug: string }[];
+  },
+>(merged: T, judged: JudgedEntity | undefined): T {
   if (judged === undefined) return merged;
+  const keep = (kind: JudgedEntity["kind"], list: { slug: string }[]) =>
+    kind === judged.kind ? list.filter(e => e.slug === judged.slug) : [];
   return {
     ...merged,
-    collections: merged.collections.filter(c => c.slug === judged),
-    singles: [],
-    components: [],
+    collections: keep("collection", merged.collections),
+    singles: keep("single", merged.singles),
+    components: keep("fieldGroup", merged.components),
   };
 }
 
 /**
- * `latest` with each held collection recorded as its definition, for the
- * address and sibling-field checks alone: nothing is written from it.
+ * `latest` with each held entity recorded as its definition, under its kind,
+ * for the address and sibling-field checks alone: nothing is written from it.
  */
 function withHeld(
   latest: { data: SnapshotFile } | null,
-  held: readonly UiSchemaEntity[]
+  held: readonly HeldEntity[]
 ): { data: SnapshotFile } | null {
   if (held.length === 0) return latest;
   const data: SnapshotFile = latest?.data ?? {
@@ -344,16 +366,20 @@ function withHeld(
     singles: {},
     fieldGroups: {},
   };
-  const collections = { ...recorded.collections };
-  for (const entity of held) {
-    collections[entity.slug] ??= {
+  const entities = {
+    collections: { ...recorded.collections },
+    singles: { ...recorded.singles },
+    fieldGroups: { ...recorded.fieldGroups },
+  };
+  for (const { kind, entity } of held) {
+    entities[RECORDED_UNDER[kind]][entity.slug] ??= {
       source: "builder",
       settings: entity as unknown as SettingsObject,
     };
   }
   return {
     ...latest,
-    data: { ...data, entities: { ...recorded, collections } },
+    data: { ...data, entities },
   };
 }
 
