@@ -547,6 +547,7 @@ export {
   type PasswordHelper,
   type PasswordRules,
   type OpaqueSecrets,
+  type KeyedDigests,
   type OneTimeSecrets,
   type SecretData,
   type TxOption,
