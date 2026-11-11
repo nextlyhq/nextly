@@ -146,8 +146,20 @@ describe("metadataFromAnswer", () => {
         card: "summary_large_image",
         title: "About us, shared",
         description: "Shared text.",
-        images: ["https://example.com/card.jpg"],
+        // The image's alt text reaches the large-image card too, which
+        // reads its own `twitter:image:alt` rather than Open Graph's.
+        images: [{ url: "https://example.com/card.jpg", alt: "Our team" }],
       },
+    });
+  });
+
+  it("names a card image with no alt text by its address alone", () => {
+    const metadata = metadataFromAnswer({
+      social: { image: { url: "https://example.com/card.jpg" } },
+    });
+    expect(metadata.twitter).toEqual({
+      card: "summary_large_image",
+      images: ["https://example.com/card.jpg"],
     });
   });
 

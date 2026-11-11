@@ -70,6 +70,18 @@ describe("validateDefaultValue", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts MySQL's stored datetime on MySQL, and no date that does not exist", () => {
+    const check = (value: string) =>
+      validateDefaultValue({ name: "published", type: "date" }, value, "mysql")
+        .success;
+    expect(check("2026-11-11 09:30:15.250")).toBe(true);
+    expect(check("2026-02-28 23:59:59")).toBe(true);
+    // The pattern alone takes these; no date column holds them.
+    expect(check("2026-99-99 00:00:00")).toBe(false);
+    expect(check("2026-02-30 00:00:00")).toBe(false);
+    expect(check("2026-11-11 24:61:00")).toBe(false);
+  });
+
   it("accepts Date object for date field", () => {
     const result = validateDefaultValue(
       { name: "published", type: "date" },
