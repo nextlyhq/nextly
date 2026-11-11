@@ -489,6 +489,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "GridSize (type)",
   "HeldAddress (type)",
   "HeldAddressUpdate (type)",
+  "HeldDocument (type)",
   "HookContext (type)",
   "HookContextPhase (type)",
   "HookHandler (type)",
