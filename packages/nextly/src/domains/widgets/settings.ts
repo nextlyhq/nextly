@@ -62,9 +62,10 @@ import {
 } from "./sources";
 
 /**
- * Where a card's settings panel draws a setting: with what the card reads
- * (`data`), with how it shows it (`display`), or folded away under Advanced
- * (`advanced`).
+ * Where a card's settings drawer draws a setting: under Content, with what the
+ * card reads (`data`), or under Display, with how it shows it (`display`).
+ * `advanced` is still accepted, from declarations written when the drawer
+ * folded some settings away, and is drawn under Display: nothing is folded.
  */
 export type SettingSection = "data" | "display" | "advanced";
 
@@ -94,16 +95,16 @@ export interface WidgetSettingBase {
   admin?: { description?: string };
   /**
    * Whether the setting sits on the card itself, changeable without opening
-   * the settings sheet, as Over time's date range does. At most three per
-   * widget, held by the card's quick popover; its header draws the first.
+   * the settings drawer, as Continue's Mine and Team do. At most three per
+   * widget; the card's header draws the first it can.
    *
    * A top-level key the field configs do not have, deliberately: it is read by
    * the card's header, never by `FieldRenderer`, which ignores it.
    *
-   * Drawn by the card's header at the medium and large tiers, and offered in
-   * the card's menu at every size, when the setting is a `select` or a
-   * `checkbox`; a change there is saved at once for the reader. A quick
-   * setting of any other type stays in the settings sheet.
+   * Drawn by the card's header at the medium and large tiers when the setting
+   * is a `select` or a `checkbox`; a change there is saved at once for the
+   * reader. Every setting, marked or not, is also in the card's settings
+   * drawer.
    *
    * @experimental The shape may still change while the quick setting's
    * controls settle.
@@ -125,10 +126,10 @@ export interface WidgetSettingBase {
    */
   editor?: { component: string };
   /**
-   * The section of the card's settings panel the setting is drawn in. Absent,
+   * The section of the card's settings drawer the setting is drawn in. Absent,
    * a setting over the card's content (its Collection, Filter, Sort, Group by
-   * and Field) and a date range are drawn under Data, and every other setting
-   * under Display; a setting is folded under Advanced only when it says so.
+   * and Field) and a date range are drawn under Content (`data`), and every
+   * other setting under Display; `advanced` is drawn under Display too.
    *
    * A top-level key the field configs do not have, like `quick`: read by the
    * panel, never by `FieldRenderer`.
@@ -623,17 +624,17 @@ export function widgetSettingsProblems(settings: unknown): string[] {
 }
 
 /**
- * The most settings one widget may mark quick: what a card's quick popover holds of them, beside
- * the card's Collection. The admin's popover caps at this same number.
+ * The most settings one widget may mark quick. The card's header draws the first it can; the
+ * bound stays so a declaration accepted before keeps being accepted, and no more.
  */
 export const MAX_QUICK_SETTINGS = 3;
 
 /**
  * Why a widget's settings mark too many as quick, or nothing when they do not.
  *
- * A card's quick popover holds at most three settings: more would turn it into
- * the settings sheet, and which of them a person saw would depend on the order
- * they were declared in.
+ * At most three: more would make "on the card itself" mean most of the card's
+ * settings, and which of them a person saw would depend on the order they were
+ * declared in.
  */
 function quickProblems(settings: readonly AnyWidgetSetting[]): string[] {
   const quick = settings.filter(setting => setting.quick === true);
@@ -1503,7 +1504,7 @@ export function namedCollection(value: unknown): string | undefined {
  * Each is matched by the setting's TYPE alone, since each content type has one
  * meaning for a query. No setting drives a query because of its name: a
  * declared widget's settings reach its `load`, which reads them as it chooses
- * (a list card's "Number of items" sizes the rows its load asks for).
+ * (a list card's "Number of entries" sizes the rows its load asks for).
  */
 const QUERY_KNOBS: readonly QueryKnob[] = [
   {

@@ -64,6 +64,16 @@ const nextConfig: NextConfig = {
   ...(CACHE_COMPONENTS
     ? { cacheComponents: true, partialPrefetching: true }
     : { cacheComponents: false }),
+  // Nextly's cache handlers, as `create-nextly-app` installs them in every
+  // app. They judge a stored page or read by when its render began, so a
+  // write made while a render runs expires what that render stores, and the
+  // first request after a write's response reads the new version. Next.js's
+  // own store judges an entry by when it was stored, which would let a
+  // render begun before a write stand as fresh. Resolved from the built
+  // `dist`, in development too, as an installed `nextly` is.
+  cacheHandler: require.resolve("nextly/cache-handler"),
+  cacheMaxMemorySize: 0,
+  cacheHandlers: { default: require.resolve("nextly/cache-handlers") },
   // Two dev servers on this app cannot share a build directory, and separate
   // ports do not help: the collision is on disk, not on the network. The
   // browser suite runs its own server on its own port, so it points this

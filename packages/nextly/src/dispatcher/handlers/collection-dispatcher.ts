@@ -33,6 +33,7 @@ import {
   respondDoc,
   respondList,
   respondMutation,
+  withSessionCacheHeaders,
 } from "../../api/response-shapes";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { container } from "../../di/container";
@@ -58,6 +59,7 @@ import {
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
+import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import {
   applyCollectionSchemaChange,
   recordedFieldsOf,
@@ -72,8 +74,7 @@ import {
   applyPluginAdminViews,
   type CollectionWithAdmin,
 } from "../../plugins/admin-views";
-import { getHandlerConfig } from "../../route-handler/auth-handler";
-import { withSessionCacheHeaders } from "../../routeHandler";
+import { bumpSchemaVersion } from "../../route-handler/schema-version";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -109,6 +110,7 @@ import {
 } from "../helpers/service-envelope";
 import {
   isTruthyParam,
+  parseCountParam,
   parseRichTextFormat,
   parseSelectParam,
   parseStatusParam,
@@ -121,6 +123,7 @@ import {
 import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
+import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
@@ -503,16 +506,21 @@ const COLLECTIONS_METHODS: Record<
     // reading that stops at the first page, and everything past it is
     // unreachable. The singles dispatcher resolves its allowlist the same way.
     execute: async (svc, p) => {
+      // Read first, so an owner it does not know is refused before any work.
+      const owner = readListOwner(p.owner);
       // The SHARED resolver, which the singles listing asks too, handed the
       // SAME caller every other read decision takes. `undefined` means no
       // filter — an unauthenticated caller, gated at the route layer, or a
       // session super admin. An empty list means nothing is visible, which
       // the registry short-circuits to a zero-row, zero-total answer.
       const reader = readAuthenticatedUser();
-      const slugAllowlist = await readableSlugAllowlist(
+      const readable = await readableSlugAllowlist(
         reader ? readAccessCallerForDispatch(reader) : undefined,
         "collection"
       );
+      // The site's own collections or the plugins', as conditions on the
+      // same query: the plugins' list only narrows what the reader may read.
+      const slugLists = await slugListsForOwner(owner, "collections", readable);
 
       const result = await svc.listCollections({
         page: toNumber(p.page),
@@ -525,7 +533,7 @@ const COLLECTIONS_METHODS: Record<
           | "updatedAt"
           | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
-        slugAllowlist,
+        ...slugLists,
       });
       // Service returns legacy { success, data, meta }. Unwrap throws on
       // failure (which the dispatcher converts to a NextlyError response).
@@ -580,7 +588,13 @@ const COLLECTIONS_METHODS: Record<
       });
       // Fold plugin view overrides (contributes.admin.views, D23) onto the
       // collection so the list page's injection slots resolve. Collection slots
-      // win; plugin fills empties (see applyPluginAdminViews).
+      // win; plugin fills empties (see applyPluginAdminViews). The route
+      // handler's config store is loaded here, not imported at the top: it
+      // reaches the auth routes and every plugin's context, several hundred
+      // modules the other collection operations never need.
+      const { getHandlerConfig } = await import(
+        "../../route-handler/auth-handler"
+      );
       const config = getHandlerConfig();
       const [collectionWithViews] = applyPluginAdminViews(
         [collection as CollectionWithAdmin],
@@ -952,6 +966,25 @@ const COLLECTIONS_METHODS: Record<
           // `dialect` is an abstract readonly property on DrizzleAdapter, not a method.
           const dialect = adapter.dialect;
 
+          // A field renamed onto a column that is already there is refused before anything
+          // changes, on either way below: written and run as a migration, or pushed. The dialog
+          // never offers such a change as a rename, only as the old column dropped beside a field
+          // kept on the column that is there, so it is found from the field lists.
+          await refuseRenamedFieldOntoTakenColumn(
+            adapter,
+            {
+              previousFields: (collection.fields ??
+                []) as unknown as FieldDefinition[],
+              fields: fields as unknown as FieldDefinition[],
+              mainTable: tableName,
+              wasLocalized: storesPerLanguage({ localized: wasLocalized }),
+              isLocalized: isStoredPerLanguage,
+              dialect,
+              builtBy: "collection",
+            },
+            { collection: p.collectionName }
+          );
+
           // One apply of the schema pipeline, with the admin's answers from the dialog, then the
           // companion brought in step: the same path a Builder save of the collection takes. Legacy
           // per-field answers are translated to typed resolutions inside the prompt dispatcher.
@@ -1165,12 +1198,7 @@ const COLLECTIONS_METHODS: Record<
           // successful pipeline apply. The bump only matters for UI-first
           // applies (sets the X-Schema-Version response header so admin tabs
           // know to refetch); HMR and boot paths don't need it.
-          try {
-            const { bumpSchemaVersion } = await import("../../routeHandler");
-            bumpSchemaVersion();
-          } catch {
-            // routeHandler may be unavailable in non-server contexts (tests).
-          }
+          bumpSchemaVersion();
 
           // applySchemaChanges is a non-CRUD mutation: there's no "item" to
           // surface. The action result carries the new schema version (so
@@ -1251,6 +1279,8 @@ const COLLECTIONS_METHODS: Record<
         fallbackLocale: p["fallback-locale"],
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
+        // `?count=capped` counts the total no further than the list shows.
+        countUpTo: parseCountParam(p.count),
       });
 
       type PaginatedShape = {
@@ -1261,6 +1291,7 @@ const COLLECTIONS_METHODS: Record<
         totalPages: number;
         hasNextPage: boolean;
         hasPrevPage: boolean;
+        totalCapped?: true;
       };
       const paginated = unwrapServiceResult<PaginatedShape>(result, {
         collectionName: p.collectionName,
@@ -1752,7 +1783,13 @@ async function writerSaveOf(change: WriterChange): Promise<
   if (!container.has("builderSaveSetup")) return undefined;
   const setup = container.get<BuilderSaveSetup>("builderSaveSetup");
   const adapter = getAdapterFromDI();
-  if (!adapter) throw new Error("Database adapter not initialized");
+  // A writer registered with no adapter is a wiring fault of the app, not the editor's: reported
+  // as an internal error, with what was missing in the log.
+  if (!adapter) {
+    throw NextlyError.internal({
+      logContext: { reason: "database adapter not initialized" },
+    });
+  }
   const logger = getLoggerFromDI() ?? consoleLogger;
   const dynamic = new DynamicCollectionService(adapter, logger);
   const before = change.collection.fields ?? [];

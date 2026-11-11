@@ -30,6 +30,7 @@ import {
   respondDoc,
   respondList,
   respondMutation,
+  withSessionCacheHeaders,
 } from "../../api/response-shapes";
 import {
   assertComparisonRequest,
@@ -54,6 +55,7 @@ import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/databa
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
+import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -76,7 +78,6 @@ import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks"
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
-import { withSessionCacheHeaders } from "../../routeHandler";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
@@ -125,6 +126,8 @@ import {
 import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
+import { readListOffset } from "./list-offset";
+import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
@@ -486,17 +489,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     // stops clients (e.g. the sidebar's auto-paginated walk) from chasing
     // hasNext through pages that filter down to zero rows.
     execute: async (svc, p) => {
+      // Read first, so an owner it does not know is refused before any work.
+      const owner = readListOwner(p.owner);
       const limit = toNumber(p.limit);
       // Accept both `offset` (canonical) and `page` (1-based, what the
       // admin UI's shared buildQuery helper emits). `offset` wins when
       // both are supplied.
-      let offset = toNumber(p.offset);
-      if (!p.offset && p.page !== undefined && limit && limit > 0) {
-        const page1Based = toNumber(p.page);
-        if (page1Based !== undefined && page1Based > 0) {
-          offset = (page1Based - 1) * limit;
-        }
-      }
+      const offset = readListOffset(p, limit);
 
       // Resolved BEFORE the registry call, through the SHARED resolver the
       // collections listing asks too, and handed the SAME caller every other
@@ -507,17 +506,20 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // explicit list, possibly empty, which the registry short-circuits to a
       // zero-row, zero-total response.
       const user = readAuthenticatedUser();
-      const slugAllowlist = await readableSlugAllowlist(
+      const readable = await readableSlugAllowlist(
         user ? readAccessCallerForDispatch(user) : undefined,
         "single"
       );
+      // The site's own Singles or the plugins', as conditions on the same
+      // query: the plugins' list only narrows what the reader may read.
+      const slugLists = await slugListsForOwner(owner, "singles", readable);
 
       const result = await svc.registry.listSingles({
         source: p.source as "code" | "ui" | "built-in" | undefined,
         search: p.search,
         limit,
         offset,
-        slugAllowlist,
+        ...slugLists,
       });
 
       const items = result.data.map(s =>
@@ -1332,6 +1334,23 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               tableName,
             });
           }
+          // A field renamed onto a column that is already there is refused before anything
+          // changes. In this dialog such a change is never offered as a rename, only as the old
+          // column dropped beside a field kept on the column that is there, so it is found from
+          // the field lists.
+          await refuseRenamedFieldOntoTakenColumn(
+            adapter,
+            {
+              previousFields: single.fields as unknown as FieldDefinition[],
+              fields: fields as unknown as FieldDefinition[],
+              mainTable: tableName,
+              wasLocalized: layout.wasStored,
+              isLocalized: layout.isStored,
+              dialect: adapter.dialect,
+              builtBy: "collection",
+            },
+            { single: slug }
+          );
           // The dialog's answer on a translated field's rename, refused when it does not say,
           // before anything changes. This and the preflights below ask where the values are stored
           // (`layout.wasStored`/`isStored`), not whether the Single is translated: an untranslated

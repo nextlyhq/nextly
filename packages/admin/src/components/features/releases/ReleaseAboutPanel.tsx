@@ -140,7 +140,7 @@ function HistoryBody({
     return (
       <p
         role="alert"
-        className="text-sm text-destructive-700 dark:text-destructive"
+        className="text-sm text-danger-text"
       >
         The history of this release could not be loaded.
       </p>

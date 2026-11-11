@@ -563,6 +563,9 @@ export {
   type FrozenValue,
   type PluginEmailSettings,
   type PluginContext,
+  type PluginDurableEvents,
+  type PluginEmitOptions,
+  type PluginEvents,
   type PluginContributions,
   type PluginDatabase,
   type PluginRawDatabase,
@@ -627,6 +630,8 @@ export {
   type PluginRouteLimitKey,
   type Middleware,
   type RouteMethod,
+  type PluginProxyHandler,
+  type ProxyAnswer,
   type NextlyPrincipals,
   type PluginPrincipalsApi,
   type PluginRoutePrincipal,
@@ -687,6 +692,17 @@ export {
   type ContentTypeScope,
 } from "./plugins/content-type-scope";
 
+// The later pages of a paginated list's address (`/news/page/2`): one
+// spelling per page, read the way the content routes read them.
+// @experimental
+export { listPageNumber, listPageOf } from "./runtime/routing/slug-param";
+
+// The cache tags a read of a collection, or of one entry in it, carries:
+// what a write to it expires. For code that caches an answer built from
+// those reads, such as a plugin's page metadata.
+// @experimental
+export { nextlyTags } from "./runtime/cache/nextly-tags";
+
 // Where an entry is served, as the site declares it: one answer for every
 // reader of a page's public address.
 // @experimental
@@ -696,6 +712,31 @@ export {
   type PublicAddress,
   type PublicAddressType,
 } from "./domains/public-addresses/public-address";
+
+// How each language's address is formed, by prefix or by domain, as the site
+// declares it: the address a path kept in one language is opened at.
+// @experimental
+export {
+  languageAddressOf,
+  type LanguageAddress,
+  type LanguageAddressRule,
+} from "./domains/i18n/language-addresses";
+
+// Keeping every public address to one page: the record a plugin keeps, as
+// core asks it on each save (`ctx.publicAddresses`).
+// @experimental
+export type {
+  AddressHolder,
+  HeldAddress,
+  HeldAddressUpdate,
+} from "./domains/public-addresses/participants";
+export type { HeldDocument } from "./domains/public-addresses/held-listing";
+export type {
+  ParticipantTransaction,
+  PluginPublicAddresses,
+  PublicAddressParticipant,
+  RefusedAddressUpdate,
+} from "./plugins/plugin-public-addresses";
 
 // The plugin limiter: `contributes.limits` rules and `ctx.limits`.
 // @experimental
@@ -765,6 +806,10 @@ export {
 // reads its `size` by to ask for no more rows than the card shows, by the formula core's own list
 // cards are drawn with. From the module the admin draws the frame by, which imports nothing more.
 export { rowsThatFit } from "./domains/widgets/card-geometry";
+// @experimental The rows a list card loads and shows for its "Number of entries" setting, and the
+// most that setting offers: what a widget's `load` reads its setting by, the rule core's own list
+// cards and the admin read alike. From `query-limits.ts`, which imports nothing.
+export { listEntries, MAX_WIDGET_ROWS } from "./domains/widgets/query-limits";
 // A setting's own editor component's props (experimental).
 export type { SettingEditorProps } from "./domains/widgets/result";
 // @experimental The check a site's generated admin component map applies, and what it reads:
@@ -1162,6 +1207,13 @@ export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from
 // root-level `fields`, `status` or `versions`, so its result is not assignable
 // to `ResolvedDraftSplitCollection` however faithfully the record carries them.
 export { resolvedCollectionView } from "./domains/versions/resolved-collection-view";
+
+// A plugin's durable events (`ctx.events.emitDurable` / `onDurable`): what a
+// subscriber receives, and the handler that receives it.
+export type {
+  DurableEvent,
+  DurableHandler,
+} from "./domains/plugin-events/subscribers";
 
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {

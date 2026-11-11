@@ -105,6 +105,8 @@ expectTypeOf<CustomEditViewProps>().toMatchTypeOf<{
   collectionSlug: string;
   isCreating: boolean;
 }>();
+// The page of the view an address names: a path, or absent on the edit address.
+expectTypeOf<CustomEditViewProps["view"]>().toEqualTypeOf<string | undefined>();
 
 // ---------------------------------------------------------------------------
 // Control primitives.
@@ -250,6 +252,8 @@ expectTypeOf<adminEntry.FieldPickerProps>().toEqualTypeOf<{
   config: adminEntry.FieldPickerConfig;
   title?: string;
   placement?: string;
+  initialLabel?: string;
+  offerAddAnother?: boolean;
   onCancel: () => void;
   onAdd: (
     choice: adminEntry.FieldPickerChoice,
@@ -331,6 +335,8 @@ expectTypeOf<adminEntry.FieldSettingsSurface>().toEqualTypeOf<{
     allowed: readonly FieldValidationRule[]
   ) => readonly FieldValidationRule[];
   displaySwitches?: boolean;
+  widthSetting?: boolean;
+  pluginSettings?: boolean;
   typeSettings?: Readonly<
     Partial<Record<string, adminEntry.FieldTypeSettings>>
   >;

@@ -149,6 +149,7 @@ const WRITES = [
   "migrate:down",
   "migrate:resolve",
   "permissions:cleanup",
+  "plugins add",
   "plugins install",
   "plugins uninstall",
   "prune",

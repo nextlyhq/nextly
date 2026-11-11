@@ -22,7 +22,10 @@ import type {
 } from "../../../schemas/_zod/ui-schema";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { settingsOf } from "../migrate-create/entity-settings";
-import type { MinimalConfigEntity } from "../migrate-create/generate";
+import type {
+  MinimalConfigEntity,
+  MinimalConfigField,
+} from "../migrate-create/generate";
 
 export interface MergeUiEntitiesArgs {
   codeCollections: MinimalConfigEntity[];
@@ -62,7 +65,10 @@ export function uiToMinimal(
   return {
     slug: entity.slug,
     tableName: `${prefix}${entity.slug.replace(/-/g, "_")}`,
-    fields: [...entity.fields],
+    // A group with no name only lays its fields out, and the column rule reads it as the code-first
+    // config's is read (`toMinimalEntities` hands its entries over the same way): the definition's
+    // field type allows one, which the diff engine's field type does not spell.
+    fields: [...entity.fields] as MinimalConfigField[],
     status: entity.status === true,
     localized: entity.localized === true,
     settings: { source: "builder", settings: settingsOf(entity, "builder") },

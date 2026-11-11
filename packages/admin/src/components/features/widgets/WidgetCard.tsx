@@ -80,8 +80,7 @@ import {
 import { CardHeaderSlotProvider } from "./frame/header-slot";
 import { CardSubtitleContext } from "./frame/header-subtitle";
 import { frameIds } from "./frame/ids";
-import { ListDensityContext, useListDensity } from "./frame/list-rows";
-import type { RowsSize } from "./frame/list-rows";
+import { ListDensityContext } from "./frame/list-rows";
 import {
   FRAME_BODY_GAP,
   FRAME_FOOTER_GAP,
@@ -137,14 +136,6 @@ export interface WidgetCardProps {
   /** The card's one quick control, just before `headerAction`. */
   quick?: ReactNode;
   /**
-   * Draws the title as a control, handed the title: the dashboard's cards make it open their
-   * quick popover. The heading around it, and the name it gives the card's region, stay as
-   * they are. Absent, the title is text.
-   *
-   * @internal Set by the dashboard grid only, never part of the widget kit.
-   */
-  titleTrigger?: ((title: string) => ReactNode) | undefined;
-  /**
    * Customise mode: the body, footer and quick control become inert and dim, so their links and
    * controls are out of reach, while the title stays where it is.
    */
@@ -157,9 +148,9 @@ export interface WidgetCardProps {
   /** The shape the loading skeleton takes. */
   skeleton?: SkeletonShape;
   /**
-   * A list or table card's items setting. Its loading skeleton then holds the place of the rows
-   * the card will draw at its tier (`rowsDrawn`), so the first answer does not make the card
-   * jump; absent, a skeleton draws its default rows.
+   * A list or table card's "Number of entries" setting. Its loading skeleton then holds the place
+   * of the rows the card will draw (`rowsDrawn`), so the first answer does not make the card jump;
+   * absent, a skeleton draws its default rows.
    */
   skeletonItems?: unknown;
   /** The density a list card draws its rows at, and its skeleton counts them at. */
@@ -455,7 +446,6 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 quick={props.quick}
                 quickInert={flags.quickInert}
                 headerAction={props.headerAction}
-                titleTrigger={props.titleTrigger}
                 // Offered at rest only: in customise mode the body is out of reach.
                 headerSlotRef={customizing ? undefined : setHeaderSlot}
               />
@@ -622,25 +612,18 @@ function LoadingBody({
   props: Pick<WidgetCardProps, "skeleton" | "skeletonItems" | "skeletonFields">;
 }) {
   const tier = useCardTier() ?? "medium";
-  // The card's height and density, as the rows that will arrive are counted at.
-  const h = useContext(CardHeightContext);
-  const density = useListDensity();
   return (
     <CardSkeleton
       shape={hint?.shape ?? props.skeleton}
-      rows={hint?.rows ?? heldRows({ tier, h }, props.skeletonItems, density)}
+      rows={hint?.rows ?? heldRows(props.skeletonItems)}
       layout={hint?.layout ?? heldLayout(tier, props.skeletonFields)}
     />
   );
 }
 
-/** The rows a list or table card's skeleton holds at `size` and `density`, from its items setting. */
-function heldRows(
-  size: RowsSize,
-  items: unknown,
-  density: ListDensity
-): number | undefined {
-  return items === undefined ? undefined : rowsDrawn(size, items, density);
+/** The rows a list or table card's skeleton holds, from its "Number of entries" setting. */
+function heldRows(items: unknown): number | undefined {
+  return items === undefined ? undefined : rowsDrawn(items);
 }
 
 /** How a list or table card's skeleton lays its rows out at `tier`, from its column count. */
@@ -651,24 +634,13 @@ function heldLayout(
   return fields === undefined ? undefined : rowsLayout(tier, fields);
 }
 
-/** The card's title inside its heading: as text, or as the control `trigger` draws it as. */
-function CardTitle({
-  title,
-  trigger,
-}: {
-  title: string;
-  trigger: WidgetCardProps["titleTrigger"];
-}): ReactNode {
-  return trigger ? trigger(title) : title;
-}
-
 /**
  * The card's header, one fixed height in every state, tier and mode.
  *
  * The title is one line, shortened with an ellipsis, its full text on hover and to assistive
  * technology (the heading's text is never cut, only its drawing). The subtitle beneath it is the
- * widget's own name, or, for a card given none, the line its body reports (`useCardSubtitle`). The quick control and the menu sit at the right end, always in that order,
- * so the menu is in the same place on every card. A body's own controls for the whole card
+ * widget's own name, or, for a card given none, the line its body reports (`useCardSubtitle`).
+ * The quick control and the menu sit at the right end, always in that order, so the menu is in the same place on every card. A body's own controls for the whole card
  * (`frame/header-slot`) come just before them, one header line high.
  */
 function WidgetCardHeader({
@@ -682,7 +654,6 @@ function WidgetCardHeader({
   quick,
   quickInert,
   headerAction,
-  titleTrigger,
   headerSlotRef,
 }: {
   titleId: string;
@@ -697,7 +668,6 @@ function WidgetCardHeader({
   quick?: ReactNode;
   quickInert: boolean;
   headerAction?: ReactNode;
-  titleTrigger?: WidgetCardProps["titleTrigger"];
   /** Registers the slot a body draws its card controls into; absent, no slot is drawn. */
   headerSlotRef?: ((element: HTMLElement | null) => void) | undefined;
 }) {
@@ -718,9 +688,7 @@ function WidgetCardHeader({
           title={title}
           className="flex min-w-0 items-baseline gap-1.5 text-sm font-semibold leading-5 tracking-tight text-foreground"
         >
-          <span className="truncate">
-            <CardTitle title={title} trigger={titleTrigger} />
-          </span>
+          <span className="truncate">{title}</span>
           <TitleCountMark count={titleCount} />
         </h2>
         {subtitle && (

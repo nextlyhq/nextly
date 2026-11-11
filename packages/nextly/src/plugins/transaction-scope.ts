@@ -17,7 +17,8 @@ export type PluginTransactionMethod =
   | "ctx.db.raw.transaction"
   | "ctx.services.collections.withTransaction"
   | "ctx.hooks.onInTransaction"
-  | "ctx.hooks.onCollectionDelete";
+  | "ctx.hooks.onCollectionDelete"
+  | "ctx.publicAddresses";
 
 /**
  * The refusal for the handle a transaction passed its work, used once that

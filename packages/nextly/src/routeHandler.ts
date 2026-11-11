@@ -160,6 +160,7 @@ import {
   withSideEffectWarnings,
 } from "./hooks/side-effect-warnings";
 import { awaitBootSeeding } from "./init/seed-permissions";
+import { awaitStartInFlight } from "./init/start-in-flight";
 import {
   SKIP_TIMEZONE_FORMAT_HEADER,
   withTimezoneFormatting,
@@ -214,6 +215,10 @@ import {
   getHandlerConfig,
 } from "./route-handler";
 import { handleDevSchemaRequest } from "./route-handler/dev-schema-handler";
+import {
+  bumpSchemaVersion,
+  getSchemaVersionHeader,
+} from "./route-handler/schema-version";
 import { handleWebhookRequest } from "./route-handler/webhook-dispatch";
 import { registerNextCacheRevalidator } from "./runtime/cache/register";
 import type { CollectionsHandler } from "./services/collections-handler";
@@ -235,21 +240,10 @@ import {
 // Schema Version Header
 // ============================================================================
 
-// Global schema version counter for cross-flow notification.
-// Bumped from collection-dispatcher.ts:applySchemaChanges after a
-// successful pipeline apply (F8 PR 3 — was previously SchemaChangeService).
-// The admin UI reads X-Nextly-Schema-Version from response headers
-// and invalidates caches when the version increases.
-let globalSchemaVersion = 0;
-
-export function bumpSchemaVersion(): number {
-  globalSchemaVersion++;
-  return globalSchemaVersion;
-}
-
-function getSchemaVersionHeader(): number {
-  return globalSchemaVersion;
-}
+// The schema version counter lives in `route-handler/schema-version`, so the
+// collection dispatcher bumps it after a schema apply without loading this
+// module. Re-exported here for `nextly/runtime`.
+export { bumpSchemaVersion };
 
 // ============================================================================
 // Global API Date/Time Formatting
@@ -2375,6 +2369,11 @@ export { withSessionCacheHeaders };
  * choose those fields rather than this package.
  */
 async function handleAdminMetaRequest(): Promise<Response> {
+  // A start already under way is waited for, never begun here: the start-up
+  // hook no longer holds the admin page until Nextly has started, so the page
+  // can ask for this before the saved settings can be read, and the answer it
+  // caches would carry the default name and logo instead of the saved ones.
+  await awaitStartInFlight();
   const { branding } = await buildAdminMeta(NO_WIDGETS, NOBODY);
   return respondAdminMeta(branding);
 }
