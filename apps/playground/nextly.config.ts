@@ -29,6 +29,7 @@ import { seoPlugin } from "@nextlyhq/plugin-seo";
 import {
   defineCollection,
   defineConfig,
+  date,
   defineSingle,
   text,
   textarea,
@@ -103,6 +104,7 @@ const SeoPages = defineCollection({
     text({ name: "slug", label: "Slug" }),
     textarea({ name: "excerpt", label: "Excerpt" }),
     text({ name: "author", label: "Author" }),
+    date({ name: "publishedAt", label: "Published at" }),
     upload({ name: "coverImage", label: "Cover image", relationTo: "media" }),
   ],
   publicAddress: "/seo/{slug}",
@@ -387,6 +389,11 @@ export default defineConfig({
             // hidden from search whole.
             structuredData: { types: { [SeoPages.slug]: { type: "article" } } },
             hiddenTypes: [SeoTags.slug],
+            // Where a production build is served, so share images and
+            // structured data name whole addresses; unset in development.
+            ...(process.env.NEXT_PUBLIC_APP_URL
+              ? { baseUrl: process.env.NEXT_PUBLIC_APP_URL }
+              : {}),
           }),
         ]
       : []),
