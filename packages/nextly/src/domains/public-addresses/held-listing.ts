@@ -17,7 +17,6 @@ import { whenServicesRegistered } from "../../di/service-access";
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { appLocalization } from "../i18n/configured-locales";
 import { resolveLocaleChain } from "../i18n/resolve-locale";
-import { getCachedNextly } from "../../init";
 import { PAGINATION_DEFAULTS } from "../../types/pagination";
 
 import { addressLanguages, heldIn, readEveryLanguage } from "./held-addresses";
@@ -25,6 +24,7 @@ import type { HeldAddressUpdate } from "./participants";
 import {
   declaredFor,
   siteTypes,
+  startedNextly,
   type PublicAddressType,
 } from "./public-address";
 
@@ -84,7 +84,7 @@ async function heldNow(
 async function singleHeld(
   type: PublicAddressType
 ): Promise<HeldAddressUpdate[]> {
-  const nextly = await getCachedNextly();
+  const nextly = await startedNextly();
   // Read only: a Single never saved has nothing to hold, and listing must
   // not create it.
   const single = (await nextly.findSingle({
@@ -121,7 +121,7 @@ export async function heldPage(args: {
     return { items: offset === 0 ? await singleHeld(type) : [] };
   }
   const limit = Math.min(Math.max(args.limit ?? DEFAULT_PAGE, 1), MAX_PAGE);
-  const nextly = await getCachedNextly();
+  const nextly = await startedNextly();
   // One more than asked, to know whether another page follows.
   const page = await nextly.find({
     collection: type.slug,
