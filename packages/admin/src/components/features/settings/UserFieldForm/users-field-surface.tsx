@@ -13,7 +13,7 @@
  *   draw (a URL, a phone number, a plugin's type);
  * - only the bounds a user field stores: lengths for text-like types, the
  *   lowest and highest value for a number;
- * - no conditions, and no Read only or Hidden switches;
+ * - no conditions, no Width, and no Read only or Hidden switches;
  * - the name and type fixed once the field exists, since its stored values
  *   are kept under them.
  */
@@ -171,6 +171,8 @@ export function usersFieldSurface(saved: boolean): FieldSettingsSurface {
       return allowed.filter(rule => kept.includes(rule));
     },
     displaySwitches: false,
+    // A user field stores no width: the profile form lays its fields out.
+    widthSetting: false,
     typeSettings: { checkbox: {}, select: choices, radio: choices },
   };
 }

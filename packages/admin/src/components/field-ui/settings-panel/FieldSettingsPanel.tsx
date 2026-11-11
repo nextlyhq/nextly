@@ -165,6 +165,7 @@ export function FieldSettingsPanel({
               deriveName={surface.deriveName}
               nameFixedReason={fixedReason(surface.fixed, "name", saved)}
               apiPath={fieldApiPath(ancestors, field)}
+              width={surface.widthSetting !== false}
               defining={
                 Defining && (
                   <TypeOwnSettings readOnly={readOnly}>

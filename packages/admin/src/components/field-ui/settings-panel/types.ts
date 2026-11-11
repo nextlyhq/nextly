@@ -116,6 +116,12 @@ export interface FieldSettingsSurface {
    */
   displaySwitches?: boolean;
   /**
+   * @experimental Whether General offers Width, how much of a row the field
+   * takes in the entry form; false on a surface that stores no width, where
+   * the choice would be kept nowhere. Shown when absent.
+   */
+  widthSetting?: boolean;
+  /**
    * @experimental A type's own settings on this surface, by type id, used in
    * place of the core table's: a form's checkbox is one yes/no, where the
    * entry form's is a set of choices. A type named here is known at once,

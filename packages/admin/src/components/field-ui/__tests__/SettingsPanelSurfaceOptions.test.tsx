@@ -164,6 +164,27 @@ describe("the Display switches", () => {
   });
 });
 
+describe("the Width setting", () => {
+  it("is left out where the surface stores no width", () => {
+    render(
+      <Host
+        initial={field("text")}
+        surface={{ ...entries, widthSetting: false }}
+      />
+    );
+    expect(screen.queryByRole("radiogroup", { name: "Width" })).toBeNull();
+    // The rest of General is still there.
+    expect(screen.getByRole("textbox", { name: "Label" })).toBeInTheDocument();
+  });
+
+  it("is offered by default", () => {
+    render(<Host initial={field("text")} surface={entries} />);
+    expect(
+      screen.getByRole("radiogroup", { name: "Width" })
+    ).toBeInTheDocument();
+  });
+});
+
 describe("a surface's own type settings", () => {
   it("draws them in place of the core table's", () => {
     const yesNo = () => <p>One yes or no</p>;

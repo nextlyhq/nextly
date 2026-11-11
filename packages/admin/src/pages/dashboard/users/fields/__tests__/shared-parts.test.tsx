@@ -173,6 +173,16 @@ describe("user custom fields on the shared picker and panel", () => {
     expect(screen.queryByLabelText("Custom error message")).toBeNull();
   });
 
+  it("offers no width, which a user field does not store", async () => {
+    const { user } = createForm();
+    await user.click(
+      screen.getByRole("button", { name: "Choose a field type" })
+    );
+    await choose(user, "text", "Nickname");
+    expect(screen.getByRole("textbox", { name: "Label" })).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: "Width" })).toBeNull();
+  });
+
   it("refuses a reserved name before anything is sent", async () => {
     const { user, onSubmit } = createForm();
     await user.click(
