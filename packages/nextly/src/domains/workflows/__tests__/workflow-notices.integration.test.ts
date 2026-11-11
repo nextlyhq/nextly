@@ -216,7 +216,10 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     it("tells a person again when a part enters review again after its draft was discarded", async () => {
       await boot(dialect);
-      const dave = await person(app(), "dave", [["update", "posts"]]);
+      const dave = await person(app(), "dave", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
       await person(app(), "bob", [["sign-off", "posts"]]);
       const post = await entry(app(), "posts");
       await saveIn(app(), "posts", post, "en", { status: "published" });
@@ -257,7 +260,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("tells a person a part was assigned to them, with its email, and the email names the document", async () => {
       await boot(dialect);
-      const dave = await person(app(), "dave", [["update", "posts"]]);
+      const dave = await person(app(), "dave", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
       await person(app(), "bob", [["sign-off", "posts"]]);
       const post = await postInLegal();
 
@@ -298,7 +304,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("tells a stage's default reviewer, a person, on entering it", async () => {
       await boot(dialect);
-      const alice = await person(app(), "alice", [["update", "posts"]]);
+      const alice = await person(app(), "alice", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
       await person(app(), "bob", [["sign-off", "posts"]]);
       await settle("editorial", {
         defaultReviewers: { legal: { kind: "user", id: "bob" } },
@@ -320,7 +329,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("tells the person accountable for the stage an approval leaves, with its email", async () => {
       await boot(dialect);
-      await person(app(), "alice", [["update", "posts"]]);
+      await person(app(), "alice", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
       const bob = await person(app(), "bob", [["sign-off", "posts"]]);
       const post = await postInLegal();
 
@@ -346,7 +358,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("tells the person accountable for the stage when changes are requested, with the comment in the notice and its email", async () => {
       await boot(dialect);
-      await person(app(), "alice", [["update", "posts"]]);
+      await person(app(), "alice", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
       const bob = await person(app(), "bob", [["sign-off", "posts"]]);
       const post = await postInLegal();
       // Markup in the comment, so the email shows it escaped in HTML and as written in text.
@@ -389,7 +404,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("tells no one of work assigned to a role, or of a stage no one is accountable for", async () => {
       await boot(dialect);
-      const dave = await person(app(), "dave", [["update", "posts"]]);
+      const dave = await person(app(), "dave", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
       const bob = await person(app(), "bob", [["sign-off", "posts"]]);
       const legal = await role(app(), "legal-team", [["sign-off", "posts"]]);
       // A person whose id is the role's: a role told as though a person would reach them.
@@ -427,7 +445,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("tells whoever a move made accountable, on a workflow with no submit step", async () => {
       await boot(dialect);
-      const carol = await person(app(), "carol", [["update", "memos"]]);
+      const carol = await person(app(), "carol", [
+        ["read", "memos"],
+        ["update", "memos"],
+      ]);
       const bob = await person(app(), "bob", [["sign-off", "memos"]]);
       const memo = await entry(app(), "memos");
 
@@ -445,8 +466,14 @@ describe.each(getConfiguredTestDialects())(
 
     it("tells whoever an edit made accountable when the part it returned to review is sent back", async () => {
       await boot(dialect);
-      await person(app(), "alice", [["update", "posts"]]);
-      await person(app(), "dave", [["update", "posts"]]);
+      await person(app(), "alice", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
+      await person(app(), "dave", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
       const bob = await person(app(), "bob", [["sign-off", "posts"]]);
       const post = await postInLegal();
       await take("posts", post, ["en"], "clear", bob);
@@ -485,7 +512,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("records the notice but queues no email where that trigger's email is switched off", async () => {
       await boot(dialect);
-      await person(app(), "alice", [["update", "posts"]]);
+      await person(app(), "alice", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
       const bob = await person(app(), "bob", [["sign-off", "posts"]]);
       await settle("editorial", { emails: { approved: false } });
       const post = await postInLegal();
@@ -505,7 +535,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("records the notice alone where the site sends no email", async () => {
       await boot(dialect, false);
-      await person(app(), "alice", [["update", "posts"]]);
+      await person(app(), "alice", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
       const bob = await person(app(), "bob", [["sign-off", "posts"]]);
       const post = await postInLegal();
 
@@ -533,7 +566,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("tells a person once for each part moved, nothing for a refused step, and nothing more on its retry", async () => {
       await boot(dialect);
-      await person(app(), "alice", [["update", "posts"]]);
+      await person(app(), "alice", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
       const bob = await person(app(), "bob", [["sign-off", "posts"]]);
       const post = await postInLegal();
       // A Spanish version to approve, then Spanish in Legal check as alice's too.
@@ -594,9 +630,45 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("withholds a notice's title, comment and link from a recipient who may not read the document, in the list and by email", async () => {
+      await boot(dialect);
+      // Alice may edit Posts but not read them, so she may not be told what one says.
+      await person(app(), "alice", [["update", "posts"]]);
+      const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+      const post = await postInLegal();
+      const comment = "Rework the intro";
+
+      await take("posts", post, ["en"], "bounce", bob, comment);
+      const [notice] = await workflowNotices();
+      expect(notice).toMatchObject({ userId: "alice" });
+
+      const service = container.get<NoticesService>("noticesService");
+      const page = await service.find({ userId: "alice" });
+      // Still listed, so her count and her list agree, but with nothing of the document.
+      expect(page.total).toBe(1);
+      const [shown] = page.rows;
+      expect(shown?.title).toBe("This notice can no longer be shown.");
+      expect(shown).not.toHaveProperty("body");
+      expect(shown?.subject).toMatchObject({ link: null });
+      expect(JSON.stringify(shown)).not.toContain("Hello");
+      expect(JSON.stringify(shown)).not.toContain(comment);
+
+      // The email the notice queued is not sent.
+      expect(await emailJobNotices()).toEqual([notice?.id]);
+      await runJobsPass(
+        app().adapter,
+        container.get<JobRegistry>("jobRegistry"),
+        { retentionMs: null }
+      );
+      expect(sent).toEqual([]);
+    });
+
     it("links each notice to the document's edit page, and says so once the document is deleted", async () => {
       await boot(dialect);
-      await person(app(), "alice", [["update", "posts"]]);
+      await person(app(), "alice", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
       const bob = await person(app(), "bob", [["sign-off", "posts"]]);
       const post = await postInLegal();
       await take("posts", post, ["en"], "clear", bob);

@@ -21,11 +21,20 @@
  * @module domains/workflows/workflow-notices
  * @experimental Until the notices feature is complete.
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { z } from "zod";
 
+import { runDetachedFromRequest } from "../../auth/caller-scope";
+import { container } from "../../di/container";
 import { NextlyError } from "../../errors";
+import {
+  resolveDocumentVisibilityScope,
+  visibleDocuments,
+} from "../../services/lib/document-visibility";
 import { existingDocumentIds } from "../../services/lib/readable-documents";
+import { resolveRunAs } from "../../shared/lib/resolve-run-as";
 import type { JobDefinition } from "../jobs/job-registry";
+import { databaseRunAs } from "../jobs/jobs-runner";
 import {
   createNoticeEmailJob,
   noticeEmailMessage,
@@ -93,13 +102,56 @@ export function documentSubjectId(document: ReviewDocument): string {
   return `${document.scopeKind}:${document.scopeSlug}:${document.entryId}`;
 }
 
+/** A subject id read back into the document it names; null for one that names none. */
+function documentOf(subjectId: string): {
+  kind: "collection" | "single";
+  slug: string;
+  entryId: string;
+} | null {
+  const [kind, slug, ...id] = subjectId.split(":");
+  if ((kind !== "collection" && kind !== "single") || !slug || id.length === 0)
+    return null;
+  return { kind, slug, entryId: id.join(":") };
+}
+
 /** A subject id read back into the collection and the id; null for any other kind of document. */
 function collectionDocumentOf(
   subjectId: string
 ): { slug: string; entryId: string } | null {
-  const [kind, slug, ...id] = subjectId.split(":");
-  if (kind !== "collection" || !slug || id.length === 0) return null;
-  return { slug, entryId: id.join(":") };
+  const document = documentOf(subjectId);
+  return document?.kind === "collection"
+    ? { slug: document.slug, entryId: document.entryId }
+    : null;
+}
+
+/**
+ * The subjects among `subjectIds` that the person `userId` may read now, asked of the read path
+ * as them (`visibleDocuments`), as any list of documents is: an assignee or accountable person who
+ * may not read a document, or no longer may, is not told its title, the step's comment or its
+ * page. None for an account that is gone or deactivated. Detached from any request, since the
+ * question is the recipient's, whoever's request renders the notice.
+ */
+async function readableDocumentSubjects(
+  userId: string,
+  subjectIds: readonly string[]
+): Promise<Set<string>> {
+  const adapter = container.get<DrizzleAdapter>("adapter");
+  const resolved = await resolveRunAs(databaseRunAs(adapter), userId);
+  if (!resolved.ok || resolved.user === null) return new Set();
+  const user = resolved.user;
+  const named = subjectIds.flatMap(subjectId => {
+    const document = documentOf(subjectId);
+    return document === null ? [] : [{ subjectId, document }];
+  });
+  const visible = await runDetachedFromRequest(async () =>
+    visibleDocuments(
+      named,
+      each => each.document,
+      { user },
+      await resolveDocumentVisibilityScope()
+    )
+  );
+  return new Set(visible.map(each => each.subjectId));
 }
 
 /**
@@ -194,6 +246,7 @@ function workflowNoticeKind(
       };
     },
     link: documentNoticeLinks,
+    readable: readableDocumentSubjects,
   });
 }
 

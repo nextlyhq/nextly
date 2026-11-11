@@ -87,6 +87,17 @@ export interface NoticeKind<TData = unknown> {
    * Omitted, they always may.
    */
   visible?: (userId: string) => Promise<boolean>;
+  /**
+   * Which of these subjects this person may be told about now, for a kind whose subject is
+   * something the person reads through access rules, such as a document. A notice whose subject
+   * is not among them is listed with none of its snapshot's text and no link, and its email is
+   * not sent: what the person may not read, a notice does not tell them. A subject `link` finds
+   * gone is listed as gone, since there is nothing left to ask. Omitted, every subject may be.
+   */
+  readable?: (
+    userId: string,
+    subjectIds: readonly string[]
+  ) => Promise<ReadonlySet<string>>;
 }
 
 /**
