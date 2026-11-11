@@ -557,7 +557,7 @@ function PanelNotices({
         </p>
       )}
       {failure === undefined ? null : (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-sm text-danger-text">
           {failure}
         </p>
       )}
@@ -731,7 +731,7 @@ function TitleField({
         Leave it empty to title the card from its settings.
       </p>
       {problem === undefined ? null : (
-        <p id={problemId} role="alert" className="text-sm text-destructive">
+        <p id={problemId} role="alert" className="text-sm text-danger-text">
           {problem}
         </p>
       )}

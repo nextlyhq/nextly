@@ -15,6 +15,7 @@
  *
  * @module address-record/participant
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 
 import {
@@ -74,6 +75,17 @@ function pathsAbove(path: string): string[] {
     above.push(`/${segments.slice(0, at).join("/")}`);
   }
   return above;
+}
+
+/**
+ * The claim keys of the rows that hold `path` in `locale`: the address
+ * itself, held exactly or as a range, and every range above it.
+ */
+function keysHolding(locale: string, path: string): string[] {
+  return [
+    claimKey("address", locale, path),
+    ...[path, ...pathsAbove(path)].map(at => claimKey("range", locale, at)),
+  ];
 }
 
 /** Whether `path` is `range` or below it. */
@@ -295,6 +307,82 @@ export async function heldNow(
   );
 }
 
+/**
+ * Who the record says holds the address `path` in `locale`, or in the site's
+ * default language where the route named none: the page holding it exactly,
+ * or holding a range it falls in, read by the rows' unique keys, so a page
+ * that still holds `path` in another language is never taken for its holder
+ * here. None where no page holds it, as before the record has caught up with
+ * a site's content.
+ */
+/**
+ * Who holds each of `paths` in `locale`, read for all of them at once while
+ * `work` runs: `addressHolders` asked about one of them in `locale` answers
+ * from this read, so a list of pages worked through one by one costs one read
+ * of the record rather than one a page. Any other address is read as before.
+ */
+export async function withAddressHolders<T>(
+  ctx: PluginContext,
+  locale: string,
+  paths: readonly string[],
+  work: () => Promise<T>
+): Promise<T> {
+  const keysByPath = new Map(
+    paths.map(path => [path, keysHolding(locale, path)])
+  );
+  const allKeys = [...new Set([...keysByPath.values()].flat())];
+  const holderByKey = new Map<string, AddressHolder>();
+  for (let at = 0; at < allKeys.length; at += READ_PAGE) {
+    const keys = allKeys.slice(at, at + READ_PAGE);
+    const { data } = await ctx.services.ownCollections.listEntries(
+      recordSlug(ctx),
+      {
+        where: { claimKey: { in: keys } },
+        pagination: { limit: keys.length, page: 1 },
+        depth: 0,
+      }
+    );
+    for (const entry of data as unknown[]) {
+      const holder = rowOf(entry).holder;
+      const claim = (entry as { claimKey?: unknown }).claimKey;
+      if (holder !== null && typeof claim === "string") {
+        holderByKey.set(claim, holder);
+      }
+    }
+  }
+  const known = new Map<string, AddressHolder[]>();
+  for (const [path, keys] of keysByPath) {
+    known.set(
+      `${locale}|${path}`,
+      keys.flatMap(claim => holderByKey.get(claim) ?? [])
+    );
+  }
+  return holdersKnown.run(known, work);
+}
+
+/** The holders a `withAddressHolders` read found, while its work runs. */
+const holdersKnown = new AsyncLocalStorage<Map<string, AddressHolder[]>>();
+
+export async function addressHolders(
+  ctx: PluginContext,
+  path: string,
+  locale: string | undefined
+): Promise<AddressHolder[]> {
+  const language = locale ?? (await ctx.publicAddresses.defaultLanguage());
+  const known = holdersKnown.getStore()?.get(`${language}|${path}`);
+  if (known !== undefined) return known;
+  const keys = keysHolding(language, path);
+  const { data } = await ctx.services.ownCollections.listEntries(
+    recordSlug(ctx),
+    {
+      where: { claimKey: { in: keys } },
+      pagination: { limit: keys.length, page: 1 },
+      depth: 0,
+    }
+  );
+  return (data as unknown[]).flatMap(entry => rowOf(entry).holder ?? []);
+}
+
 /** The participant, bound to the SEO plugin's context. */
 export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   const { slug, rowsWhere, holdLock, holdHolderLock, rowsOf } = recordRows(ctx);
@@ -345,15 +433,9 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     // The address itself, held exactly or as a range, and every range above
     // it, found through the unique claim key's index rather than a scan of
     // the language's addresses.
-    const keys = [
-      claimKey("address", asked.locale, asked.path),
-      ...[asked.path, ...pathsAbove(asked.path)].map(path =>
-        claimKey("range", asked.locale, path)
-      ),
-    ];
     const atOrAbove = await rowsWhere(
       transaction,
-      { claimKey: { in: keys } },
+      { claimKey: { in: keysHolding(asked.locale, asked.path) } },
       "share"
     );
     if (asked.range !== true) return atOrAbove;
