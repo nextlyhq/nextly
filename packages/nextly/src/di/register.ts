@@ -77,7 +77,10 @@ import {
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import { stopGrantsExpiryRetry } from "../domains/flush-content-change";
-import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import type {
+  LanguageAddressRule,
+  SanitizedLocalizationConfig,
+} from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
   mainTableFields,
@@ -217,6 +220,12 @@ import {
   publishPluginDependencies,
 } from "../plugins/plugin-dependencies";
 import { sealPluginSettings } from "../plugins/plugin-settings-provider";
+import {
+  clearProxyHandlers,
+  collectProxyHandlers,
+  registerProxyHandlers,
+  type CollectedProxyHandler,
+} from "../plugins/proxy/proxy-registry";
 import {
   resolveDeclaredPlugins,
   resolveTransformedPlugins,
@@ -530,6 +539,13 @@ export interface NextlyServiceConfig {
    * populating localized fields from the companion `_locales` table.
    */
   localization?: SanitizedLocalizationConfig;
+
+  /**
+   * How each language's public address is formed, as the app declares it.
+   * Carried through so the address of a page in a language is answered from
+   * the running configuration.
+   */
+  languageAddresses?: LanguageAddressRule;
 
   /**
    * Resolved webhook retention policy, carried through so services can offer a
@@ -1582,6 +1598,8 @@ function validateBootContributions(
   // again there.
   const pluginBootContributions: PluginBootContributions = {
     routes: collectPluginRoutes(transformedPlugins),
+    // A proxy handler with no name or no `handle` fails the boot here too.
+    proxy: collectProxyHandlers(transformedPlugins),
   };
 
   registerPluginFieldTypes(transformedPlugins);
@@ -2921,6 +2939,7 @@ function bindDirectApi(): void {
  */
 interface PluginBootContributions {
   routes: CollectedRoute[];
+  proxy: CollectedProxyHandler[];
 }
 
 /**
@@ -4740,6 +4759,9 @@ async function initializePlugins(
   hookRegistry: HookRegistry | undefined
 ): Promise<Array<{ plugin: PluginDefinition; context: PluginContext }>> {
   const plugins = transformedConfig.plugins ?? [];
+  // Before the early return: a boot with no plugin left must not keep an
+  // earlier boot's proxy handlers answering requests.
+  clearProxyHandlers();
   if (plugins.length === 0) return [];
 
   const collectedRoutes = contributions.routes;
@@ -5088,6 +5110,13 @@ async function initializePlugins(
     }
     logger.info?.(`Registered ${collectedRoutes.length} plugin route(s)`);
   }
+
+  // The proxy handlers, each with its plugin's context, registered with the
+  // routes so they too are rebuilt on every boot rather than accumulated.
+  registerProxyHandlers(
+    contributions.proxy,
+    new Map(teardown.map(t => [t.plugin.name, t.context]))
+  );
 
   // PASS 3 — `onReady`, after every plugin's init AND after the route registry
   // is rebuilt, so a plugin reading the assembled system sees all of it. In

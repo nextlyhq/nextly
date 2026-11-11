@@ -5,7 +5,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { toDbError } from "../../../database/errors";
-import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 // PR 4 migration: switched DB error mapping from the legacy
 // mapDbErrorToServiceError helper to NextlyError.fromDatabaseError. The
 // public method return shape (MetadataServiceResult) is preserved because
@@ -34,6 +33,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import {
   checkSaveHistory,
   prepareCollectionSave,

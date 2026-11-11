@@ -46,6 +46,7 @@ import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/databa
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
+import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
@@ -264,7 +265,11 @@ export const COMPONENTS_METHODS: Record<
       // The site's own field groups or the plugins', as conditions on the
       // same query. Field groups carry no per-reader allowlist, so the
       // plugins' list is the plugins' slugs.
-      const slugLists = slugListsForOwner(owner, "fieldGroups", undefined);
+      const slugLists = await slugListsForOwner(
+        owner,
+        "fieldGroups",
+        undefined
+      );
       const result = await svc.registry.listComponents({
         source: p.source as "code" | "ui" | undefined,
         // 🔴 Filtered by the DATABASE, not by the caller narrowing a page it was already sent.
@@ -648,6 +653,24 @@ export const COMPONENTS_METHODS: Record<
 
           const adapter = getAdapterFromDI();
           if (!adapter) throw new Error("Database adapter not initialized");
+          // A field renamed onto a column that is already there is refused before anything
+          // changes. In this dialog such a change is never offered as a rename, only as the old
+          // column dropped beside a field kept on the column that is there, so it is found from
+          // the field lists.
+          await refuseRenamedFieldOntoTakenColumn(
+            adapter,
+            {
+              previousFields: (component.fields ??
+                []) as unknown as FieldDefinition[],
+              fields: fields as unknown as FieldDefinition[],
+              mainTable: tableName,
+              wasLocalized: wasStored,
+              isLocalized: isStored,
+              dialect: adapter.dialect,
+              builtBy: "fieldGroup",
+            },
+            { fieldGroup: slug }
+          );
           // The dialog's answer on a translated field's rename, refused when it does not
           // say, before anything changes.
           const companionRename = await resolveCompanionRename(

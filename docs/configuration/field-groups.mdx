@@ -193,6 +193,8 @@ export default defineFieldGroup({
 
 Field groups can embed other field groups using the `component` field type, at any depth. There is no depth limit.
 
+Each level's values are stored, read and migrated like the outer field group's. A field group placed directly in another's fields is stored as rows of its own table, each pointing at the row of the instance that holds it; one placed inside a group or repeater is stored in that container's value. Either way it is validated by its own fields' rules, a required one is required, and removing an instance removes everything placed in it. Filtering reaches a field group's own fields only (`hero.title`); a path that goes further (`hero.cta.label`) is refused as a field that cannot be filtered on.
+
 A field group placed inside itself, directly or through other field groups (`a` holds `b`, which holds `a`), is a cycle, and a cycle is refused where it is written. A placement inside a group, a repeater or a list of allowed field groups counts as well. The refusal names the field groups in the cycle:
 
 - `defineConfig()` refuses a cycle among the field groups your code defines.
