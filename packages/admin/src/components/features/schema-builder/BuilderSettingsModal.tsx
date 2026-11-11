@@ -25,6 +25,8 @@ import {
 import type { JSX } from "react";
 import { useState } from "react";
 
+import type { StoredHookConfig } from "@admin/types/collection";
+
 // The title and description name the kind through the shared table, so the
 // modal spells each kind as every other builder message does.
 import {
@@ -34,6 +36,7 @@ import {
 } from "./builder-config";
 import { AdvancedTab } from "./builder-settings-modal/AdvancedTab";
 import { BasicsTab } from "./builder-settings-modal/BasicsTab";
+import { StoredHooksView } from "./HooksEditor/StoredHooksView";
 
 /**
  * Form-state shape shared by both modes. Optional fields are present so the
@@ -107,6 +110,12 @@ type Props = {
   /** Code-first entities open this dialog to inspect config; every control
    *  is disabled and the footer collapses to a single Close button. */
   readOnly?: boolean;
+  /**
+   * A collection's stored hooks, shown read-only in a tab of their own when
+   * there are any. Nothing in the dialog edits them, and its submit never
+   * carries them, so a settings save leaves them as they are stored.
+   */
+  storedHooks?: readonly StoredHookConfig[];
   onCancel: () => void;
   onSubmit: (values: BuilderSettingsValues) => void;
 };
@@ -168,13 +177,15 @@ export function BuilderSettingsModal({
   config,
   initialValues,
   readOnly = false,
+  storedHooks,
   onCancel,
   onSubmit,
 }: Props): JSX.Element {
   const [values, setValues] = useState<BuilderSettingsValues>(() =>
     computeInitialValues(mode, config, initialValues)
   );
-  const [tab, setTab] = useState<"basics" | "advanced">("basics");
+  const [tab, setTab] = useState<"basics" | "advanced" | "hooks">("basics");
+  const hookCount = storedHooks?.length ?? 0;
 
   const kindLabel = BUILDER_KIND_NOUN[config.kind];
   const title =
@@ -200,6 +211,9 @@ export function BuilderSettingsModal({
           <TabsList>
             <TabsTrigger value="basics">Basics</TabsTrigger>
             <TabsTrigger value="advanced">Advanced</TabsTrigger>
+            {hookCount > 0 && (
+              <TabsTrigger value="hooks">Hooks ({hookCount})</TabsTrigger>
+            )}
           </TabsList>
           <TabsContent value="basics">
             {/* A disabled fieldset natively disables every descendant control
@@ -232,6 +246,11 @@ export function BuilderSettingsModal({
               />
             </fieldset>
           </TabsContent>
+          {hookCount > 0 && (
+            <TabsContent value="hooks">
+              <StoredHooksView hooks={storedHooks} />
+            </TabsContent>
+          )}
         </Tabs>
 
         <DialogFooter>
