@@ -830,6 +830,16 @@ export type {
   PluginRoutePermissionScope,
 } from "nextly";
 
+/**
+ * What a plugin adds to the site's Proxy (`contributes.proxy`): a handler that
+ * may answer a request before its page is served, set headers on what is
+ * served, or pass headers on to the page's render. Intended to become stable
+ * once the SEO plugin's redirects run on it.
+ *
+ * @experimental
+ */
+export type { PluginProxyHandler, ProxyAnswer } from "nextly";
+
 // A VALUE, so it cannot ride in the type-only block above. `narrowScope` is the
 // only correct way for a route to restrict its own scope before a call: the
 // scope's arrays are frozen, and the two spellings a permission is written in
