@@ -63,13 +63,17 @@ function summary(
 
 export function FieldGroupUsedBy({ slug }: { slug: string }): JSX.Element {
   const query = useFieldGroupUsedBy(slug);
-  const placements = query.data;
+  // Any failed read, a refresh included, leaves the answer unknown. An earlier
+  // answer kept past a failed refresh is not shown as current: a kept empty
+  // list would say "used nowhere" after a use was added.
+  const failed = query.isError;
+  const placements = failed ? undefined : query.data;
   return (
     <section
       aria-label="Where this field group is used"
       className="mb-4 rounded-md border border-border px-4 py-3 text-sm"
     >
-      <p role="status">{summary(placements, query.isError && !placements)}</p>
+      <p role="status">{summary(placements, failed)}</p>
       {placements && placements.length > 0 && (
         <ul className="mt-2 space-y-1">
           {byHolder(placements).map(({ holder, paths }) => {

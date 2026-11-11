@@ -148,9 +148,13 @@ export interface OutlineNode {
      * be read, or read and not there. Undefined when none is missing.
      */
     unavailable?: "loading" | "failed" | "not-found";
-    /** For a field using one field group: how many fields place it. */
-    placedBy?: number | null;
   };
+  /**
+   * For a row standing for one field group (a field using one, or one entry of
+   * a field accepting several): how many fields place that field group; null
+   * when that is not known. Absent on any other row.
+   */
+  usedIn?: number | null;
   /**
    * For a blocks field: the blocks it accepts, as its policy names them (a
    * block's name or a pattern); absent when it accepts any block.
@@ -333,6 +337,7 @@ function fillFieldGroup(
         readOnly: { kind: "field-group", slug, label: group?.label ?? slug },
         own: false,
         translatable: false,
+        usedIn: group?.placedBy ?? null,
       };
       entry.children = record(
         slug,
@@ -341,13 +346,15 @@ function fillFieldGroup(
       return entry;
     });
   }
+  // A field using one field group stands for it; one accepting several
+  // stands for none of them, and each entry row carries its own count.
+  if (refs.single !== undefined) {
+    node.usedIn = ctx.fieldGroups.get(refs.single)?.placedBy ?? null;
+  }
   node.fieldGroup = {
     slugs,
     missing,
     cycle,
-    ...(refs.single !== undefined
-      ? { placedBy: ctx.fieldGroups.get(refs.single)?.placedBy ?? null }
-      : {}),
     ...(missing.length > 0 ? { unavailable: unavailableWhy(ctx.load) } : {}),
   };
 }

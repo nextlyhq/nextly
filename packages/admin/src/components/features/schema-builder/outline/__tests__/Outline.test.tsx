@@ -204,6 +204,27 @@ describe("the outline of the nested fixture", () => {
     expect(on.setHidden).toHaveBeenCalledWith("f-internal-note", false);
   });
 
+  it("shows each accepted field group's own count, on its own row", () => {
+    renderOutline({
+      nodes: buildOutline(
+        [
+          {
+            id: "f-zone",
+            name: "zone",
+            label: "Zone",
+            type: "component",
+            components: ["seo", "social"],
+          } as BuilderField,
+        ],
+        { entityReadOnly: false, fieldGroups: nestedFixtureFieldGroups() }
+      ),
+    });
+    expect(row("zone/@seo")).toHaveTextContent("Shared · used in 3 places");
+    expect(row("zone/@social")).toHaveTextContent("Shared · used in 1 place");
+    // The field itself stands for neither, so it carries no count.
+    expect(row("zone")).not.toHaveTextContent("used in");
+  });
+
   it("a field group's fields, read-only, with its link", async () => {
     const { on } = renderOutline();
     const field = row("seo/meta_title") as HTMLElement;

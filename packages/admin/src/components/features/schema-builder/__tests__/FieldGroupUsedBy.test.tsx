@@ -5,7 +5,13 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import {
+  act,
+  createTestQueryClient,
+  render,
+  screen,
+  within,
+} from "@admin/__tests__/utils";
 
 import { FieldGroupUsedBy } from "../FieldGroupUsedBy";
 
@@ -67,6 +73,23 @@ describe("FieldGroupUsedBy", () => {
   it("says it does not know, rather than that it is used nowhere", async () => {
     get.mockRejectedValue(new Error("down"));
     render(<FieldGroupUsedBy slug="seo" />);
+    expect(
+      await screen.findByText(/could not be read, so it is not known/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/not used anywhere/)).toBeNull();
+  });
+
+  it("says it does not know after a failed refresh, not the answer it had", async () => {
+    const queryClient = createTestQueryClient();
+    get.mockResolvedValueOnce({ items: [], meta: { total: 0 } });
+    render(<FieldGroupUsedBy slug="seo" />, { queryClient });
+    expect(
+      await screen.findByText("This field group is not used anywhere yet.")
+    ).toBeInTheDocument();
+
+    // A use is added elsewhere, and the refresh that would have shown it fails.
+    get.mockRejectedValueOnce(new Error("down"));
+    await act(() => queryClient.refetchQueries());
     expect(
       await screen.findByText(/could not be read, so it is not known/)
     ).toBeInTheDocument();

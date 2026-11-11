@@ -116,9 +116,9 @@ function rowNote(node: OutlineNode): string | null {
  * known. The count is of fields, as the field-group list counts them.
  */
 function sharedText(node: OutlineNode): string {
-  const placedBy = node.fieldGroup?.placedBy;
-  if (placedBy === undefined || placedBy === null) return "Shared";
-  return `Shared · used in ${placedBy} ${placedBy === 1 ? "place" : "places"}`;
+  const usedIn = node.usedIn;
+  if (usedIn === undefined || usedIn === null) return "Shared";
+  return `Shared · used in ${usedIn} ${usedIn === 1 ? "place" : "places"}`;
 }
 
 /** The badges a row carries, in a fixed order; told in words, not colour. */
@@ -139,7 +139,14 @@ function RowBadges({
       show: node.readOnly,
       text: node.readOnly ? `Locked · ${describeReadOnly(node.readOnly)}` : "",
     },
-    { show: node.container === "field-group", text: sharedText(node) },
+    {
+      // A field using field groups, and each field group a field accepting
+      // several offers: both are shared, each with its own count when known.
+      show:
+        node.container === "field-group" ||
+        node.container === "field-group-entry",
+      text: sharedText(node),
+    },
   ];
   return (
     <span className="ml-auto flex flex-wrap items-center justify-end gap-1">
