@@ -215,6 +215,56 @@ describe("a form's Settings", () => {
   });
 });
 
+describe("closing by itself", () => {
+  it("saves a closing time and a limit once switched on and set", async () => {
+    const { user, fetchMock } = view({ status: "published" });
+    expect(
+      screen.queryByLabelText("Closing date and time")
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("switch", { name: "Close on a date" }));
+    const closing = screen.getByLabelText("Closing date and time");
+    await user.clear(closing);
+    await user.type(closing, "2026-12-06T18:00");
+
+    await user.click(
+      screen.getByRole("switch", { name: "Limit the number of submissions" })
+    );
+    const limit = screen.getByRole("spinbutton", { name: "Submission limit" });
+    await user.clear(limit);
+    await user.type(limit, "120");
+    await user.click(save());
+
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
+    expect(saves(fetchMock)[0]?.settings).toMatchObject({
+      // Typed in the author's time zone, stored as the instant it names.
+      closesAt: new Date("2026-12-06T18:00").toISOString(),
+      submissionLimit: 120,
+    });
+  });
+
+  it("clears each when switched off", async () => {
+    const { user, fetchMock } = view({
+      status: "published",
+      settings: { closesAt: "2026-12-06T18:00:00.000Z", submissionLimit: 50 },
+    });
+    expect(
+      screen.getByRole("spinbutton", { name: "Submission limit" })
+    ).toHaveValue(50);
+
+    await user.click(screen.getByRole("switch", { name: "Close on a date" }));
+    await user.click(
+      screen.getByRole("switch", { name: "Limit the number of submissions" })
+    );
+    await user.click(save());
+
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
+    const { settings } = saves(fetchMock)[0]!;
+    expect(settings).not.toHaveProperty("closesAt");
+    expect(settings).not.toHaveProperty("submissionLimit");
+  });
+});
+
 describe("the form's ID", () => {
   it("follows the name, and can be typed, while the form is a draft", async () => {
     const { user } = view({ name: "", slug: "" });
