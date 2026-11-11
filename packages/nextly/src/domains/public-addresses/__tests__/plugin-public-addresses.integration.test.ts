@@ -491,6 +491,67 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("a participant's own write rolls back when the save fails", async () => {
+      const seen: { ctx?: PluginContext } = {};
+      const writer: PublicAddressParticipant = {
+        holderOf: () => Promise.resolve(null),
+        record: async (batch, { transaction }) => {
+          const ctx = seen.ctx;
+          if (!ctx) throw new Error("no context");
+          for (const update of batch) {
+            await ctx.services.collections.createEntryInTransaction(
+              transaction,
+              "addr_log",
+              { holder: `${update.holder.collection}:${update.holder.id}` }
+            );
+          }
+        },
+      };
+      const failing: PublicAddressParticipant = {
+        holderOf: () => Promise.resolve(null),
+        record: () => Promise.reject(new Error("second record failed")),
+      };
+      const plugin = definePlugin({
+        name: "@test/address-log-rollback",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          collections: [
+            defineCollection({
+              slug: "addr_log",
+              fields: [text({ name: "holder" })],
+            }),
+          ],
+        },
+        init(ctx) {
+          seen.ctx = ctx;
+          ctx.publicAddresses.participate(writer);
+          ctx.publicAddresses.participate(failing);
+        },
+      });
+      current = await createTestNextly({
+        dialect,
+        plugins: [plugin],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+
+      await expect(publish(current, "hello")).rejects.toThrow();
+
+      expect(
+        (await current.nextly.find({ collection: "posts" })).items
+      ).toEqual([]);
+      expect(
+        (await current.nextly.find({ collection: "addr_log" })).items
+      ).toEqual([]);
+    });
+
     it("a participant writes its own collection on the save's transaction", async () => {
       const seen: { ctx?: PluginContext } = {};
       const participant: PublicAddressParticipant = {
