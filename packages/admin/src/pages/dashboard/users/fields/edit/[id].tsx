@@ -94,7 +94,7 @@ export default function EditUserFieldPage(): JSX.Element {
     return (
       <PageContainer type="form">
         <div>
-          <div className="mb-6">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="fields-edit" />
           </div>
           <Alert variant="destructive">
@@ -117,7 +117,7 @@ export default function EditUserFieldPage(): JSX.Element {
     return (
       <PageContainer type="form">
         <div>
-          <div className="mb-6">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="fields-edit" />
           </div>
           <div className="space-y-6">
@@ -140,7 +140,7 @@ export default function EditUserFieldPage(): JSX.Element {
     return (
       <PageContainer type="form">
         <div>
-          <div className="mb-6">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="fields-edit" />
           </div>
           <PageHeader
@@ -181,7 +181,7 @@ export default function EditUserFieldPage(): JSX.Element {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer type="form">
         <div>
-          <div className="mb-6">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="fields-edit" />
           </div>
 

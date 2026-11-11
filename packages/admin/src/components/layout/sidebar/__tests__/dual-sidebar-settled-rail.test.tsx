@@ -56,6 +56,19 @@ vi.mock("../SubSidebarPanel", () => ({ SubSidebarPanel: () => null }));
 // The rail's foot (Inbox and account menu) has its own tests; these read the
 // rail's entries.
 vi.mock("../RailAccount", () => ({ RailAccount: () => null }));
+/** "+ New"'s own answer: what the reader may create, and whether that is known. */
+let newMenu: { types: { slug: string }[]; isReady: boolean } = {
+  types: [{ slug: "posts" }],
+  isReady: true,
+};
+vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
+  useNewMenuTypes: () => newMenu,
+  NewMenuView: ({ variant }: { variant: string }) => (
+    <button type="button" data-testid="new-menu" data-variant={variant}>
+      New
+    </button>
+  ),
+}));
 vi.mock("@admin/hooks/useRouter", () => ({
   useRouter: () => ({ pathname: "/admin", route: null, isHydrated: true }),
 }));
@@ -115,6 +128,7 @@ const railLabels = () =>
 
 afterEach(() => {
   vi.clearAllMocks();
+  newMenu = { types: [{ slug: "posts" }], isReady: true };
 });
 
 describe("DualSidebar's rail while its answers arrive", () => {
@@ -235,5 +249,45 @@ describe("DualSidebar's rail under the keyboard", () => {
       // among them, where it would leave focus with nothing drawn at all.
       expect(control.classList.contains("outline-none")).toBe(false);
     }
+  });
+});
+
+describe(`DualSidebar's rail and its "+ New" button`, () => {
+  const settledAnswers = {
+    workspacePending: false,
+    permissionsLoading: false,
+    contentLoading: false,
+  };
+
+  it(`draws "+ New" under the logo, ahead of every entry`, () => {
+    answers = settledAnswers;
+    render(<DualSidebar />);
+    const newButton = screen.getByTestId("new-menu");
+    expect(newButton).toHaveAttribute("data-variant", "rail");
+    const firstEntry = screen.getByLabelText("Dashboard");
+    expect(
+      newButton.compareDocumentPosition(firstEntry) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it(`holds every entry, and the settled mark, until "+ New"'s answer is in`, () => {
+    answers = settledAnswers;
+    newMenu = { types: [], isReady: false };
+    render(<DualSidebar />);
+    // Drawn before it, the entries would move when it arrived.
+    expect(railLabels()).toEqual([]);
+    expect(screen.queryByTestId("new-menu")).toBeNull();
+    expect(
+      document.querySelector("aside")?.getAttribute("data-shell-answers")
+    ).toBe("pending");
+  });
+
+  it(`leaves "+ New" out of the phone drawer's rail, which does not wait on it`, () => {
+    answers = settledAnswers;
+    newMenu = { types: [{ slug: "posts" }], isReady: false };
+    render(<DualSidebar isMobile />);
+    expect(screen.queryByTestId("new-menu")).toBeNull();
+    expect(railLabels()).toContain("Dashboard");
   });
 });

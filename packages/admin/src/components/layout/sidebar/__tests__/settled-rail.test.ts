@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   railAnswersIn,
   railAnswersPending,
+  railBehindNewMenu,
   railEntryDecided,
   settledRailItems,
 } from "../lib/settled-rail";
@@ -211,5 +212,24 @@ describe("railAnswersPending", () => {
     expect(
       railAnswersPending({ ...SETTLED, workspacePending: true }).workspace
     ).toBe(true);
+  });
+});
+
+describe(`the rail behind its "+ New" entry`, () => {
+  const rail = { items: ["dashboard", "content"], settled: true };
+
+  it(`draws nothing and is not settled until "+ New"'s place is decided`, () => {
+    expect(railBehindNewMenu(rail, { isReady: false })).toEqual({
+      items: [],
+      settled: false,
+    });
+  });
+
+  it("does not wait in the phone drawer, whose rail does not draw it", () => {
+    expect(railBehindNewMenu(rail, { isReady: false }, true)).toBe(rail);
+  });
+
+  it("draws the rail as it stands once it is", () => {
+    expect(railBehindNewMenu(rail, { isReady: true })).toBe(rail);
   });
 });

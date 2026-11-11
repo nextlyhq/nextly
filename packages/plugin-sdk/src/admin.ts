@@ -662,6 +662,17 @@ export type { AdminChromeLayer } from "@nextlyhq/admin";
 export { useFoldedPanel } from "@nextlyhq/admin";
 
 /**
+ * Draw a page's own content into the admin's one top bar (@experimental):
+ * `name="start"` is the bar's left part (where a breadcrumb goes) and
+ * `name="end"` its right part, for the page's own actions such as Save. The
+ * children stay in the page's tree, so they keep its state and context, and
+ * are drawn in the bar for as long as the page is mounted. Outside the admin's
+ * shell (a unit test) they render where they stand.
+ */
+export { TopBarPlace } from "@nextlyhq/admin";
+export type { TopBarPlaceName, TopBarPlaceProps } from "@nextlyhq/admin";
+
+/**
  * The live values of the document being edited (@experimental), for any
  * component a plugin draws inside the editor: a block, a side panel section
  * or a tab, on an entry, a new one or a Single. A place's `entry` prop is the
