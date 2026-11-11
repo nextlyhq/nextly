@@ -563,6 +563,7 @@ export {
   type FrozenValue,
   type PluginEmailSettings,
   type PluginContext,
+  type PluginDurableEvents,
   type PluginEmitOptions,
   type PluginEvents,
   type PluginContributions,
@@ -629,6 +630,8 @@ export {
   type PluginRouteLimitKey,
   type Middleware,
   type RouteMethod,
+  type PluginProxyHandler,
+  type ProxyAnswer,
   type NextlyPrincipals,
   type PluginPrincipalsApi,
   type PluginRoutePrincipal,
@@ -1209,6 +1212,13 @@ export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from
 // root-level `fields`, `status` or `versions`, so its result is not assignable
 // to `ResolvedDraftSplitCollection` however faithfully the record carries them.
 export { resolvedCollectionView } from "./domains/versions/resolved-collection-view";
+
+// A plugin's durable events (`ctx.events.emitDurable` / `onDurable`): what a
+// subscriber receives, and the handler that receives it.
+export type {
+  DurableEvent,
+  DurableHandler,
+} from "./domains/plugin-events/subscribers";
 
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {

@@ -181,7 +181,10 @@ describe("visibility and the canonical", () => {
     expect(
       resolveOrder({
         ...none,
-        page: { canonical: "https://elsewhere.example/original" },
+        page: {
+          canonical: "https://elsewhere.example/original",
+          canonicalElsewhere: true,
+        },
         address: "/de/ueber",
       }).canonical
     ).toEqual({ value: "https://elsewhere.example/original", from: "page" });

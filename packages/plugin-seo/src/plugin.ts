@@ -31,11 +31,17 @@ import { rootFileRoutes, sitemapResponse } from "./outputs/root-routes";
 import { SITEMAP_LIMITS, type SitemapLimits } from "./outputs/sitemap-files";
 import { NO_RULES } from "./resolver/page-levels";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
+import { decideStanding, stagingGuard } from "./staging/guard";
 import {
   resolveBaseOrigin,
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
+import { withStructuredData } from "./structured-data/provider";
+import {
+  rulesFromOptions,
+  type StructuredDataOptions,
+} from "./structured-data/rules";
 import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
@@ -126,6 +132,31 @@ export interface SeoPluginOptions {
    * A collection's slug, such as `"tags"`, or `"single:<slug>"` for a Single.
    */
   hiddenTypes?: string[];
+  /**
+   * @experimental Each content type's structured data type, the fields that
+   * hold each detail it needs, and the brand facts every page names, until the
+   * SEO settings hold them. Keyed by collection slug, or `single:<slug>`:
+   *
+   * ```ts
+   * seoPlugin({
+   *   collections: ["posts"],
+   *   baseUrl: "https://example.com",
+   *   structuredData: {
+   *     brand: { name: "Example", profiles: [{ url: "https://x.com/example" }] },
+   *     types: {
+   *       posts: {
+   *         type: "blogPosting",
+   *         details: { blogPosting: { author: "writer", datePublished: "date" } },
+   *       },
+   *     },
+   *   },
+   * });
+   * ```
+   *
+   * Structured data is written with absolute addresses, so `baseUrl` is
+   * needed for any to be served.
+   */
+  structuredData?: StructuredDataOptions;
 }
 
 /** A page-size option, a positive whole number no larger than the protocol allows. */
@@ -270,14 +301,26 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const sitemapSubset = subsetOf(options.sitemap, targets);
   const readRules = rulesReader(options.hiddenTypes);
 
+  // Checked here, so a misspelled type or detail fails when the site starts.
+  const readStructuredDataRules = rulesFromOptions(
+    options.baseUrl,
+    options.structuredData
+  );
+
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
     // The record that keeps each public address to one page.
     collections: [addressRecordCollection()],
     services: {
-      // Every page's head, worked out by the one order of who wins.
-      pageMetadata: ctx => seoPageMetadata(ctx, readRules),
+      // Every page's head, worked out by the one order of who wins, and its
+      // structured data, worked out from that same answer.
+      pageMetadata: ctx =>
+        withStructuredData(
+          ctx,
+          seoPageMetadata(ctx, readRules),
+          readStructuredDataRules
+        ),
       // The pages the site lists and the problems that left any out, read by
       // the same rules as the head: one reading for every listing output.
       listedPages: (ctx): ListedPagesService => ({
@@ -291,6 +334,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           }),
       }),
     },
+    // Every host but the site's production addresses is kept out of search.
+    proxy: [stagingGuard(readRules)],
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -365,6 +410,16 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // record up to date with content saved while the plugin was absent or
       // addresses a deploy moved.
       void startCatchUp(ctx);
+      // Decided once, the first time the plugin starts on a site: whether a
+      // site with no production address known is kept out of search.
+      void decideStanding(ctx).catch((error: unknown) => {
+        ctx.logger.error(
+          "The SEO plugin could not record the site's standing",
+          {
+            error,
+          }
+        );
+      });
     },
   });
 }

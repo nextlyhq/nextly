@@ -5,13 +5,15 @@
  * Core's address answers are stood in for: each type's declared address and
  * the language rule (every language but the default under its code).
  */
+import { createHash } from "node:crypto";
+
 import {
   NextlyError,
   type PageMetadataInput,
   type PluginContext,
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fillPattern, type SiteRules } from "../page-levels";
 import { answerOf, resolveSeo, seoPageMetadata } from "../provider";
@@ -47,12 +49,52 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
  * answering a missing id as the media service does, and `failing` ids with
  * a fault that is not about the image at all.
  */
+/** The record's unique key of the address `path` in `locale`. */
+function addressKey(locale: string, path: string): string {
+  return createHash("sha256")
+    .update(`address:${locale}|${path}`, "utf8")
+    .digest("hex");
+}
+
 function context(
   media: Record<string, Record<string, unknown>> = {},
-  failing: readonly string[] = []
+  failing: readonly string[] = [],
+  holders: Record<string, { collection: string; id: string }> = {}
 ) {
   return {
+    self: { collections: {} },
+    config: {},
+    publicAddresses: { defaultLanguage: async () => "en" },
     services: {
+      // The address record: who holds each path in English, read by the
+      // rows' unique keys as the record stores them.
+      ownCollections: {
+        listEntries: async (
+          _slug: string,
+          options: { where?: { claimKey?: { in?: string[] } } }
+        ) => {
+          const keys = options.where?.claimKey?.in ?? [];
+          const path = Object.keys(holders).find(held =>
+            keys.includes(addressKey("en", held))
+          );
+          const held = path === undefined ? undefined : holders[path];
+          return {
+            data:
+              held === undefined
+                ? []
+                : [
+                    {
+                      id: "r1",
+                      kind: "address",
+                      locale: "en",
+                      path,
+                      holderCollection: held.collection,
+                      holderId: held.id,
+                    },
+                  ],
+          };
+        },
+      },
       media: {
         findById: async (id: string) => {
           if (failing.includes(id)) throw new Error("connection reset");
@@ -397,7 +439,11 @@ describe("a typed canonical", () => {
     ]) {
       const answer = await resolveSeo(
         context(),
-        entryInput("pages", { slug: "about", seo: { canonical: typed } })
+        entryInput("pages", {
+          slug: "about",
+          // Confirmed: the page first appeared at that address.
+          seo: { canonical: typed, canonicalElsewhere: true },
+        })
       );
       expect(answer.canonical).toEqual({ value: used, from: "page" });
     }
@@ -442,5 +488,88 @@ describe("a pattern", () => {
     expect(
       fillPattern("{Title} | {Site name}", { title: "Hello" }, {})
     ).toBeUndefined();
+  });
+});
+
+describe("the canonical a page is given, with addresses from the environment", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("takes a typed address on a production address the environment names", async () => {
+    vi.stubEnv("NEXTLY_PRODUCTION_ADDRESSES", "https://acme.example");
+    const answer = await resolveSeo(
+      context(),
+      entryInput("pages", {
+        id: "p1",
+        slug: "about",
+        seo: { canonical: "https://acme.example/about-us" },
+      })
+    );
+    expect(answer.canonical).toEqual({
+      value: "https://acme.example/about-us",
+      from: "page",
+    });
+  });
+
+  it("names the address record's tags, so a page gaining or losing its address expires the head", () => {
+    const tags = seoPageMetadata(context()).tags?.(
+      entryInput("pages", { slug: "a" })
+    );
+    expect(tags).toEqual(expect.arrayContaining(["nextly:nx_seo_addresses"]));
+  });
+});
+
+describe("the canonical a page is given", () => {
+  it("is none where another page holds its address, having lost it in a clash", async () => {
+    const answer = await resolveSeo(
+      context({}, [], { "/news": { collection: "posts", id: "p9" } }),
+      entryInput("pages", { id: "p1", slug: "news", title: "News" })
+    );
+    expect(answer.canonical).toBeUndefined();
+  });
+
+  it("is its own address where it holds it, or where no page does yet", async () => {
+    const held = await resolveSeo(
+      context({}, [], { "/news": { collection: "pages", id: "p1" } }),
+      entryInput("pages", { id: "p1", slug: "news" })
+    );
+    expect(held.canonical).toEqual({ value: "/news", from: "address" });
+    const unrecorded = await resolveSeo(
+      context(),
+      entryInput("pages", { id: "p1", slug: "news" })
+    );
+    expect(unrecorded.canonical).toEqual({ value: "/news", from: "address" });
+  });
+
+  it("takes a typed address off the site only where the page first appeared there", async () => {
+    const typed = (seo: Record<string, unknown>, rules?: SiteRules) =>
+      resolveSeo(
+        context(),
+        entryInput("pages", { id: "p1", slug: "about", seo }),
+        async () => rules ?? { patterns: {} }
+      );
+    // Off the site, not confirmed: the page's own address.
+    expect(
+      (await typed({ canonical: "https://elsewhere.example/a" })).canonical
+    ).toEqual({ value: "/about", from: "address" });
+    // Confirmed: the typed address.
+    expect(
+      (
+        await typed({
+          canonical: "https://elsewhere.example/a",
+          canonicalElsewhere: true,
+        })
+      ).canonical
+    ).toEqual({ value: "https://elsewhere.example/a", from: "page" });
+    // On one of the site's production addresses: taken.
+    expect(
+      (
+        await typed(
+          { canonical: "https://acme.example/about-us" },
+          { productionAddresses: ["https://acme.example"], patterns: {} }
+        )
+      ).canonical
+    ).toEqual({ value: "https://acme.example/about-us", from: "page" });
   });
 });

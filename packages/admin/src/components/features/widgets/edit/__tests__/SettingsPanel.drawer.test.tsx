@@ -134,14 +134,86 @@ describe("the drawer for each kind of card", () => {
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     expect(sections()).toEqual(["Content", "Display", "Size"]);
-    expect(holds("Content")).toMatch(/Collection.*Filter/s);
-    expect(holds("Display")).toMatch(/Title/);
+    expect(holds("Content")).toMatch(/Source.*Count.*Filter/s);
+    expect(holds("Display")).toMatch(/Title.*Under the number/s);
     // Nothing folded: no section is a disclosure to open.
     expect(
       screen
         .getAllByRole("region")
         .every(region => region.querySelector("h3 [aria-expanded]") === null)
     ).toBe(true);
+  });
+
+  it("offers Users after the collections as Count's Source, and set to it, no Count or Filter", async () => {
+    drawer(core("core/count"), { collection: "posts" });
+    const content = screen.getByRole("region", { name: "Content" });
+    expect(
+      within(content).getByRole("radiogroup", { name: "Count" })
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(content).getByRole("combobox", { name: /Source/ })
+    );
+    expect(
+      screen.getAllByRole("option").map(option => option.textContent)
+    ).toEqual(["Posts", "Users"]);
+    await userEvent.click(screen.getByRole("option", { name: "Users" }));
+    // People have no entries to choose among, and no fields to filter by.
+    expect(
+      within(content).queryByRole("radiogroup", { name: "Count" })
+    ).toBeNull();
+    expect(holds("Content")).not.toMatch(/Filter/);
+    // Nor a status split to draw under their number.
+    const under = within(
+      screen.getByRole("region", { name: "Display" })
+    ).getByRole("radiogroup", { name: "Under the number" });
+    expect(
+      within(under).getByRole("radio", { name: "Status split" })
+    ).toBeDisabled();
+  });
+
+  it("reopens a card set to Users on Users, with nothing reset", () => {
+    drawer(core("core/count"), { collection: "users" });
+    const content = screen.getByRole("region", { name: "Content" });
+    expect(
+      within(content).getByRole("combobox", { name: /Source/ })
+    ).toHaveTextContent("Users");
+    expect(screen.queryByText(/was reset/)).toBeNull();
+  });
+
+  it("rules a status split out beside Drafts, saying why, and a split held gives way to the change", () => {
+    drawer(core("core/count"), {
+      collection: "posts",
+      count: "draft",
+      show: "split",
+    });
+    const display = screen.getByRole("region", { name: "Display" });
+    const under = within(display).getByRole("radiogroup", {
+      name: "Under the number",
+    });
+    expect(
+      within(under).getByRole("radio", { name: "Status split" })
+    ).toBeDisabled();
+    expect(
+      within(under).getByRole("radio", { name: "Change this week" })
+    ).toHaveAttribute("aria-checked", "true");
+    expect(under).toHaveAccessibleDescription(/needs Count: All entries/);
+  });
+
+  it("offers the status split again once Count is All entries", async () => {
+    drawer(core("core/count"), { collection: "posts", count: "draft" });
+    const content = screen.getByRole("region", { name: "Content" });
+    await userEvent.click(
+      within(
+        within(content).getByRole("radiogroup", { name: "Count" })
+      ).getByRole("radio", { name: "All entries" })
+    );
+    const under = within(
+      screen.getByRole("region", { name: "Display" })
+    ).getByRole("radiogroup", { name: "Under the number" });
+    expect(
+      within(under).getByRole("radio", { name: "Status split" })
+    ).toBeEnabled();
+    expect(under).not.toHaveAccessibleDescription(/needs Count/);
   });
 
   it("draws Recent entries' Number of entries and Row spacing under Display, as choices", () => {
@@ -171,9 +243,19 @@ describe("the drawer for each kind of card", () => {
     ).toEqual(["Comfortable", "Compact"]);
   });
 
-  it("draws Team with its title and width alone", () => {
+  it("draws Team's role and Number of people, then its title and last active", () => {
     drawer(core("core/team"), undefined);
-    expect(sections()).toEqual(["Display", "Size"]);
+    expect(sections()).toEqual(["Content", "Display", "Size"]);
+    expect(holds("Content")).toMatch(/Role.*Number of people/s);
+    expect(holds("Content")).toContain(
+      "People can also switch this from the card."
+    );
+    expect(
+      within(screen.getByRole("radiogroup", { name: "Number of people" }))
+        .getAllByRole("radio")
+        .map(radio => radio.textContent)
+    ).toEqual(["5", "10", "20"]);
+    expect(holds("Display")).toContain("Show last active");
   });
 
   it("draws the Note's text with what Markdown it takes and the characters left", () => {
