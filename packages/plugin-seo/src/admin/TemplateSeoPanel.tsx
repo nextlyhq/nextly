@@ -15,7 +15,7 @@
  *
  * @module admin/TemplateSeoPanel
  */
-import { Input, Switch, Textarea } from "@nextlyhq/ui";
+import { Input, Switch } from "@nextlyhq/ui";
 import { Info } from "lucide-react";
 import {
   useEffect,
@@ -273,9 +273,9 @@ function RuleEditor(props: RuleEditorProps): ReactNode {
   const id = useId();
   const answer = previewAnswer(context);
   const one = inSentence(context.typeLabel);
-  const inputs = useRef<
-    Partial<Record<RuleField, HTMLInputElement | HTMLTextAreaElement | null>>
-  >({});
+  const inputs = useRef<Partial<Record<RuleField, HTMLInputElement | null>>>(
+    {}
+  );
   // The field a variable is added to: the one last in focus.
   const focused = useRef<RuleField>("title");
   const set = (field: RuleField, text: string): RuleDraft => ({
@@ -372,9 +372,8 @@ function RuleEditor(props: RuleEditorProps): ReactNode {
         limit={DESCRIPTION_LIMIT}
         unknown={unknownIn(draft.description, context.fields)}
       >
-        <Textarea
+        <Input
           id={`${id}-desc`}
-          rows={2}
           ref={input => {
             inputs.current.description = input;
           }}
