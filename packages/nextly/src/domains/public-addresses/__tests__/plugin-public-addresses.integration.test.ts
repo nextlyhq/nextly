@@ -306,6 +306,10 @@ describe.each(getConfiguredTestDialects())(
       expect(listed.map(item => item.holder.id)).toEqual(
         created.items.map(item => String(item.id))
       );
+      // Each carries when it was made, for ordering across types.
+      expect(listed.every(item => typeof item.createdAt === "string")).toBe(
+        true
+      );
       const one = listed.find(item => item.holder.id === ids[0]);
       expect(one?.holds).toEqual([{ locale: "en", path: "/blog/one" }]);
     });
@@ -602,6 +606,15 @@ describe.each(getConfiguredTestDialects())(
 
       const { items } = await current.nextly.find({ collection: "addr_log" });
       expect(items.map(item => item.holder)).toEqual([`posts:${post}`]);
+    });
+
+    it("types lists the site's content types, and no plugin's or system one", async () => {
+      const { ctx } = await boot(dialect);
+
+      const types = await ctx.publicAddresses.types();
+
+      expect(types).toContainEqual({ kind: "collection", slug: "posts" });
+      expect(types.map(type => type.slug)).not.toContain("users");
     });
 
     it("withdraw stops the asking", async () => {

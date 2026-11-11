@@ -63,6 +63,7 @@ import type {
   LegacyFieldResolution,
   LegacyResolutionsBundle,
 } from "../../schema/pipeline/prompt-dispatcher/browser";
+import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import {
   columnsThatMayHoldNull,
   fieldProducesColumn,
@@ -1574,6 +1575,25 @@ export class DynamicCollectionService extends BaseService {
         collection.tableName,
         oldUserFields,
         userDefinedFields
+      );
+      // A field renamed onto a column that is already there is refused before anything here is
+      // written: the archive write just below is the first.
+      await refuseRenamedFieldOntoTakenColumn(
+        this.adapter,
+        {
+          previousFields: oldUserFields,
+          fields: userDefinedFields,
+          mainTable: collection.tableName,
+          // Where its translatable values are stored, before and after: per language when it is
+          // translated, or always under per-language storage.
+          wasLocalized: storesPerLanguage({
+            localized: collectionWasLocalized,
+          }),
+          isLocalized: storesPerLanguage({ localized: collectionIsLocalized }),
+          dialect: this.adapter.getCapabilities().dialect,
+          builtBy: "collection",
+        },
+        { collection: collectionName }
       );
       // A field leaving or joining translation has preconditions of its own, asked before anything
       // here is written or altered.

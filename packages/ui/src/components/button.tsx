@@ -28,7 +28,7 @@ export const BUTTON_VARIANT_MAP = {
     // one mode and into it in the other. `-600` clears both (5.92:1 light,
     // 5.67:1 dark); `-700` reads at 3.70:1 against the dark label.
     destructive:
-      "bg-destructive-solid text-destructive-foreground border border-transparent hover:bg-destructive-600",
+      "bg-destructive-solid text-destructive-foreground border border-transparent hover:bg-destructive-hover",
     // border-border is the decorative separator token, and it is the right
     // one here: a button is identified by its label and fill, so its edge
     // carries no meaning on its own, unlike border-input, which is the

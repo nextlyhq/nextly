@@ -26,7 +26,10 @@ import { PLUGIN_EVENTS_TABLE } from "../../schemas/plugin-events";
 export const MAX_DURABLE_PAYLOAD_BYTES = 64 * 1024;
 
 /** What recording needs from the database adapter. */
-export type DurableEventsAdapter = Pick<DrizzleAdapter, "transaction">;
+export type DurableEventsAdapter = Pick<
+  DrizzleAdapter,
+  "transaction" | "afterCommit"
+>;
 
 /** What a plugin's recorder is built from. */
 export interface DurableEventRecorderOptions {
@@ -38,6 +41,11 @@ export interface DurableEventRecorderOptions {
   adapter: () => DurableEventsAdapter;
   /** The clock; injectable for tests. */
   now?: () => Date;
+  /**
+   * The prompt dispatch a committed event offers, or null where there is
+   * none; without it, events wait for the scheduled sweep.
+   */
+  kick?: () => { offer(): void } | null;
 }
 
 /** Where a durable event is written. */
@@ -74,15 +82,30 @@ export function durableEventNames(
  * when there is none. The one place this rule is decided, so the public emit
  * answers it as one function does.
  */
-function runDurableWrite<R>(
+async function runDurableWrite<R>(
   adapter: DurableEventsAdapter,
   tx: PluginTransaction | undefined,
-  work: (adapterTx: TransactionContext) => Promise<R>
+  work: (adapterTx: TransactionContext) => Promise<R>,
+  committed: () => void
 ): Promise<R> {
   if (tx !== undefined) {
-    return linkedTransaction(tx, "events.recordDurable").run(work);
+    const link = linkedTransaction(tx, "events.recordDurable");
+    return link.run(async adapterTx => {
+      const result = await work(adapterTx);
+      // Held until the plugin's transaction commits, and dropped if it rolls
+      // back: there is nothing to deliver for a discarded event. Registered
+      // while the write is still tracked, so the transaction cannot end in
+      // between: a callback that did not await the emit returns at once, and
+      // its transaction ends as soon as the write lands.
+      link.afterCommit(committed);
+      return result;
+    });
   }
-  return adapter.transaction(work);
+  const result = await adapter.transaction(work);
+  // Held until the transaction the calling flow holds commits, if it holds
+  // one; run now when the write committed in a transaction of its own.
+  await adapter.afterCommit(committed);
+  return result;
 }
 
 /** `payload` as the JSON a row stores, or a refusal naming what is wrong. */
@@ -137,16 +160,22 @@ export function createDurableEventRecorder(
       }
       const json = payloadJson(name, payload);
       const id = randomUUID();
-      await runDurableWrite(options.adapter(), recordOptions?.tx, tx =>
-        tx.insert(PLUGIN_EVENTS_TABLE, {
-          id,
-          owner: options.owner,
-          name,
-          payload: json,
-          createdAt: now(),
-          fannedOutAt: null,
-          finishedAt: null,
-        })
+      await runDurableWrite(
+        options.adapter(),
+        recordOptions?.tx,
+        tx =>
+          tx.insert(PLUGIN_EVENTS_TABLE, {
+            id,
+            owner: options.owner,
+            name,
+            payload: json,
+            createdAt: now(),
+            fannedOutAt: null,
+            finishedAt: null,
+          }),
+        // Offers the prompt dispatch; never throws, so a committed write
+        // never fails on its account.
+        () => options.kick?.()?.offer()
       );
       return { id };
     },

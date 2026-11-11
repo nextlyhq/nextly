@@ -34,6 +34,7 @@ import {
 import { ChevronDown, Loader2, MoreHorizontal } from "lucide-react";
 import { Fragment, type JSX } from "react";
 
+import { useInTopBar } from "@admin/components/layout/header/TopBarPlaces";
 import { cn } from "@admin/lib/utils";
 
 import {
@@ -42,6 +43,7 @@ import {
   withContributedActions,
   type EditorDocumentAction,
 } from "./document-actions";
+import { DOCUMENT_PANEL_TOGGLE_ATTRIBUTE } from "./DocumentSidePanel";
 
 /** What a host wires an action to, and why it might not run right now. */
 export interface ActionBinding {
@@ -188,6 +190,12 @@ export interface NarrowMenuItem {
   label: string;
   onSelect: () => void;
   disabled?: boolean;
+  /**
+   * The row that shows or hides the document panel. While it is folded here,
+   * the menu's trigger is the panel's toggle: where focus goes back to when
+   * the panel closes.
+   */
+  togglesPanel?: boolean;
 }
 
 /**
@@ -301,6 +309,7 @@ export function DocumentActionBar({
   className,
   narrowItems = [],
 }: DocumentActionBarProps): JSX.Element {
+  const inTopBar = useInTopBar();
   const { available, primary } = wiredActions(actions, bindings);
   const toolbar = bound(actionsAt(available, "toolbar"), bindings);
   const groups = menuGroups(available);
@@ -327,10 +336,15 @@ export function DocumentActionBar({
   return (
     // Wraps within the width it is given rather than past it, as the header's
     // cluster around it does: a preview pane can narrow the editor on a wide
-    // screen, and the document's own verbs must stay inside it.
+    // screen, and the document's own verbs must stay inside it. In the admin's
+    // top bar, which is one row tall, the verbs stay on that row: Save, its
+    // arrow and More together never split across two lines.
     <div
       className={cn(
-        "flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5",
+        "flex min-w-0 max-w-full items-center justify-end gap-1.5",
+        // In the bar it also keeps its own width, so its buttons never spill
+        // over the controls before them.
+        inTopBar ? "shrink-0 flex-nowrap" : "flex-wrap",
         className
       )}
     >
@@ -637,6 +651,9 @@ function DocumentMenu({
           className="px-2"
           aria-label="More actions"
           title="More actions"
+          {...(narrowItems.some(item => item.togglesPanel === true)
+            ? { [DOCUMENT_PANEL_TOGGLE_ATTRIBUTE]: "" }
+            : {})}
         >
           <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
         </Button>
