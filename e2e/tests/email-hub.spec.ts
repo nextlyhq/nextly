@@ -1,7 +1,8 @@
 /**
- * The Email hub against a real server: entered from the main navigation, each
- * tab visited, every URL email had under Settings landing in its place in the
- * hub, a new email started from the dialog, a form's notification linking to
+ * The Email hub against a real server: entered from the Settings panel, each
+ * tab visited, every URL email had before (under `/admin/email`, and as
+ * separate Settings pages) landing in its place in the hub, a new email
+ * started from the dialog, a form's notification linking to
  * its email, and every tab usable at phone, tablet and desktop widths without
  * the page scrolling sideways.
  */
@@ -17,7 +18,7 @@ test.describe.configure({ lock: [LOCK.email] });
 const TABS = [
   {
     name: "Messages",
-    path: "/email",
+    path: "/settings/email",
     // A fresh install's emails, under their owner.
     // Visible only: below tablet width the table is hidden and the cards
     // carry the same names.
@@ -26,12 +27,12 @@ const TABS = [
   },
   {
     name: "Design",
-    path: "/email/design",
+    path: "/settings/email/design",
     loaded: (page: Page) => page.getByRole("heading", { name: "Layouts" }),
   },
   {
     name: "Sending",
-    path: "/email/sending",
+    path: "/settings/email/sending",
     loaded: (page: Page) =>
       page.getByRole("searchbox").or(page.getByRole("textbox")).first(),
   },
@@ -55,14 +56,17 @@ async function scrollsSideways(page: Page): Promise<boolean> {
 const hubHeading = (page: Page) =>
   page.getByRole("heading", { name: "Email", exact: true, level: 1 });
 
-test("enters the hub from the main navigation and visits each tab", async ({
+test("enters the hub from the Settings panel and visits each tab", async ({
   page,
 }) => {
   await gotoAdmin(page, "");
   const rail = page.getByRole("navigation").first();
-  await rail.locator('a[href="/admin/email"]').click();
+  // Email has no rail entry of its own: it is a Settings destination.
+  await expect(rail.locator('a[href="/admin/email"]')).toHaveCount(0);
+  await gotoAdmin(page, "/settings");
+  await page.locator('a[href="/admin/settings/email"]').first().click();
 
-  await expect(page).toHaveURL(/\/admin\/email$/);
+  await expect(page).toHaveURL(/\/admin\/settings\/email$/);
   await expect(hubHeading(page)).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("tab", { name: "Messages" })).toHaveAttribute(
     "aria-selected",
@@ -83,15 +87,27 @@ test("enters the hub from the main navigation and visits each tab", async ({
   }
 });
 
-test.describe("the email URLs under Settings", () => {
+test.describe("the URLs email had before", () => {
   const ID = "3f6c1d2e-8a4b-4c5d-9e6f-7a8b9c0d1e2f";
   const MOVED = [
-    ["/settings/email-templates", "/email"],
-    ["/settings/email-templates/create", "/email/messages/create"],
-    [`/settings/email-templates/edit/${ID}`, `/email/messages/edit/${ID}`],
-    ["/settings/email-providers", "/email/sending"],
-    ["/settings/email-providers/create", "/email/sending/create"],
-    [`/settings/email-providers/edit/${ID}`, `/email/sending/edit/${ID}`],
+    ["/settings/email-templates", "/settings/email"],
+    ["/settings/email-templates/create", "/settings/email/messages/create"],
+    [
+      `/settings/email-templates/edit/${ID}`,
+      `/settings/email/messages/edit/${ID}`,
+    ],
+    ["/settings/email-providers", "/settings/email/sending"],
+    ["/settings/email-providers/create", "/settings/email/sending/create"],
+    [
+      `/settings/email-providers/edit/${ID}`,
+      `/settings/email/sending/edit/${ID}`,
+    ],
+    // The hub's own addresses when it had a rail entry.
+    ["/email", "/settings/email"],
+    ["/email/design", "/settings/email/design"],
+    ["/email/sending", "/settings/email/sending"],
+    [`/email/messages/edit/${ID}`, `/settings/email/messages/edit/${ID}`],
+    [`/email/sending/edit/${ID}`, `/settings/email/sending/edit/${ID}`],
   ] as const;
 
   for (const [old, now] of MOVED) {
@@ -108,22 +124,35 @@ test.describe("the email URLs under Settings", () => {
   }) => {
     await gotoAdmin(page, `/settings/email-templates/create?duplicate=${ID}`);
     await expect(page).toHaveURL(
-      new RegExp(`/admin/email/messages/create\\?duplicate=${ID}$`),
+      new RegExp(`/admin/settings/email/messages/create\\?duplicate=${ID}$`),
+      { timeout: 30_000 }
+    );
+  });
+
+  test("keeps the query of a link to the hub's old address", async ({
+    page,
+  }) => {
+    await gotoAdmin(page, `/email/messages/create?duplicate=${ID}`);
+    await expect(page).toHaveURL(
+      new RegExp(`/admin/settings/email/messages/create\\?duplicate=${ID}$`),
       { timeout: 30_000 }
     );
   });
 });
 
 test("starts a new email from the dialog, named", async ({ page }) => {
-  await gotoAdmin(page, "/email");
+  await gotoAdmin(page, "/settings/email");
   await page.getByRole("button", { name: "New email" }).click();
   const dialog = page.getByRole("dialog", { name: "New email" });
   await dialog.getByLabel("Name").fill("Back-in-stock alert");
   await dialog.getByRole("button", { name: "Create email" }).click();
 
-  await expect(page).toHaveURL(/\/admin\/email\/messages\/create\?name=/, {
-    timeout: 30_000,
-  });
+  await expect(page).toHaveURL(
+    /\/admin\/settings\/email\/messages\/create\?name=/,
+    {
+      timeout: 30_000,
+    }
+  );
   await expect(page.locator('input[name="name"]')).toHaveValue(
     "Back-in-stock alert",
     { timeout: 30_000 }
@@ -146,7 +175,7 @@ test("links a form's notification to its email in the hub", async ({
   await expect(link).toBeVisible();
   await expect(link).toHaveAttribute("target", "_blank");
   const href = await link.getAttribute("href");
-  expect(href).toMatch(/^\/admin\/email\/messages\/edit\/[^/]+$/);
+  expect(href).toMatch(/^\/admin\/settings\/email\/messages\/edit\/[^/]+$/);
 
   // The link opens the email's editor.
   await page.goto(href as string);
@@ -183,7 +212,7 @@ for (const size of WIDTHS) {
 
 test("shows each email as a card at phone width", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await gotoAdmin(page, "/email");
+  await gotoAdmin(page, "/settings/email");
   await expect(page.getByRole("article").first()).toBeVisible({
     timeout: 30_000,
   });

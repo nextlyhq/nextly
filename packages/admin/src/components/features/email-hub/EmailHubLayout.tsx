@@ -18,6 +18,7 @@ import {
 } from "@admin/constants/email-hub";
 import { ROUTES } from "@admin/constants/routes";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useSettingsLanding } from "@admin/hooks/useSettingsLanding";
 import { navigateTo } from "@admin/lib/navigation";
 
 interface EmailHubLayoutProps {
@@ -43,6 +44,7 @@ export function EmailHubLayout({
   children,
 }: EmailHubLayoutProps): React.JSX.Element {
   const { hasPermission, hasAnswer } = useCurrentUserPermissions();
+  const settingsHref = useSettingsLanding();
   const tabs = hasAnswer
     ? visibleEmailHubTabs(hasPermission)
     : [...EMAIL_HUB_TABS];
@@ -57,6 +59,9 @@ export function EmailHubLayout({
           <Breadcrumbs
             items={[
               { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+              // The hub is a Settings destination, so its trail runs through
+              // Settings, to the first page there this reader can open.
+              { label: "Settings", href: settingsHref },
               { label: "Email" },
             ]}
           />

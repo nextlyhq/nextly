@@ -23,7 +23,9 @@ import {
 } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useRouter } from "@admin/hooks/useRouter";
+import { useSettingsLanding } from "@admin/hooks/useSettingsLanding";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
+import { isMultilingual } from "@admin/lib/localization";
 import {
   filterCollectionItems,
   filterSingleItems,
@@ -63,7 +65,6 @@ import {
 } from "./lib/place-standalone-plugins";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import { resolveActiveSection } from "./lib/resolve-section";
-import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
 import {
   railAnswersIn,
@@ -236,6 +237,7 @@ export function DualSidebar({
     hasPermission,
   });
   const hasBuildersSection = showBuilder;
+  const translationsShown = isMultilingual(branding?.locales);
 
   /**
    * Whether a section other than Plugins draws a panel this reader can open:
@@ -324,11 +326,15 @@ export function DualSidebar({
           return hasSettingsSection;
         case "builders":
           return hasBuildersSection;
+        case "translations":
+          // Only a site with two or more locales has anything to translate.
+          return translationsShown;
         default:
           return true;
       }
     },
     [
+      translationsShown,
       visibleStandaloneIds,
       hasPermission,
       hasPermissionDataPending,
@@ -454,12 +460,9 @@ export function DualSidebar({
   // table and not to the chain became unreachable from the rail. Background
   // Jobs was exactly that — the entry appeared, the link fell through every
   // arm, and a jobs-only operator landed on General Settings, which answers to
-  // manage-settings and returns 403.
-  const settingsHref = resolveSettingsLanding({
-    hasPermission,
-    canAccessApiKeys: apiKeysReachable,
-    canAccessWebhooks: webhooksReachable,
-  });
+  // manage-settings and returns 403. The same hook places the Settings crumb
+  // of the pages inside the panel, so the two cannot disagree.
+  const settingsHref = useSettingsLanding();
 
   const resolveItemHref = (item: MainMenuItem): string =>
     resolveItemHrefHelper(
