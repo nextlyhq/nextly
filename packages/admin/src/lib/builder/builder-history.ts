@@ -62,20 +62,29 @@ export function commit<T>(
 
 /**
  * The history from `state` on: what came before it can no longer be undone
- * to, and every step after it stays. The history as it is when it does not
- * hold `state`, as when a later edit to the same field replaced it.
+ * to, and every step after it stays.
+ *
+ * A later edit to the same field joins the step `state` was, as typing does,
+ * and replaces it; then `state` comes back as the start, with the state shown
+ * one step on, so Undo returns to exactly what was saved. Either way the step
+ * shown is closed: the next edit is a step of its own.
  */
 export function startFrom<T>(
   history: BuilderHistory<T>,
   state: T
 ): BuilderHistory<T> {
   const at = history.states.indexOf(state);
-  if (at <= 0 || at > history.index) return history;
-  return {
-    ...history,
-    states: history.states.slice(at),
-    index: history.index - at,
-  };
+  if (at >= 0 && at <= history.index) {
+    return {
+      ...history,
+      states: history.states.slice(at),
+      index: history.index - at,
+      key: null,
+    };
+  }
+  const now = currentState(history);
+  if (Object.is(now, state)) return createHistory(state, history.limit);
+  return { states: [state, now], index: 1, key: null, limit: history.limit };
 }
 
 /** Show the state before, if there is one. An undo ends the step being joined. */
