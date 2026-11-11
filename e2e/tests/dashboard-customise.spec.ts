@@ -25,6 +25,12 @@ test.describe.configure({ lock: [LOCK.dashboard] });
 
 const CELLS = '[data-testid^="widget-cell-"]';
 
+/**
+ * A card menu's last item, which takes the card off the dashboard: "Remove", or "Hide setup" on
+ * the setup card, which shows to the suite's super-admin until setup is done.
+ */
+const REMOVE = /^(Remove|Hide setup)$/;
+
 /** The dashboard's address, with or without the trailing slash. */
 const DASHBOARD_PATH = /\/admin\/?$/;
 
@@ -40,7 +46,12 @@ const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 const KNOWN_DEFECT = { rule: "link-name", within: "aside nav" } as const;
 
 function bar(page: Page) {
-  return page.getByRole("group", { name: "Customize your dashboard" });
+  return page.getByRole("group", { name: "Customize dashboard" });
+}
+
+/** The bar's Save, enabled exactly while there are unsaved changes. */
+function save(page: Page) {
+  return bar(page).getByRole("button", { name: "Save" });
 }
 
 /** Opens customise mode from the keyboard. */
@@ -58,7 +69,7 @@ async function moveFirstCardLater(page: Page): Promise<void> {
     .first()
     .click();
   await page.getByRole("menuitem", { name: "Move later" }).click();
-  await expect(bar(page).getByText("Unsaved changes")).toBeVisible();
+  await expect(save(page)).toBeEnabled();
 }
 
 /** The unsaved-changes prompt's buttons, by name, in document order. */
@@ -185,6 +196,51 @@ test("entering by keyboard lands on the bar, and Tab never reaches a card's own 
   ).toBe(true);
 });
 
+test("leaving by Cancel puts focus on the greeting, and asks first only with unsaved changes", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  const greeting = page.getByRole("heading", { level: 1 });
+
+  await customize(page);
+  await bar(page).getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("dashboard-leave-ask")).toHaveCount(0);
+  await expect(greeting).toBeFocused();
+
+  await customize(page);
+  await moveFirstCardLater(page);
+  await bar(page).getByRole("button", { name: "Cancel" }).click();
+  const ask = page.getByTestId("dashboard-leave-ask");
+  await expect(ask).toBeVisible();
+  await ask.getByRole("button", { name: "Keep editing" }).click();
+  await expect(save(page)).toBeEnabled();
+
+  await bar(page).getByRole("button", { name: "Cancel" }).click();
+  await ask.getByRole("button", { name: "Discard changes" }).click();
+  await expect(bar(page)).toBeHidden();
+  await expect(greeting).toBeFocused();
+});
+
+test("the breadcrumb reads Dashboard / Customizing, and its Dashboard leaves the mode as Cancel does", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  const crumb = page.getByRole("navigation", { name: "Breadcrumb" });
+  await expect(crumb).toHaveText(/^Dashboard$/);
+  await customize(page);
+  await expect(crumb).toContainText("Customizing");
+  await moveFirstCardLater(page);
+  await crumb.getByRole("button", { name: "Dashboard" }).click();
+  await page
+    .getByTestId("dashboard-leave-ask")
+    .getByRole("button", { name: "Discard changes" })
+    .click();
+  await expect(bar(page)).toBeHidden();
+  await expect(crumb).toHaveText(/^Dashboard$/);
+  await expect(page).toHaveURL(DASHBOARD_PATH);
+  await expect(page.getByRole("heading", { level: 1 })).toBeFocused();
+});
+
 test("moving within the admin with unsaved changes asks, and Keep Editing stays", async ({
   page,
 }) => {
@@ -209,7 +265,7 @@ test("moving within the admin with unsaved changes asks, and Keep Editing stays"
   await page.keyboard.press("Enter");
   await expect(prompt).toBeHidden();
   await expect(page).toHaveURL(DASHBOARD_PATH);
-  await expect(bar(page).getByText("Unsaved changes")).toBeVisible();
+  await expect(save(page)).toBeEnabled();
 });
 
 test("going Back with unsaved changes asks, and Keep Editing stays", async ({
@@ -250,14 +306,14 @@ test("going Back with unsaved changes asks, and Keep Editing stays", async ({
   // is out of the accessibility tree while it shows, though still drawn.
   await expect(
     page.getByRole("group", {
-      name: "Customize your dashboard",
+      name: "Customize dashboard",
       includeHidden: true,
     })
   ).toBeVisible();
   await prompt.getByRole("button", { name: "Keep Editing" }).click();
   await expect(prompt).toBeHidden();
   await expect(page).toHaveURL(DASHBOARD_PATH);
-  await expect(bar(page).getByText("Unsaved changes")).toBeVisible();
+  await expect(save(page)).toBeEnabled();
 });
 
 test("reloading with unsaved changes gets the browser's own prompt", async ({
@@ -276,7 +332,7 @@ test("reloading with unsaved changes gets the browser's own prompt", async ({
   await prompt.dismiss();
 
   // Dismissed, the page stays, changes and all.
-  await expect(bar(page).getByText("Unsaved changes")).toBeVisible();
+  await expect(save(page)).toBeEnabled();
 });
 
 for (const theme of ["light", "dark"] as Theme[]) {
@@ -286,7 +342,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
       page.locator(CELLS).filter({ visible: true }).first()
     ).toBeVisible();
     await customize(page);
-    // With a change made, so the unsaved-changes marker is scanned too.
+    // With a change made, so Save is scanned enabled.
     await moveFirstCardLater(page);
     await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     await expectNoAxeViolations(page);
@@ -326,7 +382,7 @@ test("the add panel adds three cards in one visit, each said and ringed, and clo
       .getByRole("button", { name: /^Card actions for / })
       .first()
       .click();
-    await page.getByRole("menuitem", { name: "Remove" }).click();
+    await page.getByRole("menuitem", { name: REMOVE }).click();
   }
   const before = await page.locator(CELLS).count();
 
@@ -374,7 +430,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
         .getByRole("button", { name: /^Card actions for / })
         .first()
         .click();
-      await page.getByRole("menuitem", { name: "Remove" }).click();
+      await page.getByRole("menuitem", { name: REMOVE }).click();
       const panel = await openAddPanel(page);
       if (viewport.width < 640) {
         // Full width on a phone.
@@ -518,7 +574,7 @@ test("a pointer drag shows a line, moves nothing else, and puts the card down af
   ).toHaveAttribute("data-highlighted", "true");
 });
 
-test("a keyboard drag moves the card, and its handle keeps focus in view below the bar", async ({
+test("a keyboard drag moves the card, and its handle keeps focus in view below the top bar", async ({
   page,
 }) => {
   await gotoAdmin(page, "/");
@@ -544,8 +600,11 @@ test("a keyboard drag moves the card, and its handle keeps focus in view below t
   await expect.poll(() => cardOrder(page)).toEqual(after);
   await expect(handle).toBeFocused();
   await expect(handle).toBeInViewport();
-  // Not hidden under the sticky bar (WCAG 2.4.11).
-  const barBox = await bar(page).boundingBox();
+  // Not hidden under the top bar (WCAG 2.4.11).
+  const barBox = await page
+    .locator("header")
+    .filter({ has: bar(page) })
+    .boundingBox();
   const handleBox = await handle.boundingBox();
   expect(handleBox?.y ?? 0).toBeGreaterThanOrEqual(
     (barBox?.y ?? 0) + (barBox?.height ?? 0) - 1
@@ -608,7 +667,7 @@ test.describe("on a phone, with touch", () => {
 
     // Remove, then add one back from the panel, which takes the whole width.
     await menu(0).tap();
-    await page.getByRole("menuitem", { name: "Remove" }).tap();
+    await page.getByRole("menuitem", { name: REMOVE }).tap();
     await bar(page).getByRole("button", { name: "Add widget" }).tap();
     const panel = page.getByRole("dialog", { name: "Add widget" });
     expect((await panel.boundingBox())?.width).toBe(390);
@@ -628,6 +687,7 @@ test.describe("on a phone, with touch", () => {
     await bar(page).getByRole("button", { name: "Save" }).tap();
     await expect(bar(page)).toBeHidden();
     await expect(page.getByTestId("dashboard-edit-begin")).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toBeFocused();
   });
 
   for (const theme of ["light", "dark"] as Theme[]) {
@@ -640,24 +700,39 @@ test.describe("on a phone, with touch", () => {
       ).toBeVisible();
       await customize(page);
       await moveFirstCardLater(page);
-      // Cancel leading, Save trailing, Add widget below them.
+      // In the top bar: Add widget as its icon, then Cancel and Save, all on one row, with no
+      // Reset; the breadcrumb is the way back to the dashboard at rest.
       const button = (name: string) =>
         boxOf(bar(page).getByRole("button", { name }));
-      const [cancel, save, add] = await Promise.all([
+      const [add, cancel, saveBox] = await Promise.all([
+        button("Add widget"),
         button("Cancel"),
         button("Save"),
-        button("Add widget"),
       ]);
-      expect(cancel.x).toBeLessThan(save.x);
-      expect(add.y).toBeGreaterThan(cancel.y);
-      // The hint on a row of its own below Cancel and Save, across the bar, not squeezed between
-      // the two buttons.
-      const [status, whole] = await Promise.all([
-        boxOf(bar(page).getByTestId("dashboard-edit-status")),
-        boxOf(bar(page)),
-      ]);
-      expect(status.y).toBeGreaterThanOrEqual(cancel.y + cancel.height);
-      expect(status.width).toBeGreaterThan(whole.width / 2);
+      expect(add.x).toBeLessThan(cancel.x);
+      expect(cancel.x).toBeLessThan(saveBox.x);
+      expect(
+        Math.abs(add.y + add.height / 2 - (cancel.y + cancel.height / 2))
+      ).toBeLessThan(2);
+      expect(add.width).toBeLessThanOrEqual(36);
+      // Its words are kept for its name, but not drawn.
+      const label = await boxOf(
+        bar(page)
+          .getByRole("button", { name: "Add widget" })
+          .getByText("Add widget")
+      ).catch(() => null);
+      expect(label === null || (label.width <= 1 && label.height <= 1)).toBe(
+        true
+      );
+      await expect(
+        bar(page).getByRole("button", { name: "Reset to default" })
+      ).toBeHidden();
+      // Nothing scrolls sideways.
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth
+        )
+      ).toBe(true);
       await expectNoAxeViolations(page);
     });
   }
