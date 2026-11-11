@@ -249,6 +249,7 @@ describe.each(getConfiguredTestDialects())(
       await as("siteSeo", ["manage-seo", ...SETTINGS, "read-posts"]);
       await as("storesOnly", [...SETTINGS, ...STORES, "read-posts"]);
       await as("manageOnly", ["manage-seo"]);
+      await as("settingsOnly", ["update-settings", "read-settings"]);
       await as("checker", ["check-seo"]);
       await as("media", ["create-media", "read-media"]);
       await as("addsMedia", ["create-media"]);
@@ -555,6 +556,60 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("the optional connections need manage-seo", () => {
+      const calls: [Method, string][] = [
+        ["GET", "/connections"],
+        ["POST", "/connections/search-console/connect"],
+        ["GET", "/connections/search-console/callback?state=s&code=c"],
+        ["POST", "/connections/search-console/disconnect"],
+        ["GET", "/connections/search-console/report"],
+      ];
+
+      it.each(calls)(
+        "answers %s %s to someone holding it",
+        async (method, path) => {
+          for (const who of ["siteSeo", "manageOnly"]) {
+            const { status } = await route(method, path, people[who]!);
+            // Past the gate: what is left is the route's own answer, such as no
+            // Google sign-in named or nothing connected.
+            expect([401, 403]).not.toContain(status);
+          }
+        }
+      );
+
+      it.each(calls)(
+        "refuses %s %s to someone without it, whatever else they hold",
+        async (method, path) => {
+          for (const who of ["reader", "storesOnly", "checker", "seoEditor"]) {
+            expect((await route(method, path, people[who]!)).status).toBe(403);
+          }
+        }
+      );
+
+      it.each(calls)(
+        "refuses %s %s to someone signed out",
+        async (method, path) => {
+          expect((await route(method, path, null)).status).toBe(401);
+        }
+      );
+
+      it("keeps the plugin's own settings, where connections are kept, to manage-seo", async () => {
+        const path = `plugins-settings/${PLUGIN}`;
+        const body = { indexNowLast: null };
+        expect(
+          (await request("PATCH", path, people.settingsOnly!, body)).status
+        ).toBe(403);
+        expect(
+          (await request("PATCH", path, people.manageOnly!, body)).status
+        ).toBe(200);
+      });
+
+      it("never answers a credential, even to someone holding it", async () => {
+        const { body } = await route("GET", "/connections", people.siteSeo!);
+        expect(JSON.stringify(body)).not.toMatch(/token|verifier|key/i);
+      });
+    });
+
     describe("share images and the public files", () => {
       it("makes a share image only for someone who may add to and read the media library", async () => {
         expect(
@@ -575,6 +630,21 @@ describe.each(getConfiguredTestDialects())(
           expect((await request("GET", file, null)).status).toBe(200);
         }
       );
+
+      it("serves llms.txt to anyone once it is switched on", async () => {
+        expect((await request("GET", "llms.txt", null)).status).toBe(404);
+        await t.nextly.updateSingle({
+          slug: SEO_SETTINGS_SLUG,
+          data: { _overwrite: true, llmsTxt: true },
+          overrideAccess: true,
+        });
+        expect((await request("GET", "llms.txt", null)).status).toBe(200);
+        await t.nextly.updateSingle({
+          slug: SEO_SETTINGS_SLUG,
+          data: { _overwrite: true, llmsTxt: false },
+          overrideAccess: true,
+        });
+      });
     });
 
     it("hides the admin's site-wide screens behind the plugin's own permissions", () => {

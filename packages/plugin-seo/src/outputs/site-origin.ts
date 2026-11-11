@@ -14,10 +14,11 @@ import type { ReadRules } from "../resolver/provider";
  * The site's origin for a request that reached `asked`: one of the site's
  * production addresses, as the page's head reads them, the one the request
  * reached where it is among them; else the configured origin; else none,
- * where only the request's own origin is left.
+ * where only the request's own origin is left. With no request (`asked`
+ * undefined), the site's main address.
  */
 export async function siteOriginFor(
-  asked: string,
+  asked: string | undefined,
   ctx: PluginContext,
   config: { origin?: string; readRules: ReadRules }
 ): Promise<string | undefined> {
