@@ -302,6 +302,19 @@ describe("pending changes controls", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
   });
 
+  it("says each undo even when it reads as the one before", async () => {
+    const user = setup();
+    act(() => builder.handleFieldAdd("text"));
+    act(() => builder.handleFieldAdd("text"));
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    const first = announced();
+    expect(first?.trim()).toBe("Undid: added a new field");
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    // The same words, but a change to the live region, so it is read again.
+    expect(announced()).not.toBe(first);
+    expect(announced()?.trim()).toBe("Undid: added a new field");
+  });
+
   it("a read-only entity offers none of them", () => {
     setup(true);
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
@@ -415,5 +428,17 @@ describe("pending changes in the outline", () => {
     await user.click(screen.getByRole("button", { name: "Undo" }));
     expect(countText()).toBe("No unsaved changes");
     expect(within(row("address")).queryByText(/Deleted/)).toBeNull();
+  });
+
+  it("a deleted row offers no place to add, inside it or before it", () => {
+    render(<LayoutHarness />, { wrapper: Providers });
+    const place = (name: string) => screen.queryByRole("button", { name });
+    // Offered while the group is there.
+    expect(place("Add a field inside Address")).not.toBeNull();
+    expect(place("Add a field before City")).not.toBeNull();
+    act(() => builder.handleFieldDelete(field("address").id));
+    expect(place("Add a field inside Address")).toBeNull();
+    expect(place("Add a field before Address")).toBeNull();
+    expect(place("Add a field before City")).toBeNull();
   });
 });

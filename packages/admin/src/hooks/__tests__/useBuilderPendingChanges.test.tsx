@@ -199,6 +199,37 @@ describe("builder pending changes", () => {
     expect(field("headline").label).toBe("X");
   });
 
+  it("an edit made while a save is in flight stays pending and undoable once it lands", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "A",
+      })
+    );
+    // The save is sent with the fields as they are now…
+    const pinWhenSaved = result.current.state.pinFields;
+    // …and another edit is made before it lands.
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("summary"),
+        label: "B",
+      })
+    );
+    act(() => pinWhenSaved());
+    expect(result.current.state.pending.changes).toMatchObject([
+      { kind: "settings", name: "summary" },
+    ]);
+    expect(result.current.state.pending.canUndo).toBe(true);
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("summary").label).toBe("Summary");
+    expect(field("headline").label).toBe("A");
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+
   it("the count is the changes plus one for the settings", () => {
     const { result, field } = setup();
     act(() =>
