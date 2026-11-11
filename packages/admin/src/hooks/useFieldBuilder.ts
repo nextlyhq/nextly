@@ -66,6 +66,7 @@ import {
   createHistory,
   currentState,
   redo as historyRedo,
+  startFrom,
   undo as historyUndo,
 } from "@admin/lib/builder/builder-history";
 import type { FieldBuilderValidationResult } from "@admin/lib/builder/field-validators";
@@ -134,8 +135,12 @@ export interface UseFieldBuilderReturn<T extends FieldValues = FieldValues> {
   // Undo history
   /** Show `fields` with no history before them: a load, or a discard. */
   resetFields: (fields: BuilderField[]) => void;
-  /** Keep the fields shown, with nothing to undo: they have just been saved. */
-  clearHistory: () => void;
+  /**
+   * Nothing before `saved` can be undone any more: it has just been saved.
+   * Edits made after it, while the save was on its way, stay undoable. With
+   * no `saved`, the fields shown are the start.
+   */
+  clearHistory: (saved?: BuilderField[]) => void;
   canUndo: boolean;
   canRedo: boolean;
   /** Step back; the fields before and after, or null with nothing to undo. */
@@ -446,8 +451,12 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
     setHistory(createHistory(next));
   }, []);
 
-  const clearHistory = useCallback(() => {
-    setHistory(prev => createHistory(currentState(prev)));
+  const clearHistory = useCallback((saved?: BuilderField[]) => {
+    setHistory(prev =>
+      saved === undefined
+        ? createHistory(currentState(prev))
+        : startFrom(prev, saved)
+    );
   }, []);
 
   const undo = useCallback((): BuilderFieldsStep | null => {

@@ -202,9 +202,12 @@ export function useBuilderEntityState<TEntity>({
   // A save is the new starting point: what was changed is now what is saved,
   // and there is nothing before it to undo into.
   const { clearHistory } = builder;
+  // The fields the save sent, as this render holds them: an edit made while
+  // the save was on its way stays pending against them, and undoable.
   const pinFields = useCallback(() => {
-    setOriginalFields(builder.fields.filter(f => !f.isSystem));
-    clearHistory();
+    const saved = builder.fields;
+    setOriginalFields(saved.filter(f => !f.isSystem));
+    clearHistory(saved);
   }, [builder.fields, clearHistory]);
 
   const pinSettings = useCallback((saved: BuilderSettingsValues) => {

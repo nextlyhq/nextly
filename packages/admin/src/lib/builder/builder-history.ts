@@ -60,6 +60,24 @@ export function commit<T>(
   };
 }
 
+/**
+ * The history from `state` on: what came before it can no longer be undone
+ * to, and every step after it stays. The history as it is when it does not
+ * hold `state`, as when a later edit to the same field replaced it.
+ */
+export function startFrom<T>(
+  history: BuilderHistory<T>,
+  state: T
+): BuilderHistory<T> {
+  const at = history.states.indexOf(state);
+  if (at <= 0 || at > history.index) return history;
+  return {
+    ...history,
+    states: history.states.slice(at),
+    index: history.index - at,
+  };
+}
+
 /** Show the state before, if there is one. An undo ends the step being joined. */
 export function undo<T>(history: BuilderHistory<T>): BuilderHistory<T> {
   if (!canUndo(history)) return history;
