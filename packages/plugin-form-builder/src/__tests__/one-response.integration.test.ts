@@ -322,6 +322,24 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toMatchObject({ code: "DUPLICATE" });
     });
 
+    it("frees a network once its submission's stored address is cleared", async () => {
+      const { nextly, submit } = await boot({ oneResponse: "ip" });
+      expect((await submit({ email: "a@b.co" }, "203.0.113.9")).success).toBe(
+        true
+      );
+      const [first] = await stored(nextly);
+      await nextly.update({
+        collection: "form-submissions",
+        id: first!.id,
+        data: { ipAddress: null, _overwrite: true },
+      });
+      const [cleared] = await stored(nextly);
+      expect(cleared?.responseKey ?? null).toBeNull();
+      expect((await submit({ email: "a@b.co" }, "203.0.113.9")).success).toBe(
+        true
+      );
+    });
+
     it("lets a person respond again once their submission is marked spam", async () => {
       const { nextly, submit } = await boot({
         oneResponse: "email",

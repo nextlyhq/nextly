@@ -118,10 +118,13 @@ export async function responseKeyAfterUpdate(input: {
   moved: boolean;
 }): Promise<string | null> {
   const { patch, stored } = input;
+  // What the update leaves out is as stored; what it clears (null) is gone.
+  const after = (field: keyof KeyedSubmission) =>
+    patch[field] === undefined ? stored?.[field] : patch[field];
   const key = await responseKeyOf(input.digests, input.settings, {
-    status: patch.status ?? stored?.status,
-    data: patch.data ?? stored?.data,
-    ipAddress: patch.ipAddress ?? stored?.ipAddress,
+    status: after("status"),
+    data: after("data"),
+    ipAddress: after("ipAddress"),
   });
   if (key === null) return null;
   const storedValue = await responseKeyOf(input.digests, input.settings, {
