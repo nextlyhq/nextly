@@ -934,6 +934,11 @@ export class CollectionRegistryService extends BaseRegistryService<
       count: configs.length,
     });
     const seedPermissions = options.seedPermissions !== false;
+    // This collection's permissions, or nothing where a later seeding is left to.
+    const seedFor = (slug: string): Promise<void> =>
+      seedPermissions
+        ? this.seedPermissionsForCollection(slug)
+        : Promise.resolve();
     const recordOf = await this.recordsBySlug();
 
     const result: SyncResult = {
@@ -1024,9 +1029,7 @@ export class CollectionRegistryService extends BaseRegistryService<
             { source: config.source ?? "code" }
           );
           result.updated.push(config.slug);
-          if (seedPermissions) {
-            await this.seedPermissionsForCollection(config.slug);
-          }
+          await seedFor(config.slug);
         } else if (decision.step === "metadata") {
           await this.updateCollection(
             config.slug,
@@ -1048,9 +1051,7 @@ export class CollectionRegistryService extends BaseRegistryService<
           );
           result.updated.push(config.slug);
         } else {
-          if (seedPermissions) {
-            await this.seedPermissionsForCollection(config.slug);
-          }
+          await seedFor(config.slug);
           result.unchanged.push(config.slug);
         }
       } catch (error) {

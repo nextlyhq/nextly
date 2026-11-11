@@ -763,6 +763,25 @@ export class PermissionSeedService extends BaseService {
       (await this.permissionService.permissionRows(
         slugs.length === 1 ? slugs : undefined
       ));
+    const declared = await this.entityDeclarations(kind, slugs, stored, result);
+    tallyEnsured(
+      result,
+      await this.permissionService.ensurePermissions(declared, stored)
+    );
+  }
+
+  /**
+   * What `seedEntitiesPermissions` ensures for every entity of `kind` in
+   * `slugs`: its built-in actions, then its workflow's where no row holds them
+   * yet (counted into `result` as skipped otherwise), built-in ones of this
+   * same pass included.
+   */
+  private async entityDeclarations(
+    kind: "collection" | "single",
+    slugs: readonly string[],
+    stored: readonly PermissionRow[],
+    result: SeedResult
+  ): Promise<PermissionDeclaration[]> {
     const held = new Set(
       stored.map(row => permissionKey(String(row.action), String(row.resource)))
     );
@@ -777,35 +796,24 @@ export class PermissionSeedService extends BaseService {
         ...(group === undefined ? {} : { meta: { group } }),
       });
     };
+    const actions =
+      kind === "collection" ? COLLECTION_SEEDED_ACTIONS : SINGLE_SEEDED_ACTIONS;
     for (const entitySlug of slugs) {
-      const actions =
-        kind === "collection"
-          ? COLLECTION_SEEDED_ACTIONS
-          : SINGLE_SEEDED_ACTIONS;
       for (const action of actions) declare(action, entitySlug);
       const attached = workflowAttachedTo(kind, entitySlug);
-      if (!attached) continue;
-      for (const action of workflowPermissionActions(attached.workflow)) {
+      for (const action of attached
+        ? workflowPermissionActions(attached.workflow)
+        : []) {
         if (held.has(permissionKey(action, entitySlug))) {
           result.total++;
           result.skipped++;
-          continue;
+        } else {
+          // Stored under the workflow group, which is how the presets tell it is a workflow's.
+          declare(action, entitySlug, WORKFLOW_PERMISSION_GROUP);
         }
-        // Stored under the workflow group, which is how the presets tell it is a workflow's.
-        declare(action, entitySlug, WORKFLOW_PERMISSION_GROUP);
       }
     }
-    for (const outcome of await this.permissionService.ensurePermissions(
-      declared,
-      stored
-    )) {
-      result.total++;
-      if ("error" in outcome) result.errors++;
-      else if (outcome.created) {
-        result.created++;
-        result.newPermissionIds.push(outcome.id);
-      } else result.skipped++;
-    }
+    return declared;
   }
 
   /**
@@ -823,6 +831,8 @@ export class PermissionSeedService extends BaseService {
    * Every collection's and every Single's permissions, against one read of the
    * permissions table shared by both: what a start ensures for its entities.
    */
+  // Reached through the service container (`getService("permissionSeedService")`).
+  // fallow-ignore-next-line unused-class-member
   async seedAllEntityPermissions(): Promise<{
     collections: SeedResult;
     singles: SeedResult;
@@ -1560,6 +1570,21 @@ export class PermissionSeedService extends BaseService {
       total: 0,
       newPermissionIds: [],
     };
+  }
+}
+
+/** Into `result`, what each ensuring of one declaration came to. */
+function tallyEnsured(
+  result: SeedResult,
+  outcomes: ReadonlyArray<{ id: string; created: boolean } | { error: unknown }>
+): void {
+  for (const outcome of outcomes) {
+    result.total++;
+    if ("error" in outcome) result.errors++;
+    else if (outcome.created) {
+      result.created++;
+      result.newPermissionIds.push(outcome.id);
+    } else result.skipped++;
   }
 }
 

@@ -1002,7 +1002,7 @@ export function unchangedSinceLastStart(
  * Schema Builder's entities are in no configuration, so only a recorded start
  * vouches for them.
  */
-export function tablesChangedSinceLastStart(): readonly string[] | undefined {
+function tablesChangedSinceLastStart(): readonly string[] | undefined {
   const state = globalForFingerprints.__nextly_startFingerprints;
   if (!state?.recorded || state.recorded.salt !== state.current.salt) {
     return undefined;

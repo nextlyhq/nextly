@@ -575,6 +575,8 @@ export class PermissionService extends BaseService {
    * checks it: a caller ensuring many at once ensures the entities it has just
    * read from them.
    */
+  // Reached through the seed service's `permissionService` property.
+  // fallow-ignore-next-line unused-class-member
   async ensurePermissions(
     declared: readonly PermissionDeclaration[],
     rows?: readonly PermissionRow[]
@@ -787,6 +789,8 @@ export class PermissionService extends BaseService {
    * Who declared the permission for `action` on `resource`: a plugin's or app's name, `null` for
    * the framework's own seed, or `undefined` when there is no such permission.
    */
+  // Published with the service (`nextly`'s services entry).
+  // fallow-ignore-next-line unused-class-member
   async ownerOf(
     action: string,
     resource: string
