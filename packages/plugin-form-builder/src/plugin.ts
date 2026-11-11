@@ -47,6 +47,7 @@ import {
   responseKeyOf,
   touchesResponseKey,
 } from "./handlers/one-response";
+import { refuseOneResponseFieldProblem } from "./handlers/one-response-field-check";
 import {
   sameSubmittedPayload,
   submissionMarks,
@@ -669,6 +670,13 @@ export function formBuilder(
           ).data ?? [],
         readSettings: normalizeFormSettings,
         warn: (message, context) => nextly.logger.warn?.(message, context),
+      });
+
+      // A form saved to compare one response per email has an Email field
+      // it can compare, however it is saved.
+      nextly.hooks.on("beforeChange", formsSlug, (context: unknown) => {
+        refuseOneResponseFieldProblem(context);
+        return (context as { data?: unknown }).data;
       });
 
       // Each form's closing time and limit, held inside the transaction that

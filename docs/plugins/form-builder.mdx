@@ -363,6 +363,7 @@ A form's Settings can limit each person to one response. The server compares a k
 | Setting (`settings.oneResponse`) | Compares | Notes |
 | --- | --- | --- |
 | `off` | nothing | The default: anyone may respond again. |
+| `email` | the answer to the chosen Email field (`settings.oneResponseField`), ignoring case | The field must be required and not hidden by a condition, so every response carries an address. Saving a form that breaks this is refused, and the builder will not delete the field, make it optional or give it a condition while it is chosen. |
 | `ip` | the network address | People sharing an office or home network count as one. Needs the trusted IP above. |
 | `browser` | a token the visitor's browser keeps | Counted from when it is chosen. Someone who clears their browser's data, or uses another browser, can respond again. |
 
