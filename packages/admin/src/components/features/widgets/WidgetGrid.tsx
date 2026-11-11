@@ -69,6 +69,7 @@ import {
 } from "./edit/useDashboardArrangement";
 import { useDashboardFocus } from "./edit/useDashboardFocus";
 import type { LayoutEditor } from "./edit/useLayoutEditor";
+import { useProvisionalDashboard } from "./edit/useProvisionalCard";
 import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
 import {
@@ -554,6 +555,13 @@ export function WidgetGrid(): JSX.Element {
   // The add panel, open or not; the card it places is ringed by the arrangement's `ring`.
   const addPanel = useAddPanelState(editor.isEditing);
   const { ring } = arrangement;
+  // A card the panel added as one the reader already has, its settings open until told apart,
+  // and the Save that leaves it out until then.
+  const { provisional, save: saveDraft } = useProvisionalDashboard({
+    editor,
+    byId,
+    save: arrangement.save,
+  });
 
   // The dashboard's own width, the cards asked at it, and dragging them by their handles.
   const {
@@ -588,7 +596,7 @@ export function WidgetGrid(): JSX.Element {
   attach(gridAnnouncer);
 
   // Saving from the bar and from the unsaved-changes prompt alike.
-  const saveRequest = useSaveRequest(arrangement.save, layout.isUnreadable);
+  const saveRequest = useSaveRequest(saveDraft, layout.isUnreadable);
 
   // Nothing DECLARED. Returned after the hooks above so the hook order is the
   // same on every render, whatever the branding says.
@@ -696,6 +704,7 @@ export function WidgetGrid(): JSX.Element {
                   focus={focus}
                   gridRef={focus.gridRef}
                   highlightedId={ring.highlightedId}
+                  provisional={provisional}
                   drag={drag}
                   on={cardActions(arrangement, removal, editor)}
                 />
@@ -711,6 +720,7 @@ export function WidgetGrid(): JSX.Element {
             restore={removal.restore}
             highlight={ring.highlight}
             focus={focus}
+            startProvisional={provisional.start}
           />
 
           <RemovalNotice

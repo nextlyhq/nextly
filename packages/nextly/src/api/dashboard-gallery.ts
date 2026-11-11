@@ -66,8 +66,9 @@ export interface GalleryRead extends Record<string, unknown> {
 }
 
 /**
- * The widgets the reader is shown a tile for: those they may add now, and
- * those they already have (a one-card widget's tile says so), each a declared
+ * The widgets the reader is shown a row for: those they may add now, and
+ * those they already have, removed or not (a one-card widget's row says it is
+ * on the dashboard, or puts its removed card back), each a declared
  * widget only when its own `access` and `shows` admit them, judged as a card
  * of it with no settings yet would be. A widget reading a collection is judged
  * before one is chosen, and its card asks for one, so it is shown.
@@ -76,11 +77,8 @@ async function tileWidgets(
   offer: GalleryOffer,
   signal: AbortSignal
 ): Promise<CanonicalWidget[]> {
-  const placed = new Set(
-    offer.placements
-      .filter(placement => placement.removed !== true)
-      .map(placement => placement.widgetId)
-  );
+  // A removed card's widget too: its row is where a one-card widget's removed card comes back.
+  const placed = new Set(offer.placements.map(placement => placement.widgetId));
   const candidates = offer.widgets.filter(
     widget => offer.offered.has(widget.id) || placed.has(widget.id)
   );

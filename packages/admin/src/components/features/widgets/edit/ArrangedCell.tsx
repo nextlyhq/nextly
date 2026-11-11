@@ -145,6 +145,19 @@ export interface ArrangedCellProps {
     /** Records what a reader chose for THIS card: its settings, and its own title where set. */
     saveSettings: (config: Record<string, unknown>, ownTitle?: string) => void;
   };
+  /**
+   * Present for a card the add panel just added as one the reader already has
+   * (`useProvisionalCard`): its settings open at once, Save keeps it only once it is told apart
+   * from the card it matches, and closing them unsaved takes it back off.
+   */
+  provisional?: {
+    refusal: (
+      config: Record<string, unknown>,
+      ownTitle: string | undefined
+    ) => string | undefined;
+    keep: () => void;
+    closed: () => void;
+  };
 }
 
 /** A card's width and its one menu, side by side, while customising. */
@@ -361,8 +374,15 @@ function doneFor(props: ArrangedCellProps): {
 } {
   const write = props.settingsWrite;
   if (props.isEditing || !write) {
+    const { provisional } = props;
     return {
       done: (kept, settled) => {
+        const refused = provisional?.refusal(kept.config, kept.ownTitle);
+        if (refused !== undefined) {
+          settled.failed(refused);
+          return;
+        }
+        provisional?.keep();
         props.on.saveSettings(kept.config, kept.ownTitle);
         if (kept.resize) props.on.setSize(kept.resize.size);
         settled.saved();
@@ -475,7 +495,13 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
   const changeSettingsOpen = (open: boolean) => {
     setSettingsOpen(open);
     if (!open) setFocusFirstField(false);
+    if (!open) props.provisional?.closed();
   };
+  // A card added as one the reader already has opens its settings as it is drawn, once.
+  const opensAtOnce = props.provisional !== undefined;
+  useEffect(() => {
+    if (opensAtOnce) setSettingsOpen(true);
+  }, [opensAtOnce, setSettingsOpen]);
   const offersFromEmpty =
     !props.isEditing &&
     props.settingsWrite !== undefined &&
