@@ -87,7 +87,7 @@ function editedAt(row: ContinueRow, now: number): React.ReactNode {
 /**
  * The card's rows as a list: each titled by its document and leading to it,
  * its icon before it, "<collection> · edited <time>" on the meta line (and on
- * Team, who saved it), its status as a pill at its end, and Pin or Unpin in
+ * Team, who saved it), its status as a quiet chip at its end, and Pin or Unpin in
  * its menu.
  */
 function continueModel(

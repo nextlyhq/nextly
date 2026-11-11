@@ -164,7 +164,7 @@ describe("Continue where you left off", () => {
     );
   });
 
-  it("leads each row with its collection's icon, and draws its status as a pill in its tone", () => {
+  it("leads each row with its collection's icon, and draws its status as a quiet chip in its tone", () => {
     draw(
       answered([
         row(1, { status: "published", icon: "Bookmark" }),
