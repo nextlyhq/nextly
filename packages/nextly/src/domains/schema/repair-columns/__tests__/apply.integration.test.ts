@@ -381,6 +381,44 @@ describe.each(getConfiguredTestDialects())(
       expect(Number((await tools.values(TABLE, "price")).p1)).toBe(3);
     });
 
+    it.skipIf(dialect !== "postgresql")(
+      "a real column becoming double precision reads back every value as before",
+      async () => {
+        await run(
+          `CREATE TABLE ${q(TABLE)} (${q("id")} text PRIMARY KEY, ${q("slug")} text, ${q("title")} text, ${q("price")} real)`
+        );
+        await tools.insert(TABLE, [
+          { id: "p1", title: "a", price: 0.1 },
+          { id: "p2", title: "b", price: 3.14159 },
+          { id: "p3", title: "c", price: 100.7 },
+        ]);
+        // Each value as the database prints it, which is what the field reads.
+        const printed = async () =>
+          Object.fromEntries(
+            (
+              (await run(
+                `SELECT ${q("id")} AS id, ${q("price")}::text AS v FROM ${q(TABLE)}`
+              )) as Array<{ id: string; v: string }>
+            ).map(row => [row.id, row.v])
+          );
+        const before = await printed();
+        expect(before).toEqual({ p1: "0.1", p2: "3.14159", p3: "100.7" });
+        const entity = collection(TABLE, [TITLE, PRICE]);
+        expect(
+          recordOf((await dryRun([entity])).result?.records, "price").class
+        ).toBe("safe");
+
+        const document = await apply([entity]);
+        expect(recordOf(document.result?.records, "price").outcome).toBe(
+          "converted"
+        );
+        expect((await tools.columnState(TABLE, "price"))?.type).toMatch(
+          /double precision|float8/
+        );
+        expect(await printed()).toEqual(before);
+      }
+    );
+
     it("changes nothing while the schema lock is held", async () => {
       await tools.createTable(TABLE, [TITLE, AUTHOR]);
       await tools.insert(TABLE, [{ id: "p1", title: "a", author: "u1" }]);
