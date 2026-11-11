@@ -44,6 +44,8 @@ export interface RecordMatch {
 export interface ImportedRedirect {
   /** The address it is from, as a URL spells it, where the source gives one. */
   source?: string;
+  /** That address in full, as the source wrote it. */
+  address?: string;
   target: string;
   permanent: boolean;
 }

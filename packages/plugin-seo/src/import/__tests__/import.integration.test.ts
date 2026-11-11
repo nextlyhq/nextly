@@ -760,13 +760,14 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     await post(t, { title: "Surfer vs Rext", slug: "surfer" });
     await post(t, { title: "Jasper vs Rext", slug: "jasper" });
     const csv = [
-      "id,slug,url,seo_title,seo_description,robots,focus_keyword,redirect_to,redirect_type",
+      "id,slug,url,seo_title,seo_description,robots,focus_keyword,redirect_to,redirect_type,canonical_url",
       '12,surfer,https://old.example/blog/surfer/,"Surfer, compared",Rank Math says so,"index,follow",surfer,,',
       "13,old-post,https://old.example/blog/old-post/,,,,,/blog/surfer,301",
       "14,removed,https://old.example/blog/removed/,,,,,,410",
       // Matched by its slug to the page now at /blog/jasper, and a redirect
       // from the address it had, which no page holds.
-      "15,jasper,https://old.example/old-jasper/,Jasper compared,,,,/blog/jasper,301",
+      // Its canonical, an address with escapes in it, is no template.
+      "15,jasper,https://old.example/old-jasper/,Jasper compared,,,,/blog/jasper,301,https://original.example/my%20long%20article",
       // An address with a space in it, spelled encoded as a URL is.
       "16,spaced,https://old.example/old%20page/,,,,,/blog/surfer,301",
     ].join("\n");
@@ -791,9 +792,11 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       limit: 10,
       overrideAccess: true,
     });
-    expect((await seoBySlug(t, "posts")).jasper?.metaTitle).toBe(
-      "Jasper compared"
-    );
+    expect((await seoBySlug(t, "posts")).jasper).toMatchObject({
+      metaTitle: "Jasper compared",
+      canonical: "https://original.example/my%20long%20article",
+      canonicalElsewhere: true,
+    });
     expect(items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1122,6 +1125,52 @@ describe.each(getConfiguredTestDialects())(
 describe.each(getConfiguredTestDialects())(
   "the SEO import on a site whose languages are prefixed (%s)",
   dialect => {
+    it("reads a From address on a language's own domain in that language", async () => {
+      const t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        languageAddresses: {
+          by: "domain" as const,
+          domains: { en: "https://example.com", de: "https://example.de" },
+        },
+        plugins: [seoPlugin({ collections: ["posts"], sitemap: false })],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+      current = t;
+      const key = await ownerKey(t);
+      const csv = [
+        "slug,url,seo_title,redirect_to,redirect_type",
+        "alt,https://example.de/alt,,/neu,301",
+      ].join("\n");
+      const source: ImportSource = {
+        kind: "rankMath",
+        fileName: "r.csv",
+        text: csv,
+      };
+      const dry = await dryRun(key, source);
+      expect(dry.redirects).toBe(1);
+      const applied = await apply(key, source, dry.plan);
+      expect(applied.status, await applied.clone().text()).toBe(200);
+      const { items } = await t.nextly.find({
+        collection: REDIRECTS_SLUG,
+        limit: 10,
+        overrideAccess: true,
+      });
+      expect(items).toEqual([
+        expect.objectContaining({
+          locale: "de",
+          source: "/alt",
+          target: "/neu",
+        }),
+      ]);
+    });
+
     it("keeps each redirect in its From address's language, without the prefix", async () => {
       const t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
@@ -1196,3 +1245,27 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+/** A full-access key for the site's first person, who may do anything. */
+async function ownerKey(t: TestNextly): Promise<string> {
+  const owner = await t.nextly.users.create({
+    data: {
+      email: "owner@example.com",
+      password: "Password123!",
+      name: "Owner",
+      isActive: true,
+    },
+  });
+  const keys = t.getService("apiKeyService") as unknown as {
+    createApiKey(
+      userId: string,
+      input: { name: string; tokenType: string; expiresIn: string }
+    ): Promise<{ key: string }>;
+  };
+  const { key } = await keys.createApiKey(String(owner.item.id), {
+    name: "owner key",
+    tokenType: "full-access",
+    expiresIn: "unlimited",
+  });
+  return key;
+}

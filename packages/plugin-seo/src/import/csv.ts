@@ -159,6 +159,7 @@ function recordOf(cell: Cells, values: ImportedValues): ImportedRecord {
       ? {
           redirect: {
             ...(source === undefined ? {} : { source }),
+            ...(address === undefined ? {} : { address }),
             target,
             permanent,
           },

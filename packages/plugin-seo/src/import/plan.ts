@@ -137,7 +137,10 @@ export interface PlannedRedirect {
 }
 
 /** A redirect a record asks for, before it is placed in a language. */
-type AskedRedirect = Omit<PlannedRedirect, "locale">;
+type AskedRedirect = Omit<PlannedRedirect, "locale"> & {
+  /** The From address in full, as the source wrote it, where it did. */
+  address?: string;
+};
 
 /** An import worked out. */
 export interface ImportPlan {
@@ -470,10 +473,14 @@ function fallsBackUnseen(
 function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
   const raw = at.record.values[place];
   if (raw === undefined) return;
-  const value = fillTemplate(raw, at.record.variables, {
-    ...at.templates,
-    title: at.record.sourceTitle ?? at.page.label,
-  });
+  // An address is no template: its percent escapes are not variables.
+  const value =
+    place === "canonical"
+      ? raw
+      : fillTemplate(raw, at.record.variables, {
+          ...at.templates,
+          title: at.record.sourceTitle ?? at.page.label,
+        });
   if (value === undefined) {
     at.tally.unfilled++;
     return;
@@ -718,8 +725,10 @@ function redirectOf(
     skipped.redirectsWithoutAddress++;
     return undefined;
   }
+  const { address } = record.redirect;
   return {
     source,
+    ...(address === undefined ? {} : { address }),
     target: record.redirect.target,
     permanent: record.redirect.permanent,
   };
@@ -925,11 +934,19 @@ async function placeRedirects(
   const redirects: PlannedRedirect[] = [];
   const warnings: string[] = [];
   for (const redirect of asked) {
-    const from = await keptFrom(ctx, redirect.source, origin);
+    // An address in full on one of the site's language domains is read in
+    // that language; one on another site (the old one) by its path.
+    const written = redirect.address ?? redirect.source;
+    const onDomain = await keptFrom(ctx, written, origin);
+    const from =
+      onDomain.locale !== undefined
+        ? onDomain
+        : await keptFrom(ctx, redirect.source, origin);
+    const beside = onDomain.locale !== undefined ? written : redirect.source;
     const to = await keptFrom(
       ctx,
       redirect.target,
-      originBeside(redirect.source, origin)
+      originBeside(beside, origin)
     );
     if (
       from.locale !== undefined &&
