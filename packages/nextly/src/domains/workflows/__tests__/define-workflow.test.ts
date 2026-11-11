@@ -393,6 +393,18 @@ describe("defineWorkflow", () => {
       ).toEqual([]);
     });
 
+    it("refuses moving a removed stage's parts into a stage that allows publishing", () => {
+      expect(
+        problemsOf({ ...base(), removedStages: { legal: "approved" } })
+      ).toEqual([
+        "removedStages.legal: `approved` allows publishing, so a removed stage's parts would become publishable without an approval; name a stage before review.",
+      ]);
+      // A stage before review is accepted.
+      expect(
+        problemsOf({ ...base(), removedStages: { legal: "inReview" } })
+      ).toEqual([]);
+    });
+
     it("refuses an edit-after-approval stage with no way out", () => {
       const input = base();
       input.stages = [...input.stages, { name: "frozen", label: "Frozen" }];
