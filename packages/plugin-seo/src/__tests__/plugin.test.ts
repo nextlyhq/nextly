@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 
+import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
 import { select, text } from "nextly";
 import type { FieldConfig } from "nextly";
 import { describe, expect, it } from "vitest";
@@ -102,7 +103,28 @@ describe("seoPlugin", () => {
       // The problem list, read and checked again by a signed-in reader.
       ["GET", "/problems", undefined, undefined],
       ["POST", "/problems/check", undefined, undefined],
+      // The Pages and addresses screen's list, and its save.
+      ["GET", "/pages", undefined, undefined],
+      ["POST", "/pages/seo", undefined, undefined],
     ]);
+  });
+
+  it("lists the site's addresses and saves a page's SEO only for those who manage the site's SEO", () => {
+    const routes = seoPlugin({ collections: ["pages"] }).contributes?.routes;
+    const permissionOf = (method: string, path: string) => {
+      const found = routes?.find(
+        route => route.method === method && route.path === path
+      )?.requiredPermission;
+      // The names a host that renamed nothing gives the plugin's own.
+      const scope: PluginRoutePermissionScope = {
+        plugin: "@nextlyhq/plugin-seo",
+        collection: (slug, action) => `${action}-${slug}`,
+        single: (slug, action) => `${action}-${slug}`,
+      };
+      return typeof found === "function" ? found(scope) : found;
+    };
+    expect(permissionOf("GET", "/pages")).toBe("manage-seo");
+    expect(permissionOf("POST", "/pages/seo")).toBe("manage-seo");
   });
 
   it("offers making a share image to a person who may add to the media library", () => {
@@ -158,6 +180,8 @@ describe("seoPlugin", () => {
       "/resolve",
       "/problems",
       "/problems/check",
+      "/pages",
+      "/pages/seo",
     ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
@@ -184,6 +208,8 @@ describe("seoPlugin", () => {
       "/resolve",
       "/problems",
       "/problems/check",
+      "/pages",
+      "/pages/seo",
     ]);
   });
 

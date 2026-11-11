@@ -26,6 +26,14 @@ import {
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
+import { codePagesCollection } from "./code-pages/collection";
+import {
+  keepCodeRoutes,
+  withCodePageConnections,
+} from "./code-pages/connections";
+import { PAGES_PAGE, PAGES_PAGE_HREF } from "./code-pages/contract";
+import { codePageRoutes } from "./code-pages/route";
+import { readCodeRoutes, type CodeRoute } from "./code-pages/routes";
 import { defaultSeoFields } from "./fields";
 import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
@@ -245,6 +253,13 @@ export interface SeoPluginOptions {
    * of its own that holds it. Admin and Super Admin hold every one.
    */
   pagePermissions?: boolean;
+  /**
+   * @experimental Where `next build` writes, relative to the app's
+   * directory: `.next` unless the app's `next.config` sets `distDir`. The
+   * pages the site's routes render from their own code are read from it,
+   * for the Pages and addresses screen and the sitemap.
+   */
+  nextBuildDir?: string;
 }
 
 /**
@@ -350,7 +365,8 @@ function sitemapConfig(
 function rootFilesConfig(
   options: SeoPluginOptions,
   readRules: ReadRules,
-  collections: readonly string[] | undefined
+  collections: readonly string[] | undefined,
+  codeRoutes: () => readonly CodeRoute[]
 ): RootFilesConfig {
   const sitemap = sitemapConfig(options, collections);
   const origin =
@@ -360,6 +376,7 @@ function rootFilesConfig(
   return {
     ...(origin === undefined ? {} : { origin }),
     readRules,
+    codeRoutes,
     ...(sitemap === undefined ? {} : { sitemap }),
     ...(options.robots === false
       ? {}
@@ -375,9 +392,10 @@ function rootFilesConfig(
 function siteFileRoutes(
   options: SeoPluginOptions,
   readRules: ReadRules,
-  collections: readonly string[] | undefined
+  collections: readonly string[] | undefined,
+  codeRoutes: () => readonly CodeRoute[]
 ): PluginRoute[] {
-  const config = rootFilesConfig(options, readRules, collections);
+  const config = rootFilesConfig(options, readRules, collections, codeRoutes);
   const routes = rootFileRoutes(config);
   const { sitemap } = config;
   if (sitemap !== undefined) {
@@ -433,6 +451,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
 
   const sitemapSubset = subsetOf(options.sitemap, targets);
   const readRules = rulesReader(options);
+  // The pages the site's routes render from their own code, read from the
+  // build each time they are asked for, so a new deploy is read as it is.
+  const codeRoutes = () =>
+    readCodeRoutes(
+      options.nextBuildDir === undefined
+        ? {}
+        : { buildDir: options.nextBuildDir }
+    );
 
   // Checked here, so a misspelled type or detail fails when the site starts.
   const readStructuredDataRules = rulesFromOptions(
@@ -509,10 +535,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       redirectsCollection(),
       notFoundCollection(),
       problemsCollection(),
+      // The SEO of each page a route renders from its own code, by address.
+      codePagesCollection(),
     ],
-    // Every page's head, as worked out above.
+    // Every page's head, as worked out above, each page built in code
+    // recorded as connected as its route asks for its head.
     services: {
-      pageMetadata,
+      pageMetadata: ctx => withCodePageConnections(ctx, pageMetadata(ctx)),
       // The pages the site lists and the problems that left any out, read by
       // the same rules as the head: one reading for every listing output.
       listedPages: (ctx): ListedPagesService => ({
@@ -520,6 +549,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           listPages(ctx, {
             origin,
             readRules,
+            codeRoutes,
             ...(sitemapSubset === undefined
               ? {}
               : { collections: sitemapSubset }),
@@ -556,6 +586,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // holding `manage-seo` without it opens the screen and is refused
         // its contents by the routes.
         {
+          label: "Pages and addresses",
+          to: PAGES_PAGE_HREF,
+          icon: "FileText",
+          requiredPermission: MANAGE_SEO_PERMISSION,
+        },
+        {
           label: "Redirects",
           to: REDIRECTS_PAGE_HREF,
           icon: "Route",
@@ -582,6 +618,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         { ...SETTINGS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...REDIRECTS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...RECEIVED_PAGE, requiredPermission: CHECK_SEO_PERMISSION },
+        { ...PAGES_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
       ],
     },
   };
@@ -602,7 +639,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   }
 
   routes.push(
-    ...siteFileRoutes(options, readRules, sitemapSubset),
+    ...siteFileRoutes(options, readRules, sitemapSubset, codeRoutes),
     shareImageRoute(options.baseUrl),
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
@@ -619,7 +656,17 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       pageMetadata,
     }),
     ...tab.routes,
-    ...problemRoutes(problemChecks)
+    ...problemRoutes(problemChecks),
+    // The Pages and addresses screen's list, and its save of a page with no
+    // entry's SEO.
+    ...codePageRoutes({
+      readRules,
+      routes: codeRoutes,
+      origin: () =>
+        options.baseUrl === undefined
+          ? undefined
+          : resolveBaseOrigin(options.baseUrl),
+    })
   );
 
   return definePlugin({
@@ -676,10 +723,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // asked on every save, and told what each document holds after it.
       ctx.publicAddresses.participate(addressRecord(ctx));
       releaseOnCollectionDelete(ctx);
-      // Kept for the site's not-found page, which logs through it.
+      // Kept for the site's not-found page, which logs through it, and for
+      // the pages built in code, which read their SEO through it.
       keepSeoContext(ctx);
       // Each saved page checked again for the problem list.
       watchSaves(ctx, problemChecks);
+      keepCodeRoutes(codeRoutes);
     },
     onReady(ctx) {
       // Started, not awaited: it waits for the boot to finish, and brings the

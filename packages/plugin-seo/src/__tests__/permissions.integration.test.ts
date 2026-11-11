@@ -8,6 +8,8 @@
  *   Single's own read or update permission beside it, which core asks of
  *   every Single, and redirects, their imports and addresses not found with
  *   nothing else, since the plugin keeps those itself.
+ * - The Pages and addresses screen, its list and its save of a page with
+ *   no entry's SEO, needs `manage-seo` alone: the plugin keeps that SEO.
  * - The check of what search engines received needs `check-seo`.
  * - Where page SEO has its own permission, a person who may edit a page but
  *   not its SEO saves the page with its SEO left as it was, and the SEO tab
@@ -379,6 +381,41 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("pages and addresses need manage-seo", () => {
+      it("lists the site's addresses to someone holding it", async () => {
+        const answered = await route("GET", "/pages", people.manageOnly!);
+        expect(answered.status).toBe(200);
+        expect(Array.isArray(answered.body.items)).toBe(true);
+      });
+
+      it("refuses the list to someone without it, whatever else they hold, with no data", async () => {
+        for (const who of ["storesOnly", "reader", "checker"]) {
+          const refused = await route("GET", "/pages", people[who]!);
+          expect([who, refused.status]).toEqual([who, 403]);
+          expect(refused.body.items).toBeUndefined();
+        }
+        expect((await route("GET", "/pages", null)).status).toBe(401);
+      });
+
+      it("takes a save only from someone holding it", async () => {
+        const save = {
+          path: "/pricing",
+          title: "Plans",
+          description: "",
+          hidden: false,
+        };
+        for (const who of ["storesOnly", "reader", "checker"]) {
+          const refused = await route("POST", "/pages/seo", people[who]!, save);
+          expect([who, refused.status]).toEqual([who, 403]);
+        }
+        // Past the permission: refused only because this site's build has
+        // no page at /pricing, which is the save's own check.
+        expect(
+          (await route("POST", "/pages/seo", people.manageOnly!, save)).status
+        ).toBe(400);
+      });
+    });
+
     describe("the check of what search engines received needs check-seo", () => {
       it("answers the pages it offers, and takes a check, from someone holding it", async () => {
         expect(
@@ -547,6 +584,7 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(gates).toEqual({
         Problems: undefined,
+        "Pages and addresses": "manage-seo",
         Redirects: "manage-seo",
         "What search engines received": "check-seo",
         Settings: "manage-seo",
