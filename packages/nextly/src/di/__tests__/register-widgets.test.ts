@@ -46,6 +46,7 @@ import {
   CONTINUE_SOURCE_ID,
   TEAM_PEOPLE_SOURCE_ID,
   TEAM_SOURCE_ID,
+  USERS_SOURCE_ID,
 } from "../../domains/widgets/system-source-ids";
 import { defineWidget } from "../../domains/widgets/declaration/define-widget";
 import { resetWidgetRegistries } from "../registrations/register-widgets";
@@ -101,6 +102,7 @@ describe("resetWidgetRegistries", () => {
         RELEASES_SOURCE_ID,
         TEAM_SOURCE_ID,
         TEAM_PEOPLE_SOURCE_ID,
+        USERS_SOURCE_ID,
         VERSIONS_SOURCE_ID,
       ].sort()
     );
@@ -261,6 +263,7 @@ describe("resetWidgetRegistries", () => {
       CONTENT_SOURCE_ID,
       TEAM_SOURCE_ID,
       TEAM_PEOPLE_SOURCE_ID,
+      USERS_SOURCE_ID,
       CONTINUE_SOURCE_ID,
       RELEASES_SOURCE_ID,
       ACTIVITY_SOURCE_ID,

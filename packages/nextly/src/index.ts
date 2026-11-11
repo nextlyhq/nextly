@@ -630,6 +630,8 @@ export {
   type PluginRouteLimitKey,
   type Middleware,
   type RouteMethod,
+  type PluginProxyHandler,
+  type ProxyAnswer,
   type NextlyPrincipals,
   type PluginPrincipalsApi,
   type PluginRoutePrincipal,

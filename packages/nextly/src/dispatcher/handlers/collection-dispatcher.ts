@@ -33,6 +33,7 @@ import {
   respondDoc,
   respondList,
   respondMutation,
+  withSessionCacheHeaders,
 } from "../../api/response-shapes";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { container } from "../../di/container";
@@ -75,8 +76,7 @@ import {
   applyPluginAdminViews,
   type CollectionWithAdmin,
 } from "../../plugins/admin-views";
-import { getHandlerConfig } from "../../route-handler/auth-handler";
-import { withSessionCacheHeaders } from "../../routeHandler";
+import { bumpSchemaVersion } from "../../route-handler/schema-version";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -522,7 +522,7 @@ const COLLECTIONS_METHODS: Record<
       );
       // The site's own collections or the plugins', as conditions on the
       // same query: the plugins' list only narrows what the reader may read.
-      const slugLists = slugListsForOwner(owner, "collections", readable);
+      const slugLists = await slugListsForOwner(owner, "collections", readable);
 
       const result = await svc.listCollections({
         page: toNumber(p.page),
@@ -590,7 +590,13 @@ const COLLECTIONS_METHODS: Record<
       });
       // Fold plugin view overrides (contributes.admin.views, D23) onto the
       // collection so the list page's injection slots resolve. Collection slots
-      // win; plugin fills empties (see applyPluginAdminViews).
+      // win; plugin fills empties (see applyPluginAdminViews). The route
+      // handler's config store is loaded here, not imported at the top: it
+      // reaches the auth routes and every plugin's context, several hundred
+      // modules the other collection operations never need.
+      const { getHandlerConfig } = await import(
+        "../../route-handler/auth-handler"
+      );
       const config = getHandlerConfig();
       const [collectionWithViews] = applyPluginAdminViews(
         [collection as CollectionWithAdmin],
@@ -1220,12 +1226,7 @@ const COLLECTIONS_METHODS: Record<
           // successful pipeline apply. The bump only matters for UI-first
           // applies (sets the X-Schema-Version response header so admin tabs
           // know to refetch); HMR and boot paths don't need it.
-          try {
-            const { bumpSchemaVersion } = await import("../../routeHandler");
-            bumpSchemaVersion();
-          } catch {
-            // routeHandler may be unavailable in non-server contexts (tests).
-          }
+          bumpSchemaVersion();
 
           // applySchemaChanges is a non-CRUD mutation: there's no "item" to
           // surface. The action result carries the new schema version (so

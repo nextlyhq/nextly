@@ -26,7 +26,7 @@ import { expectNoAxeViolations } from "./support/axe";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
 import { createEntry, expectOk } from "./support/runtime-collection";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 // Creates roles for its two viewers; the posts it reads are its own.
 test.describe.configure({ mode: "serial", lock: [LOCK.usersRoles] });
@@ -349,7 +349,9 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
       `Fixture replacement of the editor, for ${storyId}`
     );
     // Instead of the editor, not beside it: none of the story's fields.
-    await expect(page.getByLabel("Summary", { exact: true })).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByLabel("Summary", { exact: true })
+    ).toHaveCount(0);
     await expectReadable(page, replacement);
     await expectNoAxeViolations(page, {
       include: "[aria-label='Fixture replacement']",
