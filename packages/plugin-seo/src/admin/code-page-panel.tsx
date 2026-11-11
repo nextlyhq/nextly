@@ -27,6 +27,7 @@ import {
 import {
   ADDRESSES_ROUTE_PATH,
   CODE_PAGE_SEO_ROUTE_PATH,
+  LONGEST_SEO_TEXT,
   type CodePageSeoInput,
   type SiteAddress,
 } from "../code-pages/contract";
@@ -351,6 +352,7 @@ function TextField({
           ref={inputRef}
           id={id}
           className="nx-seo-inp"
+          maxLength={LONGEST_SEO_TEXT}
           placeholder={placeholder}
           value={value}
           onChange={event => onChange(event.target.value)}
@@ -360,6 +362,7 @@ function TextField({
           id={id}
           className="nx-seo-inp"
           rows={3}
+          maxLength={LONGEST_SEO_TEXT}
           placeholder={placeholder}
           value={value}
           onChange={event => onChange(event.target.value)}

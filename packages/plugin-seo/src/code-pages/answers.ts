@@ -5,8 +5,9 @@
  *
  * @module code-pages/answers
  */
-import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import { addressOfRequest, type PluginContext } from "@nextlyhq/plugin-sdk";
 
+import { addressHolders } from "../address-record/participant";
 import type { SeoAnswer } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 
@@ -19,6 +20,25 @@ export interface CodePage {
   route: CodeRoute;
   row: CodePageRow | undefined;
   answer: SeoAnswer;
+}
+
+/**
+ * Whether a document holds the address `path` is on the site at `origin`, in
+ * whichever language that address is: a published entry, or a translation of
+ * one, served there. Its SEO is then the entry's, hidden or not, never a
+ * page built in code's.
+ */
+export async function heldByDocument(
+  ctx: PluginContext,
+  path: string,
+  origin: string
+): Promise<boolean> {
+  const address = await addressOfRequest(new URL(path, origin));
+  if (address === undefined) return false;
+  const own = codePagesSlug(ctx);
+  return (await addressHolders(ctx, address.path, address.locale)).some(
+    holder => holder.collection !== own
+  );
 }
 
 /** The answer of the page built in code at `path`, from `row`. */

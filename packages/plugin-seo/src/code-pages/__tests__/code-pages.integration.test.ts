@@ -34,6 +34,7 @@ import { seoMetadata } from "../metadata";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
 const PAGES = "seocp_pages";
+const LOCALIZED = "seocp_localized";
 const SITE = "https://acme.example";
 const PLUGIN = "@nextlyhq/plugin-seo";
 const CSRF = "c".repeat(64);
@@ -81,6 +82,66 @@ afterAll(() => {
   rmSync(BUILD, { recursive: true, force: true });
 });
 
+/** A signed-in person holding exactly `permissions`, or every one. */
+async function personWith(
+  t: TestNextly,
+  name: string,
+  permissions: readonly string[] | "all"
+): Promise<string> {
+  const stored = await t.nextly.permissions.find({ limit: 1000 });
+  const ids =
+    permissions === "all"
+      ? []
+      : permissions.map(slug => {
+          const found = stored.items.find(p => p.slug === slug);
+          if (found === undefined) throw new Error(`no permission ${slug}`);
+          return String(found.id);
+        });
+  const roles =
+    ids.length === 0
+      ? []
+      : [
+          String(
+            (
+              await t.nextly.roles.create({
+                data: { name, slug: `seocp-${name}`, permissionIds: ids },
+              })
+            ).item.id
+          ),
+        ];
+  const created = await t.nextly.users.create({
+    email: `${name}@example.com`,
+    password: "Password123!",
+    data: { name, isActive: true, roles },
+  });
+  const token = await signAccessToken(
+    buildClaims({
+      userId: String(created.item.id),
+      email: `${name}@example.com`,
+      name,
+      image: null,
+      roleIds: [],
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET ?? ""
+  );
+  return `nextly_session=${token}`;
+}
+
+/** The addresses the screen lists, as `cookie`. */
+async function addressesFor(cookie: string) {
+  const segments = ["plugins", ...PLUGIN.split("/"), "pages"];
+  const res = await createDynamicHandlers().GET(
+    new Request(`${SITE}/api/${segments.join("/")}`, {
+      headers: { cookie },
+    }),
+    { params: Promise.resolve({ params: segments }) }
+  );
+  if (!res.ok) return { status: res.status, items: undefined };
+  const body = (await res.json()) as { items: SiteAddress[] };
+  return { status: res.status, items: body.items };
+}
+
 describe.each(getConfiguredTestDialects())(
   "pages with no entry (%s)",
   (dialect: TestDialect) => {
@@ -111,66 +172,6 @@ describe.each(getConfiguredTestDialects())(
         data: { title: "About us", slug: "about", status: "published" },
       });
       return current;
-    }
-
-    /** A signed-in person holding exactly `permissions`, or every one. */
-    async function personWith(
-      t: TestNextly,
-      name: string,
-      permissions: readonly string[] | "all"
-    ): Promise<string> {
-      const stored = await t.nextly.permissions.find({ limit: 1000 });
-      const ids =
-        permissions === "all"
-          ? []
-          : permissions.map(slug => {
-              const found = stored.items.find(p => p.slug === slug);
-              if (found === undefined) throw new Error(`no permission ${slug}`);
-              return String(found.id);
-            });
-      const roles =
-        ids.length === 0
-          ? []
-          : [
-              String(
-                (
-                  await t.nextly.roles.create({
-                    data: { name, slug: `seocp-${name}`, permissionIds: ids },
-                  })
-                ).item.id
-              ),
-            ];
-      const created = await t.nextly.users.create({
-        email: `${name}@example.com`,
-        password: "Password123!",
-        data: { name, isActive: true, roles },
-      });
-      const token = await signAccessToken(
-        buildClaims({
-          userId: String(created.item.id),
-          email: `${name}@example.com`,
-          name,
-          image: null,
-          roleIds: [],
-          sessionEpoch: 0,
-        }),
-        process.env.NEXTLY_SECRET ?? ""
-      );
-      return `nextly_session=${token}`;
-    }
-
-    /** The addresses the screen lists, as `cookie`. */
-    async function addressesFor(cookie: string) {
-      const segments = ["plugins", ...PLUGIN.split("/"), "pages"];
-      const res = await createDynamicHandlers().GET(
-        new Request(`${SITE}/api/${segments.join("/")}`, {
-          headers: { cookie },
-        }),
-        { params: Promise.resolve({ params: segments }) }
-      );
-      if (!res.ok) return { status: res.status, items: undefined };
-      const body = (await res.json()) as { items: SiteAddress[] };
-      return { status: res.status, items: body.items };
     }
 
     /** Saves `body` for a page with no entry, as `cookie`. */
@@ -407,6 +408,119 @@ describe.each(getConfiguredTestDialects())(
       expect(locs).toContain(`${SITE}/contact`);
       expect(locs).not.toContain(`${SITE}/thank-you`);
       expect(locs).not.toContain(`${SITE}/pricing`);
+    });
+
+    it("leaves an address an entry holds to the entry, hidden from search or not", async () => {
+      const t = await boot();
+      const owner = await personWith(t, "owner", "all");
+      await t.nextly.create({
+        collection: PAGES,
+        data: {
+          title: "Pricing page",
+          slug: "pricing",
+          status: "published",
+          seo: { noindex: true },
+        },
+      });
+      // The build rendered the route at the same address, and it called.
+      process.env.NEXT_PHASE = "phase-production-build";
+      await seoMetadata("/pricing");
+
+      expect(await listed()).not.toContain(`${SITE}/pricing`);
+      const { items } = await addressesFor(owner);
+      expect(
+        items
+          ?.filter(item => item.path === "/pricing")
+          .map(({ source, standing }) => ({ source, standing }))
+      ).toEqual([{ source: "entry", standing: "hidden" }]);
+    });
+  }
+);
+
+/**
+ * A site in English and German, each language under its own prefix, whose
+ * catch-all route declared each page's address in each language.
+ */
+const LANGUAGE_BUILD = mkdtempSync(join(tmpdir(), "seo-code-pages-de-"));
+mkdirSync(join(LANGUAGE_BUILD, "server"), { recursive: true });
+writeFileSync(
+  join(LANGUAGE_BUILD, "server/app-paths-manifest.json"),
+  JSON.stringify({
+    "/[locale]/[...slug]/page": "app/[locale]/[...slug]/page.js",
+  })
+);
+writeFileSync(
+  join(LANGUAGE_BUILD, "prerender-manifest.json"),
+  JSON.stringify({
+    version: 4,
+    routes: {
+      "/en/about": { srcRoute: "/[locale]/[...slug]" },
+      "/de/ueber": { srcRoute: "/[locale]/[...slug]" },
+    },
+  })
+);
+
+afterAll(() => {
+  rmSync(LANGUAGE_BUILD, { recursive: true, force: true });
+});
+
+describe.each(getConfiguredTestDialects())(
+  "pages with no entry on a site in several languages (%s)",
+  (dialect: TestDialect) => {
+    it("lists each published translation as its entry, never as a page built in code", async () => {
+      const t = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        languageAddresses: { by: "prefix" },
+        plugins: [
+          seoPlugin({
+            collections: [LOCALIZED],
+            baseUrl: SITE,
+            nextBuildDir: LANGUAGE_BUILD,
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: LOCALIZED,
+            localized: true,
+            status: true,
+            access: { read: () => true },
+            fields: [
+              text({ name: "slug", localized: true }),
+              text({ name: "title", localized: true }),
+            ],
+            publicAddress: "/{slug}",
+          }),
+        ],
+      });
+      current = t;
+      const about = await t.nextly.create({
+        collection: LOCALIZED,
+        locale: "en",
+        data: { slug: "about", title: "About us", status: "published" },
+      });
+      await t.nextly.update({
+        collection: LOCALIZED,
+        id: String(about.item.id),
+        locale: "de",
+        data: {
+          slug: "ueber",
+          title: "Über uns",
+          status: "published",
+          _overwrite: true,
+        },
+      });
+      await lastCatchUp();
+      const owner = await personWith(t, "owner", "all");
+
+      const { items } = await addressesFor(owner);
+
+      expect(
+        items?.map(({ path, name, source }) => ({ path, name, source }))
+      ).toEqual([
+        { path: "/about", name: "About us", source: "entry" },
+        { path: "/de/ueber", name: "Über uns", source: "entry" },
+      ]);
     });
   }
 );

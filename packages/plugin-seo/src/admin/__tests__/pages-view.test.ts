@@ -134,10 +134,7 @@ describe("where a field's value comes from", () => {
     });
   });
 
-  it("is the route's code while the route is not connected, or where its code supplies it", () => {
-    expect(valueSource(page("not-connected", pattern), "title", false)).toEqual(
-      { kind: "code", connected: false }
-    );
+  it("is the route's code only where its code supplies the value", () => {
     expect(
       valueSource(
         page("listed", { title: { value: "Pricing", from: "code" } }),
@@ -145,6 +142,11 @@ describe("where a field's value comes from", () => {
         false
       )
     ).toEqual({ kind: "code", connected: true });
+    // A route not connected yet is said to be so in the panel's note; its
+    // value still comes from where it comes from.
+    expect(valueSource(page("not-connected", pattern), "title", false)).toEqual(
+      { kind: "pattern", pattern: "{Title} | {Site name}" }
+    );
   });
 
   it("is the site's pattern, or its defaults, otherwise", () => {

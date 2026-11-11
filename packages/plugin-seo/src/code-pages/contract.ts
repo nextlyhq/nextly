@@ -111,6 +111,9 @@ export interface SiteAddress {
   seo?: CodePageSeo;
 }
 
+/** The longest title or description a save keeps. */
+export const LONGEST_SEO_TEXT = 1000;
+
 /** What a save of a page's SEO sends. */
 export interface CodePageSeoInput {
   path: string;

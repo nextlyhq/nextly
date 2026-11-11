@@ -23,6 +23,7 @@ import { codePagesSlug } from "./collection";
 import {
   ADDRESSES_ROUTE_PATH,
   CODE_PAGE_SEO_ROUTE_PATH,
+  LONGEST_SEO_TEXT,
   type CodePageSeoInput,
 } from "./contract";
 import type { CodeRoute } from "./routes";
@@ -36,14 +37,11 @@ export interface CodePageRoutesConfig {
   origin: () => string | undefined;
 }
 
-/** The longest title or description kept. */
-const LONGEST_TEXT = 1000;
-
 /** A save, parsed at the boundary. */
 const SAVE = z.object({
   path: z.string().min(1).max(2048),
-  title: z.string().max(LONGEST_TEXT),
-  description: z.string().max(LONGEST_TEXT),
+  title: z.string().max(LONGEST_SEO_TEXT),
+  description: z.string().max(LONGEST_SEO_TEXT),
   hidden: z.boolean(),
   image: z.string().max(200).nullable().optional(),
 });

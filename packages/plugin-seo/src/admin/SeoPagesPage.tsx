@@ -122,11 +122,15 @@ function AddressesScreen({ items }: { items: SiteAddress[] }): JSX.Element {
     items.map(item => hostOf(item.canonical)).find(Boolean) ??
     (typeof window === "undefined" ? "the site" : window.location.host);
 
-  const close = () => {
-    const was = open;
+  // Closes the panel of `path`, and only it: a save that finishes after
+  // another page's panel was opened leaves that one open.
+  const openNow = useRef(open);
+  openNow.current = open;
+  const close = (path: string) => {
+    if (openNow.current !== path) return;
     setOpen(null);
     // Back to the button that opened the panel.
-    if (was !== null) editButtons.current.get(was)?.focus();
+    editButtons.current.get(path)?.focus();
   };
 
   return (
@@ -268,7 +272,7 @@ function AddressesScreen({ items }: { items: SiteAddress[] }): JSX.Element {
           key={editing.path}
           item={editing}
           host={host}
-          onClose={close}
+          onClose={() => close(editing.path)}
         />
       ) : null}
     </>

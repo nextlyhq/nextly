@@ -29,7 +29,7 @@ import {
   addressHolders,
   withAddressHolders,
 } from "../address-record/participant";
-import { codePages } from "../code-pages/answers";
+import { codePages, heldByDocument } from "../code-pages/answers";
 import { codePagesSlug } from "../code-pages/collection";
 import type { CodeRoute } from "../code-pages/routes";
 import { languageLinks } from "../languages/links";
@@ -284,6 +284,8 @@ async function listCodePages(
     taken
   )) {
     if (row?.connected !== true) continue;
+    // An entry holds it, hidden from search or not: the address is its.
+    if (await heldByDocument(ctx, route.path, options.origin)) continue;
     const at = standingOf(answer, options.origin, route.path);
     if (at === null || at === "lost") continue;
     found.pages.push({

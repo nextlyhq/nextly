@@ -18,13 +18,26 @@ import {
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
 
-import { absolute, onceEach, resolveIn } from "../languages/versions";
+import {
+  absolute,
+  documentsIn,
+  heldLanguages,
+  onceEach,
+  otherLanguages,
+  resolveIn,
+  servedAt,
+} from "../languages/versions";
 import { candidates, type Candidate } from "../outputs/listing";
 import { isRecord, textOf } from "../plain-values";
 import type { SeoAnswer, Sourced } from "../resolver/order";
 import type { ReadRules } from "../resolver/provider";
 
-import { codePages, resolveCodePage, type CodePage } from "./answers";
+import {
+  codePages,
+  heldByDocument,
+  resolveCodePage,
+  type CodePage,
+} from "./answers";
 import type {
   AddressStanding,
   AutomaticValue,
@@ -198,16 +211,16 @@ function labelsOf(
 async function entryAddressOf(
   ctx: PluginContext,
   candidate: Candidate,
-  options: {
-    language: string;
-    origin: string;
-    label: (type: PublicAddressType) => Promise<string>;
-    readRules: ReadRules | undefined;
-  }
+  options: EntryListing & { language: string }
 ): Promise<SiteAddress | undefined> {
   const { type, holder, document } = candidate;
   const own = await publicAddressOf(type, document, options.language);
   if (own.status !== "resolved") return undefined;
+  // A translation is listed where its language serves it, such as `/de/…`.
+  const path =
+    options.language === options.defaultLanguage
+      ? own.path
+      : ((await servedAt(own.path, options.language)) ?? own.path);
   const label = await options.label(type);
   const answer = await resolveIn(
     ctx,
@@ -217,7 +230,7 @@ async function entryAddressOf(
     options.readRules
   );
   return {
-    path: own.path,
+    path,
     name: textOf(document.title) ?? textOf(document.name) ?? label,
     source: "entry",
     from: label,
@@ -230,14 +243,66 @@ async function entryAddressOf(
   };
 }
 
-/** Each published entry at its declared address, in the site's language. */
+/** What every entry of a listing is read with. */
+interface EntryListing {
+  defaultLanguage: string;
+  origin: string;
+  label: (type: PublicAddressType) => Promise<string>;
+  readRules: ReadRules | undefined;
+}
+
+/**
+ * One read's entries in each other language the address record says each
+ * is published in, as the sitemap lists them: each language's documents read
+ * once for the batch.
+ */
+async function translationsOf(
+  ctx: PluginContext,
+  batch: readonly Candidate[],
+  options: EntryListing
+): Promise<SiteAddress[]> {
+  const [first] = batch;
+  if (first === undefined) return [];
+  const held = await heldLanguages(
+    ctx,
+    first.holder.collection,
+    batch.map(candidate => candidate.holder.id)
+  );
+  const found: SiteAddress[] = [];
+  for (const language of otherLanguages(
+    held.values(),
+    options.defaultLanguage
+  )) {
+    const ids = batch.flatMap(({ holder }) =>
+      held.get(holder.id)?.has(language) === true ? [holder.id] : []
+    );
+    const documents = await documentsIn(ctx, first.type, ids, language);
+    for (const candidate of batch) {
+      const document = documents.get(candidate.holder.id);
+      if (document === undefined) continue;
+      const address = await entryAddressOf(
+        ctx,
+        { ...candidate, document },
+        { ...options, language }
+      );
+      if (address !== undefined) found.push(address);
+    }
+  }
+  return found;
+}
+
+/**
+ * Each published entry at its declared address, in the site's language and
+ * in each other language it is published in.
+ */
 async function entryAddresses(
   ctx: PluginContext,
   origin: string,
   readRules: ReadRules | undefined
 ): Promise<SiteAddress[]> {
-  const options = {
-    language: await ctx.publicAddresses.defaultLanguage(),
+  const defaultLanguage = await ctx.publicAddresses.defaultLanguage();
+  const options: EntryListing = {
+    defaultLanguage,
     origin,
     label: labelsOf(ctx),
     readRules,
@@ -245,9 +310,13 @@ async function entryAddresses(
   const found: SiteAddress[] = [];
   for await (const batch of candidates(ctx, { origin })) {
     for (const candidate of batch) {
-      const address = await entryAddressOf(ctx, candidate, options);
+      const address = await entryAddressOf(ctx, candidate, {
+        ...options,
+        language: defaultLanguage,
+      });
       if (address !== undefined) found.push(address);
     }
+    found.push(...(await translationsOf(ctx, batch, options)));
   }
   return found;
 }
@@ -271,7 +340,16 @@ export async function siteAddresses(
     options.readRules === undefined ? undefined : onceEach(options.readRules);
   const entries = await entryAddresses(ctx, options.origin, readRules);
   const entryPaths = new Set(entries.map(entry => entry.path));
-  const pages = await codePages(ctx, options.routes, readRules, entryPaths);
+  // A route serving an address a document holds is serving that entry,
+  // whatever language the address is in: its SEO is the entry's.
+  const routes: CodeRoute[] = [];
+  for (const route of options.routes) {
+    if (entryPaths.has(route.path)) continue;
+    if (!(await heldByDocument(ctx, route.path, options.origin))) {
+      routes.push(route);
+    }
+  }
+  const pages = await codePages(ctx, routes, readRules);
   const rules = await readRules?.(ctx, undefined);
   const site = { origin: options.origin, name: rules?.siteName };
   const code: SiteAddress[] = [];

@@ -216,3 +216,40 @@ describe("the share image of a page built in code", () => {
     ).toBeTruthy();
   });
 });
+
+describe("a save that finishes late", () => {
+  it("leaves another page's panel open, opened while the save was on its way", async () => {
+    let finish: (value: { path: string }) => void = () => {};
+    vi.mocked(usePluginRouteMutation).mockImplementation(
+      () =>
+        ({
+          write: vi.fn(
+            () =>
+              new Promise<{ path: string }>(resolve => {
+                finish = resolve;
+              })
+          ),
+          pending: false,
+          error: null,
+        }) as unknown as ReturnType<typeof usePluginRouteMutation>
+    );
+    render(<SeoPagesPage />);
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit SEO" })[0]);
+    fireEvent.click(
+      within(
+        screen.getByRole("dialog", { name: "SEO for /pricing" })
+      ).getByRole("button", { name: "Save" })
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit SEO" })[1]);
+    expect(
+      screen.getByRole("dialog", { name: "SEO for /contact" })
+    ).toBeTruthy();
+
+    finish({ path: "/pricing" });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(
+      screen.getByRole("dialog", { name: "SEO for /contact" })
+    ).toBeTruthy();
+  });
+});

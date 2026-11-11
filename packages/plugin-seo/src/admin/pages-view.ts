@@ -128,7 +128,9 @@ export function valueSource(
 ): ValueSource {
   const automatic: AutomaticValue | undefined = item.seo?.automatic[field];
   if (typed) return { kind: "typed" };
-  if (item.standing === "not-connected" || automatic?.from === "code") {
+  // Only a value the route's code supplied is said to be set in code; the
+  // panel's note says separately whether the route is connected.
+  if (automatic?.from === "code") {
     return { kind: "code", connected: item.standing !== "not-connected" };
   }
   if (automatic?.from === "pattern" && automatic.pattern !== undefined) {

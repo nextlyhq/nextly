@@ -111,7 +111,7 @@ const CSS = `
 @media (max-width:1100px){.nx-seo-shifted{padding-right:0}}
 @media (max-width:720px){
 .nx-seo-find input[type="search"]{width:100%}
-.nx-seo-atbl thead{display:none}
+.nx-seo-atbl thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
 .nx-seo-atbl tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;padding:12px;border-bottom:1px solid var(--nx-border-subtle)}
 .nx-seo-atbl tr:last-child{border-bottom:0}
 .nx-seo-atbl td{display:block;padding:0;border:0}
