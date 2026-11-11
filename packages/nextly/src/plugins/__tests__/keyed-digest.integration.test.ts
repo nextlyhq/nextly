@@ -84,7 +84,7 @@ describe.each(getConfiguredTestDialects())(
           owner,
           store: () => metaStore(),
           secrets: () => [process.env.NEXTLY_SECRET ?? ""],
-          probe: () => current!.adapter,
+          adapter: () => current!.adapter,
         });
       const [one, two] = await Promise.all([
         helper().digest("ip", "203.0.113.9"),
@@ -109,6 +109,41 @@ describe.each(getConfiguredTestDialects())(
       await expect(
         adapter.transaction(() => digests.digest("email", "ada@example.com"))
       ).resolves.toBe(outside);
+    });
+
+    it("make the key on their own while another request's transaction rolls back", async () => {
+      const digests = await boot();
+      const adapter = current!.adapter;
+
+      // Another request's transaction, open while the first digest is taken,
+      // then rolled back. On SQLite's one connection a key made meanwhile would
+      // join it and be undone.
+      let release: () => void = () => undefined;
+      const held = new Promise<void>(resolve => (release = resolve));
+      const other = adapter
+        .transaction(async () => {
+          await held;
+          throw new Error("rolled back");
+        })
+        .catch(() => undefined);
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const first = digests.digest("email", "ada@example.com");
+      await new Promise(resolve => setTimeout(resolve, 50));
+      release();
+      await other;
+      const digest = await first;
+
+      // The key outlived the other transaction's rollback: it is stored, and a
+      // fresh helper reading it gives the same digest.
+      expect(await metaStore().get(digestKeyMetaKey(NAME))).toMatch(/^sealed:/);
+      const fresh = createKeyedDigests({
+        owner: NAME,
+        store: () => metaStore(),
+        secrets: () => [process.env.NEXTLY_SECRET ?? ""],
+        adapter: () => adapter,
+      });
+      expect(await fresh.digest("email", "ada@example.com")).toBe(digest);
     });
 
     it("still match after a rotation, once the previous secret is gone", async () => {
@@ -139,7 +174,7 @@ describe.each(getConfiguredTestDialects())(
         owner: NAME,
         store: () => metaStore(),
         secrets: () => [ROTATED],
-        probe: () => current!.adapter,
+        adapter: () => current!.adapter,
       });
       expect(await afterwards.digest("email", "ada@example.com")).toBe(before);
     });

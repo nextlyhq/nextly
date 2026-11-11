@@ -29,6 +29,8 @@
  */
 import { createHmac, randomBytes } from "node:crypto";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
 import type { MetaService } from "../../domains/meta/services/meta-service";
 import {
   openSetting,
@@ -75,9 +77,17 @@ export interface KeyedDigestsOptions {
   store: () => DigestKeyStore;
   /** The install's secrets, current first, read per call so a rotation applies. */
   secrets: () => readonly string[];
-  /** Whether the calling flow is inside an open transaction. */
-  probe: () => OpenTransactionProbe;
+  /**
+   * The adapter, for the first use's own session: outside any transaction,
+   * and on SQLite once no other flow's transaction is open on its one
+   * connection.
+   */
+  adapter: () => DigestKeyAdapter;
 }
+
+/** What the helper needs of the adapter. */
+export type DigestKeyAdapter = OpenTransactionProbe &
+  Pick<DrizzleAdapter, "withSession">;
 
 /** Bytes of key material: the HMAC-SHA256 block's worth of entropy. */
 const KEY_BYTES = 32;
@@ -195,19 +205,26 @@ export function createKeyedDigests(options: KeyedDigestsOptions): KeyedDigests {
   // promise is dropped on a failure, so the next call tries again.
   let key: Promise<Buffer> | undefined;
   const keyOnce = () => {
-    // Made or read on its own connection, never inside the caller's
-    // transaction: on SQLite, which shares one connection, a key made there
-    // would be undone by a rollback while this process kept using it, and on
-    // a pool of one a read beside the transaction would wait for it.
+    // Never inside the caller's transaction: on SQLite, which shares one
+    // connection, a key made there would be undone by a rollback while this
+    // process kept using it, and on a pool of one a read beside the
+    // transaction would wait for it.
     if (key === undefined) {
-      assertNoOpenTransaction(options.probe(), "security.digests first use");
+      assertNoOpenTransaction(options.adapter(), "security.digests first use");
     }
-    key ??= loadKey(options.owner, options.store(), options.secrets()).catch(
-      (error: unknown) => {
+    // In a session of its own, so it commits on its own: on SQLite's one
+    // connection a statement run while another request's transaction is
+    // open would join that transaction, and a rollback there would undo a
+    // key this process went on using.
+    key ??= options
+      .adapter()
+      .withSession(() =>
+        loadKey(options.owner, options.store(), options.secrets())
+      )
+      .catch((error: unknown) => {
         key = undefined;
         throw error;
-      }
-    );
+      });
     return key;
   };
   return {

@@ -152,6 +152,7 @@ import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
 import type { PluginReceivedWebhooks } from "./security/inbound-webhooks";
 import {
   createKeyedDigests,
+  type DigestKeyAdapter,
   type DigestKeyStore,
   type KeyedDigests,
 } from "./security/keyed-digest";
@@ -1984,6 +1985,33 @@ function asSecretsAdapter(adapter: AdapterTransactions): SecretsAdapter {
 }
 
 /**
+ * The adapter as keyed digests use it: a session of its own for the first
+ * use, and whether the calling flow is in a transaction. Every adapter core
+ * ships has both; one that does not is refused with a clear error.
+ */
+function isDigestKeyAdapter(value: unknown): value is DigestKeyAdapter {
+  if (typeof value !== "object" || value === null) return false;
+  const methods: readonly (keyof DigestKeyAdapter)[] = [
+    "withSession",
+    "transactionOpenInFlow",
+  ];
+  return methods.every(
+    name => typeof (value as Record<string, unknown>)[name] === "function"
+  );
+}
+
+function asDigestKeyAdapter(adapter: AdapterTransactions): DigestKeyAdapter {
+  if (isDigestKeyAdapter(adapter)) return adapter;
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "An unexpected error occurred.",
+    logMessage:
+      "The adapter this plugin context resolves has no withSession or transactionOpenInFlow, which keyed digests need.",
+    logContext: { reason: "digest-adapter-incomplete" },
+  });
+}
+
+/**
  * The resolved adapter as received-webhook claims need it, or a named failure
  * when a stand-in lacks a part of it, rather than a TypeError mid-claim.
  */
@@ -3037,7 +3065,7 @@ export function createPluginContext(
       digests: createKeyedDigests({
         owner,
         store: () => getServiceFn("metaService"),
-        probe: () => getServiceFn("adapter"),
+        adapter: () => asDigestKeyAdapter(getServiceFn("adapter")),
         // The keyed generations only: a key is sealed and opened with one.
         secrets: () =>
           secretGenerations(

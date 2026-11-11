@@ -54,7 +54,10 @@ function digests(
     owner,
     store: () => store,
     secrets: () => secrets,
-    probe: () => ({ transactionOpenInFlow: () => flow.inTransaction }),
+    adapter: () => ({
+      transactionOpenInFlow: () => flow.inTransaction,
+      withSession: work => work({ execute: async () => [] as never }),
+    }),
   });
 }
 
