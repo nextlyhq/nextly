@@ -46,6 +46,11 @@ export function useOutlineFieldGroups(): {
   const query = useQuery({
     queryKey: [...fieldGroupKeys.lists(), "every-definition"],
     queryFn: readEveryFieldGroup,
+    // Read again on each Builder visit: the use counts it carries change when
+    // a collection or Single places a field group, and those saves refresh
+    // their own keys, not this one. Kept while read, so the outline is drawn
+    // from the last answer meanwhile.
+    staleTime: 0,
   });
   const fieldGroups = useMemo(() => {
     const map = new Map<string, LoadedFieldGroup>();

@@ -476,11 +476,14 @@ export async function fieldGroupPlacementCounts(
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   if (slugs.length === 0) return counts;
-  const owners = await sources.fieldOwners();
-  for (const slug of slugs) {
-    // The count is the length of the list a field group's own editor shows,
-    // never a second walk that could come to disagree with it.
-    counts.set(slug, placementsAmong(owners, slug).length);
+  // One walk over every field list for the whole page. Each count is the
+  // length of the list a field group's own editor shows, never a second walk
+  // that could come to disagree with it.
+  for (const [slug, placements] of placementsBySlug(
+    await sources.fieldOwners(),
+    slugs
+  )) {
+    counts.set(slug, placements.length);
   }
   return counts;
 }
@@ -504,20 +507,67 @@ export async function fieldGroupUsedBy(
   return placementsAmong(await sources.fieldOwners(), slug);
 }
 
-/**
- * The one walk both answers come from: the delete's own, asked as if this
- * field group were deleted alone, so its own fields go with it and a
- * reference to itself does not count.
- */
+/** The fields that place one field group: the walk below, for that one. */
 function placementsAmong(
   owners: readonly FieldOwner[],
   slug: string
 ): FieldReference[] {
-  const goingToo = fieldsGoingWith(
-    [{ kind: "fieldGroup", slug, tables: [] }],
-    {}
+  return placementsBySlug(owners, [slug]).get(slug) ?? [];
+}
+
+/**
+ * The fields that place each of `slugs`, from one walk over every field list.
+ * Each field group is asked about as a delete asks about it alone
+ * (`fieldsPlacing` over each owner, its own fields going with it), so a
+ * reference to itself does not count, while one field group's use of another
+ * does. One walk however many are asked about, so a list page costs one pass
+ * over the site's fields rather than one per row.
+ */
+function placementsBySlug(
+  owners: readonly FieldOwner[],
+  slugs: readonly string[]
+): Map<string, FieldReference[]> {
+  const bySlug = new Map<string, FieldReference[]>(
+    slugs.map(slug => [slug, []])
   );
-  return referencesAmong(owners, "fieldGroup", slug, goingToo);
+  for (const { entityType, entitySlug, fields } of owners) {
+    for (const placement of fieldGroupPlacements(fields)) {
+      // A field naming one field group twice places it once.
+      for (const slug of new Set(placement.slugs)) {
+        const found = bySlug.get(slug);
+        if (!found) continue;
+        if (entityType === "fieldGroup" && entitySlug === slug) continue;
+        found.push({ entityType, entitySlug, fieldPath: placement.path });
+      }
+    }
+  }
+  return bySlug;
+}
+
+/**
+ * The slugs of the collections and Singles a reader may read, as their own
+ * lists decide; `undefined` for a kind leaves it unfiltered.
+ */
+export interface ReadableOwnerSlugs {
+  readonly collection?: readonly string[];
+  readonly single?: readonly string[];
+}
+
+/**
+ * The field lists a reader may learn about: a collection's or Single's only
+ * when the reader may read it, so where a field group is used names nothing
+ * the reader's own lists hide. Field groups carry no per-reader read rule
+ * and are all kept, as their list keeps them.
+ */
+export function ownersReadableBy(
+  owners: readonly FieldOwner[],
+  readable: ReadableOwnerSlugs
+): FieldOwner[] {
+  return owners.filter(owner => {
+    if (owner.entityType === "fieldGroup") return true;
+    const allowed = readable[owner.entityType];
+    return allowed === undefined || allowed.includes(owner.entitySlug);
+  });
 }
 
 /**

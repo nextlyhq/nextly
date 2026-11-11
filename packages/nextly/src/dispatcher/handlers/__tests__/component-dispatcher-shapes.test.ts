@@ -29,6 +29,26 @@ vi.mock(
   })
 );
 
+// Who is reading, and what their lists let them read. No reader by default,
+// as outside a request; the tests about a reader set one.
+const readAuthenticatedUser = vi.hoisted(() => vi.fn());
+vi.mock("../../helpers/authenticated-user", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../helpers/authenticated-user")
+  >()),
+  readAuthenticatedUser,
+}));
+const readableSlugAllowlist = vi.hoisted(() => vi.fn());
+vi.mock(
+  "../../../services/lib/readable-slug-allowlist",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../services/lib/readable-slug-allowlist")
+    >()),
+    readableSlugAllowlist,
+  })
+);
+
 vi.mock("../../../di/container", () => ({
   container: {
     has: vi.fn().mockReturnValue(false),
@@ -306,6 +326,36 @@ describe("dispatchComponents, listComponents use counts", () => {
       { slug: "seo", tableName: "comp_seo", placedBy: 1 },
     ]);
     expect(readFieldOwners).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts no field of a collection the reader may not read", async () => {
+    readFieldOwners.mockResolvedValue([
+      {
+        entityType: "collection",
+        entitySlug: "pages",
+        fields: [{ name: "teaser", type: "component", component: "card" }],
+      },
+      {
+        entityType: "collection",
+        entitySlug: "secret",
+        fields: [{ name: "teaser", type: "component", component: "card" }],
+      },
+    ]);
+    readAuthenticatedUser.mockReturnValue({ id: "u1", role: "editor" });
+    readableSlugAllowlist.mockImplementation(
+      async (_caller: unknown, kind: string) =>
+        kind === "collection" ? ["pages"] : []
+    );
+    try {
+      const body = await (
+        (await dispatchComponents("listComponents", {}, undefined)) as Response
+      ).json();
+      // "secret" places "card" too, but this reader's list hides it.
+      expect(body.items[0]).toMatchObject({ slug: "card", placedBy: 1 });
+    } finally {
+      readAuthenticatedUser.mockReset();
+      readableSlugAllowlist.mockReset();
+    }
   });
 
   it("still lists the field groups when the field lists cannot be read, with no count", async () => {
@@ -592,6 +642,44 @@ describe("dispatchComponents, where a field group is used (getComponentUsedBy)",
       { entityType: "single", entitySlug: "home", fieldPath: "seo" },
     ]);
     expect(body.meta).toMatchObject({ total: 3 });
+  });
+
+  it("names no collection or Single the reader may not read, as their own lists hide them", async () => {
+    wireRegistry(
+      makeRegistry({ getComponent: vi.fn().mockResolvedValue({ slug: "seo" }) })
+    );
+    readFieldOwners.mockResolvedValue(owners);
+    readAuthenticatedUser.mockReturnValue({ id: "u1", role: "editor" });
+    // The reader may read no Single, and of the collections only "posts".
+    readableSlugAllowlist.mockImplementation(
+      async (_caller: unknown, kind: string) =>
+        kind === "collection" ? ["posts"] : []
+    );
+    try {
+      const body = await (
+        (await dispatchComponents(
+          "getComponentUsedBy",
+          { slug: "seo" },
+          undefined
+        )) as Response
+      ).json();
+      // "pages" and "home" are hidden from this reader's lists, so the answer
+      // names neither; a field group has no per-reader rule and stays.
+      expect(body.items).toEqual([
+        { entityType: "fieldGroup", entitySlug: "card", fieldPath: "meta" },
+      ]);
+      expect(readableSlugAllowlist).toHaveBeenCalledWith(
+        expect.anything(),
+        "collection"
+      );
+      expect(readableSlugAllowlist).toHaveBeenCalledWith(
+        expect.anything(),
+        "single"
+      );
+    } finally {
+      readAuthenticatedUser.mockReset();
+      readableSlugAllowlist.mockReset();
+    }
   });
 
   it("answers not found for a field group that does not exist, before reading any field list", async () => {

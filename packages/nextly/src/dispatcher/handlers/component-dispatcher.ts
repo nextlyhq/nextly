@@ -61,7 +61,9 @@ import {
   type FieldGroupMigrationStatus,
 } from "../../schemas/dynamic-field-groups/types";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
+import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import type { Logger } from "../../shared/types";
+import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import {
   builderSchemaPush,
@@ -82,6 +84,7 @@ import type { MethodHandler, Params } from "../types";
 
 import { readListOffset } from "./list-offset";
 import { readListOwner, slugListsForOwner } from "./list-owner";
+import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 
 interface ComponentsServices {
@@ -193,15 +196,39 @@ async function placementsOf(slug: string) {
   if (!adapter) throw placementsUnreadable(slug, "no database adapter");
   try {
     // Loaded when asked, as the list and the delete path load it.
-    const { fieldGroupUsedBy, readFieldOwners } = await import(
+    const { fieldGroupUsedBy } = await import(
       "../../domains/collections/services/collection-dependents"
     );
     return await fieldGroupUsedBy(slug, {
-      fieldOwners: () => readFieldOwners(adapter),
+      fieldOwners: () => readableFieldOwners(adapter),
     });
   } catch (error) {
     throw placementsUnreadable(slug, error);
   }
+}
+
+/**
+ * Every stored field list this reader may learn about, for where a field
+ * group is used and how often. A collection or Single the reader may not read
+ * is left out, by the same decision their own lists are scoped by
+ * (`readableSlugAllowlist`), so neither answer names or counts one those
+ * lists hide. A delete's refusal reads every field list instead: it must know
+ * every use, whoever asks.
+ */
+async function readableFieldOwners(
+  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>
+) {
+  const { ownersReadableBy, readFieldOwners } = await import(
+    "../../domains/collections/services/collection-dependents"
+  );
+  const reader = readAuthenticatedUser();
+  const caller = reader ? readAccessCallerForDispatch(reader) : undefined;
+  const [collection, single, owners] = await Promise.all([
+    readableSlugAllowlist(caller, "collection"),
+    readableSlugAllowlist(caller, "single"),
+    readFieldOwners(adapter),
+  ]);
+  return ownersReadableBy(owners, { collection, single });
 }
 
 /** The refusal when a field group's uses cannot be read. */
@@ -233,11 +260,11 @@ async function placementCountsFor(
   try {
     // Loaded when a list asks, as the delete path loads it: the registry's
     // other callers never need the dependents readers.
-    const { fieldGroupPlacementCounts, readFieldOwners } = await import(
+    const { fieldGroupPlacementCounts } = await import(
       "../../domains/collections/services/collection-dependents"
     );
     return await fieldGroupPlacementCounts(slugs, {
-      fieldOwners: () => readFieldOwners(adapter),
+      fieldOwners: () => readableFieldOwners(adapter),
     });
   } catch (error) {
     (getLoggerFromDI() ?? DISCARDED_LOG).warn(

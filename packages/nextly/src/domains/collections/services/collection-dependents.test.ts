@@ -7,6 +7,7 @@ import {
   assertNothingDependsOn,
   fieldGroupPlacementCounts,
   fieldGroupUsedBy,
+  ownersReadableBy,
   fieldsPlacing,
   fieldsPointingAt,
   findEntityDependents,
@@ -1002,5 +1003,52 @@ describe("fieldGroupUsedBy", () => {
     await expect(
       fieldGroupUsedBy("seo", sources({ owners: new Error("down") }))
     ).rejects.toThrow("down");
+  });
+  it("walks each field list once for a whole page, however many it counts", async () => {
+    // Each owner counts the times its fields are read.
+    const reads = new Map<string, number>();
+    const counted = owners.map(owner => ({
+      entityType: owner.entityType,
+      entitySlug: owner.entitySlug,
+      get fields() {
+        reads.set(owner.entitySlug, (reads.get(owner.entitySlug) ?? 0) + 1);
+        return owner.fields;
+      },
+    }));
+    await fieldGroupPlacementCounts(
+      ["card", "seo", "other", "more"],
+      sources({ owners: counted })
+    );
+    expect([...reads.values()]).toEqual([1, 1, 1]);
+  });
+});
+
+describe("ownersReadableBy", () => {
+  const owners: FieldOwner[] = [
+    { entityType: "collection", entitySlug: "posts", fields: [] },
+    { entityType: "collection", entitySlug: "secret", fields: [] },
+    { entityType: "single", entitySlug: "home", fields: [] },
+    { entityType: "single", entitySlug: "payroll", fields: [] },
+    { entityType: "fieldGroup", entitySlug: "seo", fields: [] },
+  ];
+  const slugs = (kept: FieldOwner[]) =>
+    kept.map(owner => `${owner.entityType}:${owner.entitySlug}`);
+
+  it("keeps only the collections and Singles the reader may read, and every field group", () => {
+    expect(
+      slugs(
+        ownersReadableBy(owners, { collection: ["posts"], single: ["home"] })
+      )
+    ).toEqual(["collection:posts", "single:home", "fieldGroup:seo"]);
+  });
+
+  it("keeps no collection or Single for a reader who may read none", () => {
+    expect(
+      slugs(ownersReadableBy(owners, { collection: [], single: [] }))
+    ).toEqual(["fieldGroup:seo"]);
+  });
+
+  it("leaves a kind unfiltered only when it is given no list", () => {
+    expect(slugs(ownersReadableBy(owners, {}))).toHaveLength(5);
   });
 });
