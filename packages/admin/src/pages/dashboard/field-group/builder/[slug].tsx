@@ -293,6 +293,7 @@ export default function FieldGroupBuilderEditPage({
     <BuilderPageLayout
       config={FIELD_GROUP_BUILDER_CONFIG}
       builder={builder}
+      entitySlug={entitySlug}
       name={settings.singularName || slug}
       locked={isLocked}
       configPath={fieldGroup?.configPath}

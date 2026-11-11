@@ -47,6 +47,7 @@ import type { ComponentProps, ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { cleanup, render, screen } from "@admin/__tests__/utils";
+import { buildOutline } from "@admin/lib/builder/outline/outline-model";
 import type {
   SchemaPreviewChange,
   SchemaPreviewLeavingTranslation,
@@ -55,7 +56,7 @@ import type {
   SchemaPreviewResponse,
 } from "@admin/services/schemaApi";
 
-import { BuilderFieldList } from "../BuilderFieldList";
+import { Outline } from "../outline/Outline";
 import { BuilderSchemaChangeDialogs } from "../BuilderSchemaChangeDialogs";
 import { BuilderSettingsModal } from "../BuilderSettingsModal";
 import { BuilderToolbar } from "../BuilderToolbar";
@@ -509,28 +510,42 @@ const SURFACES: readonly Surface[] = [
       name: `field outline, ${kind}`,
       ui: (
         <DndContext>
-          <BuilderFieldList
+          <Outline
             kind={kind}
-            fields={[
+            nodes={buildOutline(
+              [
+                field({ id: "u1", type: "richText" }),
+                field({
+                  id: "u2",
+                  type: "upload",
+                  name: "cover",
+                  label: "Cover",
+                }),
+              ],
+              { entityReadOnly: false, fieldGroups: new Map() }
+            )}
+            systemFields={[
               field({
                 id: "system_title",
                 name: "title",
                 label: "Title",
                 isSystem: true,
               }),
-              field({ id: "u1", type: "richText" }),
-              field({
-                id: "u2",
-                type: "upload",
-                name: "cover",
-                label: "Cover",
-              }),
             ]}
-            onAddAt={() => {}}
-            onEditField={() => {}}
-            onDeleteField={() => {}}
-            onDuplicateField={() => {}}
-            onReorder={() => {}}
+            errors={new Map()}
+            foldKey={`test:copy:${kind}`}
+            selectedId={null}
+            readOnly={false}
+            callbacks={{
+              select: () => {},
+              addAt: () => {},
+              move: () => {},
+              duplicate: () => {},
+              remove: () => {},
+              setHidden: () => {},
+              openFieldGroup: () => {},
+            }}
+            renderPreview={() => null}
           />
         </DndContext>
       ),

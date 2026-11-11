@@ -432,6 +432,19 @@ const BUILDER_MODELLED_FIELD_KEYS: ReadonlySet<string> = new Set([
   "pluginOptions",
 ]);
 
+/**
+ * Properties the server adds to a field when it hands a definition out, that
+ * are not part of the definition: a field-group field's resolved fields
+ * (`componentFields`, `componentSchemas`), read from the field groups it
+ * names. Carried as the field's own options they were written back on the
+ * next save, freezing a copy of another definition into this one; the Builder
+ * reads the field groups themselves instead.
+ */
+const SERVER_DERIVED_FIELD_KEYS: ReadonlySet<string> = new Set([
+  "componentFields",
+  "componentSchemas",
+]);
+
 /** Whether a value is a `{}` literal, matching what core accepts as a container. */
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -469,6 +482,7 @@ function collectUnmodelledOptions(
 
   for (const [key, value] of Object.entries(field)) {
     if (BUILDER_MODELLED_FIELD_KEYS.has(key)) continue;
+    if (SERVER_DERIVED_FIELD_KEYS.has(key)) continue;
     collect(key, value);
   }
 
@@ -481,7 +495,12 @@ function collectUnmodelledOptions(
   if (Object.prototype.hasOwnProperty.call(field, "pluginOptions")) {
     const container = (field as { pluginOptions?: unknown }).pluginOptions;
     if (isPlainRecord(container)) {
-      for (const [key, value] of Object.entries(container)) collect(key, value);
+      // A definition saved before these were left out may hold them in the
+      // container; they are dropped there too, so its next save is clean.
+      for (const [key, value] of Object.entries(container)) {
+        if (SERVER_DERIVED_FIELD_KEYS.has(key)) continue;
+        collect(key, value);
+      }
     }
   }
 
@@ -516,10 +535,16 @@ export function applyCarriedOptions(
 /**
  * Convert FieldDefinition (API) to BuilderField (UI).
  * Handles nested fields, blocks, and all field-type-specific properties.
+ *
+ * @param nested - The field sits inside another field (a group, repeating
+ *   rows) or a field group, rather than at the entity's top level. Only a
+ *   top-level `title` or `slug` is one of the entity's own built-in fields; a
+ *   field of that name anywhere else is an ordinary field of its container.
  */
 export function convertToBuilderField(
   field: FieldDefinition,
-  index: number | string
+  index: number | string,
+  nested = false
 ): BuilderField {
   const id = generateFieldId();
 
@@ -528,7 +553,7 @@ export function convertToBuilderField(
     name: field.name,
     label: field.label || field.name,
     type: field.type,
-    isSystem: field.name === "title" || field.name === "slug",
+    isSystem: !nested && (field.name === "title" || field.name === "slug"),
     // Provenance (P8): carry the plugin tag through so the Builder renders a
     // plugin-contributed field locked + badged instead of as an editable field.
     source: field.source,
@@ -588,7 +613,7 @@ export function convertToBuilderField(
   // Nested fields
   if (field.fields && field.fields.length > 0) {
     builderField.fields = field.fields.map((f, i) =>
-      convertToBuilderField(f, i)
+      convertToBuilderField(f, i, true)
     );
   }
 

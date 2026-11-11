@@ -40,8 +40,16 @@ import {
 } from "@admin/components/field-ui/settings-panel";
 import { Trash2 } from "@admin/components/icons";
 import { toSnakeName } from "@admin/lib/builder";
-import { findFieldPlacement } from "@admin/lib/builder/field-placement";
+import {
+  findFieldPlacement,
+  type FieldPlacement,
+} from "@admin/lib/builder/field-placement";
 import { isRepeatingContainer } from "@admin/lib/builder/is-inside-repeating-ancestor";
+import {
+  describeReadOnly,
+  placementReadOnlyReason,
+  type ReadOnlyReason,
+} from "@admin/lib/builder/outline/outline-model";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 import { AdvancedTab } from "./builder-field-settings/AdvancedTab";
@@ -104,6 +112,19 @@ type Props = {
   onFieldChange: (next: BuilderField) => void;
   onFieldDelete: (fieldId: string) => void;
   onClose: () => void;
+  /**
+   * Where a field that is not the entity's own sits: a field group's field,
+   * shown beneath the field that uses it. Used when `fields` holds no field of
+   * that id.
+   */
+  fallbackPlacement?: FieldPlacement;
+  /**
+   * Why the field cannot be changed here, as the outline decided it. Absent,
+   * the panel asks the same rule over the field's placement.
+   */
+  readOnlyReason?: ReadOnlyReason | null;
+  /** Open a field group in its own editor. */
+  onOpenFieldGroup?: (slug: string) => void;
 };
 
 export function BuilderFieldSettings({
@@ -116,16 +137,43 @@ export function BuilderFieldSettings({
   onFieldChange,
   onFieldDelete,
   onClose,
+  fallbackPlacement,
+  readOnlyReason,
+  onOpenFieldGroup,
 }: Props): JSX.Element | null {
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
-  const placement = findFieldPlacement(fields, fieldId);
+  const placement = findFieldPlacement(fields, fieldId) ?? fallbackPlacement;
   if (!placement) return null;
 
   const { field, ancestors, siblings } = placement;
-  // A field a plugin or code owns is shown read-only, like a code-first entity.
-  const fieldReadOnly = readOnly || field.locked === true;
+  // The outline's own read-only rule: a field owned by code or a plugin, one
+  // inside an owned container, one of a field group's fields, or any field of
+  // a code-first entity is shown with every setting and none changeable.
+  const reason =
+    readOnlyReason !== undefined
+      ? readOnlyReason
+      : placementReadOnlyReason(field, ancestors, readOnly);
+  const fieldReadOnly = reason !== null;
   const canDelete = !fieldReadOnly && field.isSystem !== true;
   const fieldTitle = field.label || "Untitled field";
+
+  // Where a read-only field is defined, and for a field group's field, the
+  // way to the editor where it can be changed.
+  const definedAt = reason && (
+    <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-sm text-muted-foreground">
+      <span>{describeReadOnly(reason)}.</span>
+      {reason.kind === "field-group" && onOpenFieldGroup && (
+        <Button
+          type="button"
+          variant="link"
+          className="h-auto p-0"
+          onClick={() => onOpenFieldGroup(reason.slug)}
+        >
+          Open the field group {reason.label}
+        </Button>
+      )}
+    </div>
+  );
 
   const panel = (
     <FieldSettingsPanel
@@ -158,6 +206,7 @@ export function BuilderFieldSettings({
     <>
       {docked ? (
         <aside className="sticky top-16 flex max-h-[calc(100vh-4rem)] w-[420px] shrink-0 flex-col border-l border-border">
+          {definedAt}
           {panel}
         </aside>
       ) : (
@@ -173,6 +222,7 @@ export function BuilderFieldSettings({
             <SheetDescription className="sr-only">
               {`Settings of the ${fieldTitle} field.`}
             </SheetDescription>
+            {definedAt}
             <div className="flex min-h-0 flex-1 flex-col">{panel}</div>
             {/* Within thumb reach on a phone, and saying why there is no
                 Apply: every change is already in the draft. */}

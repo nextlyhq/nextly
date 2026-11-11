@@ -13,12 +13,11 @@ export {
   convertToBuilderField,
 } from "./field-transformers";
 
-export {
-  findComponentFieldMissingReference,
-  findSelectFieldMissingOptions,
-  validateBuilderFields,
+export { builderFieldErrors, validateBuilderFields } from "./field-validators";
+export type {
+  BuilderFieldError,
+  FieldBuilderValidationResult,
 } from "./field-validators";
-export type { FieldBuilderValidationResult } from "./field-validators";
 
 export { nestedFieldPriorityCollision } from "./dnd-collision";
 

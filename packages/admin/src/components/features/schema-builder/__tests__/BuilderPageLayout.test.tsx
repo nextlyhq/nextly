@@ -8,6 +8,7 @@ import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
+import { convertToFieldDefinition } from "@admin/lib/builder";
 
 import { BuilderPageLayout } from "../BuilderPageLayout";
 import type { BuilderConfig } from "../builder-config";
@@ -70,6 +71,7 @@ function renderLayout(
   const props: ComponentProps<typeof BuilderPageLayout> = {
     config,
     builder: makeBuilder(),
+    entitySlug: "posts",
     name: "Posts",
     locked: false,
     unsavedCount: 0,
@@ -239,5 +241,22 @@ describe("BuilderPageLayout", () => {
       );
       expect(onActiveChange).toHaveBeenCalledWith({ kind: "none" });
     });
+  });
+
+  // Hiding from the outline changes the field in the Builder's draft, and the
+  // save sends it hidden: the outline's Hide is the same edit as the panel's.
+  it("hides a field from its row's menu, into the draft the save sends", async () => {
+    const { props } = renderLayout();
+    const user = userEvent.setup();
+    screen.getByTestId("field-row-excerpt").focus();
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await user.click(await screen.findByRole("menuitem", { name: "Hide" }));
+
+    const update = props.builder.handleFieldUpdate as ReturnType<typeof vi.fn>;
+    expect(update).toHaveBeenCalledTimes(1);
+    const hidden = update.mock.calls[0][0] as BuilderField;
+    expect(hidden).toMatchObject({ id: "u1", admin: { hidden: true } });
+    // Kept by what a save sends.
+    expect(convertToFieldDefinition(hidden).admin?.hidden).toBe(true);
   });
 });

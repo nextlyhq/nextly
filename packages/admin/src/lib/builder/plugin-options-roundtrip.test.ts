@@ -179,3 +179,51 @@ describe("plugin field options round-trip through the builder", () => {
     ).not.toHaveProperty("pluginOptions");
   });
 });
+
+/**
+ * The server hands a field-group field out with the fields of the field groups
+ * it names resolved onto it (`componentFields`, `componentSchemas`). They are
+ * not part of the field's definition, so a save never writes them back: a copy
+ * of another definition frozen into this one would go stale the moment that
+ * field group changed.
+ */
+describe("a field group's resolved fields", () => {
+  const RESOLVED = {
+    componentFields: [{ name: "meta_title", type: "text" }],
+    componentSchemas: { seo: { label: "SEO", fields: [] } },
+  };
+
+  it("are not written back by a save", () => {
+    const loaded = convertToBuilderField(
+      {
+        name: "seo",
+        type: "component",
+        label: "SEO",
+        component: "seo",
+        ...RESOLVED,
+      } as unknown as Parameters<typeof convertToBuilderField>[0],
+      0
+    );
+    const saved = convertToFieldDefinition(loaded);
+    expect(saved).not.toHaveProperty("componentFields");
+    expect(saved).not.toHaveProperty("componentSchemas");
+    expect(saved).not.toHaveProperty("pluginOptions");
+    expect(saved).toMatchObject({ type: "component", component: "seo" });
+  });
+
+  it("are dropped from a definition that was saved holding them", () => {
+    const loaded = convertToBuilderField(
+      {
+        name: "rating",
+        type: "star-rating",
+        label: "Rating",
+        pluginOptions: { ratingScale: SCALE, ...RESOLVED },
+      } as unknown as Parameters<typeof convertToBuilderField>[0],
+      0
+    );
+    expect(
+      (convertToFieldDefinition(loaded) as { pluginOptions?: unknown })
+        .pluginOptions
+    ).toEqual({ ratingScale: SCALE });
+  });
+});
