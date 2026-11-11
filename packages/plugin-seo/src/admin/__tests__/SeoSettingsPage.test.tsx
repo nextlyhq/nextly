@@ -43,6 +43,7 @@ const POSTS: SeoContentType = {
     values: { category: "Comparisons" },
     address: "/blog/surfer-seo-vs-rext-ai",
   },
+  count: 19,
   mappableFields: [
     { name: "byline", label: "Byline" },
     { name: "publishedAt", label: "Published at" },
@@ -513,6 +514,7 @@ describe("the content types table", () => {
   it("shows each type's SEO as set in code, and hides a whole type from search", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
+    expect(screen.getByText("19 entries")).toBeTruthy();
 
     const seo = screen.getByRole("switch", { name: "SEO for Blog posts" });
     expect(seo.getAttribute("aria-checked")).toBe("true");

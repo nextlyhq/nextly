@@ -87,6 +87,8 @@ export interface SeoContentType {
   fields: PatternField[];
   /** The newest page of the type, where the reader may see one. */
   example?: PatternExample;
+  /** How many entries of the type the reader may read. */
+  count?: number;
   /** The type's own fields a structured data detail may be read from. */
   mappableFields: MappableField[];
   /** Whether its pages have a public address yet. */

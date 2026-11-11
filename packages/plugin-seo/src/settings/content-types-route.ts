@@ -108,6 +108,27 @@ async function newestEntry(
   }
 }
 
+/**
+ * How many entries of `slug` the person asking may read, counted as them;
+ * nothing where they may read none.
+ */
+async function entryCount(
+  ctx: PluginRouteContext,
+  slug: string
+): Promise<number | undefined> {
+  if (ctx.user === null) return undefined;
+  try {
+    return await ctx.services.collections.count(
+      slug,
+      {},
+      { as: "user", user: ctx.user }
+    );
+  } catch (error) {
+    if (NextlyError.isCode(error, "FORBIDDEN")) return undefined;
+    throw error;
+  }
+}
+
 /** One content type as the screen lists it, for this reader. */
 async function contentTypeOf(
   ctx: PluginRouteContext,
@@ -130,7 +151,10 @@ async function contentTypeOf(
   const isPublic = !withoutAddress.has(slug);
   // An example only from what the reader may read of the type's entries: the
   // settings permission alone must not show them a page's title.
-  const entry = await newestEntry(ctx, slug);
+  const [entry, count] = await Promise.all([
+    newestEntry(ctx, slug),
+    entryCount(ctx, slug),
+  ]);
   let example: PatternExample | undefined;
   if (entry !== undefined) {
     example = exampleOf(entry, fields);
@@ -148,6 +172,7 @@ async function contentTypeOf(
     fields,
     mappableFields,
     ...(example === undefined ? {} : { example }),
+    ...(count === undefined ? {} : { count }),
     public: isPublic,
   };
 }

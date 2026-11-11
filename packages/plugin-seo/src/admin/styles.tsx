@@ -67,13 +67,13 @@ const CSS = `
 .nx-seo-tname small{display:block;color:var(--nx-muted-foreground);font-size:12px}
 .nx-seo-code{font-family:var(--seo-mono);font-size:12px;background:var(--nx-muted);padding:2px 6px;border-radius:4px;overflow-wrap:anywhere}
 .nx-seo-notpublic{color:var(--nx-warning-text);font-weight:600;display:inline-flex;gap:6px;align-items:center}
-.nx-seo-pattern{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--nx-border);border-radius:7px;padding:4px 8px;background:var(--nx-background);color:var(--nx-foreground);cursor:pointer;font-family:var(--seo-mono);font-size:12px;max-width:100%;text-align:left;overflow-wrap:anywhere}
+.nx-seo-pattern{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--nx-border);border-radius:7px;padding:4px 8px;background:var(--nx-background);color:var(--nx-foreground);cursor:pointer;font-family:var(--seo-mono);font-size:12px;max-width:100%;text-align:left;overflow-wrap:break-word}
 .nx-seo-pattern:hover{border-color:var(--nx-muted-foreground)}
 .nx-seo-pattern[aria-expanded="true"]{border-color:var(--nx-foreground)}
-.nx-seo-pattern small{font-family:inherit;font-size:12px;color:var(--nx-muted-foreground)}
+.nx-seo-pattern small{font-family:inherit;font-size:12px;color:var(--nx-muted-foreground);white-space:nowrap}
 .nx-seo-editrow td{background:var(--nx-muted)}
 .nx-seo-switchcell{width:56px}
-.nx-seo-select{height:34px;width:100%;max-width:220px;border:1px solid var(--nx-input);border-radius:8px;padding:0 8px;background:var(--nx-background);color:var(--nx-foreground);font:inherit;font-size:13px}
+.nx-seo-select{height:34px;width:100%;max-width:170px;border:1px solid var(--nx-input);border-radius:8px;padding:0 8px;background:var(--nx-background);color:var(--nx-foreground);font:inherit;font-size:13px}
 .nx-seo-select[aria-invalid="true"]{border-color:var(--nx-warning-border)}
 .nx-seo-select-fit{width:auto}
 .nx-seo-sdstate{margin-top:4px;font-size:12px}

@@ -184,6 +184,7 @@ describe.each(getConfiguredTestDialects())(
             },
             address: "/blog/surfer-seo-vs-rext-ai",
           },
+          count: 1,
           public: true,
         },
         // No address declared, and no page yet. `name` is what `{Title}`
@@ -198,6 +199,7 @@ describe.each(getConfiguredTestDialects())(
             { name: "slug", label: "Slug" },
             { name: "name", label: "Name" },
           ],
+          count: 0,
           public: false,
         },
       ]);
@@ -218,6 +220,11 @@ describe.each(getConfiguredTestDialects())(
       const answered = await listFor(t, settingsOnly);
       expect(answered.status).toBe(200);
       expect(answered.items?.map(type => type.example)).toEqual([
+        undefined,
+        undefined,
+      ]);
+      // Nor how many entries a type has.
+      expect(answered.items?.map(type => type.count)).toEqual([
         undefined,
         undefined,
       ]);
@@ -245,6 +252,8 @@ describe.each(getConfiguredTestDialects())(
 
       expect(status).toBe(200);
       expect(items?.[0]?.example?.title).toBe("Open note");
+      // The count is of what the reader may read too.
+      expect(items?.[0]?.count).toBe(1);
     });
   }
 );

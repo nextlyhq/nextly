@@ -286,11 +286,13 @@ function TypeRows({
         </td>
         <td className="nx-seo-tname">
           <b>{type.label}</b>
-          <small>
-            {type.example?.title
-              ? `Newest: ${type.example.title}`
-              : "No pages yet"}
-          </small>
+          {type.count === undefined ? null : (
+            <small>
+              {type.count === 0
+                ? "No entries yet"
+                : `${type.count} ${type.count === 1 ? "entry" : "entries"}`}
+            </small>
+          )}
         </td>
         <td data-label="Public address">
           <TypeAddress type={type} />
