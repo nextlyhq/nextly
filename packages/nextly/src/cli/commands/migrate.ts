@@ -1026,9 +1026,10 @@ export async function previewMigrate(args: {
     logger,
     pendingModules.length > 0
   );
-  // The renames a real run would refuse before any statement, from the same check.
+  // The renames a real run would refuse before any statement, from the same check over the same
+  // units: the modules, then the files.
   for (const { file, message } of await renamesOntoTakenTargets(
-    pendingFiles.map(file => fileUnit(file, dialect)),
+    [...moduleRuns, ...pendingFiles.map(file => fileUnit(file, dialect))],
     db,
     dialect
   )) {
@@ -2304,14 +2305,27 @@ async function judgeFileDeletions(
   const fileUnits = listed.flatMap(({ file }) =>
     plan.runs.has(file) ? [fileUnit(file, deps.dialect)] : []
   );
-  // A file renaming a column or a table onto one already there is refused here, before any
-  // statement and before anyone is asked to consent to the run: on MySQL, which commits each
-  // schema statement as it runs, the database's own refusal would stop the file part-way. Asked
+  const modules = await moduleUnits(deps);
+  // A module or file renaming a column or a table onto one already there is refused here, before
+  // any statement and before anyone is asked to consent to the run: on MySQL, which commits each
+  // schema statement as it runs, the database's own refusal would stop the unit part-way. Asked
   // with this judgement both times, so again under the lock against the database as it stands.
-  // A rename after another change to the same table in the run is left to the runner's failure
-  // (`renamesOntoTakenTargets`).
-  await refuseRenamesOntoTakenTargets(fileUnits, deps.db, deps.dialect);
-  const units = [...(await moduleUnits(deps)), ...fileUnits];
+  // Only what this run reaches is judged: the modules, then the files the step leaves them
+  // (`appFileUnits`). A rename after another change to the same table in the run is left to the
+  // runner's failure (`renamesOntoTakenTargets`).
+  await refuseRenamesOntoTakenTargets(
+    [
+      ...modules,
+      ...appFileUnits(
+        listed,
+        appStepAfter(deps.step, modules.length),
+        deps.dialect
+      ),
+    ],
+    deps.db,
+    deps.dialect
+  );
+  const units = [...modules, ...fileUnits];
   for (const { unit, deletions } of await pendingRunDeletions(
     units,
     deps.db,
@@ -2356,6 +2370,23 @@ interface RunUnit {
   label: string;
   text: string;
   statements: string[];
+}
+
+/**
+ * The app files a run applies after its plugin modules have spent their share
+ * of `--step` (`step`, from `appStepAfter`), as units of the run: none when the
+ * modules spend all of it.
+ */
+function appFileUnits(
+  listed: readonly { file: ParsedMigration; applied: boolean }[],
+  step: number | undefined,
+  dialect: SupportedDialect
+): RunUnit[] {
+  if (step === 0) return [];
+  const plan = fileRunPlan(listed, step);
+  return listed.flatMap(({ file }) =>
+    plan.runs.has(file) ? [fileUnit(file, dialect)] : []
+  );
 }
 
 /** An app migration file as a unit of the run: its UP section. */

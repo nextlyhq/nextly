@@ -593,6 +593,18 @@ describe("renamesIn", () => {
         { kind: "column", table: "dc_posts", from: "c", to: "d" },
       ],
     ],
+    // MySQL and SQLite compare names without regard to case, so a quoted name in another case is
+    // read, lower-cased.
+    [
+      "mysql",
+      "ALTER TABLE `Dc_Posts` RENAME COLUMN `Heading` TO `HeadLine`",
+      [{ kind: "column", table: "dc_posts", from: "heading", to: "headline" }],
+    ],
+    [
+      "sqlite",
+      `ALTER TABLE "dc_posts" RENAME COLUMN "Heading" TO "HeadLine"`,
+      [{ kind: "column", table: "dc_posts", from: "heading", to: "headline" }],
+    ],
   ] as const)("reads %s's %s", (dialect, sql, renames) => {
     expect(renamesIn(sql, dialect)).toEqual(renames);
   });

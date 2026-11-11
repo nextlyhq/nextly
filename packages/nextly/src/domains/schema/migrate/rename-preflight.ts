@@ -28,6 +28,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { queryLiveColumnTypes } from "../pipeline/live-column-types";
+import { readNameHoldersElsewhere } from "../pipeline/live-table-facts";
 import { identifierKey } from "../rename-target";
 
 import { cursorOf } from "./statement-cursor";
@@ -50,25 +51,28 @@ export interface TakenRename {
   message: string;
 }
 
+/** First words of statements that change no table and no column. */
+const CHANGES_NO_TABLE: readonly string[][] = [
+  ["ALTER", "INDEX"],
+  ["COMMENT", "ON"],
+  ["PRAGMA"],
+  ["CREATE", "TYPE"],
+  ["CREATE", "SEQUENCE"],
+];
+
 /**
  * Whether `statement` changes no table and no column, though `tablesChangedIn`
  * does not read it: an index dropped or altered (a `DROP INDEX` without
- * CASCADE), a comment, a session setting, or a type or sequence created. Any
- * other statement it cannot read may change any table.
+ * CASCADE), a comment, a session setting other than PostgreSQL's
+ * `search_path` (which changes the table an unqualified name reaches), or a
+ * type or sequence created. Any other statement it cannot read may change any
+ * table.
  */
 function changesNoTable(statement: string, dialect: SupportedDialect): boolean {
   const cursor = cursorOf(statement, dialect);
-  if (cursor.accept("DROP", "INDEX")) {
-    return !cursor.rest().some(token => token === "CASCADE");
-  }
-  return (
-    cursor.accept("ALTER", "INDEX") ||
-    cursor.accept("COMMENT", "ON") ||
-    cursor.accept("SET") ||
-    cursor.accept("PRAGMA") ||
-    cursor.accept("CREATE", "TYPE") ||
-    cursor.accept("CREATE", "SEQUENCE")
-  );
+  if (cursor.accept("DROP", "INDEX")) return !cursor.rest().includes("CASCADE");
+  if (cursor.accept("SET")) return !cursor.rest().includes("SEARCH_PATH");
+  return CHANGES_NO_TABLE.some(words => cursor.accept(...words));
 }
 
 /** The tables a rename involves: its table, or both of a table's names. */
@@ -77,9 +81,29 @@ function tablesOf(rename: StatementRename): string[] {
 }
 
 /**
+ * A statement that renames nothing, read in order: the tables it changes are
+ * added to `changed`, or `stop` when it may change any table.
+ */
+function noteChanges(
+  statement: string,
+  dialect: SupportedDialect,
+  changed: Set<string>
+): [] | "stop" {
+  const tables = tablesChangedIn(statement, dialect);
+  if (tables === undefined) {
+    return changesNoTable(statement, dialect) ? [] : "stop";
+  }
+  for (const table of tables) changed.add(table);
+  return [];
+}
+
+/**
  * One statement of the run, read in order: the renames it makes that no
- * earlier statement changed the table of, or `stop` when it may change any
- * table. The tables it changes are added to `changed`.
+ * earlier statement or earlier rename in it changed the table of, or `stop`
+ * when it may change any table. The tables it changes are added to `changed`.
+ * A rename after another of the same name in one statement, as in MySQL's
+ * `RENAME TABLE a TO tmp, b TO a, tmp TO b`, is not judged: the earlier one
+ * changes what the name holds.
  */
 function judgedIn(
   statement: string,
@@ -87,15 +111,13 @@ function judgedIn(
   changed: Set<string>
 ): StatementRename[] | "stop" {
   const renames = renamesIn(statement, dialect);
-  const tables =
-    renames?.flatMap(tablesOf) ?? tablesChangedIn(statement, dialect);
-  if (tables === undefined) {
-    return changesNoTable(statement, dialect) ? [] : "stop";
+  if (renames === undefined) return noteChanges(statement, dialect, changed);
+  const judged: StatementRename[] = [];
+  for (const rename of renames) {
+    const tables = tablesOf(rename);
+    if (tables.every(table => !changed.has(table))) judged.push(rename);
+    for (const table of tables) changed.add(table);
   }
-  const judged = (renames ?? []).filter(rename =>
-    tablesOf(rename).every(table => !changed.has(table))
-  );
-  for (const table of tables) changed.add(table);
   return judged;
 }
 
@@ -120,24 +142,56 @@ function judgedRenames(
   return judged;
 }
 
-/** Whether `rename`'s new name is taken while its old one is still there, in `live` (by `key`). */
-function isTaken(
-  rename: StatementRename,
-  live: ReadonlyMap<string, ReadonlySet<string>>,
-  key: (name: string) => string
-): boolean {
-  if (rename.kind === "table") {
-    return live.has(key(rename.from)) && live.has(key(rename.to));
-  }
-  const columns = live.get(key(rename.table));
-  return columns?.has(key(rename.from)) === true && columns.has(key(rename.to));
+/** The live tables' columns, each name by `key`. */
+type LiveNames = ReadonlyMap<string, ReadonlySet<string>>;
+
+/**
+ * What already holds a table rename's new name while the table it renames is
+ * still there, said for the refusal, or undefined when nothing does. A table
+ * with columns is in `live`. PostgreSQL gives a table the name space of every
+ * relation in its schema (an index, a view, a sequence, a table with no
+ * column), and SQLite one name space for the whole database, so there the
+ * catalog is asked too (`readNameHoldersElsewhere`); on MySQL a view is in
+ * `live` with its columns.
+ */
+async function tableNameHolder(
+  rename: Extract<StatementRename, { kind: "table" }>,
+  live: LiveNames,
+  key: (name: string) => string,
+  read: { db: unknown; dialect: SupportedDialect }
+): Promise<string | undefined> {
+  if (!live.has(key(rename.from))) return undefined;
+  if (live.has(key(rename.to))) return `a table '${rename.to}' already exists`;
+  const holder = (
+    await readNameHoldersElsewhere(read.db, read.dialect, rename.from, [
+      rename.to,
+    ])
+  ).get(rename.to);
+  if (holder === undefined) return undefined;
+  const article = /^[aeiou]/.test(holder.type) ? "an" : "a";
+  return `${article} ${holder.type} '${holder.name}' already exists`;
 }
 
-/** Why `rename` is refused, given where its new name is taken. */
-function takenMessage(rename: StatementRename): string {
-  return rename.kind === "column"
+/**
+ * Why `rename` is refused, when its new name is taken while its old one is
+ * still there; undefined when it is not.
+ */
+async function takenMessage(
+  rename: StatementRename,
+  live: LiveNames,
+  key: (name: string) => string,
+  read: { db: unknown; dialect: SupportedDialect }
+): Promise<string | undefined> {
+  if (rename.kind === "table") {
+    const holder = await tableNameHolder(rename, live, key, read);
+    return holder === undefined
+      ? undefined
+      : `Table '${rename.from}' cannot be renamed to '${rename.to}': ${holder}.`;
+  }
+  const columns = live.get(key(rename.table));
+  return columns?.has(key(rename.from)) === true && columns.has(key(rename.to))
     ? `Column '${rename.from}' cannot be renamed to '${rename.to}': table '${rename.table}' already has a column '${rename.to}'.`
-    : `Table '${rename.from}' cannot be renamed to '${rename.to}': a table '${rename.to}' already exists.`;
+    : undefined;
 }
 
 /**
@@ -164,9 +218,11 @@ export async function renamesOntoTakenTargets(
   );
   const taken: TakenRename[] = [];
   for (const { file, rename } of judged) {
-    if (isTaken(rename, liveTables, key)) {
-      taken.push({ file, rename, message: takenMessage(rename) });
-    }
+    const message = await takenMessage(rename, liveTables, key, {
+      db,
+      dialect,
+    });
+    if (message !== undefined) taken.push({ file, rename, message });
   }
   return taken;
 }

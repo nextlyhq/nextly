@@ -31,12 +31,17 @@ import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { ensureSchemaEventsTable } from "../../events/schema-events-ddl";
 import { formatMigrationFile } from "../../migrate-create/format-file";
 import { NO_CONSENT, resolveDataLossConsent } from "../data-loss-consent";
+import { SchemaOwnersRepository } from "../../ownership/schema-owners-repository";
 import { queryLiveColumnTypes } from "../../pipeline/live-column-types";
 import {
   LOCK_DIALECTS,
   lockWorld,
   type LockWorld,
 } from "../../pipeline/__tests__/helpers/schema-lock-world";
+import {
+  migrationChecksum,
+  type MigrationContent,
+} from "../plugin/plugin-migration";
 import { renamesOntoTakenTargets } from "../rename-preflight";
 
 const logger = createLogger({ quiet: true });
@@ -80,7 +85,7 @@ describe.each(LOCK_DIALECTS)(
       await world.dispose();
     }, 60_000);
 
-    function migrate() {
+    function migrate(extra: Partial<Parameters<typeof migrateCore>[0]> = {}) {
       return migrateCore({
         extensionSchema: undefined,
         dialect,
@@ -94,7 +99,47 @@ describe.each(LOCK_DIALECTS)(
         consent: acceptAll
           ? resolveDataLossConsent({ flag: true, env: {} })
           : NO_CONSENT,
+        ...extra,
       });
+    }
+
+    /** Plugin `rtx` with one pending module whose UP is `up` on every dialect. */
+    function pluginSet(up: string[]) {
+      const none = { tables: [] };
+      const sides = { postgresql: none, mysql: none, sqlite: none };
+      const content: MigrationContent = {
+        name: "20261111_000002_rtx_rename",
+        schemaVersion: 1,
+        dialects: {
+          postgresql: { up, down: [] },
+          mysql: { up, down: [] },
+          sqlite: { up, down: [] },
+        },
+        snapshot: sides,
+        before: sides,
+      };
+      return [
+        {
+          pluginName: "rtx",
+          pluginVersion: "1.0.0",
+          migrations: [{ ...content, checksum: migrationChecksum(content) }],
+        },
+      ];
+    }
+
+    /** `tables` as plugin `rtx`'s own, as its earlier module recorded them: a plugin changes only what it owns. */
+    async function ownedByPlugin(tables: string[]): Promise<void> {
+      await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert(
+        tables.map(tableName => ({
+          tableName,
+          ownerKind: "plugin" as const,
+          ownerId: "rtx",
+          migratedBy: "plugin:rtx",
+          ownerVersion: "1.0.0",
+          schemaVersion: 1,
+          state: "active" as const,
+        }))
+      );
     }
 
     async function run(statements: string[]): Promise<void> {
@@ -237,6 +282,138 @@ describe.each(LOCK_DIALECTS)(
       expect(await ledger()).toEqual([]);
       expect(await valueOf("heading")).toBe("Kept");
     });
+
+    // A plugin's module runs before the app's files, through the same runner, so its renames are
+    // judged with the run's.
+    it("refuses a plugin's module renaming a column onto one its table has, before any statement", async () => {
+      await ownedByPlugin([NOTES, OTHER]);
+
+      const error = await migrate({
+        pluginMigrationSets: pluginSet([
+          `ALTER TABLE ${q(OTHER)} ADD COLUMN ${q("extra")} text`,
+          renameColumn("heading", "headline"),
+        ]),
+      }).then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+
+      expect(NextlyError.is(error)).toBe(true);
+      expect(await columnsOf(OTHER)).toEqual(["id"]);
+      expect(await valueOf("heading")).toBe("Kept");
+      expect(entries(error as NextlyError)).toEqual([
+        {
+          path: expect.stringContaining("rtx"),
+          code: "RENAME_TARGET_TAKEN",
+          message: `Column 'heading' cannot be renamed to 'headline': table '${NOTES}' already has a column 'headline'.`,
+        },
+      ]);
+    });
+
+    // `--step` counts a plugin's modules first: a file the step leaves for a later run is not
+    // judged by this one, so the plugin's module still runs on its own.
+    it("does not refuse a file the step leaves for a later run", async () => {
+      await ownedByPlugin([OTHER]);
+      writeFile([renameColumn("heading", "headline")]);
+
+      await migrate({
+        step: 1,
+        pluginMigrationSets: pluginSet([
+          `ALTER TABLE ${q(OTHER)} ADD COLUMN ${q("extra")} text`,
+        ]),
+      });
+
+      expect(await columnsOf(OTHER)).toEqual(["extra", "id"]);
+      expect(await ledger()).toEqual([]);
+      expect(await valueOf("heading")).toBe("Kept");
+    });
+
+    // MySQL renames the pairs of one RENAME TABLE in order, so a swap through a spare name runs;
+    // a pair after another of the same name is not judged against the database as it was.
+    it.runIf(dialect === "mysql")(
+      "runs a swap of two tables' names through a spare one",
+      async () => {
+        writeFile([
+          `RENAME TABLE ${q(NOTES)} TO ${q("rtp_spare")}, ${q(ARCHIVE)} TO ${q(NOTES)}, ${q("rtp_spare")} TO ${q(ARCHIVE)}`,
+        ]);
+
+        await migrate();
+
+        expect(await ledger()).toEqual(["applied"]);
+        expect(await columnsOf(ARCHIVE)).toEqual(["heading", "headline", "id"]);
+        expect(await columnsOf(NOTES)).toEqual(["id"]);
+      }
+    );
+
+    // PostgreSQL's search_path decides which table an unqualified name reaches, so a rename after
+    // a statement setting it is not judged against the tables the run started with.
+    it.runIf(dialect === "postgresql")(
+      "does not judge a rename after search_path is set, and judges one after another setting",
+      async () => {
+        const after = (setting: string) =>
+          renamesOntoTakenTargets(
+            [
+              {
+                label: FILE,
+                statements: [setting, renameColumn("heading", "headline")],
+              },
+            ],
+            adapter.getDrizzle(),
+            dialect
+          );
+
+        expect(
+          await after(`SET LOCAL search_path TO rtp_side, public`)
+        ).toEqual([]);
+        expect(await after(`SET LOCAL statement_timeout = 0`)).toHaveLength(1);
+      }
+    );
+
+    // MySQL and SQLite compare names without regard to case, quoted or not.
+    it.runIf(dialect !== "postgresql")(
+      "refuses a rename spelled in another case onto a column the table has",
+      async () => {
+        writeFile([
+          `ALTER TABLE ${q(NOTES)} RENAME COLUMN ${q("Heading")} TO ${q("HeadLine")}`,
+        ]);
+
+        const error = await refusal();
+
+        expect(await ledger()).toEqual([]);
+        expect(await valueOf("heading")).toBe("Kept");
+        expect(entries(error)).toEqual([
+          {
+            path: FILE,
+            code: "RENAME_TARGET_TAKEN",
+            message: `Column 'heading' cannot be renamed to 'headline': table '${NOTES}' already has a column 'headline'.`,
+          },
+        ]);
+      }
+    );
+
+    // PostgreSQL gives a table the name space of every relation in its schema, and SQLite one name
+    // space for the whole database: an index holds a name a table cannot take.
+    it.runIf(dialect !== "mysql")(
+      "refuses a table renamed onto an index's name",
+      async () => {
+        await run([
+          `CREATE INDEX ${q("rtp_held")} ON ${q(OTHER)} (${q("id")})`,
+        ]);
+        writeFile([`ALTER TABLE ${q(NOTES)} RENAME TO ${q("rtp_held")}`]);
+
+        const error = await refusal();
+
+        expect(await ledger()).toEqual([]);
+        expect(await valueOf("heading")).toBe("Kept");
+        expect(entries(error)).toEqual([
+          {
+            path: FILE,
+            code: "RENAME_TARGET_TAKEN",
+            message: `Table '${NOTES}' cannot be renamed to 'rtp_held': an index 'rtp_held' already exists.`,
+          },
+        ]);
+      }
+    );
 
     // Controls.
 

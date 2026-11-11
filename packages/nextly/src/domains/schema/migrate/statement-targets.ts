@@ -227,15 +227,22 @@ function alterTableRenames(
  * (`renameClause`; every clause names the table as the statement found it),
  * or MySQL's `RENAME TABLE a TO b[, c TO d]`. Undefined for any other
  * statement, for a rename beside a clause that does anything else, and for a
- * name not read here (schema-qualified, or quoted in another case), so a
- * caller judging renames before a file runs counts such a statement as a
- * change it did not read.
+ * name not read here (schema-qualified, or on PostgreSQL quoted in another
+ * case than lower), so a caller judging renames before a file runs counts such
+ * a statement as a change it did not read. Names come back lower-cased: MySQL
+ * and SQLite compare them without regard to case, so a quoted `Heading` there
+ * is read as the column it names; PostgreSQL keeps a quoted name's case, so
+ * there only the lower-case spelling is read.
  */
 export function renamesIn(
   statement: string,
   dialect: SupportedDialect
 ): StatementRename[] | undefined {
-  const cursor = cursorOf(statement, dialect, EXACT);
+  const cursor = cursorOf(
+    statement,
+    dialect,
+    dialect === "postgresql" ? EXACT : {}
+  );
   if (cursor.accept("RENAME", "TABLE")) return tablesRenamed(cursor);
   if (!cursor.accept("ALTER", "TABLE")) return undefined;
   return alterTableRenames(cursor);
