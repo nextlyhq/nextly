@@ -8,7 +8,7 @@ import type {
   PageMetadataResolver,
   PluginContext,
 } from "@nextlyhq/plugin-sdk";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   cardLocale,
@@ -16,6 +16,12 @@ import {
   socialCardRulesFromOptions,
   withSocialCard,
 } from "../card";
+
+/** A plugin context on a site whose default language is `language`. */
+const siteIn = (language: string) =>
+  ({
+    publicAddresses: { defaultLanguage: async () => language },
+  }) as unknown as PluginContext;
 
 const STORED = {
   url: "/uploads/2026/11/cover.jpg",
@@ -118,6 +124,35 @@ describe("cardLocale", () => {
 });
 
 describe("socialCardRulesFromOptions", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("reads the site's origin from its production addresses where baseUrl is not set", async () => {
+    vi.stubEnv(
+      "NEXTLY_PRODUCTION_ADDRESSES",
+      "https://www.example.com, https://fr.example.com"
+    );
+    const read = socialCardRulesFromOptions(undefined, {});
+    expect((await read(siteIn("en"), undefined)).origin).toBe(
+      "https://www.example.com"
+    );
+    // baseUrl, where it is set, is the site's own word for its origin.
+    const set = socialCardRulesFromOptions("https://example.com", {});
+    expect((await set(siteIn("en"), undefined)).origin).toBe(
+      "https://example.com"
+    );
+  });
+
+  it("states the site's default language where the options name none", async () => {
+    const read = socialCardRulesFromOptions(undefined, {});
+    expect((await read(siteIn("de-AT"), undefined)).language).toBe("de-AT");
+    // The option names the language of a site that declares no languages,
+    // whose default is otherwise English.
+    const named = socialCardRulesFromOptions(undefined, { language: "fr-CA" });
+    expect((await named(siteIn("en"), undefined)).language).toBe("fr-CA");
+  });
+
   it("refuses a language that is no language tag when the plugin is created", () => {
     expect(() =>
       socialCardRulesFromOptions(undefined, { language: "english please" })
@@ -129,7 +164,7 @@ describe("socialCardRulesFromOptions", () => {
       siteName: "Acme",
       language: "en-GB",
     });
-    expect(await read({} as PluginContext, undefined)).toEqual({
+    expect(await read(siteIn("en"), undefined)).toEqual({
       origin: "https://example.com",
       siteName: "Acme",
       language: "en-GB",
@@ -144,7 +179,7 @@ describe("withSocialCard", () => {
       resolve: () => ({ social: { image: STORED } }),
     };
     const card = withSocialCard(
-      {} as PluginContext,
+      siteIn("en"),
       resolver,
       socialCardRulesFromOptions("https://example.com", { siteName: "Acme" })
     );
@@ -160,6 +195,7 @@ describe("withSocialCard", () => {
         url: "https://example.com/uploads/2026/11/cover.jpg",
       },
       siteName: "Acme",
+      locale: "en",
     });
   });
 });

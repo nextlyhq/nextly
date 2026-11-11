@@ -136,6 +136,40 @@ describe("judgeColumn", () => {
       }
     });
 
+    it("a PostgreSQL real to double precision: safe, as the conversion reads each value through its text", async () => {
+      // 0.1 and 3.14159 read back as themselves only through their text; the conversion casts
+      // that way, so every value of a real converts.
+      await expect(
+        judgeColumn(
+          pg("real", "double precision", {
+            compareAs: "number",
+            throughText: true,
+          }),
+          rows("0.1", "3.14159", "100.7", "-3.4028235e+38", null)
+        )
+      ).resolves.toEqual({ class: "safe", reasons: [] });
+      // A conversion that casts plainly cannot keep 0.1, so without saying it reads through the
+      // text it still has no conversion.
+      expect(
+        kinds(
+          await judgeColumn(
+            pg("real", "double precision", { compareAs: "number" }),
+            rows("0.1")
+          )
+        )
+      ).toEqual(["no-conversion"]);
+      // The other way, and on MySQL, there is still no conversion for the pair.
+      for (const conversion of [
+        pg("double precision", "real", { compareAs: "number" }),
+        my("float", "double", { compareAs: "number" }),
+      ]) {
+        expect(
+          kinds(await judgeColumn(conversion, rows("0.5"))),
+          `${conversion.dialect} ${conversion.from.type} to ${conversion.to.type}`
+        ).toEqual(["no-conversion"]);
+      }
+    });
+
     it("a MySQL text column to varchar(255): safe when every value fits, blocked by a longer one", async () => {
       const narrow = my("text", "varchar(255)");
       // 255 characters of four bytes each fit: the limit counts characters, not bytes or UTF-16 units.

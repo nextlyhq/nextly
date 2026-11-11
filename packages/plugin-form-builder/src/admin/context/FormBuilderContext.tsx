@@ -41,6 +41,7 @@ import {
 } from "../../utils/form-settings";
 
 import { generateFieldName } from "./field-names";
+import { useBeenLive } from "./use-been-live";
 import { useChangeHistory } from "./use-change-history";
 import { useFieldIdentity } from "./use-field-identity";
 
@@ -185,6 +186,14 @@ export interface FieldBookkeeping {
    */
   restored: number;
   /**
+   * Whether the form's ID is fixed: it has been live as stored (set back to
+   * draft, it still has), or the save that makes it live is under way. An
+   * unsaved pick in the bar does not count.
+   */
+  formIdFixed: boolean;
+  /** The save that began was refused or failed: nothing was stored. */
+  saveFailed: () => void;
+  /**
    * The key a field is known by while it is edited, whatever its name
    * becomes: the list's row key and the settings panel's field id.
    */
@@ -213,6 +222,8 @@ export interface FormBuilderProviderProps {
     slug?: string;
     description?: string;
     status?: "draft" | "published" | "closed";
+    /** When the form first went live, as the server stamped it. */
+    wentLiveAt?: string | null;
     closedMessage?: string;
     fields?: AnyFormField[];
     settings?: Partial<FormSettings>;
@@ -247,6 +258,7 @@ const READS_ONLY = new Set([
   "setActiveTab",
   "markAsSaved",
   "beginSave",
+  "saveFailed",
   "markFieldsSaved",
 ]);
 
@@ -516,7 +528,7 @@ export function FormBuilderProvider({
     record,
     undo,
     current: currentDocument,
-    markSaved: markAsSaved,
+    markSaved: historyMarkSaved,
     beginSave: historyBeginSave,
     rebase: rebaseHistory,
   } = useChangeHistory(formDocument, restore);
@@ -752,10 +764,21 @@ export function FormBuilderProvider({
     [record]
   );
 
+  // A save stores the form as it stood when it began, its status among it.
+  const {
+    idFixed: formIdFixed,
+    beginSave: statusBeginSave,
+    markSaved: markAsSaved,
+    saveFailed,
+  } = useBeenLive(initialData, currentDocument, {
+    beginSave: historyBeginSave,
+    markSaved: historyMarkSaved,
+  });
+
   const beginSave = useCallback(() => {
     vacatedRef.current = new Set();
-    historyBeginSave();
-  }, [historyBeginSave]);
+    statusBeginSave();
+  }, [statusBeginSave]);
 
   const isDirty = changeCount > 0;
 
@@ -809,6 +832,8 @@ export function FormBuilderProvider({
       changeCount,
       undo,
       restored,
+      formIdFixed,
+      saveFailed,
       fieldKey,
       editField,
     }),
@@ -843,6 +868,8 @@ export function FormBuilderProvider({
       changeCount,
       undo,
       restored,
+      formIdFixed,
+      saveFailed,
       fieldKey,
       editField,
     ]

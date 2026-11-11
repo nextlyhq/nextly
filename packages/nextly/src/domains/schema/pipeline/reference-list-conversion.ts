@@ -115,6 +115,21 @@ export function mysqlReferenceListRewrite(
 }
 
 /**
+ * MySQL's list conversion, once the column is JSON: any value that is not a list becomes a one-item
+ * list, as the rewrite makes it. The rewrite and the retype commit separately, so a value written
+ * between them (a single id as a JSON scalar, which strict mode accepts) would otherwise stay a
+ * scalar in a column that keeps a list. Changes no list.
+ */
+export function mysqlReferenceListNormalise(
+  tableName: string,
+  columnName: string
+): string {
+  const table = quoteIdent(tableName, "mysql");
+  const c = quoteIdent(columnName, "mysql");
+  return `UPDATE ${table} SET ${c} = JSON_ARRAY(${c}) WHERE ${c} IS NOT NULL AND JSON_TYPE(${c}) <> 'ARRAY'`;
+}
+
+/**
  * The statements that convert `op`'s column, in order: forward into the list column for a
  * `referenceList` conversion, back to the scalar type for its `referenceScalar` DOWN.
  *

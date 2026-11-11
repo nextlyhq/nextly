@@ -11,7 +11,8 @@
 //     "version": 1,
 //     "migrationHash": "<sha256 of paired .sql file content>",
 //     "snapshot": { "tables": [ ... ] },
-//     "entities": { "collections": {...}, "singles": {...}, "fieldGroups": {...} }
+//     "entities": { "collections": {...}, "singles": {...}, "fieldGroups": {...} },
+//     "permissions": { "app": {...}, "plugins": {...}, "collections": {...}, "singles": {...} }
 //   }
 //
 // JSON is written deterministically (sorted keys + 2-space indent) so
@@ -28,6 +29,10 @@ import type {
   NextlySchemaSnapshot,
 } from "../pipeline/diff/types";
 
+import {
+  isPermissionRecord,
+  type PermissionRecord,
+} from "./declared-permissions";
 import {
   isEntitySettingsRecord,
   type EntitySettingsRecord,
@@ -59,6 +64,15 @@ export interface SnapshotFile {
    * must never take the absence as settings cleared.
    */
   entities?: EntitySettingsRecord;
+  /**
+   * Every permission the app and each collection, Single and installed plugin
+   * declares at this point, by owner (`declared-permissions.ts`), and no grant.
+   *
+   * Recorded whole in every snapshot, as the settings are. Absent from a
+   * snapshot written before permissions were recorded, which says nothing about
+   * them: a reader must never take the absence as permissions removed.
+   */
+  permissions?: PermissionRecord;
   /**
    * That every translated table in `snapshot` carries `localized: true` and its
    * `localizedColumns`, so a table without them was not translated. Written in
@@ -182,6 +196,9 @@ function optionalPartProblem(obj: Record<string, unknown>): string | undefined {
   if (obj.entities !== undefined && !isEntitySettingsRecord(obj.entities)) {
     return "expected entities to record each collection's, single's and field group's settings by slug";
   }
+  if (obj.permissions !== undefined && !isPermissionRecord(obj.permissions)) {
+    return "expected permissions to record each owner's declared permissions by slug";
+  }
   if (
     obj.translatedFieldsRecorded !== undefined &&
     obj.translatedFieldsRecorded !== true
@@ -213,7 +230,9 @@ export async function writeSnapshot(
   sqlContent: string,
   contributions: Readonly<Record<string, ContributedElements>> = {},
   /** Every entity's settings; omitted only by a caller that has none to record. */
-  entities?: EntitySettingsRecord
+  entities?: EntitySettingsRecord,
+  /** Every declared permission, by owner; omitted only by a caller that knows none. */
+  permissions?: PermissionRecord
 ): Promise<string> {
   await mkdir(metaDir, { recursive: true });
   const byName = (a: { name: string }, b: { name: string }) =>
@@ -229,6 +248,7 @@ export async function writeSnapshot(
     // Key order is sorted by the replacer below, so the record is written the
     // same way whatever order the config declares its entities in.
     ...(entities !== undefined ? { entities } : {}),
+    ...(permissions !== undefined ? { permissions } : {}),
     // The tables below carry the translated-field record as written here.
     translatedFieldsRecorded: true,
     // Sort tables by name for reproducibility across machines.

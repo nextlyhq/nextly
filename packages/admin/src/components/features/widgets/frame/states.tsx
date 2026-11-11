@@ -311,7 +311,11 @@ export function CardError({
       className="grid justify-items-center gap-1"
       data-testid="widget-card-error"
     >
-      <XCircle className="mb-1 h-5 w-5 text-destructive" aria-hidden="true" />
+      <XCircle
+        className="mb-1 h-5 w-5 text-danger-solid"
+        aria-hidden="true"
+        data-testid="widget-card-error-mark"
+      />
       {/* A string expression rather than JSX text, so the apostrophe is written as itself. */}
       <p className="text-sm font-semibold text-foreground">
         {"This card couldn't load"}

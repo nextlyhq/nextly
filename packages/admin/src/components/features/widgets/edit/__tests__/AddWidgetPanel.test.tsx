@@ -282,6 +282,31 @@ describe("what a row offers", () => {
     ).toBeEnabled();
   });
 
+  it("adds Count set to Users for a reader who may read users and no collection", async () => {
+    const user = userEvent.setup();
+    // As the server tells a reader who may read users: Count's setting offers them.
+    const offering = new Map(BY_ID).set("core/count", {
+      ...BY_ID.get("core/count")!,
+      settings: [{ ...COLLECTION_SETTING, users: true }],
+    });
+    const { onAdd } = renderPanel({
+      byId: offering,
+      gallery: {
+        read: { ...READ, collections: [] },
+        isError: false,
+        retry: vi.fn(),
+      },
+    });
+    const count = row("core/count");
+    expect(count).not.toHaveTextContent("Needs a collection you can read");
+    await user.click(within(count).getByRole("button", { name: "Add Count" }));
+    expect(onAdd).toHaveBeenCalledWith(
+      "core/count",
+      { collection: "users" },
+      false
+    );
+  });
+
   it("offers no new card at the limit, but still puts a removed one back", () => {
     renderPanel({
       atCapacity: true,

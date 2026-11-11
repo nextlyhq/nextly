@@ -18,6 +18,7 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { productionAddressesOf } from "../canonical";
 import { originOf } from "../origin";
 
 /** What a social card reads beyond the page and its answer. */
@@ -154,15 +155,19 @@ export interface SocialCardOptions {
   siteName?: string;
   /**
    * The language of the site's pages, as a language tag such as `en-US`,
-   * for a page the route read in no particular language.
+   * for a page the route read in no particular language. Defaults to the
+   * site's default language, which is English on a site that declares no
+   * languages.
    */
   language?: string;
 }
 
 /**
  * The card's rules as the plugin's options give them: its `baseUrl` as the
- * site's origin, and the name and language its `socialCard` names. A
- * language that is no language tag is refused when the plugin is created.
+ * site's origin, or else the first of the site's production addresses, the
+ * name its `socialCard` names, and its language, or else the site's default
+ * language. A language that is no language tag is refused when the plugin
+ * is created.
  */
 export function socialCardRulesFromOptions(
   baseUrl: string | undefined,
@@ -174,10 +179,12 @@ export function socialCardRulesFromOptions(
       message: `seoPlugin: socialCard.language ${JSON.stringify(language)} is not a language tag, such as "en-US".`,
     });
   }
-  const rules: SocialCardRules = defined({
-    origin: baseUrl,
-    siteName: options?.siteName,
-    language,
-  });
-  return () => Promise.resolve(rules);
+  // The production addresses are read on every page, as the canonical rule
+  // reads them, so a deploy that names them needs no restart of the reader.
+  return async ctx =>
+    defined({
+      origin: baseUrl ?? productionAddressesOf(undefined)[0],
+      siteName: options?.siteName,
+      language: language ?? (await ctx.publicAddresses.defaultLanguage()),
+    });
 }

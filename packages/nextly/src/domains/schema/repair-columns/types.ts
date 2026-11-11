@@ -12,6 +12,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 import type { ConversionJudgement } from "../value-conversion/types";
 
+import type { DifferenceToClass } from "./classify";
 import type { ColumnAspects } from "./column-comparison";
 import type { ColumnConversionPlan } from "./conversion/types";
 
@@ -162,6 +163,12 @@ export interface DiffersFinding extends FindingBase {
    * place. Null where there is no conversion to run.
    */
   rowsRewritten: number | null;
+  /**
+   * What the judgement was asked: the field, the column as the database spells it and how its rows
+   * are keyed. An apply asks it again inside the change that converts the column, so a value
+   * written since the report is judged too. Absent on a finding built by hand.
+   */
+  judged?: DifferenceToClass;
 }
 
 /**

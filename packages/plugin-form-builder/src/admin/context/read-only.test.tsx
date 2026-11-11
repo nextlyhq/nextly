@@ -80,6 +80,7 @@ const READS = [
   "setActiveTab",
   "markAsSaved",
   "beginSave",
+  "saveFailed",
   "markFieldsSaved",
 ];
 

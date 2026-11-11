@@ -6,6 +6,7 @@ import type { AnyWidgetSetting, PublishedContentSource } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
 import {
+  collectionOptions,
   dependentsOf,
   fieldFits,
   fieldsNamedBy,
@@ -243,5 +244,42 @@ describe("a stored value naming a field no longer offered", () => {
         sources
       )
     ).toEqual([]);
+  });
+});
+
+describe("a Collection setting's choices", () => {
+  const collection = { name: "collection", type: "collection" } as const;
+
+  it("offers Users after the collections where the setting offers them", () => {
+    expect(
+      collectionOptions({ ...collection, users: true }, sources).map(
+        option => option.value
+      )
+    ).toEqual([...sources.map(source => source.collection), "users"]);
+  });
+
+  it("keeps Users stored on a setting that offers them, reopened", () => {
+    // 🔴 Read against the collections alone, a saved Users card would be reset to no source.
+    expect(
+      staleContentValues(
+        [{ name: "collection", type: "collection", users: true }],
+        { collection: "users" },
+        sources
+      )
+    ).toEqual([]);
+    // The must-differ half: told without the offer, Users is a value that went away.
+    expect(
+      staleContentValues(
+        [{ name: "collection", type: "collection" }],
+        { collection: "users" },
+        sources
+      )
+    ).toHaveLength(1);
+  });
+
+  it("offers no Users where the server told the setting without them", () => {
+    expect(
+      collectionOptions(collection, sources).map(option => option.value)
+    ).toEqual(sources.map(source => source.collection));
   });
 });

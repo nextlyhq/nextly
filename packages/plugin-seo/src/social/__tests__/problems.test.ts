@@ -18,10 +18,17 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   publicAddressOf: async () => ({ status: "resolved", path: "/blog/harbour" }),
 }));
 
-/** A plugin context whose media library holds `media`. */
+/**
+ * A plugin context whose media library holds `media`, on a site whose
+ * address record names no holder.
+ */
 function context(media: Record<string, Record<string, unknown>>) {
   return {
+    self: { collections: {} },
+    config: {},
+    publicAddresses: { defaultLanguage: async () => "en" },
     services: {
+      ownCollections: { listEntries: async () => ({ data: [] }) },
       media: {
         findById: async (id: string) => {
           const found = media[id];

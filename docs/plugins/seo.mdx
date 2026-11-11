@@ -353,10 +353,34 @@ gap. What a person typed always wins, so a route's code fills only what nobody t
 - **Visibility** is never code's to decide: a page is listed unless `noindex` is set on it.
 - **The canonical** is the page's own declared address, in the language it was read in, formed by
   the site's [language rule](/docs/localization#each-languages-address). A page whose type
-  declares no address gets no canonical rather than a guessed one. A canonical typed in the `seo`
-  group overrides it.
+  declares no address gets no canonical rather than a guessed one, and so does a page whose
+  address another page holds: it lost the address in a clash, and gets one back when it is given a
+  new address. A canonical typed in the `seo` group overrides it only where search engines can
+  follow it (a path from the site's root, or an `http(s)` address) and only on the site's own
+  production addresses, unless `canonicalElsewhere` says the page first appeared on another site.
 - **The share image** may be stored as a media id: the plugin looks it up, so a page read at
   `depth: 0` keeps its image.
+
+## Keeping copies out of search
+
+A preview, a staging copy or a production build served from another host must never compete with
+the real site. With the plugin installed, the site's Proxy sends `X-Robots-Tag: noindex` with
+every response from any host but the site's production addresses, prerendered pages included.
+Wire the Proxy once, in `proxy.ts`, as [Proxy handlers](/docs/plugins/proxy) shows.
+
+Name the production addresses in the environment, as bare origins, comma-separated:
+
+```bash
+NEXTLY_PRODUCTION_ADDRESSES=https://example.com,https://example.de
+```
+
+The environment wins over the SEO settings, so a deploy can't be indexed by mistake while its
+settings are being changed. With no address known, the plugin decides once, the first time it
+starts on a site:
+
+- **A site with no pages yet** is kept out of search everywhere until it has an address.
+- **A site that already has pages** stays listable, and its missing address is listed as a
+  problem to fix. Dropping a live site out of search is the worse error.
 
 Without the plugin, `buildMetadata` from `nextly/runtime` still turns the `seo` group into a
 Next.js `Metadata` object by hand. The `buildMetadata` section of
@@ -370,11 +394,12 @@ built from the page's head. The plugin states everything the card reads:
 - the title and description, the social ones where a page has them, else the page's own;
 - the **share image** at its full address, with its width, height and alt text. The media library
   stores an upload with a path from the site's root (`/uploads/cover.jpg`), which a network cannot
-  load, so the plugin states it on `baseUrl`, or on the origin of the page's canonical where that is
-  absolute;
+  load, so the plugin states it on `baseUrl`, else the first of the site's production addresses,
+  else the origin of the page's canonical where that is absolute;
 - the **site's name**, from `socialCard.siteName`;
-- the page's **language**: the one the route read it in, or else `socialCard.language`, written as
-  Open Graph writes it (`en-US` becomes `en_US`).
+- the page's **language**: the one the route read it in, or else `socialCard.language`, or else
+  the site's default language (English on a site that declares no languages), written as Open
+  Graph writes it (`en-US` becomes `en_US`).
 
 ```ts
 seoPlugin({
@@ -399,12 +424,13 @@ Making a share image is one action. The plugin's `POST /share-image` route
 (`/admin/api/plugins/@nextlyhq/plugin-seo/share-image` in a scaffolded project), sent
 `{ "media": "<media id>" }`, makes a copy of the picture at exactly 1200 × 630, cut around the
 picture's focal point and enlarged where it is smaller, as a JPEG under 600 KB. It adds the copy to
-the media library, in the same folder and with the same alt text, and answers it; set it as the
-page's `seo.ogImage` to use it. The picture itself, and every page that shows it, are unchanged.
+the media library, in the same folder and with the same alt text, and answers it as
+`{ message, item }`; set the item as the page's `seo.ogImage` to use it. The picture itself, and every page that shows it, are unchanged.
 
 The route is for a signed-in person who may add to the media library (`create-media`) and read it
 (`read-media`). It reads the picture from where the site serves its uploads, on `baseUrl` where it
-is set. It needs the `sharp` image library, which the media library uses to read image sizes:
+is set. A picture that storage will not serve to an anonymous reader is refused, since no network
+could load it either. It needs the `sharp` image library, which the media library uses to read image sizes:
 install it with `npm install sharp`.
 
 ## Structured data
