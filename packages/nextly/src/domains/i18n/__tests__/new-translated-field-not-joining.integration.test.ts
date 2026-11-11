@@ -311,27 +311,23 @@ describeEachDialect(
       expect(await summaryIn(t, id)).toBe("Kept");
     }, 120_000);
 
-    // SQLite keeps no length on a text column, so a shorter bound cuts nothing there.
-    it.skipIf(dialect === "sqlite")(
-      "still refuses the schema dialog narrowing a short text as it becomes translated",
-      async () => {
-        const t = current as TestNextly;
-        const id = await withSharedSummary(t, 100);
+    // Refused on SQLite too, where TEXT keeps no length: the field's maximum is the bound there.
+    it("still refuses the schema dialog narrowing a short text as it becomes translated", async () => {
+      const t = current as TestNextly;
+      const id = await withSharedSummary(t, 100);
 
-        const answer = await apply(t, [
-          TITLE,
-          summary({ localized: true, maxLength: 10 }),
-        ]);
+      const answer = await apply(t, [
+        TITLE,
+        summary({ localized: true, maxLength: 10 }),
+      ]);
 
-        expect(answer).toEqual([
-          expect.objectContaining({
-            code: "RESHAPED_FIELD_JOINS_TRANSLATION",
-          }),
-        ]);
-        expect(await summaryIn(t, id)).toBe("Kept");
-      },
-      120_000
-    );
+      expect(answer).toEqual([
+        expect.objectContaining({
+          code: "RESHAPED_FIELD_JOINS_TRANSLATION",
+        }),
+      ]);
+      expect(await summaryIn(t, id)).toBe("Kept");
+    }, 120_000);
 
     // A number made translated as text in one save: its values would be copied as they are into a
     // column of another kind, which no widening covers. Still refused, and nothing changes.

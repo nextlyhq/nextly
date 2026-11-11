@@ -8,9 +8,9 @@
  * each dialect and for each column origin, and each answer is checked against the expected one.
  * The code-first apply and `migrate:create` have only the database's types, never the field's
  * kind, so where a dialect stores both kinds of a pair, or both bounds, as one declared type
- * (SQLite's `integer` for a checkbox and a number, its `numeric` for every decimal), they see no
- * change and keep the move, the values held as they were. Those pairs are found from the types the
- * descriptor gives each side, not listed by hand.
+ * (SQLite's `integer` for a checkbox and a number, its `text` for every text, its `numeric` for
+ * every decimal), they see no change and keep the move, the values held as they were. Those pairs
+ * are found from the types the descriptor gives each side, not listed by hand.
  */
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -58,11 +58,9 @@ const ALL_REFUSED = {
   mysql: "refused",
   sqlite: "refused",
 } as const;
-const ALL_KEEP = { postgresql: "keeps", mysql: "keeps", sqlite: "keeps" } as const;
-/** Refused where the database enforces a length or precision; SQLite enforces neither. */
-const BOUND_NARROWED = {
-  postgresql: "refused",
-  mysql: "refused",
+const ALL_KEEP = {
+  postgresql: "keeps",
+  mysql: "keeps",
   sqlite: "keeps",
 } as const;
 
@@ -83,7 +81,7 @@ const PAIRS: {
     name: "a short text made shorter",
     from: short(100),
     to: short(10),
-    expected: BOUND_NARROWED,
+    expected: ALL_REFUSED,
   },
   {
     name: "a short text made long",
@@ -95,7 +93,7 @@ const PAIRS: {
     name: "a long text made short",
     from: LONG,
     to: short(50),
-    expected: BOUND_NARROWED,
+    expected: ALL_REFUSED,
   },
   { name: "a text made long", from: TEXT, to: LONG, expected: ALL_KEEP },
   {
@@ -260,8 +258,8 @@ async function migrateCreateAnswer(
     try {
       await run(entity(pair.to, true), "two", "2026-11-11T11:00:00.000Z");
     } catch (error) {
-      const errors = (error as { publicData?: { errors?: unknown } })
-        .publicData?.errors;
+      const errors = (error as { publicData?: { errors?: unknown } }).publicData
+        ?.errors;
       expect(errors).toEqual([
         expect.objectContaining({
           path: "fields.f",

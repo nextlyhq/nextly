@@ -96,6 +96,8 @@ export interface MovedColumn {
   type: string;
   /** The field's column kind, known to a judge that has the field; a judge with only types has none. */
   kind?: LocalizedColumnKind;
+  /** The column's length, given with the kind. */
+  length?: number;
 }
 
 /**
@@ -106,9 +108,10 @@ export interface MovedColumn {
  * would keep of its values. Then the copy keeps each value as it is, within what the new type
  * allows (`copiesEveryValue`): a widening, never a narrowing.
  *
- * A judge with only the database's types has no kinds, and on one dialect two kinds can share a
- * declared type (SQLite stores a checkbox and a number both as `integer`, and keeps no decimal's
- * precision); such a judge sees no change there, where the database holds each value as it was.
+ * A judge with only the database's types has no kinds, and on one dialect two kinds or two bounds
+ * can share a declared type (SQLite stores a checkbox and a number both as `integer`, and keeps no
+ * text's length or decimal's precision); such a judge sees no change there, where the database
+ * holds each value as it was.
  */
 export function moveKeepsEveryValue(
   from: MovedColumn,
@@ -121,6 +124,18 @@ export function moveKeepsEveryValue(
       from.kind === to.kind ||
       (family !== undefined && family === STORAGE_FAMILY[to.kind]);
     if (!sameFamily) return false;
+    // SQLite's TEXT keeps no length, so a short text's declared maximum is the only bound there:
+    // its values must already be within it, as PostgreSQL and MySQL require of the column.
+    if (
+      dialect === "sqlite" &&
+      to.kind === "shortText" &&
+      to.length !== undefined &&
+      (from.kind !== "shortText" ||
+        from.length === undefined ||
+        from.length > to.length)
+    ) {
+      return false;
+    }
   }
   return copiesEveryValue(from.type, to.type, dialect);
 }

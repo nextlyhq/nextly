@@ -929,8 +929,12 @@ export function joiningFieldsLosingValues(
         from != null &&
         to != null &&
         moveKeepsEveryValue(
-          { type: ddlType(from, dialect), kind: from.kind },
-          { type: ddlType(to, dialect), kind: to.kind },
+          {
+            type: ddlType(from, dialect),
+            kind: from.kind,
+            length: from.length,
+          },
+          { type: ddlType(to, dialect), kind: to.kind, length: to.length },
           dialect
         )
       )
