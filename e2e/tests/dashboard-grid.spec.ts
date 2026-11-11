@@ -217,7 +217,7 @@ async function contentHeights(
 
 /** The columns a card of `w` spans on a dashboard `area` wide, as the bands state them. */
 function expectedSpan(w: number, area: number): number {
-  if (area < 640) return 12;
+  if (area < 640) return w <= 3 ? 6 : 12;
   if (area < 1024) return w <= 6 ? 6 : 12;
   return w;
 }
@@ -412,6 +412,38 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
     expect(wide?.overflow).toBeLessThanOrEqual(1);
   });
 }
+
+test("pairs two quarter-width cards on one row on a 390 px phone, each half the row", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await gotoAdmin(page, "/");
+  // Two Count cards, a quarter of the row each where the dashboard is wide, placed first.
+  const layout = await readLayout(page);
+  const write = await saveLayout(page, [
+    { id: "e2e-quarter-a", widgetId: "core/count", w: 3, h: 2, removed: false },
+    { id: "e2e-quarter-b", widgetId: "core/count", w: 3, h: 2, removed: false },
+    ...layout.placements,
+  ]);
+  expect(write.ok()).toBe(true);
+  await page.reload();
+  const a = page.locator(`${CELLS}[data-placement-id="e2e-quarter-a"]`);
+  const b = page.locator(`${CELLS}[data-placement-id="e2e-quarter-b"]`);
+  await expect(a).toBeVisible();
+  await expect(b).toBeVisible();
+  const area = await areaWidth(page);
+  expect(area).toBeLessThan(640);
+  const [boxA, boxB] = await Promise.all([a.boundingBox(), b.boundingBox()]);
+  if (boxA === null || boxB === null)
+    throw new Error("[e2e] a quarter card has no box");
+  // 🔴 One row, side by side, each half the row less half the gap; every other card is full width.
+  expect(Math.abs(boxA.y - boxB.y)).toBeLessThan(1);
+  expect(boxB.x).toBeGreaterThan(boxA.x);
+  const half = (area - expectedColumnGap(area)) / 2;
+  expect(boxA.width).toBeCloseTo(half, 0);
+  expect(boxB.width).toBeCloseTo(half, 0);
+  await expectCardsInBand(page, "390px with two quarter cards");
+});
 
 test("changes band at the dashboard's own 639/640 and 1,023/1,024 px, and its gap at 1,280 px", async ({
   page,

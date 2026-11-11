@@ -1503,7 +1503,7 @@ export function namedCollection(value: unknown): string | undefined {
  * Each is matched by the setting's TYPE alone, since each content type has one
  * meaning for a query. No setting drives a query because of its name: a
  * declared widget's settings reach its `load`, which reads them as it chooses
- * (a list card's "Number of items" sizes the rows its load asks for).
+ * (a list card's "Number of entries" sizes the rows its load asks for).
  */
 const QUERY_KNOBS: readonly QueryKnob[] = [
   {
