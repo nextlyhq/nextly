@@ -1,3 +1,5 @@
+import { SiteCode } from "@nextlyhq/plugin-page-builder/site";
+
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./globals.css";
@@ -85,10 +87,12 @@ export default function RootLayout({
        *
        * @see https://react.dev/link/hydration-mismatch
        */}
-      <head>{null}</head>
+      <head>
+        <SiteCode slot="head" />
+      </head>
       <body className="antialiased" suppressHydrationWarning>
         {children}
-        {null}
+        <SiteCode slot="body" />
       </body>
     </html>
   );
