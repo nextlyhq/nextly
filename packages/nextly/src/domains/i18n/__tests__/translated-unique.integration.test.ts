@@ -718,12 +718,11 @@ describeEachDialect("a translated unique field", dialect => {
     expect(lengths.map(row => Number(row.n))).toEqual([300]);
   });
 
-  it("makes a field group's shared text field with no width unique only as a change to its table on MySQL", async () => {
-    // On MySQL a shared unique text field that states no width is the bounded default MySQL can
-    // key, and one that is not unique is unbounded, so turning Unique on changes the column: the
-    // field group's own update refuses it and sends it to the schema preview. Elsewhere the column
-    // is text either way, and the update goes ahead. A translated field is keyed per language and
-    // keeps its column, so only a shared one is changed this way.
+  it("sends a field group's shared text field made unique to the schema preview, on every dialect", async () => {
+    // Turning Unique on adds the field's unique index, a change to the field group's table that its
+    // own update does not make: it refuses and sends the change to the schema preview. On MySQL the
+    // column changes too, a shared unique text field that states no width being the bounded default
+    // MySQL can key, which the preview judges by the stored values.
     await dispatchComponents(
       "createComponent",
       {},
@@ -747,13 +746,9 @@ describeEachDialect("a translated unique field", dialect => {
         (error: { publicData?: unknown }) => error
       );
 
-    if (dialect === "mysql") {
-      expect(JSON.stringify(refusal?.publicData ?? null)).toMatch(
-        /requires_schema_change/
-      );
-    } else {
-      expect(refusal).toBeUndefined();
-    }
+    expect(JSON.stringify(refusal?.publicData ?? null)).toMatch(
+      /requires_schema_change/
+    );
   });
 
   it("refuses, rather than cuts, a field group's shared text value over 255 characters when Unique bounds its column on MySQL", async () => {

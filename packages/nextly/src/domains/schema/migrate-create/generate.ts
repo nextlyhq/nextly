@@ -1640,6 +1640,36 @@ function tablesOfSettingsChanges(
  * type to restore and is skipped: its translations stay archived rather than emitting SQL for a
  * column that has nowhere to land.
  */
+/**
+ * The fields a disable brings home and the companion columns they come from: each field whose
+ * column the previous snapshot records in the companion. The snapshot, not the config, says what
+ * the companion holds, so a field added in the disabling edit is not among them.
+ */
+function recordedCompanionFields(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  prevMain: TableSpec,
+  dialect: SupportedDialect
+): {
+  field: MinimalConfigEntity["fields"][number];
+  column: LocalizedColumnSpec;
+}[] {
+  const recorded = prevMain.localizedColumns ?? [];
+  const out: {
+    field: MinimalConfigEntity["fields"][number];
+    column: LocalizedColumnSpec;
+  }[] = [];
+  for (const field of entity.fields) {
+    const column = fieldToLocalizedColumnSpec(
+      field,
+      dialect,
+      columnOriginOf(entity, kind)
+    );
+    if (column && recorded.includes(column.name)) out.push({ field, column });
+  }
+  return out;
+}
+
 function buildDisableSpec(
   entity: MinimalConfigEntity,
   kind: I18nTransitionKind,
@@ -1647,18 +1677,9 @@ function buildDisableSpec(
   dialect: SupportedDialect,
   defaultLocale: string
 ): CompanionMigrationSpec | null {
-  const recorded = prevMain.localizedColumns;
-  if (!recorded || recorded.length === 0) return null;
-
-  const columns: LocalizedColumnSpec[] = [];
-  for (const f of entity.fields) {
-    const col = fieldToLocalizedColumnSpec(
-      f,
-      dialect,
-      columnOriginOf(entity, kind)
-    );
-    if (col && recorded.includes(col.name)) columns.push(col);
-  }
+  const columns = recordedCompanionFields(entity, kind, prevMain, dialect).map(
+    r => r.column
+  );
   if (columns.length === 0) return null;
 
   return {
@@ -1911,12 +1932,16 @@ function disableEntryFor(
   if (prevMain?.localized !== true) return undefined;
   // Turning translation off moves every translated field out of it at once, so each is judged as
   // a field leaving translation alone is (`refusalsForFieldsLeavingTranslation`): one whose shared
-  // column is shaped otherwise than its translated one is refused before any file is written.
+  // column is shaped otherwise than its translated one is refused before any file is written. The
+  // fields judged are the ones the disable brings home (`recordedCompanionFields`), so a field
+  // added in the same edit, which the companion never held, is left to the main table's diff.
   refuseMigration(
     c,
     refusalsForFieldsLeavingTranslation({
       leaving: new Set(
-        c.fields.filter(f => isFieldLocalized(f, true)).map(f => f.name)
+        recordedCompanionFields(c, entityKind, prevMain, dialect).map(
+          r => r.field.name
+        )
       ),
       newFields: c.fields,
       dialect,

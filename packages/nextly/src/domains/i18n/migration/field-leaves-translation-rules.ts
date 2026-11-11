@@ -15,6 +15,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
+import { ddlType } from "./ddl-types";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import type { CompanionFieldLike } from "./reconcile-companion";
 import type { LocalizedColumnSpec } from "./types";
@@ -62,6 +63,22 @@ export function refusal(
 export type TranslationSurface = "builder" | "code";
 type Surface = TranslationSurface;
 type Constraint = "required" | "unique";
+
+/**
+ * Whether the database holds a field's values in a different column type under two descriptions
+ * of it, as this dialect renders each (`ddlType`). Two kinds can name one type: a translated
+ * unique field that states no width is unbounded text and its shared column a bounded string,
+ * which is `TEXT` against `VARCHAR(255)` on MySQL but `TEXT` both ways on PostgreSQL and SQLite.
+ * No description of either side is no difference, since there is nothing to judge.
+ */
+function rendersDifferently(
+  before: LocalizedColumnSpec | null | undefined,
+  after: LocalizedColumnSpec | null | undefined,
+  dialect: SupportedDialect
+): boolean {
+  if (!before || !after) return false;
+  return ddlType(before, dialect) !== ddlType(after, dialect);
+}
 
 /**
  * Whether a field's storage differs between two descriptions of its column: its kind, or its
@@ -233,9 +250,10 @@ export function refusalsForFieldsLeavingTranslation(args: {
     if (storageDiffers(previousColumnOf(field), columnOf(field))) {
       refusals.push(reshapedRefusal(field.name, args.surface));
     } else if (
-      storageDiffers(
+      rendersDifferently(
         columnOf(field),
-        fieldToLocalizedColumnSpec(field, args.dialect, args.builtBy, "shared")
+        fieldToLocalizedColumnSpec(field, args.dialect, args.builtBy, "shared"),
+        args.dialect
       )
     ) {
       // The same field shaped differently once shared: a unique field that states no width is a

@@ -375,43 +375,60 @@ const translatedProject = defineConfig({
   db: { migrationsDir: "./migrations" },
 });
 
-describe("turning translation off for a Builder collection on MySQL", () => {
-  const manifest = (localized: boolean) => ({
-    collections: [
-      {
-        slug: "cases",
-        localized,
-        fields: [{ name: "code", type: "text", unique: true }],
-      },
-    ],
-  });
+describe.each(["sqlite", "postgresql", "mysql"] as const)(
+  "turning translation off for a Builder collection on %s",
+  dialect => {
+    const manifest = (localized: boolean, fields: object[]) => ({
+      collections: [{ slug: "cases", localized, fields }],
+    });
+    const code = { name: "code", type: "text", unique: true };
+    const note = { name: "note", type: "text" };
 
-  async function create(localized: boolean) {
-    process.env.DB_DIALECT = "mysql";
-    process.env.DATABASE_URL = URLS.mysql();
-    _resetEnvCache();
-    await writeFile(
-      join(dir, "ui-schema.json"),
-      JSON.stringify(manifest(localized))
-    );
-    return run(context => {
-      setNonInteractive(true);
-      return runMigrateCreate("translation", { cwd: dir }, context).finally(
-        () => setNonInteractive(false)
+    async function create(localized: boolean, fields: object[]) {
+      process.env.DB_DIALECT = dialect;
+      process.env.DATABASE_URL = URLS[dialect](dir);
+      _resetEnvCache();
+      await writeFile(
+        join(dir, "ui-schema.json"),
+        JSON.stringify(manifest(localized, fields))
       );
-    }, translatedProject);
+      return run(context => {
+        setNonInteractive(true);
+        return runMigrateCreate("translation", { cwd: dir }, context).finally(
+          () => setNonInteractive(false)
+        );
+      }, translatedProject);
+    }
+
+    it("refuses a translated unique field that states no width only where sharing bounds its column", async () => {
+      expect((await create(true, [code])).code).toBeUndefined();
+      const before = sqlFiles();
+
+      const disabled = await create(false, [code]);
+
+      // Translated, `code` is TEXT keyed per language. Shared on MySQL it is varchar(255) keyed
+      // whole, which its values may not fit, so the disable is refused before any file is written.
+      // On PostgreSQL and SQLite it is TEXT either way, and the disable is written.
+      if (dialect === "mysql") {
+        expect(disabled.code).toBe(1);
+        expect(disabled.said.join("\n")).toContain("states no width");
+        expect(sqlFiles()).toEqual(before);
+      } else {
+        expect(disabled.code, disabled.said.join("\n")).toBeUndefined();
+        expect(sqlFiles().length).toBeGreaterThan(before.length);
+      }
+    });
+
+    it("does not judge a unique field that states no width added in the disabling edit", async () => {
+      expect((await create(true, [note])).code).toBeUndefined();
+      const before = sqlFiles();
+
+      // `code` was never in the companion, so it does not leave translation: it is a new column
+      // on the main table, which the main table's diff adds.
+      const disabled = await create(false, [note, code]);
+
+      expect(disabled.code, disabled.said.join("\n")).toBeUndefined();
+      expect(sqlFiles().length).toBeGreaterThan(before.length);
+    });
   }
-
-  it("refuses for a translated unique field that states no width, writing nothing", async () => {
-    expect((await create(true)).code).toBeUndefined();
-    const before = sqlFiles();
-
-    const refused = await create(false);
-
-    // Translated, `code` is TEXT keyed per language; shared, it is varchar(255) keyed whole, which
-    // its values may not fit: the disable is refused before any file is written.
-    expect(refused.code).toBe(1);
-    expect(refused.said.join("\n")).toContain("states no width");
-    expect(sqlFiles()).toEqual(before);
-  });
-});
+);
