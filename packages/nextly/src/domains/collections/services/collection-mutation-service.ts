@@ -13130,9 +13130,10 @@ export class CollectionMutationService extends BaseService {
     // Recorded before the save's own capture, whose retention pass then keeps
     // it.
     await this.recordBaseOfNewChange(tx, {
-      // Kept by part, a language's draft holds no shared value that a shared
-      // change published since could leave behind, so it records no base.
-      begins: !existingDraft && !parts,
+      // Kept by part, the change begins when its language's draft does: that
+      // draft keeps a copy of a translated component's shared parts, judged
+      // against this base when it is published.
+      begins: parts ? parts.language === undefined : !existingDraft,
       collection,
       collectionName: params.collectionName,
       entryId: params.entryId,
