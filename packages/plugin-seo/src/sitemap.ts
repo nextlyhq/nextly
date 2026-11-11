@@ -29,6 +29,7 @@
 // importing it never loads `next`, so the package's zero-`next` guarantee holds.
 import { slugToStaticParam } from "@nextlyhq/plugin-sdk/routing";
 
+import { typedCanonical } from "./canonical";
 import type { CollectionReads } from "./collection-reads";
 
 /**
@@ -590,25 +591,23 @@ export async function buildSitemapUrls(
         // absolute); ignore a non-http scheme (`mailto:`/`javascript:`/`data:`)
         // or embedded credentials, keeping the generated URL; and DROP the entry
         // when the canonical is on another origin.
-        const canonical =
-          typeof seo?.canonical === "string" ? seo.canonical.trim() : "";
-        if (canonical) {
-          let offOrigin = false;
-          try {
-            const resolved = new URL(canonical, baseOrigin);
-            const isHttp =
-              resolved.protocol === "http:" || resolved.protocol === "https:";
-            const hasCreds =
-              resolved.username !== "" || resolved.password !== "";
-            if (isHttp && resolved.origin === baseOrigin && !hasCreds) {
-              loc = resolved.href;
-            } else if (isHttp && resolved.origin !== baseOrigin) {
-              offOrigin = true;
-            }
-          } catch {
-            // Malformed canonical → keep the generated URL.
+        //
+        // Decided by the one canonical rule the page's head follows: a typed
+        // address off this origin counts only where the page is confirmed
+        // to have first appeared elsewhere, and then the entry belongs to
+        // that site's sitemap, not this one.
+        const canonical = typedCanonical(
+          typeof seo?.canonical === "string" ? seo.canonical : undefined,
+          {
+            productionAddresses: [baseOrigin],
+            elsewhere: seo?.canonicalElsewhere === true,
           }
-          if (offOrigin) continue;
+        );
+        if (canonical !== undefined) {
+          const resolved = new URL(canonical, baseOrigin);
+          if (resolved.origin !== baseOrigin) continue;
+          const hasCreds = resolved.username !== "" || resolved.password !== "";
+          if (!hasCreds) loc = resolved.href;
         }
         // A `<loc>` over the protocol's 2,048-char limit is an invalid record —
         // drop it rather than emit a non-compliant entry.

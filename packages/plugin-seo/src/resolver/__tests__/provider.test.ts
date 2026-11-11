@@ -11,7 +11,7 @@ import {
   type PluginContext,
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fillPattern, type SiteRules } from "../page-levels";
 import { answerOf, resolveSeo, seoPageMetadata } from "../provider";
@@ -442,6 +442,35 @@ describe("a pattern", () => {
     expect(
       fillPattern("{Title} | {Site name}", { title: "Hello" }, {})
     ).toBeUndefined();
+  });
+});
+
+describe("the canonical a page is given, with addresses from the environment", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("takes a typed address on a production address the environment names", async () => {
+    vi.stubEnv("NEXTLY_PRODUCTION_ADDRESSES", "https://acme.example");
+    const answer = await resolveSeo(
+      context(),
+      entryInput("pages", {
+        id: "p1",
+        slug: "about",
+        seo: { canonical: "https://acme.example/about-us" },
+      })
+    );
+    expect(answer.canonical).toEqual({
+      value: "https://acme.example/about-us",
+      from: "page",
+    });
+  });
+
+  it("names the address record's tags, so a page gaining or losing its address expires the head", () => {
+    const tags = seoPageMetadata(context()).tags?.(
+      entryInput("pages", { slug: "a" })
+    );
+    expect(tags).toEqual(expect.arrayContaining(["nextly:nx_seo_addresses"]));
   });
 });
 

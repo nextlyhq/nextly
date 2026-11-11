@@ -19,6 +19,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import { addressHolders } from "../address-record/participant";
+import { productionAddressesOf } from "../canonical";
 
 import type { Levels } from "./order";
 
@@ -352,7 +353,9 @@ export async function levelsOf(
       title: rules.siteName,
       description: rules.description,
       image: rules.image,
-      productionAddresses: rules.productionAddresses,
+      // The environment's addresses win over the settings', as the staging
+      // guard reads them, so the two never disagree about the site's own.
+      productionAddresses: productionAddressesOf(rules.productionAddresses),
     }),
     ...(address === undefined ? {} : { address }),
   };

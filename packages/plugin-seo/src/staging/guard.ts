@@ -22,10 +22,8 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import { recordSlug } from "../address-record/participant";
+import { productionAddressesOf } from "../canonical";
 import type { ReadRules } from "../resolver/provider";
-
-/** The environment variable naming the site's production addresses. */
-export const PRODUCTION_ADDRESSES_ENV = "NEXTLY_PRODUCTION_ADDRESSES";
 
 /**
  * How a site with no production address known is served: `listable` for a
@@ -41,26 +39,6 @@ const STANDING_KEY = createHash("sha256")
 
 /** How long a read of the addresses and the standing is reused. */
 const REREAD_MS = 30_000;
-
-/** A bare http(s) origin, or nothing for anything else. */
-function originOf(address: string): string | undefined {
-  try {
-    const url = new URL(address.trim());
-    return url.protocol === "http:" || url.protocol === "https:"
-      ? url.origin
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** The origins in a comma-separated list, each once; unusable ones left out. */
-export function originsFrom(list: string | undefined): string[] {
-  if (list === undefined) return [];
-  return [
-    ...new Set(list.split(",").flatMap(address => originOf(address) ?? [])),
-  ];
-}
 
 /**
  * Whether a request to `origin` is kept out of search: any origin but the
@@ -81,10 +59,11 @@ async function productionAddresses(
   ctx: PluginContext,
   readRules: ReadRules
 ): Promise<string[]> {
-  const fromEnvironment = originsFrom(process.env[PRODUCTION_ADDRESSES_ENV]);
+  const fromEnvironment = productionAddressesOf(undefined);
   if (fromEnvironment.length > 0) return fromEnvironment;
-  const rules = await readRules(ctx, undefined);
-  return originsFrom((rules.productionAddresses ?? []).join(","));
+  return productionAddressesOf(
+    (await readRules(ctx, undefined)).productionAddresses
+  );
 }
 
 /** The site's recorded standing, or nothing before it is decided. */
@@ -142,6 +121,26 @@ export async function decideStanding(
 }
 
 /**
+ * What a request is judged by: the production addresses, and the site's
+ * standing only where none are known, so that with addresses named the guard
+ * never waits on, or fails with, the database.
+ */
+async function decide(
+  ctx: PluginContext,
+  readRules: ReadRules
+): Promise<{ addresses: string[]; standing: StagingStanding | undefined }> {
+  const fromEnvironment = productionAddressesOf(undefined);
+  if (fromEnvironment.length > 0) {
+    return { addresses: fromEnvironment, standing: undefined };
+  }
+  const addresses = await productionAddresses(ctx, readRules);
+  return {
+    addresses,
+    standing: addresses.length > 0 ? undefined : await readStanding(ctx),
+  };
+}
+
+/**
  * The Proxy handler sending `X-Robots-Tag: noindex` from every host but the
  * site's production addresses. The addresses and the standing are read at
  * most every half minute, so a request does not wait on the database.
@@ -161,13 +160,7 @@ export function stagingGuard(readRules: ReadRules): PluginProxyHandler {
     async handle(request, ctx) {
       const now = Date.now();
       if (read === undefined || now - read.at > REREAD_MS) {
-        read = {
-          at: now,
-          value: Promise.all([
-            productionAddresses(ctx, readRules),
-            readStanding(ctx),
-          ]).then(([addresses, standing]) => ({ addresses, standing })),
-        };
+        read = { at: now, value: decide(ctx, readRules) };
         // A failed read is not kept: the next request reads again.
         read.value.catch(() => {
           read = undefined;

@@ -24,7 +24,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ADDRESS_RECORD_SLUG } from "../../address-record/collection";
 import { seoPlugin } from "../../plugin";
-import { PRODUCTION_ADDRESSES_ENV } from "../guard";
+import { PRODUCTION_ADDRESSES_ENV } from "../../canonical";
 
 let current: TestNextly | undefined;
 

@@ -6,12 +6,8 @@ import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SiteRules } from "../../resolver/page-levels";
-import {
-  PRODUCTION_ADDRESSES_ENV,
-  keptOutOfSearch,
-  originsFrom,
-  stagingGuard,
-} from "../guard";
+import { PRODUCTION_ADDRESSES_ENV, originsFrom } from "../../canonical";
+import { keptOutOfSearch, stagingGuard } from "../guard";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -114,6 +110,28 @@ describe("the Proxy handler", () => {
         context("listable").ctx
       )
     ).toBeUndefined();
+  });
+
+  it("with addresses named, never waits on the database, even when it is down", async () => {
+    vi.stubEnv(PRODUCTION_ADDRESSES_ENV, "https://acme.example");
+    const reads = { count: 0 };
+    const ctx = {
+      self: { collections: {} },
+      services: {
+        ownCollections: {
+          listEntries: async () => {
+            reads.count += 1;
+            throw new Error("database unavailable");
+          },
+        },
+      },
+    } as unknown as PluginContext;
+    const guard = stagingGuard(rules([]));
+
+    expect(
+      await guard.handle(new Request("https://preview.acme.dev/"), ctx)
+    ).toEqual({ headers: { "X-Robots-Tag": "noindex" } });
+    expect(reads.count).toBe(0);
   });
 
   it("reads the standing at most every half minute", async () => {

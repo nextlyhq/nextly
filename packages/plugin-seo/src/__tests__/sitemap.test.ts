@@ -392,9 +392,35 @@ describe("buildSitemapUrls", () => {
     expect(basePath).not.toHaveBeenCalled();
   });
 
-  it("drops an entry whose canonical is on another host", async () => {
-    // A sitemap must only list URLs on its own host, so a cross-host canonical
-    // means the entry belongs in that other host's sitemap — exclude it here.
+  it("drops an entry confirmed to live on another host", async () => {
+    // A sitemap lists only its own host's URLs: a page that first appeared
+    // elsewhere belongs in that site's sitemap.
+    const services = stubServices({
+      posts: [
+        [
+          {
+            slug: "a",
+            seo: {
+              canonical: "https://other.example/a",
+              canonicalElsewhere: true,
+            },
+          },
+          { slug: "b" },
+        ],
+      ],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/posts/b"]);
+  });
+
+  it("lists an entry at its own address where an off-host canonical is not confirmed", async () => {
+    // An unconfirmed address on another host is not the page's canonical,
+    // as the page's head ignores it too.
     const services = stubServices({
       posts: [
         [
@@ -409,11 +435,15 @@ describe("buildSitemapUrls", () => {
       baseUrl: "https://x.com",
     });
 
-    expect(urls.map(u => u.loc)).toEqual(["https://x.com/posts/b"]);
+    expect(urls.map(u => u.loc)).toEqual([
+      "https://x.com/posts/a",
+      "https://x.com/posts/b",
+    ]);
   });
 
-  it("treats a scheme mismatch as a different origin and drops the entry", async () => {
-    // Same host but http vs https is a distinct URL to a crawler.
+  it("treats a scheme mismatch as another origin, so an unconfirmed one keeps the entry's own address", async () => {
+    // Same host but http vs https is a distinct URL to a crawler: not this
+    // site's canonical, so the entry is listed at its own address.
     const services = stubServices({
       posts: [
         [{ slug: "a", seo: { canonical: "http://x.com/a" } }, { slug: "b" }],
@@ -425,7 +455,10 @@ describe("buildSitemapUrls", () => {
       baseUrl: "https://x.com",
     });
 
-    expect(urls.map(u => u.loc)).toEqual(["https://x.com/posts/b"]);
+    expect(urls.map(u => u.loc)).toEqual([
+      "https://x.com/posts/a",
+      "https://x.com/posts/b",
+    ]);
   });
 
   it("honors a urlFor exclusion even when the entry has a canonical", async () => {

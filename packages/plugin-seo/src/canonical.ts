@@ -55,3 +55,30 @@ export function typedCanonical(
   );
   return origin !== undefined && own.has(origin) ? usable : undefined;
 }
+
+/** The environment variable naming the site's production addresses. */
+export const PRODUCTION_ADDRESSES_ENV = "NEXTLY_PRODUCTION_ADDRESSES";
+
+/** The origins in a comma-separated list, each once; unusable ones left out. */
+export function originsFrom(list: string | undefined): string[] {
+  if (list === undefined) return [];
+  return [
+    ...new Set(
+      list.split(",").flatMap(address => originOf(address.trim()) ?? [])
+    ),
+  ];
+}
+
+/**
+ * Where the site itself is served: the origins `NEXTLY_PRODUCTION_ADDRESSES`
+ * names, which win, or else those the SEO settings hold. The one answer the
+ * canonical rule and the staging guard both read.
+ */
+export function productionAddressesOf(
+  fromSettings: readonly string[] | undefined
+): string[] {
+  const fromEnvironment = originsFrom(process.env[PRODUCTION_ADDRESSES_ENV]);
+  return fromEnvironment.length > 0
+    ? fromEnvironment
+    : originsFrom((fromSettings ?? []).join(","));
+}

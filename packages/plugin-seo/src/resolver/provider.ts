@@ -16,6 +16,8 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { recordSlug } from "../address-record/participant";
+
 import { resolveOrder, type SeoAnswer } from "./order";
 import { levelsOf, NO_RULES, type SiteRules } from "./page-levels";
 
@@ -81,7 +83,9 @@ export function seoPageMetadata(
   return {
     // A share image is read from the media library, so any write to it
     // expires the head that shows it, as a write to the page itself does.
-    tags: () => nextlyTags("media"),
+    // The address record too: a page that gains or loses its address to
+    // another changes its canonical without a write to itself.
+    tags: () => [...nextlyTags("media"), ...nextlyTags(recordSlug(ctx))],
     // The page's head is derived from the one resolution, never worked out
     // beside it.
     async resolve(input) {
