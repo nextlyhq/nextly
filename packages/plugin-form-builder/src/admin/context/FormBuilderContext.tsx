@@ -19,6 +19,7 @@ import {
   useContext,
   useCallback,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -30,6 +31,10 @@ import type {
   FormNotification,
   FormSettings,
 } from "../../types";
+import {
+  renameInFieldConditions,
+  renameInNotifications,
+} from "../../utils/field-references";
 import {
   DEFAULT_FORM_SETTINGS,
   normalizeFormSettings,
@@ -118,6 +123,46 @@ export interface FormBuilderContextValue
   extends FormBuilderState,
     FormBuilderActions {}
 
+/**
+ * The builder's own field bookkeeping, kept off the exported state and
+ * actions so a host that builds or mocks those types is not asked for it.
+ * The provider supplies it; the builder's field list reads it through
+ * `useFieldBookkeeping`, which the package does not export.
+ */
+export interface FieldBookkeeping {
+  /**
+   * The names of the fields the stored form holds, as of the last load or
+   * save. A field named here has answers stored under its name and type, so
+   * its type is fixed; a renamed one keeps its place here under its new name.
+   */
+  savedFieldNames: ReadonlySet<string>;
+  /**
+   * Replace a field by name with the whole of its next definition, so a
+   * setting the next one leaves out is gone rather than kept from before.
+   * Given `referencesFrom`, the name other fields' conditions and the
+   * notifications know the field by, those references move to its new name.
+   */
+  replaceField: (
+    fieldName: string,
+    next: AnyFormField,
+    referencesFrom?: string
+  ) => void;
+  /** Called as a save begins, before anything is sent. */
+  beginSave: () => void;
+  /**
+   * Records the fields a save stored, by the names they were saved under.
+   * Given the names the save was handed, so an edit made while it was under
+   * way is not counted as stored; and a name deleted or renamed away since
+   * the save began is not either, since a field under it now is another one.
+   */
+  markFieldsSaved: (names: readonly string[]) => void;
+  /** Whether a colleague holds the form, so nothing in it may change. */
+  readOnly: boolean;
+}
+
+export type FormBuilderInternalValue = FormBuilderContextValue &
+  FieldBookkeeping;
+
 export interface FormBuilderProviderProps {
   /** Initial form data (for editing existing forms) */
   initialData?: {
@@ -154,7 +199,13 @@ export interface FormBuilderProviderProps {
  * rather than a second list of what to block. `markAsSaved` is the save's own
  * bookkeeping and cannot run while the save is withheld anyway.
  */
-const READS_ONLY = new Set(["selectField", "setActiveTab", "markAsSaved"]);
+const READS_ONLY = new Set([
+  "selectField",
+  "setActiveTab",
+  "markAsSaved",
+  "beginSave",
+  "markFieldsSaved",
+]);
 
 /** Default form settings (the canonical defaults from the settings reader) */
 export const DEFAULT_SETTINGS: FormSettings = DEFAULT_FORM_SETTINGS;
@@ -180,7 +231,7 @@ export function createNotification(): FormNotification {
 // Context
 // ============================================================================
 
-const FormBuilderContext = createContext<FormBuilderContextValue | null>(null);
+const FormBuilderContext = createContext<FormBuilderInternalValue | null>(null);
 
 // ============================================================================
 // Utilities
@@ -337,6 +388,13 @@ export function FormBuilderProvider({
     "builder" | "preview" | "settings" | "notifications"
   >("builder");
   const [isDirty, setIsDirty] = useState(false);
+  // The names that stopped meaning the field they named (deleted, or renamed
+  // away) since the save under way began.
+  const vacatedRef = useRef(new Set<string>());
+
+  const [savedFieldNames, setSavedFieldNames] = useState<ReadonlySet<string>>(
+    () => new Set((initialData?.fields ?? []).map(field => field.name))
+  );
   const [formData, setFormData] = useState<FormBuilderState["formData"]>({
     id: initialData?.id,
     name: initialData?.name || "",
@@ -373,28 +431,72 @@ export function FormBuilderProvider({
     setIsDirty(true);
   }, []);
 
+  /**
+   * What a field's rename moves with it. The selection follows it, so the
+   * open settings stay open — including when the name passes through the
+   * empty string, where a rename that clears the input first goes: skipping it
+   * there would stop the renamed field matching its own selection and close
+   * its settings mid-rename. And a saved field stays saved under its new name.
+   */
+  const followRename = useCallback((from: string, to: string | undefined) => {
+    if (to === undefined || to === from) return;
+    vacatedRef.current.add(from);
+    setSelectedFieldId(to);
+    setSavedFieldNames(prev => {
+      if (!prev.has(from)) return prev;
+      const next = new Set(prev);
+      next.delete(from);
+      next.add(to);
+      return next;
+    });
+  }, []);
+
   const updateField = useCallback(
     (fieldName: string, updates: Partial<AnyFormField>) => {
       setFieldsState(prev =>
         prev.map(f => (f.name === fieldName ? { ...f, ...updates } : f))
       );
-      // If the field name is being changed, also update selectedFieldId.
-      // This prevents the sidebar from disappearing when renaming a field —
-      // including when the change is TO the empty string, which is where a
-      // rename that clears the input first passes through: skipping it there
-      // would stop the renamed field matching its own selection, collapsing
-      // the card (and unmounting the editor) mid-rename.
-      if (updates.name !== undefined && updates.name !== fieldName) {
-        setSelectedFieldId(updates.name);
-      }
+      followRename(fieldName, updates.name);
       setIsDirty(true);
     },
-    []
+    [followRename]
+  );
+
+  const replaceField = useCallback(
+    (fieldName: string, next: AnyFormField, referencesFrom?: string) => {
+      const moves =
+        referencesFrom !== undefined &&
+        next.name !== "" &&
+        next.name !== referencesFrom;
+      setFieldsState(prev => {
+        const replaced = prev.map(f => (f.name === fieldName ? next : f));
+        return moves
+          ? renameInFieldConditions(replaced, referencesFrom, next.name)
+          : replaced;
+      });
+      if (moves) {
+        setNotifications(prev =>
+          renameInNotifications(prev, referencesFrom, next.name)
+        );
+      }
+      followRename(fieldName, next.name);
+      setIsDirty(true);
+    },
+    [followRename]
   );
 
   const deleteField = useCallback(
     (fieldName: string) => {
       setFieldsState(prev => prev.filter(f => f.name !== fieldName));
+      vacatedRef.current.add(fieldName);
+      // The name no longer stands for a stored field: a new field given it
+      // later is a new field, with its type and name still its own to choose.
+      setSavedFieldNames(prev => {
+        if (!prev.has(fieldName)) return prev;
+        const next = new Set(prev);
+        next.delete(fieldName);
+        return next;
+      });
       if (selectedFieldId === fieldName) {
         setSelectedFieldId(null);
       }
@@ -522,14 +624,25 @@ export function FormBuilderProvider({
     setIsDirty(false);
   }, []);
 
+  const beginSave = useCallback(() => {
+    vacatedRef.current = new Set();
+  }, []);
+
+  const markFieldsSaved = useCallback((names: readonly string[]) => {
+    // What was saved is what the stored form now holds.
+    const vacated = vacatedRef.current;
+    setSavedFieldNames(new Set(names.filter(name => !vacated.has(name))));
+  }, []);
+
   // Memoized context value
-  const value = useMemo<FormBuilderContextValue>(
+  const value = useMemo<FormBuilderInternalValue>(
     () => ({
       // State
       fields,
       selectedFieldId,
       activeTab,
       isDirty,
+      savedFieldNames,
       formData,
       settings,
       notifications,
@@ -537,6 +650,7 @@ export function FormBuilderProvider({
       setFields,
       addField,
       updateField,
+      replaceField,
       deleteField,
       moveField,
       duplicateField,
@@ -550,18 +664,23 @@ export function FormBuilderProvider({
       deleteNotification,
       seedNotifications,
       markAsSaved,
+      beginSave,
+      markFieldsSaved,
+      readOnly,
     }),
     [
       fields,
       selectedFieldId,
       activeTab,
       isDirty,
+      savedFieldNames,
       formData,
       settings,
       notifications,
       setFields,
       addField,
       updateField,
+      replaceField,
       deleteField,
       moveField,
       duplicateField,
@@ -574,6 +693,9 @@ export function FormBuilderProvider({
       deleteNotification,
       seedNotifications,
       markAsSaved,
+      beginSave,
+      markFieldsSaved,
+      readOnly,
     ]
   );
 
@@ -588,7 +710,7 @@ export function FormBuilderProvider({
    * What stays is navigation and the save's own bookkeeping. Neither changes
    * the document, and both are what "you can read it" has to mean.
    */
-  const guarded = useMemo<FormBuilderContextValue>(() => {
+  const guarded = useMemo<FormBuilderInternalValue>(() => {
     if (!readOnly) return value;
     return Object.fromEntries(
       Object.entries(value).map(([name, member]) =>
@@ -596,7 +718,7 @@ export function FormBuilderProvider({
           ? [name, () => undefined]
           : [name, member]
       )
-    ) as FormBuilderContextValue;
+    ) as FormBuilderInternalValue;
   }, [value, readOnly]);
 
   return (
@@ -657,4 +779,19 @@ export function useFormBuilder(): FormBuilderContextValue {
  */
 export function useOptionalFormBuilder(): FormBuilderContextValue | null {
   return useContext(FormBuilderContext);
+}
+
+/**
+ * The builder's state and actions with its field bookkeeping (see
+ * `FieldBookkeeping`), for the builder's own components. Not exported from
+ * the package.
+ */
+export function useFieldBookkeeping(): FormBuilderInternalValue {
+  const context = useContext(FormBuilderContext);
+  if (!context) {
+    throw new Error(
+      "useFieldBookkeeping must be used within a FormBuilderProvider"
+    );
+  }
+  return context;
 }

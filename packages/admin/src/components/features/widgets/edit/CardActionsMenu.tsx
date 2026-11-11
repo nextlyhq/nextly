@@ -47,7 +47,6 @@ import {
   ArrowUp,
   ArrowUpToLine,
   MoveHorizontal,
-  MoveVertical,
   Settings,
   Trash2,
 } from "lucide-react";
@@ -58,8 +57,6 @@ import * as Icons from "@admin/components/icons";
 
 import type { MoveDirection } from "../layout-editor";
 import {
-  heightChoices,
-  rowsName,
   sizeName,
   widthChoiceName,
   widthChoices,
@@ -123,7 +120,7 @@ export function CardSizeLabel({ size }: { size: GridSize }): JSX.Element {
 
 /** One direction of the card's size: what it is called, its choices and how each reads. */
 export interface SizeAxis {
-  kind: "width" | "height";
+  kind: "width";
   label: string;
   icon: ComponentType<{ "aria-hidden"?: boolean; className?: string }>;
   /** The value the card is drawn at in this direction. */
@@ -225,9 +222,9 @@ export function AxisSection({
 }
 
 /**
- * The directions a card may be resized in: each whose bounds offer more than the one size it
- * has, so a widget of one fixed height offers no Height at all. The one reading of a card's size
- * choices for both card menus and the quick popover.
+ * The directions a card may be resized in: its width, where its bounds offer more than the one
+ * width it has. Never its height: a card is as tall as its content, and a stored `h` sets no
+ * height. The one reading of a card's size choices for both card menus and the quick popover.
  */
 export function sizeAxes(
   size: GridSize,
@@ -244,15 +241,6 @@ export function sizeAxes(
       name: widthChoiceName,
       // The other direction kept as drawn, which already lies within the bounds.
       choose: w => setSize({ w, h: size.h }),
-    },
-    {
-      kind: "height",
-      label: "Height",
-      icon: MoveVertical,
-      value: size.h,
-      choices: heightChoices(bounds),
-      name: h => ({ label: rowsName(h), spoken: rowsName(h) }),
-      choose: h => setSize({ w: size.w, h }),
     },
   ];
   return axes.filter(axis => axis.choices.length > 1);
