@@ -77,7 +77,10 @@ import {
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import { stopGrantsExpiryRetry } from "../domains/flush-content-change";
-import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import type {
+  LanguageAddressRule,
+  SanitizedLocalizationConfig,
+} from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
   mainTableFields,
@@ -530,6 +533,13 @@ export interface NextlyServiceConfig {
    * populating localized fields from the companion `_locales` table.
    */
   localization?: SanitizedLocalizationConfig;
+
+  /**
+   * How each language's public address is formed, as the app declares it.
+   * Carried through so the address of a page in a language is answered from
+   * the running configuration.
+   */
+  languageAddresses?: LanguageAddressRule;
 
   /**
    * Resolved webhook retention policy, carried through so services can offer a
