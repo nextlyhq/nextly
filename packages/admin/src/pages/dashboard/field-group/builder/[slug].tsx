@@ -26,7 +26,6 @@ import {
   BuilderNotFoundScreen,
   BuilderPageLayout,
   BuilderSchemaChangeDialogs,
-  DirectFieldGroupsNotice,
   type ActiveOverlay,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
@@ -351,7 +350,6 @@ export default function FieldGroupBuilderEditPage({
               </div>
             </Alert>
           ) : null}
-          <DirectFieldGroupsNotice fields={fieldGroup.fields} />
         </>
       }
       isSaving={isSaving || confirmation.isApplying}
