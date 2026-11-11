@@ -199,3 +199,24 @@ describe("copiesEveryValue", () => {
     expect(copiesEveryValue("int", "double", "mysql")).toBe(false);
   });
 });
+
+// A fixed-point column copies every value into one with no fewer digits on either side of the point.
+describe("copiesEveryValue for fixed-point types", () => {
+  it("copies every value into more digits before the point, or after it", () => {
+    expect(copiesEveryValue("decimal(10,2)", "decimal(12,2)", "mysql")).toBe(
+      true
+    );
+    expect(
+      copiesEveryValue("numeric(10,2)", "numeric(12, 4)", "postgresql")
+    ).toBe(true);
+  });
+  it("does not where either side loses digits", () => {
+    expect(copiesEveryValue("decimal(12,2)", "decimal(10,2)", "mysql")).toBe(
+      false
+    );
+    // Same precision, a longer scale: one digit fewer before the point.
+    expect(
+      copiesEveryValue("numeric(10,2)", "numeric(10,3)", "postgresql")
+    ).toBe(false);
+  });
+});

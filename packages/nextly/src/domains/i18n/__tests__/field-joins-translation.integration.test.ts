@@ -610,6 +610,46 @@ describeEachDialect("a shared field that becomes translated", dialect => {
   // An integer moved into a float column is stored as a floating-point number, which keeps no
   // integer past 2^53: SQLite would copy 9007199254740993 as 9007199254740992, and no other dialect
   // counts the change as a widening either.
+  // A fixed-point column given more digits copies every value as it is: applied, and the value
+  // becomes the default language's.
+  it("applies a code-first apply that widens a decimal as it becomes translated, keeping its value", async () => {
+    const price = (precision: number) => ({
+      name: "price",
+      type: "number",
+      dbType: "decimal",
+      precision,
+      scale: 2,
+    });
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      localized: true,
+      fields: [
+        { name: "heading", type: "text", localized: false },
+        { ...price(10), localized: false },
+      ],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler()
+      .getEntryService()
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { heading: "Hello", price: 12345678.91 }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+
+    const applied = await applyCodeFirst([
+      { name: "heading", type: "text", localized: false },
+      { ...price(12), localized: true },
+    ]);
+
+    expect(applied.success, JSON.stringify(applied)).toBe(true);
+    const [row] = await query<{ price: unknown }>(
+      `SELECT CAST(${quote(dialect, "price")} AS ${dialect === "mysql" ? "CHAR" : "TEXT"}) AS price FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en'`
+    );
+    expect(Number(row?.price)).toBe(12345678.91);
+  });
+
   it("refuses a code-first apply that makes an integer a float as it becomes translated, and changes nothing", async () => {
     const id = await seedCollection();
     // SQLite's INTEGER holds 64 bits; elsewhere the column is a 32-bit integer and keeps the 7 seeded.

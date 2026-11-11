@@ -151,6 +151,28 @@ export function isWideningChange(
   return false;
 }
 
+/** A fixed-point type with its precision and optional scale, as any dialect spells it. */
+const DECIMAL_RE = /^(?:decimal|numeric)\s*\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)$/i;
+
+/**
+ * Whether a fixed-point column of `fromType` copies every value into one of `toType`: as many
+ * digits after the point, and as many before it (precision less scale). Null when either is not
+ * a fixed-point type with a stated precision, which the other rules judge.
+ */
+function decimalHoldsEveryValue(
+  fromType: string,
+  toType: string
+): boolean | null {
+  const from = DECIMAL_RE.exec(fromType.trim());
+  const to = DECIMAL_RE.exec(toType.trim());
+  if (from === null || to === null) return null;
+  const [fromPrecision, fromScale] = [Number(from[1]), Number(from[2] ?? 0)];
+  const [toPrecision, toScale] = [Number(to[1]), Number(to[2] ?? 0)];
+  return (
+    toScale >= fromScale && toPrecision - toScale >= fromPrecision - fromScale
+  );
+}
+
 /** Whether a SQLite declared type has REAL affinity, by SQLite's own rules (an `INT` match first). */
 function sqliteRealAffinity(type: string): boolean {
   const lower = type.toLowerCase();
@@ -159,7 +181,8 @@ function sqliteRealAffinity(type: string): boolean {
 
 /**
  * Whether copying every value of a column of `fromType` into a new column of `toType` keeps each
- * one as it is: a widening (`isWideningChange`), derived from it. On SQLite one widening in place
+ * one as it is: a fixed-point type with no fewer digits on either side of the point
+ * (`decimalHoldsEveryValue`), or a widening (`isWideningChange`), derived from it. On SQLite one widening in place
  * is not one across a copy: a value written into a column with REAL affinity is stored as a
  * floating-point number, so an integer moved there from another affinity past 2^53 loses its last
  * digits. A copy out of REAL keeps its values, since SQLite converts there only where it loses
@@ -170,6 +193,8 @@ export function copiesEveryValue(
   toType: string,
   dialect: SupportedDialect
 ): boolean {
+  const decimal = decimalHoldsEveryValue(fromType, toType);
+  if (decimal !== null) return decimal;
   if (!isWideningChange(fromType, toType, dialect)) return false;
   return (
     dialect !== "sqlite" ||
