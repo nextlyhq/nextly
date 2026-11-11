@@ -4715,9 +4715,13 @@ export class SingleMutationService extends BaseService {
             // later save keeps it, so saving again never makes an old shared
             // value current. Recorded before the save's own capture, whose
             // retention pass then keeps it.
-            // Kept by part, a language's draft holds no shared value a shared
-            // change published since could leave behind, so none is recorded.
-            if (!existingDraft && companion && !singleParts) {
+            // Kept by part, the change begins when its language's draft does:
+            // that draft keeps a copy of a translated component's shared
+            // parts, judged against this base when it is published.
+            const begins = singleParts
+              ? singleParts.language === undefined
+              : !existingDraft;
+            if (begins && companion) {
               // A held save has written nothing live, so the live document
               // read here is the one the change began from.
               const { live, shared, views } = await this.liveSharedDocument(
