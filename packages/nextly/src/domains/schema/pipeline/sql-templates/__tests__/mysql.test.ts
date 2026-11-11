@@ -119,4 +119,28 @@ describe("generateSQL — mysql", () => {
       })
     ).toBe("ALTER TABLE `dc_posts` ALTER COLUMN `views` DROP DEFAULT");
   });
+
+  // `SET DEFAULT` takes a literal or an expression in parentheses; the bare function a column
+  // definition may carry is a syntax error there.
+  it.each([
+    ["CURRENT_TIMESTAMP", "(CURRENT_TIMESTAMP)"],
+    ["(CURRENT_TIMESTAMP)", "(CURRENT_TIMESTAMP)"],
+    ["'draft'", "'draft'"],
+    ["'it''s'", "'it''s'"],
+    ["-1.5", "-1.5"],
+    ["NULL", "NULL"],
+    ["true", "true"],
+  ])("change_column_default sets %s as %s", (toDefault, written) => {
+    expect(
+      my({
+        type: "change_column_default",
+        tableName: "comp_card",
+        columnName: "created_at",
+        fromDefault: undefined,
+        toDefault,
+      })
+    ).toBe(
+      `ALTER TABLE \`comp_card\` ALTER COLUMN \`created_at\` SET DEFAULT ${written}`
+    );
+  });
 });
