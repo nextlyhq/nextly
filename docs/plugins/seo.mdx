@@ -383,6 +383,64 @@ instead.
 builds a sitemap from its own route. They are deprecated, and list pages by the old rules:
 they do not read each page's answer.
 
+## Search Console and IndexNow
+
+Two optional connections on **SEO > Settings > Connections**. Neither is on until someone
+who may manage site-wide SEO turns it on, and if one fails, the Connections tab and the
+problem list say so in plain words and no page is affected.
+
+### Google Search Console
+
+Search Console shows the site's clicks from Google over the last 28 days, what people
+searched, and the pages where Google chose a different official address than the page
+names (of the most visited ten, checked with Google's URL inspection). Connecting it needs a
+Google sign-in for the site: create an OAuth client of the **Web application** kind in Google
+Cloud, add the redirect address below, and name it in the plugin's options, keeping the
+secret out of the code:
+
+```ts
+import { secret } from "@nextlyhq/plugin-sdk";
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+
+seoPlugin({
+  collections: ["posts"],
+  searchConsole: {
+    clientId: process.env.GOOGLE_CLIENT_ID ?? "",
+    clientSecret: secret(process.env.GOOGLE_CLIENT_SECRET ?? ""),
+  },
+});
+```
+
+The redirect address is the admin's own, on each host people sign in to the admin on:
+`https://<host>/admin/api/plugins/@nextlyhq/plugin-seo/connections/search-console/callback`.
+
+**Connect Search Console** sends the person to Google, which asks them to approve read-only
+access (`webmasters.readonly`, with `openid email` to show who connected). Nextly never
+changes anything in Search Console. The property used is the one for the site's production
+address: its URL-prefix property, else its domain property. The token that renews access is
+kept encrypted in the plugin's settings, with the sign-in's one-time state and PKCE verifier
+while it is under way; none of them is ever returned to the admin or any API, or logged.
+**Disconnect** withdraws the access at Google and forgets it.
+
+### IndexNow
+
+IndexNow tells Bing and the other search engines taking part the moment a page is published,
+changed, given a new address or taken down. Google does not take part. Changes are gathered
+for a few seconds after the last save, so a burst of saves makes one notice, and sent after
+the save has finished: a save never waits for IndexNow, and a working draft's save sends
+nothing.
+
+The site proves it owns its pages with a key served at its root, `/<key>.txt`, answered by the
+site's [Proxy](/docs/plugins/proxy) while IndexNow is on. The key is made the first time a
+notice is sent and kept encrypted in the plugin's settings. Every notice goes to
+`api.indexnow.org` only. A refused key (`403` or `422`), a rate limit (`429`) or an endpoint
+that cannot be reached is shown on the Connections tab and listed on the problem list until a
+later notice goes through; the next change is sent again. Notices name the site's production
+address, so IndexNow needs one saved.
+
+The plugin may reach only `api.indexnow.org`, `oauth2.googleapis.com`, `www.googleapis.com`
+and `searchconsole.googleapis.com`, each request given ten seconds and following no redirect.
+
 ## llms.txt and plain-text copies
 
 Two optional outputs for AI tools, both off until someone switches them on in **SEO >
@@ -475,7 +533,7 @@ with a line on the page to finish later. Every answer stays editable on the tabs
 | Content types | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from |
 | Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                                                                                                                                                           |
 | Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none                                                                                                                                    |
-| Connections   | Optional outputs for AI tools, each off until switched on: [llms.txt and plain-text copies of pages](#llmstxt-and-plain-text-copies)                                                                                                            |
+| Connections   | Optional services and outputs, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow), [llms.txt and plain-text copies](#llmstxt-and-plain-text-copies)                                                        |
 
 The production addresses saved on General are the ones the page's canonical, the sitemap,
 robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over
