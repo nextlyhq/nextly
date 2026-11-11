@@ -275,7 +275,7 @@ export function assertSchemaLockHeld(): void {
 }
 
 /** The comment a statement is marked with while `claim` holds the lock (`markedForSchemaLock`). */
-export function schemaLockMarker(claim: string): string {
+function schemaLockMarker(claim: string): string {
   return `/* nextly-lock:${claim} */`;
 }
 
@@ -471,6 +471,17 @@ type RowAttempt =
     }
   | { ok: false; state: RowState | undefined };
 
+/**
+ * The run whose lapsed row `claim` took over: a row still names the run that held it when that run
+ * stalled or was killed, whose statements may still be running; one that released it cleared the
+ * owner, and this run's own claim is no earlier holder.
+ */
+function earlierHolderOf(before: RowState, claim: string): string | undefined {
+  return before.owner !== null && before.owner !== claim
+    ? before.owner
+    : undefined;
+}
+
 /** Claim the row, or report who holds it. */
 async function claimRow(
   adapter: DrizzleAdapter,
@@ -499,13 +510,7 @@ async function claimRow(
     // differently. A claim that is ours but already near its end is not a claim to start work on.
     const after = await readState(ctx, dialect, timings);
     if (after?.owner === claim && after.usable) {
-      // A lapsed row still names the run that held it: one that stalled or was killed, whose
-      // statements may still be running. One that released it cleared the owner.
-      const earlier =
-        before.owner !== null && before.owner !== claim
-          ? before.owner
-          : undefined;
-      return { ok: true, earlier };
+      return { ok: true, earlier: earlierHolderOf(before, claim) };
     }
     if (after?.owner === claim) await ctx.runStatement(clearStatement(claim));
     return { ok: false, state: after };

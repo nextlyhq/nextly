@@ -71,25 +71,11 @@ export class DrizzleStatementExecutor
   }
 
   private async executePg(tx: unknown, statements: string[]): Promise<void> {
-    const { sql: sqlTag } = await import("drizzle-orm");
-    const txTyped = tx as AsyncExecuteClient;
-    for (const stmt of statements) {
-      // A run that lost the schema lock starts no further statement, and each one carries the
-      // run's claim so a run taking the lock over can find and stop it (`markedForSchemaLock`).
-      assertSchemaLockHeld();
-      await txTyped.execute(sqlTag.raw(markedForSchemaLock(stmt)));
-    }
+    await executeMarked(tx, statements);
   }
 
   private async executeMysql(tx: unknown, statements: string[]): Promise<void> {
-    const { sql: sqlTag } = await import("drizzle-orm");
-    const txTyped = tx as AsyncExecuteClient;
-    for (const stmt of statements) {
-      // A run that lost the schema lock starts no further statement, and each one carries the
-      // run's claim so a run taking the lock over can find and stop it (`markedForSchemaLock`).
-      assertSchemaLockHeld();
-      await txTyped.execute(sqlTag.raw(markedForSchemaLock(stmt)));
-    }
+    await executeMarked(tx, statements);
     // Note: drizzle-kit 0.31.10's silent-drop bug for MySQL applies to
     // pushSchema's apply() method, NOT to manual statement execution.
     // The pipeline owns pushSchema invocation and passes us the
@@ -130,5 +116,22 @@ export class DrizzleStatementExecutor
         throw err;
       }
     }
+  }
+}
+
+/**
+ * Runs each statement on the transaction, PostgreSQL's and MySQL's alike. A run that lost the
+ * schema lock starts no further statement, and each one carries the run's claim so a run taking
+ * the lock over can find and stop it (`markedForSchemaLock`).
+ */
+async function executeMarked(
+  tx: unknown,
+  statements: readonly string[]
+): Promise<void> {
+  const { sql: sqlTag } = await import("drizzle-orm");
+  const txTyped = tx as AsyncExecuteClient;
+  for (const stmt of statements) {
+    assertSchemaLockHeld();
+    await txTyped.execute(sqlTag.raw(markedForSchemaLock(stmt)));
   }
 }
