@@ -134,8 +134,15 @@ test("links a form's notification to its email in the hub", async ({
   page,
 }) => {
   await gotoAdmin(page, "/collections/forms/create");
-  await page.getByRole("textbox", { name: "Form Name" }).fill("E2E Email Link");
-  await page.getByRole("tab", { name: "Notifications" }).click();
+  // The form editor's pages are links in its header: the name is typed on
+  // Settings, and the notifications have a page of their own.
+  const formPage = (label: string) =>
+    page
+      .getByRole("navigation", { name: "Form pages" })
+      .getByRole("link", { name: new RegExp(`^${label}`) });
+  await formPage("Settings").click();
+  await page.getByRole("textbox", { name: "Name" }).fill("E2E Email Link");
+  await formPage("Notifications").click();
   await page.getByRole("button", { name: "Add notification" }).first().click();
 
   await page.getByRole("combobox", { name: "Email template" }).click();
