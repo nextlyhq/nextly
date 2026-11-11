@@ -336,3 +336,27 @@ describe("SchemaRegistry.assertRelationsResolve, after it refuses", () => {
     expect(() => registry.assertRelationsResolve()).not.toThrow();
   });
 });
+
+describe("SchemaRegistry.refreshDynamicTable", () => {
+  it("swaps a registered table and keeps its edges, rebuilding relations over the new one", () => {
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"), [
+      { key: "author", fromColumn: "authorId", targetTable: "users" },
+    ]);
+    const before = registry.getRelations();
+    const rebuilt = makeDcTable("dc_posts");
+
+    registry.refreshDynamicTable("dc_posts", rebuilt);
+
+    expect(registry.getTable("dc_posts")).toBe(rebuilt);
+    const after = registry.getRelations() as unknown as RelationsShape;
+    expect(after).not.toBe(before);
+    expect(Object.keys(after.dc_posts?.relations ?? {})).toContain("author");
+  });
+
+  it("leaves a table nothing registered unregistered", () => {
+    const registry = makeRegistry();
+    registry.refreshDynamicTable("dc_posts", makeDcTable("dc_posts"));
+    expect(registry.getTable("dc_posts")).toBeNull();
+  });
+});

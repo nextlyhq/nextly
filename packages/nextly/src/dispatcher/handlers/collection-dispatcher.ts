@@ -40,6 +40,7 @@ import { container } from "../../di/container";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { DynamicCollectionService } from "../../domains/dynamic-collections/services/dynamic-collection-service";
+import { bumpSchemaEpoch } from "../../domains/dynamic-collections/services/schema-epoch";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
 import {
@@ -1122,6 +1123,20 @@ const COLLECTIONS_METHODS: Record<
               `[applySchemaChanges] Post-apply metadata write failed for ` +
                 `'${p.collectionName}': ${msg}. Live DB schema is correct ` +
                 `but admin UI may show stale field names until next reload.`
+            );
+          }
+
+          // Other instances still hold this collection's table as it was before the apply: moving
+          // the schema epoch makes them rebuild it from the registry within a second. Past the
+          // DDL, so a failure here is logged rather than failing a save that already happened;
+          // those instances then catch up at their next restart, as before.
+          try {
+            await bumpSchemaEpoch(adapter);
+          } catch (err) {
+            consoleLogger.warn(
+              `[applySchemaChanges] Could not tell other instances that ` +
+                `'${p.collectionName}' changed: ` +
+                `${err instanceof Error ? err.message : String(err)}`
             );
           }
 

@@ -225,6 +225,19 @@ export class SchemaRegistry {
   }
 
   /**
+   * Swap the table object registered for `tableName` for `table`, keeping its relation edges: for
+   * a table rebuilt because another instance changed it, which changes its columns, not what it
+   * relates to. A table not registered here is left unregistered, since nothing in this process
+   * reached it through the registry.
+   */
+  refreshDynamicTable(tableName: string, table: unknown): void {
+    if (!this.dynamicSchemas.has(tableName)) return;
+    this.dynamicSchemas.set(tableName, table);
+    // Relations close over table objects, as for a registration.
+    this.relationsCache = null;
+  }
+
+  /**
    * Forget one dynamic table, so the next lookup rebuilds it instead of adopting it.
    *
    * The counterpart `registerDynamicSchema` was missing. A caller that has changed a table's

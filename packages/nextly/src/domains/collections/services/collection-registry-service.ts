@@ -36,6 +36,7 @@ import type {
 import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { bumpSchemaEpoch } from "../../dynamic-collections/services/schema-epoch";
 import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
@@ -649,6 +650,16 @@ export class CollectionRegistryService extends BaseRegistryService<
       if (results.length === 0) {
         // Generic "Not found." from the factory; slug moves to logContext.
         throw NextlyError.notFound({ logContext: { slug } });
+      }
+      // Other instances cache this collection's runtime table: moving the schema epoch with a
+      // change to its columns, or to the table it is stored in, makes them rebuild it from the
+      // row as it is now, within a second.
+      if (
+        schemaChanged ||
+        (updateData.table_name !== undefined &&
+          updateData.table_name !== existing.tableName)
+      ) {
+        await bumpSchemaEpoch(this.adapter);
       }
 
       // Mirror the stored change into the live policy so turning the switch

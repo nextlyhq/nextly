@@ -11,8 +11,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { getTableColumns } from "drizzle-orm";
 
-import { CollectionFileManager } from "../collection-file-manager";
+import { SCHEMA_EPOCH_TTL_MS } from "../../domains/dynamic-collections/services/schema-epoch";
+import {
+  CollectionFileManager,
+  CollectionSchemaCache,
+} from "../collection-file-manager";
 import type { DatabaseInstance } from "../../types/database-operations";
 
 function makeFileManager(): CollectionFileManager {
@@ -174,5 +179,108 @@ describe("CollectionFileManager.saveDropMigration", () => {
     } finally {
       await rm(migrationsDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("CollectionFileManager across instances (the schema epoch)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * A file manager over a database whose schema epoch is `epoch.value`, building `posts` from
+   * `posts.fields` and counting the builds, as another instance's would after a change there.
+   */
+  function watchingFm(cache = new CollectionSchemaCache()) {
+    const epoch = { value: JSON.stringify("first") };
+    const posts = {
+      fields: [{ name: "title", type: "text" }] as Array<{
+        name: string;
+        type: string;
+      }>,
+      builds: 0,
+    };
+    const fm = new CollectionFileManager(
+      {} as DatabaseInstance,
+      {
+        schemasDir: "/tmp/test-schemas",
+        migrationsDir: "/tmp/test-migrations",
+      },
+      cache
+    );
+    fm.setAdapter({
+      dialect: "sqlite",
+      select: async () => [{ value: epoch.value }],
+    } as unknown as DrizzleAdapter);
+    fm.setMetadataFetcher(async slug => {
+      if (slug !== "posts") return null;
+      posts.builds += 1;
+      return { fields: posts.fields as never, tableName: "dc_posts" };
+    });
+    return { fm, epoch, posts, cache };
+  }
+
+  function frozenClock(): { at: number } {
+    const now = { at: 1_000_000 };
+    vi.spyOn(Date, "now").mockImplementation(() => now.at);
+    return now;
+  }
+
+  it("rebuilds a cached table once another instance moved the epoch", async () => {
+    const now = frozenClock();
+    const { fm, epoch, posts } = watchingFm();
+    const before = await fm.loadDynamicSchema("posts");
+    expect(Object.keys(getTableColumns(before))).not.toContain("body");
+
+    // Another instance adds a field and moves the epoch.
+    posts.fields = [...posts.fields, { name: "body", type: "text" }];
+    epoch.value = JSON.stringify("second");
+    now.at += SCHEMA_EPOCH_TTL_MS + 1;
+
+    const after = await fm.loadDynamicSchema("posts");
+    expect(Object.keys(getTableColumns(after))).toContain("body");
+    expect(posts.builds).toBe(2);
+  });
+
+  it("keeps serving the cached table while the epoch stands", async () => {
+    const now = frozenClock();
+    const { fm, posts } = watchingFm();
+    const first = await fm.loadDynamicSchema("posts");
+    now.at += SCHEMA_EPOCH_TTL_MS + 1;
+    expect(await fm.loadDynamicSchema("posts")).toBe(first);
+    expect(posts.builds).toBe(1);
+  });
+
+  it("keeps a schema the app registered itself when the epoch moves", async () => {
+    const now = frozenClock();
+    const { fm, epoch } = watchingFm();
+    const registered = { registered: true };
+    fm.registerSchema("pages", registered);
+    await fm.loadDynamicSchema("pages");
+
+    epoch.value = JSON.stringify("second");
+    now.at += SCHEMA_EPOCH_TTL_MS + 1;
+    // Nothing could rebuild it: the registry holds no `pages`.
+    expect(await fm.loadDynamicSchema("pages")).toBe(registered);
+  });
+
+  it("rebuilds once per move for every file manager sharing the cache", async () => {
+    const now = frozenClock();
+    const shared = watchingFm();
+    const other = watchingFm(shared.cache);
+    await shared.fm.loadDynamicSchema("posts");
+
+    shared.epoch.value = JSON.stringify("second");
+    other.epoch.value = JSON.stringify("second");
+    now.at += SCHEMA_EPOCH_TTL_MS + 1;
+    // The other file manager reads through the same cache: its first load after the move drops
+    // and rebuilds the entry the first one cached.
+    const rebuilt = await other.fm.loadDynamicSchema("posts");
+    expect(other.posts.builds).toBe(1);
+
+    // The cache has seen this move, so the first file manager is served the rebuilt table.
+    now.at += SCHEMA_EPOCH_TTL_MS + 1;
+    expect(await shared.fm.loadDynamicSchema("posts")).toBe(rebuilt);
+    expect(shared.posts.builds).toBe(1);
   });
 });

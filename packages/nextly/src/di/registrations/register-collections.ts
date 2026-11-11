@@ -20,6 +20,7 @@
 
 import { resolve } from "node:path";
 
+import type { SchemaRegistry } from "../../database/schema-registry";
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
@@ -27,7 +28,10 @@ import { collectionMetadataFetcher } from "../../domains/dynamic-collections/ser
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import { retentionPoliciesFrom } from "../../domains/retention/passes";
 import type { BuilderSaveSetup } from "../../domains/schema/builder-save/collection-save";
-import { CollectionFileManager } from "../../services/collection-file-manager";
+import {
+  CollectionFileManager,
+  CollectionSchemaCache,
+} from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
 import { CollectionMetadataService } from "../../services/collections/collection-metadata-service";
 import { CollectionRegistryService } from "../../services/collections/collection-registry-service";
@@ -61,14 +65,38 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
     builderSaveSetup(ctx)
   );
 
+  // One runtime-table cache for the process, read by the collection service's file manager and
+  // the content handler's alike: a drop or refresh through either reaches both readers.
+  container.registerSingleton<CollectionSchemaCache>(
+    "collectionSchemaCache",
+    () => {
+      const cache = new CollectionSchemaCache();
+      // A table rebuilt because another instance changed it replaces the adapter's copy too, so
+      // the adapter's reads and writes by table name use its new columns. Looked up when it is
+      // needed: the schema registry is registered after these services.
+      cache.setRebuiltTableListener((tableName, table) => {
+        if (container.has("schemaRegistry")) {
+          container
+            .get<SchemaRegistry>("schemaRegistry")
+            .refreshDynamicTable(tableName, table);
+        }
+      });
+      return cache;
+    }
+  );
+
   container.registerSingleton<CollectionService>("collectionService", () => {
     // Raw Drizzle instance for non-BaseService classes that need it directly.
     const drizzleDb = adapterDrizzleDb;
 
-    const fileManager = new CollectionFileManager(drizzleDb, {
-      schemasDir: schemasDir ?? `${basePath}/src/db/schemas/dynamic`,
-      migrationsDir: migrationsDir ?? `${basePath}/src/db/migrations/dynamic`,
-    });
+    const fileManager = new CollectionFileManager(
+      drizzleDb,
+      {
+        schemasDir: schemasDir ?? `${basePath}/src/db/schemas/dynamic`,
+        migrationsDir: migrationsDir ?? `${basePath}/src/db/migrations/dynamic`,
+      },
+      container.get<CollectionSchemaCache>("collectionSchemaCache")
+    );
 
     // Runtime schema generation: UI-created collections work without
     // pre-compiled TypeScript schemas.

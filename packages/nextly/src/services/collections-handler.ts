@@ -40,7 +40,10 @@ import type { ValidationIssue } from "../shared/lib/entry-validation";
 import type { HiddenFieldPaths } from "../shared/lib/filterable-fields";
 import type { DatabaseInstance } from "../types/database-operations";
 
-import { CollectionFileManager } from "./collection-file-manager";
+import {
+  CollectionFileManager,
+  CollectionSchemaCache,
+} from "./collection-file-manager";
 import {
   CollectionEntryService,
   CollectionMetadataService,
@@ -264,10 +267,18 @@ export class CollectionsHandler {
     const hookRegistry = getHookRegistry();
 
     const appRoot = consumerAppRoot || process.cwd();
-    this.fileManager = new CollectionFileManager(db, {
-      schemasDir: path.join(appRoot, "src/db/schemas/dynamic"),
-      migrationsDir: path.join(appRoot, "src/db/migrations/dynamic"),
-    });
+    this.fileManager = new CollectionFileManager(
+      db,
+      {
+        schemasDir: path.join(appRoot, "src/db/schemas/dynamic"),
+        migrationsDir: path.join(appRoot, "src/db/migrations/dynamic"),
+      },
+      // The process's one runtime-table cache, which the collection service reads too; a cache of
+      // its own where nothing registered it (a handler built outside a boot).
+      container.has("collectionSchemaCache")
+        ? container.get<CollectionSchemaCache>("collectionSchemaCache")
+        : new CollectionSchemaCache()
+    );
 
     // Set up the adapter and metadata fetcher for runtime schema generation
     // This allows UI-created collections to work without pre-compiled TypeScript schemas

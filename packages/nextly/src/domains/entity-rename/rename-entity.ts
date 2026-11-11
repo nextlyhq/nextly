@@ -21,6 +21,7 @@ import { collectionTag, singleTag } from "../../revalidation/compute-tags";
 import type { CacheRevalidator } from "../../revalidation/types";
 import { writingPermissions } from "../../services/lib/permissions";
 import type { Logger } from "../../shared/types";
+import { bumpSchemaEpoch } from "../dynamic-collections/services/schema-epoch";
 import { withSchemaChangeExcluded } from "../schema/services/schema-change-exclusion";
 import type { WebhookEndpointRegistry } from "../webhooks/endpoint-registry";
 import {
@@ -104,6 +105,9 @@ export async function renameEntity<T>(
           // Read after the registry row is written, so a collection relating to itself is
           // pointed at its new slug too.
           await moveRelationshipTargets(tx, move, present);
+          // Every other instance still maps the old slug to this table in its schema cache: the
+          // epoch moves with the rename, so they drop those entries within a second of it.
+          await bumpSchemaEpoch(tx);
           return row;
         })
       );

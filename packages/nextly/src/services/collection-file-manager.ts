@@ -2,7 +2,10 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { clearRegistryRowCache } from "../domains/dynamic-collections/services/collection-row-cache";
+import { SchemaEpochWatch } from "../domains/dynamic-collections/services/schema-epoch";
 import { resolveLocalizedFieldNames } from "../domains/i18n/classify-fields";
 import type { LocalizedFieldRef } from "../domains/i18n/companion-join";
 import {
@@ -71,17 +74,120 @@ export type CollectionMetadataFetcher = (
  */
 export type { CompanionSchema };
 
+/**
+ * The runtime tables the collection services read, by key: one cache a process can share between
+ * its file managers, so a change one of them is told of reaches the other's readers too.
+ *
+ * Most entries are rebuilt from the registry on a miss (the lazy path in `loadDynamicSchema`, and
+ * the tables an apply pushes in), so they can be dropped whenever another instance may have changed
+ * a schema. An entry an app registered itself (`registerSchema` / `registerSchemas`) has nothing
+ * to rebuild it from, so it is pinned and kept.
+ */
+export class CollectionSchemaCache {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private readonly tables = new Map<string, any>();
+  private readonly pinned = new Set<string>();
+  // What this cache knows of the install-wide schema epoch, so it can tell another instance's
+  // change from none.
+  private readonly epoch = new SchemaEpochWatch();
+  // Entries dropped because the epoch moved and not rebuilt since: their rebuild is a table
+  // another instance changed, which the adapter's own table registry must be told of too.
+  private readonly droppedByMove = new Set<string>();
+  private onRebuiltAfterChange?: (tableName: string, table: unknown) => void;
+
+  has(key: string): boolean {
+    return this.tables.has(key);
+  }
+
+  // The table cached under `key`, typed as the map holds it.
+  get(key: string) {
+    return this.tables.get(key);
+  }
+
+  /** Caches `table` under `key`; `pinned` for one an app registered, which nothing rebuilds. */
+  set(key: string, table: unknown, options?: { pinned?: boolean }): void {
+    this.tables.set(key, table);
+    if (options?.pinned) this.pinned.add(key);
+    else this.pinned.delete(key);
+  }
+
+  delete(key: string): void {
+    this.tables.delete(key);
+    this.pinned.delete(key);
+  }
+
+  keys(): IterableIterator<string> {
+    return this.tables.keys();
+  }
+
+  /** Drops every entry the registry can rebuild, keeping the ones an app registered. */
+  dropRebuildable(): void {
+    for (const key of [...this.tables.keys()]) {
+      if (!this.pinned.has(key)) this.tables.delete(key);
+    }
+  }
+
+  /**
+   * Told of each table rebuilt because another instance changed it (the schema epoch moved), so
+   * the adapter's table registry, which its own reads and writes resolve tables through, can hold
+   * the same one.
+   */
+  setRebuiltTableListener(
+    listener: (tableName: string, table: unknown) => void
+  ): void {
+    this.onRebuiltAfterChange = listener;
+  }
+
+  /**
+   * Caches `table`, rebuilt from the registry, under `key`; where an epoch move dropped the entry
+   * it replaces, tells the listener that `tableName` now has this table.
+   */
+  setRebuilt(key: string, tableName: string, table: unknown): void {
+    this.set(key, table);
+    if (this.droppedByMove.delete(key)) {
+      this.onRebuiltAfterChange?.(tableName, table);
+    }
+  }
+
+  /**
+   * Drops what the registry can rebuild when the schema epoch moved since this cache last looked:
+   * another instance renamed or changed a collection, so an entry here may name a table that is
+   * no longer the one its key resolves to. Looks at most once per epoch interval.
+   */
+  async dropIfSchemasChanged(
+    reader: Pick<TransactionContext, "select">
+  ): Promise<void> {
+    if (!(await this.epoch.moved(reader))) return;
+    // The tables are rebuilt from registry rows, which this process keeps for up to a second: a
+    // row read before the change would rebuild the old table and keep it until the epoch next
+    // moved, so the rows go too.
+    clearRegistryRowCache();
+    for (const key of this.tables.keys()) {
+      if (!this.pinned.has(key)) this.droppedByMove.add(key);
+    }
+    this.dropRebuildable();
+  }
+}
+
 export class CollectionFileManager {
   private migrationsDir: string;
   private db: DatabaseInstance;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private schemaRegistry: Map<string, any> = new Map();
+  private schemaRegistry: CollectionSchemaCache;
   private adapter?: DrizzleAdapter;
   private metadataFetcher?: CollectionMetadataFetcher;
 
-  constructor(db: DatabaseInstance, config: FileManagerConfig) {
+  /**
+   * @param cache - The cache to read and fill: the process's shared one where the caller holds it,
+   *   so every file manager it makes answers alike; a cache of its own otherwise.
+   */
+  constructor(
+    db: DatabaseInstance,
+    config: FileManagerConfig,
+    cache: CollectionSchemaCache = new CollectionSchemaCache()
+  ) {
     this.db = db;
     this.migrationsDir = config.migrationsDir;
+    this.schemaRegistry = cache;
   }
 
   /**
@@ -101,7 +207,9 @@ export class CollectionFileManager {
   }
 
   registerSchema(collectionName: string, schema: unknown): void {
-    this.schemaRegistry.set(`dc_${collectionName.replace(/-/g, "_")}`, schema);
+    this.schemaRegistry.set(`dc_${collectionName.replace(/-/g, "_")}`, schema, {
+      pinned: true,
+    });
   }
 
   registerSchemas(schemas: Record<string, unknown>): void {
@@ -109,7 +217,7 @@ export class CollectionFileManager {
       detail: Object.keys(schemas),
     });
     Object.entries(schemas).forEach(([key, schema]) => {
-      this.schemaRegistry.set(key, schema);
+      this.schemaRegistry.set(key, schema, { pinned: true });
       consoleLogger.info("[FileManager] Registered schema", { key });
     });
     consoleLogger.info("[FileManager] Registry now has", {
@@ -229,6 +337,13 @@ export class CollectionFileManager {
     // it logs nothing: a line per call, with the registry's whole key list, was
     // thousands of lines per request burst and an array copy each time. The
     // rarer paths below (a schema generated, or none found) still log.
+    // Another instance may have renamed or changed a collection since this was cached: where the
+    // schema epoch moved (read at most once a second), what the registry can rebuild is dropped
+    // and rebuilt from the registry as it is now. Asked on a miss too, so the epoch this cache
+    // compares against is read before anything is built from the registry, never after.
+    if (this.adapter) {
+      await this.schemaRegistry.dropIfSchemasChanged(this.adapter);
+    }
     if (this.schemaRegistry.has(schemaKey)) {
       return this.schemaRegistry.get(schemaKey);
     }
@@ -274,7 +389,11 @@ export class CollectionFileManager {
             }
           );
 
-          this.schemaRegistry.set(schemaKey, runtimeSchema.table);
+          this.schemaRegistry.setRebuilt(
+            schemaKey,
+            tableName,
+            runtimeSchema.table
+          );
           consoleLogger.info(
             "[FileManager] Runtime schema generated and cached"
           );
@@ -333,6 +452,9 @@ export class CollectionFileManager {
       metadata.tableName || `dc_${collectionName.replace(/-/g, "_")}`;
     const companionTableName = `${tableName}_locales`;
 
+    // The companion's cached table follows the same epoch as the main table's: a change on another
+    // instance drops it, so it is rebuilt from the fields read above.
+    await this.schemaRegistry.dropIfSchemasChanged(this.adapter);
     const cached = this.schemaRegistry.get(companionTableName);
     // Pair each translatable field's API name (camelCase row key) with its physical companion
     // column (snake_case) — the same conversion the column descriptor applies to main columns.
@@ -368,7 +490,11 @@ export class CollectionFileManager {
     });
     if (!companion) return null;
 
-    this.schemaRegistry.set(companionTableName, companion.table);
+    this.schemaRegistry.setRebuilt(
+      companionTableName,
+      companionTableName,
+      companion.table
+    );
     return {
       table: companion.table,
       companionTableName,
