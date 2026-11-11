@@ -756,6 +756,56 @@ describeEachDialect("a translated unique field", dialect => {
     }
   });
 
+  it("refuses, rather than cuts, a field group's shared text value over 255 characters when Unique bounds its column on MySQL", async () => {
+    // The schema preview and apply flow the field group's own update sends this change to judges
+    // the narrowing by the stored values, as it does a collection's: on MySQL Unique bounds the
+    // width-less column to 255 characters, so a longer value refuses the apply and is kept whole.
+    // Elsewhere the column stays text and the apply goes ahead, the value still whole.
+    await dispatchComponents(
+      "createComponent",
+      {},
+      {
+        slug: "teaser",
+        label: "Teaser",
+        fields: [{ name: "heading", type: "text" }],
+      }
+    );
+    const columns = (names: string[]) => names.map(quoted).join(", ");
+    await query(
+      `INSERT INTO ${quoted("comp_teaser")} (${columns(["id", "_parent_id", "_parent_table", "_parent_field", "heading"])}) ` +
+        `VALUES ('t1', 'entry-t1', 'dc_pages', 'teaser', '${"h".repeat(300)}')`
+    );
+
+    const applied = await dispatchComponents(
+      "applyComponentSchemaChanges",
+      { slug: "teaser" },
+      {
+        fields: [{ name: "heading", type: "text", unique: true }],
+        confirmed: true,
+        schemaVersion: await schemaVersionOf("dynamic_components", "teaser"),
+      }
+    ).then(
+      result => ({ refused: false, said: JSON.stringify(result) }),
+      (error: { message?: string; publicData?: unknown }) => ({
+        refused: true,
+        said: `${error.message ?? ""} ${JSON.stringify(error.publicData ?? null)}`,
+      })
+    );
+
+    if (dialect === "mysql") {
+      expect(applied.refused, applied.said).toBe(true);
+      expect(applied.said).toMatch(
+        /cannot become varchar\(255\): 1 row\(s\) hold a value longer than 255 characters/
+      );
+    } else {
+      expect(applied.refused, applied.said).toBe(false);
+    }
+    const lengths = await query<{ n: unknown }>(
+      `SELECT ${dialect === "postgresql" ? "char_length" : "length"}(${quoted("heading")}) AS ${quoted("n")} FROM ${quoted("comp_teaser")}`
+    );
+    expect(lengths.map(row => Number(row.n))).toEqual([300]);
+  });
+
   it("refuses a field group's own update that makes a translated field unique over duplicates, and changes nothing", async () => {
     // Declared 255 characters wide, so making it unique leaves its column as it is and the
     // duplicates are what the update is refused for. A field group's width is a top-level key.
