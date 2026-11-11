@@ -23,6 +23,58 @@ export type CanonicalCheck =
   /** A complete address on another site. */
   | { kind: "elsewhere"; host: string };
 
+/** A refusal, in one sentence. */
+function bad(message: string): CanonicalCheck {
+  return { kind: "bad", message };
+}
+
+/**
+ * Why the typed text is not written as a whole web address, or nothing: the
+ * checks a person can fix by retyping, before the address is read.
+ */
+function spellingProblem(typed: string): CanonicalCheck | undefined {
+  if (/\s/.test(typed)) return bad("An address can't contain spaces.");
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(typed)?.[1];
+  if (scheme !== undefined && !/^https?$/i.test(scheme)) {
+    return bad(
+      "Only web addresses can be used here, starting with https:// (or http://)."
+    );
+  }
+  return /^https?:\/\//i.test(typed)
+    ? undefined
+    : bad("Enter the full address, starting with https://.");
+}
+
+/** The address read, or nothing where it is not one. */
+function urlOf(typed: string): URL | undefined {
+  try {
+    return new URL(typed);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Where a whole address points, against the hosts the site is served from. */
+function placeOf(
+  url: URL,
+  typed: string,
+  siteHosts: readonly string[]
+): CanonicalCheck {
+  const host = url.hostname.toLowerCase();
+  if (host === "") return incomplete();
+  if (url.username !== "" || url.password !== "") {
+    return bad("Remove the sign-in details from the address.");
+  }
+  const onSite = siteHosts.includes(host);
+  if (!onSite && (!host.includes(".") || host.endsWith("."))) {
+    return bad(
+      `The address is missing the site's name, like ${siteHosts[0] ?? "example.com"}.`
+    );
+  }
+  if (usableCanonical(typed) === undefined) return incomplete();
+  return onSite ? { kind: "same" } : { kind: "elsewhere", host };
+}
+
 /**
  * The typed address read against the hosts the site is served from
  * (`siteHosts`, lower case, with no port).
@@ -33,61 +85,23 @@ export function checkCanonical(
 ): CanonicalCheck {
   const typed = raw.trim();
   if (typed === "") return { kind: "empty" };
-  if (/\s/.test(typed)) {
-    return { kind: "bad", message: "An address can't contain spaces." };
-  }
   // A path from the site's root is on the site by construction.
-  if (typed.startsWith("/") && !typed.startsWith("//")) {
+  if (typed.startsWith("/") && !typed.startsWith("//") && !/\s/.test(typed)) {
     return usableCanonical(typed) === undefined
-      ? { kind: "bad", message: "That isn't an address on this site." }
+      ? bad("That isn't an address on this site.")
       : { kind: "same" };
   }
-  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(typed);
-  if (scheme !== null && !/^https?$/i.test(scheme[1] ?? "")) {
-    return {
-      kind: "bad",
-      message:
-        "Only web addresses can be used here, starting with https:// (or http://).",
-    };
-  }
-  if (!/^https?:\/\//i.test(typed)) {
-    return {
-      kind: "bad",
-      message: "Enter the full address, starting with https://.",
-    };
-  }
-  let url: URL;
-  try {
-    url = new URL(typed);
-  } catch {
-    return incomplete();
-  }
-  const host = url.hostname.toLowerCase();
-  if (host === "") return incomplete();
-  if (url.username !== "" || url.password !== "") {
-    return {
-      kind: "bad",
-      message: "Remove the sign-in details from the address.",
-    };
-  }
-  const onSite = siteHosts.includes(host);
-  if (!onSite && (!host.includes(".") || host.endsWith("."))) {
-    return {
-      kind: "bad",
-      message: `The address is missing the site's name, like ${siteHosts[0] ?? "example.com"}.`,
-    };
-  }
-  if (usableCanonical(typed) === undefined) return incomplete();
-  return onSite ? { kind: "same" } : { kind: "elsewhere", host };
+  const problem = spellingProblem(typed);
+  if (problem !== undefined) return problem;
+  const url = urlOf(typed);
+  return url === undefined ? incomplete() : placeOf(url, typed, siteHosts);
 }
 
 /** The refusal for something that is not a whole address. */
 function incomplete(): CanonicalCheck {
-  return {
-    kind: "bad",
-    message:
-      "That isn't a complete web address. Check it starts with https:// and then names a site.",
-  };
+  return bad(
+    "That isn't a complete web address. Check it starts with https:// and then names a site."
+  );
 }
 
 /** What the `seo` group stores for a typed address. */

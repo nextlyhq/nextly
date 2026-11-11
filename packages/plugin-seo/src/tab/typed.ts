@@ -32,41 +32,38 @@ export const TYPED_SEO_FIELDS = [
   "noindex",
 ] as const;
 
-/** One of the values a person types in the `seo` group. */
-export type TypedSeoField = (typeof TYPED_SEO_FIELDS)[number];
+/** A group's values, or none where the group is not an object. */
+function groupOf(value: unknown): Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-/** Text with something in it: blank text is nothing typed. */
-const textOf = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim() !== "" ? value : undefined;
+/** Each typed text field, and the value of the page level it sets. */
+const TEXT_VALUES = [
+  ["metaTitle", "title"],
+  ["metaDescription", "description"],
+  ["socialTitle", "socialTitle"],
+  ["socialDescription", "socialDescription"],
+  ["canonical", "canonical"],
+] as const;
 
 /**
  * The page level from the `seo` group's values. `image` is the chosen share
- * image, looked up by the caller, since a stored image is an id.
+ * image, looked up by the caller, since a stored image is an id. Blank text
+ * is nothing typed.
  */
 export function typedPageLevel(
   seo: unknown,
   image?: PageMetadataImage
 ): Levels["page"] {
-  const typed = isRecord(seo) ? seo : {};
+  const typed = groupOf(seo);
   const level: Levels["page"] = {};
-  const title = textOf(typed.metaTitle);
-  const description = textOf(typed.metaDescription);
-  const socialTitle = textOf(typed.socialTitle);
-  const socialDescription = textOf(typed.socialDescription);
-  const canonical = textOf(typed.canonical);
-  if (title !== undefined) level.title = title;
-  if (description !== undefined) level.description = description;
-  if (socialTitle !== undefined) level.socialTitle = socialTitle;
-  if (socialDescription !== undefined) {
-    level.socialDescription = socialDescription;
+  for (const [field, value] of TEXT_VALUES) {
+    const text = typed[field];
+    if (typeof text === "string" && text.trim() !== "") level[value] = text;
   }
-  if (image !== undefined && textOf(image.url) !== undefined) {
-    level.image = image;
-  }
-  if (canonical !== undefined) level.canonical = canonical;
+  if (image !== undefined && image.url.trim() !== "") level.image = image;
   if (typed.noindex === true) level.hidden = true;
   return level;
 }
@@ -80,9 +77,11 @@ export function withoutTyped(
   document: Readonly<Record<string, unknown>>
 ): Record<string, unknown> {
   const seo = document[SEO_GROUP];
-  if (!isRecord(seo)) return { ...document };
+  if (typeof seo !== "object" || seo === null || Array.isArray(seo)) {
+    return { ...document };
+  }
   const kept = Object.fromEntries(
-    Object.entries(seo).filter(
+    Object.entries(groupOf(seo)).filter(
       ([name]) => !(TYPED_SEO_FIELDS as readonly string[]).includes(name)
     )
   );

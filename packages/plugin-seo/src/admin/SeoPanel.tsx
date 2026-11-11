@@ -132,6 +132,76 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
   );
 }
 
+/** Where a field's value comes from, with one way back once it is typed. */
+function FieldSource({
+  id,
+  typed,
+  automatic,
+  value,
+  names,
+  problem,
+  writable,
+  onAutomatic,
+}: {
+  id: string;
+  typed: string;
+  automatic: Sourced<string> | undefined;
+  value: "title" | "description";
+  names: SourceNames;
+  problem: SeoProblem | undefined;
+  writable: boolean;
+  onAutomatic: () => void;
+}): ReactNode {
+  if (isTyped(typed)) {
+    return (
+      <SourceRow id={id}>
+        <Chip kind="typed">Typed for this page</Chip>
+        <LinkAction disabled={!writable} onClick={onAutomatic}>
+          Go back to automatic
+        </LinkAction>
+      </SourceRow>
+    );
+  }
+  if (automatic !== undefined) {
+    return (
+      <SourceRow id={id}>
+        <AutomaticSource sourced={automatic} value={value} names={names} />
+      </SourceRow>
+    );
+  }
+  return (
+    <SourceRow id={id}>
+      <span className={problem && "font-medium text-warning-text"}>
+        Nothing to use yet. {problem?.text}
+      </span>
+    </SourceRow>
+  );
+}
+
+/** What the title's or the description's control is handed. */
+function fieldProps(
+  id: string,
+  typed: string,
+  automatic: Sourced<string> | undefined,
+  writable: boolean,
+  error: string | undefined,
+  onChange: (next: string | null) => void
+) {
+  const described = [`${id}-help`, `${id}-source`];
+  if (error !== undefined) described.push(`${id}-error`);
+  return {
+    id,
+    value: typed,
+    placeholder: automatic?.value ?? "",
+    disabled: !writable,
+    "aria-describedby": described.join(" "),
+    "aria-invalid": error !== undefined,
+    // A field emptied is a field returned to automatic.
+    onChange: (event: { target: { value: string } }) =>
+      onChange(event.target.value === "" ? null : event.target.value),
+  };
+}
+
 /**
  * The title or the description: a count of what will be used, one plain
  * sentence, the field with the automatic value as its placeholder, and where
@@ -167,17 +237,8 @@ function SeoTextField({
   onChange: (next: string | null) => void;
 }): ReactNode {
   const id = useId();
-  const field = {
-    id,
-    value: typed,
-    placeholder: automatic?.value ?? "",
-    disabled: !writable,
-    "aria-describedby": `${id}-help ${id}-source${error === undefined ? "" : ` ${id}-error`}`,
-    "aria-invalid": error !== undefined,
-    // A field emptied is a field returned to automatic.
-    onChange: (event: { target: { value: string } }) =>
-      onChange(event.target.value === "" ? null : event.target.value),
-  };
+  const field = fieldProps(id, typed, automatic, writable, error, onChange);
+  const Control = multiline ? Textarea : Input;
   return (
     <div className="grid gap-1.5">
       <div className="flex items-baseline justify-between gap-2.5">
@@ -195,30 +256,18 @@ function SeoTextField({
       >
         {help}
       </p>
-      {multiline ? <Textarea rows={3} {...field} /> : <Input {...field} />}
-      <SourceRow id={`${id}-source`}>
-        {isTyped(typed) ? (
-          <>
-            <Chip kind="typed">Typed for this page</Chip>
-            <LinkAction disabled={!writable} onClick={() => onChange(null)}>
-              Go back to automatic
-            </LinkAction>
-          </>
-        ) : automatic === undefined ? (
-          <span
-            className={
-              problem === undefined
-                ? undefined
-                : "font-medium text-warning-text"
-            }
-          >
-            Nothing to use yet. {problem?.text ?? ""}
-          </span>
-        ) : (
-          <AutomaticSource sourced={automatic} value={value} names={names} />
-        )}
-      </SourceRow>
-      {error === undefined ? null : (
+      <Control {...field} {...(multiline ? { rows: 3 } : {})} />
+      <FieldSource
+        id={`${id}-source`}
+        typed={typed}
+        automatic={automatic}
+        value={value}
+        names={names}
+        problem={problem}
+        writable={writable}
+        onAutomatic={() => onChange(null)}
+      />
+      {error && (
         <p
           id={`${id}-error`}
           role="alert"

@@ -62,7 +62,7 @@ export function LinkAction({
 }
 
 /** Pattern or code text, set in the code face. */
-export function Code({ children }: { children: ReactNode }): ReactNode {
+function Code({ children }: { children: ReactNode }): ReactNode {
   return (
     <code className="rounded bg-muted px-[5px] py-px font-mono text-xs whitespace-nowrap text-foreground">
       {children}
@@ -132,7 +132,7 @@ export function AutomaticSource({
  * A type's name inside a sentence: "Blog post" becomes "blog post", while a
  * name that opens with an acronym, such as "SEO page", keeps its capitals.
  */
-export function inSentence(name: string): string {
+function inSentence(name: string): string {
   const [first = "", second = ""] = name;
   return second !== "" &&
     second === second.toUpperCase() &&

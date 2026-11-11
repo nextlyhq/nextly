@@ -20,7 +20,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useFormState, useWatch } from "react-hook-form";
 
-import { problemsBadge, seoProblems } from "../tab/problems";
+import { problemsBadge, seoProblems, type SeoProblem } from "../tab/problems";
 import { SEO_GROUP } from "../tab/typed";
 
 import { SeoPanel } from "./SeoPanel";
@@ -28,6 +28,7 @@ import { useSeoTabContext, type SeoTabDocument } from "./use-seo-tab-context";
 import {
   panelAnswers,
   type ChosenImage,
+  type PanelAnswers,
   type SeoPanelField,
   type SeoPanelValues,
 } from "./values";
@@ -68,6 +69,34 @@ function chosenImageOf(
     ...(typeof media.height === "number" ? { height: media.height } : {}),
     ...(media.altText ? { alt: media.altText } : {}),
   };
+}
+
+/** The chosen share image, read from the media library by its id. */
+function useChosenImage(imageId: string | undefined): ChosenImage | undefined {
+  const media = useMediaItem(imageId);
+  return useMemo(
+    () => (imageId === undefined ? undefined : chosenImageOf(media.data)),
+    [imageId, media.data]
+  );
+}
+
+/**
+ * The page's problems, shown as the count beside the tab's label, kept while
+ * another tab is open; none is shown until the page's levels have been read.
+ */
+function useProblemsBadge(
+  answers: PanelAnswers | undefined,
+  setBadge: DocumentTabProps["setBadge"]
+): SeoProblem[] {
+  const problems = useMemo(
+    () => (answers === undefined ? [] : seoProblems(answers.answer)),
+    [answers]
+  );
+  const badge = useMemo(() => problemsBadge(problems), [problems]);
+  useEffect(() => {
+    if (answers !== undefined) setBadge(badge);
+  }, [answers, badge, setBadge]);
+  return problems;
 }
 
 /** Each of the panel's values, writable as the person typing it would. */
@@ -127,26 +156,12 @@ export function SeoTab({
     return isRecord(seo) ? seo : {};
   }, [document]);
   const imageId = imageIdOf(values.ogImage);
-  const media = useMediaItem(imageId);
-  const chosenImage = useMemo(
-    () => (imageId === undefined ? undefined : chosenImageOf(media.data)),
-    [imageId, media.data]
-  );
-
+  const chosenImage = useChosenImage(imageId);
   const answers = useMemo(
     () => panelAnswers(levels, values, chosenImage),
     [levels, values, chosenImage]
   );
-  const problems = useMemo(
-    () => (answers === undefined ? [] : seoProblems(answers.answer)),
-    [answers]
-  );
-  const badge = useMemo(() => problemsBadge(problems), [problems]);
-  // The count beside the tab's label, kept while another tab is open; none
-  // is shown until the page's levels have been read.
-  useEffect(() => {
-    if (answers !== undefined) setBadge(badge);
-  }, [answers, badge, setBadge]);
+  const problems = useProblemsBadge(answers, setBadge);
 
   if (target === null) return null;
   const writable =

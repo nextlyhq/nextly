@@ -173,7 +173,6 @@ function HideRow({ values, writable, onSet }: AdvancedProps): ReactNode {
 function OfficialAddressRow({
   values,
   context,
-  answer,
   writable,
   onSet,
 }: AdvancedProps): ReactNode {
@@ -263,12 +262,7 @@ function OfficialAddressRow({
                 data-testid="seo-official-address"
                 className="font-mono text-xs break-all text-foreground"
               >
-                {absoluteAddress(
-                  context.site.origin,
-                  answer?.canonical?.from === "address"
-                    ? answer.canonical.value
-                    : own
-                )}
+                {absoluteAddress(context.site.origin, own)}
               </span>
               <span>this page&apos;s own address</span>
             </>
@@ -407,6 +401,38 @@ function SharedTitleRow({
   );
 }
 
+/** The image the row shows: the one chosen, else the automatic one. */
+function shownImage(
+  chosen: boolean,
+  chosenImage: ChosenImage | undefined,
+  automatic: ChosenImage | undefined
+): ChosenImage | undefined {
+  return chosen ? chosenImage : automatic;
+}
+
+/** The image's thumbnail, name and size. */
+function ImageSummary({
+  shown,
+}: {
+  shown: ChosenImage | undefined;
+}): ReactNode {
+  if (shown === undefined) {
+    return <div className="text-muted-foreground">No share image yet.</div>;
+  }
+  const size =
+    shown.width !== undefined && shown.height !== undefined
+      ? `${shown.width} × ${shown.height}`
+      : undefined;
+  return (
+    <>
+      <div className="break-all">{shown.filename ?? fileNameOf(shown.url)}</div>
+      {size === undefined ? null : (
+        <div className="font-mono text-xs text-muted-foreground">{size}</div>
+      )}
+    </>
+  );
+}
+
 /** The picture shown when someone shares the page. */
 function ShareImageRow({
   values,
@@ -419,27 +445,26 @@ function ShareImageRow({
 }: AdvancedProps): ReactNode {
   const chosen = values.ogImage !== null && values.ogImage !== undefined;
   const image = answer?.image;
-  const shown: ChosenImage | undefined =
-    chosen && chosenImage !== undefined
-      ? chosenImage
-      : image === undefined
-        ? undefined
-        : { ...image.value, filename: fileNameOf(image.value.url) };
+  const shown = shownImage(
+    chosen,
+    chosenImage,
+    image && { ...image.value, filename: fileNameOf(image.value.url) }
+  );
+  const choose =
+    onChooseImage === undefined ? undefined : (
+      <RowButton disabled={!writable} onClick={onChooseImage}>
+        {shown === undefined ? "Choose an image" : "Choose another image"}
+      </RowButton>
+    );
   return (
     <Row
       label="Share image"
       help="The picture shown when someone shares this page on LinkedIn, X, Slack and others."
-      control={
-        onChooseImage === undefined ? undefined : (
-          <RowButton disabled={!writable} onClick={onChooseImage}>
-            {shown === undefined ? "Choose an image" : "Choose another image"}
-          </RowButton>
-        )
-      }
+      control={choose}
     >
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative h-[62px] w-[88px] flex-none overflow-hidden rounded-md bg-muted">
-          {shown === undefined ? null : (
+          {shown && (
             <img
               src={shown.url}
               alt={shown.alt ?? ""}
@@ -448,20 +473,7 @@ function ShareImageRow({
           )}
         </div>
         <div className="min-w-0 text-[13px] leading-normal text-foreground">
-          {shown === undefined ? (
-            <div className="text-muted-foreground">No share image yet.</div>
-          ) : (
-            <>
-              <div className="break-all">
-                {shown.filename ?? fileNameOf(shown.url)}
-              </div>
-              {shown.width !== undefined && shown.height !== undefined ? (
-                <div className="font-mono text-xs text-muted-foreground">
-                  {shown.width} × {shown.height}
-                </div>
-              ) : null}
-            </>
-          )}
+          <ImageSummary shown={shown} />
           <SourceRow>
             {chosen ? (
               <>
@@ -473,8 +485,10 @@ function ShareImageRow({
                   Go back to automatic
                 </LinkAction>
               </>
-            ) : image === undefined ? null : (
-              <AutomaticSource sourced={image} value="image" names={names} />
+            ) : (
+              image && (
+                <AutomaticSource sourced={image} value="image" names={names} />
+              )
             )}
           </SourceRow>
         </div>

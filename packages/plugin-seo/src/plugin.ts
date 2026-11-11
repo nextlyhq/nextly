@@ -31,8 +31,7 @@ import {
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
-import { seoTabContributions, tabEditsGroup } from "./tab/contributions";
-import { seoTabRoute } from "./tab/route";
+import { seoTabParts } from "./tab/install";
 import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
@@ -172,6 +171,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     );
   }
 
+  const tab = seoTabParts({
+    collections: targets,
+    singles: singleTargets,
+    fields: seoFields,
+    baseUrl: options.baseUrl,
+  });
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: [...targets, ...singleTargets], fields: [seoGroup] }],
@@ -179,26 +184,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     collections: [addressRecordCollection()],
     // Every page's head, worked out by the one order of who wins.
     services: { pageMetadata: ctx => seoPageMetadata(ctx) },
-    // The SEO tab on each page the group is added to, and the route it reads
-    // a page's automatic values from. A group of fields the tab does not
-    // edit stays among the page's own fields instead.
-    ...(tabEditsGroup(seoFields)
-      ? {
-          admin: {
-            contributions: seoTabContributions({
-              collections: targets,
-              singles: singleTargets,
-            }),
-          },
-        }
-      : {}),
-    routes: [
-      seoTabRoute({
-        collections: targets,
-        singles: singleTargets,
-        ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
-      }),
-    ],
+    // The SEO tab on each page the group is added to, and its route.
+    ...tab,
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -224,7 +211,6 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // of the canonical `/sitemap.xml` belongs to the Next delivery layer, and
     // headless consumers cache at their edge.
     contributes.routes = [
-      ...(contributes.routes ?? []),
       {
         method: "GET",
         path: "/sitemap.xml",
@@ -258,6 +244,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           return new Response(xml, { headers });
         },
       },
+      // The SEO tab's own route.
+      ...tab.routes,
     ];
   }
 
