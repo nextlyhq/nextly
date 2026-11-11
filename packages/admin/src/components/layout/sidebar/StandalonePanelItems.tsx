@@ -54,7 +54,7 @@ export function StandalonePanelItems({
 }
 
 /** The plugin whose standalone panel `section` is. */
-export function panelPlugin(
+function panelPlugin(
   plugins: readonly PluginMetadata[] | undefined,
   section: ActiveNavSection
 ): PluginMetadata | undefined {
@@ -64,7 +64,7 @@ export function panelPlugin(
 }
 
 /** Whether the plugin declares groups, or a number on any item. */
-export function declaresPanel(plugin: PluginMetadata): boolean {
+function declaresPanel(plugin: PluginMetadata): boolean {
   if ((plugin.panel?.groups.length ?? 0) > 0) return true;
   return (plugin.menu ?? []).some(
     item => item.count !== undefined || item.badge !== undefined
@@ -72,7 +72,7 @@ export function declaresPanel(plugin: PluginMetadata): boolean {
 }
 
 /** What an item shows: its declared kind, and its number once read. */
-export function shownNumber(
+function shownNumber(
   item: PluginMenuItemMeta,
   numbers: ReadonlyMap<string, PanelItemNumber>
 ): ShownItemNumber | undefined {

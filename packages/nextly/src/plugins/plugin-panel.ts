@@ -178,6 +178,8 @@ function withPanelFields(
   scope: PanelScope,
   problems: PluginPanelProblem[]
 ): PluginMenuItem {
+  // Read before the checks below, which narrow `item` by what its type allows.
+  const { label } = item;
   const { group, count, badge, ...fields } = item;
   const kept: PluginMenuItemFields = keptGroup(group, scope.known)
     ? { ...fields, group }
@@ -185,17 +187,17 @@ function withPanelFields(
   if (group !== undefined && kept.group === undefined) {
     problems.push({
       kind: "panel-item-unknown-group",
-      subject: item.label,
+      subject: label,
       declared: String(group),
     });
   }
   if (count !== undefined && badge !== undefined) {
-    problems.push({ kind: "panel-item-count-and-badge", subject: item.label });
+    problems.push({ kind: "panel-item-count-and-badge", subject: label });
     return kept;
   }
   const number = count ?? badge;
   if (number === undefined) return kept;
-  const resolved = resolvedCount(number, scope.plugin, item.label, problems);
+  const resolved = resolvedCount(number, scope.plugin, label, problems);
   if (resolved === undefined) return kept;
   return count === undefined
     ? { ...kept, badge: resolved }
