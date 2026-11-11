@@ -745,6 +745,27 @@ function redirectRefusal(message: string, field: PickedDocumentField) {
   });
 }
 
+/**
+ * A field read rule admitting the callers who can update forms of this
+ * collection, and no one else: what the people managing a form may see, and
+ * a visitor may not.
+ *
+ * A super-admin is admitted by role. They may save any form, since the
+ * collection gate admits them before any rule, but field rules still apply
+ * to them, and their role need not hold `update-<slug>` as a stored grant. A
+ * field they could save but not read would come back empty to the editor
+ * and be saved empty. So everyone who can save a form can read these fields.
+ */
+function readableByFormEditors(
+  slug: string
+): (context: {
+  permissions: readonly string[];
+  roles: readonly string[];
+}) => boolean {
+  return ({ permissions, roles }) =>
+    permissions.includes(`update-${slug}`) || roles.includes("super-admin");
+}
+
 export function formsCollection(
   pluginConfig: ResolvedFormBuilderConfig
 ): ExtendedCollectionConfig {
@@ -918,9 +939,7 @@ export function formsCollection(
       // For the people who manage the form. The public read of a form returns
       // its row, and the Public role may read forms, so the note is withheld
       // from anyone who cannot edit them.
-      access: {
-        read: ({ permissions }) => permissions.includes(`update-${slug}`),
-      },
+      access: { read: readableByFormEditors(slug) },
     }),
 
     text({
@@ -1002,6 +1021,12 @@ export function formsCollection(
         description:
           "Email notification rules. Managed by the Form Builder UI.",
       },
+      // Who is emailed is for the people who manage the form. The public read
+      // of a form returns its row, and the Public role may read forms, so the
+      // rules, with their recipients' addresses, are withheld from anyone who
+      // cannot edit forms. Sending reads the form as the system, which this
+      // rule does not limit.
+      access: { read: readableByFormEditors(slug) },
     }),
 
     // ============================================================
