@@ -1,30 +1,34 @@
 /**
- * What one reader may change about one card: its More settings panel.
+ * What one reader may change about one card: its settings drawer, the one place every setting
+ * of the card is changed, opened from Settings… in its menu.
  *
  * 🔴 Keyed by PLACEMENT, not by widget. The same widget can sit on a dashboard
  * twice — a "recent entries" card for posts beside one for pages — and settings
  * belong to the card the reader is looking at, not to the definition behind it.
  * Every save goes through `setConfig(placementId, …)` for that reason.
  *
- * A side panel that is NOT modal: the dashboard behind it stays usable, read
+ * A side drawer that is NOT modal: the dashboard behind it stays usable, read
  * and clicked, so the reader sees the card they are changing and the ones
  * around it. It draws the card as its values would draw it at the top, then
- * the settings in three sections: Data (what the card reads), Display (how it
- * shows it, the card's title first) and Advanced, folded. Each section holds
- * only what the widget declares (`sectionOf`), Display aside, which always
- * holds the title.
+ * the settings in three sections, none folded: Content (what the card reads),
+ * Display (how it shows it, the card's title first) and Size (its width).
+ * Content holds only what the widget declares (`sectionOf`); Display always
+ * holds the title, and Size the width wherever the drawer is given one.
  *
- * The form is drawn by `FieldRenderer`, the same component the entry editor
- * uses, because a widget setting IS a field definition. A reader meets the
- * inputs they already know, and a plugin author gets a settings form without
- * writing one.
+ * Most of the form is drawn by `FieldRenderer`, the same component the entry
+ * editor uses, because a widget setting IS a field definition. A reader meets
+ * the inputs they already know, and a plugin author gets a settings form
+ * without writing one. A short choice, an on/off and a note's text are drawn
+ * by the drawer's own controls (`DrawerSettingControls`).
  *
- * Done is the one way to keep a change, and what it does depends on where the
+ * Save is the one way to keep a change, and what it does depends on where the
  * reader is (`onDone`): while customising it joins the dashboard's unsaved
- * changes and the panel closes; at rest it is saved at once, and the panel
- * stays open until the save lands, saying why in place when it does not.
- * Cancel and Escape discard the panel's changes; leaving the page with changes
- * still in it asks first, as the admin's other editors do.
+ * changes, kept until the customise bar's Save, and the drawer closes; at rest
+ * it is saved at once, and the drawer stays open until the save lands, saying
+ * why in place when it does not. Until then the card itself is untouched.
+ * Cancel, Escape and the close button discard the drawer's changes; leaving
+ * the page with changes still in it asks first, as the admin's other editors
+ * do.
  */
 import {
   AlertDialog,
@@ -36,22 +40,17 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   Button,
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
   Input,
   Label,
   Sheet,
   SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
 } from "@nextlyhq/ui";
 import {
   MAX_CARD_TITLE_LENGTH,
   textLength,
   type AnyWidgetSetting,
+  type GridSize,
+  type WidgetSizeBounds,
 } from "nextly/config";
 import {
   useCallback,
@@ -68,10 +67,10 @@ import { FormProvider, useForm, type UseFormReturn } from "react-hook-form";
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
-import * as Icons from "@admin/components/icons";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
+import { widthChoices } from "../sizes";
 import { askableWith, titleAsAsked } from "../widget-as-asked";
 
 import {
@@ -84,6 +83,8 @@ import {
   type SettingSection,
 } from "./content-settings";
 import { ContentSettingControl } from "./ContentSettingControl";
+import { DrawerHeader } from "./DrawerHeader";
+import { drawerControlOf, WidthControl } from "./DrawerSettingControls";
 import { closeFocusTo } from "./panel-close-focus";
 import {
   initialValues,
@@ -92,11 +93,7 @@ import {
   type PanelKept,
 } from "./panel-values";
 import { PendingRowsContext, usePendingRows } from "./pending-rows";
-import {
-  drawnSetting,
-  overlongMessage,
-  overlongSetting,
-} from "./setting-length";
+import { overlongMessage, overlongSetting } from "./setting-length";
 import { SettingEditorControl } from "./SettingEditorControl";
 import {
   bringRefusedPanelForward,
@@ -119,17 +116,22 @@ export interface SettingsPanelProps {
   widget?: DashboardWidget;
   /** What this placement has stored, if anything. */
   config: Record<string, unknown> | undefined;
+  /**
+   * The card's size as drawn and its widget's bounds, for the Size section's Width. Absent, the
+   * drawer has no Size section.
+   */
+  sizing?: { size: GridSize; bounds: WidgetSizeBounds };
   /** The title the reader gave this card, as stored; absent while it is titled automatically. */
   ownTitle?: string | undefined;
   /**
-   * Keep the change, and say how that ended: `saved` closes the panel, `failed` keeps it open
-   * with the reason beside the form.
+   * Keep the change (Save), and say how that ended: `saved` closes the drawer, `failed` keeps it
+   * open with the reason beside the form.
    */
   onDone: (kept: PanelKept, settled: DoneSettled) => void;
-  /** Why Done cannot keep a change now, when it cannot; said in the panel, and Done is off. */
+  /** Why Save cannot keep a change now, when it cannot; said in the panel, and Save is off. */
   blocked?: string;
   /**
-   * The card as the panel's current values would draw it, at the top: handed what Done would
+   * The card as the panel's current values would draw it, at the top: handed what Save would
    * keep, and a way to empty the panel's filters, which the preview offers while they match
    * nothing.
    */
@@ -146,7 +148,7 @@ export interface SettingsPanelProps {
   defersLeave?: boolean;
   /**
    * Whether a dashboard write is on its way, such as the dashboard's Save carrying this panel's
-   * staged change: the panel is frozen as while its own Done saves, so nothing is changed after
+   * staged change: the panel is frozen as while its own Save saves, so nothing is changed after
    * the values the write carries were taken.
    */
   dashboardWriting?: boolean;
@@ -167,17 +169,16 @@ export interface SettingsPanelProps {
 const SETTINGS_FIELD =
   "input:not([type='hidden']), textarea, select, [role='combobox'], [role='switch'], [role='radio']";
 
-/** How a Done ended, told back to the panel that asked. */
+/** How a Save ended, told back to the panel that asked. */
 export interface DoneSettled {
   saved: () => void;
   failed: (message: string) => void;
 }
 
-/** The panel's sections, in the order drawn, each by the name the reader reads. */
+/** The drawer's setting sections, in the order drawn, each by the name the reader reads. */
 const SECTIONS: readonly { section: SettingSection; label: string }[] = [
-  { section: "data", label: "Data" },
+  { section: "data", label: "Content" },
   { section: "display", label: "Display" },
-  { section: "advanced", label: "Advanced" },
 ];
 
 /**
@@ -295,13 +296,13 @@ function usePanelForm(
   // The form keeps the values it was mounted with, and `defaultValues` changing
   // later does not replace them. So while the panel is closed it is rebuilt
   // from the latest baseline: sources that arrive or change after mounting are
-  // what it opens with, a value a notice says was reset is the value Done
+  // what it opens with, a value a notice says was reset is the value Save
   // keeps, and a change the reader cancelled is gone. Never while it stays
   // open, where it would discard the reader's edits.
   //
   // While it is open, the card can still change behind it (the panel is not modal, so its quick
   // setting saves at once): a setting the reader has not touched here follows the card, and one
-  // they changed keeps their change, so Done never puts back a value the card has moved on from.
+  // they changed keeps their change, so Save never puts back a value the card has moved on from.
   const lastBaseline = useRef(defaultValues);
   useEffect(() => {
     const previous = lastBaseline.current;
@@ -364,7 +365,7 @@ function usePanelForm(
 }
 
 /**
- * What Done would keep, as the reader changes the form, for the preview. Held as its JSON, a
+ * What Save would keep, as the reader changes the form, for the preview. Held as its JSON, a
  * string that changes exactly when the draft does: the form hands every change the same values
  * object, which would not re-render anything.
  */
@@ -392,7 +393,7 @@ function usePanelDraft(
 
 /**
  * The card's own title as the panel holds it: the stored one when it opens, back to it when the
- * panel closes, and why Done refuses it, when it is longer than a card's header holds.
+ * panel closes, and why Save refuses it, when it is longer than a card's header holds.
  */
 function useOwnTitle(open: boolean, stored: string | undefined) {
   const [ownTitle, setOwnTitle] = useState(stored ?? "");
@@ -428,7 +429,22 @@ function useOwnTitle(open: boolean, stored: string | undefined) {
   return { ownTitle, setOwnTitle: change, problem, check };
 }
 
-/** A Done in flight, why the last one did not keep the change, and closing that waits for it. */
+/**
+ * The card's width as the drawer holds it: the drawn one when it opens, the reader's choice
+ * while it is open, and back to the drawn one when it closes. `undefined` where the drawer has
+ * no Size section.
+ */
+function useDraftWidth(open: boolean, drawn: number | undefined) {
+  const [w, setW] = useState(drawn);
+  // Back to the card's own width whenever the drawer closes or the card's width moves while it
+  // is closed; never while it is open, where it would undo the reader's choice.
+  useEffect(() => {
+    if (!open) setW(drawn);
+  }, [open, drawn]);
+  return [w, setW] as const;
+}
+
+/** A Save in flight, why the last one did not keep the change, and closing that waits for it. */
 function usePanelDone(
   props: Pick<SettingsPanelProps, "open" | "onOpenChange" | "onDone">
 ) {
@@ -441,7 +457,7 @@ function usePanelDone(
     if (!open) setFailure(undefined);
   }, [open]);
 
-  /** Keep `kept`, answering whether it landed, for Done and for the leave prompt's Save. */
+  /** Keep `kept`, answering whether it landed, for Save and for the leave prompt's Save. */
   const submit = useCallback(
     (kept: PanelKept): Promise<boolean> =>
       new Promise(resolve => {
@@ -517,7 +533,7 @@ function LeavePrompt({
   );
 }
 
-/** Why Done is off, why the last Done did not keep the change, and which stored values were reset. */
+/** Why Save is off, why the last Save did not keep the change, and which stored values were reset. */
 function PanelNotices({
   blocked,
   failure,
@@ -554,11 +570,14 @@ function SettingControl({
   sources,
   saving,
   widget,
+  opened,
 }: {
   setting: AnyWidgetSetting;
   sources: WidgetSources;
   saving: boolean;
   widget: DashboardWidget | undefined;
+  /** The setting's value as the drawer opened on it: the card's own, for a choice to keep. */
+  opened: unknown;
 }) {
   // A setting with its own editor is drawn by it, whatever its type.
   if (setting.editor !== undefined) {
@@ -571,6 +590,9 @@ function SettingControl({
       />
     );
   }
+  // A short choice, an on/off or a note's text: the drawer's own controls.
+  const own = drawerControlOf(setting, saving, opened);
+  if (own !== undefined) return own;
   if (isContentSetting(setting)) {
     return (
       <ContentSettingControl
@@ -590,8 +612,8 @@ function SettingControl({
     );
   }
   // No cast: `WidgetSetting` is assignable to `FieldConfig`, and `settings.compat.test-d.ts` is
-  // what keeps that true. A textarea's bound is judged on Done (`drawnSetting`).
-  return <FieldRenderer field={drawnSetting(setting)} mode="edit" />;
+  // what keeps that true.
+  return <FieldRenderer field={setting} mode="edit" />;
 }
 
 /**
@@ -629,18 +651,24 @@ function SectionFields({
   saving,
   widget,
   resetNotices,
+  baseline,
 }: {
   settings: readonly AnyWidgetSetting[];
   sources: WidgetSources;
   saving: boolean;
   widget: DashboardWidget | undefined;
   resetNotices: Readonly<Record<string, string>>;
+  /** The values the drawer opened on (`usePanelBaseline`), by setting name. */
+  baseline: Readonly<Record<string, unknown>>;
 }) {
   return (
     <>
       {settings.map(setting => (
         <div key={setting.name} className="flex flex-col gap-1.5">
-          <SettingControl {...{ setting, sources, saving, widget }} />
+          <SettingControl
+            {...{ setting, sources, saving, widget }}
+            opened={baseline[setting.name]}
+          />
           <ResetNotice setting={setting} notice={resetNotices[setting.name]} />
         </div>
       ))}
@@ -648,7 +676,7 @@ function SectionFields({
   );
 }
 
-/** The card's own title, with its automatic one as the placeholder and why Done refuses it. */
+/** The card's own title, with its automatic one as the placeholder and why Save refuses it. */
 function TitleField({
   value,
   automatic,
@@ -689,114 +717,80 @@ function TitleField({
   );
 }
 
-/** A section's heading and its "Reset to defaults" link, named for the section it resets. */
+/** How every section's heading is drawn: small, muted, the drawer's own label style. */
+const SECTION_HEADING_CLASS =
+  "text-xs font-semibold tracking-wide text-muted-foreground";
+
+/**
+ * A section's heading and, where it has settings to reset, its "Reset to defaults" link, named
+ * for the section it resets.
+ */
 function SectionHeading({
   id,
   label,
   saving,
   onReset,
-  folding,
 }: {
   id: string;
   label: string;
   saving: boolean;
-  onReset: () => void;
-  /**
-   * Advanced's way to fold: its heading is then the trigger, named as the others' are, with a
-   * chevron that turns as it opens. The heading's id goes on the trigger, which names the section.
-   */
-  folding?: { open: boolean };
+  onReset?: () => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2">
-      <h3
-        {...(folding ? {} : { id })}
-        className="text-sm font-semibold text-foreground"
-      >
-        {folding ? (
-          <CollapsibleTrigger asChild>
-            <button
-              id={id}
-              type="button"
-              className="inline-flex items-center gap-1 rounded-sm text-sm font-semibold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {label}
-              <Icons.ChevronDown
-                aria-hidden
-                className={`size-4 text-muted-foreground transition-transform motion-reduce:transition-none ${folding.open ? "rotate-180" : ""}`}
-              />
-            </button>
-          </CollapsibleTrigger>
-        ) : (
-          label
-        )}
+    <div className="flex min-h-5 items-center justify-between gap-2">
+      <h3 id={id} className={SECTION_HEADING_CLASS}>
+        {label}
       </h3>
-      <Button
-        type="button"
-        variant="link"
-        size="sm"
-        // In the text's own colour, underlined: the link variant's primary colour falls under
-        // 4.5:1 on the panel when a brand colour replaces the default primary.
-        className="h-auto p-0 text-foreground underline"
-        disabled={saving}
-        aria-label={`Reset ${label} to defaults`}
-        onClick={onReset}
-      >
-        Reset to defaults
-      </Button>
+      {onReset ? (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          // In the text's own colour, underlined: the link variant's primary colour falls under
+          // 4.5:1 on the drawer when a brand colour replaces the default primary.
+          className="h-auto p-0 text-xs text-foreground underline"
+          disabled={saving}
+          aria-label={`Reset ${label} to defaults`}
+          onClick={onReset}
+        >
+          Reset to defaults
+        </Button>
+      ) : null}
     </div>
   );
 }
 
 /**
- * One section of the panel. Advanced is folded until the reader opens it; Data and Display are
- * open.
+ * One section of the drawer, open, below a rule that parts it from the one above: the sections
+ * read as one column, nothing folded.
  */
 function PanelSection({
-  section,
   label,
   saving,
   onReset,
-  advanced,
   children,
 }: {
-  section: SettingSection;
   label: string;
   saving: boolean;
-  onReset: () => void;
-  advanced: { open: boolean; onOpenChange: (open: boolean) => void };
+  onReset?: () => void;
   children: ReactNode;
 }) {
   const id = useId();
-  if (section !== "advanced") {
-    return (
-      <section aria-labelledby={id} className="flex flex-col gap-4">
-        <SectionHeading {...{ id, label, saving, onReset }} />
-        {children}
-      </section>
-    );
-  }
   return (
-    <Collapsible
-      asChild
-      open={advanced.open}
-      onOpenChange={advanced.onOpenChange}
+    <section
+      aria-labelledby={id}
+      className="flex flex-col gap-3 border-t border-border pt-4"
     >
-      <section aria-labelledby={id} className="flex flex-col gap-4">
-        {/* Headed as Data and Display are, on one row with its Reset, so the three line up. */}
-        <SectionHeading
-          {...{ id, label, saving, onReset }}
-          folding={{ open: advanced.open }}
-        />
-        <CollapsibleContent className="flex flex-col gap-4">
-          {children}
-        </CollapsibleContent>
-      </section>
-    </Collapsible>
+      <SectionHeading
+        {...{ id, label, saving }}
+        {...(onReset ? { onReset } : {})}
+      />
+      {children}
+    </section>
   );
 }
 
-/** Cancel and Done, with Done off while saving or when it cannot keep a change. */
+/** Cancel and Save, with Save off while saving or when it cannot keep a change. */
 function PanelActions({
   saving,
   blocked,
@@ -807,9 +801,8 @@ function PanelActions({
   onCancel: () => void;
 }) {
   return (
-    // Held to the panel's foot while the form above it scrolls, on the panel's own surface so the
-    // fields pass under it, and padded apart from them, so Cancel and Done are always in reach.
-    <SheetFooter className="sticky bottom-0 z-10 -mx-4 mt-auto flex-row justify-end gap-2 border-t border-border bg-background px-4 py-3">
+    // At the drawer's foot, below the part that scrolls, so Cancel and Save are always in reach.
+    <div className="flex shrink-0 flex-row justify-end gap-2 border-t border-border bg-background px-5 py-3">
       <Button
         type="button"
         variant="outline"
@@ -819,9 +812,9 @@ function PanelActions({
         Cancel
       </Button>
       <Button type="submit" disabled={saving || blocked !== undefined}>
-        {saving ? "Saving…" : "Done"}
+        {saving ? "Saving…" : "Save"}
       </Button>
-    </SheetFooter>
+    </div>
   );
 }
 
@@ -851,20 +844,10 @@ function panelFocus(
 }
 
 /**
- * Keeping the panel's change: Done, staging it for the dashboard's prompt, focus on what a
- * refused staging named, and emptying its filters. One reading of the change (`keepable`) for
- * Done and for staging, so a change Done would refuse is never staged.
+ * Showing what a check refused: focus lands on the first refused field, once it is drawn as
+ * refused.
  */
-/**
- * Showing what a check refused: Advanced, folded until the reader opens it, opens when a setting
- * of its own is among those refused, and focus then lands on the first refused field, once the
- * section has drawn it.
- */
-function useRevealRefused(
-  settings: readonly AnyWidgetSetting[],
-  fieldsRef: RefObject<HTMLFieldSetElement | null>
-) {
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+function useRevealRefused(fieldsRef: RefObject<HTMLFieldSetElement | null>) {
   const [asked, setAsked] = useState(0);
   useEffect(() => {
     if (asked === 0) return undefined;
@@ -875,21 +858,18 @@ function useRevealRefused(
     }, 0);
     return () => window.clearTimeout(timer);
   }, [asked, fieldsRef]);
-  /** Reveal the settings named `refused`, by their names. */
-  const reveal = useCallback(
-    (refused: readonly string[]) => {
-      const inAdvanced = settings.some(
-        setting =>
-          refused.includes(setting.name) && sectionOf(setting) === "advanced"
-      );
-      if (inAdvanced) setAdvancedOpen(true);
-      setAsked(count => count + 1);
-    },
-    [settings]
-  );
-  return { advancedOpen, setAdvancedOpen, reveal };
+  /** Show the settings a check refused: focus moves to the first. */
+  const reveal = useCallback(() => {
+    setAsked(count => count + 1);
+  }, []);
+  return { reveal };
 }
 
+/**
+ * Keeping the drawer's change: Save, staging it for the dashboard's prompt, focus on what a
+ * refused staging named, and emptying its filters. One reading of the change (`keepable`) for
+ * Save and for staging, so a change Save would refuse is never staged.
+ */
 function usePanelKeeping(args: {
   settings: readonly AnyWidgetSetting[];
   config: Record<string, unknown> | undefined;
@@ -898,52 +878,55 @@ function usePanelKeeping(args: {
   submit: (kept: PanelKept) => Promise<boolean>;
   holdsChanges: boolean;
   fieldsRef: RefObject<HTMLFieldSetElement | null>;
-  /** Show the settings a check refused, by name (`useRevealRefused`). */
-  reveal: (refused: readonly string[]) => void;
+  /** Show the settings a check refused (`useRevealRefused`). */
+  reveal: () => void;
+  /** The size the reader chose in the drawer, kept with the rest (`PanelKept`'s `resize`). */
+  resize: PanelKept["resize"];
 }) {
   const { settings, config, form, own, submit, holdsChanges, fieldsRef } = args;
   const { reveal } = args;
   // Set by a refused staging, and cleared by the next one.
   const refused = useRef(false);
 
-  /** What Done would keep from `values`, or `undefined` when a check refuses it, said in place. */
+  /** What Save would keep from `values`, or `undefined` when a check refuses it, said in place. */
   const keepable = (values: Record<string, unknown>): PanelKept | undefined => {
     // A note over its bound is refused here, by the counter the layout write uses, rather than
-    // by the server after Done; so is a title too long for a card's header.
+    // by the server after Save; so is a title too long for a card's header.
     const overlong = overlongSetting(settings, values);
     if (overlong) {
       form.setError(overlong.name, {
         type: "maxLength",
         message: overlongMessage(overlong.maxLength),
       });
-      reveal([overlong.name]);
+      reveal();
       return undefined;
     }
     if (own.check() !== undefined) {
-      reveal([]);
+      reveal();
       return undefined;
     }
     return {
       config: toStoredConfig(settings, values, config),
       ownTitle: own.ownTitle.trim(),
+      ...(args.resize === undefined ? {} : { resize: args.resize }),
     };
   };
 
-  /** Done: the form's checks first, then the change kept. */
+  /** Save: the form's checks first, then the change kept. */
   const done = (values: Record<string, unknown>) => {
     const kept = keepable(values);
     if (kept !== undefined) void submit(kept);
   };
 
   /**
-   * This panel's change as Done would keep it, for the dashboard's prompt to save with the rest:
+   * This panel's change as Save would keep it, for the dashboard's prompt to save with the rest:
    * judged by the same checks, the form's rules included. Refused, the panel shows why.
    */
   const stage = async (): Promise<PanelKept | "invalid" | undefined> => {
     refused.current = false;
     if (!holdsChanges) return undefined;
     const valid = await form.trigger(undefined, { shouldFocus: true });
-    if (!valid) reveal(Object.keys(form.formState.errors));
+    if (!valid) reveal();
     const kept = valid ? keepable(form.getValues()) : undefined;
     if (kept !== undefined) return kept;
     refused.current = true;
@@ -960,7 +943,7 @@ function usePanelKeeping(args: {
   };
 
   /**
-   * Every Filter setting emptied, as the reader's own change, so Done keeps it: to no conditions
+   * Every Filter setting emptied, as the reader's own change, so Save keeps it: to no conditions
    * rather than to unset, so a filter the widget sets by default is cleared too.
    */
   const clearFilters = () => {
@@ -971,7 +954,7 @@ function usePanelKeeping(args: {
     }
   };
   /**
-   * Save the panel's change from a prompt, judged by Done's own checks: `true` once kept, or with
+   * Save the panel's change from a prompt, judged by Save's own checks: `true` once kept, or with
    * nothing to keep; `false`, keeping the reader in the panel, when a check refuses it.
    */
   const saveChecked = async (): Promise<boolean> => {
@@ -982,9 +965,8 @@ function usePanelKeeping(args: {
     }
     return staged === undefined ? true : submit(staged);
   };
-  /** Done's refusal by the form's own rules: the refused settings shown, by name. */
-  const refusedOnDone = (errors: Record<string, unknown>) =>
-    reveal(Object.keys(errors));
+  /** Save's refusal by the form's own rules: the refused settings shown, by name. */
+  const refusedOnDone = () => reveal();
   return {
     done,
     refusedOnDone,
@@ -1012,7 +994,7 @@ function PanelLeavePrompt({
   title: string;
   saving: boolean;
   changeOpen: (open: boolean) => void;
-  /** Keep the panel's change by Done's own checks, answering whether it was kept. */
+  /** Keep the panel's change by Save's own checks, answering whether it was kept. */
   save: () => Promise<boolean>;
 }) {
   return (
@@ -1036,7 +1018,10 @@ function PanelLeavePrompt({
   );
 }
 
-/** The panel's sections, in order: each drawn where it holds something, Display always. */
+/**
+ * The drawer's sections, in order, none folded: Content where the widget declares any, Display
+ * always (it holds the title), and Size where the drawer is given the card's width.
+ */
 function PanelSections({
   settings,
   sources,
@@ -1046,18 +1031,28 @@ function PanelSections({
   resetSection,
   own,
   automatic,
-  advanced,
+  size,
+  baseline,
 }: {
   settings: readonly AnyWidgetSetting[];
   sources: WidgetSources;
   saving: boolean;
   widget: DashboardWidget | undefined;
   resetNotices: Readonly<Record<string, string>>;
+  /** The values the drawer opened on, by setting name. */
+  baseline: Readonly<Record<string, unknown>>;
   resetSection: (section: SettingSection) => void;
   own: ReturnType<typeof useOwnTitle>;
   automatic: string;
-  /** Whether Advanced is unfolded, held by the panel so a refusal inside it can unfold it. */
-  advanced: { open: boolean; onOpenChange: (open: boolean) => void };
+  /** The card's width as the drawer holds it, its choices, and a way to choose another. */
+  size:
+    | {
+        w: number;
+        choices: readonly number[];
+        bounds: WidgetSizeBounds;
+        onSelect: (w: number) => void;
+      }
+    | undefined;
 }) {
   return (
     <>
@@ -1065,16 +1060,14 @@ function PanelSections({
         const inSection = settings.filter(
           setting => sectionOf(setting) === section
         );
-        // Display holds every card's title; the others only what the widget declares.
+        // Display holds every card's title; Content only what the widget declares.
         if (section !== "display" && inSection.length === 0) return null;
         const isDisplay = section === "display";
         return (
           <PanelSection
             key={section}
-            section={section}
             label={label}
             saving={saving}
-            advanced={advanced}
             onReset={() => {
               resetSection(section);
               if (isDisplay) own.setOwnTitle("");
@@ -1094,17 +1087,30 @@ function PanelSections({
               saving={saving}
               widget={widget}
               resetNotices={resetNotices}
+              baseline={baseline}
             />
           </PanelSection>
         );
       })}
+      {size === undefined ? null : (
+        <PanelSection label="Size" saving={saving}>
+          <WidthControl
+            value={size.w}
+            choices={size.choices}
+            minW={size.bounds.min.w}
+            maxW={size.bounds.max.w}
+            disabled={saving}
+            onSelect={size.onSelect}
+          />
+        </PanelSection>
+      )}
     </>
   );
 }
 
 /**
  * What the panel holds: the reader's sources, its form and what it opened on, the card's own
- * title, Done's progress, what Done would keep, and whether that differs from what it opened on.
+ * title, Save's progress, what Save would keep, and whether that differs from what it opened on.
  */
 function usePanelState(props: SettingsPanelProps) {
   const { open, settings, config } = props;
@@ -1115,32 +1121,54 @@ function usePanelState(props: SettingsPanelProps) {
   const formState = usePanelForm(open, settings, sources, defaultValues);
   const draft = usePanelDraft(formState.form, settings, config);
   const own = useOwnTitle(open, props.ownTitle);
+  const drawnW = props.sizing?.size.w;
+  const [w, setW] = useDraftWidth(open, drawnW);
   const doneState = usePanelDone(props);
   // Rows begun and not finished write nothing to the draft, so they are counted on their own.
   const pendingRows = usePendingRows();
 
-  // What Done would keep, against what the panel opened on: the leave prompt asks only when the
+  // What Save would keep, against what the panel opened on: the leave prompt asks only when the
   // two differ, and another card's panel opening closes this one only when they do not.
   const opened = useMemo(
     () => toStoredConfig(settings, defaultValues, config),
     [settings, defaultValues, config]
   );
+  // By the size's numbers and the bounds, not the sizing object, which the caller may build anew.
+  const drawnH = props.sizing?.size.h;
+  const bounds = props.sizing?.bounds;
+  const resize = useMemo(
+    () =>
+      drawnW === undefined || drawnH === undefined || bounds === undefined
+        ? undefined
+        : resizeOf({ size: { w: drawnW, h: drawnH }, bounds }, w),
+    [drawnW, drawnH, bounds, w]
+  );
   const kept: PanelKept = useMemo(
-    () => ({ config: draft, ownTitle: own.ownTitle.trim() }),
-    [draft, own.ownTitle]
+    () => ({
+      config: draft,
+      ownTitle: own.ownTitle.trim(),
+      ...(resize === undefined ? {} : { resize }),
+    }),
+    [draft, own.ownTitle, resize]
   );
   const holdsChanges =
     !sameSettingValue(draft, opened) ||
     kept.ownTitle !== (props.ownTitle ?? "") ||
+    resize !== undefined ||
     pendingRows.anyPending;
   return {
     sources,
     stale,
+    // What the drawer opened on, held apart from the form, whose own defaults a reset replaces.
+    baseline: defaultValues,
     ...formState,
     draft,
     own,
+    w,
+    setW,
+    resize,
     ...doneState,
-    // Frozen while Done saves, or while a dashboard write carries what the panel staged.
+    // Frozen while Save saves, or while a dashboard write carries what the panel staged.
     saving: doneState.saving || props.dashboardWriting === true,
     kept,
     holdsChanges,
@@ -1158,6 +1186,39 @@ function automaticTitleOf(
   return widget ? titleAsAsked(widget, draft, sources).title : fallback;
 }
 
+/**
+ * The size the reader chose in the drawer, held against the card's own: its new width with the
+ * height it has, and its widget's bounds; `undefined` while the width is the card's own.
+ */
+function resizeOf(
+  sizing: SettingsPanelProps["sizing"],
+  w: number | undefined
+): PanelKept["resize"] {
+  if (sizing === undefined || w === undefined || w === sizing.size.w) {
+    return undefined;
+  }
+  return { size: { w, h: sizing.size.h }, bounds: sizing.bounds };
+}
+
+/**
+ * The Size section's width: the drawer's own, its choices within the widget's bounds, read
+ * against the width the card is drawn at (so a stored width outside them is offered until the
+ * reader picks another), and a way to choose one. `undefined` where the drawer has no Size.
+ */
+function sizeSection(
+  sizing: SettingsPanelProps["sizing"],
+  w: number | undefined,
+  setW: (w: number) => void
+) {
+  if (sizing === undefined || w === undefined) return undefined;
+  return {
+    w,
+    choices: widthChoices(sizing.bounds, sizing.size.w),
+    bounds: sizing.bounds,
+    onSelect: setW,
+  };
+}
+
 export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
   const { open, title, settings, config, blocked, renderPreview } = props;
   const state = usePanelState(props);
@@ -1169,7 +1230,7 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
   // Another card's settings asked for while this panel holds a change: what to open once the
   // reader has answered this panel's prompt.
   const [leaving, setLeaving] = useState<(() => void) | undefined>(undefined);
-  const refusal = useRevealRefused(settings, fieldsRef);
+  const refusal = useRevealRefused(fieldsRef);
   const keeping = usePanelKeeping({
     settings,
     config,
@@ -1179,6 +1240,7 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
     holdsChanges,
     fieldsRef,
     reveal: refusal.reveal,
+    resize: state.resize,
   });
   useOnePanelOpen(props.placementId, open, holdsChanges, {
     close: () => changeOpen(false),
@@ -1187,6 +1249,7 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
     focusRefused: keeping.focusRefused,
   });
   const automatic = automaticTitleOf(props.widget, draft, sources, title);
+  const size = sizeSection(props.sizing, state.w, state.setW);
 
   return (
     <UnsavedChangesGuard
@@ -1206,22 +1269,18 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
       <Sheet open={open} onOpenChange={changeOpen} modal={false}>
         <SheetContent
           side="right"
-          // 480 to 560 pixels from the small breakpoint up, the whole width below it. A column
-          // whose own overflow is hidden, so the area below the header takes the height that is
-          // left and scrolls inside it.
-          className="flex w-full flex-col overflow-hidden sm:w-[520px] sm:min-w-[480px] sm:max-w-[560px]"
+          // 440 pixels from the small breakpoint up, the whole width below it. No padding of its
+          // own: the header, the part that scrolls and the actions each pad themselves, so the
+          // rules between them run edge to edge. Its own overflow is hidden, so the part below
+          // the header takes the height that is left and scrolls inside it.
+          className="flex w-full flex-col gap-0 overflow-hidden p-0 sm:w-[440px] sm:max-w-[440px]"
           // Not modal: the dashboard behind stays usable, so a click on it is the reader using
-          // it, never a request to throw the panel's changes away.
+          // it, never a request to throw the drawer's changes away.
           onInteractOutside={event => event.preventDefault()}
+          data-testid="widget-settings-drawer"
           {...panelFocus(props, fieldsRef)}
         >
-          <SheetHeader>
-            <SheetTitle>{title} settings</SheetTitle>
-            <SheetDescription>
-              These apply to this card only. Another copy of the same widget
-              keeps its own.
-            </SheetDescription>
-          </SheetHeader>
+          <DrawerHeader title={title} saving={saving} />
 
           {/* Its controls say here which rows they hold unfinished, which `holdsChanges` counts. */}
           <PendingRowsContext.Provider value={state.reportPendingRow}>
@@ -1237,34 +1296,34 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
                     keeping.refusedOnDone
                   )(event);
                 }}
-                className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4"
+                className="flex min-h-0 flex-1 flex-col"
               >
-                {renderPreview?.(kept, keeping.clearFilters)}
-                <PanelNotices {...{ blocked, failure, stale }} />
-                {/* Frozen while Done saves: the save carries the values Done was pressed on, so a
-                  field changed after it would be dropped without a word when the panel closes.
-                  A disabled fieldset disables every control inside it, the custom ones too. */}
-                <fieldset
-                  ref={fieldsRef}
-                  disabled={saving}
-                  className="m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
-                >
-                  <PanelSections
-                    {...{
-                      settings,
-                      sources,
-                      saving,
-                      resetNotices,
-                      resetSection,
-                    }}
-                    {...{ own, automatic }}
-                    widget={props.widget}
-                    advanced={{
-                      open: refusal.advancedOpen,
-                      onOpenChange: refusal.setAdvancedOpen,
-                    }}
-                  />
-                </fieldset>
+                <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pt-4 pb-5">
+                  {renderPreview?.(kept, keeping.clearFilters)}
+                  <PanelNotices {...{ blocked, failure, stale }} />
+                  {/* Frozen while Save saves: the save carries the values Save was pressed on, so
+                    a field changed after it would be dropped without a word when the drawer
+                    closes. A disabled fieldset disables every control inside it, the custom ones
+                    too. */}
+                  <fieldset
+                    ref={fieldsRef}
+                    disabled={saving}
+                    className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0"
+                  >
+                    <PanelSections
+                      {...{
+                        settings,
+                        sources,
+                        saving,
+                        resetNotices,
+                        resetSection,
+                      }}
+                      {...{ own, automatic, size }}
+                      baseline={state.baseline}
+                      widget={props.widget}
+                    />
+                  </fieldset>
+                </div>
                 <PanelActions
                   saving={saving}
                   blocked={blocked}

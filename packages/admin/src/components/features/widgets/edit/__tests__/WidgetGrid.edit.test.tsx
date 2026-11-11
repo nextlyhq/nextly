@@ -13,7 +13,15 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
@@ -25,11 +33,11 @@ import type {
 } from "@admin/types/dashboard/widgets";
 import { MAX_PLACEMENTS } from "nextly/config";
 
-import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { FrameState } from "../../frame/card-state";
 import { WidgetGrid } from "../../WidgetGrid";
 import { DRAG_INSTRUCTIONS } from "../drag/drag-messages";
+import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 import {
   resizeDashboard,
   stubDashboardWidth,
@@ -42,12 +50,6 @@ let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
 let layoutRejects = false;
 
-// The header's New button reads collections and permissions of its own,
-// which this test does not set up; it is a marker here.
-vi.mock("@admin/components/features/dashboard/header/NewSplitButton", () => ({
-  NewSplitButton: () => <div data-testid="dashboard-new" />,
-}));
-
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
   useAppName: () => "Acme Site",
@@ -59,11 +61,6 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
-}));
-// The page's header beside the grid holds Customize: its own reads stubbed.
-vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
-  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
-  useDashboardSummary: () => ({ data: undefined }),
 }));
 vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => ({
@@ -184,10 +181,10 @@ function renderGrid() {
   return {
     client,
     ...render(
-      <DashboardChromeProvider>
+      <>
         <WelcomeHeader />
         <WidgetGrid />
-      </DashboardChromeProvider>,
+      </>,
       { wrapper: Wrapper }
     ),
   };
@@ -196,6 +193,13 @@ function renderGrid() {
 // The cards' own component, so each card draws its answer rather than a missing component's
 // error, which the grid would count and announce as a failure.
 registerCoreComponent("core#Whatever", () => <p>Body</p>);
+
+// The settings drawer's code loads apart from the dashboard's. Fetched once here, so a test
+// opening the drawer meets its form rather than its loading screen.
+beforeAll(async () => {
+  preloadWidgetSettingsSheet();
+  await import("../CellSettings");
+});
 
 beforeEach(() => {
   // jsdom lays nothing out; the grid asks nothing until its dashboard has a width.
@@ -244,6 +248,23 @@ async function beginEditing() {
   return user;
 }
 
+/**
+ * Leaves customise mode from the bar's Cancel, agreeing to discard when the
+ * mode asks first (it asks only while there are unsaved changes).
+ */
+async function cancelEditing(
+  user: ReturnType<typeof userEvent.setup>
+): Promise<void> {
+  await user.click(screen.getByTestId("dashboard-edit-cancel"));
+  const ask = screen.queryByTestId("dashboard-leave-ask");
+  if (ask !== null) {
+    await user.click(
+      within(ask).getByRole("button", { name: "Discard changes" })
+    );
+  }
+  await screen.findByTestId("dashboard-edit-begin");
+}
+
 /** The order the grid draws its cells in, by widget id. */
 function drawnOrder(): string[] {
   return screen
@@ -275,21 +296,27 @@ async function choose(
   await user.click(within(menu).getByRole("menuitem", { name: item }));
 }
 
-/** Opens a card's Width or Height submenu and returns it. */
+/** Opens a card's settings drawer from its menu, and returns its Width, once it has loaded. */
 async function openSizes(
   user: ReturnType<typeof userEvent.setup>,
-  title: string,
-  axis: "Width" | "Height" = "Width"
+  title: string
 ) {
-  const menu = await openMenu(user, title);
+  await choose(user, title, "Settings…");
+  return screen.findByRole("radiogroup", { name: "Width" });
+}
+
+/** Chooses a width in the open drawer and saves it, which stages it in customise mode. */
+async function chooseWidth(
+  user: ReturnType<typeof userEvent.setup>,
+  widths: HTMLElement,
+  name: string
+) {
+  await user.click(within(widths).getByRole("radio", { name }));
+  // The drawer's own Save, not the customise bar's.
   await user.click(
-    within(menu).getByRole("menuitem", { name: new RegExp(axis) })
+    within(screen.getByRole("dialog")).getByRole("button", { name: "Save" })
   );
-  return waitFor(() => {
-    const menus = screen.getAllByRole("menu");
-    expect(menus.length).toBe(2);
-    return menus[1];
-  });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 }
 
 function live(): HTMLElement {
@@ -365,7 +392,8 @@ describe("the dashboard is one ordered list", () => {
     await screen.findByTestId("dashboard-edit-begin");
     const cell = screen.getByTestId("widget-cell-core/a");
     expect(cell).toHaveClass("@min-[1024px]/dashboard:col-span-3");
-    expect(cell.style.gridRow).toBe("span 5 / span 5");
+    // Its stored rows set no height: no row span, the card as tall as its content.
+    expect(cell.style.gridRow).toBe("");
   });
 
   it("draws a stored size outside its widget's bounds at the nearest size inside them", async () => {
@@ -382,11 +410,9 @@ describe("the dashboard is one ordered list", () => {
     await screen.findByTestId("dashboard-edit-begin");
     const clamped = screen.getByTestId("widget-cell-core/a");
     expect(clamped).toHaveClass("@min-[1024px]/dashboard:col-span-8");
-    expect(clamped.style.gridRow).toBe("span 4 / span 4");
-    // Each direction only as far as it must: too narrow is widened, its rows kept.
+    // Too narrow is widened.
     const widened = screen.getByTestId("widget-cell-core/b");
     expect(widened).toHaveClass("@min-[1024px]/dashboard:col-span-4");
-    expect(widened.style.gridRow).toBe("span 2 / span 2");
   });
 
   it("does not draw a removed card", async () => {
@@ -409,7 +435,7 @@ describe("entering customise mode", () => {
     expect(menuButton("Widget core/a")).toHaveClass("size-7");
   });
 
-  it("shows each card's size beside its menu, in columns by rows", async () => {
+  it("shows each card's size beside its menu, as its share of the row", async () => {
     layoutResponse = layout([
       { id: "p1", widgetId: "core/a", w: 6, h: 3 },
       { id: "p2", widgetId: "core/b", w: 3, h: 4 },
@@ -418,8 +444,8 @@ describe("entering customise mode", () => {
     await beginEditing();
     const labels = screen.getAllByTestId("card-size-label");
     expect(labels.map(label => label.textContent)).toEqual([
-      "6×36 columns by 3 rows",
-      "3×43 columns by 4 rows",
+      "50%50% wide",
+      "25%25% wide",
     ]);
   });
 
@@ -431,22 +457,22 @@ describe("entering customise mode", () => {
 });
 
 describe("moving a card from its menu", () => {
-  it("offers the four moves, disabling the ones a card at an end cannot make", async () => {
+  it("offers Move earlier and Move later, disabling the one a card at an end cannot make", async () => {
     renderGrid();
     const user = await beginEditing();
 
     let menu = await openMenu(user, "Widget core/a");
     const item = (name: string) => within(menu).getByRole("menuitem", { name });
-    expect(item("Move to start")).toHaveAttribute("aria-disabled", "true");
     expect(item("Move earlier")).toHaveAttribute("aria-disabled", "true");
     expect(item("Move later")).not.toHaveAttribute("aria-disabled");
-    expect(item("Move to end")).not.toHaveAttribute("aria-disabled");
+    expect(
+      within(menu).queryByRole("menuitem", { name: /Move to/ })
+    ).toBeNull();
     await user.keyboard("{Escape}");
 
     menu = await openMenu(user, "Widget core/c");
     expect(item("Move later")).toHaveAttribute("aria-disabled", "true");
-    expect(item("Move to end")).toHaveAttribute("aria-disabled", "true");
-    expect(item("Move to start")).not.toHaveAttribute("aria-disabled");
+    expect(item("Move earlier")).not.toHaveAttribute("aria-disabled");
   });
 
   it("moves it, and says where from and where to", async () => {
@@ -457,18 +483,6 @@ describe("moving a card from its menu", () => {
 
     expect(drawnOrder()).toEqual(["core/b", "core/a", "core/c"]);
     expect(live()).toHaveTextContent("Widget core/a moved from 1 to 2 of 3.");
-  });
-
-  it("moves it to either end", async () => {
-    renderGrid();
-    const user = await beginEditing();
-
-    await choose(user, "Widget core/a", "Move to end");
-    expect(drawnOrder()).toEqual(["core/b", "core/c", "core/a"]);
-    expect(live()).toHaveTextContent("Widget core/a moved from 1 to 3 of 3.");
-
-    await choose(user, "Widget core/a", "Move to start");
-    expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
   });
 
   it("returns focus to the moved card's menu button", async () => {
@@ -509,7 +523,7 @@ describe("moving a card from its menu", () => {
   });
 });
 
-describe("choosing a size", () => {
+describe("choosing a width in the settings drawer while customising", () => {
   beforeEach(() => {
     mockBranding = branding(["core/a", "core/b", "core/c"], {
       "core/a": { size: BOUNDED },
@@ -517,99 +531,58 @@ describe("choosing a size", () => {
     layoutResponse = layout([{ id: "p1", widgetId: "core/a", w: 6, h: 3 }]);
   });
 
-  it("lists the common widths within the widget's bounds and its ends, the current one checked", async () => {
+  it("lists the named widths within the widget's bounds and its ends, the current one checked", async () => {
     renderGrid();
     const user = await beginEditing();
 
     const widths = await openSizes(user, "Widget core/a");
-    const items = within(widths).getAllByRole("menuitemradio");
+    const items = within(widths).getAllByRole("radio");
     // 🔴 Never past the bounds: no 3 below the minimum, no 12 above the maximum.
     expect(items.map(i => i.getAttribute("aria-label"))).toEqual([
-      "Third width, 4 columns",
-      "Half width, 6 columns",
-      "Two thirds width, 8 columns",
+      "33% width",
+      "50% width",
+      "66% width",
     ]);
-    const half = within(widths).getByRole("menuitemradio", {
-      name: "Half width, 6 columns",
-    });
+    const half = within(widths).getByRole("radio", { name: "50% width" });
     expect(half).toHaveAttribute("aria-checked", "true");
-    // Drawn as the design names it: the share, and the columns beneath.
-    expect(within(half).getByText("½")).toBeInTheDocument();
-    expect(within(half).getByText("6 columns")).toBeInTheDocument();
+    // Drawn as the design names it: the percent.
+    expect(half).toHaveTextContent(/^50%$/);
   });
 
-  it("lists every height within the widget's bounds, the current one checked", async () => {
-    renderGrid();
-    const user = await beginEditing();
-
-    const heights = await openSizes(user, "Widget core/a", "Height");
-    const items = within(heights).getAllByRole("menuitemradio");
-    expect(items.map(i => i.textContent)).toEqual([
-      "2 rows",
-      "3 rows",
-      "4 rows",
-    ]);
-    expect(
-      within(heights).getByRole("menuitemradio", { name: "3 rows" })
-    ).toHaveAttribute("aria-checked", "true");
-  });
-
-  it("offers no Height for a widget of one height", async () => {
-    mockBranding = branding(["core/a", "core/b", "core/c"], {
-      "core/a": { size: { default: { w: 6, h: 3 } } },
-    });
+  it("offers no Height, though the widget's bounds allow several", async () => {
+    // 🔴 `core/a` may be two to six rows high: a card is as tall as its content, so its stored
+    // rows are not offered to change, in the menu or in the drawer.
     renderGrid();
     const user = await beginEditing();
     const menu = await openMenu(user, "Widget core/a");
-    expect(within(menu).queryByRole("menuitem", { name: /Height/ })).toBeNull();
-    expect(
-      within(menu).getByRole("menuitem", { name: /Width/ })
-    ).toBeInTheDocument();
+    expect(within(menu).queryByText(/Height|Width/)).toBeNull();
+    await user.keyboard("{Escape}");
+    await openSizes(user, "Widget core/a");
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "Height follows the content."
+    );
+    expect(screen.queryByRole("radiogroup", { name: /Height/ })).toBeNull();
   });
 
-  it("applies a width at once, keeping the rows, and says so", async () => {
+  it("applies a width at once, keeping the stored h, and says so by the width alone", async () => {
     renderGrid();
     const user = await beginEditing();
 
     const widths = await openSizes(user, "Widget core/a");
-    // By keyboard: jsdom has no geometry, so a simulated pointer crossing from
-    // the submenu's trigger into it reads as leaving, and Radix closes it.
-    within(widths)
-      .getByRole("menuitemradio", { name: "Third width, 4 columns" })
-      .focus();
-    await user.keyboard("{Enter}");
+    await chooseWidth(user, widths, "33% width");
 
     expect(screen.getByTestId("widget-cell-core/a")).toHaveClass(
       "@min-[1024px]/dashboard:col-span-4"
     );
-    expect(live()).toHaveTextContent(
-      "Widget core/a set to 4 columns by 3 rows."
+    expect(live()).toHaveTextContent("Widget core/a set to 33% wide.");
+    expect(screen.getByTestId("card-size-label").textContent).toBe(
+      "33%33% wide"
     );
-    expect(screen.getByTestId("card-size-label")).toHaveTextContent("4×3");
     // Nothing written until Save.
     expect(api.put).not.toHaveBeenCalled();
     await user.click(screen.getByTestId("dashboard-edit-save"));
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
     expect(putBody().placements[0]).toMatchObject({ w: 4, h: 3 });
-  });
-
-  it("applies a height at once, keeping the columns", async () => {
-    renderGrid();
-    const user = await beginEditing();
-
-    const heights = await openSizes(user, "Widget core/a", "Height");
-    within(heights).getByRole("menuitemradio", { name: "4 rows" }).focus();
-    await user.keyboard("{Enter}");
-
-    expect(screen.getByTestId("widget-cell-core/a").style.gridRow).toBe(
-      "span 4 / span 4"
-    );
-    expect(live()).toHaveTextContent(
-      "Widget core/a set to 6 columns by 4 rows."
-    );
-    await user.click(screen.getByTestId("dashboard-edit-save"));
-    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
-    expect(putBody().placements[0]).toMatchObject({ w: 6, h: 4 });
   });
 
   it("checks the DRAWN size when the stored one is outside the bounds, and saves it unchanged", async () => {
@@ -622,15 +595,14 @@ describe("choosing a size", () => {
 
     const widths = await openSizes(user, "Widget core/a");
     expect(
-      within(widths).getByRole("menuitemradio", {
-        name: "Two thirds width, 8 columns",
-      })
+      within(widths).getByRole("radio", { name: "66% width" })
     ).toHaveAttribute("aria-checked", "true");
     await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
     // An unrelated change saves the stored size as it was: it is kept until
     // its owner changes it.
-    await choose(user, "Widget core/b", "Move to start");
+    await choose(user, "Widget core/b", "Move earlier");
     await user.click(screen.getByTestId("dashboard-edit-save"));
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
     expect(putBody().placements.find(p => p.id === "p1")).toMatchObject({
@@ -1303,7 +1275,7 @@ describe("cancelling", () => {
 
     await choose(user, "Widget core/a", "Move later");
     await choose(user, "Widget core/c", "Remove");
-    await user.click(screen.getByTestId("dashboard-edit-cancel"));
+    await cancelEditing(user);
 
     expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
     expect(api.put).not.toHaveBeenCalled();
@@ -1321,7 +1293,7 @@ describe("cancelling", () => {
     await user.click(screen.getByTestId("dashboard-edit-save"));
     await screen.findByTestId("dashboard-edit-error");
 
-    await user.click(screen.getByTestId("dashboard-edit-cancel"));
+    await cancelEditing(user);
 
     await waitFor(() =>
       expect(screen.queryByTestId("dashboard-edit-error")).toBeNull()
@@ -1406,7 +1378,7 @@ describe("resetting to the default dashboard", () => {
     );
     renderGrid();
     const user = await beginEditing();
-    await choose(user, "Widget core/b", "Move to start");
+    await choose(user, "Widget core/b", "Move earlier");
     expect(screen.getByTestId("widget-cell-core/b")).toHaveAttribute(
       "data-highlighted"
     );
@@ -1476,7 +1448,7 @@ describe("resetting to the default dashboard", () => {
       })
     );
 
-    await user.click(screen.getByTestId("dashboard-edit-cancel"));
+    await cancelEditing(user);
 
     expect(drawnOrder()).toEqual(["core/c", "core/a"]);
     expect(api.delete).not.toHaveBeenCalled();
@@ -1510,7 +1482,8 @@ describe("resetting to the default dashboard", () => {
         name: "Reset dashboard",
       })
     );
-    await choose(user, "Widget core/a", "Move to end");
+    await choose(user, "Widget core/a", "Move later");
+    await choose(user, "Widget core/a", "Move later");
 
     await user.click(screen.getByTestId("dashboard-edit-save"));
 
@@ -1549,7 +1522,7 @@ describe("a stored dashboard the server could not read", () => {
   it("says so above the grid", async () => {
     renderGrid();
     expect(await screen.findByTestId("dashboard-unreadable")).toHaveTextContent(
-      "Your saved dashboard couldn't be loaded, so you're seeing the default. Saving from Customize replaces the saved one."
+      "Your saved dashboard couldn't be loaded, so you're seeing the default. Saving from Customize dashboard replaces the saved one."
     );
   });
 
@@ -1671,9 +1644,9 @@ describe("at one column", () => {
   it("offers customising at every width", async () => {
     stubDashboardWidth(390);
     renderGrid();
-    const offer = await screen.findByTestId("dashboard-edit-offer");
-    expect(offer).not.toHaveClass("hidden");
-    expect(offer).toContainElement(screen.getByTestId("dashboard-edit-begin"));
+    const begin = await screen.findByTestId("dashboard-edit-begin");
+    expect(begin).not.toHaveClass("hidden");
+    expect(begin).toHaveAccessibleName("Customize dashboard");
   });
 
   it("draws no handle, and leaves every move to the card menu", async () => {
@@ -1682,13 +1655,12 @@ describe("at one column", () => {
     const user = await beginEditing();
     expect(screen.queryAllByTestId("widget-drag-handle")).toEqual([]);
 
-    await choose(user, "Widget core/c", "Move to start");
-    expect(drawnOrder()).toEqual(["core/c", "core/a", "core/b"]);
+    await choose(user, "Widget core/c", "Move earlier");
+    expect(drawnOrder()).toEqual(["core/a", "core/c", "core/b"]);
   });
 
-  it("lists the sizes in the card menu itself, with no submenu to open off the screen", async () => {
-    // 🔴 On a phone the menu sits mid-screen, and a submenu beside it has room on neither side,
-    // so it was drawn partly off the screen. In place, the sizes share the menu's own box.
+  it("sets the width in the full-width drawer, the menu holding no sizes", async () => {
+    // On a phone the drawer takes the whole width; the menu stays short.
     mockBranding = branding(["core/a", "core/b", "core/c"], {
       "core/a": { size: BOUNDED },
     });
@@ -1698,32 +1670,14 @@ describe("at one column", () => {
     const user = await beginEditing();
 
     const menu = await openMenu(user, "Widget core/a");
-    expect(screen.queryByTestId("card-width-menu")).toBeNull();
-    expect(screen.queryByTestId("card-height-menu")).toBeNull();
-    expect(
-      within(menu)
-        .getAllByRole("menuitemradio")
-        .map(item => item.getAttribute("aria-label"))
-    ).toEqual([
-      "Third width, 4 columns",
-      "Half width, 6 columns",
-      "Two thirds width, 8 columns",
-      "2 rows",
-      "3 rows",
-      "4 rows",
-    ]);
-    expect(
-      within(menu).getByRole("menuitemradio", { name: "Half width, 6 columns" })
-    ).toHaveAttribute("aria-checked", "true");
-
-    within(menu)
-      .getByRole("menuitemradio", { name: "Third width, 4 columns" })
-      .focus();
-    await user.keyboard("{Enter}");
-    expect(live()).toHaveTextContent(
-      "Widget core/a set to 4 columns by 3 rows."
+    expect(within(menu).queryByRole("menuitemradio")).toBeNull();
+    await user.keyboard("{Escape}");
+    const widths = await openSizes(user, "Widget core/a");
+    expect(screen.getByRole("dialog")).toHaveClass("w-full");
+    await chooseWidth(user, widths, "33% width");
+    expect(screen.getByTestId("card-size-label").textContent).toBe(
+      "33%33% wide"
     );
-    expect(screen.getByTestId("card-size-label")).toHaveTextContent("4×3");
   });
 
   it("keeps the drag library's sensors the same size while the dashboard narrows to one column", async () => {

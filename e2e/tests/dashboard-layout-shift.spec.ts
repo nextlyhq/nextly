@@ -238,6 +238,36 @@ async function waitForSettled(page: Page): Promise<void> {
 }
 
 /** Follows the link at `href` the way the app does, without it counting as a reader's input. */
+/**
+ * Follow the first VISIBLE link to `href` with a real click, as a reader would.
+ * On a phone the rail's own links sit in the closed drawer, so the first match
+ * in document order can be one no reader could press.
+ */
+async function clickLink(page: Page, href: string): Promise<void> {
+  await page.locator(`a[href="${href}"]:visible`).first().click();
+}
+
+/**
+ * The first collection's list the dashboard links to (`/admin/collections/<slug>`), whichever the
+ * Content card happens to list first: which collections it lists depends on what the site has
+ * seeded and edited last, so no one slug is certain to be among them.
+ */
+async function firstCollectionLink(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const link = [
+      ...document.querySelectorAll<HTMLAnchorElement>(
+        'main a[href^="/admin/collections/"]'
+      ),
+    ].find(anchor =>
+      /^\/admin\/collections\/[^/]+$/.test(anchor.getAttribute("href") ?? "")
+    );
+    const href = link?.getAttribute("href");
+    if (!href)
+      throw new Error("no link to a collection's list on the dashboard");
+    return href;
+  });
+}
+
 async function followLink(page: Page, href: string): Promise<void> {
   await page.evaluate(target => {
     const link = document.querySelector<HTMLAnchorElement>(
@@ -327,8 +357,9 @@ for (const site of SITES) {
         await gotoAdmin(page, "/");
         await waitForSettled(page);
         // Away and back within the session: the arrangement and the answers are cached.
-        await followLink(page, "/admin/collections/posts");
-        await page.waitForURL(/\/admin\/collections\/posts/);
+        const collection = await firstCollectionLink(page);
+        await followLink(page, collection);
+        await page.waitForURL(url => url.pathname === collection);
         await forgetShifts(page);
         await followLink(page, "/admin");
         await page.waitForURL(/\/admin\/?$/);
@@ -343,29 +374,32 @@ for (const site of SITES) {
 }
 
 for (const size of WIDTHS) {
-  test(`holds the main column through a round trip to a collection (${size.name})`, async ({
+  test(`draws each page of a round trip to a collection at its direct-load geometry (${size.name})`, async ({
     page,
   }, info) => {
     test.setTimeout(240_000);
     const wide = size.width >= 1024;
     await page.setViewportSize({ width: size.width, height: size.height });
     await recordShifts(page);
+
+    // Each page's geometry as a direct load draws it. A page with a panel
+    // (the collection) and one without (the dashboard) start their column at
+    // different edges on the wide layout, and the round trip must land on
+    // exactly these.
+    await gotoAdmin(page, "/collections/posts");
+    await waitForShellAnswers(page);
+    const collectionDirect = await mainColumnBox(page);
     await gotoAdmin(page, "/");
     await waitForSettled(page);
-    // Warm the collection's route (on the dev server, its compile) so the window measures the
-    // navigation, not a first compile.
-    await followLink(page, "/admin/collections/posts");
-    await page.waitForURL(/\/admin\/collections\/posts/);
-    await waitForShellAnswers(page);
-    await followLink(page, "/admin");
-    await page.waitForURL(/\/admin\/?$/);
-    await waitForSettled(page);
+    const dashboardDirect = await mainColumnBox(page);
 
-    const before = await mainColumnBox(page);
     await forgetShifts(page);
     await measureLeavingTheDashboard(page);
 
-    await followLink(page, "/admin/collections/posts");
+    // Followed with a real click, as a reader does: the column moving with a
+    // navigation the reader started is not a layout shift, and the browser
+    // records it as following input.
+    await clickLink(page, "/admin/collections/posts");
     await page.waitForURL(/\/admin\/collections\/posts/);
     await waitForShellAnswers(page);
     if (wide) {
@@ -379,7 +413,7 @@ for (const size of WIDTHS) {
     await page.waitForTimeout(1_000);
     const open = await mainColumnBox(page);
 
-    await followLink(page, "/admin");
+    await clickLink(page, "/admin");
     await page.waitForURL(/\/admin\/?$/);
     await waitForSettled(page);
     const after = await mainColumnBox(page);
@@ -387,15 +421,17 @@ for (const size of WIDTHS) {
     const shift = await shiftSoFar(page);
     report(info, `round trip ${size.name} ${size.width}px`, shift, "routed");
     console.log(
-      `LAYOUT-SHIFT   main column ${JSON.stringify({ before, open, after })}`
+      `LAYOUT-SHIFT   main column ${JSON.stringify({ collectionDirect, open, dashboardDirect, after })}`
     );
 
-    expect(open, "the main column moved as the second panel opened").toEqual(
-      before
-    );
-    expect(after, "the main column moved as the second panel closed").toEqual(
-      before
-    );
+    expect(
+      open,
+      "the collection reached from the dashboard is drawn as its direct load"
+    ).toEqual(collectionDirect);
+    expect(
+      after,
+      "the dashboard reached from the collection is drawn as its direct load"
+    ).toEqual(dashboardDirect);
     if (PRODUCTION_SERVER) {
       if (wide) {
         expect(
@@ -412,20 +448,12 @@ for (const size of WIDTHS) {
     }
 
     if (wide) {
-      // The population control: the probe sees a move when one happens. Collapsing the panel's
-      // track, as the shell did when a surface owned no panel, must move the column by the
-      // track's width; a probe that read a fixed box, or the wrong element, would see nothing.
-      const track = page.getByTestId("sub-sidebar");
-      const trackWidth = await track.evaluate(
-        element => element.getBoundingClientRect().width
-      );
-      expect(trackWidth).toBeGreaterThan(0);
-      await track.evaluate(element => {
-        (element as HTMLElement).style.width = "0px";
-        (element as HTMLElement).style.borderWidth = "0px";
-      });
-      const collapsed = await mainColumnBox(page);
-      expect(collapsed.x).toBe(before.x - Math.round(trackWidth));
+      // The population control: the probe sees a move when one happens. On the
+      // wide layout a collection holds its panel's track and the dashboard
+      // holds none, so their direct loads start the column a track's width
+      // apart; a probe that read a fixed box, or the wrong element, would see
+      // the two as equal and the assertions above would pass on nothing.
+      expect(collectionDirect.x - dashboardDirect.x).toBe(256);
     }
   });
 }

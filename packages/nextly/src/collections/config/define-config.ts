@@ -34,6 +34,8 @@
 
 import { assertNoFieldGroupCycleInCode } from "../../domains/field-groups/field-group-cycles";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
+import { validateLanguageAddressRule } from "../../domains/i18n/language-addresses";
+import { assertConfiguredPublicAddresses } from "../../domains/public-addresses/distinct-public-addresses";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { workflowAttachmentsOf } from "../../domains/workflows/attachments";
 import { NextlyError } from "../../errors";
@@ -126,6 +128,10 @@ function validateNextlyConfig(config: NextlyConfig): void {
     slugs.add(slug);
   }
 
+  // Each Single is one page at one address, so two at the same address are
+  // refused here, naming both, as the boot refuses them once plugins join.
+  assertConfiguredPublicAddresses(config);
+
   assertNoLegacyFieldGroupKey(config, "defineConfig");
 
   const components = config.fieldGroups ?? [];
@@ -207,6 +213,10 @@ function validateNextlyConfig(config: NextlyConfig): void {
         .map(fieldType => [fieldType.type, fieldType.storage] as const)
     );
     assertValidUserConfig(config.users, configUsersTypes);
+  }
+
+  if (config.languageAddresses !== undefined) {
+    validateLanguageAddressRule(config.languageAddresses, config.localization);
   }
 
   if (config.localization) {

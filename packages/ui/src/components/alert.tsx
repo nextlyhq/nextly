@@ -13,19 +13,16 @@ import type { VariantsFn } from "../lib/variants";
 /** The arms `alertVariants` is built from. Its type is read from them: {@link VariantsFn}. */
 export const ALERT_VARIANT_MAP = {
   variant: {
-    // text-primary is mode-correct (dark ink on light in light mode, light
-    // ink on dark in dark mode); the previous dark text override rendered
-    // dark slate on the dark tint at about 1:1.
-    info: "bg-primary/5 text-primary",
-    // dark:border-l-* re-asserts the strong base accent on the left after
-    // the dark:border-*-900 all-sides rule, so the meaningful accent stays
-    // visible in dark mode instead of collapsing to the faint -900 shade.
-    success:
-      "border-success-200 bg-success-50 text-success-900 border-l-4 border-l-success dark:border-success-900 dark:border-l-success dark:bg-success-950 dark:text-success-100",
+    // Info and success are news, not trouble: a plain card, with the icon in
+    // the status's text colour. Warning and danger ask for attention, so they
+    // sit on their status surface inside its border. The text is always the
+    // page's own foreground, and no alert carries a coloured side bar.
+    info: "border-border bg-card text-foreground [&>svg]:text-info-text",
+    success: "border-border bg-card text-foreground [&>svg]:text-success-text",
     warning:
-      "border-warning-200 bg-warning-50 text-warning-900 border-l-4 border-l-warning dark:border-warning-900 dark:border-l-warning dark:bg-warning-950 dark:text-warning-100",
+      "border-warning-border bg-warning-surface text-foreground [&>svg]:text-warning-text",
     destructive:
-      "border-destructive-200 bg-destructive-50 text-destructive-900 border-l-4 border-l-destructive dark:border-destructive-900 dark:border-l-destructive dark:bg-destructive-950 dark:text-destructive-100",
+      "border-danger-border bg-danger-surface text-foreground [&>svg]:text-danger-text",
   },
 };
 
@@ -39,11 +36,12 @@ export const ALERT_VARIANT_MAP = {
  * - Padding: 16px (p-4)
  * - Border radius: `rounded-md`, one step tighter than Card's `rounded-lg`
  *   for inline/flow content vs. larger container components
- * - Border: 1px solid matching variant color
+ * - Border: 1px; the card border for info and success, the status border for
+ *   warning and destructive
  * - Shadow: sm (subtle elevation)
  * - Font: 14px (text-sm)
  * - Layout: Flex with gap-3 for icon/content spacing
- * - Colors: Light backgrounds with dark text for WCAG 2.2 AA compliance
+ * - Colors: the page's foreground text; the icon in the status's text colour
  *
  * Variants (4 total):
  * - info (default): Blue - informational messages, neutral announcements

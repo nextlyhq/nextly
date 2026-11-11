@@ -53,6 +53,9 @@ vi.mock("@admin/components/ui/link", () => ({
   ),
 }));
 vi.mock("../SubSidebarPanel", () => ({ SubSidebarPanel: () => null }));
+// The rail's foot (Inbox and account menu) has its own tests; these read the
+// rail's entries.
+vi.mock("../RailAccount", () => ({ RailAccount: () => null }));
 vi.mock("@admin/hooks/useRouter", () => ({
   useRouter: () => ({ pathname: "/admin", route: null, isHydrated: true }),
 }));

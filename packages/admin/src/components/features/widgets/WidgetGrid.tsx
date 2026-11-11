@@ -51,6 +51,7 @@ import { DrawFailureContext, useDrawFailures } from "./draw-failures";
 import { ArrangedGrid } from "./edit/ArrangedGrid";
 import { AtRestSettingsWriteProvider } from "./edit/at-rest-settings-write";
 import { DashboardAddPanel, useAddPanelState } from "./edit/DashboardAddPanel";
+import { DashboardCrumb } from "./edit/DashboardBarControls";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
 import { CardDragContext } from "./edit/drag/CardDragContext";
 import { useCardDrag } from "./edit/drag/useCardDrag";
@@ -70,7 +71,6 @@ import { useDashboardFocus } from "./edit/useDashboardFocus";
 import type { LayoutEditor } from "./edit/useLayoutEditor";
 import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
-import { usePublishGridChrome } from "./grid-chrome";
 import {
   HiddenWhileEmptyContext,
   useHiddenWhileEmptyAtFirstPaint,
@@ -78,7 +78,7 @@ import {
 } from "./hidden-while-empty";
 import { WidenLonePairContext, widensLonePair } from "./lone-pair";
 import { resolveDashboardWidgets } from "./resolve-widgets";
-import { cardRowStyle, drawnSize, GRID_CLASS } from "./sizes";
+import { drawnSize, GRID_CLASS } from "./sizes";
 import { DashboardWidthProvider, useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
@@ -132,16 +132,15 @@ function NothingToDraw({
       <section
         aria-label="Dashboard widgets"
         data-testid="widget-grid-loading"
-        // The grid the cards will be drawn on, on its fixed rows: the placeholders hold nothing a
-        // row could take its height from, so each takes the two rows a two-row card would.
+        // The grid the cards will be drawn on. The placeholders hold nothing a row could take its
+        // height from, so each is drawn at a short card's height.
         className={GRID_CLASS}
       >
         {[0, 1, 2].map(row => (
           <div
             key={row}
             aria-hidden
-            style={cardRowStyle(2)}
-            className="col-span-12 animate-pulse rounded-lg bg-muted"
+            className="col-span-12 h-[160px] animate-pulse rounded-lg bg-muted"
           />
         ))}
       </section>
@@ -303,7 +302,7 @@ function DashboardLeaveGuard({
 
 /** Why a single-card write is unavailable while the stored layout is unreadable. */
 const UNREADABLE_SINGLE_CARD =
-  "Unavailable: your saved dashboard couldn't be loaded. Save it from Customize first.";
+  "Unavailable: your saved dashboard couldn't be loaded. Save it from Customize dashboard first.";
 
 /** Why a single-card write is unavailable now, or nothing when it is available. */
 function singleCardWriteBlocked(isUnreadable: boolean): string | undefined {
@@ -361,8 +360,8 @@ function useStandingCardWrites(
 }
 
 /**
- * A card's settings and size saved at once, outside customise mode: its quick setting, its quick
- * popover, its menu's Size and its sheet.
+ * A card's settings saved at once, outside customise mode: its header's quick setting, and its
+ * settings drawer's Save, with the card's width where the drawer changed it.
  * Offered only at rest, where there is no draft to hold a change, and once an arrangement has
  * been read, for the reason the standing dismiss waits for one.
  */
@@ -374,23 +373,17 @@ function useSettingsWriteAtRest(
   const cardSettingsWrite = useCardSettingsWrite(layout);
   if (!layout.layout || editor.isEditing) return undefined;
   return {
-    write: (placementId, title, config, callbacks, ownTitle) =>
+    write: (placementId, title, config, callbacks, ownTitle, size) =>
       cardSettingsWrite.write(
         {
           placementId,
           title,
           change: {
-            kind: "settings",
             config,
             ...(ownTitle === undefined ? {} : { ownTitle }),
+            ...(size === undefined ? {} : { size }),
           },
         },
-        callbacks
-      ),
-    // The same write, of the card's size: the request customise mode's Save sends for it.
-    resize: (placementId, title, size, bounds, callbacks) =>
-      cardSettingsWrite.write(
-        { placementId, title, change: { kind: "size", size, bounds } },
         callbacks
       ),
     isWriting: editor.isWriting,
@@ -577,7 +570,6 @@ export function WidgetGrid(): JSX.Element {
     failed,
     settling,
     retry,
-    refresh,
     reportDraw,
   } = useCardsAtDashboardWidth(
     visible,
@@ -590,15 +582,6 @@ export function WidgetGrid(): JSX.Element {
     },
     layout.layout
   );
-
-  // What the page's header draws from the grid.
-  usePublishGridChrome({
-    arrangement,
-    requested,
-    updatedAtFor,
-    refresh,
-    customizeRef: focus.customizeRef,
-  });
 
   const gridAnnouncer = useGridAnnouncer(settling, counted, failed);
   const { announcement } = gridAnnouncer;
@@ -640,6 +623,7 @@ export function WidgetGrid(): JSX.Element {
         data-testid="dashboard-container"
         className="@container/dashboard"
       >
+        <DashboardCrumb />
         {holding}
       </div>
     );
@@ -671,6 +655,7 @@ export function WidgetGrid(): JSX.Element {
             isUnreadable={layout.isUnreadable}
             onStageReset={arrangement.stageReset}
             on={{
+              begin: arrangement.begin,
               cancel: arrangement.cancel,
               addWidget: () => addPanel.setOpen(true),
             }}

@@ -1,4 +1,4 @@
-import { PageShell } from "@nextlyhq/ui";
+import { PageFrame, PageShell } from "@nextlyhq/ui";
 import React from "react";
 
 import { cn } from "@admin/lib/utils";
@@ -108,21 +108,40 @@ import type { PageContainerProps } from "@admin/types/layout/page-container";
  * ```
  */
 export const PageContainer: React.ForwardRefExoticComponent<
-  React.HTMLAttributes<HTMLDivElement> & {
-    children: React.ReactNode;
-    className?: string;
-    width?: "form" | "wide" | "full";
-  } & React.RefAttributes<HTMLDivElement>
+  PageContainerProps & React.RefAttributes<HTMLDivElement>
 > = React.forwardRef<HTMLDivElement, PageContainerProps>(
-  ({ children, className, width, ...props }, ref) => {
+  ({ children, className, width, type, ...props }, ref) => {
     // What every page gets regardless of how its content is laid out: the panel
     // background and a floor of one viewport minus the header.
     const surface =
-      "w-full max-w-full min-h-[calc(100vh-4rem)] admin-page-container";
+      "w-full max-w-full min-h-[calc(100vh-var(--admin-bar-height))] admin-page-container";
 
     // Vertical padding scales with the content panel rather than the viewport,
     // which is what makes it agree with a sidebar that can open and close.
     const rhythm = "py-6 @sm/content:py-8";
+
+    // A page that says its type is drawn by the shared frame, so two pages of
+    // one type cannot differ in width or inset. `width` is the older spelling,
+    // kept for callers outside the admin; a page passing both gets its type.
+    if (type) {
+      return (
+        <PageFrame
+          ref={ref}
+          data-testid="page-container"
+          type={type}
+          className={cn(
+            surface,
+            // A workspace draws its own surface edge to edge, so it takes no
+            // vertical rhythm either.
+            type !== "workspace" && rhythm,
+            className
+          )}
+          {...props}
+        >
+          {children}
+        </PageFrame>
+      );
+    }
 
     if (width) {
       return (

@@ -157,6 +157,18 @@ describe("init - Nextly API", () => {
 
       expect(mockLog).not.toHaveBeenCalled();
     });
+
+    it("starts again when the services of the instance it kept were shut down without it", async () => {
+      await getNextly(testOptions());
+      const { shutdownServices } = await import("../di/register");
+      await shutdownServices();
+      expect(isServicesRegistered()).toBe(false);
+
+      // Not the kept instance with nothing registered behind it.
+      await getNextly(testOptions());
+
+      expect(isServicesRegistered()).toBe(true);
+    });
   });
 
   describe("shutdownNextly()", () => {
