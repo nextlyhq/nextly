@@ -222,6 +222,7 @@ import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import {
   clearProxyHandlers,
   collectProxyHandlers,
+  markProxyHandlersReady,
   registerProxyHandlers,
   type CollectedProxyHandler,
 } from "../plugins/proxy/proxy-registry";
@@ -254,6 +255,7 @@ import {
 } from "../plugins/schema/validate-relations";
 import { extendTargetUnknownError } from "../plugins/schema-error";
 import { breachedPasswordsWarnings } from "../plugins/security/breached-passwords";
+import { resealPluginDigestKeys } from "../plugins/security/keyed-digest";
 import {
   clearPluginServices,
   registerPluginService,
@@ -1275,6 +1277,13 @@ async function registerServicesOnce(
   // since rotated is sealed again under the current one while the previous
   // can still open it, so a message outlives any number of rotations.
   await resealQueuedMessagesAtBoot(adapter, pluginSettingsSecrets(env));
+  // And every plugin digest key stored, a removed plugin's included, for the
+  // same reason: a digest stored beside a plugin's records must match for as
+  // long as they are kept.
+  await resealPluginDigestKeys(
+    getService("metaService"),
+    pluginSettingsSecrets(env)
+  );
 
   // In production, until the install has an administrator, setup needs a
   // token: an install with none gets one here, printed once to this output.
@@ -4836,6 +4845,7 @@ async function initializePlugins(
       | JobRegistry
       | JobsPassDatabase
       | WebhookFastDrainScheduler
+      | MetaService
       | null
   > = {
     collectionService: () =>
@@ -4889,6 +4899,9 @@ async function initializePlugins(
             "webhookFastDrainScheduler"
           )
         : null,
+    // This registration's `nextly_meta`, where each plugin's sealed digest
+    // key is kept.
+    metaService: () => services.container.get<MetaService>("metaService"),
   };
 
   const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>
@@ -4947,6 +4960,9 @@ async function initializePlugins(
    * plugin's failure to clean up must not spare the others'.
    */
   const destroyInitializedPlugins = async (): Promise<void> => {
+    // The proxy handlers registered so far belong to plugins about to be
+    // destroyed: the Proxy must not run them against a failed boot.
+    clearProxyHandlers();
     for (let i = initialized.length - 1; i >= 0; i -= 1) {
       const { plugin, context } = initialized[i];
       if (!plugin.destroy) continue;
@@ -5159,6 +5175,9 @@ async function initializePlugins(
     }
   }
 
+  // Every plugin is ready, so the Proxy may now run their handlers; until
+  // here it lets each request through as the page alone.
+  markProxyHandlersReady();
   return teardown;
 }
 
@@ -5298,6 +5317,9 @@ async function releaseServices(opts: {
     consoleLogger.error("Error during service shutdown", { error: error });
   } finally {
     container.clear();
+    // The proxy handlers close over the released plugins' contexts, so they
+    // go with them; the Proxy stands aside until a start registers new ones.
+    clearProxyHandlers();
     // The recording policy is a process-global registry, so it must be cleared
     // with the container — otherwise a later instance where a slug is only
     // DB/Builder-backed inherits a prior instance's stale opt-out and silently

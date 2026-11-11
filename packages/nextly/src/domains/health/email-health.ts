@@ -17,11 +17,9 @@ import { eq } from "drizzle-orm";
 import { loadedDialect } from "../../database/dialect-tables";
 import { getEmailProviderRegistry } from "../email/services/email-provider-registry";
 
-/** The email line. */
-export interface EmailHealth {
-  /** The sending provider's label, or `null` when none is set up. */
-  provider: string | null;
-}
+import type { EmailHealth } from "./health-types";
+
+export type { EmailHealth } from "./health-types";
 
 /** The select chain this read makes, in the form all three dialects share. */
 interface ProvidersDb {

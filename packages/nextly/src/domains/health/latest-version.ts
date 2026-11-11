@@ -28,6 +28,10 @@ import { z } from "zod";
 
 import { processHeld } from "../widgets/process-held";
 
+import type { LatestVersion } from "./health-types";
+
+export type { LatestVersion } from "./health-types";
+
 /** Where the `nextly` package's dist-tags are read. */
 export const DIST_TAGS_URL =
   "https://registry.npmjs.org/-/package/nextly/dist-tags";
@@ -40,15 +44,6 @@ const ANSWER_KEPT_MS = 60 * 60 * 1000;
 
 /** How long a failed read is kept before the registry is asked again. */
 const FAILURE_KEPT_MS = 10 * 60 * 1000;
-
-/**
- * The installed version against its channel's newest: the newest itself,
- * behind it, or unknown when the newest could not be read.
- */
-export type LatestVersion =
-  | { status: "latest"; version: string }
-  | { status: "update"; version: string }
-  | { status: "unknown" };
 
 /** What the registry answers: each dist-tag and the version it names. */
 const DistTags = z.record(z.string(), z.string());

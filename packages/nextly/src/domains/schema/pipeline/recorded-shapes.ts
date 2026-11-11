@@ -13,11 +13,12 @@
  * @module domains/schema/pipeline/recorded-shapes
  */
 import {
+  relationshipStoresJson,
   relationStorageShape,
   toSnakeCase,
 } from "../services/field-column-descriptor";
 
-import type { NextlySchemaSnapshot } from "./diff/types";
+import type { NextlySchemaSnapshot, TableSpec } from "./diff/types";
 import type {
   DesiredCollection,
   DesiredFieldGroup,
@@ -90,6 +91,58 @@ function recordedShapes(
     }
   }
   return shapes;
+}
+
+/**
+ * Whether a change of `before` into `after` reaches a relation's storage, which only the push
+ * applies: a field kept by name that stores another shape now (one reference, a list, a reference
+ * naming its collection, a list of those), or a field storing a list or such a reference whose live
+ * column still carries a foreign key, as an older save left one reference's column.
+ *
+ * The push plans every such change from the live table: it counts the rows that refuse a switch
+ * before anything runs, converts the values and repairs an older column, and SQLite drops a key
+ * only by rebuilding the table. A Schema Builder save that writes its migration from the newest
+ * snapshot sees none of that, so a save this answers true for is applied by the push and its file
+ * recorded once it has run, as a translated collection's is. `liveTable` is read only where a
+ * field stores a list or a reference naming its collection.
+ */
+export async function reachesRelationStorage(args: {
+  before: readonly RecordedField[];
+  after: readonly RecordedField[];
+  liveTable: () => Promise<TableSpec | undefined>;
+}): Promise<boolean> {
+  // By column, as the push keys a relation's shape: two names that spell one column are one.
+  const columnOf = (field: RecordedField) =>
+    typeof field.name === "string"
+      ? toSnakeCase(field.name).toLowerCase()
+      : undefined;
+  const shapeOf = (fields: readonly RecordedField[]) =>
+    new Map(
+      fields.flatMap(field => {
+        const column = columnOf(field);
+        const shape = relationStorageShape(field);
+        return column !== undefined && shape !== undefined
+          ? [[column, shape] as const]
+          : [];
+      })
+    );
+  const was = shapeOf(args.before);
+  for (const [column, shape] of shapeOf(args.after)) {
+    const before = was.get(column);
+    if (before !== undefined && before !== shape) return true;
+  }
+  // The columns that keep no key to one row, by the one rule the push drops their keys by.
+  const keyless = args.after.flatMap(field => {
+    const column = columnOf(field);
+    return column !== undefined && relationshipStoresJson(field)
+      ? [column]
+      : [];
+  });
+  if (keyless.length === 0) return false;
+  const table = await args.liveTable();
+  return (table?.foreignKeys ?? []).some(key =>
+    key.columns.some(column => keyless.includes(column.toLowerCase()))
+  );
 }
 
 /** `live` with each recorded relation's column given the shape its field stored. */

@@ -1,13 +1,14 @@
 "use client";
 
 /**
- * Form Settings Tab
+ * A form's Settings after its Form section: what happens after someone
+ * submits, whether it is taking submissions, how many responses one person
+ * may send, and its spam protection.
  *
- * Per-form behavior on the canonical settings shape: every control here is
- * consumed somewhere (the submit handler or the confirmation flow) — a
- * setting that does nothing does not get a toggle. Spam controls are
- * per-form OVERRIDES of the plugin's global config: blank means inherit,
- * and the inherited value is shown rather than hidden.
+ * Every control here is consumed somewhere (the submit handler or the
+ * confirmation flow): a setting that does nothing does not get a control.
+ * Spam controls are per-form OVERRIDES of the plugin's options: "Site
+ * default" follows them, and the value it follows is shown.
  *
  * @module admin/components/builder/FormSettingsTab
  */
@@ -15,9 +16,6 @@
 import {
   FormSection,
   Input,
-  Label,
-  RadioGroup,
-  RadioGroupItem,
   Select,
   SelectContent,
   SelectItem,
@@ -28,47 +26,23 @@ import {
 } from "@nextlyhq/ui";
 import type React from "react";
 
+import { DEFAULT_FORM_SETTINGS } from "../../../config/defaults";
+import type {
+  BotCheckMode,
+  FormSettings,
+  OneResponseMode,
+} from "../../../types";
 import { parseRedirectReference } from "../../../utils/redirect-reference";
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
+import { ClosingTimeRow, SubmissionLimitRow } from "./ClosingRows";
 import { RedirectPagePicker } from "./RedirectPagePicker";
-
-// ---------------------------------------------------------------------------
-// Layout helpers
-// ---------------------------------------------------------------------------
-
-function SettingRow({
-  label,
-  description,
-  htmlFor,
-  children,
-}: {
-  label: string;
-  description?: string;
-  htmlFor?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
-      <div className="space-y-1">
-        <Label
-          htmlFor={htmlFor}
-          className="text-[13px] font-semibold text-foreground tracking-tight"
-        >
-          {label}
-        </Label>
-        {description && (
-          <p className="text-[12px] text-muted-foreground leading-relaxed">
-            {description}
-          </p>
-        )}
-      </div>
-      <div className="shrink-0 flex items-center justify-end min-w-25">
-        {children}
-      </div>
-    </div>
-  );
-}
+import {
+  type Choice,
+  ChoiceCards,
+  descriptionIdOf,
+  SettingRow,
+} from "./settings-rows";
 
 /**
  * Tri-state override select: inherit from the plugin config (showing the
@@ -80,6 +54,7 @@ function InheritToggle({
   inherited,
   onChange,
 }: {
+  /** The trigger's id; its row's description is read with it. */
   id: string;
   value: boolean | undefined;
   inherited: boolean | undefined;
@@ -87,8 +62,8 @@ function InheritToggle({
 }) {
   const inheritedLabel =
     inherited === undefined
-      ? "Inherit"
-      : `Inherit (${inherited ? "on" : "off"})`;
+      ? "Site default"
+      : `Site default (${inherited ? "on" : "off"})`;
   return (
     <Select
       value={value === undefined ? "inherit" : value ? "on" : "off"}
@@ -98,7 +73,8 @@ function InheritToggle({
     >
       <SelectTrigger
         id={id}
-        className="w-40 bg-transparent border-input dark:bg-muted/50"
+        aria-describedby={descriptionIdOf(id)}
+        className="w-48 bg-transparent border-input dark:bg-muted/50"
       >
         <SelectValue />
       </SelectTrigger>
@@ -206,7 +182,18 @@ export function redirectOptionState(input: {
   return input.configFailed ? "unknown" : "hidden";
 }
 
-function PageRedirectOption({
+type ConfirmationType = NonNullable<FormSettings["confirmationType"]>;
+
+/**
+ * The "Go to a page on this site" choice, or none when it is not offered.
+ *
+ * Selectable only when there are collections to pick from. In every other
+ * state choosing it leads to a save the server must refuse: the rule requires
+ * a page, and a page can only come from a configured collection.
+ * `stored-only` shows what is already saved; it is not an invitation to
+ * switch a different form into that state.
+ */
+function pageChoice({
   redirectCollections,
   configFailed,
   settings,
@@ -214,220 +201,319 @@ function PageRedirectOption({
 }: {
   redirectCollections: string[] | null;
   configFailed: boolean;
-  settings: { confirmationType?: string; redirectPage?: unknown };
-  updateSettings: (patch: { redirectPage?: unknown }) => void;
-}) {
+  settings: FormSettings;
+  updateSettings: (patch: Partial<FormSettings>) => void;
+}): Choice<ConfirmationType> | null {
   const state = redirectOptionState({
     hasStoredPage: hasStoredRedirectPage(settings),
     collections: redirectCollections,
     configFailed,
   });
   if (state === "hidden") return null;
-
-  return (
-    <div className="flex items-start gap-3">
-      {/* Selectable only when there are collections to pick from. In every
-          other state choosing it leads to a save the server must refuse: the
-          rule requires a page, and a page can only come from a configured
-          collection. `stored-only` shows what is already saved; it is not an
-          invitation to switch a different form into that state. */}
-      <RadioGroupItem
-        value="relationship"
-        id="settings-confirm-page"
-        className="mt-0.5"
-        disabled={state !== "ready"}
+  return {
+    value: "relationship",
+    title: "Go to a page on this site",
+    description: "Picks a page; the link follows if the page moves.",
+    disabled: state !== "ready",
+    note:
+      state === "ready" ? undefined : (
+        <p className="text-xs text-muted-foreground">
+          {configFailed
+            ? "The redirect configuration could not be loaded, so the pages you can choose from are not listed. Reload to try again."
+            : "No collection is configured as a redirect target right now. The page below is still saved, and stays until you choose a different confirmation."}
+        </p>
+      ),
+    // Mounted whenever a page is stored, including with NO configured
+    // collections: the picker is what recovers the stored target by id and
+    // labels it, so leaving it out there tells an author a page is saved
+    // without telling them which.
+    details: (
+      <RedirectPagePicker
+        collections={redirectCollections ?? []}
+        value={settings.redirectPage}
+        onChange={next => updateSettings({ redirectPage: next })}
       />
-      <div className="w-full space-y-2">
-        <Label htmlFor="settings-confirm-page">Redirect to a page</Label>
+    ),
+  };
+}
 
-        {state !== "ready" && (
-          <p className="text-[12px] text-muted-foreground">
-            {configFailed
-              ? "The redirect configuration could not be loaded, so the pages you can choose from are not listed. Reload to try again."
-              : "No collection is configured as a redirect target right now. The page below is still saved, and stays until you choose a different confirmation."}
-          </p>
-        )}
-
-        {/* Mounted whenever a page is stored, including with NO configured
-            collections: the picker is what recovers the stored target by id
-            and labels it, so leaving it out there tells an author a page is
-            saved without telling them which. */}
-        {state === "stored-only" || state === "ready"
-          ? settings.confirmationType === "relationship" && (
-              <RedirectPagePicker
-                collections={redirectCollections ?? []}
-                value={settings.redirectPage}
-                onChange={next => updateSettings({ redirectPage: next })}
-              />
-            )
-          : null}
-      </div>
-    </div>
+function AfterSubmitSection({
+  redirectCollections,
+  redirectConfigFailed,
+}: Pick<
+  FormSettingsTabProps,
+  "redirectCollections" | "redirectConfigFailed"
+>): React.JSX.Element {
+  const { settings, updateSettings } = useFormBuilder();
+  const page = pageChoice({
+    redirectCollections,
+    configFailed: redirectConfigFailed,
+    settings,
+    updateSettings,
+  });
+  const choices: Choice<ConfirmationType>[] = [
+    {
+      value: "message",
+      title: "Show a message",
+      description: "Replaces the form on the page.",
+      details: (
+        <Textarea
+          aria-label="Message after submitting"
+          value={settings.successMessage ?? ""}
+          onChange={event =>
+            updateSettings({ successMessage: event.target.value })
+          }
+          rows={3}
+          placeholder="Thank you for your submission!"
+        />
+      ),
+    },
+    ...(page ? [page] : []),
+    {
+      value: "redirect",
+      title: "Go to a web address",
+      details: (
+        <Input
+          aria-label="Web address"
+          type="url"
+          className="font-mono"
+          value={settings.redirectUrl ?? ""}
+          onChange={event =>
+            updateSettings({ redirectUrl: event.target.value || undefined })
+          }
+          placeholder="https://example.com/thanks"
+        />
+      ),
+    },
+  ];
+  return (
+    <FormSection label="After someone submits">
+      <SettingRow label="Button text" htmlFor="settings-submit-text">
+        <Input
+          id="settings-submit-text"
+          type="text"
+          className="w-full sm:w-72"
+          value={settings.submitButtonText ?? ""}
+          onChange={event =>
+            updateSettings({ submitButtonText: event.target.value })
+          }
+        />
+      </SettingRow>
+      <SettingRow label="Then" stack>
+        <ChoiceCards
+          name="settings-confirm"
+          label="What happens after someone submits"
+          value={settings.confirmationType ?? "message"}
+          onChange={confirmationType => updateSettings({ confirmationType })}
+          choices={choices}
+        />
+      </SettingRow>
+    </FormSection>
   );
 }
+
+/** What "Accepting submissions" says, by the form's status as edited. */
+const ACCEPTING_DESCRIPTION = {
+  draft:
+    "This form is a draft. Make it live from the status in the bar to start taking submissions.",
+  published: "Turn off to close the form now. Visitors see the closed message.",
+  closed:
+    "The form is closed: visitors see the closed message. Turn on to open it.",
+} as const satisfies Record<"draft" | "published" | "closed", string>;
+
+function AvailabilitySection(): React.JSX.Element {
+  const { formData, updateFormData } = useFormBuilder();
+  const status = formData.status;
+  return (
+    <FormSection label="Availability">
+      <SettingRow
+        label="Accepting submissions"
+        htmlFor="settings-accepting"
+        description={ACCEPTING_DESCRIPTION[status]}
+      >
+        <Switch
+          id="settings-accepting"
+          aria-describedby={descriptionIdOf("settings-accepting")}
+          checked={status === "published"}
+          // A draft is opened from the status menu, where Live is chosen on
+          // purpose; this switch only closes and reopens a live form.
+          disabled={status === "draft"}
+          onCheckedChange={accepting =>
+            updateFormData({ status: accepting ? "published" : "closed" })
+          }
+        />
+      </SettingRow>
+      <ClosingTimeRow />
+      <SubmissionLimitRow />
+      <SettingRow
+        label="Message when closed"
+        htmlFor="settings-closed-message"
+        description="Shown to anyone who reaches this form while it is closed. Left empty, they are told only that it is not taking submissions."
+        stack
+      >
+        <Textarea
+          id="settings-closed-message"
+          aria-describedby={descriptionIdOf("settings-closed-message")}
+          value={formData.closedMessage ?? ""}
+          onChange={event =>
+            updateFormData({ closedMessage: event.target.value })
+          }
+          rows={3}
+          placeholder="e.g., Applications closed on 31 March. Thank you to everyone who applied."
+        />
+      </SettingRow>
+    </FormSection>
+  );
+}
+
+/** Every way a form can limit responses, by how Settings names it. */
+const ONE_RESPONSE_TITLES = {
+  off: "Allow several responses",
+  email: "One per email address",
+  browser: "One per browser",
+  ip: "One per network (IP address)",
+} as const satisfies Record<OneResponseMode, string>;
+
+/** The ways offered: the ones the submit handler enforces today. */
+const ONE_RESPONSE_CHOICES: readonly Choice<OneResponseMode>[] = [
+  { value: "off", title: ONE_RESPONSE_TITLES.off },
+  {
+    value: "ip",
+    title: ONE_RESPONSE_TITLES.ip,
+    description:
+      "People in one office or home count as one person, so only one of them can respond.",
+  },
+];
+
+/** Why a stored way that is not offered is shown, and cannot be chosen. */
+const NOT_ENFORCED = "Saved on this form, and not yet applied to submissions.";
+
+/**
+ * The choices for a form, with its stored way added when it is not one of
+ * those offered (one written through the API): left out, the list would show
+ * nothing chosen while the stored value is saved again on the next save.
+ */
+function oneResponseChoices(
+  current: OneResponseMode
+): readonly Choice<OneResponseMode>[] {
+  return ONE_RESPONSE_CHOICES.some(choice => choice.value === current)
+    ? ONE_RESPONSE_CHOICES
+    : [
+        ...ONE_RESPONSE_CHOICES,
+        {
+          value: current,
+          title: ONE_RESPONSE_TITLES[current],
+          description: NOT_ENFORCED,
+          disabled: true,
+        },
+      ];
+}
+
+function OneResponseSection(): React.JSX.Element {
+  const { settings, updateSettings } = useFormBuilder();
+  // Always set once the settings are read; the default covers the type.
+  const current = settings.oneResponse ?? DEFAULT_FORM_SETTINGS.oneResponse;
+  return (
+    <FormSection label="One response per person">
+      <SettingRow label="Who may respond again" stack>
+        <ChoiceCards
+          name="settings-one-response"
+          label="One response per person"
+          value={current}
+          onChange={oneResponse => updateSettings({ oneResponse })}
+          choices={oneResponseChoices(current)}
+        />
+      </SettingRow>
+    </FormSection>
+  );
+}
+
+/** What "Site default" means for the bot check, as the plugin is set. */
+function botCheckDefaultLabel(recaptchaEnabled: boolean | undefined): string {
+  if (recaptchaEnabled === undefined) return "Site default";
+  return `Site default (${recaptchaEnabled ? "reCAPTCHA" : "off"})`;
+}
+
+function SpamSection({
+  spamDefaults,
+}: Pick<FormSettingsTabProps, "spamDefaults">): React.JSX.Element {
+  const { settings, updateSettings } = useFormBuilder();
+  return (
+    <FormSection label="Spam protection">
+      <SettingRow
+        label="Hidden trap field"
+        htmlFor="settings-honeypot"
+        description="A field people never see; bots fill it in."
+      >
+        <InheritToggle
+          id="settings-honeypot"
+          value={settings.honeypotEnabled}
+          inherited={spamDefaults?.honeypot}
+          onChange={honeypotEnabled => updateSettings({ honeypotEnabled })}
+        />
+      </SettingRow>
+      <SettingRow
+        label="Bot check"
+        htmlFor="settings-bot-check"
+        description="Scores each visitor in the background; there is no puzzle to solve. Keys are set in the plugin's options."
+      >
+        <Select
+          value={settings.botCheck ?? DEFAULT_FORM_SETTINGS.botCheck}
+          onValueChange={value => {
+            const botCheck = BOT_CHECK_CHOICES.find(mode => mode === value);
+            if (botCheck) updateSettings({ botCheck });
+          }}
+        >
+          <SelectTrigger
+            id="settings-bot-check"
+            aria-describedby={descriptionIdOf("settings-bot-check")}
+            className="w-48 bg-transparent border-input dark:bg-muted/50"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="default">
+              {botCheckDefaultLabel(spamDefaults?.recaptchaEnabled)}
+            </SelectItem>
+            <SelectItem value="off">Off</SelectItem>
+            <SelectItem value="recaptcha">reCAPTCHA</SelectItem>
+            {/* Shown only when stored (through the API), for the reason
+                `oneResponseChoices` gives. */}
+            {settings.botCheck === "turnstile" ? (
+              <SelectItem value="turnstile" disabled>
+                Turnstile (not yet applied)
+              </SelectItem>
+            ) : null}
+          </SelectContent>
+        </Select>
+      </SettingRow>
+    </FormSection>
+  );
+}
+
+/** The bot checks offered: the ones the submit handler runs today. */
+const BOT_CHECK_CHOICES: readonly BotCheckMode[] = [
+  "default",
+  "off",
+  "recaptcha",
+];
 
 export function FormSettingsTab({
   spamDefaults,
   redirectCollections,
   redirectConfigFailed,
 }: FormSettingsTabProps): React.JSX.Element {
-  const { settings, updateSettings } = useFormBuilder();
-
   return (
-    // The measure belongs to the page's shell, not to this tab.
-    <div className="flex flex-col gap-10">
-      {/* Submission */}
-      <FormSection label="Submission">
-        <SettingRow
-          label="Submit button text"
-          description="Label on the form's primary action button"
-          htmlFor="settings-submit-text"
-        >
-          <Input
-            id="settings-submit-text"
-            type="text"
-            className="w-56"
-            value={settings.submitButtonText ?? ""}
-            onChange={e => updateSettings({ submitButtonText: e.target.value })}
-          />
-        </SettingRow>
-
-        <SettingRow
-          label="Allow multiple submissions"
-          description="When off, the same visitor (by IP) can submit this form only once. Best-effort: IP-based, so shared networks count as one visitor."
-          htmlFor="settings-multiple"
-        >
-          <Switch
-            id="settings-multiple"
-            checked={settings.allowMultipleSubmissions ?? true}
-            onCheckedChange={checked =>
-              updateSettings({ allowMultipleSubmissions: checked })
-            }
-          />
-        </SettingRow>
-      </FormSection>
-
-      {/* After submission */}
-      <FormSection label="After submission">
-        <RadioGroup
-          value={settings.confirmationType ?? "message"}
-          onValueChange={value =>
-            updateSettings({
-              confirmationType: value as
-                | "message"
-                | "redirect"
-                | "relationship",
-            })
-          }
-          className="flex flex-col gap-3"
-        >
-          <div className="flex items-start gap-3">
-            <RadioGroupItem
-              value="message"
-              id="settings-confirm-message"
-              className="mt-0.5"
-            />
-            <div className="w-full space-y-2">
-              <Label htmlFor="settings-confirm-message">Show a message</Label>
-              {(settings.confirmationType ?? "message") === "message" && (
-                <Textarea
-                  aria-label="Success message"
-                  value={settings.successMessage ?? ""}
-                  onChange={e =>
-                    updateSettings({ successMessage: e.target.value })
-                  }
-                  rows={3}
-                  placeholder="Thank you for your submission!"
-                />
-              )}
-            </div>
-          </div>
-          <div className="flex items-start gap-3">
-            <RadioGroupItem
-              value="redirect"
-              id="settings-confirm-redirect"
-              className="mt-0.5"
-            />
-            <div className="w-full space-y-2">
-              <Label htmlFor="settings-confirm-redirect">
-                Redirect to a URL
-              </Label>
-              {settings.confirmationType === "redirect" && (
-                <Input
-                  aria-label="Redirect URL"
-                  type="url"
-                  value={settings.redirectUrl ?? ""}
-                  onChange={e =>
-                    updateSettings({
-                      redirectUrl: e.target.value || undefined,
-                    })
-                  }
-                  placeholder="https://example.com/thanks"
-                />
-              )}
-            </div>
-          </div>
-          <PageRedirectOption
-            redirectCollections={redirectCollections}
-            configFailed={redirectConfigFailed}
-            settings={settings}
-            updateSettings={updateSettings}
-          />
-        </RadioGroup>
-      </FormSection>
-
-      {/* Spam protection */}
-      <FormSection label="Spam protection">
-        <SettingRow
-          label="Honeypot"
-          description="Invisible trap field for bots. Inherits the plugin default unless overridden here."
-          htmlFor="settings-honeypot"
-        >
-          <InheritToggle
-            id="settings-honeypot"
-            value={settings.honeypotEnabled}
-            inherited={spamDefaults?.honeypot}
-            onChange={honeypotEnabled => updateSettings({ honeypotEnabled })}
-          />
-        </SettingRow>
-
-        <SettingRow
-          label="reCAPTCHA"
-          description="Challenge-based bot check. Inherits the plugin default unless overridden here."
-          htmlFor="settings-captcha"
-        >
-          <InheritToggle
-            id="settings-captcha"
-            value={settings.captchaEnabled}
-            inherited={spamDefaults?.recaptchaEnabled}
-            onChange={captchaEnabled => updateSettings({ captchaEnabled })}
-          />
-        </SettingRow>
-
-        {settings.captchaEnabled === true && (
-          <SettingRow
-            label="reCAPTCHA site key"
-            description="The client-facing site key for this form"
-            htmlFor="settings-captcha-key"
-          >
-            <Input
-              id="settings-captcha-key"
-              type="text"
-              // Full width below the breakpoint: 288px does not fit inside the
-              // section's 24px insets on a ~360px panel, and the card clips
-              // rather than scrolling.
-              className="w-full font-mono sm:w-72"
-              value={settings.captchaSiteKey ?? ""}
-              onChange={e =>
-                updateSettings({
-                  captchaSiteKey: e.target.value || undefined,
-                })
-              }
-            />
-          </SettingRow>
-        )}
-      </FormSection>
-    </div>
+    // The page's shell spaces the sections, and the Form section above.
+    <>
+      <AfterSubmitSection
+        redirectCollections={redirectCollections}
+        redirectConfigFailed={redirectConfigFailed}
+      />
+      <AvailabilitySection />
+      <OneResponseSection />
+      <SpamSection spamDefaults={spamDefaults} />
+    </>
   );
 }
 

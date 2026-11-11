@@ -330,7 +330,9 @@ describe("component tables, which are declared elsewhere on purpose", () => {
       [{ name: "createdAt", type: "text" } as FieldConfig]
     );
 
-    expect(ddl.match(/"created_at"/g)?.length).toBe(2);
+    // Counted in the CREATE TABLE alone: the index on `created_at` after it names the column too.
+    const createTable = ddl.slice(0, ddl.indexOf(");"));
+    expect(createTable.match(/"created_at"/g)?.length).toBe(2);
   });
 });
 

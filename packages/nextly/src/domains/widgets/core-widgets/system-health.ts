@@ -30,11 +30,14 @@
  */
 
 import { NextlyError } from "../../../errors/nextly-error";
-import type { DatabaseHealth } from "../../health/database-health";
-import type { EmailHealth } from "../../health/email-health";
-import type { JobsHealth } from "../../health/jobs-health";
-import type { LatestVersion } from "../../health/latest-version";
-import type { PluginHealth, RuntimeHealth } from "../../health/runtime-health";
+import type {
+  DatabaseHealth,
+  EmailHealth,
+  JobsHealth,
+  LatestVersion,
+  PluginHealth,
+  RuntimeHealth,
+} from "../../health/health-types";
 import {
   defineWidget,
   type WidgetReadServices,

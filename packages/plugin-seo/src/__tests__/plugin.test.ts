@@ -55,6 +55,7 @@ describe("seoPlugin", () => {
       "metaDescription",
       "ogImage",
       "canonical",
+      "canonicalElsewhere",
       "noindex",
       "structuredDataType",
     ]);
@@ -67,22 +68,86 @@ describe("seoPlugin", () => {
     expect(seoGroup(plugin).fields).toBe(custom);
   });
 
-  it("serves the sitemap route by default", () => {
-    const plugin = seoPlugin({ collections: ["pages"] });
-    expect(plugin.contributes?.routes?.[0]).toMatchObject({
-      method: "GET",
-      path: "/sitemap.xml",
-      public: true,
-    });
+  it("serves the sitemap and robots.txt at the site root by default, and the sitemap at its old address too", () => {
+    const routes = seoPlugin({ collections: ["pages"] }).contributes?.routes;
+    expect(
+      routes?.map(route => [
+        route.method,
+        route.path,
+        route.mount,
+        route.public,
+      ])
+    ).toEqual([
+      ["GET", "/sitemap.xml", "root", true],
+      ["GET", "/robots.txt", "root", true],
+      ["GET", "/sitemap.xml", undefined, true],
+      ["POST", "/share-image", undefined, undefined],
+      // The settings screen's reads, for a signed-in reader of the settings.
+      ["GET", "/settings/content-types", undefined, undefined],
+      ["GET", "/settings/document", undefined, undefined],
+    ]);
   });
 
-  it("omits the sitemap route when sitemap is disabled", () => {
+  it("offers making a share image to a person who may add to the media library", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
-    // No public enumeration route when the sitemap is turned off.
-    expect(plugin.contributes?.routes).toBeUndefined();
+    const route = plugin.contributes?.routes?.find(
+      ({ path }) => path === "/share-image"
+    );
+    expect(route).toMatchObject({
+      method: "POST",
+      requiredPermission: "create-media",
+    });
+    expect(route?.public).toBeUndefined();
+  });
+
+  it("omits the sitemap routes when sitemap is disabled, and keeps robots.txt", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
+      "/robots.txt",
+      "/share-image",
+      "/settings/content-types",
+      "/settings/document",
+    ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
   });
+
+  it("serves neither file with both turned off", () => {
+    const plugin = seoPlugin({
+      collections: ["pages"],
+      sitemap: false,
+      robots: false,
+    });
+    expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
+      "/share-image",
+      "/settings/content-types",
+      "/settings/document",
+    ]);
+  });
+
+  it("rejects a sitemap file size smaller than an empty file", () => {
+    expect(() =>
+      seoPlugin({ collections: ["pages"], sitemap: { maxBytesPerFile: 100 } })
+    ).toThrow(/maxBytesPerFile must be at least/);
+  });
+
+  it.each([0, -1, 1.5, Number.NaN])(
+    "rejects a sitemap file size of %s",
+    value => {
+      expect(() =>
+        seoPlugin({
+          collections: ["pages"],
+          sitemap: { maxUrlsPerFile: value },
+        })
+      ).toThrow(/maxUrlsPerFile must be a positive whole number/);
+      expect(() =>
+        seoPlugin({
+          collections: ["pages"],
+          sitemap: { maxBytesPerFile: value },
+        })
+      ).toThrow(/maxBytesPerFile must be a positive whole number/);
+    }
+  );
 
   it("rejects a sitemap collection outside the configured collections", () => {
     // A typo'd / non-extended slug would 500 the public route at request time;
@@ -116,6 +181,7 @@ describe("seoPlugin", () => {
       "metaDescription",
       "ogImage",
       "canonical",
+      "canonicalElsewhere",
       "noindex",
       "structuredDataType",
     ]);
@@ -149,7 +215,7 @@ describe("the dashboard card the plugin contributes", () => {
     // `admin.widgets`, and no data source under `widgetSources`.
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
-    expect(plugin.contributes?.admin).toBeUndefined();
+    expect(plugin.contributes?.admin).not.toHaveProperty("widgets");
     // Read as a property of the value: `widgetSources` is no field of the
     // contributions type, so a typed read of it does not compile.
     expect(plugin.contributes).toBeDefined();
