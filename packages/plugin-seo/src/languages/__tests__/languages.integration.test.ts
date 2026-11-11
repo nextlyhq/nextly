@@ -103,14 +103,18 @@ async function boot(dialect: TestDialect, rule?: LanguageAddressRule) {
   return t;
 }
 
-/** The head of the page at `slug` in `locale`, as a `[locale]` route serves it. */
-async function headOf(t: TestNextly, locale: string, slug: string) {
+/**
+ * The head of the page at `slug` in `locale`, as a `[locale]` route serves
+ * it, each page a list of three pages, so `<slug>/page/2` is its second.
+ */
+async function headOf(t: TestNextly, locale: string, ...slug: string[]) {
   const route = createPublicContentRoute({
     collections: ["pages"],
     nextly: t.nextly,
+    listPages: async () => 3,
     render: (entry: ContentEntry) => entry.title,
   });
-  return route.generateMetadata({ params: { locale, slug: [slug] } });
+  return route.generateMetadata({ params: { locale, slug } });
 }
 
 // Segments after `/api/`, as the catch-all splits the sitemap's path.
@@ -159,6 +163,15 @@ describe.each(getConfiguredTestDialects())(
       // Each version's own canonical is the address the others link to.
       expect(german.alternates?.canonical).toBe(links.de);
       expect(english.alternates?.canonical).toBe(links.en);
+    });
+
+    it("links no language from a later page of a list, whose canonical is that page", async () => {
+      const t = await boot(dialect);
+
+      const second = await headOf(t, "de", "ueber", "page", "2");
+
+      expect(second.alternates?.canonical).toBe("/de/ueber/page/2");
+      expect(second.alternates?.languages).toBeUndefined();
     });
 
     it("links no language a page is not published in: a page in one language has none", async () => {
@@ -270,6 +283,44 @@ describe.each(getConfiguredTestDialects())(
         ],
         [`${SITE}/team`]: [],
       });
+    });
+
+    it("reads a canonical typed as a path on the language's own domain", async () => {
+      const t = await boot(dialect, {
+        by: "domain",
+        domains: {
+          en: SITE,
+          de: "https://acme.de",
+          fr: "https://acme.fr",
+        },
+      });
+      const [about] = (
+        await t.nextly.find({
+          collection: "pages",
+          where: { slug: { equals: "about" } },
+        })
+      ).items;
+      await t.nextly.update({
+        collection: "pages",
+        id: String(about?.id),
+        locale: "de",
+        data: { seo: { canonical: "/ueber" }, _overwrite: true },
+      });
+
+      const links = {
+        en: `${SITE}/about`,
+        de: "https://acme.de/ueber",
+        "x-default": `${SITE}/about`,
+      };
+      expect((await headOf(t, "en", "about")).alternates?.languages).toEqual(
+        links
+      );
+      expect((await headOf(t, "de", "ueber")).alternates?.languages).toEqual(
+        links
+      );
+      expect(entries(await sitemap())[`${SITE}/about`]).toContain(
+        "de https://acme.de/ueber"
+      );
     });
   }
 );

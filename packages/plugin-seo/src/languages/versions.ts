@@ -20,6 +20,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import { recordSlug, rowOf } from "../address-record/participant";
+import { originOf } from "../origin";
 import type { SeoAnswer } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import { MAX_LOC_LENGTH, publishedWhere } from "../sitemap";
@@ -231,11 +232,15 @@ export function resolveIn(
 
 /**
  * How a version of a page whose own address is `served` stands, from its
- * answer: at its canonical, as the answer gives it (`href`) and made
- * absolute against `origin` (`loc`), where it is listed and its canonical is
- * its own address; `lost` where it has no canonical, so another page holds
- * its address; null where it is hidden, names another page, or names an
- * address past the protocol's length.
+ * answer: at its canonical (`href`, as the answer gives it, or made absolute
+ * where it is a path on a language's own domain, so a link from another
+ * domain reaches it) and made absolute (`loc`), where it is listed and its
+ * canonical is its own address; `lost` where it has no canonical, so another
+ * page holds its address; null where it is hidden, names another page, or
+ * names an address past the protocol's length.
+ *
+ * A path is read on the origin the version is served on: its language's own
+ * domain where it has one, else `origin`.
  */
 export function standingOf(
   answer: SeoAnswer,
@@ -244,12 +249,16 @@ export function standingOf(
 ): { href: string; loc: string } | "lost" | null {
   if (!answer.robots.value.index) return null;
   if (answer.canonical === undefined) return "lost";
-  const loc = absolute(answer.canonical.value, origin);
+  const domain = originOf(served);
+  const base = domain ?? origin;
+  const loc = absolute(answer.canonical.value, base);
   // A typed canonical is the page's own where it names the page's address as
   // the page's language serves it.
   const elsewhere =
     answer.canonical.from !== "address" &&
-    (served === undefined || loc !== absolute(served, origin));
+    (served === undefined || loc !== absolute(served, base));
   if (loc === null || elsewhere || loc.length > MAX_LOC_LENGTH) return null;
-  return { href: answer.canonical.value, loc };
+  const onItsDomain =
+    domain !== undefined && originOf(answer.canonical.value) === undefined;
+  return { href: onItsDomain ? loc : answer.canonical.value, loc };
 }

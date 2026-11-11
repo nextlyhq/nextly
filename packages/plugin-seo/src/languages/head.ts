@@ -20,7 +20,7 @@ import {
 
 import { productionAddressesOf } from "../canonical";
 import { idOf, typeOf } from "../resolver/page-levels";
-import { overAnswer, type ReadRules } from "../resolver/provider";
+import { overAnswer, resolveSeo, type ReadRules } from "../resolver/provider";
 import { readSeoRules } from "../settings/rules";
 
 import type { LanguageCodeProblem } from "./hreflang";
@@ -30,6 +30,7 @@ import {
   type LanguageVersion,
 } from "./links";
 import {
+  absolute,
   documentsIn,
   heldLanguages,
   onceEach,
@@ -64,7 +65,7 @@ async function versionIn(
   language: string,
   readRules: ReadRules,
   origin: string
-): Promise<LanguageVersion | null> {
+): Promise<(LanguageVersion & { loc: string }) | null> {
   const { type, id } = page;
   const document =
     type.kind === "single"
@@ -83,19 +84,25 @@ async function versionIn(
   );
   return standing === null || standing === "lost"
     ? null
-    : { language, href: standing.href };
+    : { language, href: standing.href, loc: standing.loc };
 }
 
 /**
  * The language links of the page `input` names, read in the language the
  * route served it in, or the site's default where it names none. None where
- * the version served does not stand for itself: a page hidden from search,
- * or one naming another page as its canonical, links to no other language.
+ * the page served is not the version linked to in its language: a page hidden
+ * from search, one naming another page as its canonical, or a later page of a
+ * list, whose canonical is that page while every language's version is the
+ * list's first.
+ *
+ * `canonical` is the served page's canonical where the caller has resolved it
+ * already; it is resolved here otherwise.
  */
 export async function pageLanguageLinks(
   ctx: PluginContext,
   input: PageMetadataInput,
-  readRules: ReadRules = readSeoRules
+  readRules: ReadRules = readSeoRules,
+  canonical?: string
 ): Promise<PageLanguageLinks> {
   const { type, key, document } = typeOf(input);
   const id = idOf(document);
@@ -108,7 +115,7 @@ export async function pageLanguageLinks(
   const rules = await readOnce(ctx, undefined);
   const origin =
     productionAddressesOf(rules.productionAddresses)[0] ?? NO_ORIGIN;
-  const versions: LanguageVersion[] = [];
+  const versions: (LanguageVersion & { loc: string })[] = [];
   for (const language of [
     defaultLanguage,
     ...otherLanguages([held], defaultLanguage),
@@ -120,11 +127,18 @@ export async function pageLanguageLinks(
         : await versionIn(ctx, { type, id, paths }, language, readOnce, origin);
     if (version !== null) versions.push(version);
   }
-  const served = input.locale ?? defaultLanguage;
   const { links, problems } = languageLinks(versions, defaultLanguage);
-  return versions.some(version => version.language === served)
-    ? { links, problems }
-    : { links: [], problems };
+  const own = versions.find(
+    version => version.language === (input.locale ?? defaultLanguage)
+  );
+  const servedAs =
+    canonical ?? (await resolveSeo(ctx, input, readOnce)).canonical?.value;
+  // Compared as absolute addresses, a path read on the version's own origin.
+  const isServed =
+    own !== undefined &&
+    servedAs !== undefined &&
+    absolute(servedAs, new URL(own.loc).origin) === own.loc;
+  return isServed ? { links, problems } : { links: [], problems };
 }
 
 /**
@@ -139,7 +153,12 @@ export function withLanguageLinks(
   readRules: ReadRules = readSeoRules
 ): PageMetadataResolver {
   return overAnswer(resolver, async (answer, input) => {
-    const { links } = await pageLanguageLinks(ctx, input, readRules);
+    const { links } = await pageLanguageLinks(
+      ctx,
+      input,
+      readRules,
+      answer.canonical
+    );
     if (links.length === 0) return answer;
     return {
       ...answer,
