@@ -460,7 +460,7 @@ const fb = formBuilder({
 
 ## Spam Protection
 
-Three layers of protection are available, all enabled by default (except reCAPTCHA).
+Three layers of protection: a honeypot and a rate limit, both on by default, and a bot check (Google reCAPTCHA v3 or Cloudflare Turnstile) once you configure its keys.
 
 ### Honeypot Fields
 
@@ -483,27 +483,57 @@ spamProtection: {
 
 The rate limit uses the deployment's shared rate-limit store, `rateLimit.store` in `defineConfig`, which falls back to memory. With several instances and no shared store, each instance counts on its own.
 
-### reCAPTCHA v3
+### Bot checks: reCAPTCHA and Turnstile
 
-Configuration is available for Google reCAPTCHA v3. Set the site key and secret key globally or per form.
+A bot check runs in the visitor's browser and gives the form a token, which the server verifies with the provider before the submission is accepted:
 
-<Callout type="warn">
-  **Not enforced yet.** The settings below are accepted and stored, and nothing
-  verifies a token against Google: submissions are accepted whether the token is
-  valid, invalid or absent. Turning it on protects nothing today. The honeypot
-  and the rate limit above are enforced.
-</Callout>
+- **Google reCAPTCHA v3** scores each visitor in the background, with no puzzle to solve. A score below `scoreThreshold` (default `0.5`) fails.
+- **Cloudflare Turnstile** checks each visitor in the background and rarely shows a puzzle.
+
+Set each provider's keys in the plugin's options. `enabled` makes a provider the site default, which forms use unless their Settings choose another check or Off (reCAPTCHA wins when both are enabled):
 
 ```typescript
 spamProtection: {
   recaptcha: {
     enabled: true,
-    siteKey: 'your-site-key',
-    secretKey: 'your-secret-key',
+    siteKey: 'your-recaptcha-site-key',
+    secretKey: 'your-recaptcha-secret-key',
     scoreThreshold: 0.5,
+  },
+  turnstile: {
+    enabled: false,
+    siteKey: 'your-turnstile-site-key',
+    secretKey: 'your-turnstile-secret-key',
   },
 }
 ```
+
+Setting a provider's `secretKey` also declares its verification host in the plugin's outbound allowlist (`www.google.com` or `challenges.cloudflare.com`). A site using neither gives the plugin no network access.
+
+**Rendering the widget.** For a form whose check is on, the public read of the form (`GET /api/forms/:slug`) includes what the widget needs:
+
+```json
+{
+  "botCheck": {
+    "provider": "turnstile",
+    "siteKey": "…",
+    "field": "cf-turnstile-response"
+  }
+}
+```
+
+Render the provider's widget with that site key, and send its token inside `data` under `field`: `g-recaptcha-response` for reCAPTCHA or `cf-turnstile-response` for Turnstile, the names each provider's widget writes by default. It is never stored with the submission.
+
+**What happens to a submission:**
+
+- **Token passes:** accepted as usual.
+- **Token fails or is missing:** stored flagged as spam (reason `recaptcha` or `turnstile`), as a honeypot hit is, so a false positive stays reviewable and the bot still sees a success.
+- **Provider unreachable or answers something unexpected:** accepted unchecked and logged, so an outage does not send every real submission to spam.
+- **Check on but the provider has no `secretKey`:** accepted unchecked, as before checks were verified. The server logs a warning at start naming the option to set, Settings says so on the form, and a check without its keys cannot be newly chosen in Settings.
+
+The check is verified where every submission is stored, so it applies to the built-in route, `submitForm`, `nextly.forms.submit()` with a request, and the generic collection create. A server-side call with no request (an import) is not checked.
+
+**Forms saved before this change** keep their protection. A form whose reCAPTCHA setting was left to the plugin follows the site default, one with reCAPTCHA on uses reCAPTCHA, and one with it off has no check. A form that stored its own reCAPTCHA site key keeps using it until the plugin's options give one, and its Settings ask to move it there.
 
 ## Conditional Logic
 
