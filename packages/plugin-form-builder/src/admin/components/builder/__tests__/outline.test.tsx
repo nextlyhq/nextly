@@ -202,11 +202,15 @@ describe("the outline of fields", () => {
     await screen.findByRole("list", { name: "Form fields" });
     await user.click(row("Email")!);
     expect(screen.getByText(SAVED_NAME_REASON)).toBeInTheDocument();
+    // Fixed, not merely explained: the input takes no edit.
+    expect(screen.getByRole("textbox", { name: "Name" })).toBeDisabled();
 
     await user.click(screen.getByRole("button", { name: "Add field" }));
     await pickPhone(user, "Mobile");
-    // The new field's settings are open, with no reason given.
+    // The new field's settings are open, with no reason given, and its name
+    // can still be changed.
     expect(screen.queryByText(SAVED_NAME_REASON)).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Name" })).toBeEnabled();
   });
 });
 
@@ -276,5 +280,55 @@ describe("a rename across a trip away from the Builder", () => {
     const company = form.fields.find(field => field.name === "company");
     expect(company?.conditionalLogic?.conditions[0]?.field).toBe("work_email");
     expect(form.notifications[0]?.replyTo).toBe("{{work_email}}");
+  });
+});
+
+describe("the field list drawn on its own", () => {
+  /** A window wide enough to dock the settings. */
+  function wide() {
+    vi.stubGlobal(
+      "matchMedia",
+      (query: string) =>
+        ({
+          matches: query.includes("min-width"),
+          media: query,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }) as unknown as MediaQueryList
+    );
+  }
+
+  function list(dockedSettings?: "beside" | "host") {
+    render(
+      <TooltipProvider>
+        <FormBuilderProvider initialData={{ fields: [EMAIL, TOPIC] }}>
+          <FieldCards
+            enabledTypes={["email"]}
+            onAddField={() => {}}
+            {...(dockedSettings === undefined ? {} : { dockedSettings })}
+          />
+        </FormBuilderProvider>
+      </TooltipProvider>
+    );
+  }
+
+  it("docks the selected field's settings beside itself on a wide window", async () => {
+    wide();
+    list();
+    await userEvent.setup().click(row("Email")!);
+    expect(
+      screen.getByRole("complementary", { name: "Field settings" })
+    ).toBeVisible();
+  });
+
+  it("leaves docking to a host that docks the settings itself", async () => {
+    // The control: the editor draws them against the window's edge, so the
+    // list must not draw a second copy.
+    wide();
+    list("host");
+    await userEvent.setup().click(row("Email")!);
+    expect(
+      screen.queryByRole("complementary", { name: "Field settings" })
+    ).toBeNull();
   });
 });

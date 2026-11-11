@@ -566,6 +566,8 @@ function FormEditor({
               {pageContent(page, {
                 builder: () => (
                   <FieldCards
+                    // The editor docks the settings against the window's edge.
+                    dockedSettings="host"
                     enabledTypes={config.enabledTypes}
                     disabledFieldTypes={config.disabledFieldTypes}
                     onAddField={handleAddField}

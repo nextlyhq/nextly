@@ -392,6 +392,39 @@ export interface FieldCardsProps {
     choice?: FieldPickerChoice,
     index?: number
   ) => void;
+  /**
+   * Where the selected field's settings dock from 1024px: `"beside"` the list
+   * (the default, for a list drawn on its own), or by the `"host"` page,
+   * which draws `FieldInspector` against the window's edge itself. Below
+   * 1024px they open under the row either way.
+   */
+  dockedSettings?: "beside" | "host";
+}
+
+/**
+ * The list with the selected field's settings docked beside it, for a list
+ * drawn on its own; the column scrolls on its own body.
+ */
+function BesideSettings({
+  list,
+  panel,
+}: {
+  list: JSX.Element;
+  panel: ReactNode;
+}): JSX.Element {
+  if (panel === null) return list;
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(20rem,26rem)] items-start gap-4">
+      {list}
+      <aside
+        id={DOCKED_PANEL_ID}
+        aria-label="Field settings"
+        className="sticky top-4 flex max-h-[calc(100vh-8rem)] flex-col overflow-hidden rounded-md border border-border bg-card"
+      >
+        {panel}
+      </aside>
+    </div>
+  );
 }
 
 /** What every submission stores beside a form's own fields. */
@@ -402,6 +435,7 @@ export function FieldCards({
   enabledTypes,
   disabledFieldTypes,
   onAddField,
+  dockedSettings = "beside",
 }: FieldCardsProps): JSX.Element {
   const {
     fields,
@@ -418,6 +452,7 @@ export function FieldCards({
   const [addAt, setAddAt] = useState<number | "end" | null>(null);
   const docked = useDocked();
   const inlinePanel = useFieldPanel(false);
+  const besidePanel = useFieldPanel(true);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -482,7 +517,7 @@ export function FieldCards({
     </Button>
   );
 
-  return (
+  const list = (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-sm font-semibold text-foreground">Fields</h2>
@@ -587,5 +622,10 @@ export function FieldCards({
         />
       )}
     </div>
+  );
+  return docked && dockedSettings === "beside" ? (
+    <BesideSettings list={list} panel={besidePanel} />
+  ) : (
+    list
   );
 }
