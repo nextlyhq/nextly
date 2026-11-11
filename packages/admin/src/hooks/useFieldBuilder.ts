@@ -64,6 +64,7 @@ import {
   canUndo as historyCanUndo,
   commit,
   createHistory,
+  currentId,
   currentState,
   redo as historyRedo,
   startFrom,
@@ -140,7 +141,9 @@ export interface UseFieldBuilderReturn<T extends FieldValues = FieldValues> {
    * Edits made after it, while the save was on its way, stay undoable. With
    * no `saved`, the fields shown are the start.
    */
-  clearHistory: (saved?: BuilderField[]) => void;
+  clearHistory: (saved?: BuilderField[], step?: number) => void;
+  /** Where the fields shown stand in the history; `clearHistory` takes it. */
+  historyStep: number;
   canUndo: boolean;
   canRedo: boolean;
   /** Step back; the fields before and after, or null with nothing to undo. */
@@ -451,11 +454,11 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
     setHistory(createHistory(next));
   }, []);
 
-  const clearHistory = useCallback((saved?: BuilderField[]) => {
+  const clearHistory = useCallback((saved?: BuilderField[], step?: number) => {
     setHistory(prev =>
       saved === undefined
         ? createHistory(currentState(prev))
-        : startFrom(prev, saved)
+        : startFrom(prev, saved, step)
     );
   }, []);
 
@@ -530,6 +533,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
     validateFields,
     resetFields,
     clearHistory,
+    historyStep: currentId(history),
     canUndo: historyCanUndo(history),
     canRedo: historyCanRedo(history),
     undo,

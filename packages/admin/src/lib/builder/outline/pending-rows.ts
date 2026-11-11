@@ -78,7 +78,7 @@ export function fieldsWithDeleted(
           : after.length > 0
             ? Math.min(...after)
             : rows.length;
-      rows.splice(place, 0, gone);
+      rows.splice(place, 0, withoutPresent(gone));
       changed = true;
     }
     // Into the containers still there; a deleted one keeps what it held.
@@ -88,6 +88,18 @@ export function fieldsWithDeleted(
         : row
     );
   };
+
+  // A deleted container's fields, less any still here elsewhere: a field
+  // moved out before the delete shows where it is now, and only there.
+  function withoutPresent(field: BuilderField): BuilderField {
+    if (!field.fields) return field;
+    return {
+      ...field,
+      fields: field.fields
+        .filter(child => !present.has(child.id))
+        .map(withoutPresent),
+    };
+  }
 
   const rows = level(null, current);
   return changed ? rows : current;

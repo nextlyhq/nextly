@@ -66,6 +66,7 @@ function makeBuilder(initial: BuilderField[]) {
     validateFields: vi.fn(() => ({ valid: true })),
     resetFields: vi.fn(),
     clearHistory: vi.fn(),
+    historyStep: 0,
     canUndo: false,
     canRedo: false,
     undo: vi.fn(() => null),

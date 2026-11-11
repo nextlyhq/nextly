@@ -113,11 +113,16 @@ export function useOutlineActions(
         if (!node?.meta && !(node && isPendingDelete(node))) call().select(id);
         focusRow(id);
       },
-      addInside: id => call().addAt({ parentFieldId: id }),
+      addInside: id => {
+        const node = nodeOf(id);
+        // The builder no longer holds a deleted container to add into.
+        if (!node || !isPendingDelete(node))
+          call().addAt({ parentFieldId: id });
+      },
       addAfter: id => {
         const node = nodeOf(id);
         // A read-only row, or one in a read-only container, offers no place.
-        if (node?.own && node.readOnly === null) {
+        if (node?.own && node.readOnly === null && !isPendingDelete(node)) {
           call().addAt(positionAfter(node));
         }
       },

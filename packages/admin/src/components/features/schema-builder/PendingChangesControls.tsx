@@ -37,6 +37,19 @@ type Props = {
   locked?: boolean;
 };
 
+/**
+ * Whether a modal dialog is open over the builder. While one is, the keys are
+ * the dialog's: a confirmation shows a previewed set of changes, and an undo
+ * behind it would change what is saved without the dialog showing it.
+ */
+function dialogOpen(): boolean {
+  return (
+    document.querySelector(
+      '[role="alertdialog"], [role="dialog"][aria-modal="true"]'
+    ) !== null
+  );
+}
+
 /** "No unsaved changes", "1 unsaved change", "3 unsaved changes". */
 function countWords(count: number): string {
   if (count === 0) return "No unsaved changes";
@@ -69,13 +82,33 @@ export function PendingChangesControls({
     if (said) announce(said);
   };
 
+  const noDialog = () => !dialogOpen();
   // Not while typing: inside a text input these keys undo the text, which is
   // what a person typing expects them to do.
   useKeyboardShortcuts(
     [
-      { key: "z", ctrl: true, action: undo, description: "Undo" },
-      { key: "z", ctrl: true, shift: true, action: redo, description: "Redo" },
-      { key: "y", ctrl: true, action: redo, description: "Redo" },
+      {
+        key: "z",
+        ctrl: true,
+        action: undo,
+        description: "Undo",
+        when: noDialog,
+      },
+      {
+        key: "z",
+        ctrl: true,
+        shift: true,
+        action: redo,
+        description: "Redo",
+        when: noDialog,
+      },
+      {
+        key: "y",
+        ctrl: true,
+        action: redo,
+        description: "Redo",
+        when: noDialog,
+      },
     ],
     { name: "builder-pending-changes", enabled: !locked }
   );

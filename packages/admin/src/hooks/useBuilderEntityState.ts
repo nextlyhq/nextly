@@ -207,8 +207,8 @@ export function useBuilderEntityState<TEntity>({
   const pinFields = useCallback(() => {
     const saved = builder.fields;
     setOriginalFields(saved.filter(f => !f.isSystem));
-    clearHistory(saved);
-  }, [builder.fields, clearHistory]);
+    clearHistory(saved, builder.historyStep);
+  }, [builder.fields, builder.historyStep, clearHistory]);
 
   const pinSettings = useCallback((saved: BuilderSettingsValues) => {
     setOriginalSettings(saved);
