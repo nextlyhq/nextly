@@ -49,10 +49,17 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
 /** An author as a route reads it populated, at `depth: 1`. */
 const SARA = { id: "a1", name: "Sara Khan", slug: "sara-khan" };
 
-/** A context reading the posts' declared fields, and the `about` Single's. */
+/**
+ * A context reading the posts' declared fields, and the `about` Single's, on
+ * a site whose address record holds no page's address yet.
+ */
 function context(): PluginContext {
   return {
+    self: { collections: {} },
+    config: {},
+    publicAddresses: { defaultLanguage: async () => "en" },
     services: {
+      ownCollections: { listEntries: async () => ({ data: [] }) },
       collections: {
         getCollection: async (slug: string) => ({
           name: slug,

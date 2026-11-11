@@ -24,7 +24,8 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
-import { seoPageMetadata } from "./resolver/provider";
+import { noRules, seoPageMetadata } from "./resolver/provider";
+import { decideStanding, stagingGuard } from "./staging/guard";
 import {
   generateSitemap,
   resolveBaseOrigin,
@@ -211,6 +212,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       pageMetadata: ctx =>
         withStructuredData(ctx, seoPageMetadata(ctx), readStructuredDataRules),
     },
+    // Every host but the site's production addresses is kept out of search.
+    proxy: [stagingGuard(noRules)],
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -321,6 +324,16 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // record up to date with content saved while the plugin was absent or
       // addresses a deploy moved.
       void startCatchUp(ctx);
+      // Decided once, the first time the plugin starts on a site: whether a
+      // site with no production address known is kept out of search.
+      void decideStanding(ctx).catch((error: unknown) => {
+        ctx.logger.error(
+          "The SEO plugin could not record the site's standing",
+          {
+            error,
+          }
+        );
+      });
     },
   });
 }
