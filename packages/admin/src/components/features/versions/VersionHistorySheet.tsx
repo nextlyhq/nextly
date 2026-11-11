@@ -38,7 +38,6 @@ import {
 } from "@admin/hooks/queries/useVersions";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
-import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
@@ -46,6 +45,7 @@ import { useDocumentHistory } from "./document-history-context";
 import { useHistoryAddress } from "./history-address";
 import { loadedWindow } from "./history-story";
 import { HistoryStoryList } from "./HistoryStoryList";
+import { restoreIntoEditor } from "./restore-into-editor";
 import { restorePlan } from "./restore-plan";
 import { RestoreFieldsDialog } from "./RestoreFieldsDialog";
 import { useMarkVersionSeen } from "./useMarkVersionSeen";
@@ -365,26 +365,18 @@ export function VersionHistorySheet({
    * stored: the person's own save or publish is the only write, and the toast
    * offers to take the restore back.
    */
-  const restoreIntoEditor = useCallback(
+  const restoreChosen = useCallback(
     (names: string[]) => {
       if (!editor || selected === null) return;
-      const chosen = new Set(names);
-      const values = Object.fromEntries(
-        restoreRows
-          .filter(row => chosen.has(row.name) && !row.disabled)
-          .map(row => [row.name, row.value])
-      );
-      const applied = editor.restore.apply(values, selected);
-      const count = Object.keys(values).length;
       setConfirmingRestore(false);
       onOpenChange(false);
-      const when = viewedAbout?.createdAt
-        ? formatDateTime(viewedAbout.createdAt)
-        : `version ${selected}`;
-      toast.success(
-        `${count === 1 ? "1 field" : `${count} fields`} restored from ${when}`,
-        { action: { label: "Undo", onClick: () => applied.undo() } }
-      );
+      restoreIntoEditor({
+        editor,
+        rows: restoreRows,
+        names,
+        versionNo: selected,
+        savedAt: viewedAbout?.createdAt ?? null,
+      });
     },
     [editor, selected, restoreRows, onOpenChange, viewedAbout]
   );
@@ -898,7 +890,7 @@ export function VersionHistorySheet({
             // the dialog is open (a claim arriving mid-dialog), and an open
             // dialog must not restore past a refusal that arrived after it.
             onConfirm={names => {
-              if (canRestore && !restoreRefused) restoreIntoEditor(names);
+              if (canRestore && !restoreRefused) restoreChosen(names);
             }}
           />
         ) : null}

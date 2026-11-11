@@ -56,6 +56,8 @@ import {
   type RestoreAffordance,
   type ViewedVersion,
 } from "./document-history-context";
+import { restoreIntoEditor } from "./restore-into-editor";
+import { restorePlan } from "./restore-plan";
 import { snapshotToFormValues } from "./snapshot-to-form-values";
 import { useChangeNavigation } from "./useChangeNavigation";
 import {
@@ -71,7 +73,10 @@ import {
   type ChangesState,
   type VersionChanges,
 } from "./version-changes";
-import { VersionChangesForm } from "./VersionChangesForm";
+import {
+  VersionChangesForm,
+  type VersionFieldRestore,
+} from "./VersionChangesForm";
 import { VersionComparisonBar } from "./VersionComparisonBar";
 import { WithheldFieldsProvider } from "./withheld-fields-context";
 
@@ -484,6 +489,7 @@ function VersionContent({
   changes,
   order,
   current,
+  restoreField,
 }: {
   viewing: ViewedVersion;
   fields: FieldConfig[];
@@ -491,6 +497,8 @@ function VersionContent({
   changes: VersionChanges | null;
   order: readonly string[];
   current: string | null;
+  /** "Restore this field" on each changed field, where restore is offered. */
+  restoreField?: VersionFieldRestore;
 }) {
   const outerLocale = useEntryLocale();
   const { getLocale, defaultLocale } = useLocalization();
@@ -551,6 +559,7 @@ function VersionContent({
               current={current}
               showUnchanged={showUnchanged}
               onToggleUnchanged={() => setShowUnchanged(v => !v)}
+              {...(restoreField ? { restoreField } : {})}
             />
           ) : (
             // Nothing to mark yet (the first version, or while what changed is
@@ -561,6 +570,51 @@ function VersionContent({
       </TranslationFieldProvider>
     </EntryLocaleProvider>
   );
+}
+
+/**
+ * "Restore this field" for the version on screen: the same restore as
+ * "Restore…", one field at a time, offered only where the history offers
+ * restoring and an editor is there to take the value. Each field is judged
+ * against the editor as it stands when the version is shown.
+ */
+function useFieldRestore(
+  viewing: ViewedVersion,
+  editor: EditorRestoreSurface | undefined,
+  restore: RestoreAffordance | null
+): VersionFieldRestore | undefined {
+  const offered = Boolean(editor && restore?.canRestore);
+  const rows = useMemo(() => {
+    if (!offered || !editor || viewing.isLoading || viewing.error) return null;
+    const snapshot =
+      typeof viewing.snapshot === "object" && viewing.snapshot !== null
+        ? (viewing.snapshot as Record<string, unknown>)
+        : {};
+    return restorePlan({
+      fields: editor.fields,
+      snapshot,
+      current: editor.currentValues(),
+      dirty: editor.dirtyFields(),
+      withheld: viewing.withheld,
+      canEdit: editor.canEdit,
+      ...(editor.translatable ? { translatable: editor.translatable } : {}),
+    });
+  }, [offered, editor, viewing]);
+  return useMemo(() => {
+    if (!rows || !editor) return undefined;
+    const byName = new Map(rows.map(row => [row.name, row]));
+    return {
+      rowFor: name => byName.get(name),
+      restore: name =>
+        restoreIntoEditor({
+          editor,
+          rows,
+          names: [name],
+          versionNo: viewing.versionNo,
+          savedAt: viewing.about?.createdAt ?? null,
+        }),
+    };
+  }, [rows, editor, viewing.versionNo, viewing.about]);
 }
 
 /**
@@ -581,8 +635,9 @@ function ViewedVersionFrame({
   actionsDisabled: boolean;
   bannerSlot: HTMLElement | null;
 }) {
-  const { restore } = useDocumentHistory();
+  const { restore, editor } = useDocumentHistory();
   const actions = useVersionActions(actionsDisabled);
+  const restoreField = useFieldRestore(viewing, editor, restore);
   const { changes, state } = useViewedChanges(viewing);
   const layout = useMemo(() => layoutNames(fields), [fields]);
   const order = useMemo(
@@ -636,6 +691,7 @@ function ViewedVersionFrame({
           changes={changes}
           order={order}
           current={current}
+          {...(restoreField ? { restoreField } : {})}
         />
         {actions ? (
           <VersionPhoneBar
