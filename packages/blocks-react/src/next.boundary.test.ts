@@ -99,6 +99,31 @@ describe("under Cache Components", () => {
       }
     );
 
+    it("hands its params to the page beneath the boundary, so a [locale] segment is read", async () => {
+      const reader = recordingReader();
+      const route = createPublicSinglePage({
+        slug: "homepage",
+        field: "content",
+        blocks,
+        nextly: reader as never,
+      });
+      const watched = { read: false };
+      const params = Promise.resolve({
+        get locale() {
+          watched.read = true;
+          return "de";
+        },
+      });
+
+      const boundary = await route.SinglePage({ params });
+
+      expect(watched.read).toBe(false);
+      // No site is running here, so the language is one it does not have:
+      // the body answers not found, having read the segment.
+      await throughBoundary(Promise.resolve(boundary)).catch(() => undefined);
+      expect(watched.read).toBe(true);
+    });
+
     it("asks its draft gate beneath the boundary", async () => {
       const reader = recordingReader();
       const draft = vi.fn(() => false);

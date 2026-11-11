@@ -31,6 +31,7 @@ const SRC = join(process.cwd(), "src");
 const SELF_MEASURING_ROUTES = [
   "pages/dashboard/entries/[slug]/[id]/index.tsx",
   "pages/dashboard/entries/[slug]/create.tsx",
+  "pages/dashboard/singles/[slug]/index.tsx",
 ] as const;
 
 /** A `PluginSlot` wrapper and whatever attributes it carries. */
@@ -80,12 +81,15 @@ describe("content routes read the shared measure", () => {
       // a route the test never read.
       expect(containers.length).toBeGreaterThan(0);
       for (const attrs of containers) {
-        // Two legal answers, and no third. `CONTENT_PAGE_MEASURE` is the page
-        // bounding the content; `full` is the content bounding itself. A raw
-        // `"form"` or `"wide"` here is a page deciding a width on its own,
-        // which is what drifts away from the frame beside it.
+        // Three legal answers, and no fourth. `CONTENT_PAGE_MEASURE` is the
+        // page bounding the content (a message in place of the editor);
+        // `type="editor"` is the Editor page, whose editor bounds its own field
+        // column; `full` is a full-width page within the gutter. A raw `"form"`
+        // or `"wide"` here is a page deciding a width on its own, which is what
+        // drifts away from the frame beside it.
         const legal =
           attrs.includes("width={CONTENT_PAGE_MEASURE}") ||
+          attrs.includes('type="editor"') ||
           attrs.includes('width="full"');
         expect(legal, `illegal width in ${route}: ${attrs.trim()}`).toBe(true);
       }
@@ -107,8 +111,8 @@ describe("content routes read the shared measure", () => {
       const first = [...skeleton.matchAll(CONTAINER_TAG)][0]?.[1] ?? "";
       expect(first, `no container found in ${route}'s skeleton`).not.toBe("");
       expect(
-        first.includes('width="full"'),
-        `${route}: the skeleton bounds the page while its frame does not`
+        first.includes('type="editor"'),
+        `${route}: the skeleton is not drawn in the Editor page that replaces it`
       ).toBe(true);
     }
   });
@@ -137,8 +141,8 @@ describe("content routes read the shared measure", () => {
 
   it("discriminates: a slot under the PAGE-measured frame stays unbounded", () => {
     // The control, and it has to be capable of the other answer. The custom
-    // edit view keeps the page measure, so its slot is bounded BY the page and
-    // must not carry a length of its own — if this ever comes back bounded,
+    // edit view's page sets no measure of its own and its slot carries none
+    // either: the view lays out its own width — if this ever comes back bounded,
     // either the frames were conflated or the scan stopped telling them apart,
     // and the assertion above is passing on the wrong region.
     const source = readFileSync(join(SRC, EDIT_ROUTE), "utf8");
