@@ -9,7 +9,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { definePlugin, type PluginContext } from "@nextlyhq/plugin-sdk";
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -99,23 +99,24 @@ describe.each(getConfiguredTestDialects())(
     let singleEditor = "";
 
     beforeAll(async () => {
-      const probe = definePlugin({
-        name: "@test/seo-tab-probe",
-        version: "0.0.0",
-        nextly: ">=0.0.0",
-        init(context) {
-          ctx = context;
-        },
+      // The SEO plugin as it ships, with its own context kept: the page's
+      // answer reads the plugin's own address record through it.
+      const seo = seoPlugin({
+        collections: ["posts"],
+        singles: ["homepage"],
+        sitemap: false,
       });
+      const seoInit = seo.init;
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
         plugins: [
-          seoPlugin({
-            collections: ["posts"],
-            singles: ["homepage"],
-            sitemap: false,
-          }),
-          probe,
+          {
+            ...seo,
+            init(context) {
+              ctx = context;
+              return seoInit?.(context);
+            },
+          },
         ],
         collections: [
           defineCollection({
@@ -225,7 +226,7 @@ describe.each(getConfiguredTestDialects())(
         document: TYPED_POST,
       });
       const { levels } = (await response.json()) as SeoTabContext;
-      if (ctx === undefined) throw new Error("the probe was not started");
+      if (ctx === undefined) throw new Error("the plugin was not started");
 
       const served = await resolveSeo(ctx, {
         source: { kind: "entry", collection: "posts", entry: TYPED_POST },
@@ -240,6 +241,27 @@ describe.each(getConfiguredTestDialects())(
       expect(tab).toEqual(served);
       expect(tab.title).toEqual({ value: "Typed title", from: "page" });
       expect(tab.robots.value.index).toBe(false);
+    });
+
+    it("answers a saved post its own address, which the record says it holds", async () => {
+      const saved = await t.nextly.create({
+        collection: "posts",
+        data: { title: "Held", slug: `held-${dialect}` },
+      });
+      const id = String((saved as { item?: { id: unknown } }).item?.id ?? "");
+      const ask = (with_id: boolean) =>
+        resolve(editor, {
+          kind: "collection",
+          slug: "posts",
+          ...(with_id ? { id } : {}),
+          document: { title: "Held", slug: `held-${dialect}` },
+        });
+
+      const own = (await (await ask(true)).json()) as SeoTabContext;
+      expect(own.levels.address).toBe(`/blog/held-${dialect}`);
+      // Without its id the document reads as another page at that address.
+      const other = (await (await ask(false)).json()) as SeoTabContext;
+      expect(other.levels.address).toBeUndefined();
     });
 
     it("answers someone who may create posts, as on a new post's page", async () => {

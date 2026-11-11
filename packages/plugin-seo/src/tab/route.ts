@@ -51,6 +51,8 @@ const RESOLVE_BODY = z.object({
   kind: z.enum(["collection", "single"]),
   slug: z.string().min(1),
   locale: z.string().min(1).nullish(),
+  /** The saved entry's id; none while it is being created. */
+  id: z.string().min(1).nullish(),
   document: z.record(z.string(), z.unknown()),
 });
 
@@ -269,7 +271,13 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
         });
       }
       const locale = body.locale ?? undefined;
-      const document = withoutTyped(body.document);
+      // The form holds the fields alone: the saved entry's id says which page
+      // the address record knows it as.
+      const asTyped =
+        body.id === undefined || body.id === null
+          ? body.document
+          : { ...body.document, id: body.id };
+      const document = withoutTyped(asTyped);
       const input: PageMetadataInput = {
         ...(locale === undefined ? {} : { locale }),
         source:
@@ -298,8 +306,8 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
         ...input,
         source:
           body.kind === "collection"
-            ? { kind: "entry", collection: body.slug, entry: body.document }
-            : { kind: "single", slug: body.slug, document: body.document },
+            ? { kind: "entry", collection: body.slug, entry: asTyped }
+            : { kind: "single", slug: body.slug, document: asTyped },
       };
       if (setup.fields.includes(STRUCTURED_DATA_FIELD)) {
         answer.structuredData = await tabStructuredData(

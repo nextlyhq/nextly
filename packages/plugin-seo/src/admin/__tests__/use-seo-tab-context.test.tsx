@@ -25,7 +25,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 import { useSeoTabContext } from "../use-seo-tab-context";
 
-const TARGET = { kind: "collection" as const, slug: "posts", locale: null };
+const TARGET = {
+  kind: "collection" as const,
+  slug: "posts",
+  locale: null,
+  id: null,
+};
 
 beforeEach(() => {
   vi.useFakeTimers();

@@ -47,10 +47,15 @@ function documentOf(
   locale: string | null
 ): SeoTabDocument | null {
   if ("single" in context) {
-    return { kind: "single", slug: context.single, locale };
+    return { kind: "single", slug: context.single, locale, id: null };
   }
   if ("collection" in context) {
-    return { kind: "collection", slug: context.collection, locale };
+    return {
+      kind: "collection",
+      slug: context.collection,
+      locale,
+      id: context.entryId,
+    };
   }
   return null;
 }

@@ -76,6 +76,8 @@ test("an entry's SEO tab shows the preview, what will be used and where it comes
   await expectNoSeoFieldIn(page.getByLabel("Document panel").first());
 
   await seoTab(page).click();
+  // The panel's one read-only SEO line says whether the page is listed.
+  await expect(page.getByTestId("seo-status")).toContainText("Listed");
   await expect(page).toHaveURL(new RegExp(`tab=${TAB_ID.replace(".", "\\.")}`));
 
   // At rest: the preview, then the title and the description, and Advanced

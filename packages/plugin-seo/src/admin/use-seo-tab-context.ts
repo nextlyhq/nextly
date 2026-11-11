@@ -24,6 +24,8 @@ export interface SeoTabDocument {
   kind: "collection" | "single";
   slug: string;
   locale: string | null;
+  /** The saved entry's id; none while it is being created, or for a Single. */
+  id: string | null;
 }
 
 /** The levels last read, and whether a read is under way or failed. */
@@ -49,9 +51,10 @@ export function useSeoTabContext(
   const kind = target?.kind;
   const slug = target?.slug;
   const locale = target?.locale ?? null;
+  const id = target?.id ?? null;
   // Another document or language: its levels are not this one's, so none
   // are shown until its own are read.
-  const targetKey = `${kind ?? ""}\u0000${slug ?? ""}\u0000${locale ?? ""}`;
+  const targetKey = [kind, slug, locale, id].join("\u0000");
   const [shownFor, setShownFor] = useState(targetKey);
   if (shownFor !== targetKey) {
     setShownFor(targetKey);
@@ -60,7 +63,13 @@ export function useSeoTabContext(
 
   useEffect(() => {
     if (kind === undefined || slug === undefined) return undefined;
-    const body = { kind, slug, locale, document };
+    const body = {
+      kind,
+      slug,
+      locale,
+      ...(id === null ? {} : { id }),
+      document,
+    };
     const key = JSON.stringify(body);
     if (key === asked.current) return undefined;
     const controller = new AbortController();
@@ -96,7 +105,7 @@ export function useSeoTabContext(
       // A request stopped before its answer is asked again.
       if (!settled && asked.current === key) asked.current = null;
     };
-  }, [kind, slug, locale, document]);
+  }, [kind, slug, locale, id, document]);
 
   return state;
 }
