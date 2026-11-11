@@ -63,10 +63,28 @@ async function savedForm(page: Page, name: string): Promise<string> {
   return new URL(page.url()).pathname.replace(/^\/admin/, "");
 }
 
+/**
+ * The seeded "Meetup sign-up" form (the playground's sample forms are seeded
+ * on every run), opened from the forms list; answers its address below
+ * `/admin`. For the cases that only look: creating a form for each costs
+ * the server's request budget, which the run would otherwise spend.
+ */
+async function seededForm(page: Page): Promise<string> {
+  await gotoAdmin(page, "/collections/forms");
+  await page
+    .getByRole("button", { name: /Meetup sign-up/ })
+    .first()
+    .click();
+  await expect(page).toHaveURL(/\/collections\/forms\/(?!create$)[^/]+$/, {
+    timeout: 30_000,
+  });
+  return new URL(page.url()).pathname.replace(/^\/admin/, "");
+}
+
 test("opens each page of a form at its own address, directly and on reload", async ({
   page,
 }) => {
-  const form = await savedForm(page, "E2E Addressed Form");
+  const form = await seededForm(page);
 
   for (const [label, segment] of PAGES) {
     await gotoAdmin(page, `${form}${segment}`);
@@ -88,14 +106,14 @@ test("is an Editor page at 1920px: one banner, one heading, edge to edge", async
   page,
 }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const form = await savedForm(page, "E2E Wide Form");
+  const form = await seededForm(page);
   await gotoAdmin(page, form);
   await waitForShellAnswers(page);
 
   await expect(page.getByRole("banner")).toHaveCount(1);
   await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
   await expect(
-    page.getByRole("heading", { level: 1, name: "E2E Wide Form" })
+    page.getByRole("heading", { level: 1, name: "Meetup sign-up" })
   ).toBeVisible();
   // The controls are in that one banner, not in a bar of the page's own.
   await expect(
@@ -109,11 +127,11 @@ test("is an Editor page at 1920px: one banner, one heading, edge to edge", async
   expect(Math.round((box?.x ?? 0) + (box?.width ?? 0))).toBe(1920);
 });
 
-test("starts with the Forms panel folded, and the bar's toggle brings it back", async ({
+test("starts with the Forms panel folded, docks a field's settings at the edge, and the toggle brings the panel back", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const form = await savedForm(page, "E2E Folded Form");
+  const form = await seededForm(page);
   // A fresh visit: the choice is remembered only once the reader makes one.
   await page.evaluate(() => window.localStorage.clear());
   await gotoAdmin(page, form);
@@ -121,6 +139,26 @@ test("starts with the Forms panel folded, and the bar's toggle brings it back", 
 
   const panel = page.getByTestId("sub-sidebar");
   await expect(panel).toBeHidden();
+
+  // With the panel folded, a selected field's settings dock against the
+  // window's right edge, as tall as the window, the outline keeping the rest.
+  // Checked here rather than on a page of its own: every page load spends the
+  // server's per-minute request budget, which the run would otherwise exhaust.
+  await page
+    .getByRole("list", { name: "Form fields" })
+    .getByRole("button", { name: /^Email/ })
+    .first()
+    .click();
+  const settings = page.getByRole("complementary", { name: "Field settings" });
+  await expect(settings).toBeVisible();
+  const box = await settings.boundingBox();
+  expect(Math.round((box?.x ?? 0) + (box?.width ?? 0))).toBe(1440);
+  expect(box?.height ?? 0).toBeGreaterThan(700);
+  const outline = await page
+    .getByRole("list", { name: "Form fields" })
+    .boundingBox();
+  expect(outline?.width ?? 0).toBeGreaterThan(600);
+
   await page.getByRole("button", { name: "Show the panel" }).click();
   await expect(panel).toBeVisible();
 });
@@ -180,7 +218,7 @@ test("asks before leaving a form with unsaved changes", async ({ page }) => {
 test("the bar and its status menu pass the accessibility check", async ({
   page,
 }) => {
-  const form = await savedForm(page, "E2E Accessible Bar Form");
+  const form = await seededForm(page);
   await gotoAdmin(page, form);
   await expectNoAxeViolations(page, {
     include: '[data-slot="form-editor-bar"]',

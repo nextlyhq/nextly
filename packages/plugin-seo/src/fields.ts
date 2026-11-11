@@ -50,5 +50,12 @@ export function defaultSeoFields(): FieldConfig[] {
       label: "Hide from search engines",
       defaultValue: false,
     }),
+    // The structured data type this page is described as, where it differs
+    // from its content type's: one of the keys the SEO tab offers. Empty is
+    // the content type's choice, and a value naming no type is read as empty.
+    text({
+      name: "structuredDataType",
+      label: "Structured data type",
+    }),
   ];
 }

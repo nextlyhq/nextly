@@ -76,6 +76,17 @@ function pathsAbove(path: string): string[] {
   return above;
 }
 
+/**
+ * The claim keys of the rows that hold `path` in `locale`: the address
+ * itself, held exactly or as a range, and every range above it.
+ */
+function keysHolding(locale: string, path: string): string[] {
+  return [
+    claimKey("address", locale, path),
+    ...[path, ...pathsAbove(path)].map(at => claimKey("range", locale, at)),
+  ];
+}
+
 /** Whether `path` is `range` or below it. */
 function within(path: string, range: string): boolean {
   if (path === range) return true;
@@ -321,10 +332,7 @@ export async function addressHolders(
   locale: string | undefined
 ): Promise<AddressHolder[]> {
   const language = locale ?? defaultLanguageOf(ctx);
-  const keys = [
-    claimKey("address", language, path),
-    ...[path, ...pathsAbove(path)].map(at => claimKey("range", language, at)),
-  ];
+  const keys = keysHolding(language, path);
   const { data } = await ctx.services.ownCollections.listEntries(
     recordSlug(ctx),
     {
@@ -386,15 +394,9 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     // The address itself, held exactly or as a range, and every range above
     // it, found through the unique claim key's index rather than a scan of
     // the language's addresses.
-    const keys = [
-      claimKey("address", asked.locale, asked.path),
-      ...[asked.path, ...pathsAbove(asked.path)].map(path =>
-        claimKey("range", asked.locale, path)
-      ),
-    ];
     const atOrAbove = await rowsWhere(
       transaction,
-      { claimKey: { in: keys } },
+      { claimKey: { in: keysHolding(asked.locale, asked.path) } },
       "share"
     );
     if (asked.range !== true) return atOrAbove;

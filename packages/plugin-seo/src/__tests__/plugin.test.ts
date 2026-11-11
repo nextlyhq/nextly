@@ -57,6 +57,7 @@ describe("seoPlugin", () => {
       "canonical",
       "canonicalElsewhere",
       "noindex",
+      "structuredDataType",
     ]);
   });
 
@@ -118,6 +119,7 @@ describe("seoPlugin", () => {
       "canonical",
       "canonicalElsewhere",
       "noindex",
+      "structuredDataType",
     ]);
   });
 });

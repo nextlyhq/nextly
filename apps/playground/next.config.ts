@@ -191,6 +191,10 @@ const nextConfig: NextConfig = {
       "@nextlyhq/admin/lib/plugin-components": [
         "../../packages/admin/src/lib/plugins/plugin-components.ts",
       ],
+      // The test entry, which the widget check's page draws its board from,
+      // aliased with the rest: from `dist` it would be a second admin beside
+      // the source one, with its own registries and contexts.
+      "@nextlyhq/admin/testing": ["../../packages/admin/src/testing.tsx"],
       "@nextlyhq/plugin-form-builder": [
         "../../packages/plugin-form-builder/src/index.ts",
       ],

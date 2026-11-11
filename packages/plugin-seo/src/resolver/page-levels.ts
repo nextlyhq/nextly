@@ -114,7 +114,7 @@ function asImage(media: unknown): PageMetadataImage | undefined {
  * A media value as a share image: a populated media document, or an id
  * looked up as the system.
  */
-async function imageOf(
+export async function imageOf(
   ctx: PluginContext,
   value: unknown
 ): Promise<PageMetadataImage | undefined> {
@@ -172,7 +172,7 @@ function firstField(
  * rule forms it where the route read it in one, root-relative or on the
  * language's own domain. None where its type declares no address.
  */
-async function addressOf(
+export async function addressOf(
   ctx: PluginContext,
   page: { type: PublicAddressType; key: string },
   document: Readonly<Record<string, unknown>>,
