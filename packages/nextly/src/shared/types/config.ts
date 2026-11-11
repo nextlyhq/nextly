@@ -69,6 +69,7 @@ import type { SingleConfig } from "../../singles/config/types";
 import type { StoragePlugin } from "../../storage/types";
 import type { UserConfig } from "../../users/config/types";
 
+import { DEFAULT_MIGRATIONS_DIR } from "./migrations-dir-default";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "./typescript-config-defaults";
 
 // ============================================================
@@ -1192,7 +1193,8 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   // and undefined is what "public" means here.
   postgres: {},
   schemasDir: "./src/db/schemas/collections",
-  migrationsDir: "./src/db/migrations",
+  // Read from its own module, which `withNextly` reads without this one.
+  migrationsDir: DEFAULT_MIGRATIONS_DIR,
   uiSchemaFile: "./ui-schema.json",
   runMigrationsOnBoot: false,
   // The schema lock's lease. A holder renews it, so it no longer has to outlast the longest
