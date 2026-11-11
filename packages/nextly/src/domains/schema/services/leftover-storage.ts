@@ -65,6 +65,13 @@ export interface ClearLeftoverStorageArgs {
    * referencing a field group's leftover belongs to something else.
    */
   makesJunctionTables: boolean;
+  /**
+   * The junction tables this create is about to build, by the names its own fields give them. A
+   * leftover junction can outlive its main table (PostgreSQL's CASCADE strips the junction's
+   * foreign key and leaves the table), where nothing references the main table any more, so the
+   * names the create will build are looked at directly.
+   */
+  plannedJunctions?: readonly string[];
   logger: { info(message: string): void };
 }
 
@@ -136,7 +143,11 @@ export async function clearLeftoverStorage(
   const companion = `${tableName}_locales`;
   const mainStands = await adapter.tableExists(tableName);
   const companionStands = await adapter.tableExists(companion);
-  if (!mainStands && !companionStands) return;
+  const plannedStanding = await standingAmong(
+    adapter,
+    args.plannedJunctions ?? []
+  );
+  if (!mainStands && !companionStands && plannedStanding.length === 0) return;
 
   const db = adapter.getDrizzle();
   const dialect = adapter.getCapabilities().dialect;
@@ -153,10 +164,12 @@ export async function clearLeftoverStorage(
   );
   if (others.length > 0) throw referencedRefusal(args, others);
 
+  // A planned junction still referencing the main table was found above as well; once each.
+  const ownJunctions = [...new Set([...junctions, ...plannedStanding])];
   const family = [
     ...(mainStands ? [tableName] : []),
     ...(companionStands ? [companion] : []),
-    ...junctions,
+    ...ownJunctions,
   ];
   const occupied = await occupiedAmong(db, dialect, family);
   if (occupied.length > 0) throw occupiedRefusal(args, occupied);
@@ -164,13 +177,25 @@ export async function clearLeftoverStorage(
   args.logger.info(
     `Dropping empty unregistered tables ${family.map(table => `"${table}"`).join(", ")} before creating the ${KIND_NAMES[args.kind]} "${args.slug}"`
   );
-  for (const table of junctions) {
+  for (const table of ownJunctions) {
     await adapter.dropTable(table, {
       ifExists: true,
       cascade: dialect === "postgresql",
     });
   }
   await args.dropFamily();
+}
+
+/** Those of `tables` that stand. */
+async function standingAmong(
+  adapter: LeftoverStorageAdapter,
+  tables: readonly string[]
+): Promise<string[]> {
+  const standing: string[] = [];
+  for (const table of tables) {
+    if (await adapter.tableExists(table)) standing.push(table);
+  }
+  return standing;
 }
 
 /** The tables referencing the leftover, as this kind's own junctions and everything else. */

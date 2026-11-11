@@ -508,13 +508,18 @@ export class SingleMetadataService {
     const { clearLeftoverStorage } = await import(
       "../../schema/services/leftover-storage"
     );
+    const { junctionTablesOf } = await import(
+      "../../schema/services/field-column-descriptor"
+    );
     await clearLeftoverStorage({
       adapter,
       kind: "single",
       slug: input.slug,
       tableName: input.tableName,
-      // A Single's many-to-many fields keep their links in junction tables of its own.
+      // A Single's many-to-many fields keep their links in junction tables of its own, by the names
+      // this request's fields give them.
       makesJunctionTables: true,
+      plannedJunctions: junctionTablesOf(input.tableName, input.fields ?? []),
       logger: this.logger,
       dropFamily: () =>
         this.dropSingleStorage(input.slug, input.tableName, adapter),

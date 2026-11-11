@@ -55,13 +55,18 @@ const adapter = {
   }),
 };
 
-function clear(kind: "fieldGroup" | "single", tableName: string) {
+function clear(
+  kind: "fieldGroup" | "single",
+  tableName: string,
+  plannedJunctions: string[] = []
+) {
   return clearLeftoverStorage({
     adapter,
     kind,
     slug: "card",
     tableName,
     makesJunctionTables: kind === "single",
+    plannedJunctions,
     logger: { info: () => {} },
     dropFamily: async () => {
       dropped.push(`family:${tableName}`);
@@ -149,6 +154,33 @@ describe("clearLeftoverStorage", () => {
     await expect(clear("single", "single_home")).rejects.toMatchObject({
       publicMessage: expect.stringContaining(
         '"dc_posts_single_home_picks" (1 row)'
+      ),
+    });
+    expect(dropped).toEqual([]);
+  });
+
+  // PostgreSQL's CASCADE drops a main table's dependants' foreign keys, not the junction tables
+  // themselves: one can stand with nothing referencing anything, where the create will build it.
+  it("drops an empty junction the create will build when its main table is gone", async () => {
+    live.tables = new Set(["dc_posts_single_home_picks"]);
+
+    await clear("single", "single_home", ["dc_posts_single_home_picks"]);
+
+    expect(dropped).toEqual([
+      "dc_posts_single_home_picks",
+      "family:single_home",
+    ]);
+  });
+
+  it("refuses over a junction the create will build that holds rows, its main table gone", async () => {
+    live.tables = new Set(["dc_posts_single_home_picks"]);
+    live.rows.set("dc_posts_single_home_picks", 4);
+
+    await expect(
+      clear("single", "single_home", ["dc_posts_single_home_picks"])
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringContaining(
+        '"dc_posts_single_home_picks" (4 rows)'
       ),
     });
     expect(dropped).toEqual([]);
