@@ -225,6 +225,10 @@ describe(`the rail behind its "+ New" entry`, () => {
     });
   });
 
+  it("does not wait in the phone drawer, whose rail does not draw it", () => {
+    expect(railBehindNewMenu(rail, { isReady: false }, true)).toBe(rail);
+  });
+
   it("draws the rail as it stands once it is", () => {
     expect(railBehindNewMenu(rail, { isReady: true })).toBe(rail);
   });

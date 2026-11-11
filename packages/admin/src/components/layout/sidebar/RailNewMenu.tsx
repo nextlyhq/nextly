@@ -7,7 +7,8 @@
  * (what the reader may create) as they wait for each other's
  * (`railBehindNewMenu`): drawn before it, they would move when it arrived or,
  * where the reader may create nothing, when it was taken away. The phone's
- * drawer holds the same rail, so it draws it there too.
+ * drawer, whose "+ New" is placed separately, neither draws it nor waits on
+ * it.
  *
  * @module components/layout/sidebar/RailNewMenu
  */
@@ -26,14 +27,16 @@ export const useRailNewMenu: () => RailNewMenuState = useNewMenuTypes;
 
 /**
  * The button, once it is known what the reader may create; nothing where they
- * may create nothing.
+ * may create nothing, and nothing in the phone's drawer.
  */
 export function RailNewMenu({
+  onPhone,
   state,
 }: {
+  onPhone?: boolean;
   state: RailNewMenuState;
 }): JSX.Element | null {
-  if (!state.isReady) return null;
+  if (onPhone === true || !state.isReady) return null;
   return (
     <NewMenuView
       variant="rail"
