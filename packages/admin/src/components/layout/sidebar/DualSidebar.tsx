@@ -25,7 +25,10 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 import { useRouter } from "@admin/hooks/useRouter";
 import { useSettingsLanding } from "@admin/hooks/useSettingsLanding";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
-import { isMultilingual } from "@admin/lib/localization";
+import {
+  isMultilingual,
+  type LocalizationConfig,
+} from "@admin/lib/localization";
 import {
   filterCollectionItems,
   filterSingleItems,
@@ -90,6 +93,52 @@ type RailSections = Readonly<Record<string, boolean>>;
  */
 function sectionHasContent(id: string, sections: RailSections): boolean {
   return sections[id] ?? true;
+}
+
+/** What each rail entry's section holds, as the rail's own answers give it. */
+interface RailSectionAnswers {
+  hasCollectionsSection: boolean;
+  hasSinglesSection: boolean;
+  pluginsSectionVisible: boolean;
+  hasMediaSection: boolean;
+  hasSettingsSection: boolean;
+  hasBuildersSection: boolean;
+  locales: LocalizationConfig;
+}
+
+/** Whether each rail entry's section has anything to show, by the entry's id. */
+function useRailSections(answers: RailSectionAnswers): RailSections {
+  const {
+    hasCollectionsSection,
+    hasSinglesSection,
+    pluginsSectionVisible,
+    hasMediaSection,
+    hasSettingsSection,
+    hasBuildersSection,
+    locales,
+  } = answers;
+  return useMemo(
+    () => ({
+      // Shown while either kind has something to list; the panel shows only
+      // the kinds that do.
+      [CONTENT_RAIL_ID]: hasCollectionsSection || hasSinglesSection,
+      plugins: pluginsSectionVisible,
+      media: hasMediaSection,
+      settings: hasSettingsSection,
+      builders: hasBuildersSection,
+      // Only a site with two or more locales has anything to translate.
+      translations: isMultilingual(locales),
+    }),
+    [
+      hasCollectionsSection,
+      hasSinglesSection,
+      pluginsSectionVisible,
+      hasMediaSection,
+      hasSettingsSection,
+      hasBuildersSection,
+      locales,
+    ]
+  );
 }
 
 /**
@@ -248,7 +297,6 @@ export function DualSidebar({
     hasPermission,
   });
   const hasBuildersSection = showBuilder;
-  const translationsShown = isMultilingual(branding?.locales);
 
   /**
    * Whether a section other than Plugins draws a panel this reader can open:
@@ -301,29 +349,15 @@ export function DualSidebar({
   // Whether an entry shows, with an answer still loading read as "shown" for
   // the entries that say so below. The panel and the routes read this; what the
   // rail DRAWS is held to the entries already decided (`rail.items`).
-  // Whether each rail entry's section has anything to show, by the entry's id.
-  const sections = useMemo<RailSections>(
-    () => ({
-      // Shown while either kind has something to list; the panel shows only
-      // the kinds that do.
-      [CONTENT_RAIL_ID]: hasCollectionsSection || hasSinglesSection,
-      plugins: pluginsSectionVisible,
-      media: hasMediaSection,
-      settings: hasSettingsSection,
-      builders: hasBuildersSection,
-      // Only a site with two or more locales has anything to translate.
-      translations: translationsShown,
-    }),
-    [
-      hasCollectionsSection,
-      hasSinglesSection,
-      pluginsSectionVisible,
-      hasMediaSection,
-      hasSettingsSection,
-      hasBuildersSection,
-      translationsShown,
-    ]
-  );
+  const sections = useRailSections({
+    hasCollectionsSection,
+    hasSinglesSection,
+    pluginsSectionVisible,
+    hasMediaSection,
+    hasSettingsSection,
+    hasBuildersSection,
+    locales: branding?.locales,
+  });
 
   const isMenuItemShown = useCallback(
     (item: MainMenuItem): boolean => {
