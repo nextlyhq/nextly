@@ -30,7 +30,8 @@ import {
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
 
-import { isFormClosed } from "./form-closing-hold";
+import { heldRefusal, SETTINGS_CHANGED } from "./form-closing-hold";
+import { ALREADY_RESPONDED } from "./one-response";
 import { asPluginSubmission, prepareSubmission } from "./prepare-submission";
 import { checkSpam } from "./spam-detection";
 
@@ -357,7 +358,7 @@ export async function submitForm(
         return {
           success: false,
           outcome: "duplicate",
-          error: "You have already submitted this form.",
+          error: ALREADY_RESPONDED,
         };
       }
     }
@@ -449,7 +450,9 @@ export async function submitForm(
         pluginConfig.formSubmissionOverrides.slug,
         asPluginSubmission(submissionData, {
           keepAsEvidence: isContentSpam,
-          form: { id: form.id, fields: form.fields },
+          // Its settings too: the seam makes the row's one-response key from
+          // them.
+          form: { id: form.id, fields: form.fields, settings: form.settings },
         }),
         // Public form submission — create as system. No ambient user; an
         // empty context already resolves to system, but be explicit.
@@ -472,12 +475,35 @@ export async function submitForm(
       // went to a submission stored first, or the closing time passed since
       // the check above, and this one is told what a visitor to a closed
       // form is told.
-      if (isFormClosed(error)) {
+      const held = heldRefusal(error);
+      if (held === "closed") {
         logger.info?.("Form submission refused (form closed)", { formSlug });
         return {
           success: false,
           outcome: "closed",
           error: closedMessageOf(form),
+        };
+      }
+      if (held === "changed") {
+        logger.info?.("Form submission refused (settings changed)", {
+          formSlug,
+        });
+        return { success: false, outcome: "failed", error: SETTINGS_CHANGED };
+      }
+      // The database refused a second submission with the same one-response
+      // key: one with the same email or network was stored first, even if
+      // only a moment before.
+      if (
+        error instanceof NextlyError &&
+        (error as { code?: unknown }).code === "DUPLICATE"
+      ) {
+        logger.info?.("Repeat submission rejected (one response per person)", {
+          formSlug,
+        });
+        return {
+          success: false,
+          outcome: "duplicate",
+          error: ALREADY_RESPONDED,
         };
       }
       // The seam refuses a submission over the limit, and refuses it the same

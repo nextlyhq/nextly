@@ -46,6 +46,8 @@ import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
 import { closedMessageOf, pastClosingTime } from "../utils/form-closing";
 import { normalizeFormSettings } from "../utils/form-settings";
 
+import { type KeyedSubmission, responseKeyOf } from "./one-response";
+
 /** The mark on a refusal for a closed form, for the caller to recognise it. */
 const FORM_CLOSED = "form-builder:form-closed";
 
@@ -54,6 +56,20 @@ type InTransactionHandler = Parameters<
 >[1];
 type InTransactionContext = Parameters<InTransactionHandler>[0];
 type OwnCollections = PluginContext["services"]["ownCollections"];
+type Digests = PluginContext["security"]["digests"];
+
+/** What the hold reads with. */
+interface HoldDeps {
+  own: OwnCollections;
+  digests: Digests;
+}
+
+/** The mark on a refusal for a setting changed while the write was in flight. */
+const SETTINGS_CHANGED_MARK = "form-builder:settings-changed";
+
+/** What a submission refused for a setting changed in flight is told. */
+export const SETTINGS_CHANGED =
+  "This form's settings changed while your response was being sent. Please send it again.";
 
 export interface FormLimitSlugs {
   forms: string;
@@ -120,26 +136,37 @@ async function formOf(
  * left alone.
  */
 async function holdFormClosing(
-  own: OwnCollections,
+  deps: HoldDeps,
   write: InTransactionContext,
   slugs: FormLimitSlugs
 ): Promise<void> {
   const submission = newSubmission(write);
   if (submission === undefined) return;
   const { formId } = submission;
-  const stored = await formOf(own, write, slugs, formId, "none");
+  const stored = await formOf(deps.own, write, slugs, formId, "none");
   if (pastClosingTime(stored.settings, new Date())) {
     throw closedRefusal(stored.form, { formId, closedBy: "date" });
   }
-  if (
-    !submission.takesAPlace ||
-    stored.settings.submissionLimit === undefined
-  ) {
-    return;
+  const limited =
+    submission.takesAPlace && stored.settings.submissionLimit !== undefined;
+  if (!limited && !keyInPlay(stored.settings, write.data)) return;
+  // Turns, one form at a time: the next submission to this form, and a
+  // change to its settings, wait here. Read again under the lock.
+  const locked = await formOf(deps.own, write, slugs, formId, "update");
+  if (submission.takesAPlace) {
+    await holdLimit(deps.own, write, slugs, formId, locked);
   }
-  // Turns, one form at a time: the next submission to this form waits here.
-  // Read again under the lock, which a change to the limit also waits for.
-  const { form, settings } = await formOf(own, write, slugs, formId, "update");
+  await holdResponseKey(deps.digests, write, formId, locked.settings);
+}
+
+/** Refuse a submission that takes the form past its limit, under the lock. */
+async function holdLimit(
+  own: OwnCollections,
+  write: InTransactionContext,
+  slugs: FormLimitSlugs,
+  formId: string,
+  { form, settings }: Awaited<ReturnType<typeof formOf>>
+): Promise<void> {
   const limit = settings.submissionLimit;
   if (limit === undefined) return;
   const { pagination } = await own.listEntriesInTransaction(
@@ -156,27 +183,71 @@ async function holdFormClosing(
   }
 }
 
+/**
+ * Whether one response per person bears on this submission: the form
+ * compares responses, or the submission was given a key under a setting the
+ * form may since have left.
+ */
+function keyInPlay(settings: { oneResponse?: string }, row: unknown): boolean {
+  const key = (row as { responseKey?: unknown } | undefined)?.responseKey;
+  return (settings.oneResponse ?? "off") !== "off" || (key ?? null) !== null;
+}
+
+/**
+ * Refuse a submission whose one-response key is not the one the form's
+ * setting, as stored now, gives it. The key was made before the write, from
+ * the settings read then; a change of mode or Email field committed since
+ * would leave a key no longer compared by anything, or none where one is
+ * owed. The visitor sends it again, under the setting that applies.
+ */
+async function holdResponseKey(
+  digests: Digests,
+  write: InTransactionContext,
+  formId: string,
+  settings: Awaited<ReturnType<typeof formOf>>["settings"]
+): Promise<void> {
+  const expected = await responseKeyOf(
+    () => digests,
+    settings,
+    write.data as KeyedSubmission
+  );
+  const stored =
+    (write.data as { responseKey?: unknown } | undefined)?.responseKey ?? null;
+  if (expected === stored) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: SETTINGS_CHANGED,
+    logContext: { cause: SETTINGS_CHANGED_MARK, formId },
+  });
+}
+
 /** Hold every form's closing on the submissions this plugin stores. */
 export function registerFormClosing(
-  ctx: Pick<PluginContext, "hooks" | "services">,
+  ctx: Pick<PluginContext, "hooks" | "services" | "security">,
   slugs: FormLimitSlugs
 ): void {
+  const deps: HoldDeps = {
+    own: ctx.services.ownCollections,
+    digests: ctx.security.digests,
+  };
   ctx.hooks.onInTransaction(slugs.submissions, write =>
-    holdFormClosing(ctx.services.ownCollections, write, slugs)
+    holdFormClosing(deps, write, slugs)
   );
 }
 
-/** Whether `error`, or one it was made from, is a closed form's refusal. */
-export function isFormClosed(error: unknown): boolean {
+/**
+ * Which of the hold's refusals `error` is, or one it was made from: a closed
+ * form's, or a setting changed while the submission was in flight.
+ */
+export function heldRefusal(error: unknown): "closed" | "changed" | undefined {
   let current: unknown = error;
   for (let depth = 0; depth < 10 && current; depth += 1) {
-    if (
-      current instanceof NextlyError &&
-      current.logContext?.cause === FORM_CLOSED
-    ) {
-      return true;
+    if (current instanceof NextlyError) {
+      const cause = current.logContext?.cause;
+      if (cause === FORM_CLOSED) return "closed";
+      if (cause === SETTINGS_CHANGED_MARK) return "changed";
     }
     current = (current as { cause?: unknown }).cause;
   }
-  return false;
+  return undefined;
 }
