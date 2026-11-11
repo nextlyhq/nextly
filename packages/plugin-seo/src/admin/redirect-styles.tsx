@@ -52,6 +52,7 @@ select.nx-seo-in{font-family:inherit}
 .nx-seo-res.bad{color:var(--nx-danger-text)}
 .nx-seo-res.same{color:var(--nx-muted-foreground)}
 .nx-seo-badrow td{background:var(--nx-warning-surface)}
+.nx-seo-visits{white-space:nowrap}
 .nx-seo-hits{font-variant-numeric:tabular-nums;font-weight:600}
 .nx-seo-hitbar{display:inline-block;height:6px;border-radius:999px;background:var(--nx-foreground);vertical-align:middle;margin-left:8px;opacity:.75}
 .nx-seo-moved{display:block;margin-top:2px;font-family:inherit;font-size:12px;color:var(--nx-warning-text)}

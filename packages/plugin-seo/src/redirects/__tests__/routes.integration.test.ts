@@ -28,7 +28,7 @@ import { recordNotFound } from "../../not-found/log";
 import { keptSeoContext, logNotFound } from "../../not-found/report";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../collection";
-import { listRedirects, redirectRoutes } from "../routes";
+import { listNotFound, listRedirects, redirectRoutes } from "../routes";
 
 let current: TestNextly | undefined;
 
@@ -491,6 +491,24 @@ describe.each(getConfiguredTestDialects())(
           .map(item => item.from)
           .sort()
       ).toEqual(["/old-1", "/old-2", "/old-3", "/old-4", "/old-5"]);
+      expect(body.meta).toMatchObject({ total: 5, hasNext: false });
+    });
+
+    it("lists every address not found, past the first page of rows", async () => {
+      const { seo } = await boot(dialect);
+      for (const n of [1, 2, 3, 4, 5]) {
+        await recordNotFound(seo, { locale: "en", path: `/gone-${n}` });
+      }
+
+      // Two rows a page: three pages, the last one short.
+      const listed = await listNotFound(seo, 2);
+      const body = (await listed.json()) as Record<string, unknown>;
+
+      expect(
+        items(body)
+          .map(item => item.path)
+          .sort()
+      ).toEqual(["/gone-1", "/gone-2", "/gone-3", "/gone-4", "/gone-5"]);
       expect(body.meta).toMatchObject({ total: 5, hasNext: false });
     });
 

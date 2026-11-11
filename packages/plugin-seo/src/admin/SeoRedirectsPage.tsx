@@ -597,7 +597,7 @@ function NotFoundList(props: {
                       </span>
                     )}
                   </td>
-                  <td data-label="Visits">
+                  <td className="nx-seo-visits" data-label="Visits">
                     <span className="nx-seo-hits">{row.hits}</span>
                     <span
                       className="nx-seo-hitbar"

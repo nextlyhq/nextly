@@ -21,7 +21,7 @@ import { z } from "zod";
 
 import { recordSlug, rowOf } from "../address-record/participant";
 import { NOT_FOUND_SLUG, notFoundSlug } from "../not-found/collection";
-import { closestPage } from "../not-found/suggest";
+import { closestPageIn, type LivePage } from "../not-found/suggest";
 
 import { REDIRECTS_SLUG, redirectsSlug } from "./collection";
 import type { NotFoundView, RedirectView } from "./contract";
@@ -123,29 +123,29 @@ async function bodyOf(req: Request): Promise<unknown> {
 }
 
 /**
- * Every redirect, newest first, read `pageSize` rows at a time: the list
- * route's answer, the page size a parameter so a test can cross a page.
+ * Every row of one of the plugin's collections in `sort` order, read
+ * `pageSize` rows at a time until a short page.
  */
-export async function listRedirects(
+async function everyRow(
   ctx: PluginContext,
-  pageSize: number = MOST_LISTED
-): Promise<Response> {
-  const entries: unknown[] = [];
+  slug: string,
+  sort: { field: string; direction: "asc" | "desc" },
+  pageSize: number
+): Promise<unknown[]> {
+  const rows: unknown[] = [];
   for (let page = 1; ; page++) {
-    const { data } = await ctx.services.ownCollections.listEntries(
-      redirectsSlug(ctx),
-      {
-        pagination: { limit: pageSize, page },
-        sort: { field: "createdAt", direction: "desc" },
-        depth: 0,
-      }
-    );
-    entries.push(...(data as unknown[]));
-    if ((data as unknown[]).length < pageSize) break;
+    const { data } = await ctx.services.ownCollections.listEntries(slug, {
+      pagination: { limit: pageSize, page },
+      sort,
+      depth: 0,
+    });
+    rows.push(...(data as unknown[]));
+    if ((data as unknown[]).length < pageSize) return rows;
   }
-  const items = await Promise.all(
-    entries.map(entry => viewOf(redirectOf(entry)))
-  );
+}
+
+/** A whole list as one page, in the list envelope. */
+function wholeList<T>(items: T[]): Response {
   return respondList(items, {
     total: items.length,
     page: 1,
@@ -154,6 +154,25 @@ export async function listRedirects(
     hasNext: false,
     hasPrev: false,
   });
+}
+
+/**
+ * Every redirect, newest first: the list route's answer, the page size a
+ * parameter so a test can cross a page.
+ */
+export async function listRedirects(
+  ctx: PluginContext,
+  pageSize: number = MOST_LISTED
+): Promise<Response> {
+  const entries = await everyRow(
+    ctx,
+    redirectsSlug(ctx),
+    { field: "createdAt", direction: "desc" },
+    pageSize
+  );
+  return wholeList(
+    await Promise.all(entries.map(entry => viewOf(redirectOf(entry))))
+  );
 }
 
 async function addRedirect(
@@ -258,9 +277,9 @@ async function deleteRedirect(ctx: PluginRouteContext): Promise<Response> {
 }
 
 /** The addresses pages hold now, as visitors open them: what is suggested from. */
-async function livePages(ctx: PluginContext): Promise<string[]> {
+async function livePages(ctx: PluginContext): Promise<LivePage[]> {
   const redirects = redirectsSlug(ctx);
-  const live: string[] = [];
+  const live: LivePage[] = [];
   for (let page = 1; live.length < MOST_CANDIDATES; page++) {
     const { data } = await ctx.services.ownCollections.listEntries(
       recordSlug(ctx),
@@ -275,7 +294,10 @@ async function livePages(ctx: PluginContext): Promise<string[]> {
       const row = rowOf(entry);
       if (row.address === null || row.holder?.collection === redirects)
         continue;
-      live.push(await servedOf(row.address.path, row.address.locale));
+      live.push({
+        locale: row.address.locale,
+        path: await servedOf(row.address.path, row.address.locale),
+      });
     }
     if ((data as unknown[]).length < PAGE) break;
   }
@@ -291,7 +313,7 @@ function isoOf(seen: unknown): string {
 /** One logged address as the Not found tab shows it, with its suggestion. */
 async function notFoundViewOf(
   row: Record<string, unknown>,
-  live: readonly string[]
+  live: readonly LivePage[]
 ): Promise<NotFoundView> {
   const kept = typeof row.path === "string" ? row.path : "";
   const locale = typeof row.locale === "string" ? row.locale : "";
@@ -308,37 +330,37 @@ async function notFoundViewOf(
     hits: Number(row.hits ?? 0),
     lastSeen: isoOf(row.lastSeen),
     kind: row.kind === "moved" ? "moved" : "missing",
-    suggestion: closestPage(served, live),
+    // A page in the address's own language, the only one a redirect from it
+    // may go to.
+    suggestion: closestPageIn(served, locale, live),
   };
 }
 
-/** The addresses not found, most visited first, each with a suggestion. */
-async function listNotFound(ctx: PluginContext): Promise<Response> {
-  const { data } = await ctx.services.ownCollections.listEntries(
+/**
+ * Every address not found, most visited first, each with a suggestion: the
+ * Not found route's answer, the page size a parameter so a test can cross a
+ * page. The log is bounded, so every row it keeps is listed.
+ */
+export async function listNotFound(
+  ctx: PluginContext,
+  pageSize: number = MOST_LISTED
+): Promise<Response> {
+  const rows = await everyRow(
+    ctx,
     notFoundSlug(ctx),
-    {
-      pagination: { limit: MOST_LISTED, page: 1 },
-      sort: { field: "hits", direction: "desc" },
-      depth: 0,
-    }
+    { field: "hits", direction: "desc" },
+    pageSize
   );
   const live = await livePages(ctx);
   const items: NotFoundView[] = [];
-  for (const row of data as Record<string, unknown>[]) {
+  for (const row of rows as Record<string, unknown>[]) {
     items.push(await notFoundViewOf(row, live));
   }
   // Most visited first, and of those visited as often, the most recent.
   items.sort(
     (a, b) => b.hits - a.hits || Date.parse(b.lastSeen) - Date.parse(a.lastSeen)
   );
-  return respondList(items, {
-    total: items.length,
-    page: 1,
-    limit: MOST_LISTED,
-    totalPages: 1,
-    hasNext: false,
-    hasPrev: false,
-  });
+  return wholeList(items);
 }
 
 const importBody = z.object({

@@ -14,7 +14,8 @@ import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { ASKED_FOR_HEADER, REQUEST_HEADER } from "../redirects/proxy-handler";
 import { askedAddress } from "../redirects/served";
 
-import { notAPageAddress, recordNotFound } from "./log";
+import { recordNotFound } from "./log";
+import { notAPageAddress } from "./page-address";
 
 /**
  * The SEO plugin's context, once it has started, on `globalThis` so the

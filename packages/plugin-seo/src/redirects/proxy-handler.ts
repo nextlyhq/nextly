@@ -18,7 +18,7 @@ import {
   type PluginProxyHandler,
 } from "@nextlyhq/plugin-sdk";
 
-import { notAPageAddress } from "../not-found/log";
+import { notAPageAddress } from "../not-found/page-address";
 
 import { destinationOf, withQuery } from "./addresses";
 import { redirectsSlug } from "./collection";

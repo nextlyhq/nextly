@@ -69,3 +69,25 @@ export function closestPage(
   }
   return best?.path ?? null;
 }
+
+/** A live page's address, as visitors open it, and its language. */
+export interface LivePage {
+  locale: string;
+  path: string;
+}
+
+/**
+ * The closest of the live pages in `locale` to `asked`, or null: a redirect
+ * stays in its From address's language, so a page in another one is never
+ * suggested, however alike its address.
+ */
+export function closestPageIn(
+  asked: string,
+  locale: string,
+  live: readonly LivePage[]
+): string | null {
+  return closestPage(
+    asked,
+    live.filter(page => page.locale === locale).map(page => page.path)
+  );
+}
