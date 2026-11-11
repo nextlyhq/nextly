@@ -124,6 +124,21 @@ function restatedNullability(op: ChangeColumnNullableOp): string[] {
 }
 
 /**
+ * How a change must run while other sessions use the table, held to it by MySQL: a statement it
+ * cannot run that way is refused before it starts (MySQL 8.0 online DDL, `ALGORITHM` and `LOCK`),
+ * never run in a way that holds more.
+ *
+ * - `copy`: the table is copied, reads continue and writes wait (a type change).
+ * - `in-place`: changed in place, reads and writes continue (a nullability change).
+ */
+export type MysqlOnlineChange = "copy" | "in-place";
+
+const ONLINE_CLAUSE: Record<MysqlOnlineChange, string> = {
+  copy: ", ALGORITHM=COPY, LOCK=SHARED",
+  "in-place": ", ALGORITHM=INPLACE, LOCK=NONE",
+};
+
+/**
  * `MODIFY COLUMN` with what `change` asks for, a type or a nullability, and everything else as the
  * column has it now: its type and nullability where `change` leaves them, character set and
  * collation, a generated column's expression, its default, `AUTO_INCREMENT`, `ON UPDATE`,
@@ -142,7 +157,8 @@ function restatedNullability(op: ChangeColumnNullableOp): string[] {
  *
  * `characterSet: "left-out"` writes no character set or collation, for a new type that has no place
  * for them: MySQL refuses `json CHARACTER SET ..` as a syntax error. Restated when not given, so a
- * caller that does not ask builds the statement it always has.
+ * caller that does not ask builds the statement it always has. `online` adds the algorithm and lock
+ * the change must run with (`MysqlOnlineChange`); left out, MySQL chooses.
  */
 export function restatedColumn(
   tableName: string,
@@ -151,6 +167,7 @@ export function restatedColumn(
     type?: string;
     nullable?: boolean;
     characterSet?: "restated" | "left-out";
+    online?: MysqlOnlineChange;
   }
 ): string[] {
   const definition = [
@@ -173,6 +190,9 @@ export function restatedColumn(
     "IF(EXTRA LIKE '%on update %', CONCAT(' ON UPDATE ', REGEXP_SUBSTR(EXTRA, '(?<=on update )[^ ]+')), '')",
     "IF(EXTRA LIKE '%INVISIBLE%', ' INVISIBLE', '')",
     `IF(COLUMN_COMMENT = '', '', CONCAT(' COMMENT ', ${quotedForSession("COLUMN_COMMENT")}))`,
+    ...(change.online === undefined
+      ? []
+      : [literal(ONLINE_CLAUSE[change.online])]),
   ].join(", ");
   const unwritable = `EXTRA LIKE '%DEFAULT_GENERATED%' AND ${unreadableHere(decoded("COLUMN_DEFAULT"))}`;
   return runBuilt(

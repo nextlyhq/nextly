@@ -367,9 +367,9 @@ describe("BuilderOverlays", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  // A component's own fields cannot hold a field group directly: no write stores it there. Held in
-  // a group or a repeater it is stored in that container's value, so it is offered there.
-  it("offers a field group in a component only inside a group or repeater", () => {
+  // A field group's own fields hold a field group directly as well: its instances are rows of
+  // their own, under the instance holding them. It is offered there as inside a group or repeater.
+  it("offers a field group in a field group at its top level and inside a group or repeater", () => {
     const component: BuilderConfig = { ...config, kind: "field-group" };
 
     const top = renderOverlays(
@@ -378,8 +378,8 @@ describe("BuilderOverlays", () => {
     );
     expect(screen.getByRole("option", { name: /^Text/ })).toBeInTheDocument();
     expect(
-      screen.queryByRole("option", { name: /Field group/ })
-    ).not.toBeInTheDocument();
+      screen.getByRole("option", { name: /Field group/ })
+    ).toBeInTheDocument();
     top.unmount();
 
     renderOverlays(

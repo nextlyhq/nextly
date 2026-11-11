@@ -451,9 +451,9 @@ describe("a card dismissed from the default dashboard", () => {
     await beginEditing();
     await user.click(screen.getByRole("button", { name: "Add widget" }));
     const panel = await screen.findByRole("dialog", { name: "Add widget" });
-    // Its hidden card is what the gallery offers back, not a second copy.
+    // Its hidden card is what the panel's Add puts back, not a second copy.
     await user.click(
-      within(panel).getByRole("button", { name: "Add back Collections" })
+      within(panel).getByRole("button", { name: "Add Collections" })
     );
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

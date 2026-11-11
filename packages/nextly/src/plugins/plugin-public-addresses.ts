@@ -128,6 +128,12 @@ export interface PluginPublicAddresses {
    * with `held`. Waits for the boot to finish, as `held` does.
    */
   types(): Promise<PublicAddressType[]>;
+  /**
+   * The language an address is held in where a read names none: the site's
+   * default language as it is now, one chosen in Settings included, or
+   * `"en"` on a site with no languages.
+   */
+  defaultLanguage(): Promise<string>;
 }
 
 /** What the plugin context hands this surface. */
@@ -210,6 +216,8 @@ export function pluginPublicAddresses(
       await whenServicesRegistered();
       return (await siteTypes()).map(({ type }) => type);
     },
+    defaultLanguage: async () =>
+      (await heldAddresses()).defaultAddressLanguage(),
   };
 }
 
@@ -221,6 +229,11 @@ export function pluginPublicAddresses(
  */
 function heldListing() {
   return import("../domains/public-addresses/held-listing");
+}
+
+/** The addresses each document holds, loaded when first asked, as above. */
+function heldAddresses() {
+  return import("../domains/public-addresses/held-addresses");
 }
 
 /**
