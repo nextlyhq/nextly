@@ -2,11 +2,11 @@
  * How tall a dashboard card's body is, and how many list rows it holds, in
  * pixels worked out from the card's height in grid rows.
  *
- * 🔴 The one copy of these numbers. The admin draws its grid rows, its frame
- * and its list rows by them and counts the rows a list card draws with
- * {@link rowsInBody}; a widget's own `load` asks the same question through
- * {@link rowsThatFit}, so the rows a load reads and the rows the card then
- * draws come from one formula and cannot drift apart.
+ * 🔴 The one copy of these numbers. The admin draws its frame and its list
+ * rows by them. How many rows a list card draws is no longer one of them: a
+ * card is as tall as its content, and its rows are its "Number of entries"
+ * (`listEntries`, `query-limits.ts`), which its `load` and the admin read
+ * alike. {@link rowsThatFit} is kept, with its meaning, for loads that call it.
  *
  * The same holds across: how many columns a card is drawn across at each
  * dashboard width, and the size tier its drawn width reads as. The admin
@@ -28,7 +28,7 @@
  */
 
 import { GRID_COLUMNS, type CardTier, type GridSize } from "./grid-size";
-import { MAX_WIDGET_ROWS, type ListDensity } from "./query-limits";
+import type { ListDensity } from "./query-limits";
 
 /**
  * One grid row's height, in pixels rather than rem so it does not follow the root font size.
@@ -116,8 +116,15 @@ export function cardBodyHeightPx(h: number): number {
 }
 
 /**
+ * The most rows {@link rowsInBody} and {@link rowsThatFit} answer: ten, as
+ * they always have. Not `MAX_WIDGET_ROWS`, the most a card's "Number of
+ * entries" offers, which may grow: a published answer keeps its meaning.
+ */
+const MOST_ROWS_THAT_FIT = 10;
+
+/**
  * The whole list rows a body `bodyHeight` pixels tall holds at `density`:
- * never part of a row, never more than `MAX_WIDGET_ROWS`, and none for a body
+ * never part of a row, never more than ten, and none for a body
  * with no room. A height that is not a finite number holds nothing rather
  * than an unbounded list.
  *
@@ -127,7 +134,7 @@ export function rowsInBody(bodyHeight: number, density: ListDensity): number {
   if (!Number.isFinite(bodyHeight) || bodyHeight <= 0) return 0;
   return Math.min(
     Math.floor(bodyHeight / LIST_ROW_HEIGHT_PX[density]),
-    MAX_WIDGET_ROWS
+    MOST_ROWS_THAT_FIT
   );
 }
 
@@ -143,8 +150,12 @@ export function rowsInBody(bodyHeight: number, density: ListDensity): number {
  * rows let the same card hold more.
  *
  * `0` for a card too short to hold one whole row, such as one two rows high at
- * the default density, whose frame then draws no row; `find` asked a limit of
- * `0` answers none, so the read and the card agree.
+ * the default density; `find` asked a limit of `0` answers none.
+ *
+ * A dashboard card is now as tall as its content, so `h` no longer sets how
+ * many rows it draws: core's own list cards read their "Number of entries"
+ * setting instead (`listEntries` in `nextly/config`). This answer is kept, and
+ * keeps its meaning, for the loads that call it.
  *
  * @experimental
  */

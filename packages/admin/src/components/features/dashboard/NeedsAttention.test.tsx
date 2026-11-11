@@ -2,16 +2,12 @@
  * The Needs your attention card's rows: each item's severity by shape, its
  * label and count, its reason and one Review; a failed item's "Not all
  * checked" with a Retry that asks the card again; no control that dismisses
- * an item; and the fold that shows the items its stored height does not hold
- * on asking.
+ * an item; and every item drawn, however many there are, with nothing folded
+ * behind "Show N more".
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
-
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
-import { cardBodyHeightPx } from "@admin/components/features/widgets/frame/measures";
-import { CardHeightContext } from "@admin/components/features/widgets/frame/tier";
 import { HiddenWhileEmptyContext } from "@admin/components/features/widgets/hidden-while-empty";
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 
@@ -105,47 +101,6 @@ function draw(
   );
 }
 
-/**
- * Lays the card out as the frame draws it at `h` grid rows: a body of `cardBodyHeightPx(h)`, rows
- * `rowPx` high from its top (the list's own height unless a case wraps them taller), and the
- * fold's control wherever it is drawn. `drawnBodyPx` draws the body shorter than its rows give
- * it, as a card as tall as its content stands while it loads.
- */
-function layOut(
-  h: number,
-  rowPx = LIST_ROW_HEIGHT_PX.default,
-  drawnBodyPx = cardBodyHeightPx(h)
-): void {
-  const rect = (top: number, bottom: number) =>
-    ({
-      top,
-      bottom,
-      left: 0,
-      right: 600,
-      width: 600,
-      height: bottom - top,
-    }) as DOMRect;
-  const row = rowPx;
-  const body = drawnBodyPx;
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-    function (this: Element) {
-      if (this.getAttribute("data-testid") === "widget-card-body")
-        return rect(0, body);
-      // What the card's body draws: its rows, one under another from the body's top.
-      if (this.getAttribute("data-testid") === "needs-attention")
-        return rect(0, row * this.querySelectorAll("[data-fold-row]").length);
-      if (this.hasAttribute("data-fold-row")) {
-        const index = [
-          ...(this.parentElement?.querySelectorAll("[data-fold-row]") ?? []),
-        ].indexOf(this);
-        return rect(row * index, row * (index + 1));
-      }
-      if (this.hasAttribute("aria-controls")) return rect(body + 12, body + 40);
-      return rect(0, 0);
-    }
-  );
-}
-
 const plugin = (n: number) => ({
   ...SEO,
   id: `seo/item-${n}`,
@@ -208,46 +163,7 @@ describe("NeedsAttention's release rows", () => {
   });
 });
 
-/** The card with `items`, its stored rows four, as the dashboard draws it in its cell. */
-function drawStoredFour(items: readonly object[]) {
-  return render(
-    <CardHeightContext.Provider value={4}>
-      {inFrame(
-        <NeedsAttention
-          widgetId="core/needs-attention"
-          placementId="attention"
-          settings={{}}
-          size={{ w: 8, h: 4, tier: "medium" }}
-          data={{ items }}
-          refreshing={false}
-          retry={() => undefined}
-        />,
-        "Needs your attention"
-      )}
-    </CardHeightContext.Provider>
-  );
-}
-
 describe("NeedsAttention", () => {
-  it("keeps every row its stored rows hold though its body is drawn shorter", () => {
-    // Drawn one row high, as a card as tall as its content stands, with two items its four stored
-    // rows hold: judged against its drawn body the second row would fold. Judged against its
-    // stored rows, both show. Fails on a fold measured against the drawn body.
-    layOut(4, LIST_ROW_HEIGHT_PX.default, LIST_ROW_HEIGHT_PX.default);
-    const { unmount } = drawStoredFour([STOPPED, OVERDUE]);
-    expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(2);
-    expect(
-      screen.queryByRole("button", { name: /^Show \d+ more$/ })
-    ).toBeNull();
-    unmount();
-    // The must-differ half: with no stored rows, the body as drawn is what the rows are judged by.
-    draw([STOPPED, OVERDUE]);
-    expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(1);
-    expect(
-      screen.getByRole("button", { name: "Show 1 more" })
-    ).toBeInTheDocument();
-  });
-
   it("draws each item with its severity, label and count, reason and one Review, in the answer's order", () => {
     draw([OVERDUE, SEO]);
     const [overdue, seo] = screen.getAllByTestId("needs-attention-item");
@@ -346,50 +262,44 @@ describe("NeedsAttention", () => {
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
-  it("folds the items its height does not hold behind Show N more, which shows them, moves focus and says so", () => {
-    layOut(3);
-    draw([STOPPED, OVERDUE, plugin(3), plugin(2)]);
-
-    expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(2);
-    const control = screen.getByRole("button", { name: "Show 2 more" });
-    expect(control).toHaveAttribute("aria-expanded", "false");
-
-    fireEvent.click(control);
-    const rows = screen.getAllByTestId("needs-attention-item");
-    expect(rows).toHaveLength(4);
-    expect(rows[2]).toHaveFocus();
-    expect(screen.getByText("2 more items shown")).toBeInTheDocument();
-    expect(control).toHaveAccessibleName("Show less");
-
-    fireEvent.click(control);
-    expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(2);
-    expect(screen.queryByText("2 more items shown")).toBeNull();
-  });
-
-  it("fills its body with whole rows at 3 and 4 rows tall, its control in the footer's room", () => {
-    const items = [STOPPED, OVERDUE, plugin(5), plugin(4), plugin(3)];
-    const fits = (h: number) =>
-      Math.floor(cardBodyHeightPx(h) / LIST_ROW_HEIGHT_PX.default);
-    for (const h of [3, 4]) {
-      layOut(h);
-      const { unmount } = draw(items);
-      expect(
-        screen.getAllByTestId("needs-attention-item"),
-        `h=${h}`
-      ).toHaveLength(fits(h));
-      // In the footer, whose room the frame keeps for every card: none of the body's room goes
-      // to it, so the rows have all of it.
-      const control = screen.getByRole("button", {
-        name: `Show ${items.length - fits(h)} more`,
-      });
-      expect(screen.getByTestId("widget-card-footer")).toContainElement(
-        control
-      );
-      unmount();
-      vi.restoreAllMocks();
-    }
-    // The frame's geometry: 2 rows at 3 tall, 4 at 4.
-    expect([fits(3), fits(4)]).toEqual([2, 4]);
+  it("draws every one of seven items, with no control to show more or fewer", () => {
+    // Laid out as a body two 52 px rows tall, so a card that folded what its body does not hold
+    // would draw fewer than seven and a "Show N more".
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        const height =
+          this.getAttribute("data-testid") === "widget-card-body" ? 104 : 52;
+        return DOMRect.fromRect({ width: 600, height });
+      }
+    );
+    const items = [
+      STOPPED,
+      OVERDUE,
+      plugin(5),
+      plugin(4),
+      plugin(3),
+      plugin(2),
+      plugin(1),
+    ];
+    draw(items);
+    expect(
+      screen
+        .getAllByTestId("needs-attention-item")
+        .map(row => within(row).getByTestId("entity-row-title").textContent)
+    ).toEqual([
+      "Releases that stopped · 1",
+      "Overdue releases · 2",
+      "Item 5 · 5+",
+      "Item 4 · 4+",
+      "Item 3 · 3+",
+      "Item 2 · 2+",
+      "Item 1 · 1+",
+    ]);
+    expect(screen.queryByRole("button", { name: /^Show/ })).toBeNull();
+    expect(screen.queryByText(/more items? shown/)).toBeNull();
+    expect(
+      within(screen.getByTestId("widget-card-footer")).queryByRole("button")
+    ).toBeNull();
   });
 
   it("carries how many items there are beside its title, read with it", () => {
