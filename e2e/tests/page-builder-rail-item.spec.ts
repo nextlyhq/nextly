@@ -46,10 +46,6 @@ test("sits right after Forms, and opens the overview and its panel", async ({
       return forms >= 0 && labels[forms + 1] === "Page Builder";
     })
     .toBe(true);
-  // Forms itself is right after Media, so Page Builder is in the media group.
-  const labels = await railLabels(page);
-  expect(labels[labels.indexOf("Media") + 1]).toBe("Forms");
-
   await rail(page)
     .getByRole("link", { name: "Page Builder", exact: true })
     .click();

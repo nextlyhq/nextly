@@ -114,7 +114,7 @@ function AdminLink({
 }
 
 /** "1 binding to fix." or "N bindings to fix." */
-export function bindingsSentence(count: number): string {
+function bindingsSentence(count: number): string {
   return `${count} ${count === 1 ? "binding" : "bindings"} to fix.`;
 }
 

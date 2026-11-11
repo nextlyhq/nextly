@@ -117,7 +117,7 @@ async function countAsCaller(
 }
 
 /** The reads as the server makes them. */
-export const CALLER_READS: OverviewReads = {
+const CALLER_READS: OverviewReads = {
   count: countAsCaller,
   singleReadable: (ctx, slug) => singleReadableByCaller(ctx, slug),
 };

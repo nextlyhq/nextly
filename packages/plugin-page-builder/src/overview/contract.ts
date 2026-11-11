@@ -18,7 +18,7 @@ export const OVERVIEW_ROUTE_PATH = "/overview";
  * Where the overview page is, relative to the admin: the plugin's admin page
  * at the same path, as the "Bindings to fix" page is.
  */
-export const OVERVIEW_ADMIN_PATH: string = `plugins/nextlyhq-plugin-page-builder${OVERVIEW_ROUTE_PATH}`;
+const OVERVIEW_ADMIN_PATH: string = `plugins/nextlyhq-plugin-page-builder${OVERVIEW_ROUTE_PATH}`;
 
 /** The overview's address from the admin's root, which the rail item opens. */
 export const OVERVIEW_PAGE_HREF: string = `/admin/${OVERVIEW_ADMIN_PATH}`;
