@@ -170,12 +170,12 @@ export function FormErrorSummary({
                 >
                   {formatFieldPath(path)}
                 </button>
-                <span className="opacity-90 ml-1">: {message}</span>
+                <span className="ml-1">: {message}</span>
               </li>
             ))}
           </ul>
           {remainingCount > 0 && (
-            <p className="mt-2 text-sm opacity-80">
+            <p className="mt-2 text-sm">
               And {remainingCount} more error{remainingCount > 1 ? "s" : ""}...
             </p>
           )}
