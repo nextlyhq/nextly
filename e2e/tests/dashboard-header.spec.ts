@@ -1,7 +1,7 @@
 /**
  * The top of the dashboard, in a browser: one greeting line as the page's only
  * heading, with nothing else above the cards, and the page's one action, a cog
- * named "Customize dashboard", at the right end of the admin's top bar. There
+ * named "Customize dashboard", at the right end of the greeting's row. There
  * is no "+ New" anywhere: not on the dashboard, not in the rail, not in the
  * phone's menu drawer, and not on a collection's list either.
  *
@@ -9,7 +9,7 @@
  *
  * @module tests/dashboard-header.spec
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
@@ -28,6 +28,13 @@ function topBar(page: Page) {
     .filter({ has: page.getByRole("navigation", { name: "Breadcrumb" }) });
 }
 
+/** Where an element is drawn; it must be on the page. */
+async function drawnBox(locator: Locator) {
+  const box = await locator.boundingBox();
+  if (box === null) throw new Error("expected the element to be drawn");
+  return box;
+}
+
 /** Every control that would be "+ New": the old trigger, or a button named New. */
 function newControls(page: Page) {
   return page
@@ -37,7 +44,7 @@ function newControls(page: Page) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`one greeting line is the page's heading, and the bar's cog is Customize dashboard (${theme})`, async ({
+  test(`one greeting line is the page's heading, and the cog at its row's end is Customize dashboard (${theme})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -46,13 +53,18 @@ for (const theme of ["light", "dark"] as const) {
     await expect(heading).toHaveCount(1);
     await expect(heading).toHaveText(GREETING);
     await expect(heading).toHaveAttribute("id", "dashboard-heading");
-    // As the approved design draws it: 20px, semibold, held a touch tight.
+    // As the approved design draws it: 20px, semibold, held a touch tight,
+    // in a row as tall as the cog, 18px above the cards.
     expect(
       await heading.evaluate(node => {
         const style = getComputedStyle(node);
-        return [style.fontSize, style.fontWeight, style.marginBottom];
+        return [style.fontSize, style.fontWeight];
       })
-    ).toEqual(["20px", "600", "18px"]);
+    ).toEqual(["20px", "600"]);
+    const row = page.getByTestId("dashboard-greeting-row");
+    expect(
+      await row.evaluate(node => getComputedStyle(node).marginBottom)
+    ).toBe("18px");
 
     // Nothing else above the cards: no project name, badge, summary or freshness line.
     const main = page.locator("main");
@@ -62,14 +74,28 @@ for (const theme of ["light", "dark"] as const) {
     await expect(main.getByText(/^Updated .* ago/)).toHaveCount(0);
     await expect(main.getByText("Resume setup")).toHaveCount(0);
 
-    // The cog, in the bar, 34px, named and tooltipped by what it does.
+    // The cog, at the greeting row's right end and not in the bar, 34px,
+    // named and tooltipped by what it does. Its right edge is the cards'.
     const cog = page.getByRole("button", { name: "Customize dashboard" });
     await expect(topBar(page)).toContainText("Dashboard");
+    await expect(
+      topBar(page).locator("[data-testid=dashboard-edit-begin]")
+    ).toHaveCount(0);
+    await expect(row.locator("[data-testid=dashboard-edit-begin]")).toHaveCount(
+      1
+    );
+    const box = await drawnBox(cog);
+    expect([box.width, box.height]).toEqual([34, 34]);
+    expect((await drawnBox(row)).height).toBe(34);
+    // On the greeting's line, centred against it, and flush with the cards' right edge.
+    const headingBox = await drawnBox(heading);
     expect(
-      await topBar(page).locator("[data-testid=dashboard-edit-begin]").count()
-    ).toBe(1);
-    const box = await cog.boundingBox();
-    expect([box?.width, box?.height]).toEqual([34, 34]);
+      Math.abs(box.y + box.height / 2 - (headingBox.y + headingBox.height / 2))
+    ).toBeLessThanOrEqual(1);
+    const gridBox = await drawnBox(page.getByTestId("dashboard-container"));
+    expect(
+      Math.abs(box.x + box.width - (gridBox.x + gridBox.width))
+    ).toBeLessThanOrEqual(1);
     await cog.hover();
     await expect(page.getByRole("tooltip")).toHaveText("Customize dashboard");
     // Moved away in steps, as a hand does, so the pointer is seen leaving.

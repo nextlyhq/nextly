@@ -31,9 +31,10 @@ describe("UserExtSchemaService — plugin field types", () => {
     const sql = new UserExtSchemaService("postgresql").generateMigrationSQL([
       field("rating"),
     ]);
-    // A numeric storage primitive yields a REAL column, not TEXT, and the
-    // column is present (not skipped).
-    expect(sql).toMatch(/"score"\s+REAL/i);
+    // A numeric storage primitive yields a number column, not TEXT, and the
+    // column is present (not skipped): DOUBLE PRECISION on PostgreSQL, as a
+    // built-in number field gets.
+    expect(sql).toMatch(/"score"\s+DOUBLE PRECISION/i);
     expect(sql).not.toMatch(/"score"\s+TEXT/i);
   });
 
