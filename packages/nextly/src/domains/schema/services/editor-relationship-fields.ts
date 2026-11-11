@@ -8,8 +8,9 @@
  * dropping the uniqueness its column had.
  *
  * Each such field is given what the editor reads, from what it already stores: its target as
- * `relationTo`, and Unique for a one-to-one. Nothing is taken away, and nothing the field already
- * states is overwritten, so every other reader of the definition reads what it read before. The
+ * `relationTo`, and Unique for a one-to-one, read as its column's uniqueness is
+ * (`builderColumnIsUnique`): on for a one-to-one even where the field also stores Unique off.
+ * Nothing is taken away, so every other reader of the definition reads what it read before. The
  * shape stays what the field already is: a relationship to one entry of one collection, whose
  * column keeps one id. A many-to-many keeps its links in a junction table, where a relationship
  * holding many keeps a list on the row, and a relationship to several collections holds
@@ -58,10 +59,9 @@ function forEditor(field: StoredField): StoredField {
   return {
     ...withNested,
     relationTo: target,
-    // A one-to-one is a relationship to one entry marked unique, in the editor's words.
-    ...(relationType === "oneToOne" && withNested.unique === undefined
-      ? { unique: true }
-      : {}),
+    // A one-to-one is a relationship to one entry marked unique, in the editor's words, and its
+    // column is unique whatever Unique mark it also stores.
+    ...(relationType === "oneToOne" ? { unique: true } : {}),
   };
 }
 
@@ -80,12 +80,10 @@ export function withEditorRelationshipFields<F>(fields: readonly F[]): F[] {
 }
 
 /**
- * The Unique mark the editor read off a stored field (`forEditor`): its own, or a one-to-one's.
+ * The Unique mark the editor read off a stored field (`forEditor`): a one-to-one's, or its own.
  */
 function uniqueAsRead(stored: StoredField, relationType: unknown): boolean {
-  return stored.unique === undefined
-    ? relationType === "oneToOne"
-    : stored.unique === true;
+  return relationType === "oneToOne" || stored.unique === true;
 }
 
 /**
@@ -153,8 +151,16 @@ function restoredRelationship(
       : {};
   return {
     ...rest,
-    // A stored field with a Unique mark of its own keeps the one the save sent.
-    ...(stored.unique === undefined ? {} : { unique: sentUnique }),
+    // A stored field with a Unique mark of its own keeps it while the save leaves Unique as it was
+    // read, and takes the one the save sent where the save turned it on or off.
+    ...(stored.unique === undefined
+      ? {}
+      : {
+          unique:
+            (sentUnique === true) === uniqueAsRead(stored, options.relationType)
+              ? stored.unique
+              : sentUnique,
+        }),
     // What the save sends over what was stored, as any edit is: the stored target, which the
     // save still points at, and the cardinality that follows its Unique mark stay as derived.
     options: {

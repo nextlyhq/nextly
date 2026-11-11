@@ -27,14 +27,18 @@ describe("withEditorRelationshipFields", () => {
     }
   });
 
-  it("never overwrites what a field states", () => {
-    const turnedOff = { ...stored("oneToOne"), unique: false };
+  it("never overwrites a target a field states", () => {
     const pointed = { ...stored("oneToOne"), relationTo: "authors" };
 
-    expect(withEditorRelationshipFields([turnedOff])).toEqual([
-      { ...turnedOff, relationTo: "people" },
-    ]);
     expect(withEditorRelationshipFields([pointed])).toEqual([pointed]);
+  });
+
+  it("opens a one-to-one with Unique on even where it also stores Unique off, as its column is unique", () => {
+    const both = { ...stored("oneToOne"), unique: false };
+
+    expect(withEditorRelationshipFields([both])).toEqual([
+      { ...both, relationTo: "people", unique: true },
+    ]);
   });
 
   it("leaves a many-to-many, and a relationship to several collections, as they are stored", () => {
@@ -156,6 +160,17 @@ describe("withStoredRelationshipOptions", () => {
         [sentFrom(field, { unique: false })],
         [field]
       )
+    ).toEqual([legacy("manyToOne", { unique: false })]);
+  });
+
+  it("writes a one-to-one that also stores Unique off back as stored, and makes it many-to-one when Unique is turned off", () => {
+    const both = legacy("oneToOne", { unique: false });
+
+    expect(withStoredRelationshipOptions([sentFrom(both)], [both])).toEqual([
+      both,
+    ]);
+    expect(
+      withStoredRelationshipOptions([sentFrom(both, { unique: false })], [both])
     ).toEqual([legacy("manyToOne", { unique: false })]);
   });
 
