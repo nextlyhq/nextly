@@ -97,7 +97,7 @@ export const StatsCard: React.ForwardRefExoticComponent<
                   <div className="flex items-center gap-2">
                     {change !== undefined && (
                       // A quiet chip, as every status is drawn: the card's surface, ordinary
-                      // text, and the arrow alone in the trend's solid colour.
+                      // text, and the arrow alone in the trend's text colour.
                       <div
                         data-trend={trend === "up" ? "up" : "down"}
                         className="flex items-center gap-1 rounded-md border border-border bg-card px-2 py-0.5 text-xs font-medium tabular-nums text-foreground"
@@ -106,13 +106,13 @@ export const StatsCard: React.ForwardRefExoticComponent<
                           <TrendingUp
                             aria-hidden="true"
                             data-testid="trend-mark"
-                            className="h-3 w-3 text-success-solid"
+                            className="h-3 w-3 text-success-text"
                           />
                         ) : (
                           <TrendingDown
                             aria-hidden="true"
                             data-testid="trend-mark"
-                            className="h-3 w-3 text-danger-solid"
+                            className="h-3 w-3 text-danger-text"
                           />
                         )}
                         <span>

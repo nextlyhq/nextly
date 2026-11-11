@@ -11,6 +11,10 @@ import "@nextlyhq/plugin-page-builder/styles/editor.css";
 // The form builder's views are declared on its collections, which the map does
 // not collect, so its admin module still registers them by hand.
 import "@nextlyhq/plugin-form-builder/admin";
+// The SEO plugin's tab, registered by its admin module: the plugin runs only
+// where a contributor or the browser suite names it, so the committed map,
+// written without it, does not import the tab.
+import "@nextlyhq/plugin-seo/admin";
 // Load the style-fixture plugin's admin component + its admin.styles
 // (side-effect: registerComponents + CSS import) for the plugin-styling e2e.
 import "../../../plugins/style-fixture/admin";
