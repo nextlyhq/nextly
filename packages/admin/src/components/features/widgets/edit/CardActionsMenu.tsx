@@ -29,7 +29,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import { ArrowDown, ArrowUp, RefreshCw, Settings, Trash2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  EyeOff,
+  RefreshCw,
+  Settings,
+  Trash2,
+} from "lucide-react";
 import type { GridSize } from "nextly/config";
 import { useRef, type ComponentType, type JSX } from "react";
 
@@ -49,6 +56,11 @@ export interface CardActionsMenuProps {
   disabled: boolean;
   /** Registers the menu button, so focus can be sent back to it. */
   triggerRef: (element: HTMLElement | null) => void;
+  /**
+   * What Remove is called on this card, where not "Remove" (`removeLabelFor`): drawn with a hide
+   * icon, as the menu at rest draws it.
+   */
+  removeLabel?: string | undefined;
   on: {
     move: (direction: MoveDirection) => void;
     remove: () => void;
@@ -100,8 +112,10 @@ export function CardActionsMenu({
   can,
   disabled,
   triggerRef,
+  removeLabel,
   on,
 }: CardActionsMenuProps): JSX.Element {
+  const RemoveIcon = removeLabel === undefined ? Trash2 : EyeOff;
   // 🔴 Set by the actions that send focus somewhere themselves -- a move back
   // to this button once it has moved, a removal to the next card, Settings to
   // its drawer. The menu's own close returns focus to its trigger a tick later,
@@ -180,8 +194,8 @@ export function CardActionsMenu({
           className={REMOVE_ITEM_CLASS}
           data-testid="card-remove"
         >
-          <Trash2 aria-hidden className="size-4" />
-          Remove
+          <RemoveIcon aria-hidden className="size-4" />
+          {removeLabel ?? "Remove"}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

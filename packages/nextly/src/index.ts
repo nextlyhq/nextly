@@ -563,6 +563,8 @@ export {
   type FrozenValue,
   type PluginEmailSettings,
   type PluginContext,
+  type PluginEmitOptions,
+  type PluginEvents,
   type PluginContributions,
   type PluginDatabase,
   type PluginRawDatabase,
@@ -706,6 +708,7 @@ export type {
   HeldAddressUpdate,
 } from "./domains/public-addresses/participants";
 export type {
+  ParticipantTransaction,
   PluginPublicAddresses,
   PublicAddressParticipant,
   RefusedAddressUpdate,

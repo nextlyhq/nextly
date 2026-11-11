@@ -75,6 +75,11 @@ function makeCtx(
     // Answers "open" so a write the secrets helper starts is refused at its
     // first question, which shows which adapter it asked.
     transactionOpenInFlow: vi.fn(() => true),
+    // A plugin's emit inside an open transaction is held for its commit;
+    // the double commits at once.
+    afterCommit: vi.fn(async (effect: () => unknown) => {
+      await effect();
+    }),
     select: vi.fn(async () => []),
   };
   const services: Record<string, () => unknown> = {

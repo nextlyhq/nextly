@@ -31,7 +31,7 @@
 import type { Metadata } from "next";
 
 import { runWithAccessMemo } from "../../auth/access/request-memo";
-import { requireNextly } from "../../direct-api/nextly";
+import { requireNextlyOnceStarted } from "../../direct-api/nextly";
 import type { Nextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
@@ -385,7 +385,9 @@ function buildSingleRoute<TNode>(
   async function read(
     grant: SingleDraftGrantResult
   ): Promise<SingleDocument | null> {
-    const reader = config.nextly ?? requireNextly();
+    // Waits for a start in flight, as the start-up hook no longer holds
+    // requests until Nextly has started.
+    const reader = config.nextly ?? (await requireNextlyOnceStarted());
     try {
       const document = await reader.findSingle(readArgs(grant));
       return document ?? null;

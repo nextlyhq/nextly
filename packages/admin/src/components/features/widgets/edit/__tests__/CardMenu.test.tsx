@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { CardActionsMenu } from "../CardActionsMenu";
-import { CardMenu, type CardMenuProps } from "../CardMenu";
+import { CardMenu, removeLabelFor, type CardMenuProps } from "../CardMenu";
 
 function draw(props: Partial<CardMenuProps> = {}) {
   render(<CardMenu title="Activity" settingsDisabled={false} {...props} />);
@@ -59,6 +59,19 @@ describe("a card's menu at rest", () => {
     // No confirmation of any kind: Undo is the notice's.
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("calls Remove Hide setup on the setup card, and it removes the card as Remove does", async () => {
+    expect(removeLabelFor("core/setup")).toBe("Hide setup");
+    expect(removeLabelFor("core/note")).toBeUndefined();
+    const onRemove = vi.fn();
+    draw({ onRemove, removeLabel: removeLabelFor("core/setup") });
+    const { user, menu } = await open();
+    expect(itemNames(menu)).toEqual(["Hide setup"]);
+    await user.click(
+      within(menu).getByRole("menuitem", { name: "Hide setup" })
+    );
+    expect(onRemove).toHaveBeenCalledTimes(1);
   });
 
   it("keeps Refresh in reach while the card's settings cannot be saved", async () => {
@@ -158,6 +171,21 @@ describe("a card's menu while customising", () => {
       within(opened.menu).getByRole("menuitem", { name: "Move later" })
     );
     expect(on.move).toHaveBeenCalledWith("later");
+  });
+
+  it("calls Remove Hide setup on the setup card, as the menu at rest does", async () => {
+    render(
+      <CardActionsMenu
+        title="Activity"
+        can={{ start: true, earlier: true, later: true, end: true }}
+        disabled={false}
+        triggerRef={() => {}}
+        removeLabel={removeLabelFor("core/setup")}
+        on={{ move: vi.fn(), remove: vi.fn(), openSettings: vi.fn() }}
+      />
+    );
+    const { menu } = await openCustomising();
+    expect(itemNames(menu).at(-1)).toBe("Hide setup");
   });
 
   it("keeps a move that would not move the card in its place, disabled", async () => {

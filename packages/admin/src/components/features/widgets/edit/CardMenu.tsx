@@ -8,7 +8,8 @@
  * 2. Refresh: asks again for this card alone;
  * 3. Remove: takes the card off at once, asking nothing, with Undo in the removal notice. It is
  *    the reader's own dismissal of the card, the same for every card, so a reader following the
- *    default dashboard keeps following it.
+ *    default dashboard keeps following it. A card may name it otherwise (`removeLabel`): the
+ *    setup card's is "Hide setup".
  *
  * Each where the card has it. The customise-mode menu (`CardActionsMenu`) keeps the same order
  * with the moves added before Remove.
@@ -24,7 +25,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import { RefreshCw, Settings, Trash2 } from "lucide-react";
+import { EyeOff, RefreshCw, Settings, Trash2 } from "lucide-react";
 import type { JSX } from "react";
 import { useId, useRef } from "react";
 
@@ -44,6 +45,11 @@ export interface CardMenuProps {
   onRefresh?: (() => void) | undefined;
   /** Take the card off the dashboard, once an arrangement has been read. */
   onRemove?: (() => void) | undefined;
+  /**
+   * What Remove is called on this card, where not "Remove": drawn with a hide icon, for a card
+   * that is hidden rather than deleted, such as the setup card's "Hide setup".
+   */
+  removeLabel?: string | undefined;
   /** A layout write is in flight, or the card cannot be saved now: Settings waits. */
   settingsDisabled: boolean;
   /** A layout write is in flight, which Remove waits for. */
@@ -53,6 +59,19 @@ export interface CardMenuProps {
    * rather than leaving the menu with no word of where it went.
    */
   removeUnavailable?: string | undefined;
+}
+
+/**
+ * What a card's Remove is called where not "Remove", by widget: the setup card is hidden rather
+ * than deleted, and comes back from Add widget.
+ */
+const REMOVE_LABELS: ReadonlyMap<string, string> = new Map([
+  ["core/setup", "Hide setup"],
+]);
+
+/** The name of Remove on a card of `widgetId`, where it is not "Remove". */
+export function removeLabelFor(widgetId: string): string | undefined {
+  return REMOVE_LABELS.get(widgetId);
 }
 
 /** Settings…: opens the card's settings drawer, which takes focus itself. */
@@ -86,10 +105,12 @@ function RemoveItem({
   disabled,
   unavailable,
   onRemove,
+  label,
 }: {
   disabled: boolean;
   unavailable: string | undefined;
   onRemove: () => void;
+  label: string | undefined;
 }): JSX.Element {
   const reasonId = useId();
   const refused = unavailable !== undefined;
@@ -113,8 +134,12 @@ function RemoveItem({
         )}
         data-testid="card-menu-remove"
       >
-        <Trash2 aria-hidden className="size-4" />
-        Remove
+        {label === undefined ? (
+          <Trash2 aria-hidden className="size-4" />
+        ) : (
+          <EyeOff aria-hidden className="size-4" />
+        )}
+        {label ?? "Remove"}
       </DropdownMenuItem>
       {refused ? (
         <span id={reasonId} className="sr-only">
@@ -131,6 +156,7 @@ export function CardMenu({
   onOpenSettings,
   onRefresh,
   onRemove,
+  removeLabel,
   settingsDisabled,
   removeDisabled = false,
   removeUnavailable,
@@ -193,6 +219,7 @@ export function CardMenu({
             disabled={removeDisabled}
             unavailable={removeUnavailable}
             onRemove={onRemove}
+            label={removeLabel}
           />
         ) : null}
       </DropdownMenuContent>

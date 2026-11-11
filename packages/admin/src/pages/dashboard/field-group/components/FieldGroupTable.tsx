@@ -1,23 +1,12 @@
 "use client";
 
-import {
-  Badge,
-  Button,
-  DropdownMenuCheckboxItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  Skeleton,
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@nextlyhq/ui";
+import { Badge, Button, Skeleton } from "@nextlyhq/ui";
 import { Eye, Pencil, Plus, Puzzle, RefreshCw, Trash2 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, type JSX } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { ReconcileFieldGroupDialog } from "@admin/components/features/field-groups/ReconcileFieldGroupDialog";
 import * as Icons from "@admin/components/icons";
-import { Lock } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
@@ -34,53 +23,75 @@ import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
-  useFieldGroups,
+  fieldGroupKeys,
   useDeleteFieldGroup,
   useBulkDeleteFieldGroups,
 } from "@admin/hooks/queries";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { usePagination } from "@admin/hooks/usePagination";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
-import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
+import { fieldGroupApi } from "@admin/services/fieldGroupApi";
 import type {
   ApiFieldGroup,
   FieldGroupSource,
   FieldGroupMigrationStatus,
 } from "@admin/types/entities";
 
+import {
+  EntityListFilterItems,
+  EntityNameCell,
+  createdColumn,
+  entityIcon,
+  fieldCountColumn,
+  schemaColumn,
+  sourceColumn,
+} from "../../collection/components/entity-list/entity-list-columns";
+import { PluginEntitySections } from "../../collection/components/entity-list/PluginEntitySections";
+import { useSiteEntityPage } from "../../collection/components/entity-list/use-entity-lists-by-owner";
+
 import { FieldGroupTableSkeleton } from "./FieldGroupTableSkeleton";
 
-/** Source badge label + icon. */
-function getSourceBadge(source?: FieldGroupSource): {
-  label: string;
-  icon: React.ReactNode;
-} {
-  switch (source) {
-    case "code":
-      return { label: "Code", icon: <Icons.Code className="mr-1 h-3 w-3" /> };
-    case "ui":
-      return { label: "UI", icon: <Icons.FileText className="mr-1 h-3 w-3" /> };
-    default:
-      return { label: "Unknown", icon: null };
-  }
+/** The source filter's options, in the order the menu offers them. */
+const SOURCE_FILTERS: FieldGroupSource[] = ["code", "ui"];
+
+/** The schema filter's options, in the order the menu offers them. */
+const SCHEMA_FILTERS: FieldGroupMigrationStatus[] = [
+  "synced",
+  "applied",
+  "pending",
+  "generated",
+  "failed",
+  "diverged",
+];
+
+/** A field group's slug, which the plugins' metadata names it by. */
+const slugOfFieldGroup = (fieldGroup: ApiFieldGroup): string => fieldGroup.slug;
+
+/** How many fields a field group has, as the list's answer counts them. */
+function fieldCountOf(fieldGroup: ApiFieldGroup): number {
+  if (fieldGroup.fieldCount !== undefined) return fieldGroup.fieldCount;
+  return fieldGroup.fields?.length || 0;
 }
 
-/** Migration-status badge variant + label. */
-type MigrationBadge = {
-  variant: "success" | "warning" | "primary" | "default" | "destructive";
-  label: string;
-};
-
-/** Every migration status this table can be handed, keyed so the compiler demands each one. */
-const MIGRATION_BADGES: Record<FieldGroupMigrationStatus, MigrationBadge> = {
-  synced: { variant: "success", label: "Synced" },
-  pending: { variant: "warning", label: "Pending" },
-  generated: { variant: "primary", label: "Generated" },
-  applied: { variant: "success", label: "Applied" },
-  failed: { variant: "destructive", label: "Failed" },
-  diverged: { variant: "destructive", label: "Diverged" },
-};
+/**
+ * How many fields place a field group: the count a delete of it would be
+ * refused over. A count the list could not read says so with a dash, since
+ * it is not the same as unused.
+ */
+function UsedByCell({ placedBy }: { placedBy?: number | null }): JSX.Element {
+  if (placedBy === undefined || placedBy === null) {
+    return <span className="text-sm text-muted-foreground">—</span>;
+  }
+  if (placedBy === 0) {
+    return <span className="text-sm text-muted-foreground">Not used</span>;
+  }
+  return (
+    <span className="whitespace-nowrap text-sm tabular-nums">
+      {placedBy} {placedBy === 1 ? "field" : "fields"}
+    </span>
+  );
+}
 
 /**
  * Statuses a definition repair is the answer to.
@@ -90,37 +101,6 @@ const MIGRATION_BADGES: Record<FieldGroupMigrationStatus, MigrationBadge> = {
  * the same operation, which is why one list covers them.
  */
 const REPAIRABLE_STATUSES = new Set<string>(["diverged", "failed"]);
-
-function getMigrationBadge(status?: FieldGroupMigrationStatus): MigrationBadge {
-  // 🔴 An exhaustive Record rather than a switch with a `default`, and that is the control.
-  //
-  // A `default` arm silently absorbs any status added later: `diverged` rendered as `-` here — "no
-  // migration state", the opposite of what it means, and the state an operator most needs to find —
-  // while the sidebar indicator, which already keyed a Record off the same union, could not compile
-  // until it was handled. The compiler is a boundary; remembering to add a case is not.
-  //
-  // `undefined` keeps its own answer, because "this row has no status" is a real case and is not
-  // the same as an unhandled one.
-  if (!status) return { variant: "default", label: "-" };
-
-  // 🔴 A runtime fallback ON TOP of the exhaustive Record, not instead of it. The two catch
-  // different things and only one of them is a compile-time question.
-  //
-  // `migration_status` is an unconstrained `varchar(20)` and the registry casts whatever string it
-  // reads to this union, so the type is a claim about the column rather than a guarantee from it —
-  // a row written by an older release, a hand-edited row, or a future status arriving during a
-  // rolling deploy all land here as a value no entry covers. Indexing then yields `undefined` and
-  // the cell dereferences `.variant`, taking down the whole management view: the operator loses the
-  // page that would have shown them the offending row.
-  //
-  // This does NOT reopen the hole the Record closed. A new member of the union still fails to
-  // compile until it has an entry, because the Record is declared exhaustive OVER THE UNION; what
-  // this adds is an answer for values that were never in the union at all. The status is shown
-  // verbatim, so an operator sees what the column actually holds rather than a shrug.
-  return (
-    MIGRATION_BADGES[status] ?? { variant: "warning", label: String(status) }
-  );
-}
 
 /** Columns pinned as always-visible in the column toggle. */
 const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
@@ -175,14 +155,20 @@ export default function FieldGroupTable(): JSX.Element {
   //
   // Asking the database once and rendering the answer also keeps the pager honest: `meta` now
   // describes the filtered set, so page count, "hasNext" and the row range all agree with the rows.
-  const { data, isLoading, isFetching, isError, error } = useFieldGroups({
-    pagination: { page, pageSize },
-    sorting: [],
-    filters: {
-      search: debouncedSearch,
-      filters: { source: sourceFilter, migrationStatus: migrationFilter },
+  // The site's own field groups: the server also leaves the plugins' out of
+  // the page AND its count.
+  const { data, isLoading, isFetching, isError, error } = useSiteEntityPage(
+    fieldGroupKeys.lists(),
+    {
+      pagination: { page, pageSize },
+      sorting: [],
+      filters: {
+        search: debouncedSearch,
+        filters: { source: sourceFilter, migrationStatus: migrationFilter },
+      },
     },
-  });
+    fieldGroupApi.fetchComponents
+  );
 
   const { mutate: deleteFieldGroup, isPending: isDeleting } =
     useDeleteFieldGroup();
@@ -295,48 +281,20 @@ export default function FieldGroupTable(): JSX.Element {
     });
   }, [filteredData, selectedIds, bulkDeleteFieldGroups, clearSelection]);
 
-  const getFieldCount = useCallback((fieldGroup: ApiFieldGroup): number => {
-    if (fieldGroup.fieldCount !== undefined) return fieldGroup.fieldCount;
-    return fieldGroup.fields?.length || 0;
-  }, []);
-
-  const allColumns = useMemo<NextlyColumn<ApiFieldGroup>[]>(
-    () => [
+  // The columns, with the source cell naming the plugin on a plugin's rows.
+  const columnsFor = useCallback(
+    (pluginName?: string): NextlyColumn<ApiFieldGroup>[] => [
       {
         name: "label",
         header: "FIELD GROUP",
-        cell: ({ row }) => {
-          const iconName = row.admin?.icon || "Puzzle";
-          const IconComponent =
-            (Icons as Record<string, React.ElementType>)[iconName] || Icons.Box;
-          return (
-            <div className="flex items-center gap-3">
-              <div className="table-row-icon-cover">
-                <IconComponent className="h-4 w-4" />
-              </div>
-              <div className="flex min-w-0 flex-1 flex-col">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium text-foreground">
-                    {row.label}
-                  </span>
-                  {row.locked && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Locked: Cannot be edited or deleted from UI</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-                <span className="truncate text-xs text-muted-foreground">
-                  {row.slug}
-                </span>
-              </div>
-            </div>
-          );
-        },
+        cell: ({ row }) => (
+          <EntityNameCell
+            icon={entityIcon(row.admin?.icon || "Puzzle", Icons.Box)}
+            label={row.label}
+            slug={row.slug}
+            locked={row.locked}
+          />
+        ),
       },
       {
         name: "admin",
@@ -353,55 +311,20 @@ export default function FieldGroupTable(): JSX.Element {
           );
         },
       },
-      // fallow-ignore-next-line code-duplication
+      sourceColumn(pluginName),
+      schemaColumn(),
       {
-        name: "source",
-        header: "SOURCE",
-        cell: ({ row }) => {
-          const sourceBadge = getSourceBadge(row.source);
-          return (
-            <Badge
-              variant="default"
-              className="whitespace-nowrap font-normal text-muted-foreground"
-            >
-              {sourceBadge.icon}
-              {sourceBadge.label}
-            </Badge>
-          );
-        },
+        // The fields that place this group, wherever they are.
+        name: "placedBy",
+        header: "USED BY",
+        cell: ({ row }) => <UsedByCell placedBy={row.placedBy} />,
       },
-      {
-        name: "migrationStatus",
-        header: "STATUS",
-        cell: ({ row }) => {
-          const migrationBadge = getMigrationBadge(row.migrationStatus);
-          return (
-            <Badge variant={migrationBadge.variant}>
-              {migrationBadge.label}
-            </Badge>
-          );
-        },
-      },
-      {
-        name: "fields",
-        header: "FIELDS",
-        cell: ({ row }) => (
-          <span className="text-sm tabular-nums">{getFieldCount(row)}</span>
-        ),
-      },
-      {
-        name: "createdAt",
-        header: "CREATED",
-        hideOnMobile: true,
-        cell: ({ value }) => (
-          <span className="text-sm text-muted-foreground">
-            {formatDateTime(value as string | undefined)}
-          </span>
-        ),
-      },
+      fieldCountColumn("fields", fieldCountOf),
+      createdColumn(),
     ],
-    [getFieldCount]
+    []
   );
+  const allColumns = useMemo(() => columnsFor(), [columnsFor]);
 
   // Resolves persisted column visibility while ensuring pinned columns remain visible.
   const { columns, columnsControl } = useTableColumns({
@@ -464,11 +387,25 @@ export default function FieldGroupTable(): JSX.Element {
         label: "Delete",
         icon: <Trash2 className="h-4 w-4" />,
         destructive: true,
-        isDisabled: () => Boolean(fieldGroup.locked),
+        // One owned by code offers no delete, rather than a disabled one.
+        isVisible: () => !fieldGroup.locked,
         onSelect: () => handleDelete(fieldGroup),
       },
     ],
     [handleEdit, handleDelete]
+  );
+
+  // A plugin's field group is read-only: it can be opened, never deleted.
+  const pluginRowActions = useCallback(
+    (fieldGroup: ApiFieldGroup): RowAction<ApiFieldGroup>[] => [
+      {
+        id: "edit",
+        label: "View",
+        icon: <Eye className="h-4 w-4" />,
+        onSelect: () => handleEdit(fieldGroup),
+      },
+    ],
+    [handleEdit]
   );
 
   const showLoadingSkeleton =
@@ -490,71 +427,14 @@ export default function FieldGroupTable(): JSX.Element {
         // hold their place so the row does not resize when they arrive.
         filters={
           showLoadingSkeleton ? undefined : (
-            <>
-              <DropdownMenuLabel>Filter by</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "all"}
-                onCheckedChange={() => handleSourceFilterChange("all")}
-              >
-                All Sources
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "code"}
-                onCheckedChange={() => handleSourceFilterChange("code")}
-              >
-                Code
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "ui"}
-                onCheckedChange={() => handleSourceFilterChange("ui")}
-              >
-                UI
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "all"}
-                onCheckedChange={() => handleMigrationFilterChange("all")}
-              >
-                All Status
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "synced"}
-                onCheckedChange={() => handleMigrationFilterChange("synced")}
-              >
-                Synced
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "pending"}
-                onCheckedChange={() => handleMigrationFilterChange("pending")}
-              >
-                Pending
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "generated"}
-                onCheckedChange={() => handleMigrationFilterChange("generated")}
-              >
-                Generated
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "applied"}
-                onCheckedChange={() => handleMigrationFilterChange("applied")}
-              >
-                Applied
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "failed"}
-                onCheckedChange={() => handleMigrationFilterChange("failed")}
-              >
-                Failed
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "diverged"}
-                onCheckedChange={() => handleMigrationFilterChange("diverged")}
-              >
-                Diverged
-              </DropdownMenuCheckboxItem>
-            </>
+            <EntityListFilterItems
+              sources={SOURCE_FILTERS}
+              source={sourceFilter}
+              onSource={handleSourceFilterChange}
+              states={SCHEMA_FILTERS}
+              state={migrationFilter}
+              onState={handleMigrationFilterChange}
+            />
           )
         }
         columnsControl={showLoadingSkeleton ? undefined : columnsControl}
@@ -591,7 +471,7 @@ export default function FieldGroupTable(): JSX.Element {
         }
         empty={{
           icon: <Puzzle className="h-5 w-5" aria-hidden="true" />,
-          title: "No field groups yet",
+          title: "No field groups of your own yet",
           description:
             "Get started by creating your first reusable field group to share across your collections.",
           action: (
@@ -605,9 +485,9 @@ export default function FieldGroupTable(): JSX.Element {
         }}
         emptyFiltered={{
           icon: <Puzzle className="h-5 w-5" aria-hidden="true" />,
-          title: "No field groups found",
+          title: "No field groups of your own found",
           description:
-            "No field groups match your search. Try adjusting your search terms or filters.",
+            "None of your own field groups match your search. Try adjusting your search terms or filters.",
         }}
         columns={columns}
         rows={filteredData}
@@ -638,6 +518,19 @@ export default function FieldGroupTable(): JSX.Element {
               }
             : undefined
         }
+      />
+
+      <PluginEntitySections<ApiFieldGroup>
+        kind="fieldGroups"
+        noun={{ one: "field group", many: "field groups" }}
+        listKey={fieldGroupKeys.lists()}
+        fetchPage={fieldGroupApi.fetchComponents}
+        search={debouncedSearch}
+        slugOf={slugOfFieldGroup}
+        columnsFor={columnsFor}
+        resolvedColumns={columns}
+        rowActions={pluginRowActions}
+        onRowClick={handleEdit}
       />
 
       {/* Mounted only while a target is held, so each opening fetches a fresh plan rather than

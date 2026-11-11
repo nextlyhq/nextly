@@ -84,6 +84,12 @@ export async function releaseBoundedRevalidate(
     return caller;
   }
 
+  // After the start, not before it: the bound reads the registered adapter,
+  // and the start-up hook no longer holds a request until the start is done,
+  // so a read made during it would take the no-release bound and cache its
+  // document past a scheduled release. Loaded on use, as the start is.
+  const { awaitStartOrRetry } = await import("../../init");
+  await awaitStartOrRetry();
   const release = await currentBound().maxCacheSeconds(now ?? new Date());
 
   if (caller === false) return release;

@@ -41,6 +41,10 @@
  *   punctuation ("(data preserved)") is read as a continuation, so its first
  *   word is not required to be capitalised.
  */
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import userEvent from "@testing-library/user-event";
 import { DndContext } from "@dnd-kit/core";
 import type { ComponentProps, ReactElement } from "react";
@@ -701,4 +705,61 @@ describe("the Builder's wording convention", () => {
     });
     expect(found).toEqual([]);
   }, 60_000);
+});
+
+/**
+ * The Builder's own source, under the admin's `src`: its editor and its lists
+ * of collections, Singles and field groups.
+ */
+const ADMIN_SRC = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../.."
+);
+const BUILDER_DIRS = [
+  "components/features/schema-builder",
+  "pages/dashboard/collection",
+  "pages/dashboard/singles",
+  "pages/dashboard/field-group",
+];
+
+/** Every source file under a directory, tests left out. */
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      return entry.name === "__tests__" ? [] : sourceFiles(path);
+    }
+    return /\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)
+      ? [path]
+      : [];
+  });
+}
+
+describe("the Builder's strings", () => {
+  // Read from the SOURCE rather than the rendered page: an action that only
+  // promises a feature does so in what it shows when chosen (a toast), which
+  // no render above opens.
+  it("no 'coming soon'", () => {
+    const promise = /coming soon|future update|not (yet )?implemented/i;
+    const found = BUILDER_DIRS.flatMap(dir =>
+      sourceFiles(join(ADMIN_SRC, dir))
+    ).flatMap(file =>
+      readFileSync(file, "utf8")
+        .split("\n")
+        .flatMap((line, index) =>
+          promise.test(line)
+            ? [
+                `${file.slice(ADMIN_SRC.length + 1)}:${index + 1}: ${line.trim()}`,
+              ]
+            : []
+        )
+    );
+    // The scan's own positive control: it reads the directories it names.
+    expect(
+      BUILDER_DIRS.flatMap(dir => sourceFiles(join(ADMIN_SRC, dir))).some(
+        file => file.endsWith("CollectionTable.tsx")
+      )
+    ).toBe(true);
+    expect(found).toEqual([]);
+  });
 });

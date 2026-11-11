@@ -29,7 +29,7 @@
 import type { Metadata } from "next";
 
 import { runWithAccessMemo } from "../../auth/access/request-memo";
-import { requireNextly } from "../../direct-api/nextly";
+import { requireNextlyOnceStarted } from "../../direct-api/nextly";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { NextlyError } from "../../errors/nextly-error";
 import { consoleLogger } from "../../shared/types";
@@ -309,7 +309,7 @@ export interface ContentRouteConfig<TNode> {
    * would see beside the page being previewed.
    */
   trustedCollections?: string[];
-  /** A booted Nextly instance (defaults to `requireNextly()`). */
+  /** A booted Nextly instance (defaults to `requireNextly()`, once any start in flight has finished). */
   nextly?: NextlyContentReader;
   /**
    * Extra cache tags attached to every resolved read, so a write to a related
@@ -513,8 +513,10 @@ function buildRoute<TNode>(
   // The predicate form, for the reads this module issues directly.
   const trusted = (name: string): boolean => trustedSet.has(name);
 
-  const getInstance = (): NextlyContentReader =>
-    config.nextly ?? requireNextly();
+  // Waits for a start in flight, as the start-up hook no longer holds requests
+  // until Nextly has started.
+  const getInstance = async (): Promise<NextlyContentReader> =>
+    config.nextly ?? (await requireNextlyOnceStarted());
 
   /** Whether this request may see unpublished edits at one collection + slug. */
   /**
@@ -771,7 +773,7 @@ function buildRoute<TNode>(
     // renders on demand via `dynamicParams`. Return before querying so a `0`
     // limit yields zero params instead of one-per-collection.
     if (staticParamsLimit <= 0) return [];
-    const nextly = getInstance();
+    const nextly = await getInstance();
     const params: Array<{ slug: string[] }> = [];
     for (const collection of collections) {
       let page = 1;
