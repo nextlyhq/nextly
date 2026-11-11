@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The SEO plugin keeps a record of who holds each public address, and a save that would give a second page an address another already holds is refused, naming both. Its record follows every save, move and release. Plugins taking part in address uniqueness now also get the transaction token `ctx.services.collections`' in-transaction methods take, so a record kept in a plugin's own collection is written with the save.
+The SEO plugin keeps a record of who holds each public address, and a save that would give a second page an address another already holds is refused, naming the address; the page holding it is logged, not shown, since the person saving may not be allowed to read it. Its record follows every save, move and release. Plugins taking part in address uniqueness now also get the transaction token `ctx.services.collections`' in-transaction methods take, so a record kept in a plugin's own collection is written with the save.

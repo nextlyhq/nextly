@@ -114,13 +114,6 @@ function rowOf(entry: unknown): RecordRow {
   };
 }
 
-/** How a refusal names the page already holding an address. */
-function named(holder: AddressHolder | null | undefined): string {
-  if (!holder) return "another page";
-  const who = holder.label ? `"${holder.label}"` : `the entry ${holder.id}`;
-  return `${who} in ${holder.collection}`;
-}
-
 /**
  * Let go of every address a deleted collection's entries held, inside the
  * delete's own transaction: a collection deleted whole removes its entries
@@ -352,12 +345,15 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
         { claimKey: { equals: key } },
         "share"
       );
+      // Only the address in the message: the saver may not be allowed to read
+      // the page holding it, which the log names instead.
       throw NextlyError.duplicate({
-        message: `${held.path} (${held.locale}) is already the address of ${named(other?.holder)}. Choose another address for this entry.`,
+        message: `${held.path} (${held.locale}) is already the address of another page. Choose another address for this entry.`,
         logContext: {
           reason: "public-address-held",
           held,
           holder: update.holder,
+          heldBy: other?.holder,
         },
       });
     }

@@ -104,6 +104,8 @@ describe.each(getConfiguredTestDialects())(
 
       await expect(publish(t, "posts", "hello")).rejects.toMatchObject({
         code: "DUPLICATE",
+        publicMessage:
+          "/hello (en) is already the address of another page. Choose another address for this entry.",
       });
       expect(await recorded(t)).toEqual({ "en|/hello": `pages:${page}` });
     });
