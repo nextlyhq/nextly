@@ -24,6 +24,11 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
     entry === undefined
       ? { status: "unavailable" }
       : { status: "resolved", path: `/${String(entry.slug)}` },
+  // Every language under its code.
+  languageAddressOf: async (path: string, locale: string) => ({
+    status: "resolved",
+    path: `/${locale}${path}`,
+  }),
 }));
 
 vi.mock("../../resolver/provider", () => ({
@@ -57,11 +62,26 @@ function meets(row: Row, condition: Record<string, unknown>): boolean {
   });
 }
 
-/** A plugin context over one collection of `documents` and a record of `rows`. */
-function context(documents: Record<string, unknown>[], rows: Row[]) {
+/**
+ * A plugin context over one collection of `documents` and a record of
+ * `rows`, on a site with `languages` where given, the first the default.
+ */
+function context(
+  documents: Record<string, unknown>[],
+  rows: Row[],
+  languages?: string[]
+) {
   return {
     self: { collections: {} },
-    config: {},
+    config:
+      languages === undefined
+        ? {}
+        : {
+            localization: {
+              locales: languages.map(code => ({ code })),
+              defaultLocale: languages[0],
+            },
+          },
     publicAddresses: {
       types: async () => [{ kind: "collection", slug: "pages" }],
     },
@@ -87,9 +107,9 @@ function context(documents: Record<string, unknown>[], rows: Row[]) {
   } as unknown as PluginContext;
 }
 
-const holds = (id: string, path: string): Row => ({
+const holds = (id: string, path: string, locale = "en"): Row => ({
   kind: "address",
-  locale: "en",
+  locale,
   path,
   holderCollection: "pages",
   holderId: id,
@@ -174,5 +194,52 @@ describe("the pages the site lists", () => {
     );
     expect(pages).toEqual([]);
     expect(problems).toEqual([]);
+  });
+
+  it("counts a page as holding its address only in the language it is listed in", async () => {
+    // The first page holds `/about` in French alone; the second holds it in
+    // English, the language listed.
+    for (const id of ["1", "2"]) {
+      answers.set(id, {
+        robots: listed,
+        canonical: { value: "/en/about", from: "address" },
+      });
+    }
+    const { pages, problems } = await listPages(
+      context(
+        [
+          { id: "1", slug: "about" },
+          { id: "2", slug: "about" },
+        ],
+        [holds("1", "/about", "fr"), holds("2", "/about", "en")],
+        ["en", "fr"]
+      ),
+      { origin: SITE }
+    );
+    expect(pages.map(page => page.holder.id)).toEqual(["2"]);
+    expect(problems).toEqual([
+      {
+        kind: "held-by-another",
+        holder: { collection: "pages", id: "1" },
+        path: "/about",
+        heldBy: { collection: "pages", id: "2" },
+      },
+    ]);
+  });
+
+  it("keeps a page whose typed canonical is its own address as its language serves it", async () => {
+    answers.set("1", {
+      robots: listed,
+      canonical: { value: `${SITE}/en/about`, from: "page" },
+    });
+    const { pages } = await listPages(
+      context(
+        [{ id: "1", slug: "about" }],
+        [holds("1", "/about")],
+        ["en", "fr"]
+      ),
+      { origin: SITE }
+    );
+    expect(pages.map(page => page.loc)).toEqual([`${SITE}/en/about`]);
   });
 });

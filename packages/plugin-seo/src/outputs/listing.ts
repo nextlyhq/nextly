@@ -15,6 +15,7 @@
  */
 import {
   getCachedNextly,
+  languageAddressOf,
   NextlyError,
   publicAddressOf,
   type AddressHolder,
@@ -116,6 +117,8 @@ async function heldPaths(
         where: {
           and: [
             { kind: { equals: "address" } },
+            // Held in another language, a path says nothing of this one.
+            { locale: { equals: recordLanguage(ctx) } },
             { holderCollection: { equals: collection } },
             { holderId: { in: [...ids] } },
           ],
@@ -136,7 +139,7 @@ async function heldPaths(
   }
 }
 
-/** Whichever page the record says holds `path`, in any language, or none. */
+/** Whichever page the record says holds `path` in the language listed, or none. */
 async function holderOfPath(
   ctx: PluginContext,
   path: string
@@ -145,7 +148,11 @@ async function holderOfPath(
     recordSlug(ctx),
     {
       where: {
-        and: [{ kind: { equals: "address" } }, { path: { equals: path } }],
+        and: [
+          { kind: { equals: "address" } },
+          { locale: { equals: recordLanguage(ctx) } },
+          { path: { equals: path } },
+        ],
       },
       pagination: { limit: 1, page: 1 },
       depth: 0,
@@ -159,6 +166,31 @@ function defaultLanguage(ctx: PluginContext): string | undefined {
   const localization = ctx.config.localization;
   return localization !== undefined && localization.locales.length > 0
     ? localization.defaultLocale
+    : undefined;
+}
+
+/**
+ * The language the listed pages are read in, as the address record keys it:
+ * the site's default, or `"en"` where a site with no languages names none, as
+ * core keys the addresses of such a site.
+ */
+function recordLanguage(ctx: PluginContext): string {
+  const named = ctx.config.localization?.defaultLocale;
+  return named !== undefined && named !== "" ? named : "en";
+}
+
+/**
+ * `path` as the language `locale` serves it, root-relative or on that
+ * language's own domain; `path` itself on a site with no languages.
+ */
+async function servedAt(
+  path: string,
+  locale: string | undefined
+): Promise<string | undefined> {
+  if (locale === undefined) return path;
+  const served = await languageAddressOf(path, locale);
+  return served.status === "resolved"
+    ? `${served.origin ?? ""}${served.path}`
     : undefined;
 }
 
@@ -312,15 +344,20 @@ function ownImage(answer: SeoAnswer, origin: string): string[] {
 async function listedAt(
   candidate: Candidate,
   answer: SeoAnswer,
-  origin: string
+  origin: string,
+  locale: string | undefined
 ): Promise<{ loc: string; path: string } | { lost: string } | null> {
   if (!answer.robots.value.index) return null;
   const own = await publicAddressOf(candidate.type, candidate.document);
   if (own.status !== "resolved") return null;
   if (answer.canonical === undefined) return { lost: own.path };
   const loc = absolute(answer.canonical.value, origin);
+  // A typed canonical is the page's own where it names the page's address as
+  // the page's language serves it.
+  const served = await servedAt(own.path, locale);
   const elsewhere =
-    answer.canonical.from !== "address" && loc !== absolute(own.path, origin);
+    answer.canonical.from !== "address" &&
+    (served === undefined || loc !== absolute(served, origin));
   if (loc === null || elsewhere || loc.length > MAX_LOC_LENGTH) return null;
   return { loc, path: own.path };
 }
@@ -339,6 +376,7 @@ async function listed(
   | null
 > {
   const { type, document, holder } = candidate;
+  const locale = defaultLanguage(ctx);
   const answer = await resolveSeo(
     ctx,
     {
@@ -351,13 +389,11 @@ async function listed(
       // A site with languages serves each page under its language's address:
       // the page as read, in the default language, is listed where that
       // language serves it. Its other languages' addresses are its own.
-      ...(defaultLanguage(ctx) === undefined
-        ? {}
-        : { locale: defaultLanguage(ctx) }),
+      ...(locale === undefined ? {} : { locale }),
     },
     options.readRules
   );
-  const at = await listedAt(candidate, answer, options.origin);
+  const at = await listedAt(candidate, answer, options.origin, locale);
   if (at === null) return null;
   if ("lost" in at) return { lost: { holder, path: at.lost } };
   const lastModified = toLastModified(document.updatedAt);
