@@ -357,6 +357,21 @@ describe("a content type's structured data", () => {
     ]);
   });
 
+  it("finds a detail by name only among the entry's own fields, as the markup does", () => {
+    const nested: SeoContentType = {
+      ...posts,
+      // Only the field inside the group: the group itself, named `start`,
+      // would be found by its name as the markup finds it.
+      mappableFields: [{ name: "start.date", label: "Start › Date" }],
+    };
+    // `start.date` reads like the start date, but the markup never looks
+    // inside a group by itself, so the date is missing until it is chosen.
+    expect(missingDetails(draftOf(stored), nested, "event")).toEqual([
+      "startDate",
+      "location",
+    ]);
+  });
+
   it("names a detail mapped to a field the type no longer has, keeping a path into one it has", () => {
     const stale = withDetailField(
       draftOf(stored),

@@ -104,6 +104,8 @@ export interface SwitchedOffType {
   label: string;
   /** How many entries of the type the reader may read. */
   count?: number;
+  /** Whether its pages have a public address, with SEO or without. */
+  public: boolean;
   seo: false;
 }
 

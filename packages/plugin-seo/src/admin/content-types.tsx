@@ -154,8 +154,11 @@ function guessedField(
   detail: StructuredDataDetail
 ): MappableField | undefined {
   for (const guess of DETAIL_GUESSES[detail]) {
+    // Among the entry's own fields only, as the markup looks: a field in a
+    // group is read only when chosen.
     const found = type.mappableFields.find(
-      field => tokenKey(field.name) === tokenKey(guess)
+      field =>
+        !field.name.includes(".") && tokenKey(field.name) === tokenKey(guess)
     );
     if (found !== undefined) return found;
   }
@@ -450,7 +453,9 @@ function SwitchedOffRow({ type }: { type: SwitchedOffType }): JSX.Element {
         </small>
       </td>
       <td data-label="Public address">
-        <span className="nx-seo-help">No public pages</span>
+        <span className="nx-seo-help">
+          {type.public ? "Public, without SEO" : "No public pages"}
+        </span>
       </td>
       <td aria-hidden="true" />
       <td aria-hidden="true" />

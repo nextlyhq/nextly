@@ -214,7 +214,13 @@ describe.each(getConfiguredTestDialects())(
           public: false,
         },
         // Neither the plugin's own collections nor the system's are listed.
-        { key: TESTIMONIALS, label: "Testimonials", count: 0, seo: false },
+        {
+          key: TESTIMONIALS,
+          label: "Testimonials",
+          count: 0,
+          public: false,
+          seo: false,
+        },
       ]);
     });
 

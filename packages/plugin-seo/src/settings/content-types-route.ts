@@ -224,7 +224,8 @@ const LISTING_PAGE = 100;
  */
 async function switchedOff(
   ctx: PluginRouteContext,
-  withSeo: ReadonlySet<string>
+  withSeo: ReadonlySet<string>,
+  withoutAddress: ReadonlySet<string>
 ): Promise<SwitchedOffType[]> {
   const found: SwitchedOffType[] = [];
   for (let page = 1; ; page += 1) {
@@ -241,6 +242,7 @@ async function switchedOff(
         key: slug,
         label: labelOf(slug, row),
         ...(count === undefined ? {} : { count }),
+        public: !withoutAddress.has(slug),
         seo: false,
       });
     }
@@ -268,7 +270,9 @@ export function contentTypesRoute(collections: readonly string[]): PluginRoute {
       for (const slug of collections) {
         items.push(await contentTypeOf(ctx, slug, withoutAddress));
       }
-      items.push(...(await switchedOff(ctx, new Set(collections))));
+      items.push(
+        ...(await switchedOff(ctx, new Set(collections), withoutAddress))
+      );
       return respondList(items, {
         total: items.length,
         page: 1,

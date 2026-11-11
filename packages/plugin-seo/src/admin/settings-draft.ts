@@ -318,7 +318,13 @@ export function missingDetails(
   structuredType: StructuredDataTypeKey
 ): StructuredDataDetail[] {
   const mapping = mappingOf(draft, type.key, structuredType);
-  const named = new Set(type.mappableFields.map(field => tokenKey(field.name)));
+  // The markup finds a detail by name among the entry's own fields only,
+  // never inside a group.
+  const named = new Set(
+    type.mappableFields
+      .filter(field => !field.name.includes("."))
+      .map(field => tokenKey(field.name))
+  );
   return STRUCTURED_DATA_TYPES[structuredType].needs.filter(detail => {
     const source = mapping[detail];
     if (source !== undefined) return !holdsField(type, source);

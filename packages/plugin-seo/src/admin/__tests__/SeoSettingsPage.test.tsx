@@ -105,8 +105,10 @@ function serving(
                   key: "testimonials",
                   label: "Testimonials",
                   count: 40,
+                  public: false,
                   seo: false,
                 },
+                { key: "events", label: "Events", public: true, seo: false },
               ],
             },
         pending: false,
@@ -587,6 +589,8 @@ describe("the content types table", () => {
       screen.getByText("40 entries · SEO switched off in code")
     ).toBeTruthy();
     expect(screen.getByText("No public pages")).toBeTruthy();
+    // A type served at its own address without SEO says so.
+    expect(screen.getByText("Public, without SEO")).toBeTruthy();
     expect(
       screen.queryByRole("switch", {
         name: "Hide all Testimonials from search",
