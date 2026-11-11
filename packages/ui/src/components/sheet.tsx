@@ -280,6 +280,7 @@ function SheetDragHandle({ onDismiss }: { onDismiss: () => void }) {
       onPointerUp={event => release(event, false)}
       onPointerCancel={event => release(event, true)}
     >
+      {/* A pill, outside the radius scale as a switch's track is. */}
       <span className="h-1 w-10 rounded-full bg-border" />
     </div>
   );
