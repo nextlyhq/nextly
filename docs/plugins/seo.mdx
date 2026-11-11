@@ -392,7 +392,10 @@ Only types Google still shows a result for are offered:
 | Review          | `review`              | author, item reviewed, item type, rating        |
 | Local business  | `localBusiness`       | street address, opening hours                   |
 
-The image is the page's share image unless a field is mapped to it. A page with no type chosen is
+The image is the page's share image unless a field is mapped to it. A rating is read out of 5, as
+search engines read one with no scale; a content type rating out of 10 maps `bestRating`, such as
+`{ value: "10" }`, and a rating off its scale is reported missing. An event's location is a group or
+an entry with the venue's name and its address, never text alone. A page with no type chosen is
 an Article when it has an author and a publish date, and a Web page otherwise. A content type
 chooses its pages' type, and a page can choose another in its `seo.structuredDataType`. A page
 hidden from search is offered only Web page and Collection page.
@@ -416,7 +419,8 @@ seoPlugin({
       events: {
         type: "event",
         // A field by name, a field in a group, or a value for every page.
-        details: { event: { startDate: "startsAt", location: "venue.name" } },
+        // A group holding the venue's name and its address.
+        details: { event: { startDate: "startsAt", location: "venue" } },
       },
     },
   },

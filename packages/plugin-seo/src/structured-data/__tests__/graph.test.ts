@@ -59,6 +59,7 @@ function context(): PluginContext {
               { name: "title", type: "text" },
               { name: "author", type: "relationship", relationTo: "authors" },
               { name: "writer", type: "text" },
+              { name: "clip", type: "upload", relationTo: "media" },
             ],
           },
         }),
@@ -600,6 +601,80 @@ describe("each type a content type can be mapped to", () => {
       }
     }
   );
+
+  it("takes no upload read as an id for a video's file, and says the route is the fix", async () => {
+    const { nodes, problems } = await buildStructuredData(
+      context(),
+      postInput({ id: "p1", clip: "abc123", uploadDate: "2026-10-01" }),
+      ANSWER,
+      rules({
+        posts: {
+          type: "videoObject",
+          details: { videoObject: { videoFile: "clip" } },
+        },
+      })
+    );
+
+    expect(nodeOf(nodes, "VideoObject")).toBeUndefined();
+    expect(problems).toEqual([
+      {
+        type: "videoObject",
+        detail: "videoFile",
+        message: "Missing: video file.",
+        fix: "route",
+        field: "clip",
+      },
+    ]);
+  });
+
+  it("takes a venue's name alone as no location, inventing no address", async () => {
+    const { nodes, problems } = await buildStructuredData(
+      context(),
+      postInput({ id: "p1", startDate: "2026-12-01", venue: "Hall A" }),
+      ANSWER,
+      rules({
+        posts: { type: "event", details: { event: { location: "venue" } } },
+      })
+    );
+
+    expect(nodeOf(nodes, "Event")).toBeUndefined();
+    expect(problems.map(problem => problem.detail)).toEqual(["location"]);
+  });
+
+  it("states a rating on the scale it is given, and refuses one off it", async () => {
+    const review = (fields: Record<string, unknown>, mapping: DetailMapping) =>
+      buildStructuredData(
+        context(),
+        postInput({ id: "p1", writer: "Sara", item: "Surfer", ...fields }),
+        ANSWER,
+        rules({
+          posts: {
+            type: "review",
+            details: {
+              review: { itemType: { value: "Product" }, ...mapping },
+            },
+          },
+        })
+      );
+
+    // Out of five, as Google reads a rating with no scale.
+    const offScale = await review({ score: 8 }, {});
+    expect(nodeOf(offScale.nodes, "Review")).toBeUndefined();
+    expect(offScale.problems.map(problem => problem.detail)).toEqual([
+      "rating",
+    ]);
+    // Out of ten, where the content type says so.
+    const outOfTen = await review(
+      { score: 8 },
+      { bestRating: { value: "10" } }
+    );
+    expect(nodeOf(outOfTen.nodes, "Review")?.reviewRating).toEqual({
+      "@type": "Rating",
+      ratingValue: 8,
+      bestRating: 10,
+      worstRating: 1,
+    });
+  });
 
   it("describes a profile page as the person it is about", async () => {
     const { nodes, problems } = await buildStructuredData(

@@ -204,14 +204,9 @@ function placeOf(value: unknown): StructuredDataNode | undefined {
       ? undefined
       : { "@type": "Place", name, address };
   }
-  const text = textOf(value);
-  return text === undefined
-    ? undefined
-    : {
-        "@type": "Place",
-        name: text,
-        address: { "@type": "PostalAddress", streetAddress: text },
-      };
+  // Text alone is a name or an address, never both: a venue is stated only
+  // where the page gives its name and its address apart.
+  return undefined;
 }
 
 /** Opening hours as text (`Mo-Fr 09:00-17:00`), one or several. */
@@ -223,10 +218,43 @@ function openingHoursOf(value: unknown): Json | undefined {
   return textOf(value);
 }
 
-/** A file's address: text, or a media document's `url`. */
+/**
+ * A file's address: a media document's `url`, or text written as an address,
+ * from the site's root or absolute. Other text, such as an upload read as its
+ * id, addresses no file.
+ */
 function fileOf(value: unknown, origin: string): string | undefined {
   const url = isRecord(value) ? textOf(value.url) : textOf(value);
-  return url === undefined ? undefined : absolute(url, origin);
+  if (url === undefined) return undefined;
+  if (!isRecord(value) && !/^(\/|https?:\/\/)/i.test(url)) return undefined;
+  return absolute(url, origin);
+}
+
+/** The top of the scale a page's ratings are given on: 5 unless it says. */
+function scaleOf(facts: PageFacts): number {
+  const read = readDetail(
+    facts.document,
+    "bestRating",
+    facts.mapping.bestRating
+  );
+  return bestRatingOf(read.value) ?? 5;
+}
+
+/** The top of a rating scale: a number above 1. */
+function bestRatingOf(value: unknown): number | undefined {
+  const best = numberOf(value);
+  return best !== undefined && best > 1 ? best : undefined;
+}
+
+/**
+ * A rating on the page's scale, from 1 to its top: one off it would be read
+ * as a different rating, since a rating with no scale is read out of 5.
+ */
+function ratingOf(facts: PageFacts, value: unknown): number | undefined {
+  const rating = numberOf(value);
+  return rating !== undefined && rating >= 1 && rating <= scaleOf(facts)
+    ? rating
+    : undefined;
 }
 
 /** A three-letter currency code, such as `USD`. */
@@ -301,7 +329,8 @@ const DETAIL_READERS: Readonly<Record<StructuredDataDetail, DetailReader>> = {
   startDate: valueRead(dateOf),
   uploadDate: valueRead(dateOf),
   price: valueRead(numberOf),
-  rating: valueRead(numberOf),
+  rating: (facts, read) => ratingOf(facts, read.value),
+  bestRating: valueRead(bestRatingOf),
   ratingCount: valueRead(countOf),
   currency: valueRead(currencyOf),
   availability: valueRead(availabilityOf),
@@ -400,6 +429,16 @@ function automaticType(
     : "webPage";
 }
 
+/** A rating's scale, where the page gives one other than out of 5. */
+function scaleOfRating(details: Partial<Record<StructuredDataDetail, Json>>): {
+  bestRating?: Json;
+  worstRating?: Json;
+} {
+  return details.bestRating === undefined
+    ? {}
+    : { bestRating: details.bestRating, worstRating: 1 };
+}
+
 /** The main subject of a page, as its chosen type describes it. */
 function subjectNode(
   type: StructuredDataTypeKey,
@@ -455,6 +494,7 @@ function subjectNode(
           "@type": "AggregateRating",
           ratingValue: details.rating ?? null,
           ratingCount: details.ratingCount ?? null,
+          ...scaleOfRating(details),
         },
       });
     case "event":
@@ -488,6 +528,7 @@ function subjectNode(
         reviewRating: {
           "@type": "Rating",
           ratingValue: details.rating ?? null,
+          ...scaleOfRating(details),
         },
       });
     case "localBusiness":

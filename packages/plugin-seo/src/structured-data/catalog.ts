@@ -22,6 +22,7 @@ export type StructuredDataDetail =
   | "currency"
   | "availability"
   | "rating"
+  | "bestRating"
   | "ratingCount"
   | "startDate"
   | "location"
@@ -43,6 +44,7 @@ export const DETAIL_LABELS: Readonly<Record<StructuredDataDetail, string>> = {
   currency: "currency",
   availability: "availability",
   rating: "rating",
+  bestRating: "best rating",
   ratingCount: "rating count",
   startDate: "start date",
   location: "location",
@@ -78,6 +80,7 @@ export const DETAIL_GUESSES: Readonly<
   currency: ["currency", "priceCurrency"],
   availability: ["availability", "inStock", "stock"],
   rating: ["rating", "ratingValue", "stars", "score"],
+  bestRating: ["bestRating", "ratingScale", "outOf"],
   ratingCount: ["ratingCount", "reviewCount", "ratings"],
   startDate: ["startDate", "startsAt", "start", "eventDate"],
   location: ["location", "venue", "place"],
@@ -165,7 +168,7 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     page: false,
     // Google shows an app only with its rating, so the rating is needed too.
     needs: ["operatingSystem", "price", "rating", "ratingCount"],
-    uses: ["currency", "image"],
+    uses: ["currency", "image", "bestRating"],
   },
   product: {
     label: "Product",
@@ -195,7 +198,7 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     page: false,
     // Google needs who wrote a review and what kind of thing it reviews.
     needs: ["author", "itemReviewed", "itemType", "rating"],
-    uses: [],
+    uses: ["bestRating"],
   },
   localBusiness: {
     label: "Local business",
