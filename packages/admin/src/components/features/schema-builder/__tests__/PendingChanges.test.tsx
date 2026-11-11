@@ -430,6 +430,19 @@ describe("pending changes in the outline", () => {
     expect(within(row("address")).queryByText(/Deleted/)).toBeNull();
   });
 
+  it("nothing moves into or out of a deleted row's place", async () => {
+    const user = userEvent.setup();
+    render(<LayoutHarness />, { wrapper: Providers });
+    act(() => builder.handleFieldDelete(field("summary").id));
+    // Headline sits just above the deleted Summary.
+    row("headline").focus();
+    await user.keyboard("{Alt>}{ArrowDown}{/Alt}");
+    expect(names()).toEqual(["headline", "address"]);
+    row("summary").focus();
+    await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
+    expect(names()).toEqual(["headline", "address"]);
+  });
+
   it("a deleted row offers no place to add, inside it or before it", () => {
     render(<LayoutHarness />, { wrapper: Providers });
     // By the id each place carries: "add-inside-<label>", "add-before-<label>".

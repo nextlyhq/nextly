@@ -330,6 +330,19 @@ describe("BuilderPageLayout", () => {
     beforeEach(() => navigateTo.mockClear());
     afterEach(() => vi.restoreAllMocks());
 
+    // The reference goes; the field group's own fields, shown beneath it,
+    // stay where they are defined.
+    it("deleting it says the field goes, not the field group's own fields", async () => {
+      withSeo(0);
+      const user = userEvent.setup();
+      screen.getByTestId("field-row-seo").focus();
+      await user.keyboard("{Shift>}{F10}{/Shift}");
+      await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
+      expect(
+        screen.getByText("Deleted SEO. Undo brings it back.")
+      ).toBeInTheDocument();
+    });
+
     it("asks first while there are unsaved changes, and stays when declined", async () => {
       const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
       withSeo(2);

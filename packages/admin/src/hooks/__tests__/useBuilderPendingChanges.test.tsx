@@ -230,6 +230,33 @@ describe("builder pending changes", () => {
     expect(result.current.state.pending.canUndo).toBe(false);
   });
 
+  it("an edit of the same field made while a save is in flight undoes back to what was saved", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "A",
+      })
+    );
+    const pinWhenSaved = result.current.state.pinFields;
+    // The same field again: one step with the edit the save sent, as typing is.
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "AB",
+      })
+    );
+    act(() => pinWhenSaved());
+    expect(result.current.state.unsavedCount).toBe(1);
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    // Back to the saved value, not past it.
+    expect(field("headline").label).toBe("A");
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+
   it("the count is the changes plus one for the settings", () => {
     const { result, field } = setup();
     act(() =>
