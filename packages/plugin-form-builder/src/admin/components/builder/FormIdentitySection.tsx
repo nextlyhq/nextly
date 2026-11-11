@@ -2,16 +2,19 @@
 
 /**
  * The first section of a form's Settings: its name, its ID (the slug the Form
- * block and the API read it by) and, once the form is closed, what it tells a
- * visitor. They sat in a box above the tabs; the name now heads the page and
- * the status sits in the bar, so what is left to type lives here.
+ * block and the API read it by), and a note for people in the admin.
  *
  * @module admin/components/builder/FormIdentitySection
  */
-import { FieldShell, FormSection, Input, Textarea } from "@nextlyhq/ui";
+import { FormSection, Input, Textarea } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
-import { useFormBuilder } from "../../context/FormBuilderContext";
+import {
+  useFieldBookkeeping,
+  useFormBuilder,
+} from "../../context/FormBuilderContext";
+
+import { descriptionIdOf, SettingRow } from "./settings-rows";
 
 /** A name as an ID: lowercase words joined by dashes. */
 function slugify(text: string): string {
@@ -31,65 +34,87 @@ function followingSlug(slug: string, oldName: string, newName: string): string {
   return slug === "" || slug === slugify(oldName) ? slugify(newName) : slug;
 }
 
+/**
+ * Why a form's ID no longer changes once the form has been live: the site's
+ * pages and any integration read the form by it.
+ */
+export const FIXED_FORM_ID_REASON =
+  "Fixed once the form has been live: pages and integrations read the form by this ID.";
+
 export function FormIdentitySection(): JSX.Element {
-  const { formData, updateFormData } = useFormBuilder();
+  const { formData, settings, updateFormData, updateSettings } =
+    useFormBuilder();
+  const { storedStatus } = useFieldBookkeeping();
+  // Live or closed as stored: the site has been reading it by its ID.
+  const idFixed = storedStatus !== "draft";
   return (
     <FormSection label="Form">
-      <div className="flex flex-col gap-5">
-        <FieldShell
-          label="Name"
-          htmlFor="form-name"
-          description="Shown in the admin, and as the heading if your site shows one."
-        >
-          <Input
-            type="text"
-            value={formData.name}
-            onChange={event =>
-              updateFormData({
-                name: event.target.value,
-                slug: followingSlug(
-                  formData.slug,
-                  formData.name,
-                  event.target.value
-                ),
-              })
-            }
-            placeholder="e.g., Contact form"
-          />
-        </FieldShell>
-        <FieldShell
-          label="Form ID"
-          htmlFor="form-slug"
-          description="Used by the Form block and the API."
-        >
-          <Input
-            type="text"
-            className="font-mono"
-            value={formData.slug}
-            onChange={event => updateFormData({ slug: event.target.value })}
-            placeholder="e.g., contact-form"
-          />
-        </FieldShell>
-        {/* Only once the form is closed: a box that is always there would
-            sit empty on the many forms that never close. */}
-        {formData.status === "closed" ? (
-          <FieldShell
-            label="Message when closed"
-            htmlFor="form-closed-message"
-            width="full"
-            description="Shown to anyone who reaches this form now that it is closed. Left empty, they are told only that it is not accepting submissions."
-          >
-            <Textarea
-              value={formData.closedMessage ?? ""}
-              onChange={event =>
-                updateFormData({ closedMessage: event.target.value })
-              }
-              placeholder="e.g., Applications closed on 31 March. Thank you to everyone who applied."
-              rows={3}
-            />
-          </FieldShell>
-        ) : null}
-      </div>
+      <SettingRow
+        label="Name"
+        htmlFor="form-name"
+        description="Shown in the admin, and as the heading if your site shows one."
+      >
+        <Input
+          id="form-name"
+          type="text"
+          className="w-full sm:w-72"
+          aria-describedby={descriptionIdOf("form-name")}
+          value={formData.name}
+          onChange={event =>
+            updateFormData({
+              name: event.target.value,
+              ...(idFixed
+                ? {}
+                : {
+                    slug: followingSlug(
+                      formData.slug,
+                      formData.name,
+                      event.target.value
+                    ),
+                  }),
+            })
+          }
+          placeholder="e.g., Contact form"
+        />
+      </SettingRow>
+      <SettingRow
+        label="Form ID"
+        htmlFor="form-slug"
+        description={
+          idFixed
+            ? FIXED_FORM_ID_REASON
+            : "Used by the Form block and the API. Fixed once the form is live."
+        }
+      >
+        <Input
+          id="form-slug"
+          type="text"
+          className="w-full font-mono sm:w-72"
+          aria-describedby={descriptionIdOf("form-slug")}
+          value={formData.slug}
+          // Read-only rather than disabled: the ID stays selectable and is
+          // still announced, with the reason it cannot change.
+          readOnly={idFixed}
+          onChange={event => updateFormData({ slug: event.target.value })}
+          placeholder="e.g., contact-form"
+        />
+      </SettingRow>
+      <SettingRow
+        label="Internal note"
+        htmlFor="form-internal-note"
+        description="Only people in the admin see this."
+        stack
+      >
+        <Textarea
+          id="form-internal-note"
+          aria-describedby={descriptionIdOf("form-internal-note")}
+          value={settings.internalNote ?? ""}
+          onChange={event =>
+            updateSettings({ internalNote: event.target.value || undefined })
+          }
+          rows={3}
+        />
+      </SettingRow>
     </FormSection>
   );
 }

@@ -42,12 +42,23 @@ export const DEFAULT_FORM_SETTINGS: Required<
     | "confirmationType"
     | "successMessage"
     | "allowMultipleSubmissions"
+    | "oneResponse"
+    | "oneResponseVersion"
+    | "botCheck"
+    | "storeIpAndBrowser"
   >
 > = {
   submitButtonText: "Submit",
   confirmationType: "message",
   successMessage: "Thank you for your submission!",
+  // Kept for readers of this constant; forms read `oneResponse`.
   allowMultipleSubmissions: true,
+  // Today's behaviour for a form that has never set them: several responses
+  // allowed, the plugin's bot check, and the visitor's IP and browser kept.
+  oneResponse: "off",
+  oneResponseVersion: 0,
+  botCheck: "default",
+  storeIpAndBrowser: true,
 };
 
 /**

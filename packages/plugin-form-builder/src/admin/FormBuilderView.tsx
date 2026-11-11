@@ -577,7 +577,8 @@ function FormEditor({
                   <FormPreview fields={fields} formData={formData} />
                 ),
                 settings: () => (
-                  <div className="flex flex-col gap-10">
+                  // One page in sections, one gap between each of them.
+                  <div className="flex flex-col gap-8">
                     <FormIdentitySection />
                     <FormSettingsTab
                       spamDefaults={config.spamDefaults}

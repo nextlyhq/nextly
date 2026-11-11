@@ -42,6 +42,7 @@ import {
 
 import { generateFieldName } from "./field-names";
 import { useChangeHistory } from "./use-change-history";
+import { useStoredStatus } from "./use-stored-status";
 import { useFieldIdentity } from "./use-field-identity";
 
 export { generateFieldName } from "./field-names";
@@ -184,6 +185,11 @@ export interface FieldBookkeeping {
    * keeps its own copy of a value, so it rereads the restored one.
    */
   restored: number;
+  /**
+   * The status the stored form has, as of the last load or save: what "has
+   * been live" is judged by, whatever an unsaved pick in the bar says.
+   */
+  storedStatus: FormBuilderState["formData"]["status"];
   /**
    * The key a field is known by while it is edited, whatever its name
    * becomes: the list's row key and the settings panel's field id.
@@ -516,7 +522,7 @@ export function FormBuilderProvider({
     record,
     undo,
     current: currentDocument,
-    markSaved: markAsSaved,
+    markSaved: historyMarkSaved,
     beginSave: historyBeginSave,
     rebase: rebaseHistory,
   } = useChangeHistory(formDocument, restore);
@@ -752,10 +758,20 @@ export function FormBuilderProvider({
     [record]
   );
 
+  // A save stores the form as it stood when it began, its status among it.
+  const {
+    storedStatus,
+    beginSave: statusBeginSave,
+    markSaved: markAsSaved,
+  } = useStoredStatus(initialData, currentDocument, {
+    beginSave: historyBeginSave,
+    markSaved: historyMarkSaved,
+  });
+
   const beginSave = useCallback(() => {
     vacatedRef.current = new Set();
-    historyBeginSave();
-  }, [historyBeginSave]);
+    statusBeginSave();
+  }, [statusBeginSave]);
 
   const isDirty = changeCount > 0;
 
@@ -809,6 +825,7 @@ export function FormBuilderProvider({
       changeCount,
       undo,
       restored,
+      storedStatus,
       fieldKey,
       editField,
     }),
@@ -843,6 +860,7 @@ export function FormBuilderProvider({
       changeCount,
       undo,
       restored,
+      storedStatus,
       fieldKey,
       editField,
     ]
