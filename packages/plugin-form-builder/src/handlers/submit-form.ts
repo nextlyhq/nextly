@@ -30,7 +30,7 @@ import {
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
 
-import { isFormFull } from "./form-limit";
+import { isFormClosed } from "./form-closing-hold";
 import { asPluginSubmission, prepareSubmission } from "./prepare-submission";
 import { checkSpam } from "./spam-detection";
 
@@ -467,12 +467,13 @@ export async function submitForm(
         { ...access, ...(request ? { request } : {}) }
       );
     } catch (error) {
-      // The form's limit is held where the submission is stored, under a lock
-      // that makes it exact (`form-limit`): the last place went to a
-      // submission stored first, and this one is told what a visitor to a
-      // closed form is told.
-      if (isFormFull(error)) {
-        logger.info?.("Form submission refused (limit reached)", { formSlug });
+      // The form's closing is held again where the submission is stored, the
+      // limit under a lock that makes it exact (`form-closing-hold`): the last place
+      // went to a submission stored first, or the closing time passed since
+      // the check above, and this one is told what a visitor to a closed
+      // form is told.
+      if (isFormClosed(error)) {
+        logger.info?.("Form submission refused (form closed)", { formSlug });
         return {
           success: false,
           outcome: "closed",

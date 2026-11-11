@@ -113,6 +113,39 @@ describe.each(getConfiguredTestDialects())("closing a form (%s)", dialect => {
     });
   });
 
+  it("refuses the Direct API past its closing time, and its limit too", async () => {
+    // `nextly.forms.submit()` stores a submission without `submitForm`, so
+    // the closing is held where every submission is stored.
+    const closesAt = new Date(Date.now() + 60_000);
+    const { nextly, submit } = await boot({
+      closesAt: closesAt.toISOString(),
+      submissionLimit: 1,
+    });
+    const direct = (
+      nextly as unknown as {
+        forms: {
+          submit: (args: { form: string; data: object }) => Promise<unknown>;
+        };
+      }
+    ).forms;
+
+    expect((await submit()).success).toBe(true);
+    // Full: the Direct API is refused, with the closed message.
+    await expect(
+      direct.submit({ form: "meetup", data: { name: "Grace" } })
+    ).resolves.toEqual({ success: false, error: CLOSED });
+
+    // Past the closing time, too, once a place is freed.
+    const [first] = await taken(nextly);
+    await nextly.delete({ collection: "form-submissions", id: first!.id });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(closesAt.getTime() + 1_000);
+    await expect(
+      direct.submit({ form: "meetup", data: { name: "Grace" } })
+    ).resolves.toEqual({ success: false, error: CLOSED });
+    expect(await taken(nextly)).toHaveLength(0);
+  });
+
   it("takes submissions again once its closing time is cleared", async () => {
     const { nextly, submit } = await boot({
       closesAt: new Date(Date.now() - 60_000).toISOString(),
