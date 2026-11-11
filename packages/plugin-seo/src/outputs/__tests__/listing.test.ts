@@ -129,15 +129,26 @@ describe("the pages the site lists", () => {
   it("lists a page at its canonical as its answer gives it", async () => {
     answers.set("1", {
       robots: listed,
-      canonical: { value: "https://de.acme.example/ueber", from: "address" },
+      canonical: { value: "/de/ueber", from: "address" },
     });
     const { pages, problems } = await listPages(
       context([{ id: "1", slug: "ueber" }], [holds("1", "/ueber")]),
       { origin: SITE }
     );
-    expect(pages.map(page => page.loc)).toEqual([
-      "https://de.acme.example/ueber",
-    ]);
+    expect(pages.map(page => page.loc)).toEqual([`${SITE}/de/ueber`]);
+    expect(problems).toEqual([]);
+  });
+
+  it("leaves a page whose canonical is on another of the site's addresses to that address's sitemap", async () => {
+    answers.set("1", {
+      robots: listed,
+      canonical: { value: "https://acme.de/ueber", from: "address" },
+    });
+    const { pages, problems } = await listPages(
+      context([{ id: "1", slug: "ueber" }], [holds("1", "/ueber")]),
+      { origin: SITE }
+    );
+    expect(pages).toEqual([]);
     expect(problems).toEqual([]);
   });
 

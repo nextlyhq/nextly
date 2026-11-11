@@ -371,6 +371,10 @@ async function listedAt(
     answer.canonical.from !== "address" &&
     (served === undefined || loc !== absolute(served, origin));
   if (loc === null || elsewhere || loc.length > MAX_LOC_LENGTH) return null;
+  // A canonical on another of the site's addresses, such as a language's own
+  // domain, is listed in that address's sitemap: a sitemap lists its own
+  // origin's pages alone.
+  if (new URL(loc).origin !== new URL(origin).origin) return null;
   return { loc, path: own.path };
 }
 
