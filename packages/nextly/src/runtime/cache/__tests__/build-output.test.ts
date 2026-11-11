@@ -21,11 +21,27 @@ vi.mock("../build-output", async importOriginal => ({
   buildOutputReader: () => built.read,
 }));
 
+import { clearStart, publishStart } from "../../../init/start-in-flight";
+import type { Nextly } from "../../../init/nextly-instance";
 import IncrementalHandler from "../incremental-cache-handler";
-import { expireTags } from "../tag-expiry-view";
+import type { TagExpiryLedger } from "../tag-expiry-ledger";
+import { expireTags, publishTagExpiryLedger } from "../tag-expiry-view";
 
 const BUILT_AT = Date.UTC(2026, 10, 11, 9, 0, 0);
 const PAGE = { kind: "APP_PAGE", html: "<p>admin</p>", headers: {} };
+const SITE_STYLE = "nextly:single:site-style";
+
+/** A ledger answering that each of `expired`'s tags expired when it says. */
+function ledgerSaying(expired: Record<string, number> = {}): TagExpiryLedger {
+  return {
+    record: async () => false,
+    expiriesOf: async () => ({
+      now: Date.now(),
+      expired: new Map(Object.entries(expired)),
+    }),
+    prune: async () => 0,
+  };
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -35,9 +51,13 @@ beforeEach(() => {
   delete (globalThis as { __nextly_tag_expiry_view?: unknown })
     .__nextly_tag_expiry_view;
   built.read.mockReset();
+  clearStart();
+  // A process whose start has connected: what expired can be asked.
+  publishTagExpiryLedger(ledgerSaying());
 });
 
 afterEach(() => {
+  clearStart();
   vi.useRealTimers();
 });
 
@@ -95,5 +115,58 @@ describe("a miss in a new process", () => {
     });
 
     expect(answer).toBeNull();
+  });
+});
+
+describe("a miss while the start has not yet connected", () => {
+  beforeEach(() => {
+    publishTagExpiryLedger(null);
+    built.read.mockResolvedValue({ lastModified: BUILT_AT, value: PAGE });
+  });
+
+  /** A start in flight, which publishes `ledger` when `connect()` is called. */
+  function startConnecting(ledger: TagExpiryLedger): () => void {
+    publishStart(new Promise<Nextly>(() => {}));
+    return () => publishTagExpiryLedger(ledger);
+  }
+
+  it("waits until what expired can be asked, and refuses a page changed since the build", async () => {
+    const connect = startConnecting(
+      ledgerSaying({ [SITE_STYLE]: BUILT_AT + 30_000 })
+    );
+    const handler = new IncrementalHandler({ fs, serverDistDir: "/app/.next" });
+
+    let answered = false;
+    const pending = handler
+      .get("/admin", { kind: "APP_PAGE", tags: [SITE_STYLE] })
+      .finally(() => {
+        answered = true;
+      });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(answered).toBe(false);
+
+    connect();
+    expect(await pending).toBeNull();
+  });
+
+  it("serves the build's page once the ledger says nothing changed", async () => {
+    const connect = startConnecting(ledgerSaying());
+    const handler = new IncrementalHandler({ fs, serverDistDir: "/app/.next" });
+
+    const pending = handler.get("/admin", {
+      kind: "APP_PAGE",
+      tags: [SITE_STYLE],
+    });
+    connect();
+
+    expect((await pending)?.value).toEqual(PAGE);
+  });
+
+  it("is a miss when no start is under way to connect", async () => {
+    const handler = new IncrementalHandler({ fs, serverDistDir: "/app/.next" });
+
+    expect(
+      await handler.get("/admin", { kind: "APP_PAGE", tags: [SITE_STYLE] })
+    ).toBeNull();
   });
 });

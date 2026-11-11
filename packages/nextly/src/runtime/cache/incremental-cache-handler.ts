@@ -10,6 +10,8 @@
  * @module runtime/cache/incremental-cache-handler
  */
 
+import { awaitStartInFlight, startInFlight } from "../../init/start-in-flight";
+
 import { sharedEntries } from "./bounded-entries";
 import {
   buildOutputReader,
@@ -23,6 +25,8 @@ import {
   isEntryExpired,
   localNow,
   refreshTagExpiries,
+  tagExpiryLedgerPublished,
+  whenTagExpiryLedgerPublished,
 } from "./tag-expiry-view";
 
 interface StoredEntry {
@@ -152,6 +156,18 @@ function fillBegan(key: string): number {
   return now;
 }
 
+/**
+ * Whether what expired can be asked of the ledger: at once when it is
+ * published; when a start is under way, once that start publishes it (as soon
+ * as its database connects) or ends without it; otherwise not.
+ */
+async function expiriesCanBeAsked(): Promise<boolean> {
+  if (tagExpiryLedgerPublished()) return true;
+  if (startInFlight() === null) return false;
+  await Promise.race([whenTagExpiryLedgerPublished(), awaitStartInFlight()]);
+  return tagExpiryLedgerPublished();
+}
+
 export default class NextlyIncrementalCacheHandler {
   /** The pages and responses the build wrote to disk, read on a miss. */
   private readonly fromBuild: ReturnType<typeof buildOutputReader>;
@@ -212,6 +228,11 @@ export default class NextlyIncrementalCacheHandler {
       ctx
     );
     if (!built) return undefined;
+    // The build's copy is served only once what expired since the build can
+    // be asked: before the ledger is published, a write another process
+    // recorded would go unseen, and the stale page could be kept by a shared
+    // cache too. A render on a miss waits for the start as it always has.
+    if (!(await expiriesCanBeAsked())) return undefined;
     // A page stored while the disk was read is newer than the build's copy
     // (a regeneration another request finished first), so it stands.
     const storedMeanwhile = entries().get(key);
