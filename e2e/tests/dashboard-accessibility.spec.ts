@@ -584,7 +584,11 @@ test("a keyboard alone adds a collection card through its add step, changes its 
   await page.keyboard.press("Enter");
   await expect(page.getByRole("listbox")).toHaveCount(0);
   await expect(range).not.toHaveText(was ?? "");
-  await expectVisibleFocus(range);
+  // A select marks focus by its border, judged against the drawer's other select.
+  await expectVisibleFocus(
+    range,
+    drawer.getByRole("combobox", { name: "Collection" })
+  );
 
   // Its width, a radio group: the arrows choose the next width.
   const widths = drawer.getByRole("radiogroup", { name: "Width" });
