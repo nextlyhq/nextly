@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { TOAST_OFFSET_BOTTOM_PROPERTY } from "@admin/constants/ui";
 
-import { useToastAboveFooter } from "./use-toast-above-footer";
+import { useToastAboveFooter } from "../useToastAboveFooter";
 
 /** A drawer whose footer, `height` px tall, is drawn a commit after `open` turns on. */
 function Drawer({ open, height }: { open: boolean; height: number }) {

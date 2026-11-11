@@ -26,6 +26,7 @@ import { Link } from "@admin/components/ui/link";
 import { useNowTick } from "@admin/hooks/useNowTick";
 import { cn } from "@admin/lib/utils";
 
+import { useToastAboveFooter } from "../widgets/edit/useToastAboveFooter";
 import {
   CARD_FOOTER_LINK_CLASS,
   CardFooterContent,
@@ -46,7 +47,6 @@ import {
   useCopyDiagnostics,
   type CopyDiagnostics,
 } from "./use-copy-diagnostics";
-import { useToastAboveFooter } from "./use-toast-above-footer";
 
 /**
  * System health, for super-admins: one status line, then the Nextly version,
