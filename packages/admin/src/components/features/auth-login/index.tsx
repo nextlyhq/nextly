@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Alert, AlertDescription, Button, Input } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -11,6 +11,10 @@ import { ArrowRight, Loader2, Mail } from "@admin/components/icons";
 import { AuthFormCard } from "@admin/components/shared/auth/AuthFormCard";
 import { AuthRefusalNotice } from "@admin/components/shared/auth/AuthRefusalNotice";
 import { PasswordVisibilityToggle } from "@admin/components/shared/auth/PasswordVisibilityToggle";
+import {
+  LOADING_FRAME_TIMES,
+  useDelayedReveal,
+} from "@admin/components/shared/loading-frame/delayed-reveal";
 import { toast } from "@admin/components/ui";
 import {
   FormControl,
@@ -20,13 +24,15 @@ import {
   FormMessage,
 } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
-import { ROUTES } from "@admin/constants/routes";
+import { PUBLIC_ROUTE_PATHS, ROUTES } from "@admin/constants/routes";
 import { useAppName } from "@admin/context/providers/BrandingProvider";
 import { useApi } from "@admin/hooks/useApi";
 import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
+import { useServerAnswered } from "@admin/hooks/useServerAnswered";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage, type ApiError } from "@admin/lib/api/parseApiError";
 import type { ActionResponse } from "@admin/lib/api/response-types";
+import { rememberSignedInHere } from "@admin/lib/auth/signed-in-here";
 
 import {
   AuthUiExtras,
@@ -66,6 +72,80 @@ function hasPreFormUi(authUi: ReturnType<typeof useAuthUi>): boolean {
   );
 }
 
+type SignInValues = z.infer<typeof formSchema>;
+
+/**
+ * Where a finished sign-in lands. Drawn at the sign-in page (or another public
+ * page), the dashboard; drawn in place of a screen the visitor asked for, that
+ * screen, reloaded now that there is a session. Either way an address on this
+ * page's own origin, never one taken from the query string.
+ */
+function afterSignInAddress(): string {
+  const { pathname, search } = window.location;
+  const onPublicPage = (PUBLIC_ROUTE_PATHS as readonly string[]).includes(
+    pathname.replace(/\/$/, "")
+  );
+  return onPublicPage ? ROUTES.DASHBOARD : `${pathname}${search}`;
+}
+
+/**
+ * What the form says while the server has not answered yet: nothing for the
+ * first moment, then that it is connecting, then that the server is starting
+ * and the sign-in will wait for it. Timed by the admin's one wait clock.
+ */
+function useConnectingNote(serverAnswered: boolean): string {
+  const connecting = useDelayedReveal(
+    !serverAnswered,
+    LOADING_FRAME_TIMES.line
+  );
+  const starting = useDelayedReveal(
+    !serverAnswered,
+    LOADING_FRAME_TIMES.status
+  );
+  if (starting) {
+    return "Starting the server. You can type now; signing in waits for it.";
+  }
+  return connecting ? "Connecting…" : "";
+}
+
+/**
+ * A sign-in asked for before the server can answer it, sent once it can.
+ *
+ * The form is drawn, and can be filled in, while a starting server still holds
+ * every request. Pressing Sign in then keeps the values instead of sending a
+ * request the server would hold: they are sent as soon as the server answers,
+ * exactly once, however often the button was pressed meanwhile (each press
+ * replaces the values kept, never adds a second sign-in).
+ */
+function useSignInWhenServerAnswers(
+  serverAnswered: boolean,
+  send: (values: SignInValues) => Promise<void>
+): (values: SignInValues) => void {
+  const held = useRef<SignInValues | null>(null);
+  const [holding, setHolding] = useState(false);
+  // The latest `send`, read when the server answers: the one from the render
+  // that pressed the button may have closed over a state since replaced.
+  const latestSend = useRef(send);
+  useLayoutEffect(() => {
+    latestSend.current = send;
+  });
+  useEffect(() => {
+    if (!serverAnswered || !holding) return;
+    const values = held.current;
+    held.current = null;
+    setHolding(false);
+    if (values !== null) void latestSend.current(values);
+  }, [serverAnswered, holding]);
+  return values => {
+    if (serverAnswered) {
+      void send(values);
+      return;
+    }
+    held.current = values;
+    setHolding(true);
+  };
+}
+
 export function Login(): JSX.Element {
   const { api } = useApi();
   const appName = useAppName();
@@ -84,7 +164,7 @@ export function Login(): JSX.Element {
   // Its logic lives in the hook so this component only renders.
   const challengeFlow = useChallengeFlow();
 
-  const form = useForm<z.infer<typeof formSchema>>({
+  const form = useForm<SignInValues>({
     resolver: zodResolver(formSchema),
     mode: "onBlur",
     defaultValues: {
@@ -105,7 +185,7 @@ export function Login(): JSX.Element {
   // The rest comes down by separating the two sign-in outcomes that still share
   // this body, never by restoring the branches.
   // fallow-ignore-next-line complexity
-  async function onSubmit(values: z.infer<typeof formSchema>) {
+  async function onSubmit(values: SignInValues) {
     setIsLoading(true);
     authRefusal.clear();
 
@@ -161,12 +241,15 @@ export function Login(): JSX.Element {
       toast.success(result?.message ?? "Login successful!", {
         description: `Welcome back to ${appName}`,
       });
+      // The server has issued a session, so this browser now has signed in
+      // here: the next visit opens on the admin's frame, not on this form.
+      rememberSignedInHere();
 
       // Use full page redirect (not client-side navigateTo) after login.
       // Client-side navigation triggers Radix UI re-renders which cause
       // useInsertionEffect errors, which trigger React Fast Refresh in dev,
       // which remounts PublicRoute, creating an infinite loop.
-      window.location.href = ROUTES.DASHBOARD;
+      window.location.href = afterSignInAddress();
     } catch (error: unknown) {
       // Its own answers first: an unverified email is a 403 too, and this form
       // meets it with a resend action rather than a refusal.
@@ -209,6 +292,12 @@ export function Login(): JSX.Element {
     }
   }
 
+  // Whether the server has answered this page: until then a sign-in waits,
+  // and the form says why.
+  const serverAnswered = useServerAnswered();
+  const connectingNote = useConnectingNote(serverAnswered);
+  const signIn = useSignInWhenServerAnswers(serverAnswered, onSubmit);
+
   async function handleResendVerification() {
     const email = form.getValues("email");
     if (!email) {
@@ -246,7 +335,7 @@ export function Login(): JSX.Element {
           // The server's own destination when it has one: the sanitized
           // `next` the pending token carried. Otherwise the dashboard.
           onDone={next => {
-            window.location.href = next ?? ROUTES.DASHBOARD;
+            window.location.href = next ?? afterSignInAddress();
           }}
           // The pending token is spent, so the step it stood for is over.
           // Clearing it brings the sign-in form back, which is the only
@@ -276,7 +365,7 @@ export function Login(): JSX.Element {
               // the view's own value cannot be that, and navigating on it
               // replaced the destination with the dashboard.
               if (challengeFlow.hasNavigated()) return;
-              window.location.href = next ?? ROUTES.DASHBOARD;
+              window.location.href = next ?? afterSignInAddress();
             }}
           />
         </>
@@ -330,7 +419,7 @@ export function Login(): JSX.Element {
           <FormProvider {...form}>
             <form
               onSubmit={e => {
-                void form.handleSubmit(onSubmit)(e);
+                void form.handleSubmit(signIn)(e);
               }}
               className="space-y-6"
             >
@@ -424,7 +513,11 @@ export function Login(): JSX.Element {
                 size="md"
                 type="submit"
                 disabled={isLoading}
-                className="w-full h-11 rounded-md shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"
+                // Not `disabled` while the server has not answered: a press
+                // is still taken, and the sign-in sent once it can be. It
+                // reads as unavailable meanwhile, to the eye and to a reader.
+                aria-disabled={serverAnswered ? undefined : true}
+                className="w-full h-11 rounded-md shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2 aria-disabled:opacity-50"
               >
                 {isLoading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -435,6 +528,15 @@ export function Login(): JSX.Element {
                   </>
                 )}
               </Button>
+              {/* Holds its line from the start, so the note arriving moves
+                  nothing below it. */}
+              <p
+                role="status"
+                data-testid="sign-in-connecting"
+                className="-mt-3 min-h-[18px] text-xs text-muted-foreground"
+              >
+                {connectingNote}
+              </p>
             </form>
           </FormProvider>
           {authUi.slots.afterForm.length > 0 && (
