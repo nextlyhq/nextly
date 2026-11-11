@@ -54,13 +54,17 @@ const ADD_AS_ICON =
 
 /**
  * The page's place in the bar's left part: "Dashboard", or, in customise mode,
- * "Dashboard / Customizing" with "Dashboard" leaving the mode. Nothing outside
- * the admin's shell, where there is no bar.
+ * "Dashboard / Customizing" with "Dashboard" leaving the mode. While leaving is
+ * held (a write on its way), "Dashboard" is drawn as words, not a control.
+ * Nothing outside the admin's shell, where there is no bar.
  */
 export function DashboardCrumb({
+  isEditing = false,
   onLeave,
 }: {
-  /** Leave customise mode; present only while it is open. */
+  /** Whether customise mode is open. */
+  isEditing?: boolean;
+  /** Leave customise mode; absent while leaving is held. */
   onLeave?: (() => void) | undefined;
 }): JSX.Element | null {
   const inBar = useInTopBar();
@@ -68,8 +72,13 @@ export function DashboardCrumb({
   return (
     <Breadcrumbs
       items={
-        onLeave
-          ? [{ label: "Dashboard", onClick: onLeave }, { label: "Customizing" }]
+        isEditing
+          ? [
+              onLeave
+                ? { label: "Dashboard", onClick: onLeave }
+                : { label: "Dashboard" },
+              { label: "Customizing" },
+            ]
           : [{ label: "Dashboard" }]
       }
     />

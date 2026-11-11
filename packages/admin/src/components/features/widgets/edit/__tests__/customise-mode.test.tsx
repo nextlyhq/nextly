@@ -737,6 +737,39 @@ describe("in the admin's top bar", () => {
     expect(writes()).toBe(0);
   });
 
+  it("offers no way out through the breadcrumb while a save is on its way, as Cancel offers none", async () => {
+    let land: (value: unknown) => void = () => undefined;
+    api.put.mockReturnValue(
+      new Promise(resolve => {
+        land = resolve;
+      })
+    );
+    renderDashboard({ inBar: true });
+    const user = await beginEditing();
+    await choose(user, "Posts", "Move later");
+    expect(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    ).toBeInTheDocument();
+    await user.click(saveButton());
+
+    await waitFor(() =>
+      expect(
+        within(bar()).getByRole("button", { name: "Cancel" })
+      ).toBeDisabled()
+    );
+    expect(
+      within(topBar()).queryByRole("button", { name: "Dashboard" })
+    ).toBeNull();
+    expect(
+      within(topBar()).getByRole("navigation", { name: "Breadcrumb" })
+    ).toHaveTextContent("Customizing");
+
+    // The save then lands, and with it the mode ends as a save does.
+    land({ message: "ok", item: {} });
+    expect(await screen.findByTestId("dashboard-edit-begin")).toBeVisible();
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+  });
+
   it.each([true, false])(
     "offers no Preview widgets, with the development server's previews %s",
     async widgetPreviews => {

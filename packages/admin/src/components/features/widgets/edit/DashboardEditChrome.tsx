@@ -265,15 +265,23 @@ export function DashboardEditChrome({
 
   // Cancel and the breadcrumb's "Dashboard" both leave the mode, through this
   // one path: with nothing unsaved at once, otherwise once the reader agrees to
-  // lose their changes.
+  // lose their changes. Never while a write is on its way: leaving drops the
+  // draft without stopping the write, so a save would land after its changes
+  // were "discarded", or fail with nothing left to retry. Cancel is disabled
+  // then, and the breadcrumb offers no way out until the write settles.
+  const canLeave = !editor.isWriting;
   const requestLeave = () => {
+    if (!canLeave) return;
     if (hasUnsavedChanges) setAskingLeave(true);
     else on.cancel();
   };
 
   return (
     <>
-      <DashboardCrumb onLeave={editor.isEditing ? requestLeave : undefined} />
+      <DashboardCrumb
+        onLeave={editor.isEditing && canLeave ? requestLeave : undefined}
+        isEditing={editor.isEditing}
+      />
       <DashboardBarControls
         isEditing={editor.isEditing}
         canBegin={hasArrangement}
