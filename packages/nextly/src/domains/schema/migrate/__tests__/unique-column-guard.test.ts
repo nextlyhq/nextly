@@ -14,6 +14,7 @@ const column = (repeats: RepeatedValue[]) => ({
   table: "dc_profiles",
   column: "person",
   repeats,
+  showValues: true,
 });
 
 describe("uniqueColumnRepeatsError", () => {

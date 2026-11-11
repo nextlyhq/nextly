@@ -552,7 +552,7 @@ describe.each(LOCK_DIALECTS)(
       const notes = "plugin_notes_unique";
       await run([
         `CREATE TABLE ${q(notes)} (${q("id")} varchar(36) PRIMARY KEY, ${q("code")} varchar(64))`,
-        `INSERT INTO ${q(notes)} (${q("id")}, ${q("code")}) VALUES ('n1', 'x'), ('n2', 'x')`,
+        `INSERT INTO ${q(notes)} (${q("id")}, ${q("code")}) VALUES ('n1', 's3cr3t-token'), ('n2', 's3cr3t-token')`,
       ]);
       await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert([
         {
@@ -608,8 +608,15 @@ describe.each(LOCK_DIALECTS)(
       );
 
       expect(NextlyError.is(error)).toBe(true);
+      // Its values may be anything, a secret included: only how many repeat is said, and logged.
       expect((error as NextlyError).publicMessage).toContain(
-        `Table '${notes}': column 'code' cannot become unique while 1 value repeats: "x" (2 entries).`
+        `Table '${notes}': column 'code' cannot become unique while 1 value repeats, the most repeated one in 2 entries.`
+      );
+      expect(
+        JSON.stringify((error as NextlyError).publicMessage)
+      ).not.toContain("s3cr3t-token");
+      expect(JSON.stringify((error as NextlyError).logContext)).not.toContain(
+        "s3cr3t-token"
       );
       const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
         notes,
@@ -658,6 +665,77 @@ describe.each(LOCK_DIALECTS)(
       );
 
       expect(asIndexed).toEqual([{ value: "x", entries: 2, language: "en" }]);
+    }, 120_000);
+
+    it("judges a file's unique index over the values its earlier statements leave, refusing one they make repeat", async () => {
+      await run([profile("p1", "ada"), profile("p2", "bob")]);
+      writeFileAs(NAME, [
+        `UPDATE ${q(PROFILES)} SET ${q("person")} = 'ada' WHERE ${q("id")} = 'p2'`,
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toContain(
+        `field 'person' cannot become unique while 1 value repeats: "ada" (2 entries)`
+      );
+      expect(await personIsUnique()).toBe(false);
+      // The check runs before the index's statement, inside the file's transaction, so the
+      // update is rolled back with the refusal on every dialect.
+      const rows = await adapter.executeQuery<{ person: string }>(
+        `SELECT ${q("person")} AS ${q("person")} FROM ${q(PROFILES)} WHERE ${q("id")} = 'p2'`
+      );
+      expect(rows[0]?.person).toBe("bob");
+    }, 120_000);
+
+    it("applies a file whose earlier statements clear the repeats its unique index would meet", async () => {
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+      writeFileAs(NAME, [
+        `UPDATE ${q(PROFILES)} SET ${q("person")} = NULL WHERE ${q("id")} = 'p2'`,
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+
+      await migrate();
+
+      expect(await personIsUnique()).toBe(true);
+    }, 120_000);
+
+    it("adopts no unique index an earlier statement of the file may take away with its column", async () => {
+      await run([
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+      const statements = [
+        `ALTER TABLE ${q(PROFILES)} DROP COLUMN ${q("partner")}`,
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ];
+
+      const adoption = await adoptUniqueIndexesAlreadyThere(
+        adapter.getDrizzle(),
+        dialect,
+        statements
+      );
+
+      expect(adoption).toEqual({ statements, adopted: [] });
     }, 120_000);
   }
 );

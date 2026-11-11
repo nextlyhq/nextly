@@ -26,15 +26,20 @@ import { sql } from "drizzle-orm";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import {
   introspectLiveColumns,
   introspectLiveSnapshot,
+  introspectTableNames,
 } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { readUniqueColumns } from "../pipeline/live-table-facts";
 import type { RequiredColumnEntity } from "../required-column-refusal";
+import { requiredColumnRegistries } from "../required-column-registries";
+import type { ColumnOrigin } from "../services/field-column-descriptor";
 
+import type { MigrationUnit } from "./migration-transaction";
 import { readRequiredColumnOwners } from "./required-column-guard";
 import {
   indexesDroppedBy,
@@ -61,6 +66,75 @@ export interface UniqueColumnRepeats {
   column: string;
   /** Every repeated value, most repeated first. */
   repeats: RepeatedValue[];
+  /**
+   * Whether the values may be shown: a relationship's are ids of entries. Any other column's may
+   * be anything, a secret included, so the refusal and the log give only how many repeat.
+   */
+  showValues: boolean;
+}
+
+/** A collection or Single the registry records, with what is read of it here. */
+export interface RegisteredEntity {
+  entity: RequiredColumnEntity;
+  table: string;
+  fields: FieldDefinition[];
+  localized: boolean;
+  /** Which builder made its table, which decides each translated column's name. */
+  builtBy: ColumnOrigin;
+}
+
+/** A stored field list, as the registry holds it: JSON text or a parsed list. */
+function fieldsOf(raw: unknown): FieldDefinition[] {
+  const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
+  return Array.isArray(value) ? (value as FieldDefinition[]) : [];
+}
+
+/** Each collection and Single the registry records, with its table and fields. */
+export async function registeredEntities(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<RegisteredEntity[]> {
+  // Field groups keep their uniqueness by their own Unique mark alone, never a relationship's
+  // cardinality, so only collections and Singles are asked.
+  const registries = (await requiredColumnRegistries(db, dialect)).filter(
+    ([kind]) => kind !== "fieldGroup"
+  );
+  const present = new Set(
+    (
+      await introspectTableNames(
+        db,
+        dialect,
+        registries.map(([, table]) => table)
+      )
+    ).map(name => name.toLowerCase())
+  );
+  const entities: RegisteredEntity[] = [];
+  for (const [kind, registry] of registries) {
+    if (!present.has(registry.toLowerCase())) continue;
+    const rows = await querySqlRows<{
+      slug: string;
+      table_name: string;
+      fields: unknown;
+      localized: unknown;
+      source: unknown;
+    }>(
+      db,
+      dialect,
+      sql`SELECT ${sql.identifier("slug")} AS slug, ${sql.identifier("table_name")} AS table_name, ${sql.identifier("fields")} AS fields, ${sql.identifier("localized")} AS localized, ${sql.identifier("source")} AS source FROM ${sql.identifier(registry)}`
+    );
+    for (const row of rows) {
+      entities.push({
+        entity: { kind, slug: String(row.slug) },
+        table: String(row.table_name),
+        fields: fieldsOf(row.fields),
+        // A boolean on PostgreSQL, a number on MySQL and SQLite.
+        localized: row.localized === true || Number(row.localized) === 1,
+        // A code-first entity's table is the code-first builder's; any other, the Schema Builder's.
+        builtBy: row.source === "code" ? "codeFirst" : "collection",
+      });
+    }
+  }
+  return entities;
 }
 
 /**
@@ -117,6 +191,15 @@ const LABELS: Record<RequiredColumnEntity["kind"], string> = {
 
 /** One column's line in a refusal: its first values, and how many more there are. */
 function repeatsMessage(column: UniqueColumnRepeats): string {
+  const count = column.repeats.length;
+  const thing = column.entity.kind === "table" ? "column" : "field";
+  const subject = `${LABELS[column.entity.kind]} '${column.entity.slug}': ${thing} '${column.field}' cannot become unique while ${count} ${count === 1 ? "value repeats" : "values repeat"}`;
+  const advice =
+    "Give each entry its own value, or clear the repeats, then run `nextly migrate` again.";
+  if (!column.showValues) {
+    const most = Math.max(...column.repeats.map(r => r.entries));
+    return `${subject}, the most repeated one in ${most} entries. ${advice}`;
+  }
   const listed = column.repeats
     .slice(0, LISTED_REPEATS)
     .map(
@@ -127,9 +210,7 @@ function repeatsMessage(column: UniqueColumnRepeats): string {
   const more = column.repeats.length - LISTED_REPEATS;
   const rest =
     more > 0 ? `, and ${more} more (the full list is in the log)` : "";
-  const count = column.repeats.length;
-  const thing = column.entity.kind === "table" ? "column" : "field";
-  return `${LABELS[column.entity.kind]} '${column.entity.slug}': ${thing} '${column.field}' cannot become unique while ${count} ${count === 1 ? "value repeats" : "values repeat"}: ${listed}${rest}. Give each entry its own value, or clear the repeats, then run \`nextly migrate\` again.`;
+  return `${subject}: ${listed}${rest}. ${advice}`;
 }
 
 /**
@@ -152,17 +233,113 @@ export function uniqueColumnRepeatsError(
         field: c.field,
         table: c.table,
         column: c.column,
-        repeats: c.repeats,
+        // A value that may be a secret never reaches the log either: only how many hold it.
+        repeats: c.showValues
+          ? c.repeats
+          : c.repeats.map(({ entries, language }) => ({
+              entries,
+              ...(language === undefined ? {} : { language }),
+            })),
       })),
     },
   });
 }
 
+/** A single-column unique index a statement of a file creates, and where in the file. */
+interface UniqueTarget {
+  table: string;
+  column: string;
+  /** The statement's position in the file. */
+  at: number;
+}
+
+/** The single-column unique indexes `statements` create, each with its position. */
+function uniqueTargets(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): UniqueTarget[] {
+  return statements.flatMap((statement, at) =>
+    (uniqueIndexesCreatedBy(statement, dialect) ?? [])
+      .filter(index => index.columns.length === 1)
+      .map(index => ({ table: index.table, column: index.columns[0], at }))
+  );
+}
+
+/**
+ * Whether a statement before `at` writes rows of `table` (INSERT, UPDATE, DELETE, MySQL's
+ * REPLACE): the values a unique index made at `at` must hold are then the ones those leave.
+ */
+function writtenBefore(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  table: string,
+  at: number
+): boolean {
+  return statements
+    .slice(0, at)
+    .some(
+      statement =>
+        /^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(statement) &&
+        tablesChangedIn(statement, dialect)?.includes(table) === true
+    );
+}
+
+/**
+ * One unique index's column judged as the database stands: undefined where the table or column
+ * is not there, a unique index already holds it, or nothing repeats. A table the registry names
+ * is named by its entity and field, any other (a plugin's, an extension's) by its table and
+ * column, and only a relationship's values are shown.
+ */
+async function judgeUniqueTarget(
+  db: unknown,
+  dialect: SupportedDialect,
+  target: UniqueTarget
+): Promise<UniqueColumnRepeats | undefined> {
+  const owner = (await readRequiredColumnOwners(db, dialect)).owner(
+    target.table
+  );
+  const live = await introspectLiveColumns(db, dialect, [
+    owner?.table ?? target.table,
+  ]);
+  const table = live.tables[0];
+  const spelled = table?.columns.find(
+    c => c.name.toLowerCase() === target.column
+  );
+  if (table === undefined || spelled === undefined) return undefined;
+  const unique = await readUniqueColumns(db, dialect, table.name);
+  if ([...unique.keys()].some(name => name.toLowerCase() === target.column)) {
+    return undefined;
+  }
+  const repeats = await readRepeatedValues(
+    db,
+    dialect,
+    table.name,
+    spelled.name
+  );
+  if (repeats.length === 0) return undefined;
+  const field = owner?.fieldsByColumn.get(target.column);
+  const definition =
+    field === undefined
+      ? undefined
+      : (await registeredEntities(db, dialect))
+          .find(e => e.table.toLowerCase() === table.name.toLowerCase())
+          ?.fields.find(f => f.name === field);
+  return {
+    entity: owner?.entity ?? { kind: "table", slug: table.name },
+    field: field ?? target.column,
+    table: table.name,
+    column: target.column,
+    repeats,
+    showValues: definition?.type === "relationship",
+  };
+}
+
 /**
  * Refuse, before any of its statements runs, a migration file that makes a column unique while
  * the column's entries repeat a value. Each single-column unique index the file creates
- * (`uniqueIndexesCreatedBy`) is judged on a table the registry names, over a column the table
- * already has and no unique index holds.
+ * (`uniqueIndexesCreatedBy`) is judged over a column the table already has and no unique index
+ * holds, except one whose table an earlier statement of the file writes: that one is judged at
+ * its statement (`uniqueIndexCheckpoint`), over the values those writes leave.
  *
  * @param statements the file's statements, as the runner splits them
  * @param source the file's name, which the refusal names
@@ -173,45 +350,46 @@ export async function refuseUniqueIndexesOverRepeats(
   statements: readonly string[],
   source: string
 ): Promise<void> {
-  const created = statements.flatMap(
-    statement => uniqueIndexesCreatedBy(statement, dialect) ?? []
-  );
-  const targets = created.filter(index => index.columns.length === 1);
-  if (targets.length === 0) return;
-  const owners = await readRequiredColumnOwners(db, dialect);
   const refused: UniqueColumnRepeats[] = [];
-  for (const target of targets) {
-    const owner = owners.owner(target.table);
-    const column = target.columns[0];
-    // A table that is not a collection's, a Single's or a field group's (a plugin's, an
-    // extension's) is judged too, and named by its table and column.
-    const table = owner?.table ?? target.table;
-    const live = await introspectLiveColumns(db, dialect, [table]);
-    const spelled = live.tables[0]?.columns.find(
-      c => c.name.toLowerCase() === column
-    );
-    if (live.tables[0] === undefined || spelled === undefined) continue;
-    const unique = await readUniqueColumns(db, dialect, live.tables[0].name);
-    if ([...unique.keys()].some(name => name.toLowerCase() === column)) {
-      continue;
-    }
-    const repeats = await readRepeatedValues(
-      db,
-      dialect,
-      live.tables[0].name,
-      spelled.name
-    );
-    if (repeats.length > 0) {
-      refused.push({
-        entity: owner?.entity ?? { kind: "table", slug: live.tables[0].name },
-        field: owner?.fieldsByColumn.get(column) ?? column,
-        table: live.tables[0].name,
-        column,
-        repeats,
-      });
-    }
+  for (const target of uniqueTargets(statements, dialect)) {
+    if (writtenBefore(statements, dialect, target.table, target.at)) continue;
+    const found = await judgeUniqueTarget(db, dialect, target);
+    if (found !== undefined) refused.push(found);
   }
   if (refused.length > 0) throw uniqueColumnRepeatsError(refused, source);
+}
+
+/**
+ * The check a unit's runner makes before each statement, for each unique index whose table an
+ * earlier statement of the unit writes, through the handle the statements run on (the
+ * transaction's, when there is one): the values those writes leave. Undefined when the unit has
+ * no such index, so a runner pays nothing for it. Outside a transaction the statements before it
+ * have run and stay applied, and the refusal says so.
+ */
+export function uniqueIndexCheckpoint(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  unit: MigrationUnit
+): ((db: unknown, index: number) => Promise<void>) | undefined {
+  const atStatement = uniqueTargets(statements, dialect).filter(target =>
+    writtenBefore(statements, dialect, target.table, target.at)
+  );
+  if (atStatement.length === 0) return undefined;
+  return async (db, index) => {
+    const refused: UniqueColumnRepeats[] = [];
+    for (const target of atStatement.filter(t => t.at === index)) {
+      const found = await judgeUniqueTarget(db, dialect, target);
+      if (found !== undefined) refused.push(found);
+    }
+    if (refused.length === 0) return;
+    const ran = unit.transaction
+      ? ""
+      : ` Its first ${index} statement(s) ran before this one and stayed applied.`;
+    throw uniqueColumnRepeatsError(
+      refused,
+      `${unit.source} at statement ${index + 1}${ran}`
+    );
+  };
 }
 
 /** A unique index a file creates that the live table already carries. */
@@ -222,7 +400,9 @@ export interface AdoptedUniqueIndex {
 
 /**
  * Whether a statement drops `table`, or may drop an index of it: a DROP TABLE naming it, a DROP
- * INDEX naming `index`, or MySQL's DROP INDEX on the table, whose index is not read here.
+ * INDEX naming `index`, MySQL's DROP INDEX on the table, whose index is not read here, or an
+ * ALTER TABLE on it that drops or renames anything (a column, a constraint, an index), which may
+ * take the index with it.
  */
 function dropsTableOrIndex(
   statement: string,
@@ -232,9 +412,12 @@ function dropsTableOrIndex(
 ): boolean {
   if (tablesDroppedBy(statement, dialect)?.includes(table)) return true;
   if (indexesDroppedBy(statement, dialect)?.includes(index)) return true;
+  const onTable = tablesChangedIn(statement, dialect)?.includes(table) === true;
+  if (/^\s*DROP\s+INDEX\b/i.test(statement)) return onTable;
   return (
-    /^\s*DROP\s+INDEX\b/i.test(statement) &&
-    tablesChangedIn(statement, dialect)?.includes(table) === true
+    onTable &&
+    /^\s*ALTER\s+TABLE\b/i.test(statement) &&
+    /\b(DROP|RENAME|CHANGE|MODIFY)\b/i.test(statement)
   );
 }
 

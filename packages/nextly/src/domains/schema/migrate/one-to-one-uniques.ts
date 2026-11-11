@@ -19,7 +19,6 @@
  *
  * @module domains/schema/migrate/one-to-one-uniques
  */
-import { sql } from "drizzle-orm";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -30,7 +29,6 @@ import {
   companionUniqueIndexStatements,
   uniqueTranslatedColumns,
 } from "../../i18n/migration/companion-unique-indexes";
-import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import {
   introspectLiveColumns,
   introspectTableNames,
@@ -42,11 +40,7 @@ import {
 } from "../pipeline/live-table-facts";
 import { createIndexSql } from "../pipeline/sql-templates/create-index";
 import type { RequiredColumnEntity } from "../required-column-refusal";
-import {
-  fieldsByColumnOf,
-  requiredColumnRegistries,
-} from "../required-column-registries";
-import type { ColumnOrigin } from "../services/field-column-descriptor";
+import { fieldsByColumnOf } from "../required-column-registries";
 import {
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
@@ -54,7 +48,9 @@ import {
 
 import {
   readRepeatedValues,
+  registeredEntities,
   uniqueColumnRepeatsError,
+  type RegisteredEntity,
   type UniqueColumnRepeats,
 } from "./unique-column-guard";
 
@@ -74,76 +70,12 @@ interface MissingUniqueness {
   statements: string[];
 }
 
-/** A collection or Single the registry records, with what the step reads of it. */
-interface RegisteredEntity {
-  entity: RequiredColumnEntity;
-  table: string;
-  fields: FieldDefinition[];
-  localized: boolean;
-  /** Which builder made its table, which decides each translated column's name. */
-  builtBy: ColumnOrigin;
-}
-
 /** What the step needs: the database, and how to run a statement on it and say what it did. */
 export interface OneToOneUniquesDeps {
   db: unknown;
   dialect: SupportedDialect;
   executeQuery: (statement: string) => Promise<unknown>;
   logger: { info(message: string): void };
-}
-
-/** A stored field list, as the registry holds it: JSON text or a parsed list. */
-function fieldsOf(raw: unknown): FieldDefinition[] {
-  const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
-  return Array.isArray(value) ? (value as FieldDefinition[]) : [];
-}
-
-/** Each collection and Single the registry records, with its table and fields. */
-async function registeredEntities(
-  db: unknown,
-  dialect: SupportedDialect
-): Promise<RegisteredEntity[]> {
-  // Field groups keep their uniqueness by their own Unique mark alone, never a relationship's
-  // cardinality, so only collections and Singles are asked.
-  const registries = (await requiredColumnRegistries(db, dialect)).filter(
-    ([kind]) => kind !== "fieldGroup"
-  );
-  const present = new Set(
-    (
-      await introspectTableNames(
-        db,
-        dialect,
-        registries.map(([, table]) => table)
-      )
-    ).map(name => name.toLowerCase())
-  );
-  const entities: RegisteredEntity[] = [];
-  for (const [kind, registry] of registries) {
-    if (!present.has(registry.toLowerCase())) continue;
-    const rows = await querySqlRows<{
-      slug: string;
-      table_name: string;
-      fields: unknown;
-      localized: unknown;
-      source: unknown;
-    }>(
-      db,
-      dialect,
-      sql`SELECT ${sql.identifier("slug")} AS slug, ${sql.identifier("table_name")} AS table_name, ${sql.identifier("fields")} AS fields, ${sql.identifier("localized")} AS localized, ${sql.identifier("source")} AS source FROM ${sql.identifier(registry)}`
-    );
-    for (const row of rows) {
-      entities.push({
-        entity: { kind, slug: String(row.slug) },
-        table: String(row.table_name),
-        fields: fieldsOf(row.fields),
-        // A boolean on PostgreSQL, a number on MySQL and SQLite.
-        localized: row.localized === true || Number(row.localized) === 1,
-        // A code-first entity's table is the code-first builder's; any other, the Schema Builder's.
-        builtBy: row.source === "code" ? "codeFirst" : "collection",
-      });
-    }
-  }
-  return entities;
 }
 
 /** The one-to-one relationships among `fields`, translated or not. */
@@ -299,7 +231,8 @@ export async function makeOneToOnesUnique(
     );
     if (repeats.length > 0) {
       const { entity, field, table, column } = target;
-      refused.push({ entity, field, table, column, repeats });
+      // A one-to-one's values are ids of entries, which the refusal shows.
+      refused.push({ entity, field, table, column, repeats, showValues: true });
     }
   }
   if (refused.length > 0) {
