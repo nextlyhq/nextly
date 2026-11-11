@@ -16,6 +16,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
 import { dialectVariantOf } from "../../domains/schema/migrate/dialect-variant";
+import { compareMigrationBaseNames } from "../../domains/schema/migrate/migration-order";
 import {
   classifyMigrationFile,
   hasOldBuilderName,
@@ -389,16 +390,10 @@ export function getSortedBaseNames(
   return Array.from(groups.keys()).sort(compareMigrationBaseNames);
 }
 
-/**
- * The order two app migrations run in, by base name (the filename without
- * `.sql`): code-unit order, so the timestamp prefix decides. The comparator
- * `getSortedBaseNames` sorts by, exported so anything that has to agree with
- * the run order asks this rather than sorting by a rule of its own.
- */
-export function compareMigrationBaseNames(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
-}
+// The run order's comparator lives in a module that imports nothing, so code
+// loaded with `next.config` can order the folder without this module's
+// imports; re-exported here, where readers of the folder have always found it.
+export { compareMigrationBaseNames };
 
 /**
  * What to tell an operator about a Builder-written file with no snapshot: it
