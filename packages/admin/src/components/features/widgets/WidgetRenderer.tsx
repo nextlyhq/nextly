@@ -66,13 +66,18 @@ function skeletonDisplayOf(definition: DashboardWidget): string {
 const DECLARED_TABLE_COLUMNS = 2;
 
 /**
- * The items setting a list or table card's skeleton holds the place of: `null`, the default
- * number, since a declared widget's rows are what its `load` chose to read; `undefined` for
- * any other card, whose skeleton draws its default rows.
+ * The "Number of entries" a list or table card's skeleton holds the place of: the card's own
+ * `limit` setting, the rows its `load` reads and the card then draws (`rowsDrawn`), so a full
+ * answer lands at the height the card loaded at; the default number (`null`) for a card that
+ * declares none. `undefined` for any other card, whose skeleton draws its default rows.
  */
-function skeletonItemsFor(definition: DashboardWidget): unknown {
+function skeletonItemsFor(
+  definition: DashboardWidget,
+  settings: Record<string, unknown> | undefined
+): unknown {
   const display = skeletonDisplayOf(definition);
-  return display === "list" || display === "table" ? null : undefined;
+  if (display !== "list" && display !== "table") return undefined;
+  return settings?.limit ?? null;
 }
 
 /**
@@ -312,7 +317,7 @@ function sharedCardProps(
     // The display the widget says it looks like, else its archetype's: a
     // declared card's `skeleton`, published as its `sketch`.
     skeleton: skeletonFor(skeletonDisplayOf(definition)),
-    skeletonItems: skeletonItemsFor(definition),
+    skeletonItems: skeletonItemsFor(definition, placement?.settings),
     // The density the card's list rows, and the skeleton holding their place, are drawn at.
     listDensity: listDensityOf(placement?.settings),
     skeletonFields: skeletonFieldsFor(definition),

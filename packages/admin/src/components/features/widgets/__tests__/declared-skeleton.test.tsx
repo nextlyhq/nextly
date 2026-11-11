@@ -55,4 +55,18 @@ describe("a declared widget's loading skeleton", () => {
     expect(list).not.toBeNull();
     expect(list?.children).toHaveLength(rowsDrawn(null));
   });
+
+  it("holds the place of the card's own Number of entries, not the default five", () => {
+    // The rows its `load` reads and the card then draws: a full answer of 10 lands at the
+    // height the card loaded at, where a skeleton of the default five would grow on arrival.
+    render(
+      <WidgetRenderer
+        definition={declared("list")}
+        slot={undefined}
+        placement={{ id: "orders", settings: { limit: 10 } }}
+      />
+    );
+    const list = screen.getByTestId("card-skeleton").querySelector(".divide-y");
+    expect(list?.children).toHaveLength(10);
+  });
 });

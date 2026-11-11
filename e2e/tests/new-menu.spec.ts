@@ -47,6 +47,14 @@ async function lengthenTypeNames(page: Page): Promise<void> {
   });
 }
 
+/**
+ * The dashboard header's "+ New" button. The shell's rail draws one too, the same menu; the
+ * header's is the one these tests open from the dashboard.
+ */
+function headerTrigger(page: Page) {
+  return page.getByTestId("dashboard-header").getByTestId("new-menu-trigger");
+}
+
 /** How far the page can scroll sideways, and how far it has. */
 async function sideways(page: Page): Promise<{ room: number; at: number }> {
   return page.evaluate(() => {
@@ -59,7 +67,7 @@ test("lists every creatable type once, flat, with a search that narrows it", asy
   page,
 }) => {
   await gotoAdmin(page, "/");
-  const trigger = page.getByTestId("new-menu-trigger");
+  const trigger = headerTrigger(page);
   await expect(trigger).toHaveAccessibleName("New");
   await trigger.click();
   const menu = page.getByRole("dialog", { name: "Create" });
@@ -86,7 +94,7 @@ test("on a 390 px phone, the button stays on screen and the menu widens nothing,
   await lengthenTypeNames(page);
   await gotoAdmin(page, "/");
 
-  const trigger = page.getByTestId("new-menu-trigger");
+  const trigger = headerTrigger(page);
   await expect(trigger).toBeVisible();
   const box = await trigger.boundingBox();
   expect(box).not.toBeNull();

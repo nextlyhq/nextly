@@ -207,7 +207,9 @@ function HeaderActions({
           </Button>
         </div>
       ) : null}
-      {chrome?.editing ? null : <NewMenu variant="rail" />}
+      {/* Below the button, not beside it as the rail's opens: in the header the list then stays
+          over the page, and on a phone moves along the edge to stay on screen. */}
+      {chrome?.editing ? null : <NewMenu variant="rail" side="bottom" />}
     </div>
   );
 }

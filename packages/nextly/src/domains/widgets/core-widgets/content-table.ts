@@ -50,6 +50,10 @@ export const contentTableWidget = defineWidget({
       { services, signal, now }
     ),
   // Its own component: a table of the rows on a wide card, rows on a narrow one.
+  // Loads as the table it draws, holding the place of its "Number of entries" of rows: a site
+  // has collections from its first day, so the table is nearly always full, and a full answer
+  // lands at the height the card loaded at.
+  skeleton: "table",
   view: { component: "core#ContentTable" },
   // The component draws its own empty state, which says what the table lists.
   isEmpty: () => false,

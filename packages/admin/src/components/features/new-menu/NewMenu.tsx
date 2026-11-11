@@ -45,6 +45,12 @@ import { newMenuTypes } from "./new-menu-model";
 export interface NewMenuProps {
   /** Where the menu is drawn: the rail's button, or the phone drawer's row. */
   variant: "rail" | "drawer";
+  /**
+   * Which side of the button its list opens on: beside it, as the rail's opens into the page
+   * (the default), or below it, as a button in a page's header opens, where the list can move
+   * sideways to stay on a narrow screen.
+   */
+  side?: "right" | "bottom";
   className?: string;
 }
 
@@ -230,6 +236,7 @@ export interface NewMenuViewProps extends NewMenuProps {
 /** {@link NewMenu} as drawn from the types it is given. */
 export function NewMenuView({
   variant,
+  side = "right",
   className,
   types,
   isReady,
@@ -316,8 +323,10 @@ export function NewMenuView({
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        side="right"
-        align="start"
+        side={side}
+        // Below a button, its end edge: the list then stays over the page, and moves along the
+        // button's edge to keep its gutter on a narrow screen.
+        align={side === "bottom" ? "end" : "start"}
         sideOffset={8}
         aria-label="Create"
         // Held inside the viewport with a gutter, so the list never runs off

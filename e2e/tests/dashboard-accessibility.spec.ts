@@ -657,8 +657,12 @@ test("a keyboard alone adds a collection card through its add step, changes its 
     .toBe("Keyboard card");
 });
 
-/** The "+ New" button, and the popover it opens. */
-const newCaret = (page: Page) => page.getByTestId("new-menu-trigger");
+/**
+ * The dashboard header's "+ New" button, and the popover it opens. The shell's rail draws one
+ * too, the same menu; the header's is the one this dashboard owns.
+ */
+const newCaret = (page: Page) =>
+  page.getByTestId("dashboard-header").getByTestId("new-menu-trigger");
 const newMenuOf = (page: Page) => page.getByRole("dialog", { name: "Create" });
 /** The menu's search row: the box around the magnifier and the search field (cmdk's wrapper). */
 const searchRow = (menu: Locator) => menu.locator("[cmdk-input-wrapper]");

@@ -187,7 +187,7 @@ export const recentOrders = defineWidget({
       limit: listEntries(settings.limit),
       total: true,
     });
-    return { items, total };
+    return total === undefined ? { items } : { items, total };
   },
 });
 ```
