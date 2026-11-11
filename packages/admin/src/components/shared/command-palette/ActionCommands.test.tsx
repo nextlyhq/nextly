@@ -45,10 +45,6 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
     content: { isLoading: false, error: null, hasAnswer: true },
   }),
 }));
-const recorded: string[] = [];
-vi.mock("@admin/hooks/queries/useDashboardNewTypes", () => ({
-  useRecordNewType: () => (slug: string) => recorded.push(slug),
-}));
 const navigateTo = vi.fn();
 vi.mock("@admin/lib/navigation", () => ({
   navigateTo: (path: string) => navigateTo(path),
@@ -71,7 +67,6 @@ const createCommands = () =>
 
 beforeEach(() => {
   offered = EVERY_KIND;
-  recorded.length = 0;
   navigateTo.mockClear();
 });
 
@@ -89,13 +84,11 @@ describe("the palette's create commands", () => {
     expect(screen.queryByText("Create Content")).toBeNull();
   });
 
-  it("open a new entry of the type, and record nothing until one is created", () => {
+  it("open a new entry of the type", () => {
     mayCreate = ["posts"];
     renderCommands();
     fireEvent.click(screen.getByTestId("command-create-posts"));
     expect(navigateTo).toHaveBeenCalledWith("/admin/collections/posts/create");
-    // Opening the form is not creating an entry: the form may be left.
-    expect(recorded).toEqual([]);
   });
 
   it("tell two types of one label apart, by their slugs", () => {

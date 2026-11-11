@@ -4,6 +4,7 @@ import {
   AlertTitle,
   Button,
   FormActions,
+  PageHeader,
 } from "@nextlyhq/ui";
 import type { JSX, ReactNode } from "react";
 import { FormProvider } from "react-hook-form";
@@ -111,19 +112,16 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
           {/* Page header. The submit button now lives in FormActions, at the
               end of the form, but keeps the `form="role-form"` attribute so it
               still targets this form regardless of where in the DOM it sits. */}
-          <div className="pb-6">
-            <h1
-              id="role-form-title"
-              className="text-xl font-semibold text-foreground"
-            >
-              {isEditMode ? "Edit Role" : "Create New Role"}
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              {isEditMode
+          <PageHeader
+            className="mb-6"
+            titleId="role-form-title"
+            title={isEditMode ? "Edit Role" : "Create New Role"}
+            description={
+              isEditMode
                 ? "Update role info and permissions."
-                : "Define role info and assign permissions."}
-            </p>
-          </div>
+                : "Define role info and assign permissions."
+            }
+          />
 
           <form
             id={ROLE_FORM_ID}

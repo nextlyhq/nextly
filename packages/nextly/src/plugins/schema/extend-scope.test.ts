@@ -363,3 +363,143 @@ describe("extend with a scope — Schema Builder types", () => {
     ).not.toThrow();
   });
 });
+
+describe("extend with a scope — what a switched-off type would have had", () => {
+  it("holds back each scope's field of one name, the one the fold adds first", async () => {
+    const { withheldScopeFieldsOf, publishWithheldScopeFields } = await import(
+      "../../domains/schema/pipeline/withheld-scope-fields"
+    );
+    const off: ContentTypeScope = { ...EVERY, except: ["pages"] };
+    const first = plugin("@t/first", {
+      extend: [{ target: off, fields: [field("seo")] }],
+    });
+    const second = plugin("@t/second", {
+      extend: [
+        {
+          target: off,
+          fields: [{ name: "SEO", type: "number" } as unknown as FieldConfig],
+        },
+      ],
+    });
+
+    // Switched on, the type has the first scope's field and not the second's.
+    const on = applyPluginSchemaContributionsDeferred(siteConfig(), [
+      plugin("@t/first", {
+        extend: [{ target: EVERY, fields: [field("seo")] }],
+      }),
+      second,
+    ]);
+    expect(fieldNames(find(on.config.collections, "pages"))).toEqual([
+      "title",
+      "seo",
+    ]);
+
+    // Both declarations could have made the column, depending on which
+    // scopes were off when it was made: the one the type took when on comes
+    // first, and the one kept is the one the column matches.
+    applyPluginSchemaContributionsDeferred(siteConfig(), [first, second]);
+    expect(
+      withheldScopeFieldsOf("collection", "pages").map(f => [
+        (f as { name?: string }).name,
+        (f as { type?: string }).type,
+      ])
+    ).toEqual([
+      ["seo", "text"],
+      ["seo", "text"],
+      ["SEO", "number"],
+    ]);
+    publishWithheldScopeFields(new Map());
+  });
+});
+
+describe("extend with a scope — what a switched-off type would have had, transformed", () => {
+  it("holds back a field as the plugin's own transform left it", async () => {
+    const { withheldScopeFieldsOf, publishWithheldScopeFields } = await import(
+      "../../domains/schema/pipeline/withheld-scope-fields"
+    );
+    // The plugin renames the field it adds, so its column is `seo_data`.
+    const rename = <T extends { fields?: readonly FieldConfig[] }>(entity: T) =>
+      ({
+        ...entity,
+        fields: (entity.fields ?? []).map(f =>
+          (f as { name?: string }).name === "seo"
+            ? ({ ...f, name: "seo_data" } as FieldConfig)
+            : f
+        ),
+      }) as T;
+    const seo = plugin("@t/seo", {
+      extend: [
+        { target: { ...EVERY, except: ["pages"] }, fields: [field("seo")] },
+      ],
+      transforms: [
+        { target: "posts", kind: "collection", transform: rename },
+        { target: "pages", kind: "collection", transform: rename },
+      ],
+    });
+
+    const { config } = applyPluginSchemaContributionsDeferred(siteConfig(), [
+      seo,
+    ]);
+    expect(fieldNames(find(config.collections, "posts"))).toEqual([
+      "title",
+      "seo_data",
+    ]);
+    // The transformed field first; the clause's own `seo` after it is kept
+    // only if a column of that name is there, and none is.
+    expect(
+      withheldScopeFieldsOf("collection", "pages").map(
+        f => (f as { name?: string }).name
+      )
+    ).toEqual(["seo_data", "seo"]);
+    publishWithheldScopeFields(new Map());
+  });
+});
+
+describe("extend with a scope — a switched-off type given the field another way", () => {
+  it("folds a type a scope excepts that another clause gives the same field", async () => {
+    const { withheldScopeFieldsOf, publishWithheldScopeFields } = await import(
+      "../../domains/schema/pipeline/withheld-scope-fields"
+    );
+    const seo = plugin("@t/seo", {
+      extend: [
+        { target: { ...EVERY, except: ["pages"] }, fields: [field("seo")] },
+        { target: "pages", fields: [field("seo")] },
+      ],
+    });
+
+    const { config } = applyPluginSchemaContributionsDeferred(siteConfig(), [
+      seo,
+    ]);
+    expect(fieldNames(find(config.collections, "pages"))).toEqual([
+      "title",
+      "seo",
+    ]);
+    // The type declares the field itself, so nothing of it is kept apart.
+    expect(
+      withheldScopeFieldsOf("collection", "pages").filter(
+        f => (f as { name?: string }).name !== "seo"
+      )
+    ).toEqual([]);
+    publishWithheldScopeFields(new Map());
+  });
+});
+
+describe("extend with a scope — an except naming a type the scope never reaches", () => {
+  it("holds nothing back from a Single a collections-only scope excepts", async () => {
+    const { withheldScopeFieldsOf, publishWithheldScopeFields } = await import(
+      "../../domains/schema/pipeline/withheld-scope-fields"
+    );
+    applyPluginSchemaContributionsDeferred(siteConfig(), [
+      seoPlugin({ every: ["collection"], except: ["homepage", "pages"] }),
+    ]);
+
+    expect(withheldScopeFieldsOf("single", "homepage")).toEqual([]);
+    // A collection it excepts is still held back.
+    expect(
+      withheldScopeFieldsOf("collection", "pages").map(
+        f => (f as { name?: string }).name
+      )
+    ).toContain("seo");
+    publishWithheldScopeFields(new Map());
+  });
+});

@@ -36,7 +36,6 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { listDensityOf } from "../frame/list-rows";
 import type { AnswerSize } from "../frame/tier";
 import {
   moveAvailability,
@@ -44,24 +43,15 @@ import {
   type MoveDirection,
 } from "../layout-editor";
 import { widenLoneOfPair, WidenLonePairContext } from "../lone-pair";
-import {
-  useReportedPlacements,
-  useReportedSpans,
-} from "../reported-placements";
-import { contentSizedPlacements } from "../row-bands";
-import {
-  cardRowStyle,
-  dashboardGridClass,
-  drawnSize,
-  drawnSpan,
-} from "../sizes";
-import { useDashboardWidthAround } from "../useDashboardWidth";
+import { useReportedPlacements } from "../reported-placements";
+import { GRID_CLASS } from "../sizes";
 import { settingsAsAsked, titleAsAsked } from "../widget-as-asked";
 
 import { ArrangedCell, type ArrangedCellProps } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
 import type { CardDrag } from "./drag/useCardDrag";
 import type { CellDrag } from "./DraggableWidgetCell";
+import { isEntriesSetting } from "./drawer-choices";
 import type { CellSettingsWrite } from "./useCardQuickSetting";
 import type { CardSettingsWriteCallbacks } from "./useCardSettingsWrite";
 import type { ArrangedWidget } from "./useDashboardArrangement";
@@ -82,12 +72,7 @@ export interface ArrangedGridProps {
    */
   drag?: Pick<
     CardDrag,
-    | "enabled"
-    | "oneColumn"
-    | "drag"
-    | "line"
-    | "onHandleKeyDown"
-    | "onHandleBlur"
+    "enabled" | "drag" | "line" | "onHandleKeyDown" | "onHandleBlur"
   >;
   /** What a card may write now, and how: one prop, as they are one concern. */
   writes: {
@@ -112,19 +97,12 @@ export interface ArrangedGridProps {
             config: Record<string, unknown>,
             callbacks: CardSettingsWriteCallbacks,
             /** The title the reader gave the card, where the change sets it. */
-            ownTitle?: string
-          ) => void;
-          /**
-           * Save a card's size at once: the card menu's and the quick popover's Size. Absent
-           * where only a card's settings are written, as a card body's own controls write them.
-           */
-          resize?: (
-            placementId: string,
-            title: string,
-            size: GridSize,
-            /** The card's widget's bounds, which the size is held to. */
-            bounds: WidgetSizeBounds,
-            callbacks: CardSettingsWriteCallbacks
+            ownTitle?: string,
+            /**
+             * The card's size, where the change sets it (the settings drawer's Width), with its
+             * widget's bounds, which the size is held to.
+             */
+            size?: { size: GridSize; bounds: WidgetSizeBounds }
           ) => void;
           isWriting: boolean;
           unavailable?: string;
@@ -186,9 +164,6 @@ function EmptyArrangement({
   return (
     <p
       data-testid="widget-grid-empty"
-      // Two rows, so its sentence fits inside the fixed rows of customise mode; at rest the rows
-      // take its own height.
-      style={cardRowStyle(2)}
       className="col-span-full flex items-center justify-center rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground"
     >
       {isEditing
@@ -247,29 +222,17 @@ function cellSettingsWrite(
   shownTitle: string
 ): { settingsWrite?: CellSettingsWrite } {
   if (!settingsWrite) return {};
-  const { resize } = settingsWrite;
   return {
     settingsWrite: {
-      write: (config, callbacks, ownTitle) =>
+      write: (config, callbacks, ownTitle, size) =>
         settingsWrite.write(
           row.placementId,
           shownTitle,
           config,
           callbacks,
-          ownTitle
+          ownTitle,
+          size === undefined ? undefined : { size, bounds: row.widget.size }
         ),
-      ...(resize === undefined
-        ? {}
-        : {
-            resize: (size: GridSize, callbacks: CardSettingsWriteCallbacks) =>
-              resize(
-                row.placementId,
-                shownTitle,
-                size,
-                row.widget.size,
-                callbacks
-              ),
-          }),
       isWriting: settingsWrite.isWriting,
       ...(settingsWrite.unavailable === undefined
         ? {}
@@ -330,22 +293,23 @@ function shownTitleOf(
 }
 
 /**
- * The size an answer was fetched at, as a card counts its rows by it: its tier and height, and
- * the density its settings asked for, read as the card reads its own (`settingsAsAsked`, then
- * `listDensityOf`), so a density its widget sets by default counts as the card would have drawn
- * it. `undefined` for an answer asked with no size.
+ * What an answer was fetched with, as a card counts its rows by it: the "Number of entries" its
+ * settings asked for, read as the card reads its own (`settingsAsAsked`), so a number its widget
+ * sets by default counts as the card would have drawn it. Only for a widget that declares that
+ * setting (`limit`), whose `load` reads by it: a widget's own component may hand its list a
+ * limit of its own with no such setting, and its answer then holds what its `load` chose, which
+ * no setting says. `undefined` for that, and for an answer not asked.
  */
-function answerSizeOf(
+export function answerSizeOf(
   widget: DashboardWidget,
   asked: AskedWith | undefined,
   sources: ArrangedGridProps["writes"]["sources"]
 ): AnswerSize | undefined {
-  if (asked?.size === undefined) return undefined;
-  return {
-    tier: asked.size.tier,
-    h: asked.size.h,
-    density: listDensityOf(settingsAsAsked(widget, asked.settings, sources)),
-  };
+  if (asked === undefined) return undefined;
+  if (!(widget.settings ?? []).some(isEntriesSetting)) {
+    return undefined;
+  }
+  return { items: settingsAsAsked(widget, asked.settings, sources).limit };
 }
 
 /** What the batch answered for one card, as its cell draws it (`ArrangedCellProps.data`). */
@@ -372,9 +336,9 @@ function cellData(
     // 🔴 This card's own request, not the batch's: partitions settle independently, and a
     // settled card must not dim.
     isFetching: answers.fetchingPlacementIds.has(placementId),
-    // The size and density its answer was fetched at: a card that grew or changed density keeps
-    // its old answer on screen while the new one loads, and drawn by the new ones that answer's
-    // one row past its rows, the sign that more exist, would read as a row.
+    // The "Number of entries" its answer was fetched with: a card whose reader asked for more
+    // keeps its old answer on screen while the new one loads, and drawn by the new number that
+    // answer's one row past its rows, the sign that more exist, would read as a row.
     answerSize: answerSizeOf(
       row.widget,
       answers.fetchedAskFor(placementId),
@@ -432,46 +396,6 @@ function useGridRows(
   };
 }
 
-/** No card drawn at its content's height. */
-const NONE_FITTING: ReadonlySet<string> = new Set();
-
-/**
- * The placements whose cards may be drawn at their content's height at rest
- * (`contentSizedPlacements`): the cards on show, placed in their order at the columns they are
- * drawn across at the dashboard's width (their own `w`, or the width the grid draws them at in
- * its place) and the rows each is drawn across now, banded by the rows they share. A cell reports
- * here the rows it spans when they are not its stored rows (`reportDrawnRows`), so a card grown or
- * collapsed moves the cards after it in the walk as it does in the grid, and keeps its band at
- * stored heights. None while customising, whose rows are fixed, and none before the dashboard has
- * a width to place the cards at.
- */
-function useContentSized(
-  rows: ArrangedWidget[],
-  isEditing: boolean,
-  shown: { hidden: ReadonlySet<string>; widths: ReadonlyMap<string, number> }
-) {
-  const { spans, report: reportDrawnRows } = useReportedSpans();
-  const dashboardWidth = useDashboardWidthAround();
-  const { hidden, widths } = shown;
-  const fitting = useMemo(() => {
-    if (isEditing || dashboardWidth === undefined) return NONE_FITTING;
-    const cards = rows
-      .filter(row => !hidden.has(row.placementId))
-      .map(row => {
-        const size = drawnSize(row.size, row.widget.size);
-        const w = widths.get(row.placementId) ?? size.w;
-        return {
-          id: row.placementId,
-          span: drawnSpan(w, dashboardWidth),
-          rows: spans.get(row.placementId) ?? size.h,
-          storedRows: size.h,
-        };
-      });
-    return contentSizedPlacements(cards);
-  }, [rows, isEditing, dashboardWidth, hidden, widths, spans]);
-  return { fitting, reportDrawnRows };
-}
-
 export function ArrangedGrid({
   rows,
   placements,
@@ -494,11 +418,6 @@ export function ArrangedGrid({
     isEditing,
     answers
   );
-  // Which cards may stand at their content's height: those whose band of rows is even.
-  const { fitting, reportDrawnRows } = useContentSized(rows, isEditing, {
-    hidden,
-    widths,
-  });
   return (
     // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
     // this, the one element the dashboard's width is measured from.
@@ -510,11 +429,11 @@ export function ArrangedGrid({
         // sequence), so focus has somewhere to land when the element holding
         // it is taken off the page.
         tabIndex={-1}
-        // The grid's columns, rows and gaps (`dashboardGridClass`), the ones a card's predicted
-        // width counts: fixed rows while customising, rows as tall as their cards at rest.
+        // The grid's columns, rows and gaps (`GRID_CLASS`), the ones a card's predicted width
+        // counts: rows as tall as their tallest card, at rest and while customising.
         // `relative` so the drop line is placed from the grid's own corner, where the drag
         // measures from.
-        className={cn("relative", dashboardGridClass(isEditing))}
+        className={cn("relative", GRID_CLASS)}
         // When the oldest answer on show arrived, for the page's one freshness line: no card
         // says when its own data arrived.
         data-answered-at={answeredAt?.toISOString()}
@@ -539,8 +458,6 @@ export function ArrangedGrid({
             drawnW={widths.get(row.placementId)}
             isEditing={isEditing}
             highlighted={highlightedId === row.placementId}
-            // At one column each card menu lists its sizes in place, where a submenu has no room.
-            sizesInPlace={drag?.oneColumn === true}
             drag={cellDragFor(drag, focus, row.placementId)}
             isWriting={writes.isWriting}
             singleCardWriteBlocked={writes.singleCardWriteBlocked}
@@ -550,8 +467,6 @@ export function ArrangedGrid({
               shownTitleOf(row, writes.sources)
             )}
             reportHidden={reportHidden}
-            fitsContent={fitting.has(row.placementId)}
-            reportDrawnRows={reportDrawnRows}
             // The same rule the move applies, so an item is enabled exactly
             // when choosing it would move the card.
             can={moveAvailability(placements, row.placementId, isDrawn)}

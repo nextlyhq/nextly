@@ -684,12 +684,18 @@ export class NextlyError extends Error {
     });
   }
 
+  /**
+   * `message` replaces the generic sentence where the caller can name what is
+   * already taken without leaking anything, such as a public address and the
+   * page holding it.
+   */
   static duplicate(opts?: {
+    message?: string;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "DUPLICATE",
-      publicMessage: "Resource already exists.",
+      publicMessage: opts?.message ?? "Resource already exists.",
       logContext: opts?.logContext,
     });
   }

@@ -126,6 +126,8 @@ import {
 import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
+import { readListOffset } from "./list-offset";
+import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
@@ -487,17 +489,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     // stops clients (e.g. the sidebar's auto-paginated walk) from chasing
     // hasNext through pages that filter down to zero rows.
     execute: async (svc, p) => {
+      // Read first, so an owner it does not know is refused before any work.
+      const owner = readListOwner(p.owner);
       const limit = toNumber(p.limit);
       // Accept both `offset` (canonical) and `page` (1-based, what the
       // admin UI's shared buildQuery helper emits). `offset` wins when
       // both are supplied.
-      let offset = toNumber(p.offset);
-      if (!p.offset && p.page !== undefined && limit && limit > 0) {
-        const page1Based = toNumber(p.page);
-        if (page1Based !== undefined && page1Based > 0) {
-          offset = (page1Based - 1) * limit;
-        }
-      }
+      const offset = readListOffset(p, limit);
 
       // Resolved BEFORE the registry call, through the SHARED resolver the
       // collections listing asks too, and handed the SAME caller every other
@@ -508,17 +506,20 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // explicit list, possibly empty, which the registry short-circuits to a
       // zero-row, zero-total response.
       const user = readAuthenticatedUser();
-      const slugAllowlist = await readableSlugAllowlist(
+      const readable = await readableSlugAllowlist(
         user ? readAccessCallerForDispatch(user) : undefined,
         "single"
       );
+      // The site's own Singles or the plugins', as conditions on the same
+      // query: the plugins' list only narrows what the reader may read.
+      const slugLists = slugListsForOwner(owner, "singles", readable);
 
       const result = await svc.registry.listSingles({
         source: p.source as "code" | "ui" | "built-in" | undefined,
         search: p.search,
         limit,
         offset,
-        slugAllowlist,
+        ...slugLists,
       });
 
       const items = result.data.map(s =>

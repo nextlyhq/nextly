@@ -25,6 +25,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  PageHeader,
   Table,
   TableBody,
   TableCell,
@@ -865,34 +866,32 @@ const UserFieldsPage: React.FC = () => {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <div>
-          <div className="mb-6">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="fields" />
           </div>
 
           {/* Page Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight">
-                User Fields
-              </h1>
-              <p className="text-sm font-normal text-muted-foreground mt-1">
-                Manage custom attributes for user accounts
-              </p>
-            </div>
-            {mayCreate && (
-              <div className="flex items-center gap-2">
-                <Link href={ROUTES.USERS_FIELDS_CREATE}>
-                  <Button
-                    size="md"
-                    className="flex items-center gap-1 shrink-0"
-                  >
-                    <Plus className="h-4 w-4" />
-                    <span>Add Field</span>
-                  </Button>
-                </Link>
-              </div>
-            )}
-          </div>
+          <PageHeader
+            title="User Fields"
+            description="Manage custom attributes for user accounts"
+            actions={
+              <>
+                {mayCreate && (
+                  <div className="flex items-center gap-2">
+                    <Link href={ROUTES.USERS_FIELDS_CREATE}>
+                      <Button
+                        size="md"
+                        className="flex items-center gap-1 shrink-0"
+                      >
+                        <Plus className="h-4 w-4" />
+                        <span>Add Field</span>
+                      </Button>
+                    </Link>
+                  </div>
+                )}
+              </>
+            }
+          />
 
           <UserFieldsTable />
         </div>

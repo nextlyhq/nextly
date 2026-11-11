@@ -38,3 +38,17 @@ export interface SanitizedLocalizationConfig {
   defaultLocale: string;
   fallback: boolean;
 }
+
+/**
+ * @experimental How each language's address is formed.
+ *
+ * - `prefix`: under the language's code, `/de/about`. The default language is
+ *   prefixed too unless `defaultLanguage` is `"unprefixed"`.
+ * - `domain`: the same path on the language's own origin, one per language.
+ *
+ * A site with several languages that declares none is read as `prefix`, every
+ * language prefixed: what a `[locale]` route serves as it stands.
+ */
+export type LanguageAddressRule =
+  | { by: "prefix"; defaultLanguage?: "prefixed" | "unprefixed" }
+  | { by: "domain"; domains: Readonly<Record<string, string>> };

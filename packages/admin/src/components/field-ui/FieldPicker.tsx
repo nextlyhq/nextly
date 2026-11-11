@@ -88,6 +88,17 @@ export interface FieldPickerProps {
   title?: string;
   /** Where the field will go, as the host words it ("to Address"). */
   placement?: string;
+  /**
+   * The label the label step starts with, for a field that has one already
+   * (a type chosen again before the field is saved). Empty when absent.
+   */
+  initialLabel?: string;
+  /**
+   * Whether "Add and add another" is offered; false for a host that adds one
+   * field at a time, where the picker would only close as "Add field" does.
+   * Offered when absent.
+   */
+  offerAddAnother?: boolean;
   onCancel: () => void;
   /** Called with the choice; `addAnother` keeps the picker open for the next. */
   onAdd: (choice: FieldPickerChoice, how: { addAnother: boolean }) => void;
@@ -149,6 +160,8 @@ export function FieldPicker({
   config,
   title = "Add a field",
   placement,
+  initialLabel,
+  offerAddAnother,
   onCancel,
   onAdd,
 }: FieldPickerProps): React.JSX.Element {
@@ -164,7 +177,13 @@ export function FieldPicker({
         </DialogHeader>
         {/* Mounted with the dialog, so every opening starts on a fresh search. */}
         {open && (
-          <PickerBody config={config} onCancel={onCancel} onAdd={onAdd} />
+          <PickerBody
+            config={config}
+            initialLabel={initialLabel}
+            offerAddAnother={offerAddAnother}
+            onCancel={onCancel}
+            onAdd={onAdd}
+          />
         )}
       </DialogContent>
     </Dialog>
@@ -173,9 +192,14 @@ export function FieldPicker({
 
 function PickerBody({
   config,
+  initialLabel,
+  offerAddAnother,
   onCancel,
   onAdd,
-}: Pick<FieldPickerProps, "config" | "onCancel" | "onAdd">) {
+}: Pick<
+  FieldPickerProps,
+  "config" | "initialLabel" | "offerAddAnother" | "onCancel" | "onAdd"
+>) {
   const [step, setStep] = useState<Step>({ kind: "type" });
   const [query, setQuery] = useState("");
 
@@ -215,6 +239,8 @@ function PickerBody({
       key={`${step.type.type}:${step.fieldGroup?.slug ?? ""}`}
       type={step.type}
       fieldGroup={step.fieldGroup}
+      initialLabel={initialLabel}
+      offerAddAnother={offerAddAnother !== false}
       deriveName={config.deriveName}
       onBack={() =>
         setStep(
@@ -463,18 +489,22 @@ function FieldGroupStep({
 function LabelStep({
   type,
   fieldGroup,
+  initialLabel,
+  offerAddAnother,
   deriveName,
   onBack,
   onAdd,
 }: {
   type: FieldTypeDescription<string>;
   fieldGroup?: FieldGroupOption;
+  initialLabel?: string;
+  offerAddAnother: boolean;
   deriveName: (label: string) => string;
   onBack: () => void;
   onAdd: (label: string, name: string, addAnother: boolean) => void;
 }) {
   const inputId = useId();
-  const [label, setLabel] = useState(fieldGroup?.label ?? "");
+  const [label, setLabel] = useState(fieldGroup?.label ?? initialLabel ?? "");
   const trimmed = label.trim();
   const name = trimmed ? deriveName(trimmed) : "";
   const add = (addAnother: boolean) => {
@@ -513,9 +543,11 @@ function LabelStep({
         <Button variant="outline" onClick={onBack}>
           Back
         </Button>
-        <Button variant="outline" disabled={!name} onClick={() => add(true)}>
-          Add and add another
-        </Button>
+        {offerAddAnother && (
+          <Button variant="outline" disabled={!name} onClick={() => add(true)}>
+            Add and add another
+          </Button>
+        )}
         <Button disabled={!name} onClick={() => add(false)}>
           Add field
         </Button>

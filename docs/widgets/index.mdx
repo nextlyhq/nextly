@@ -81,16 +81,21 @@ A widget declared with `defineWidget` draws one of those with its own component,
 `view: { component }`, handed its `load`'s data. `access` gates the whole card: nothing in a
 declaration gates one item inside it.
 
-A widget's size is `{ w, h }` on a grid 12 columns wide, with rows of one fixed height: `w` is
-from 1 to 12 columns and `h` from 2 to 12 rows. It declares the size a card starts at and, if it
-likes, the smallest and largest a reader may resize it to:
+A widget's size is `{ w, h }` on a grid 12 columns wide: `w` is from 1 to 12 columns and `h`
+from 2 to 12. It declares the size a card starts at and, if it likes, the smallest and largest a
+reader may resize it to:
 `size: { default: { w: 6, h: 3 }, min: { w: 4, h: 2 }, max: { w: 12, h: 6 } }`. The minimum
-defaults to the default, and the maximum to the full width at the default's height. On the
+defaults to the default, and the maximum to the full width at the default's `h`. On the
 dashboard, cards sit in one ordered list, filling rows left to right and wrapping, each spanning
-its `w` columns and `h` rows, and a reader can change a card's width and height from its menu
-within the widget's bounds. Columns follow the dashboard's own width rather than the window's:
-from 640 to 1,023 pixels a card of 6 columns or fewer is drawn at 6 and a wider one at 12, and
-below 640 pixels every card is drawn at the full width. A card keeps its height at every width. A reader can arrange the dashboard at every width.
+its `w` columns, and a reader can change a card's width from its menu within the widget's
+bounds. A card is as tall as its content, and the cards that share a row are drawn as tall as the
+tallest of them; nothing inside a card is cut off or scrolls. `h` no longer sets a card's height:
+it is kept in the declaration and in saved layouts. A list's length is its reader's "Number of
+entries" setting rather than its size (below). Columns follow the dashboard's own width rather than the
+window's: from 640 to 1,023 pixels a card of 6 columns or fewer is drawn at 6 and a wider one at
+12, and below 640 pixels a card of 3 columns (25%) or fewer is drawn at half the width, so two
+share a row, and every other card at the full width. A reader can arrange the
+dashboard at every width.
 Where it shows more than one column, a card is dragged by its handle, with the pointer or the
 keyboard, and a line shows where it will land; below 640 pixels, where every card is full width,
 cards are moved, resized and removed from their menu instead. The arrangement applies at every
@@ -151,35 +156,49 @@ A widget declared with `defineWidget` can compute its own data in a `load` funct
 runs on the server for each card, as the person viewing it. It is handed the card's `size`: its
 `w` and `h` in grid units, kept within the widget's size bounds, and its `tier`, which is
 `"small"`, `"medium"` or `"large"`. The tier depends on how wide the card is drawn on that
-reader's screen. Use the size to read only what the card can show:
+reader's screen. A card is as tall as its content, so how many rows a list reads is not a
+question of its size: it is the reader's "Number of entries", a setting the widget declares.
 
 ```ts
-import { defineWidget, rowsThatFit } from "@nextlyhq/plugin-sdk";
+import {
+  defineWidget,
+  listEntries,
+  MAX_WIDGET_ROWS,
+  setting,
+} from "@nextlyhq/plugin-sdk";
 
 export const recentOrders = defineWidget({
   id: "acme/recent-orders",
   title: "Recent orders",
-  description: "The newest orders, and how many there are on a large card.",
+  description: "The newest orders, and how many there are in all.",
   size: { default: { w: 6, h: 4 }, max: { w: 12, h: 8 } },
   view: "list",
-  load: async ({ size, services }) => {
-    // As many rows as this card's body draws: never more than ten.
-    const limit = rowsThatFit(size, { density: "default" });
-    const { items } = await services.find("orders", {
+  settings: {
+    limit: setting.number({
+      label: "Number of entries",
+      defaultValue: 5,
+      min: 1,
+      max: MAX_WIDGET_ROWS,
+    }),
+  },
+  load: async ({ settings, services }) => {
+    // The reader's "Number of entries": five unless chosen, never more than twenty.
+    const { items, total } = await services.find("orders", {
       sort: "-createdAt",
-      limit,
+      limit: listEntries(settings.limit),
+      total: true,
     });
-    if (size.tier !== "large") return { items };
-    // Only a large card shows the total, so only a large card counts the orders.
-    return { items, total: await services.count("orders") };
+    return total === undefined ? { items } : { items, total };
   },
 });
 ```
 
-`rowsThatFit(size, { density })` counts the list rows that fit in a card of that height. It
-uses the same formula as core's own list cards, so a load reads exactly the rows the card
-draws. `density` is `"default"` or `"compact"`, the values a list card's Density setting takes.
-Compact rows are shorter, so the same card holds more of them.
+`listEntries(limit)` is the rule core's own list cards read their "Number of entries" by: five
+where the setting is missing, at most `MAX_WIDGET_ROWS` (twenty). With `total`, the card's
+footer reads "View all (N)" when there are more than it shows.
+
+`rowsThatFit(size, { density })` still answers the list rows a card of that `h` held when cards
+were drawn at fixed heights, at most ten, for the loads that call it.
 
 The size is part of the question a load answers. When a reader resizes a card, or a card
 crosses into another tier, that card's `load` runs again on its own. The other cards keep their
@@ -356,25 +375,31 @@ shape may change.
 
 ## Where a setting is drawn
 
-A card's More settings panel draws its settings in three sections: **Data**, what the card reads;
-**Display**, how it shows it (every card's title is there too); and **Advanced**, folded until a
-reader opens it. Name a setting's section with `section`:
+A card's settings drawer, opened from Settings… in its menu, shows a preview of the card, then
+its settings in sections, none folded: **Content**, what the card reads; **Display**, how it
+shows it (every card's title is there too); and **Size**, the card's width. Name a setting's
+section with `section`, `"data"` for Content or `"display"`:
 
 ```ts
 density: setting.select({
-  label: "Density",
+  label: "Row spacing",
   options: [
-    { label: "Default", value: "default" },
+    { label: "Comfortable", value: "default" },
     { label: "Compact", value: "compact" },
   ],
   defaultValue: "default",
-  section: "advanced",
+  section: "display",
 }),
 ```
 
 Without one, a Collection, Filter, Sort, Group by or Field setting and a `setting.dateRange` are
-drawn under Data, and every other setting under Display. A setting is folded under Advanced only
-when it says so. Startup refuses a `section` other than `"data"`, `"display"` or `"advanced"`.
+drawn under Content, and every other setting under Display. `"advanced"` is still accepted, from
+when the drawer folded settings away, and is drawn under Display. Startup refuses a `section`
+other than `"data"`, `"display"` or `"advanced"`.
+
+A list's "Number of entries", a number setting keyed `limit`, is drawn as a choice of 5, 10 or
+20 within its bounds; a number stored before that is none of them is shown and kept until the
+reader picks another.
 
 ## Related
 

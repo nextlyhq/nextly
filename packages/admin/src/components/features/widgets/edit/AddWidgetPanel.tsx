@@ -506,7 +506,6 @@ function RadioChips({
   value,
   onChange,
   testId,
-  glyphs = false,
 }: {
   legend: string;
   name: string;
@@ -514,8 +513,6 @@ function RadioChips({
   value: string;
   onChange: (value: string) => void;
   testId: string;
-  /** Labels that are glyphs (⅓, ½): drawn larger, in the text face, so a fraction reads. */
-  glyphs?: boolean;
 }): JSX.Element {
   return (
     <fieldset className="space-y-1.5" data-testid={testId}>
@@ -536,10 +533,7 @@ function RadioChips({
             />
             <span
               aria-hidden="true"
-              className={cn(
-                "inline-flex min-h-8 cursor-pointer items-center justify-center rounded-md border border-border px-2.5 text-muted-foreground peer-checked:border-foreground peer-checked:text-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring",
-                glyphs ? "min-w-10 text-sm" : "font-mono text-xs"
-              )}
+              className="inline-flex min-h-8 cursor-pointer items-center justify-center rounded-md border border-border px-2.5 font-mono text-xs text-muted-foreground peer-checked:border-foreground peer-checked:text-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring"
             >
               {option.label}
             </span>
@@ -883,7 +877,6 @@ function StepChoices({
           value={String(step.width)}
           onChange={value => onChange({ ...step, width: Number(value) })}
           testId="add-panel-width"
-          glyphs
         />
       ) : null}
     </>

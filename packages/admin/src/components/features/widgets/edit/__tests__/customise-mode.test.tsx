@@ -28,8 +28,6 @@ import type {
 
 import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
-import { oneItemBodyPx, requestedCardHeightPx } from "../../frame/fit";
-import { cardHeightPx } from "../../sizes";
 import { WidgetGrid } from "../../WidgetGrid";
 import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 import {
@@ -44,8 +42,8 @@ let layoutResponse: DashboardLayoutResponse | undefined;
 
 // The header's New button reads collections and permissions of its own,
 // which this test does not set up; it is a marker here.
-vi.mock("@admin/components/features/dashboard/header/NewSplitButton", () => ({
-  NewSplitButton: () => <div data-testid="dashboard-new" />,
+vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
+  NewMenu: () => <div data-testid="dashboard-new" />,
 }));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
@@ -334,28 +332,28 @@ function saveButton(): HTMLElement {
   return within(bar()).getByRole("button", { name: "Save" });
 }
 
+/** Opens a card's settings drawer from its menu, once its form has loaded. */
+async function openDrawer(user: User, title: string): Promise<HTMLElement> {
+  await choose(user, title, "Settings…");
+  // The drawer opens at once and says it is loading until its code arrives, so wait for its
+  // Width before reading it.
+  await screen.findByRole("radiogroup", { name: "Width" });
+  return screen.getByRole("dialog", { name: title });
+}
+
 /** One change of each kind customise mode can make. */
 const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
   ["a move", user => choose(user, "Posts", "Move later")],
   [
     "a resize",
     async user => {
+      // The drawer's Width, staged with the rest on its Save.
+      const drawer = await openDrawer(user, "Posts");
       await user.click(
-        screen.getByRole("button", { name: "Card actions for Posts" })
+        within(drawer).getByRole("radio", { name: "50% width" })
       );
-      const menu = await screen.findByRole("menu");
-      await user.click(within(menu).getByRole("menuitem", { name: /Width/ }));
-      const widths = await waitFor(() => {
-        const menus = screen.getAllByRole("menu");
-        expect(menus.length).toBe(2);
-        return menus[1];
-      });
-      // By keyboard: jsdom has no geometry, so a pointer crossing into the
-      // submenu reads as leaving it.
-      within(widths)
-        .getByRole("menuitemradio", { name: "Half width, 6 columns" })
-        .focus();
-      await user.keyboard("{Enter}");
+      await user.click(within(drawer).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     },
   ],
   ["a removal", user => choose(user, "Posts", "Remove")],
@@ -373,40 +371,11 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
   ],
   ["a reset", user => confirmReset(user)],
   [
-    "a size from the quick popover",
-    async user => {
-      // Settings opens the card's quick popover; its Size is staged with the rest.
-      await choose(user, "Notes", "Settings");
-      const popover = await screen.findByRole("dialog", {
-        name: "Quick settings for Notes",
-      });
-      await user.click(
-        within(popover).getByRole("combobox", { name: "Width" })
-      );
-      await user.click(
-        await screen.findByRole("option", { name: "Half width, 6 columns" })
-      );
-      await user.keyboard("{Escape}");
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    },
-  ],
-  [
     "a setting",
     async user => {
-      // Settings opens the card's quick popover, and More settings the sheet.
-      await choose(user, "Notes", "Settings");
-      const popover = await screen.findByRole("dialog", {
-        name: "Quick settings for Notes",
-      });
-      await user.click(
-        within(popover).getByRole("button", { name: "More settings" })
-      );
-      // The sheet's panel opens at once and says it is loading until its code
-      // arrives, so wait for the form's field before reading the sheet.
-      await screen.findByLabelText(/Heading/);
-      const sheet = screen.getByRole("dialog", { name: "Notes settings" });
+      const sheet = await openDrawer(user, "Notes");
       await user.type(within(sheet).getByLabelText(/Heading/), "Mine");
-      await user.click(within(sheet).getByRole("button", { name: "Done" }));
+      await user.click(within(sheet).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     },
   ],
@@ -453,8 +422,8 @@ describe("customise mode writes nothing before Save", () => {
   );
 });
 
-describe("the card menu and quick popover while customising", () => {
-  it("lists Settings, the size, the moves, then Remove", async () => {
+describe("the card menu and the settings drawer while customising", () => {
+  it("lists Settings…, Refresh, Move earlier, Move later and Remove, and no size", async () => {
     renderDashboard();
     const user = await beginEditing();
     await user.click(
@@ -464,38 +433,63 @@ describe("the card menu and quick popover while customising", () => {
     const names = within(menu)
       .getAllByRole("menuitem")
       .map(item => item.textContent?.trim() ?? "");
-    expect(names[0]).toBe("Settings");
-    expect(names[1]).toMatch(/^Width/);
-    expect(names[2]).toMatch(/^Height/);
-    expect(names.slice(3, 7)).toEqual([
-      "Move to start",
+    // Refresh is offered where the card has data to ask again for.
+    expect(names.filter(name => name !== "Refresh")).toEqual([
+      "Settings…",
       "Move earlier",
       "Move later",
-      "Move to end",
+      "Remove",
     ]);
-    expect(names.at(-1)).toBe("Remove");
+    expect(within(menu).queryByText(/Width|Height/)).toBeNull();
   });
 
-  it("applies a size at once, with the popover still open, and keeps it for Save", async () => {
+  it("leaves the card as it was until the drawer's Save, then stages it until the bar's Save", async () => {
     renderDashboard();
     const user = await beginEditing();
     const before = sizeLabels();
-    await choose(user, "Notes", "Settings");
-    const popover = await screen.findByRole("dialog", {
-      name: "Quick settings for Notes",
-    });
-    await user.click(within(popover).getByRole("combobox", { name: "Width" }));
-    await user.click(
-      await screen.findByRole("option", { name: "Half width, 6 columns" })
-    );
-
-    // Drawn at once in the draft, the popover still open over the card, and nothing written.
-    await waitFor(() => expect(sizeLabels()).not.toEqual(before));
-    // The label's glyphs, then the name a screen reader hears.
-    expect(sizeLabels()).toContain("6×36 columns by 3 rows");
+    const drawer = await openDrawer(user, "Notes");
+    await user.click(within(drawer).getByRole("radio", { name: "50% width" }));
+    // The preview follows at once; the card itself does not.
     expect(
-      screen.getByRole("dialog", { name: "Quick settings for Notes" })
-    ).toBeInTheDocument();
+      within(drawer).getByTestId("settings-preview-width")
+    ).toHaveTextContent("At 50% of the dashboard");
+    expect(sizeLabels()).toEqual(before);
+
+    await user.click(within(drawer).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // Staged in the draft, drawn at once, and nothing written until the bar's Save.
+    expect(sizeLabels()).toContain("50%50% wide");
+    expect(writes()).toBe(0);
+    await user.click(saveButton());
+    await waitFor(() => expect(writes()).toBe(1));
+  });
+
+  it("discards the drawer's change on Cancel and on Escape, the card untouched", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    const before = sizeLabels();
+    for (const close of ["Cancel", "{Escape}"]) {
+      const drawer = await openDrawer(user, "Notes");
+      await user.click(
+        within(drawer).getByRole("radio", { name: "50% width" })
+      );
+      await user.type(within(drawer).getByLabelText(/Heading/), "Mine");
+      if (close === "Cancel") {
+        await user.click(
+          within(drawer).getByRole("button", { name: "Cancel" })
+        );
+      } else {
+        await user.keyboard(close);
+      }
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(sizeLabels()).toEqual(before);
+    }
+    // Opened again, it holds what is stored, not what was discarded.
+    const drawer = await openDrawer(user, "Notes");
+    expect(within(drawer).getByLabelText(/Heading/)).toHaveValue("");
+    expect(
+      within(drawer).getByRole("radio", { name: "100% width" })
+    ).toHaveAttribute("aria-checked", "true");
     expect(writes()).toBe(0);
   });
 });
@@ -534,81 +528,23 @@ describe("the bar", () => {
     expect(bar()).toHaveClass("sticky", "top-0");
   });
 
-  it("draws fixed rows and every card at its stored rows while customising, and rows as tall as their cards at rest", async () => {
-    // 🔴 Fails with fixed rows at rest, where no cell asks its rows for a height and no card can
-    // be drawn shorter than its stored size; and with content rows while customising, where the
-    // stored sizes are what is being edited.
+  it("draws rows as tall as their cards at rest and while customising, no cell spanning rows or clipping its card", async () => {
+    // 🔴 Fails with fixed rows while customising, where a card is drawn at its stored rows rather
+    // than its content's height, and so at another height than at rest.
+    const drawnAsTallAsTheirCards = () => {
+      const grid = screen.getByLabelText("Dashboard widgets");
+      expect(grid).toHaveClass("auto-rows-auto");
+      expect(grid).not.toHaveClass("auto-rows-[72px]");
+      const cell = screen.getByTestId("widget-cell-core/a");
+      expect(cell.style.gridRow).toBe("");
+      expect(cell).not.toHaveClass("overflow-hidden");
+      expect(cell).not.toHaveClass("contain-size");
+    };
     renderDashboard();
-    const resting = await screen.findByTestId("widget-cell-core/a");
-    expect(screen.getByLabelText("Dashboard widgets")).toHaveClass(
-      "auto-rows-auto"
-    );
-    // A body that reports nothing asks for its stored height, and holds its row at it.
-    expect(resting.style.minHeight).toBe(`${cardHeightPx(3)}px`);
-    expect(resting).toHaveClass("contain-size");
-
+    await screen.findByTestId("widget-cell-core/a");
+    drawnAsTallAsTheirCards();
     await beginEditing();
-    const grid = screen.getByLabelText("Dashboard widgets");
-    expect(grid).toHaveClass("auto-rows-[72px]");
-    expect(grid).not.toHaveClass("auto-rows-auto");
-    const editing = screen.getByTestId("widget-cell-core/a");
-    expect(editing.style.gridRow).toBe("span 3 / span 3");
-    expect(editing.style.minHeight).toBe("");
-    expect(editing).not.toHaveClass("contain-size");
-  });
-
-  it("draws a loading content-sized card at its one-item answer's height at rest, and at its stored rows while customising", async () => {
-    // 🔴 Fails at rest where the loading state asks for nothing: the cell asks for its stored
-    // height, 336 px. Fails while customising wherever the loading request reaches fixed rows.
-    mockBranding = {
-      widgets: [
-        ...(mockBranding?.widgets ?? []),
-        {
-          id: "core/needs-attention",
-          title: "Needs your attention",
-          archetype: "custom",
-          size: RESIZABLE,
-          component: "core#NotesBody",
-        },
-      ],
-    } as unknown as AdminBranding;
-    layoutResponse = layout({
-      placements: [
-        ...OPENED.map(p => ({ ...p })),
-        {
-          id: "p4",
-          widgetId: "core/needs-attention",
-          w: 8,
-          h: 4,
-          removed: false,
-        },
-      ],
-      widgets: {
-        "core/a": facts(),
-        "core/b": facts(),
-        "core/c": facts(),
-        "core/d": facts(),
-        "core/needs-attention": facts(),
-      },
-    });
-    // The answers never arrive, so the card stays loading in both modes.
-    api.post.mockImplementation(() => new Promise(() => {}));
-    renderDashboard();
-    const resting = await screen.findByTestId(
-      "widget-cell-core/needs-attention"
-    );
-    await within(resting).findByTestId("card-skeleton");
-    expect(resting.style.minHeight).toBe(
-      `${requestedCardHeightPx(4, oneItemBodyPx("default"))}px`
-    );
-
-    await beginEditing();
-    const editing = screen.getByTestId("widget-cell-core/needs-attention");
-    expect(editing.style.gridRow).toBe("span 4 / span 4");
-    expect(editing.style.minHeight).toBe("");
-    expect(screen.getByLabelText("Dashboard widgets")).toHaveClass(
-      "auto-rows-[72px]"
-    );
+    drawnAsTallAsTheirCards();
   });
 
   it("keeps exactly one level-one heading, the page's own", async () => {
@@ -876,16 +812,9 @@ describe("leaving with unsaved changes", () => {
     expect(window.location.pathname).toBe(DASHBOARD);
   });
 
-  /** Opens Notes' settings panel while customising and changes its Heading, keeping it open. */
+  /** Opens Notes' settings drawer while customising and changes its Heading, keeping it open. */
   async function panelChanged(user: User): Promise<void> {
-    await choose(user, "Notes", "Settings");
-    const popover = await screen.findByRole("dialog", {
-      name: "Quick settings for Notes",
-    });
-    await user.click(
-      within(popover).getByRole("button", { name: "More settings" })
-    );
-    const panel = await screen.findByRole("dialog", { name: /settings$/ });
+    const panel = await openDrawer(user, "Notes");
     await user.type(within(panel).getByLabelText(/Heading/), "Mine");
   }
 
@@ -952,7 +881,7 @@ describe("leaving with unsaved changes", () => {
   it("Save in the prompt stops, saying why in the panel, when the panel's change is refused", async () => {
     const user = await changed();
     await panelChanged(user);
-    const panel = screen.getByRole("dialog", { name: /settings$/ });
+    const panel = screen.getByRole("dialog", { name: "Notes" });
     const title = within(panel).getByLabelText("Title");
     await user.click(title);
     await user.paste("x".repeat(81));
@@ -983,11 +912,25 @@ describe("leaving with unsaved changes", () => {
     ).toEqual({ heading: "Mine" });
   });
 
+  it("the bar's Save keeps an open drawer's width too, with its settings", async () => {
+    // A width chosen in the drawer, left open, and the dashboard saved from the bar.
+    renderDashboard();
+    const user = await beginEditing();
+    const drawer = await openDrawer(user, "Notes");
+    await user.click(within(drawer).getByRole("radio", { name: "50% width" }));
+    await user.type(within(drawer).getByLabelText(/Heading/), "Mine");
+    await user.click(saveButton());
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(
+      sentPlacements().find(placement => placement.widgetId === "core/c")
+    ).toMatchObject({ w: 6, config: { heading: "Mine" } });
+  });
+
   it("the bar's Save stops, with the panel saying why, when the panel's change is refused", async () => {
     renderDashboard();
     const user = await beginEditing();
     await panelChanged(user);
-    const panel = screen.getByRole("dialog", { name: /settings$/ });
+    const panel = screen.getByRole("dialog", { name: "Notes" });
     const title = within(panel).getByLabelText("Title");
     await user.click(title);
     await user.paste("x".repeat(81));
@@ -1015,14 +958,14 @@ describe("leaving with unsaved changes", () => {
     renderDashboard();
     const user = await beginEditing();
     await panelChanged(user);
-    const panel = screen.getByRole("dialog", { name: /settings$/ });
+    const panel = screen.getByRole("dialog", { name: "Notes" });
     // The write is held, so the save is on its way while the panel is checked.
     api.put.mockReturnValue(new Promise(() => {}));
     await user.click(saveButton());
     await waitFor(() =>
       expect(within(panel).getByLabelText(/Heading/)).toBeDisabled()
     );
-    // Done says the save is on its way, as it does for the panel's own.
+    // Save says the save is on its way, as it does for the drawer's own.
     expect(
       within(panel).getByRole("button", { name: "Saving…" })
     ).toBeDisabled();
@@ -1033,22 +976,15 @@ describe("leaving with unsaved changes", () => {
     const user = await beginEditing();
     await panelChanged(user);
     await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
-    // "Changes discarded" is true of the panel too: it is closed, with no Done to press.
+    // "Changes discarded" is true of the drawer too: it is closed, with no Save to press.
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: /settings$/ })).toBeNull()
+      expect(screen.queryByRole("dialog", { name: "Notes" })).toBeNull()
     );
     expect(writes()).toBe(0);
     // Opened again, it holds what is stored, not the discarded Heading.
     await user.click(await screen.findByTestId("dashboard-edit-begin"));
     await screen.findAllByTestId("card-actions");
-    await choose(user, "Notes", "Settings");
-    const popover = await screen.findByRole("dialog", {
-      name: "Quick settings for Notes",
-    });
-    await user.click(
-      within(popover).getByRole("button", { name: "More settings" })
-    );
-    const panel = await screen.findByRole("dialog", { name: /settings$/ });
+    const panel = await openDrawer(user, "Notes");
     expect(within(panel).getByLabelText(/Heading/)).toHaveValue("");
     expect(writes()).toBe(0);
   });
@@ -1056,20 +992,13 @@ describe("leaving with unsaved changes", () => {
   it("hands focus to the card's menu at rest when a panel opened while customising closes after the mode ended", async () => {
     renderDashboard();
     const user = await beginEditing();
-    await choose(user, "Notes", "Settings");
-    const popover = await screen.findByRole("dialog", {
-      name: "Quick settings for Notes",
-    });
-    await user.click(
-      within(popover).getByRole("button", { name: "More settings" })
-    );
-    const panel = await screen.findByRole("dialog", { name: /settings$/ });
+    const panel = await openDrawer(user, "Notes");
     await user.type(within(panel).getByLabelText(/Heading/), "Mine");
-    // Saved, the panel's change with it: customise mode ends, and the controls the popover was
-    // opened from go with it, while the panel stays open.
+    // Saved, the drawer's change with it: customise mode ends, and the menu the drawer was
+    // opened from goes with it, while the drawer stays open.
     await user.click(saveButton());
     await screen.findByTestId("dashboard-edit-begin");
-    expect(screen.getByRole("dialog", { name: /settings$/ })).toBe(panel);
+    expect(screen.getByRole("dialog", { name: "Notes" })).toBe(panel);
     await user.click(within(panel).getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
       expect(

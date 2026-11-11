@@ -49,6 +49,9 @@
     "**/*.test.mjs",
     // Spawned by the webServer command in e2e/playwright.config.ts.
     "e2e/scripts/*.mjs",
+    // Loaded into the production server with `node --import` by
+    // e2e/admin-speed/measure.mjs, which names it only as a path.
+    "e2e/admin-speed/preload.mjs",
     // Handed to the Tailwind CLI by packages/ui/scripts/build-css.mjs.
     "packages/ui/src/styles/index.css",
     // Passed as an argv path to the admin-css bin by its integration test.
@@ -227,7 +230,7 @@
   // It is deliberately generated from `main`, never from a branch: a branch
   // that baselines its own findings has written itself a pass.
   "audit": {
-    "healthBaseline": "fallow-health-baseline.json"
+    "healthBaseline": "fallow-health-baseline.json",
   },
 
   "duplicates": {
