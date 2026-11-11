@@ -53,6 +53,8 @@ vi.mock("@nextlyhq/ui", () => ({
     <>{children}</>
   ),
   TooltipContent: () => null,
+  // The rail's neutral shapes for entries not decided yet.
+  Skeleton: () => <span data-testid="skeleton" />,
 }));
 vi.mock("@admin/components/shared/ThemeAwareLogo", () => ({
   ThemeAwareLogo: () => null,
@@ -177,6 +179,33 @@ describe("DualSidebar's rail while its answers arrive", () => {
     // still not drawn, since an answer that refuses them would take them back.
     expect(railLabels()).toEqual(["Dashboard", "Content"]);
     expect(screen.queryByLabelText("Media Library")).not.toBeInTheDocument();
+  });
+
+  it("holds the places of entries not decided yet with neutral shapes, and draws none once settled", () => {
+    const ghosts = () => screen.queryAllByTestId("rail-ghost-item");
+    answers = {
+      workspacePending: false,
+      permissionsLoading: false,
+      contentLoading: true,
+    };
+    const { unmount } = render(<DualSidebar />);
+    // Dashboard is drawn; every place after it, still undecided, is a shape
+    // naming nothing, so the rail never reads as empty while it waits.
+    expect(railLabels()).toEqual(["Dashboard"]);
+    expect(ghosts().length).toBeGreaterThan(0);
+    for (const ghost of ghosts()) {
+      expect(ghost).toHaveAttribute("aria-hidden", "true");
+      expect(ghost).not.toHaveAttribute("aria-label");
+    }
+    unmount();
+
+    answers = {
+      workspacePending: false,
+      permissionsLoading: false,
+      contentLoading: false,
+    };
+    render(<DualSidebar />);
+    expect(ghosts()).toHaveLength(0);
   });
 
   it("marks the rail settled only once every answer it waits on is in", () => {
