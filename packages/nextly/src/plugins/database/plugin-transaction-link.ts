@@ -96,8 +96,8 @@ export function linkPluginTransaction(
   // transaction, not by whatever transaction that flow is in, or none. Only
   // the registration runs here; the effect itself runs in its caller's
   // context (below).
-  const inTransaction = AsyncResource.bind(<T>(register: () => T): T =>
-    register()
+  const inTransaction = AsyncResource.bind(
+    <T>(register: () => T): T => register()
   );
   links.set(surface, {
     // Async so a refusal, or work that throws before it returns its promise,

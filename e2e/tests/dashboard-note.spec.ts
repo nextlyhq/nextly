@@ -93,10 +93,16 @@ test("an unwritten Note is empty by its declaration, and its action opens the no
   const empty = card.getByTestId("card-empty");
   await expect(empty).toContainText("Nothing written yet.");
   await empty.getByRole("button", { name: "Write a note" }).click();
-  // The card's own settings, on the field the note is written in.
-  const sheet = page.getByRole("dialog", { name: /settings/ });
+  // The card's own settings drawer, on the field the note is written in, which says what
+  // Markdown it takes and how many characters are left.
+  const sheet = page.getByTestId("widget-settings-drawer");
   await expect(sheet).toBeVisible();
-  await expect(sheet.getByRole("textbox", { name: "Note" })).toBeFocused();
+  const text = sheet.getByRole("textbox", { name: "Text" });
+  await expect(text).toBeFocused();
+  await expect(text).toHaveAccessibleDescription(
+    /Supports Markdown: .*\*\*bold\*\*.*_italic_.*- lists.*\[links\]\(https:\/\/…\)/
+  );
+  await expect(text).toHaveAccessibleDescription(/1,997 characters left/);
 });
 
 test("a Note over its bound is refused by the layout write", async ({

@@ -1,11 +1,11 @@
 /**
- * The settings sheet's reading of a textarea's bound: counted in characters,
- * as the layout write counts it, and kept off the textarea's native attribute.
+ * The settings drawer's reading of a textarea's bound: counted in characters,
+ * as the layout write counts it.
  */
 import type { AnyWidgetSetting, WidgetSetting } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
-import { drawnSetting, overlongSetting } from "../setting-length";
+import { overlongSetting } from "../setting-length";
 
 const note: WidgetSetting = {
   name: "text",
@@ -30,15 +30,5 @@ describe("a textarea's bound in the sheet", () => {
       overlongSetting([unbounded], { text: "x".repeat(99) })
     ).toBeUndefined();
     expect(overlongSetting([note], { text: 123456 })).toBeUndefined();
-  });
-
-  it("hands the textarea no maxLength, and every other setting as it is", () => {
-    expect(drawnSetting(note)).not.toHaveProperty("maxLength");
-    expect(drawnSetting(note)).toMatchObject({
-      name: "text",
-      type: "textarea",
-    });
-    const items: WidgetSetting = { name: "items", type: "number", max: 9 };
-    expect(drawnSetting(items)).toBe(items);
   });
 });

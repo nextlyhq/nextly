@@ -196,6 +196,41 @@ wins) and call `notFound()` on a genuine miss or a reserved path (`/admin`,
 `/api`, `/_next`, `/static`, and metadata files like `sitemap.xml`). `status`
 behaves as in `resolveContent`.
 
+### One route for every language
+
+On a [translated site](/docs/localization), put the catch-all under a
+`[locale]` segment and the route reads the language from it: one route serves
+every language, each page at its own translated address, and a segment that
+names none of the site's languages answers not found. Leave the route's
+`locale` option out there. List the languages in the segment's layout, and
+each language's paths are pre-rendered in it:
+
+```tsx
+// app/[locale]/layout.tsx
+export function generateStaticParams() {
+  return [{ locale: "en" }, { locale: "de" }];
+}
+```
+
+```tsx
+// app/[locale]/[[...slug]]/page.tsx
+import { createPublicContentRoute } from "nextly/runtime";
+
+const route = createPublicContentRoute({
+  collections: ["pages"],
+  render: (entry, context) => <Page entry={entry} locale={context.locale} />,
+});
+
+export const generateStaticParams = route.generateStaticParams;
+export const generateMetadata = route.generateMetadata;
+export default route.ContentPage;
+```
+
+The addresses the route hands on, a list's first-page redirect and the address
+its head is asked for, are formed by the site's
+[language rule](/docs/localization#each-languages-address). A Single route
+under the segment reads its language the same way: pass the page's props on.
+
 ### A paginated list's pages
 
 Give either factory `listPages`, a function from a resolved entry to how many pages its
