@@ -4,21 +4,19 @@
  *
  * Its `load` reads `system:releases` as the caller its read services were
  * bound for: the upcoming releases, soonest first, and one row per reason
- * releases need attention. Asked as core's own lists are: the rows the card's
- * size and density hold, at most five, and one more, so the card can say more
- * exist at every size.
+ * releases need attention. Asked as core's own lists are: its "Number of
+ * entries" (`listEntries`), and one more, so the card can say more exist.
  *
  * @module domains/widgets/core-widgets/upcoming-releases
  */
 
-import { rowsThatFit } from "../card-geometry";
 import { defineWidget } from "../declaration/define-widget";
-import { DEFAULT_WIDGET_LIMIT } from "../query-limits";
+import { listEntries } from "../query-limits";
 import { RELEASES_SOURCE_ID } from "../system-source-ids";
 
 import type { CoreListWidgetData } from "./data";
 import { CORE_WIDGET_ID } from "./ids";
-import { LIST_DENSITY_SETTING } from "./shared";
+import { LIST_DENSITY_SETTING, LIST_ITEMS } from "./shared";
 import { readCoreList } from "./system-read";
 
 export const upcomingReleasesWidget = defineWidget({
@@ -76,11 +74,10 @@ export const upcomingReleasesWidget = defineWidget({
       "publish-content-releases",
     ],
   },
-  settings: { density: LIST_DENSITY_SETTING },
+  settings: { limit: LIST_ITEMS, density: LIST_DENSITY_SETTING },
   load: async ({
     settings,
     services,
-    size,
     signal,
     now,
   }): Promise<CoreListWidgetData> =>
@@ -102,13 +99,9 @@ export const upcomingReleasesWidget = defineWidget({
           "reason",
           "count",
         ],
-        // The rows the card's height holds at its density, at most five, and the one more
-        // that says more exist: the rule the card's own rows are drawn by.
-        limit:
-          Math.min(
-            DEFAULT_WIDGET_LIMIT,
-            rowsThatFit(size, { density: settings.density })
-          ) + 1,
+        // Its "Number of entries", and the one more that says more exist: the rule the card's
+        // own rows are drawn by (`listEntries`).
+        limit: listEntries(settings.limit) + 1,
       },
       { services, signal, now }
     ),

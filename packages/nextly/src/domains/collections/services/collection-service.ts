@@ -61,6 +61,7 @@ import { NextlyError } from "../../../errors";
 import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type {
   RequestContext,
@@ -443,6 +444,16 @@ export class CollectionService extends BaseService {
    * service.registerDynamicSchemas(dynamicSchemas);
    * ```
    */
+  /** {@link CollectionMetadataService.companionSchemaOf}. */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  companionSchemaOf(
+    slug: string,
+    executor?: unknown
+  ): Promise<CompanionSchema | null> {
+    return this.metadataService.companionSchemaOf(slug, executor);
+  }
+
   registerDynamicSchemas(schemas: Record<string, unknown>): void {
     this.metadataService.registerDynamicSchemas(schemas);
   }

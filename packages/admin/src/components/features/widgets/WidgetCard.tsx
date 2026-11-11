@@ -80,8 +80,7 @@ import {
 import { CardHeaderSlotProvider } from "./frame/header-slot";
 import { CardSubtitleContext } from "./frame/header-subtitle";
 import { frameIds } from "./frame/ids";
-import { ListDensityContext, useListDensity } from "./frame/list-rows";
-import type { RowsSize } from "./frame/list-rows";
+import { ListDensityContext } from "./frame/list-rows";
 import {
   FRAME_BODY_GAP,
   FRAME_FOOTER_GAP,
@@ -157,9 +156,9 @@ export interface WidgetCardProps {
   /** The shape the loading skeleton takes. */
   skeleton?: SkeletonShape;
   /**
-   * A list or table card's items setting. Its loading skeleton then holds the place of the rows
-   * the card will draw at its tier (`rowsDrawn`), so the first answer does not make the card
-   * jump; absent, a skeleton draws its default rows.
+   * A list or table card's "Number of entries" setting. Its loading skeleton then holds the place
+   * of the rows the card will draw (`rowsDrawn`), so the first answer does not make the card jump;
+   * absent, a skeleton draws its default rows.
    */
   skeletonItems?: unknown;
   /** The density a list card draws its rows at, and its skeleton counts them at. */
@@ -622,25 +621,18 @@ function LoadingBody({
   props: Pick<WidgetCardProps, "skeleton" | "skeletonItems" | "skeletonFields">;
 }) {
   const tier = useCardTier() ?? "medium";
-  // The card's height and density, as the rows that will arrive are counted at.
-  const h = useContext(CardHeightContext);
-  const density = useListDensity();
   return (
     <CardSkeleton
       shape={hint?.shape ?? props.skeleton}
-      rows={hint?.rows ?? heldRows({ tier, h }, props.skeletonItems, density)}
+      rows={hint?.rows ?? heldRows(props.skeletonItems)}
       layout={hint?.layout ?? heldLayout(tier, props.skeletonFields)}
     />
   );
 }
 
-/** The rows a list or table card's skeleton holds at `size` and `density`, from its items setting. */
-function heldRows(
-  size: RowsSize,
-  items: unknown,
-  density: ListDensity
-): number | undefined {
-  return items === undefined ? undefined : rowsDrawn(size, items, density);
+/** The rows a list or table card's skeleton holds, from its "Number of entries" setting. */
+function heldRows(items: unknown): number | undefined {
+  return items === undefined ? undefined : rowsDrawn(items);
 }
 
 /** How a list or table card's skeleton lays its rows out at `tier`, from its column count. */

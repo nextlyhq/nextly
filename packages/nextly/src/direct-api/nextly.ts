@@ -62,6 +62,7 @@ import { RoleService } from "../domains/auth/services/role-service";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import { NextlyError } from "../errors/nextly-error";
 import { assertBootMigrationsSettled } from "../init/boot-migrations-gate";
+import { startInFlight } from "../init/start-in-flight";
 import { createNextlyPrincipals } from "../plugins/principals/api";
 import type { NextlyPrincipals } from "../plugins/principals/types";
 import { buildPluginServicesNamespace } from "../plugins/services/plugin-services-registry";
@@ -848,6 +849,17 @@ export function requireNextly(config?: DirectAPIConfig): Nextly {
       publicMessage:
         "Nextly services not initialized. Call registerServices() before using the Direct API.",
       statusCode: 500,
+      // The start-up hook no longer holds requests until Nextly has started,
+      // so code that reads synchronously can now run while a start is under
+      // way: said apart from nothing having started, with the way to wait.
+      ...(startInFlight()
+        ? {
+            logMessage:
+              "requireNextly() was called while Nextly is still starting. " +
+              "Await `getNextly({ config })` or `getCachedNextly()`, which " +
+              "wait for the start, before reading synchronously.",
+          }
+        : {}),
     });
   }
 
@@ -864,6 +876,26 @@ export function requireNextly(config?: DirectAPIConfig): Nextly {
   }
 
   return globalForDirectApi.__nextly_directApiInstance;
+}
+
+/**
+ * `requireNextly()`, once any start in flight has finished, or a failed one
+ * has been made again.
+ *
+ * The start-up hook begins Nextly's start without waiting for it, so a request
+ * can reach a reader while the start is under way. A reader that can wait
+ * (the module-level `nextly` object below, a content route's default reader)
+ * waits here for that one start, then reads as `requireNextly()` does. A start
+ * that failed is made again first (`awaitStartOrRetry`), so the worker recovers
+ * once the database is back. Where nothing is starting it reads at once, and
+ * where nothing has started it refuses exactly as `requireNextly()` does.
+ */
+export async function requireNextlyOnceStarted(): Promise<Nextly> {
+  // Loaded when a reader first waits: the start imports this module, so a
+  // static import here would be a cycle.
+  const { awaitStartOrRetry } = await import("../init");
+  await awaitStartOrRetry();
+  return requireNextly();
 }
 
 /**
@@ -899,10 +931,11 @@ export function isNextlyInstantiated(): boolean {
  * so it's safe to import at module scope. All methods delegate to
  * `requireNextly()` internally.
  *
- * **Important:** the runtime must already be initialised before any method on
- * this object is called, because each one resolves through `requireNextly()`,
- * which throws when nothing has registered services. `getNextly({ config })`
- * from `nextly` is what initialises.
+ * **Important:** the runtime must already be initialised, or starting, before
+ * any method on this object is called. Each one waits for a start in flight
+ * and then resolves through `requireNextly()`, which throws when nothing has
+ * registered services. `getNextly({ config })` from `nextly` is what
+ * initialises.
  *
  * @example
  * ```typescript
@@ -920,47 +953,55 @@ export function isNextlyInstantiated(): boolean {
  * ```
  */
 export const nextly = {
-  find: <TSlug extends CollectionSlug>(args: FindArgs<TSlug>) =>
-    requireNextly().find(args),
-  findByID: <TSlug extends CollectionSlug>(args: FindByIDArgs<TSlug>) =>
-    requireNextly().findByID(args),
-  create: <TSlug extends CollectionSlug>(args: CreateArgs<TSlug>) =>
-    requireNextly().create(args),
-  update: <TSlug extends CollectionSlug>(args: UpdateArgs<TSlug>) =>
-    requireNextly().update(args),
-  delete: (args: DeleteArgs) => requireNextly().delete(args),
-  count: (args: CountArgs) => requireNextly().count(args),
-  group: (args: GroupArgs) => requireNextly().group(args),
-  timeseries: (args: TimeseriesArgs) => requireNextly().timeseries(args),
-  bulkDelete: (args: BulkDeleteArgs) => requireNextly().bulkDelete(args),
-  duplicate: <TSlug extends CollectionSlug>(args: DuplicateArgs<TSlug>) =>
-    requireNextly().duplicate(args),
+  find: async <TSlug extends CollectionSlug>(args: FindArgs<TSlug>) =>
+    (await requireNextlyOnceStarted()).find(args),
+  findByID: async <TSlug extends CollectionSlug>(args: FindByIDArgs<TSlug>) =>
+    (await requireNextlyOnceStarted()).findByID(args),
+  create: async <TSlug extends CollectionSlug>(args: CreateArgs<TSlug>) =>
+    (await requireNextlyOnceStarted()).create(args),
+  update: async <TSlug extends CollectionSlug>(args: UpdateArgs<TSlug>) =>
+    (await requireNextlyOnceStarted()).update(args),
+  delete: async (args: DeleteArgs) =>
+    (await requireNextlyOnceStarted()).delete(args),
+  count: async (args: CountArgs) =>
+    (await requireNextlyOnceStarted()).count(args),
+  group: async (args: GroupArgs) =>
+    (await requireNextlyOnceStarted()).group(args),
+  timeseries: async (args: TimeseriesArgs) =>
+    (await requireNextlyOnceStarted()).timeseries(args),
+  bulkDelete: async (args: BulkDeleteArgs) =>
+    (await requireNextlyOnceStarted()).bulkDelete(args),
+  duplicate: async <TSlug extends CollectionSlug>(args: DuplicateArgs<TSlug>) =>
+    (await requireNextlyOnceStarted()).duplicate(args),
 
   // Generic in `TCreate` as the method is, so this delegate answers the same
   // type for the same call. The answer type and the inner call's type
   // arguments are stated rather than inferred: inferred, a call that left
   // `createIfMissing` out resolved the inner `TCreate` to nothing and answered
   // `never`.
-  findSingle: <
+  findSingle: async <
     TSlug extends SingleSlug,
     TCreate extends boolean | undefined = undefined,
   >(
     args: FindSingleArgs<TSlug> & { createIfMissing?: TCreate }
   ): Promise<FoundSingle<TSlug, TCreate>> =>
-    requireNextly().findSingle<TSlug, TCreate>(args),
-  updateSingle: <TSlug extends SingleSlug>(args: UpdateSingleArgs<TSlug>) =>
-    requireNextly().updateSingle(args),
-  findSingles: (args?: FindSinglesArgs) =>
-    requireNextly().findSingles(args ?? {}),
+    (await requireNextlyOnceStarted()).findSingle<TSlug, TCreate>(args),
+  updateSingle: async <TSlug extends SingleSlug>(
+    args: UpdateSingleArgs<TSlug>
+  ) => (await requireNextlyOnceStarted()).updateSingle(args),
+  findSingles: async (args?: FindSinglesArgs) =>
+    (await requireNextlyOnceStarted()).findSingles(args ?? {}),
   // Delegated like the reads above, so this object handed to a page route as
   // its reader still shows the site's settings.
-  publicSiteSettings: (): Promise<PublicSiteSettings> =>
-    requireNextly().publicSiteSettings(),
+  publicSiteSettings: async (): Promise<PublicSiteSettings> =>
+    (await requireNextlyOnceStarted()).publicSiteSettings(),
 
-  login: (args: LoginArgs) => requireNextly().login(args),
-  logout: () => requireNextly().logout(),
-  me: (args: { user: UserContext }) => requireNextly().me(args),
-  updateMe: (args: {
+  login: async (args: LoginArgs) =>
+    (await requireNextlyOnceStarted()).login(args),
+  logout: async () => (await requireNextlyOnceStarted()).logout(),
+  me: async (args: { user: UserContext }) =>
+    (await requireNextlyOnceStarted()).me(args),
+  updateMe: async (args: {
     user: UserContext;
     data: {
       name?: string;
@@ -968,229 +1009,280 @@ export const nextly = {
       /** A language tag (`fr`, `pt-BR`), or null to follow the browser. */
       interfaceLanguage?: string | null;
     };
-  }) => requireNextly().updateMe(args),
-  register: (args: RegisterArgs) => requireNextly().register(args),
-  changePassword: (args: ChangePasswordArgs & { user: UserContext }) =>
-    requireNextly().changePassword(args),
-  forgotPassword: (args: ForgotPasswordArgs) =>
-    requireNextly().forgotPassword(args),
-  resetPassword: (args: ResetPasswordArgs) =>
-    requireNextly().resetPassword(args),
-  verifyEmail: (args: VerifyEmailArgs) => requireNextly().verifyEmail(args),
+  }) => (await requireNextlyOnceStarted()).updateMe(args),
+  register: async (args: RegisterArgs) =>
+    (await requireNextlyOnceStarted()).register(args),
+  changePassword: async (args: ChangePasswordArgs & { user: UserContext }) =>
+    (await requireNextlyOnceStarted()).changePassword(args),
+  forgotPassword: async (args: ForgotPasswordArgs) =>
+    (await requireNextlyOnceStarted()).forgotPassword(args),
+  resetPassword: async (args: ResetPasswordArgs) =>
+    (await requireNextlyOnceStarted()).resetPassword(args),
+  verifyEmail: async (args: VerifyEmailArgs) =>
+    (await requireNextlyOnceStarted()).verifyEmail(args),
 
   jobs: {
-    queue: <TTask extends JobSlug>(args: QueueJobArgs<TTask>) =>
-      requireNextly().jobs.queue(args),
+    queue: async <TTask extends JobSlug>(args: QueueJobArgs<TTask>) =>
+      (await requireNextlyOnceStarted()).jobs.queue(args),
   },
 
   principals: {
-    fromRequest: (request: Request, kind: string) =>
-      requireNextly().principals.fromRequest(request, kind),
-    byId: (kind: string, id: string) =>
-      requireNextly().principals.byId(kind, id),
+    fromRequest: async (request: Request, kind: string) =>
+      (await requireNextlyOnceStarted()).principals.fromRequest(request, kind),
+    byId: async (kind: string, id: string) =>
+      (await requireNextlyOnceStarted()).principals.byId(kind, id),
   },
 
   notices: {
-    find: (args: Parameters<NoticesNamespace["find"]>[0]) =>
-      requireNextly().notices.find(args),
-    count: (args: Parameters<NoticesNamespace["count"]>[0]) =>
-      requireNextly().notices.count(args),
-    markRead: (args: Parameters<NoticesNamespace["markRead"]>[0]) =>
-      requireNextly().notices.markRead(args),
+    find: async (args: Parameters<NoticesNamespace["find"]>[0]) =>
+      (await requireNextlyOnceStarted()).notices.find(args),
+    count: async (args: Parameters<NoticesNamespace["count"]>[0]) =>
+      (await requireNextlyOnceStarted()).notices.count(args),
+    markRead: async (args: Parameters<NoticesNamespace["markRead"]>[0]) =>
+      (await requireNextlyOnceStarted()).notices.markRead(args),
   },
 
   contentEvents: {
-    list: args => requireNextly().contentEvents.list(args),
+    list: async args =>
+      (await requireNextlyOnceStarted()).contentEvents.list(args),
   } satisfies ContentEventsNamespace,
 
   // Checked against the namespace's own type, so a method added there and
   // not delegated here is a compile error rather than a gap a caller finds.
   releases: {
-    create: args => requireNextly().releases.create(args),
+    create: async args =>
+      (await requireNextlyOnceStarted()).releases.create(args),
     // Optional, as the namespace declares them: `satisfies` keeps an arrow's
     // own parameter list, so a bare `args =>` would require an argument.
-    find: (args?) => requireNextly().releases.find(args),
-    count: (args?) => requireNextly().releases.count(args),
-    calendar: args => requireNextly().releases.calendar(args),
-    findByID: args => requireNextly().releases.findByID(args),
-    capabilities: args => requireNextly().releases.capabilities(args),
-    blockingReasons: args => requireNextly().releases.blockingReasons(args),
-    blockersOf: args => requireNextly().releases.blockersOf(args),
-    readiness: args => requireNextly().releases.readiness(args),
-    readinessOf: args => requireNextly().releases.readinessOf(args),
-    memberCounts: args => requireNextly().releases.memberCounts(args),
-    addMember: args => requireNextly().releases.addMember(args),
-    addMembers: args => requireNextly().releases.addMembers(args),
-    scheduleDocument: args => requireNextly().releases.scheduleDocument(args),
-    removeMember: args => requireNextly().releases.removeMember(args),
-    changeMemberAction: args =>
-      requireNextly().releases.changeMemberAction(args),
-    listMembers: args => requireNextly().releases.listMembers(args),
-    membersOf: args => requireNextly().releases.membersOf(args),
-    schedule: args => requireNextly().releases.schedule(args),
-    cancel: args => requireNextly().releases.cancel(args),
-    publishNow: args => requireNextly().releases.publishNow(args),
-    update: args => requireNextly().releases.update(args),
-    delete: args => requireNextly().releases.delete(args),
+    find: async (args?) =>
+      (await requireNextlyOnceStarted()).releases.find(args),
+    count: async (args?) =>
+      (await requireNextlyOnceStarted()).releases.count(args),
+    calendar: async args =>
+      (await requireNextlyOnceStarted()).releases.calendar(args),
+    findByID: async args =>
+      (await requireNextlyOnceStarted()).releases.findByID(args),
+    capabilities: async args =>
+      (await requireNextlyOnceStarted()).releases.capabilities(args),
+    blockingReasons: async args =>
+      (await requireNextlyOnceStarted()).releases.blockingReasons(args),
+    blockersOf: async args =>
+      (await requireNextlyOnceStarted()).releases.blockersOf(args),
+    readiness: async args =>
+      (await requireNextlyOnceStarted()).releases.readiness(args),
+    readinessOf: async args =>
+      (await requireNextlyOnceStarted()).releases.readinessOf(args),
+    memberCounts: async args =>
+      (await requireNextlyOnceStarted()).releases.memberCounts(args),
+    addMember: async args =>
+      (await requireNextlyOnceStarted()).releases.addMember(args),
+    addMembers: async args =>
+      (await requireNextlyOnceStarted()).releases.addMembers(args),
+    scheduleDocument: async args =>
+      (await requireNextlyOnceStarted()).releases.scheduleDocument(args),
+    removeMember: async args =>
+      (await requireNextlyOnceStarted()).releases.removeMember(args),
+    changeMemberAction: async args =>
+      (await requireNextlyOnceStarted()).releases.changeMemberAction(args),
+    listMembers: async args =>
+      (await requireNextlyOnceStarted()).releases.listMembers(args),
+    membersOf: async args =>
+      (await requireNextlyOnceStarted()).releases.membersOf(args),
+    schedule: async args =>
+      (await requireNextlyOnceStarted()).releases.schedule(args),
+    cancel: async args =>
+      (await requireNextlyOnceStarted()).releases.cancel(args),
+    publishNow: async args =>
+      (await requireNextlyOnceStarted()).releases.publishNow(args),
+    update: async args =>
+      (await requireNextlyOnceStarted()).releases.update(args),
+    delete: async args =>
+      (await requireNextlyOnceStarted()).releases.delete(args),
   } satisfies ReleasesNamespace,
 
   users: {
-    find: (args?: FindUsersArgs) => requireNextly().users.find(args),
-    findOne: (args?: FindOneUserArgs) => requireNextly().users.findOne(args),
-    findByID: (args: FindUserByIDArgs) => requireNextly().users.findByID(args),
-    create: (args: CreateUserArgs) => requireNextly().users.create(args),
-    update: (args: UpdateUserArgs) => requireNextly().users.update(args),
-    delete: (args: DeleteUserArgs) => requireNextly().users.delete(args),
+    find: async (args?: FindUsersArgs) =>
+      (await requireNextlyOnceStarted()).users.find(args),
+    findOne: async (args?: FindOneUserArgs) =>
+      (await requireNextlyOnceStarted()).users.findOne(args),
+    findByID: async (args: FindUserByIDArgs) =>
+      (await requireNextlyOnceStarted()).users.findByID(args),
+    create: async (args: CreateUserArgs) =>
+      (await requireNextlyOnceStarted()).users.create(args),
+    update: async (args: UpdateUserArgs) =>
+      (await requireNextlyOnceStarted()).users.update(args),
+    delete: async (args: DeleteUserArgs) =>
+      (await requireNextlyOnceStarted()).users.delete(args),
   },
 
   media: {
-    upload: (args: UploadMediaArgs) => requireNextly().media.upload(args),
-    find: (args?: FindMediaArgs) => requireNextly().media.find(args),
-    findByID: (args: FindMediaByIDArgs) => requireNextly().media.findByID(args),
-    findByIDs: (args: FindMediaByIDsArgs) =>
-      requireNextly().media.findByIDs(args),
-    update: (args: UpdateMediaArgs) => requireNextly().media.update(args),
-    delete: (args: DeleteMediaArgs) => requireNextly().media.delete(args),
-    bulkDelete: (args: BulkDeleteMediaArgs) =>
-      requireNextly().media.bulkDelete(args),
+    upload: async (args: UploadMediaArgs) =>
+      (await requireNextlyOnceStarted()).media.upload(args),
+    find: async (args?: FindMediaArgs) =>
+      (await requireNextlyOnceStarted()).media.find(args),
+    findByID: async (args: FindMediaByIDArgs) =>
+      (await requireNextlyOnceStarted()).media.findByID(args),
+    findByIDs: async (args: FindMediaByIDsArgs) =>
+      (await requireNextlyOnceStarted()).media.findByIDs(args),
+    update: async (args: UpdateMediaArgs) =>
+      (await requireNextlyOnceStarted()).media.update(args),
+    delete: async (args: DeleteMediaArgs) =>
+      (await requireNextlyOnceStarted()).media.delete(args),
+    bulkDelete: async (args: BulkDeleteMediaArgs) =>
+      (await requireNextlyOnceStarted()).media.bulkDelete(args),
     folders: {
-      list: (args?: ListFoldersArgs) =>
-        requireNextly().media.folders.list(args),
-      create: (args: CreateFolderArgs) =>
-        requireNextly().media.folders.create(args),
+      list: async (args?: ListFoldersArgs) =>
+        (await requireNextlyOnceStarted()).media.folders.list(args),
+      create: async (args: CreateFolderArgs) =>
+        (await requireNextlyOnceStarted()).media.folders.create(args),
     },
   },
 
   forms: {
-    find: (args?: FindFormsArgs) => requireNextly().forms.find(args),
-    findBySlug: (args: FindFormBySlugArgs) =>
-      requireNextly().forms.findBySlug(args),
-    submit: (args: SubmitFormArgs) => requireNextly().forms.submit(args),
-    submissions: (args: FormSubmissionsArgs) =>
-      requireNextly().forms.submissions(args),
+    find: async (args?: FindFormsArgs) =>
+      (await requireNextlyOnceStarted()).forms.find(args),
+    findBySlug: async (args: FindFormBySlugArgs) =>
+      (await requireNextlyOnceStarted()).forms.findBySlug(args),
+    submit: async (args: SubmitFormArgs) =>
+      (await requireNextlyOnceStarted()).forms.submit(args),
+    submissions: async (args: FormSubmissionsArgs) =>
+      (await requireNextlyOnceStarted()).forms.submissions(args),
   },
 
   fieldGroups: {
-    find: (args?: FindFieldGroupsArgs) =>
-      requireNextly().fieldGroups.find(args),
-    findBySlug: (args: FindFieldGroupBySlugArgs) =>
-      requireNextly().fieldGroups.findBySlug(args),
-    create: (args: CreateFieldGroupArgs) =>
-      requireNextly().fieldGroups.create(args),
-    update: (args: UpdateFieldGroupArgs) =>
-      requireNextly().fieldGroups.update(args),
-    delete: (args: DeleteFieldGroupArgs) =>
-      requireNextly().fieldGroups.delete(args),
+    find: async (args?: FindFieldGroupsArgs) =>
+      (await requireNextlyOnceStarted()).fieldGroups.find(args),
+    findBySlug: async (args: FindFieldGroupBySlugArgs) =>
+      (await requireNextlyOnceStarted()).fieldGroups.findBySlug(args),
+    create: async (args: CreateFieldGroupArgs) =>
+      (await requireNextlyOnceStarted()).fieldGroups.create(args),
+    update: async (args: UpdateFieldGroupArgs) =>
+      (await requireNextlyOnceStarted()).fieldGroups.update(args),
+    delete: async (args: DeleteFieldGroupArgs) =>
+      (await requireNextlyOnceStarted()).fieldGroups.delete(args),
   },
 
   email: {
-    send: (args: SendEmailArgs) => requireNextly().email.send(args),
-    sendWithTemplate: (args: SendTemplateEmailArgs) =>
-      requireNextly().email.sendWithTemplate(args),
-    queue: (args: QueueEmailArgs) => requireNextly().email.queue(args),
-    queueWithTemplate: (args: QueueTemplateEmailArgs) =>
-      requireNextly().email.queueWithTemplate(args),
+    send: async (args: SendEmailArgs) =>
+      (await requireNextlyOnceStarted()).email.send(args),
+    sendWithTemplate: async (args: SendTemplateEmailArgs) =>
+      (await requireNextlyOnceStarted()).email.sendWithTemplate(args),
+    queue: async (args: QueueEmailArgs) =>
+      (await requireNextlyOnceStarted()).email.queue(args),
+    queueWithTemplate: async (args: QueueTemplateEmailArgs) =>
+      (await requireNextlyOnceStarted()).email.queueWithTemplate(args),
   },
 
   emailProviders: {
-    find: (args?: FindEmailProvidersArgs) =>
-      requireNextly().emailProviders.find(args),
-    findByID: (args: FindEmailProviderByIDArgs) =>
-      requireNextly().emailProviders.findByID(args),
-    create: (args: CreateEmailProviderArgs) =>
-      requireNextly().emailProviders.create(args),
-    update: (args: UpdateEmailProviderArgs) =>
-      requireNextly().emailProviders.update(args),
-    delete: (args: DeleteEmailProviderArgs) =>
-      requireNextly().emailProviders.delete(args),
-    setDefault: (args: SetDefaultProviderArgs) =>
-      requireNextly().emailProviders.setDefault(args),
-    test: (args: TestEmailProviderArgs) =>
-      requireNextly().emailProviders.test(args),
+    find: async (args?: FindEmailProvidersArgs) =>
+      (await requireNextlyOnceStarted()).emailProviders.find(args),
+    findByID: async (args: FindEmailProviderByIDArgs) =>
+      (await requireNextlyOnceStarted()).emailProviders.findByID(args),
+    create: async (args: CreateEmailProviderArgs) =>
+      (await requireNextlyOnceStarted()).emailProviders.create(args),
+    update: async (args: UpdateEmailProviderArgs) =>
+      (await requireNextlyOnceStarted()).emailProviders.update(args),
+    delete: async (args: DeleteEmailProviderArgs) =>
+      (await requireNextlyOnceStarted()).emailProviders.delete(args),
+    setDefault: async (args: SetDefaultProviderArgs) =>
+      (await requireNextlyOnceStarted()).emailProviders.setDefault(args),
+    test: async (args: TestEmailProviderArgs) =>
+      (await requireNextlyOnceStarted()).emailProviders.test(args),
   },
 
   emailTemplates: {
-    find: (args?: FindEmailTemplatesArgs) =>
-      requireNextly().emailTemplates.find(args),
-    findByID: (args: FindEmailTemplateByIDArgs) =>
-      requireNextly().emailTemplates.findByID(args),
-    findBySlug: (args: FindEmailTemplateBySlugArgs) =>
-      requireNextly().emailTemplates.findBySlug(args),
-    create: (args: CreateEmailTemplateArgs) =>
-      requireNextly().emailTemplates.create(args),
-    update: (args: UpdateEmailTemplateArgs) =>
-      requireNextly().emailTemplates.update(args),
-    delete: (args: DeleteEmailTemplateArgs) =>
-      requireNextly().emailTemplates.delete(args),
-    preview: (args: PreviewEmailTemplateArgs) =>
-      requireNextly().emailTemplates.preview(args),
+    find: async (args?: FindEmailTemplatesArgs) =>
+      (await requireNextlyOnceStarted()).emailTemplates.find(args),
+    findByID: async (args: FindEmailTemplateByIDArgs) =>
+      (await requireNextlyOnceStarted()).emailTemplates.findByID(args),
+    findBySlug: async (args: FindEmailTemplateBySlugArgs) =>
+      (await requireNextlyOnceStarted()).emailTemplates.findBySlug(args),
+    create: async (args: CreateEmailTemplateArgs) =>
+      (await requireNextlyOnceStarted()).emailTemplates.create(args),
+    update: async (args: UpdateEmailTemplateArgs) =>
+      (await requireNextlyOnceStarted()).emailTemplates.update(args),
+    delete: async (args: DeleteEmailTemplateArgs) =>
+      (await requireNextlyOnceStarted()).emailTemplates.delete(args),
+    preview: async (args: PreviewEmailTemplateArgs) =>
+      (await requireNextlyOnceStarted()).emailTemplates.preview(args),
     /** @experimental */
-    override: (args: OverrideEmailTemplateArgs) =>
-      requireNextly().emailTemplates.override(args),
+    override: async (args: OverrideEmailTemplateArgs) =>
+      (await requireNextlyOnceStarted()).emailTemplates.override(args),
     /** @experimental */
-    reset: (args: ResetEmailTemplateArgs) =>
-      requireNextly().emailTemplates.reset(args),
+    reset: async (args: ResetEmailTemplateArgs) =>
+      (await requireNextlyOnceStarted()).emailTemplates.reset(args),
     /** @experimental */
-    compare: (args: CompareEmailTemplateArgs) =>
-      requireNextly().emailTemplates.compare(args),
+    compare: async (args: CompareEmailTemplateArgs) =>
+      (await requireNextlyOnceStarted()).emailTemplates.compare(args),
     /** @experimental */
-    applyUpdate: (args: ApplyEmailTemplateUpdateArgs) =>
-      requireNextly().emailTemplates.applyUpdate(args),
+    applyUpdate: async (args: ApplyEmailTemplateUpdateArgs) =>
+      (await requireNextlyOnceStarted()).emailTemplates.applyUpdate(args),
     /** @experimental */
-    undoUpdate: (args: UndoEmailTemplateUpdateArgs) =>
-      requireNextly().emailTemplates.undoUpdate(args),
+    undoUpdate: async (args: UndoEmailTemplateUpdateArgs) =>
+      (await requireNextlyOnceStarted()).emailTemplates.undoUpdate(args),
   },
 
   userFields: {
-    find: (args?: FindUserFieldsArgs) => requireNextly().userFields.find(args),
-    findByID: (args: FindUserFieldByIDArgs) =>
-      requireNextly().userFields.findByID(args),
-    create: (args: CreateUserFieldArgs) =>
-      requireNextly().userFields.create(args),
-    update: (args: UpdateUserFieldArgs) =>
-      requireNextly().userFields.update(args),
-    delete: (args: DeleteUserFieldArgs) =>
-      requireNextly().userFields.delete(args),
-    reorder: (args: ReorderUserFieldsArgs) =>
-      requireNextly().userFields.reorder(args),
+    find: async (args?: FindUserFieldsArgs) =>
+      (await requireNextlyOnceStarted()).userFields.find(args),
+    findByID: async (args: FindUserFieldByIDArgs) =>
+      (await requireNextlyOnceStarted()).userFields.findByID(args),
+    create: async (args: CreateUserFieldArgs) =>
+      (await requireNextlyOnceStarted()).userFields.create(args),
+    update: async (args: UpdateUserFieldArgs) =>
+      (await requireNextlyOnceStarted()).userFields.update(args),
+    delete: async (args: DeleteUserFieldArgs) =>
+      (await requireNextlyOnceStarted()).userFields.delete(args),
+    reorder: async (args: ReorderUserFieldsArgs) =>
+      (await requireNextlyOnceStarted()).userFields.reorder(args),
   },
 
   roles: {
-    find: (args?: FindRolesArgs) => requireNextly().roles.find(args),
-    findByID: (args: FindRoleByIDArgs) => requireNextly().roles.findByID(args),
-    create: (args: CreateRoleArgs) => requireNextly().roles.create(args),
-    update: (args: UpdateRoleArgs) => requireNextly().roles.update(args),
-    delete: (args: DeleteRoleArgs) => requireNextly().roles.delete(args),
-    getPermissions: (args: GetRolePermissionsArgs) =>
-      requireNextly().roles.getPermissions(args),
-    setPermissions: (args: SetRolePermissionsArgs) =>
-      requireNextly().roles.setPermissions(args),
+    find: async (args?: FindRolesArgs) =>
+      (await requireNextlyOnceStarted()).roles.find(args),
+    findByID: async (args: FindRoleByIDArgs) =>
+      (await requireNextlyOnceStarted()).roles.findByID(args),
+    create: async (args: CreateRoleArgs) =>
+      (await requireNextlyOnceStarted()).roles.create(args),
+    update: async (args: UpdateRoleArgs) =>
+      (await requireNextlyOnceStarted()).roles.update(args),
+    delete: async (args: DeleteRoleArgs) =>
+      (await requireNextlyOnceStarted()).roles.delete(args),
+    getPermissions: async (args: GetRolePermissionsArgs) =>
+      (await requireNextlyOnceStarted()).roles.getPermissions(args),
+    setPermissions: async (args: SetRolePermissionsArgs) =>
+      (await requireNextlyOnceStarted()).roles.setPermissions(args),
   },
 
   permissions: {
-    find: (args?: FindPermissionsArgs) =>
-      requireNextly().permissions.find(args),
-    findByID: (args: FindPermissionByIDArgs) =>
-      requireNextly().permissions.findByID(args),
-    create: (args: CreatePermissionArgs) =>
-      requireNextly().permissions.create(args),
-    delete: (args: DeletePermissionArgs) =>
-      requireNextly().permissions.delete(args),
+    find: async (args?: FindPermissionsArgs) =>
+      (await requireNextlyOnceStarted()).permissions.find(args),
+    findByID: async (args: FindPermissionByIDArgs) =>
+      (await requireNextlyOnceStarted()).permissions.findByID(args),
+    create: async (args: CreatePermissionArgs) =>
+      (await requireNextlyOnceStarted()).permissions.create(args),
+    delete: async (args: DeletePermissionArgs) =>
+      (await requireNextlyOnceStarted()).permissions.delete(args),
   },
 
   apiKeys: {
-    list: (args?: ListApiKeysArgs) => requireNextly().apiKeys.list(args),
-    findByID: (args: FindApiKeyByIDArgs) =>
-      requireNextly().apiKeys.findByID(args),
-    create: (args: CreateApiKeyArgs) => requireNextly().apiKeys.create(args),
-    update: (args: UpdateApiKeyArgs) => requireNextly().apiKeys.update(args),
-    revoke: (args: RevokeApiKeyArgs) => requireNextly().apiKeys.revoke(args),
+    list: async (args?: ListApiKeysArgs) =>
+      (await requireNextlyOnceStarted()).apiKeys.list(args),
+    findByID: async (args: FindApiKeyByIDArgs) =>
+      (await requireNextlyOnceStarted()).apiKeys.findByID(args),
+    create: async (args: CreateApiKeyArgs) =>
+      (await requireNextlyOnceStarted()).apiKeys.create(args),
+    update: async (args: UpdateApiKeyArgs) =>
+      (await requireNextlyOnceStarted()).apiKeys.update(args),
+    revoke: async (args: RevokeApiKeyArgs) =>
+      (await requireNextlyOnceStarted()).apiKeys.revoke(args),
   },
 
   access: {
-    check: (args: CheckAccessArgs) => requireNextly().access.check(args),
-    checkApiKey: (args: CheckApiKeyArgs) =>
-      requireNextly().access.checkApiKey(args),
+    check: async (args: CheckAccessArgs) =>
+      (await requireNextlyOnceStarted()).access.check(args),
+    checkApiKey: async (args: CheckApiKeyArgs) =>
+      (await requireNextlyOnceStarted()).access.checkApiKey(args),
   },
 };
 

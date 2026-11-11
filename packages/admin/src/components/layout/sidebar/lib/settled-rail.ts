@@ -113,19 +113,3 @@ export function settledRailItems<T extends MainMenuItem>(
   }
   return settled;
 }
-
-/**
- * The rail as drawn while "+ New", its first entry, may still be undecided:
- * none of its entries and not settled until it is, since an entry drawn before
- * it would move when it arrived or was taken away. The phone drawer's rail
- * does not draw it, so it does not wait on it.
- */
-export function railBehindNewMenu<Item>(
-  rail: { items: readonly Item[]; settled: boolean },
-  newMenu: { isReady: boolean },
-  onPhone?: boolean
-): { items: readonly Item[]; settled: boolean } {
-  return onPhone === true || newMenu.isReady
-    ? rail
-    : { items: [], settled: false };
-}

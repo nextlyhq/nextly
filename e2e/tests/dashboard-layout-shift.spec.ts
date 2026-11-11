@@ -247,6 +247,27 @@ async function clickLink(page: Page, href: string): Promise<void> {
   await page.locator(`a[href="${href}"]:visible`).first().click();
 }
 
+/**
+ * The first collection's list the dashboard links to (`/admin/collections/<slug>`), whichever the
+ * Content card happens to list first: which collections it lists depends on what the site has
+ * seeded and edited last, so no one slug is certain to be among them.
+ */
+async function firstCollectionLink(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const link = [
+      ...document.querySelectorAll<HTMLAnchorElement>(
+        'main a[href^="/admin/collections/"]'
+      ),
+    ].find(anchor =>
+      /^\/admin\/collections\/[^/]+$/.test(anchor.getAttribute("href") ?? "")
+    );
+    const href = link?.getAttribute("href");
+    if (!href)
+      throw new Error("no link to a collection's list on the dashboard");
+    return href;
+  });
+}
+
 async function followLink(page: Page, href: string): Promise<void> {
   await page.evaluate(target => {
     const link = document.querySelector<HTMLAnchorElement>(
@@ -336,8 +357,9 @@ for (const site of SITES) {
         await gotoAdmin(page, "/");
         await waitForSettled(page);
         // Away and back within the session: the arrangement and the answers are cached.
-        await followLink(page, "/admin/collections/posts");
-        await page.waitForURL(/\/admin\/collections\/posts/);
+        const collection = await firstCollectionLink(page);
+        await followLink(page, collection);
+        await page.waitForURL(url => url.pathname === collection);
         await forgetShifts(page);
         await followLink(page, "/admin");
         await page.waitForURL(/\/admin\/?$/);

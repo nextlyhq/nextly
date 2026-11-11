@@ -27,6 +27,8 @@ import type { FieldSettingsSurface, FieldTypeSettings } from "./types";
  */
 export type FieldTypeSettingsLookup =
   | { status: "known"; settings: FieldTypeSettings | undefined }
+  // A plugin's type whose declared settings this surface cannot store.
+  | { status: "withheld" }
   | { status: "loading" }
   | { status: "unavailable"; retry: () => void };
 
@@ -38,7 +40,10 @@ export function useFieldTypeSettings(
   type: string,
   // The surface asked about: its own settings by type win over the core
   // table's, and its catalog's built-in types are known without a plugin.
-  surface: Pick<FieldSettingsSurface, "surface" | "typeSettings">
+  surface: Pick<
+    FieldSettingsSurface,
+    "surface" | "typeSettings" | "pluginSettings"
+  >
 ): FieldTypeSettingsLookup {
   const declared = pluginFieldTypeSettings(useBranding().plugins, type);
   const { isPending, isUnavailable, retry } = useBrandingStatus();
@@ -53,7 +58,11 @@ export function useFieldTypeSettings(
   if (core) return { status: "known", settings: core };
   if (isSurfaceBuiltInType(surface.surface, type))
     return { status: "known", settings: {} };
-  if (fromPlugin) return { status: "known", settings: fromPlugin };
+  if (fromPlugin) {
+    return surface.pluginSettings === false
+      ? { status: "withheld" }
+      : { status: "known", settings: fromPlugin };
+  }
   if (isPending) return { status: "loading" };
   if (isUnavailable) return { status: "unavailable", retry };
   return { status: "known", settings: undefined };

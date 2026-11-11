@@ -2,9 +2,9 @@
  * A card lays itself out by its OWN rendered width, never the window's.
  *
  * Three copies of one list card in one viewport, in containers 300, 500 and 800 px wide: the
- * narrow one is small (three rows, titles only), the middle one medium (five rows, each with its
- * line of detail), the wide one large (a table, of the default five rows). One window, three
- * layouts: only the card's width decides.
+ * narrow one is small and the middle one medium, each a list whose rows carry their line of
+ * detail, the wide one large, a table. One window, three layouts: only the card's width decides,
+ * and it decides the layout alone, never how many rows: each draws every row its answer holds.
  */
 import { render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -75,21 +75,37 @@ function drawThree() {
 describe("one card at three widths in one viewport", () => {
   it("is small, medium and large by its own width", () => {
     const { narrow, middle, wide } = drawThree();
+    const tierOf = (at: number) =>
+      screen
+        .getByTestId(`at-${at}`)
+        .querySelector("[data-tier]")
+        ?.getAttribute("data-tier");
+    expect([tierOf(300), tierOf(500), tierOf(800)]).toEqual([
+      "small",
+      "medium",
+      "large",
+    ]);
 
-    expect(narrow.getAllByTestId("entity-row")).toHaveLength(3);
-
-    expect(middle.getAllByTestId("entity-row")).toHaveLength(5);
-    expect(middle.getAllByText("draft")).toHaveLength(5);
-
+    expect(narrow.queryByTestId("list-card-table")).not.toBeInTheDocument();
+    expect(middle.queryByTestId("list-card-table")).not.toBeInTheDocument();
     expect(wide.getByTestId("list-card-table")).toBeInTheDocument();
-    expect(wide.getAllByTestId("list-card-table-row")).toHaveLength(5);
     expect(wide.queryByTestId("list-card-rows")).not.toBeInTheDocument();
   });
 
-  it("keeps each row's detail when small, in fewer rows", () => {
-    // Below large every card stacks the row's slots; the narrow card differs in how many
-    // rows it draws, not in what a row says.
-    const { narrow } = drawThree();
-    expect(narrow.getAllByText("draft")).toHaveLength(3);
+  it("draws every row its answer holds at every width", () => {
+    // 🔴 Counted by the tier, the narrow card drew three and the others five.
+    const { narrow, middle, wide } = drawThree();
+    expect(narrow.getAllByTestId("entity-row")).toHaveLength(items.length);
+    expect(middle.getAllByTestId("entity-row")).toHaveLength(items.length);
+    expect(wide.getAllByTestId("list-card-table-row")).toHaveLength(
+      items.length
+    );
+  });
+
+  it("keeps each row's detail when small, as when medium", () => {
+    // Below large every card stacks the row's slots, so a narrow card says what a row says.
+    const { narrow, middle } = drawThree();
+    expect(narrow.getAllByText("draft")).toHaveLength(items.length);
+    expect(middle.getAllByText("draft")).toHaveLength(items.length);
   });
 });
