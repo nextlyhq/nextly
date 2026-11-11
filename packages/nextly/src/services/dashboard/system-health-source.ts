@@ -15,7 +15,18 @@
  * - **Schema changes:** the ledger's collections whose newest schema change
  *   failed or was interrupted, from the same read.
  * - **Storage:** the storage layer's last failed write, which it keeps per
- *   process (`lastStorageWriteFailure`).
+ *   process (`lastStorageWriteFailure`), and the adapter's type.
+ * - **Database:** the adapter's own read of its connection
+ *   (`readDatabaseHealth`): the server's version, a round trip, and whether
+ *   the connection is encrypted, read from the session.
+ * - **The newest version, email, jobs, runtime and plugins:** the health
+ *   domain's reads (`domains/health`), each answered on its own, so one that
+ *   fails leaves its line "Couldn't check" and the card still drawn.
+ *
+ * The attention digest reads only what its items count (migrations, schema
+ * changes, storage and the database's connection), never the registry or the
+ * jobs table, so Needs your attention does not wait on the newest-version
+ * read.
  *
  * None of these is computed here a second way: the card and the attention
  * items are two views of {@link readSystemHealth}, so they cannot disagree
@@ -36,6 +47,19 @@ import {
   readAccessCaller,
 } from "../../auth/entity-read-access";
 import { container } from "../../di/container";
+import type { NextlyServiceConfig } from "../../di/register";
+import {
+  connectionAttention,
+  readDatabaseHealth,
+  type InspectableAdapter,
+} from "../../domains/health/database-health";
+import { readEmailHealth } from "../../domains/health/email-health";
+import { readJobsHealth } from "../../domains/health/jobs-health";
+import { readLatestVersion } from "../../domains/health/latest-version";
+import {
+  pluginsHealth,
+  readRuntimeHealth,
+} from "../../domains/health/runtime-health";
 import { readSchemaProblems } from "../../domains/schema/events/schema-problems";
 import type { DigestReader } from "../../domains/widgets/attention/digest";
 import {
@@ -47,6 +71,7 @@ import { boundCaller } from "../../domains/widgets/declaration/read-services";
 import { NextlyError } from "../../errors/nextly-error";
 import { assertBootMigrationsSettled } from "../../init/boot-migrations-gate";
 import { getCoreVersion } from "../../plugins/core-version";
+import { isProductionRuntime } from "../../shared/builder-refusal";
 import { lastStorageWriteFailure } from "../../storage/last-write-failure";
 
 import type { ReadCaller } from "./readable-resources";
@@ -74,11 +99,14 @@ function bootGateState(): BootGateState {
   }
 }
 
-/** The handle the ledger is read through. */
-interface AdapterLike {
-  dialect: "postgresql" | "mysql" | "sqlite";
+/** The handle the ledger, the jobs and the connection are read through. */
+interface AdapterLike extends InspectableAdapter {
   getDrizzle: () => unknown;
 }
+
+/** The documentation on encrypting the database connection. */
+export const ENCRYPTED_CONNECTIONS_DOCS =
+  "https://nextlyhq.com/docs/database/encrypted-connections";
 
 /** The registry the failed collections' labels are read from. */
 interface CollectionLabels {
@@ -123,34 +151,80 @@ function migrationsLine(
   return { status, failed, pending: running };
 }
 
+/** The storage adapter's type, or nothing when storage could not say. */
+function storageType(): { type?: string } {
+  try {
+    const type = container
+      .get<{ getStorageType: () => string }>("mediaStorage")
+      .getStorageType();
+    return typeof type === "string" && type !== "" ? { type } : {};
+  } catch {
+    return {};
+  }
+}
+
 /** The storage line: working, or when, where and why its last write failed. */
 function storageLine(): SystemHealthData["storage"] {
   const failure = lastStorageWriteFailure();
   return failure === undefined
-    ? { status: "ok" }
+    ? { status: "ok", ...storageType() }
     : {
         status: "failed",
+        ...storageType(),
         failedAt: failure.at,
         adapter: failure.adapter,
         reason: failure.reason,
       };
 }
 
+/** What a line's own read answered, or `null` when it failed. */
+async function orNull<T>(read: () => Promise<T>): Promise<T | null> {
+  try {
+    return await read();
+  } catch {
+    return null;
+  }
+}
+
 /**
- * The install's health, as System health draws it and the attention kind
- * counts it. Takes no caller: who may see it is decided before it is asked.
+ * The site's own name for the deployment (`admin.environment.label`), when it
+ * gives one. Read from the booted config on demand, so this module does not
+ * load the route handler's.
  */
-async function readSystemHealth(): Promise<SystemHealthData> {
+async function environmentLabel(): Promise<{ label?: string }> {
+  try {
+    const { getHandlerConfig } = await import(
+      "../../route-handler/auth-handler"
+    );
+    const label = getHandlerConfig()?.admin?.environment?.label;
+    return typeof label === "string" && label.trim() !== "" ? { label } : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The facts the attention kind counts: each problem System health reports. */
+type ProblemFacts = Pick<
+  SystemHealthData,
+  "migrations" | "schemaChanges" | "storage" | "database"
+>;
+
+/**
+ * The facts a problem is counted from: migrations, schema changes, storage
+ * and the database's connection, read at once. Takes no caller: who may see
+ * them is decided before they are asked.
+ */
+async function readProblemFacts(): Promise<ProblemFacts> {
   const adapter = container.get<AdapterLike>("adapter");
   const gate = bootGateState();
-  const problems = await readSchemaProblems({
-    db: adapter.getDrizzle(),
-    dialect: adapter.dialect,
-  });
+  const [problems, database] = await Promise.all([
+    readSchemaProblems({ db: adapter.getDrizzle(), dialect: adapter.dialect }),
+    readDatabaseHealth(adapter, isProductionRuntime()),
+  ]);
   const failed = problems.failedCollectionChanges;
   const listed = failed.slice(0, SYSTEM_HEALTH_LISTED_COLLECTIONS);
   return {
-    version: getCoreVersion(),
+    database,
     migrations: migrationsLine(
       gate,
       problems.unfinishedMigrations.length,
@@ -166,6 +240,42 @@ async function readSystemHealth(): Promise<SystemHealthData> {
   };
 }
 
+/**
+ * The install's health, as System health draws it: the problem facts, and
+ * the version's channel, the environment, email, jobs, runtime and plugins,
+ * each read on its own beside them.
+ */
+async function readSystemHealth(): Promise<SystemHealthData> {
+  const adapter = container.get<AdapterLike>("adapter");
+  const config = container.get<NextlyServiceConfig>("config");
+  const version = getCoreVersion();
+  const [facts, latest, label, email, jobs] = await Promise.all([
+    readProblemFacts(),
+    readLatestVersion(version),
+    environmentLabel(),
+    orNull(() =>
+      readEmailHealth(
+        adapter.getDrizzle(),
+        adapter.dialect,
+        config.email?.providerConfig?.provider
+      )
+    ),
+    orNull(() =>
+      readJobsHealth(adapter.getDrizzle(), adapter.dialect, new Date())
+    ),
+  ]);
+  return {
+    version,
+    latest,
+    environment: { production: isProductionRuntime(), ...label },
+    ...facts,
+    email,
+    jobs,
+    runtime: readRuntimeHealth(process.cwd()),
+    plugins: pluginsHealth(config.plugins),
+  };
+}
+
 /** Whether `caller` may be shown the install's health: a super-admin, by the one decision. */
 function maySeeSystemHealth(caller: ReadCaller): Promise<boolean> {
   return callerIsSuperAdmin(readAccessCaller(caller));
@@ -173,7 +283,8 @@ function maySeeSystemHealth(caller: ReadCaller): Promise<boolean> {
 
 /**
  * The "System problems" kind: one item per problem System health reports,
- * each critical, each with why it matters and where to go about it.
+ * each with why it matters and where to go about it: critical, but for a
+ * connection whose encryption could not be read in production, a warning.
  *
  * A migration has no page in the admin, and the System health card may not
  * be placed, so a migration's item links nowhere: its reason names the
@@ -183,8 +294,11 @@ const SYSTEM_PROBLEMS: readonly {
   id: string;
   label: string;
   reason: string;
+  severity?: "critical" | "warning";
   link?: string;
-  count: (health: SystemHealthData) => number;
+  help?: string;
+  single?: true;
+  count: (health: ProblemFacts) => number;
 }[] = [
   {
     id: "core/system-migrations-failed",
@@ -220,28 +334,49 @@ const SYSTEM_PROBLEMS: readonly {
     link: "media",
     count: health => (health.storage.status === "failed" ? 1 : 0),
   },
+  {
+    id: "core/system-connection-unencrypted",
+    label: "Database connection is not encrypted",
+    reason: "Passwords and data cross the network as plain text.",
+    help: ENCRYPTED_CONNECTIONS_DOCS,
+    single: true,
+    count: health =>
+      connectionAttention(health.database) === "unencrypted" ? 1 : 0,
+  },
+  {
+    id: "core/system-connection-unchecked",
+    label: "Couldn't check the database connection's encryption",
+    reason: "It may cross the network as plain text.",
+    severity: "warning",
+    help: ENCRYPTED_CONNECTIONS_DOCS,
+    single: true,
+    count: health =>
+      connectionAttention(health.database) === "unchecked" ? 1 : 0,
+  },
 ];
 
 /**
  * A reader for each system problem, for the attention digest. A reader who is
  * not a super-admin is shown none, as on an install with nothing wrong; so is
  * one whose roles could not be read, since `callerIsSuperAdmin` fails closed.
- * The health is read once for all of them, and only after the caller is known
+ * The problem facts are read once for all of them, and only after the caller is known
  * to be a super-admin: each item's own budget bounds it, and a read that fails
  * fails these items alone.
  */
 export function systemProblemReaders(caller: ReadCaller): DigestReader[] {
   let allowed: Promise<boolean> | undefined;
   const visible = () => (allowed ??= maySeeSystemHealth(caller));
-  let health: Promise<SystemHealthData> | undefined;
-  const read = () => (health ??= readSystemHealth());
+  let health: Promise<ProblemFacts> | undefined;
+  const read = () => (health ??= readProblemFacts());
   return SYSTEM_PROBLEMS.map(problem => ({
     id: problem.id,
     kind: "system" as const,
     label: problem.label,
     reason: problem.reason,
-    severity: "critical" as const,
+    severity: problem.severity ?? ("critical" as const),
     ...(problem.link === undefined ? {} : { link: problem.link }),
+    ...(problem.help === undefined ? {} : { help: problem.help }),
+    ...(problem.single === undefined ? {} : { single: problem.single }),
     owner: "core",
     visible,
     read: async () => problem.count(await read()),
