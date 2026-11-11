@@ -255,10 +255,11 @@ async function startOf(server, log) {
     await response.arrayBuffer();
     return at;
   });
-  // A page that needs neither Nextly nor the database, asked for at the same
-  // moment: what the server takes to answer anything at all once it listens,
-  // which the admin page's first byte is read against.
-  const anyPage = fetch(`${BASE}/_not-found`).then(async response => {
+  // A file the server sends as it is, asked for at the same moment: what the
+  // server takes to answer anything at all once it listens, which the admin
+  // page's first byte is read against. A file, not a page, so nothing of the
+  // app's layouts is rendered for it.
+  const anyPage = fetch(`${BASE}/next.svg`).then(async response => {
     const at = Date.now() - server.listening;
     await response.arrayBuffer();
     return at;
@@ -287,11 +288,16 @@ async function startOf(server, log) {
 
 /**
  * The admin page as a visitor with no session is sent it, twice, once the
- * start has fallen quiet: whether both are the same bytes, whether its headers
+ * start has fallen quiet and the page has settled: whether both are the same bytes, whether its headers
  * let a shared cache keep it, and how many statements were sent while it was
  * served. A prebuilt page is the same for everyone and reads nothing.
  */
 async function pageServed(log) {
+  // Once after the start, to let the page settle: the copy the build wrote
+  // describes the database the build saw, and is refreshed in the background
+  // the first time it is served after a write. Two visitors are compared after.
+  await (await fetch(`${BASE}/admin`)).arrayBuffer();
+  await sleep(1500);
   const before = readLog(log).length;
   const first = await fetch(`${BASE}/admin`);
   const second = await fetch(`${BASE}/admin`);

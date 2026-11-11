@@ -11,6 +11,11 @@
  */
 
 import { sharedEntries } from "./bounded-entries";
+import {
+  buildOutputReader,
+  type BuildOutputEntry,
+  type CacheHandlerContext,
+} from "./build-output";
 import { holdFailedRecord, retryFailedRecordsAtRead } from "./record-retry";
 import { markIncrementalHandlerInUse } from "./shared-handlers";
 import {
@@ -35,6 +40,8 @@ interface CacheContext {
   cacheControl?: unknown;
   tags?: readonly string[];
   softTags?: readonly string[];
+  /** The kind of entry asked for: a page, a route response, a fetch. */
+  kind?: unknown;
 }
 
 /** The tags a stored page or response carries in its cache-tags header. */
@@ -146,10 +153,14 @@ function fillBegan(key: string): number {
 }
 
 export default class NextlyIncrementalCacheHandler {
+  /** The pages and responses the build wrote to disk, read on a miss. */
+  private readonly fromBuild: ReturnType<typeof buildOutputReader>;
+
   // Next.js constructs the configured handler for each request and build
   // before it renders, so reads this process caches keep their lifetimes.
-  constructor() {
+  constructor(ctx?: CacheHandlerContext) {
     markIncrementalHandlerInUse();
+    this.fromBuild = buildOutputReader(ctx);
   }
 
   async get(
@@ -164,7 +175,7 @@ export default class NextlyIncrementalCacheHandler {
     // Where a timer may never fire, a read retries what the ledger refused.
     const retrying = retryFailedRecordsAtRead();
     if (retrying !== undefined) await retrying;
-    const stored = entries().get(key);
+    const stored = entries().get(key) ?? (await this.storedFromBuild(key, ctx));
     if (stored === undefined) return null;
     const tags = [
       ...stored.tags,
@@ -184,6 +195,32 @@ export default class NextlyIncrementalCacheHandler {
       value: stored.value,
       cacheControl: stored.cacheControl,
     };
+  }
+
+  /**
+   * What the build wrote for `key`, kept here as an entry this process stored,
+   * or `undefined`. Judged from when the build wrote it, so a write anywhere
+   * since expires it as it expires any entry stored before the write.
+   */
+  private async storedFromBuild(
+    key: string,
+    ctx: CacheContext | undefined
+  ): Promise<StoredEntry | undefined> {
+    const built: BuildOutputEntry | null | undefined = await this.fromBuild?.(
+      key,
+      ctx?.kind,
+      ctx
+    );
+    if (!built) return undefined;
+    const entry: StoredEntry = {
+      value: built.value,
+      lastModified: built.lastModified,
+      begunAt: built.lastModified,
+      tags: [],
+      cacheControl: built.cacheControl ?? ctx?.cacheControl,
+    };
+    entries().set(key, entry, sizeOf(built.value));
+    return entry;
   }
 
   // Synchronous work behind the promise Next.js expects from a handler.

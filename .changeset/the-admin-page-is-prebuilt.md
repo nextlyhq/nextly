@@ -35,6 +35,8 @@ Before, the admin was rendered for each request and marked `private, no-store`. 
 
 The logo, name and favicon set in `admin.branding` are written into the page, so they show from the first paint with no swap after it loads. The favicon's link is in the first HTML. Branding set only in General settings still arrives with the admin's first requests.
 
+Nextly's cache handler now serves the pages `next build` prerendered. Before, it kept entries only in memory, so a new server process (every cold start) found none of them and rendered every prerendered page again on its first request. Now a miss is answered from the build's files, which are judged by the same tag expiries as any other entry, so a write made since the build still expires them. Every app using `nextly/cache-handler` gets this.
+
 New apps get this from `create-nextly-app`. To update an existing app's `app/admin/[[...params]]/layout.tsx`:
 
 - export `metadata = adminMetadataFor(config.admin?.branding)`, which replaces `adminMetadata`;
