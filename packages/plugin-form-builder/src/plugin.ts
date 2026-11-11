@@ -42,6 +42,7 @@ import {
 } from "./handlers/bot-check";
 import { registerFormClosing } from "./handlers/form-closing-hold";
 import {
+  browserTokenOf,
   responseKeyAfterUpdate,
   responseKeyOf,
   touchesResponseKey,
@@ -1152,15 +1153,42 @@ export async function prepareSubmissionForWrite(
   }
   if (ctx.operation === "create") {
     // Made from what is stored, after the spam verdict: spam takes no key.
+    // The browser token is the one answer the row does not keep, so it comes
+    // from the handler that read it, or the payload at every other door.
+    const settings = normalizeFormSettings(form.settings);
+    const browserToken = marks?.browserToken ?? browserTokenOf(incoming);
     ctx.data.responseKey = await responseKeyOf(
       () => nextly.security.digests,
-      normalizeFormSettings(form.settings),
-      ctx.data
+      settings,
+      { ...ctx.data, browserToken }
     );
+    warnTokenless(settings, browserToken, ctx, formId, nextly);
   } else {
     await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);
   }
   return ctx.data;
+}
+
+/**
+ * Say so when a visitor's submission reaches a form taking one response per
+ * browser without the browser's token: it is accepted, as a browser that
+ * cleared its data is, and nothing stops that visitor sending another. Left
+ * silent, a site whose form script does not send the token would never learn
+ * the setting has no effect.
+ */
+function warnTokenless(
+  settings: { oneResponse?: string },
+  browserToken: string | undefined,
+  ctx: { req?: { http?: unknown }; data?: Record<string, unknown> },
+  formId: string,
+  nextly: NextlyInstance
+): void {
+  if (settings.oneResponse !== "browser" || browserToken !== undefined) return;
+  if (!ctx.req?.http || ctx.data?.status === "spam") return;
+  nextly.logger.warn?.(
+    "A submission to a form taking one response per browser came without the browser's token, so it is accepted without a check. The form's script sends it as the `nextly-browser-token` answer.",
+    { formId }
+  );
 }
 
 /**
