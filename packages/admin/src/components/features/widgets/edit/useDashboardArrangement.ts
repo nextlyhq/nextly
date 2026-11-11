@@ -98,8 +98,8 @@ export interface DashboardArrangement {
   /** Move one card from its menu, saying where it went. */
   moveCard: (placementId: string, direction: MoveDirection) => void;
   /**
-   * Put a dragged card down at `final` among the drawn cards, saying where it went, with focus
-   * back on its handle. The menu's sentence, so a drag and a menu move are heard alike.
+   * Put a dragged card down at `final` among the drawn cards, saying where it went. The menu's
+   * sentence, so a drag and a menu move are heard alike.
    */
   dropCard: (placementId: string, final: number) => void;
   /** Set one card's size from its menu, saying so. */
@@ -294,11 +294,8 @@ export function useDashboardArrangement(
       );
       editor.moveTo(placementId, final);
       ring.highlight(placementId);
-      // Back to the handle it was dragged by: the card moved in the page, and React moving a
-      // focused element takes the focus with nowhere to go.
-      focus.request({ kind: "handle", placementId });
     },
-    [announceMove, editor, isDrawn, focus, ring]
+    [announceMove, editor, isDrawn, ring]
   );
 
   const setCardSize = useCallback(

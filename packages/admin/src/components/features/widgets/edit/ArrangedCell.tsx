@@ -47,9 +47,14 @@ import { CardMenu, removeLabelFor } from "./CardMenu";
 import {
   CardControlsOverlay,
   CardControlsSpace,
+  CardHandleSpace,
   CustomizingFence,
 } from "./CustomizingFence";
-import { DraggableWidgetCell, type CellDrag } from "./DraggableWidgetCell";
+import {
+  DraggableWidgetCell,
+  type CellDrag,
+  type CellResize,
+} from "./DraggableWidgetCell";
 import { LazyWidgetSettingsSheet } from "./LazyWidgetSettingsSheet";
 import { requestSettingsPanel } from "./settings-panel-registry";
 import type { SettingsPanelProps } from "./SettingsPanel";
@@ -72,6 +77,14 @@ export interface ArrangedCellProps {
   highlighted?: boolean;
   /** Its handle's drag, while dragging is on; absent at one column. */
   drag?: CellDrag;
+  /** Its right edge, where its width can be dragged; absent where it cannot. */
+  resize?: CellResize;
+  /**
+   * Where the grid places it among the cards while one is dragged (CSS `order`), so the grid
+   * lays the cards out in the order the drag has reached without moving any on the page;
+   * absent otherwise.
+   */
+  order?: number;
   /**
    * Whether a layout write is in flight anywhere on this dashboard.
    *
@@ -189,6 +202,8 @@ function CardBody(props: {
   subtitle: string | undefined;
   placement: ComponentProps<typeof WidgetRenderer>["placement"];
   headerAction: ReactNode;
+  /** Before the title: the room the drag handle is drawn over, while customising. */
+  leading: ReactNode;
   /** The card's quick setting, at rest; the frame decides when to draw it. */
   quick: ReactNode;
   data: ArrangedCellProps["data"];
@@ -197,7 +212,7 @@ function CardBody(props: {
   onOpenSettings: (() => void) | undefined;
 }) {
   const { widget, placement, headerAction, quick, data, isEditing } = props;
-  const { subtitle } = props;
+  const { subtitle, leading } = props;
   if (isEditing) {
     // While customising: drawn, and out of reach. A different element from
     // the resting cell's, so entering and leaving customise mode mounts the
@@ -208,6 +223,7 @@ function CardBody(props: {
           definition={widget}
           placement={placement}
           headerAction={headerAction}
+          leading={leading}
           customizing
           subtitle={subtitle}
           {...data}
@@ -518,16 +534,18 @@ function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
  */
 function useHeldCellStyle(
   placementId: string,
-  loading: boolean
+  loading: boolean,
+  order: number | undefined
 ): {
   cellRef: RefObject<HTMLDivElement | null>;
   style: CSSProperties | undefined;
 } {
   const cellRef = useRef<HTMLDivElement>(null);
   const heldPx = useHeldCardHeight(placementId, loading, cellRef);
+  const held = heldCellStyle(heldPx);
   return {
     cellRef,
-    style: heldCellStyle(heldPx),
+    style: order === undefined ? held : { ...held, order },
   };
 }
 
@@ -572,7 +590,11 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     [row.size, row.widget.size]
   );
   const collapse = useBodyCollapse(isEditing);
-  const held = useHeldCellStyle(row.placementId, data.slot === undefined);
+  const held = useHeldCellStyle(
+    row.placementId,
+    data.slot === undefined,
+    props.order
+  );
   // The card's report, bound to this placement. Only the card drawn in the cell is told it: the
   // settings sheet's preview of the same placement is drawn outside it and reports nothing.
   const { reportHidden } = props;
@@ -600,14 +622,17 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   // While customising, the card's header keeps the room its controls are drawn
   // over; at rest it holds the menu.
   const headerAction = isEditing ? <CardControlsSpace /> : restingControls;
+  // Room before the title for the handle, wherever one is drawn.
+  const leading =
+    isEditing && props.drag !== undefined ? <CardHandleSpace /> : undefined;
 
   return (
     <DraggableWidgetCell
       id={row.placementId}
-      title={widget.title}
       isEditing={isEditing}
       highlighted={props.highlighted}
       {...(props.drag === undefined ? {} : { drag: props.drag })}
+      {...(props.resize === undefined ? {} : { resize: props.resize })}
       data-testid={`widget-cell-${widget.id}`}
       className={cellClassName(
         props.drawnW ?? size.w,
@@ -636,7 +661,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       <CardCollapseContext.Provider value={collapse}>
         <CardHiddenReportContext.Provider value={reportCardHidden}>
           <CardBody
-            {...{ widget, placement, headerAction, data, isEditing }}
+            {...{ widget, placement, headerAction, leading, data, isEditing }}
             subtitle={heading.subtitle}
             quick={quick.inline}
             onOpenSettings={sheet.openFromEmpty}
