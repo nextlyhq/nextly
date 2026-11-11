@@ -32,7 +32,7 @@ import {
   type ListModel,
 } from "@admin/components/features/widgets/frame/list-card";
 import { useListCard } from "@admin/components/features/widgets/frame/list-card-hook";
-import { StatusPill } from "@admin/components/features/widgets/frame/row-parts";
+import { StatusChip } from "@admin/components/features/widgets/frame/row-parts";
 import type { PinTarget } from "@admin/hooks/queries/useDashboardPins";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { formatRelativeTime } from "@admin/lib/dashboard";
@@ -87,7 +87,7 @@ function editedAt(row: ContinueRow, now: number): React.ReactNode {
 /**
  * The card's rows as a list: each titled by its document and leading to it,
  * its icon before it, "<collection> · edited <time>" on the meta line (and on
- * Team, who saved it), its status as a pill at its end, and Pin or Unpin in
+ * Team, who saved it), its status as a quiet chip at its end, and Pin or Unpin in
  * its menu.
  */
 function continueModel(
@@ -133,7 +133,7 @@ function continueModel(
         role: "trailing",
         present: row =>
           row.status === undefined ? undefined : (
-            <StatusPill tone={statusTone(row.status)}>{row.status}</StatusPill>
+            <StatusChip tone={statusTone(row.status)}>{row.status}</StatusChip>
           ),
       },
     ],

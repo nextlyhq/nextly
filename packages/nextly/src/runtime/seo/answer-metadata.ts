@@ -10,7 +10,10 @@
  */
 import type { Metadata } from "next";
 
-import type { PageMetadataAnswer } from "./page-metadata-contract";
+import type {
+  PageMetadataAnswer,
+  PageMetadataImage,
+} from "./page-metadata-contract";
 
 type OpenGraph = NonNullable<Metadata["openGraph"]>;
 type Twitter = NonNullable<Metadata["twitter"]>;
@@ -83,16 +86,26 @@ function openGraphOf(answer: PageMetadataAnswer): OpenGraph | undefined {
   return Object.keys(openGraph).length > 0 ? openGraph : undefined;
 }
 
+/** A card image as the Twitter card names it: with its alt text, if any. */
+function twitterImageOf(
+  image: PageMetadataImage
+): string | { url: string; alt: string } {
+  return image.alt === undefined
+    ? image.url
+    : { url: image.url, alt: image.alt };
+}
+
 /**
  * The Twitter card, or undefined when the answer states none of it: a
- * large-image card whenever there is an image to show on it.
+ * large-image card whenever there is an image to show on it, with the
+ * image's alt text where it has one, since that card reads its own.
  */
 function twitterOf(answer: PageMetadataAnswer): Twitter | undefined {
   const image = answer.social?.image;
   const twitter: Twitter = defined({
     card: image === undefined ? undefined : "summary_large_image",
     ...cardTextOf(answer),
-    images: image === undefined ? undefined : [image.url],
+    images: image === undefined ? undefined : [twitterImageOf(image)],
   });
   return Object.keys(twitter).length > 0 ? twitter : undefined;
 }

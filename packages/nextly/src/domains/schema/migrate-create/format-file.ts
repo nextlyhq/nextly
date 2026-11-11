@@ -48,6 +48,21 @@ export const FIELD_GROUP_HEADER = "-- Field groups:";
 const SETTINGS_HEADER = "-- Settings:";
 
 /**
+ * The header line naming one app's or plugin's added and removed permissions
+ * (`-- Permissions: @nextlyhq/plugin-form-builder: + export-submissions`).
+ */
+const PERMISSIONS_HEADER = "-- Permissions:";
+
+/**
+ * `text` on one line. A settings or permissions header names what a config or a plugin declares,
+ * which may hold a line break; one would end the comment and leave the rest of the line as a
+ * statement `nextly migrate` runs. Each break becomes a space.
+ */
+function oneLine(text: string): string {
+  return text.replace(/[\r\n\u2028\u2029]+/g, " ");
+}
+
+/**
  * Marks a file whose entity headers name what the migration CHANGES.
  *
  * 🔴 Provenance, not decoration. Migrations generated before headers were
@@ -140,6 +155,12 @@ export interface FormatArgs {
    */
   settingsChanges?: readonly string[];
   /**
+   * Each app's or plugin's added and removed permissions, one line per owner,
+   * as `describePermissionChange` writes them. Kept apart from the entity
+   * headers for the same reason as the settings: no table changes with them.
+   */
+  permissionChanges?: readonly string[];
+  /**
    * Whether the file changes no table. Its UP may still hold statements: a
    * Builder entity's registry row travels with its settings.
    */
@@ -167,7 +188,10 @@ export function formatMigrationFile(args: FormatArgs): string {
   const scopeLine =
     args.entitiesAreScoped === false ? "" : `${SCOPED_ENTITIES_MARKER}\n`;
   const settingsLines = (args.settingsChanges ?? [])
-    .map(change => `${SETTINGS_HEADER} ${change}\n`)
+    .map(change => `${SETTINGS_HEADER} ${oneLine(change)}\n`)
+    .join("");
+  const permissionLines = (args.permissionChanges ?? [])
+    .map(change => `${PERMISSIONS_HEADER} ${oneLine(change)}\n`)
     .join("");
   // Each statement gets a trailing `;`. splitSqlStatements in migrate.ts
   // splits on `;` so statements MUST be terminated.
@@ -178,16 +202,19 @@ export function formatMigrationFile(args: FormatArgs): string {
   // file must not stop a rollback reaching the migrations before it. So its
   // DOWN is one statement that changes nothing, valid on every dialect.
   const settingsOnly =
-    args.changesNoTable === true && (args.settingsChanges ?? []).length > 0;
+    args.changesNoTable === true &&
+    (args.settingsChanges ?? []).length +
+      (args.permissionChanges ?? []).length >
+      0;
   const downBody =
     args.downSqlStatements.length > 0
       ? args.downSqlStatements.map(s => `${s};`).join("\n\n")
       : settingsOnly
-        ? "-- No table statements to undo: this migration changes settings only.\nSELECT 1;"
+        ? "-- No table statements to undo: this migration changes settings or permissions only.\nSELECT 1;"
         : "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)";
 
   return `-- Migration: ${args.name}
-${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}-- Generated at: ${now}
+${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}-- Generated at: ${now}
 -- Dialect: ${getDialectDisplayName(args.dialect)}
 
 -- UP

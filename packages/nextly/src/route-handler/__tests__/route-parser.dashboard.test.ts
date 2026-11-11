@@ -111,6 +111,16 @@ describe("dashboard routes", () => {
     expect(parseRestRoute(["dashboard", "onboarding"], "GET")).toEqual({});
   });
 
+  it("resolves the diagnostics report under GET alone", () => {
+    expect(parseRestRoute(["dashboard", "diagnostics"], "GET")).toMatchObject({
+      method: "getDashboardDiagnostics",
+    });
+    expect(parseRestRoute(["dashboard", "diagnostics"], "POST")).toEqual({});
+    expect(
+      parseRestRoute(["dashboard", "diagnostics", "full"], "GET").method
+    ).toBeUndefined();
+  });
+
   it("rejects a DELETE to an id other than layout or pins", () => {
     expect(parseRestRoute(["dashboard", "stats"], "DELETE")).toEqual({});
     expect(parseRestRoute(["dashboard", "query"], "DELETE")).toEqual({});

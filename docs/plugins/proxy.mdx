@@ -28,7 +28,7 @@ export const config = {
 
 Keep `config` written out in this file: Next.js reads the matcher without running it. Leave built files and optimized images out, as above, since no handler has anything to say about them.
 
-The Proxy starts Nextly on the first request if nothing has started it yet. It lets a request through untouched when no plugin contributes a handler, when every handler answers nothing, or when Nextly cannot start, so it never takes the site down by itself.
+The Proxy never holds a request for Nextly's start. While a start is under way, it lets every request through as the page alone, and begins the start if nothing has. Handlers apply from the first request after the start finishes, which keeps a cold server answering pages and files at once, even against a database far from it. It also lets a request through untouched when no plugin contributes a handler, when every handler answers nothing, or when Nextly cannot start, so it never takes the site down by itself. A redirect or header that must hold from a server's very first request belongs in `next.config`, not in a handler.
 
 ## Contribute a handler
 

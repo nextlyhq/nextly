@@ -1,7 +1,7 @@
 /**
  * The Count card's scheduled figure, against a real database, as callers with
- * different read rights: the card's `load`, set to a collection, at the medium
- * tier where the figure is first drawn.
+ * different read rights: the card's `load`, set to a collection and drawing
+ * its status split, the one line that shows the figure.
  *
  * What only a database can settle: that the figure counts exactly the entries
  * a scheduled release will publish, through the entry list's own condition;
@@ -60,16 +60,16 @@ function scoped(permissions: string[]): ReadCaller {
 const READS_POSTS = [`read-${POSTS}`, `read-${PAGES}`];
 const READS_RELEASES = [...READS_POSTS, "read-content-releases"];
 
-/** What a medium Count card set to `collection` answers `caller`. */
+/** What a Count card set to `collection`, drawing its status split, answers `caller`. */
 function card(caller: ReadCaller, collection = POSTS) {
-  return loadCard(countWidget, { collection }, caller, {
+  return loadCard(countWidget, { collection, show: "split" }, caller, {
     size: { w: 4, h: 2, tier: "medium" },
   });
 }
 
 /** The card's scheduled figure for `caller`, or `undefined` when it is left out. */
 async function scheduled(caller: ReadCaller, collection = POSTS) {
-  return (await card(caller, collection)).scheduled;
+  return (await card(caller, collection)).split?.scheduled;
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -168,7 +168,7 @@ describe.each(getConfiguredTestDialects())(
       const barred = await card(scoped(READS_POSTS));
       // The figure is left out, and the card is otherwise the same: its
       // number stands, and nothing in it tells the two apart.
-      expect(withoutReleases.scheduled).toBeUndefined();
+      expect(withoutReleases.split?.scheduled).toBeUndefined();
       expect(withoutReleases.total).toBe(2);
       expect(barred).toEqual(withoutReleases);
     });

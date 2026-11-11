@@ -10,6 +10,9 @@
  * 5. A value taken from the page's own content.
  * 6. The site's defaults.
  *
+ * Visibility has one level above them all: a content type hidden whole keeps
+ * every page in it hidden, whatever the page's own setting.
+ *
  * A level with nothing for a value, or only blank text, gives way to the next
  * rather than answering it empty. Every value is reported with the level
  * that supplied it, so the SEO tab can say where an automatic value comes
@@ -19,6 +22,8 @@
  */
 import type { PageMetadataImage } from "@nextlyhq/plugin-sdk";
 
+import { typedCanonical } from "../canonical";
+
 /** A level of the order, as a value's source names it. */
 export type SeoLevel =
   | "page"
@@ -27,7 +32,8 @@ export type SeoLevel =
   | "pattern"
   | "content"
   | "site"
-  | "address";
+  | "address"
+  | "type";
 
 /** A value with the level that supplied it. */
 export interface Sourced<T> {
@@ -63,7 +69,12 @@ interface FromField<T> {
 /** What each level holds for one page. */
 export interface Levels {
   /** What a person typed, with visibility and an Advanced canonical. */
-  page: SeoValues & { canonical?: string; hidden?: boolean };
+  page: SeoValues & {
+    canonical?: string;
+    /** The person said the page first appeared on another site. */
+    canonicalElsewhere?: boolean;
+    hidden?: boolean;
+  };
   code: SeoValues;
   template: SeoValues;
   pattern: { title?: FromPattern; description?: FromPattern };
@@ -72,9 +83,17 @@ export interface Levels {
     description?: FromField<string>;
     image?: FromField<PageMetadataImage>;
   };
-  site: { title?: string; description?: string; image?: PageMetadataImage };
+  site: {
+    title?: string;
+    description?: string;
+    image?: PageMetadataImage;
+    /** Where the site itself is served, which a typed canonical must be on. */
+    productionAddresses?: readonly string[];
+  };
   /** The page's own public address in its language, where it has one. */
   address?: string;
+  /** Whether the page's content type is hidden from search as a whole. */
+  typeHidden?: boolean;
 }
 
 /** A page's answer: each value with its source. */
@@ -91,25 +110,6 @@ export interface SeoAnswer {
 /** Text with something in it: blank text is no value. */
 function text(value: string | undefined): string | undefined {
   return value !== undefined && value.trim() !== "" ? value : undefined;
-}
-
-/**
- * A typed canonical a search engine can follow: a path from the site's root,
- * or an http(s) address, trimmed. Anything else (`mailto:`, `javascript:`,
- * stray text) is no canonical, and the page's own address is used.
- */
-function usableCanonical(value: string | undefined): string | undefined {
-  const typed = text(value)?.trim();
-  if (typed === undefined) return undefined;
-  if (typed.startsWith("/")) return typed;
-  try {
-    const url = new URL(typed);
-    return url.protocol === "http:" || url.protocol === "https:"
-      ? typed
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /** An image with an address to load it from. */
@@ -207,13 +207,23 @@ export function resolveOrder(levels: Levels): SeoAnswer {
   // choice, else listed and the page's own declared address. A page with no
   // declared address has no canonical rather than a guessed one.
   const canonical = first<string>([
-    { value: usableCanonical(levels.page.canonical), from: "page" },
+    {
+      value: typedCanonical(levels.page.canonical, {
+        productionAddresses: levels.site.productionAddresses ?? [],
+        elsewhere: levels.page.canonicalElsewhere === true,
+      }),
+      from: "page",
+    },
     { value: text(levels.address), from: "address" },
   ]);
+  // A hidden type comes first: its pages stay hidden, whatever each says,
+  // and return to their own setting once the type is shown again.
   const robots: Sourced<{ index: boolean; follow: boolean }> =
-    levels.page.hidden === true
-      ? { value: { index: false, follow: true }, from: "page" }
-      : { value: { index: true, follow: true }, from: "site" };
+    levels.typeHidden === true
+      ? { value: { index: false, follow: true }, from: "type" }
+      : levels.page.hidden === true
+        ? { value: { index: false, follow: true }, from: "page" }
+        : { value: { index: true, follow: true }, from: "site" };
   return {
     ...(title === undefined ? {} : { title }),
     ...(description === undefined ? {} : { description }),

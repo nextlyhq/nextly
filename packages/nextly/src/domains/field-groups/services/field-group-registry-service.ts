@@ -20,6 +20,10 @@ import type {
   BaseListResult,
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
+import {
+  withUnsaidKept,
+  type RecordedWriteOptions,
+} from "../../collections/services/collection-registry-service";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import {
@@ -79,6 +83,158 @@ export interface CodeFirstComponentConfig {
   /** i18n: whether the component is localized (translatable fields → companion table). */
   localized?: boolean;
 }
+
+/**
+ * What {@link toCodeFirstComponentConfig} reads of a field group's config
+ * entry, typed as the minimal shape rather than `FieldGroupConfig` so a caller
+ * holding a recorded declaration (not a live config) can project it the same
+ * way.
+ */
+export interface CodeFirstComponentSource {
+  slug: string;
+  label?: { singular?: string };
+  fields: CodeFirstComponentConfig["fields"];
+  description?: string;
+  admin?: FieldGroupAdminOptions;
+  localized?: boolean;
+}
+
+/**
+ * The registry-sync payload for one code-first component.
+ *
+ * The one projection from a config entry to the sync payload, so the start's
+ * sync and `nextly migrate` derive a component's row from its declaration the
+ * same way and cannot rewrite each other's rows.
+ */
+export function toCodeFirstComponentConfig(
+  fieldGroup: CodeFirstComponentSource
+): CodeFirstComponentConfig {
+  return {
+    slug: fieldGroup.slug,
+    // The declared label, else the slug with `-` and `_` as spaces and every
+    // word capitalised.
+    label:
+      fieldGroup.label?.singular ??
+      fieldGroup.slug
+        .replace(/[-_]/g, " ")
+        .replace(/\b\w/g, c => c.toUpperCase()),
+    fields: fieldGroup.fields,
+    description: fieldGroup.description,
+    admin: fieldGroup.admin,
+    // Derived from the slug rather than read from the entry: the conventional
+    // file a code-first component is declared in.
+    configPath: `${STORAGE_FORMAT.configPathDir}/${fieldGroup.slug}.ts`,
+    // i18n: forward the localized flag from defineFieldGroup so the registry persists
+    // it and the companion is provisioned for embedded per-language values.
+    localized: fieldGroup.localized === true,
+  };
+}
+
+/**
+ * A component row's update: the insert's columns, with a description and admin
+ * options that may be cleared (`null`) as well as set or left out.
+ */
+type ComponentUpdate = Partial<
+  Omit<DynamicFieldGroupInsert, "description" | "admin">
+> & {
+  description?: string | null;
+  admin?: FieldGroupAdminOptions | null;
+};
+
+/**
+ * The columns a component's declaration gives a row it registers, before
+ * where the row came from (source, lock, config path), which each caller adds.
+ * One projection for the start's sync and `nextly migrate`'s writer.
+ */
+function declaredComponentRegistration(
+  config: CodeFirstComponentConfig,
+  schemaHash: string,
+  tableName: string
+): Omit<DynamicFieldGroupInsert, "source" | "locked" | "configPath"> {
+  return {
+    slug: config.slug,
+    label: config.label,
+    tableName,
+    description: config.description,
+    fields: config.fields,
+    admin: config.admin,
+    localized: config.localized === true,
+    schemaHash,
+  };
+}
+
+/**
+ * The columns a component's declaration rewrites on a schema change: its
+ * fields, its localization, its metadata, and its table pointer when that is
+ * repaired (`codeFirstTablePointer`). Where the row came from is the caller's
+ * to add, or to leave.
+ */
+function declaredComponentRow(
+  config: CodeFirstComponentConfig,
+  schemaHash: string,
+  repairedTableName: string | undefined
+): ComponentUpdate {
+  return {
+    ...declaredComponentMetadata(config),
+    fields: config.fields,
+    schemaHash,
+    localized: config.localized === true,
+    // Undefined unless repaired, which `updateComponent` reads as "leave".
+    tableName: repairedTableName,
+  };
+}
+
+/**
+ * The columns a metadata-only change rewrites: label, description and admin
+ * options. An absent description or admin block is written as `null`, so a
+ * declaration that dropped one clears it instead of leaving the old value.
+ */
+function declaredComponentMetadata(
+  config: CodeFirstComponentConfig
+): ComponentUpdate {
+  return {
+    label: config.label,
+    description: config.description ?? null,
+    admin: config.admin ?? null,
+  };
+}
+
+/**
+ * Where a stored table pointer stands against the one a Builder record's own
+ * row names: in agreement (or no row yet), or diverged, which no write
+ * resolves.
+ */
+function recordedTablePointer(
+  tableName: string,
+  existing: DynamicFieldGroupRecord | null
+): CodeFirstTablePointer {
+  return existing === null || existing.tableName === tableName
+    ? {
+        matches: true,
+        desiredTableName: tableName,
+        repairedTableName: undefined,
+      }
+    : {
+        matches: false,
+        desiredTableName: tableName,
+        storedTableName: existing.tableName,
+      };
+}
+
+/**
+ * Where a code-first component's table pointer stands against the table its
+ * slug derives (`codeFirstTablePointer`): in agreement, repairable (the stored
+ * name addresses no table while the derived one exists), or diverged, which
+ * neither the sync nor the recorded writer resolves.
+ */
+type CodeFirstTablePointer =
+  | {
+      matches: true;
+      desiredTableName: string;
+      /** Set when the stored pointer is to be corrected to the derived name. */
+      repairedTableName: string | undefined;
+    }
+  | { matches: false; desiredTableName: string; storedTableName: string };
 
 export interface SyncComponentResult {
   created: string[];
@@ -381,7 +537,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    */
   async updateComponent(
     slug: string,
-    data: Partial<DynamicFieldGroupInsert>,
+    data: ComponentUpdate,
     options?: UpdateComponentOptions
   ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Updating Component", { slug });
@@ -456,7 +612,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * column mapping lives once here.
    */
   private buildComponentUpdateColumns(
-    data: Partial<DynamicFieldGroupInsert>
+    data: ComponentUpdate
   ): Record<string, unknown> {
     const updateData: Record<string, unknown> = {
       updated_at: this.formatDateForDb(),
@@ -748,73 +904,33 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       try {
         const existing = await this.findRecordForWrite(config.slug);
         const schemaHash = calculateSchemaHash(config.fields);
-        // Canonical resolution: comp_ + normalized slug, matching what the
-        // runtime schema layer and migrate:create derive for the same
-        // component. Resolved before the
-        // existence check so a stored name that drifted from it is reconciled
-        // rather than left addressing a table the schema layer never created.
-        const desiredTableName = resolveComponentTableName(config.slug);
-        // A component's stored table name is never changed here. Repointing an
-        // existing component at different storage moves no data, and the paths
-        // that generate DDL do not all have the registry available — the
-        // offline migration generator has no database connection at all — so a
-        // divergence between the configured name and the stored one cannot be
-        // honoured consistently. Moving a registered component to different
-        // storage is a migration, not a config edit.
-        //
-        // Reported rather than passed over: registry-backed reads, filters and
-        // teardown all follow the stored name, so a mismatch means they address
-        // a table the schema layer is not maintaining. Recording it as a sync
-        // error surfaces it on every boot until a migration resolves it.
-        let repairedTableName: string | undefined;
-        // Any difference is treated the same way, casing included. Derived
-        // names are always lowercase, so a stored pointer differing only in
-        // case is a legacy or hand-edited row rather than a supported state,
-        // and whether two spellings are one table is server configuration that
-        // cannot be inferred from the catalog: a single listed spelling means
-        // the other does not exist, not that the server folded them.
-        if (existing !== null && existing.tableName !== desiredTableName) {
-          // One mismatch is repairable without moving anything: the stored name
-          // addresses no table while the configured one does. That is a row
-          // written before names resolved canonically — the data has always
-          // been in the configured table — so correcting the pointer converges
-          // the registry onto the config rather than leaving them divergent.
-          const [storedExists, desiredExists] = await Promise.all([
-            this.adapter.tableExists(existing.tableName),
-            this.adapter.tableExists(desiredTableName),
-          ]);
-
-          if (!storedExists && desiredExists) {
-            repairedTableName = desiredTableName;
-            this.logger.warn("Component registry table name repaired", {
-              slug: config.slug,
-              from: existing.tableName,
-              to: desiredTableName,
-            });
-          } else {
-            result.errors.push({
-              slug: config.slug,
-              error:
-                `Registry table '${existing.tableName}' does not match the derived ` +
-                `'${desiredTableName}'. Storage is not repointed automatically; run a ` +
-                `migration to move the data.`,
-            });
-            continue;
-          }
+        // The pointer decision `writeRecordedComponent` shares: a stored name
+        // that differs from the derived one is repaired or reported, never
+        // repointed at storage that holds data.
+        const pointer = await this.codeFirstTablePointer(config.slug, existing);
+        if (!pointer.matches) {
+          // Recording it as a sync error surfaces it on every boot until a
+          // migration resolves it.
+          result.errors.push({
+            slug: config.slug,
+            error:
+              `Registry table '${pointer.storedTableName}' does not match the derived ` +
+              `'${pointer.desiredTableName}'. Storage is not repointed automatically; run a ` +
+              `migration to move the data.`,
+          });
+          continue;
         }
+        const { desiredTableName, repairedTableName } = pointer;
         if (!existing) {
           await this.registerComponent({
-            slug: config.slug,
-            label: config.label,
-            tableName: desiredTableName,
-            description: config.description,
-            fields: config.fields,
-            admin: config.admin,
+            ...declaredComponentRegistration(
+              config,
+              schemaHash,
+              desiredTableName
+            ),
             source: "code",
             locked: true,
-            localized: config.localized === true,
             configPath: config.configPath,
-            schemaHash,
           });
           result.created.push(config.slug);
         } else {
@@ -900,7 +1016,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * Write the config file's definition onto a component the registry already holds.
    *
    * Extracted so the divergence repair above reads as one step rather than being buried in the
-   * branch it guards; the decision of WHAT to write is unchanged.
+   * branch it guards; WHAT to write is `codeFirstSyncStep`'s decision, shared with
+   * `writeRecordedComponent`.
    */
   private async syncExistingCodeFirstComponent(args: {
     config: CodeFirstComponentConfig;
@@ -910,40 +1027,223 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     result: SyncComponentResult;
   }): Promise<void> {
     const { config, existing, schemaHash, repairedTableName, result } = args;
-    if (
-      repairedTableName !== undefined ||
-      !schemaHashesMatch(schemaHash, existing.schemaHash) ||
-      (config.localized === true) !== (existing.localized === true)
-    ) {
+    const step = this.codeFirstSyncStep(
+      config,
+      existing,
+      schemaHash,
+      repairedTableName
+    );
+    if (step === "update") {
       await this.updateComponent(
         config.slug,
         {
-          label: config.label,
-          description: config.description,
-          fields: config.fields,
-          admin: config.admin,
+          ...declaredComponentRow(config, schemaHash, repairedTableName),
           configPath: config.configPath,
-          schemaHash,
           locked: true,
-          localized: config.localized === true,
-          tableName: repairedTableName,
         },
         { source: "code" }
       );
       result.updated.push(config.slug);
-    } else if (this.adminConfigChanged(config.admin, existing.admin)) {
+    } else if (step === "metadata") {
       await this.updateComponent(
         config.slug,
-        {
-          admin: config.admin,
-          locked: true,
-        },
+        { ...declaredComponentMetadata(config), locked: true },
         { source: "code" }
       );
       result.updated.push(config.slug);
     } else {
       result.unchanged.push(config.slug);
     }
+  }
+
+  /**
+   * What a code-first sync does with `config` on a component the registry
+   * already holds: write a schema change through (`update`: the table pointer is
+   * repaired, the fields changed by hash, or localization flipped), write only
+   * its label, description and admin options (`metadata`), as a collection's
+   * and a Single's are written, or leave it (`unchanged`).
+   *
+   * The one decision of it: `syncCodeFirstComponents` and
+   * `writeRecordedComponent` both act on it, so a start and `nextly migrate`
+   * agree on what matching means.
+   */
+  private codeFirstSyncStep(
+    config: CodeFirstComponentConfig,
+    existing: DynamicFieldGroupRecord,
+    schemaHash: string,
+    repairedTableName: string | undefined
+  ): "update" | "metadata" | "unchanged" {
+    if (
+      repairedTableName !== undefined ||
+      !schemaHashesMatch(schemaHash, existing.schemaHash) ||
+      (config.localized === true) !== (existing.localized === true)
+    ) {
+      return "update";
+    }
+    // Label, description and admin options, as a collection's and a
+    // Single's are compared: a change to one alone is still written.
+    if (
+      config.label !== existing.label ||
+      (config.description ?? null) !== (existing.description ?? null) ||
+      this.adminConfigChanged(config.admin, existing.admin)
+    ) {
+      return "metadata";
+    }
+    return "unchanged";
+  }
+
+  /**
+   * Where a code-first component's stored table pointer stands against the
+   * table its slug derives.
+   *
+   * Canonical resolution: comp_ + normalized slug, matching what the runtime
+   * schema layer and migrate:create derive for the same component. Resolved
+   * before the existence check so a stored name that drifted from it is
+   * reconciled rather than left addressing a table the schema layer never
+   * created.
+   *
+   * A component's stored table name is never changed to address other
+   * storage. Repointing an existing component at different storage moves no
+   * data, and the paths that generate DDL do not all have the registry
+   * available — the offline migration generator has no database connection at
+   * all — so a divergence between the configured name and the stored one
+   * cannot be honoured consistently. Moving a registered component to
+   * different storage is a migration, not a config edit. Reported rather than
+   * passed over (`matches: false`): registry-backed reads, filters and teardown
+   * all follow the stored name, so a mismatch means they address a table the
+   * schema layer is not maintaining.
+   *
+   * Any difference is treated the same way, casing included. Derived names are
+   * always lowercase, so a stored pointer differing only in case is a legacy or
+   * hand-edited row rather than a supported state, and whether two spellings
+   * are one table is server configuration that cannot be inferred from the
+   * catalog: a single listed spelling means the other does not exist, not that
+   * the server folded them.
+   */
+  private async codeFirstTablePointer(
+    slug: string,
+    existing: DynamicFieldGroupRecord | null
+  ): Promise<CodeFirstTablePointer> {
+    const desiredTableName = resolveComponentTableName(slug);
+    if (existing === null || existing.tableName === desiredTableName) {
+      return { matches: true, desiredTableName, repairedTableName: undefined };
+    }
+    // One mismatch is repairable without moving anything: the stored name
+    // addresses no table while the configured one does. That is a row written
+    // before names resolved canonically — the data has always been in the
+    // configured table — so correcting the pointer converges the registry onto
+    // the config rather than leaving them divergent.
+    const [storedExists, desiredExists] = await Promise.all([
+      this.adapter.tableExists(existing.tableName),
+      this.adapter.tableExists(desiredTableName),
+    ]);
+    if (!storedExists && desiredExists) {
+      this.logger.warn("Component registry table name repaired", {
+        slug,
+        from: existing.tableName,
+        to: desiredTableName,
+      });
+      return {
+        matches: true,
+        desiredTableName,
+        repairedTableName: desiredTableName,
+      };
+    }
+    return {
+      matches: false,
+      desiredTableName,
+      storedTableName: existing.tableName,
+    };
+  }
+
+  /**
+   * Brings the registry row of a component the registry source records to that
+   * record, as `nextly migrate` does after its migrations apply, and writes
+   * nothing where the row already matches. The decision is the code-first
+   * sync's (`codeFirstTablePointer`, `codeFirstSyncStep`) and the columns are
+   * the ones it writes (`declaredComponentRow`, `declaredComponentMetadata`),
+   * so migrate and a start agree on what matching means.
+   *
+   * Unlike the sync it changes only what the declaration says: never where the
+   * row came from (its source, lock, config path or creator), and it runs no
+   * repair of a `diverged` mark, which is the sync's own step. `origin` is used
+   * only for a row it creates.
+   *
+   * @throws NextlyError(CONFLICT) when the stored table pointer differs from
+   *   the derived one in a way the sync reports rather than repairs; nothing is
+   *   written.
+   */
+  async writeRecordedComponent(
+    recorded: CodeFirstComponentConfig,
+    origin: { source: FieldGroupSource; locked: boolean },
+    options: RecordedWriteOptions<DynamicFieldGroupRecord> & {
+      /**
+       * The table a Builder record's own row names (`componentRowValues`),
+       * which a slug can spell differently from the code-first derivation:
+       * the row is held to that one, never to the derived name.
+       */
+      tableName?: string;
+    } = {}
+  ): Promise<"created" | "updated" | "unchanged"> {
+    const existing =
+      options.existing === undefined
+        ? await this.findRecordForWrite(recorded.slug)
+        : options.existing;
+    const config =
+      options.leavesUnsaid === true
+        ? withUnsaidKept(recorded, existing)
+        : recorded;
+    const schemaHash = calculateSchemaHash(config.fields);
+    const pointer =
+      options.tableName === undefined
+        ? await this.codeFirstTablePointer(config.slug, existing)
+        : recordedTablePointer(options.tableName, existing);
+    if (!pointer.matches) {
+      // The table names stay in the log: the public message says what to do.
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "A component's registry row points at a table other than the one its slug derives. Storage is not repointed automatically; run a migration to move the data.",
+        logContext: {
+          slug: config.slug,
+          storedTableName: pointer.storedTableName,
+          derivedTableName: pointer.desiredTableName,
+        },
+      });
+    }
+    if (!existing) {
+      await this.registerComponent({
+        ...declaredComponentRegistration(
+          config,
+          schemaHash,
+          pointer.desiredTableName
+        ),
+        // The config path a start gives the row it creates, from the same
+        // projection; a Builder record has none.
+        ...(config.configPath === undefined
+          ? {}
+          : { configPath: config.configPath }),
+        ...origin,
+      });
+      return "created";
+    }
+    const step = this.codeFirstSyncStep(
+      config,
+      existing,
+      schemaHash,
+      pointer.repairedTableName
+    );
+    if (step === "unchanged") return "unchanged";
+    await this.updateComponent(
+      config.slug,
+      step === "update"
+        ? declaredComponentRow(config, schemaHash, pointer.repairedTableName)
+        : declaredComponentMetadata(config),
+      // The row's own source, so a row defined in code is written as the
+      // pipeline writes it, past its lock, and its source is left as it is.
+      { source: existing.source }
+    );
+    return "updated";
   }
 
   /**

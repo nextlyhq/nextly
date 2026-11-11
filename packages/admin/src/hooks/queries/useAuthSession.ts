@@ -21,6 +21,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+import { abandonStartupRequest } from "@admin/lib/api/startup-request";
 import {
   isAuthenticated as checkIsAuthenticated,
   SessionUnavailableError,
@@ -98,5 +99,8 @@ export async function restartSessionCheck(
 ): Promise<void> {
   await queryClient.cancelQueries({ queryKey: authSessionKey });
   resetSetupStatusCache();
+  // A startup request that has not answered would hold the retry's session
+  // read too; the retry asks the server afresh instead.
+  abandonStartupRequest();
   await queryClient.refetchQueries({ queryKey: authSessionKey });
 }

@@ -48,6 +48,7 @@ import {
   dropServerDatabase,
   recreateServerDatabase,
 } from "../support/server-database.mjs";
+import { sharedCacheMayKeep } from "../support/shared-cache.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..", "..");
@@ -75,14 +76,19 @@ const GROWTH_SLACK_MIN = 5;
 const ROUND_SLACK = 1;
 const DELAY_MS = 100;
 /**
- * How soon the admin page's first byte must arrive after the server listens,
- * on the delayed start: the page needs no database, so the start under way
- * must not hold it. A start that held it took about 104 s; one that does not
- * leaves the page's own first render, about 2 s on a cold server with or
- * without the delay, so this catches the start holding the page without
- * judging that render. Lowered to a second once the page is prebuilt.
+ * How soon, at most, the admin page's first byte may arrive after the server
+ * listens, on the delayed start: a start that holds the page takes about
+ * 104 s. The tighter judgement is against the server's own first answer,
+ * below, as that answer alone takes seconds on a busy machine.
  */
 const FIRST_BYTE_LIMIT_MS = 10_000;
+/**
+ * How much later than the server's first answer to any page the admin page's
+ * first byte may come. The page is prebuilt, so it adds no wait of its own;
+ * what remains is the server answering its first request at all, which on a
+ * busy machine takes seconds whatever the page.
+ */
+const FIRST_BYTE_OVER_SERVER_MS = 1000;
 const EXTRA_COLLECTIONS = 45;
 const QUIET_MS = 1500;
 /** How long an open request is waited for once nothing else happens. */
@@ -125,7 +131,7 @@ async function portOpen(port) {
 }
 
 /** The database a run of `dialect` uses, made empty, and the env that points at it. */
-async function freshDatabase(dialect, extra) {
+async function freshDatabase(dialect, extra, key = PORT) {
   if (dialect === "sqlite") {
     const file = path.join(PLAYGROUND, "data", "admin-speed.db");
     for (const suffix of ["", "-shm", "-wal"])
@@ -134,7 +140,9 @@ async function freshDatabase(dialect, extra) {
   }
   const serverUrl = process.env[`E2E_DB_SERVER_URL_${dialect.toUpperCase()}`];
   const database = e2eDatabase({
-    port: PORT,
+    // Names the database: the server's port, or a key of its own for a
+    // database kept beside another, as the start-only measurements' are.
+    port: key,
     env: {
       E2E_DB_DIALECT: dialect,
       ...(serverUrl ? { E2E_DB_SERVER_URL: serverUrl } : {}),
@@ -250,7 +258,17 @@ async function startOf(server, log) {
     await response.arrayBuffer();
     return at;
   });
+  // A file the server sends as it is, asked for at the same moment: what the
+  // server takes to answer anything at all once it listens, which the admin
+  // page's first byte is read against. A file, not a page, so nothing of the
+  // app's layouts is rendered for it.
+  const anyPage = fetch(`${BASE}/next.svg`).then(async response => {
+    const at = Date.now() - server.listening;
+    await response.arrayBuffer();
+    return at;
+  });
   const firstByteMs = await firstByte;
+  const anyPageFirstByteMs = await anyPage;
   const until = Date.now() + 900_000;
   let count = -1;
   let since = Date.now();
@@ -266,7 +284,33 @@ async function startOf(server, log) {
   return {
     statements: count,
     firstByteMs,
+    anyPageFirstByteMs,
     seconds: Number(((since - server.started) / 1000).toFixed(1)),
+  };
+}
+
+/**
+ * The admin page as a visitor with no session is sent it, twice, once the
+ * start has fallen quiet and the page has settled: whether both are the same bytes, whether its headers
+ * let a shared cache keep it, and how many statements were sent while it was
+ * served. A prebuilt page is the same for everyone and reads nothing.
+ */
+async function pageServed(log) {
+  // Once after the start, to let the page settle: the copy the build wrote
+  // describes the database the build saw, and is refreshed in the background
+  // the first time it is served after a write. Two visitors are compared after.
+  await (await fetch(`${BASE}/admin`)).arrayBuffer();
+  await sleep(1500);
+  const before = readLog(log).length;
+  const first = await fetch(`${BASE}/admin`);
+  const second = await fetch(`${BASE}/admin`);
+  const [a, b] = [await first.text(), await second.text()];
+  // Long enough for anything the page set off to reach the database.
+  await sleep(1000);
+  return {
+    sameBytes: a === b,
+    keepable: sharedCacheMayKeep(first.headers.get("cache-control")),
+    statements: readLog(log).length - before,
   };
 }
 
@@ -473,7 +517,10 @@ async function measureDialect(dialect, dir) {
     // work it leaves running after Nextly says it has started included.
     const started = await startOf(server, log);
     out.firstByteMs = started.firstByteMs;
+    out.anyPageFirstByteMs = started.anyPageFirstByteMs;
     out.start.statements = started.statements;
+    // Once the start has fallen quiet: how the page itself is served.
+    out.page = await pageServed(log);
 
     const fresh = () =>
       browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -556,14 +603,41 @@ async function measureDialect(dialect, dir) {
   return out;
 }
 
-/** The start alone: its statements, with a delay or extra collections. */
-async function measureStart(dialect, dir, { delay = 0, extra = 0, label }) {
-  const { database, url } = await freshDatabase(dialect);
+/**
+ * A database for a start-only measurement, migrated, seeded and with the
+ * plugins installed, kept under its own `key` so it can be made before the
+ * build and stand beside the build's own.
+ */
+async function preparedDatabase(dialect, { key, extra = 0 }) {
+  const { database, url } = await freshDatabase(dialect, extra, key);
+  // Dropped at the end of the run too, so one made before the build is not
+  // left behind when a later step fails before its measurement drops it.
+  if (database) madeDatabases.push(database);
+  prepare(serverEnv(dialect, url, { extra }));
+  return { database, url };
+}
+
+/** Every database a start-only measurement made, dropped when the run ends. */
+const madeDatabases = [];
+
+/**
+ * The start alone: its statements, with a delay or extra collections. Served
+ * from `prepared` when given, a database made before the build, as a deploy
+ * migrates its database and then builds and starts: a database seeded after
+ * the build has changed every page that reads it, which the build's copies
+ * then no longer stand for.
+ */
+async function measureStart(
+  dialect,
+  dir,
+  { delay = 0, extra = 0, label, prepared }
+) {
+  const { database, url } =
+    prepared ?? (await preparedDatabase(dialect, { key: PORT, extra }));
   const log = path.join(dir, `${dialect}.${label}.statements.jsonl`);
   fs.rmSync(log, { force: true });
   let server;
   try {
-    prepare(serverEnv(dialect, url, { extra }));
     server = await startServer(
       serverEnv(dialect, url, { delay, extra, log, production: true })
     );
@@ -709,18 +783,49 @@ function compare(measured, pins) {
   }
   return [
     ...problems,
+    ...DIALECTS.flatMap(dialect =>
+      pageProblems(dialect, measured[dialect].page)
+    ),
     ...growthProblems(measured.growth, pins),
     ...firstByteProblems(measured.delayed),
   ];
 }
 
-/** The admin page's first byte on the delayed start, against its limit. */
+/** What is wrong with how the admin page was served, when anything is. */
+function pageProblems(dialect, page) {
+  if (page === undefined) return [];
+  const problems = [];
+  if (!page.sameBytes)
+    problems.push(
+      `${dialect} admin page: two visitors were sent different pages`
+    );
+  if (!page.keepable)
+    problems.push(`${dialect} admin page: its headers forbid keeping it`);
+  // `statements` is reported, not judged: the server's own background work
+  // (the jobs poll, a timer) can land in the window, and a page served from
+  // the build's files sends none of its own.
+  return problems;
+}
+
+/**
+ * The admin page's first byte on the delayed start: within a second of the
+ * server's own first answer to a page that needs nothing (the admin page adds
+ * no wait of its own), and never past the absolute limit, which a start that
+ * holds the page would cross.
+ */
 function firstByteProblems(delayed) {
-  if (delayed === undefined || delayed.firstByteMs <= FIRST_BYTE_LIMIT_MS)
-    return [];
-  return [
-    `admin page first byte with ${DELAY_MS} ms per round trip: ${delayed.firstByteMs} ms, above its limit of ${FIRST_BYTE_LIMIT_MS} ms`,
-  ];
+  if (delayed === undefined) return [];
+  const problems = [];
+  const overServer = delayed.firstByteMs - delayed.anyPageFirstByteMs;
+  if (overServer > FIRST_BYTE_OVER_SERVER_MS)
+    problems.push(
+      `admin page first byte with ${DELAY_MS} ms per round trip: ${delayed.firstByteMs} ms, ${overServer} ms after the server's first answer to any page (limit ${FIRST_BYTE_OVER_SERVER_MS} ms)`
+    );
+  if (delayed.firstByteMs > FIRST_BYTE_LIMIT_MS)
+    problems.push(
+      `admin page first byte with ${DELAY_MS} ms per round trip: ${delayed.firstByteMs} ms, above its limit of ${FIRST_BYTE_LIMIT_MS} ms`
+    );
+  return problems;
 }
 
 async function main() {
@@ -731,6 +836,19 @@ async function main() {
   }
   const dir = path.join(ROOT, "e2e", ".playwright", "admin-speed");
   fs.mkdirSync(dir, { recursive: true });
+  // The start-only measurements' databases are made before the build when
+  // there is one, so the build's copies of the pages stand for them.
+  const growth = DIALECTS.includes("postgresql") && !flag("no-growth");
+  const prepared = {};
+  if (growth && flag("build")) {
+    prepared.delay = await preparedDatabase("postgresql", {
+      key: PORT * 100 + 1,
+    });
+    prepared.extra = await preparedDatabase("postgresql", {
+      key: PORT * 100 + 2,
+      extra: EXTRA_COLLECTIONS,
+    });
+  }
   if (flag("build")) {
     // The build prerenders pages that read the database, so it is given a
     // seeded one, as the production browser suite seeds before it builds.
@@ -753,15 +871,17 @@ async function main() {
     measured[dialect] = await measureDialect(dialect, dir);
     console.log(JSON.stringify(measured[dialect]));
   }
-  if (DIALECTS.includes("postgresql") && !flag("no-growth")) {
+  if (growth) {
     const plain = measured.postgresql.start.statements;
     const delayed = await measureStart("postgresql", dir, {
       delay: DELAY_MS,
       label: "delay",
+      prepared: prepared.delay,
     });
     const extra = await measureStart("postgresql", dir, {
       extra: EXTRA_COLLECTIONS,
       label: "extra",
+      prepared: prepared.extra,
     });
     measured.growth = {
       [`withDelay${DELAY_MS}ms`]: delayed.statements - plain,
@@ -807,4 +927,10 @@ async function main() {
   }
 }
 
-await main();
+try {
+  await main();
+} finally {
+  // A database already dropped by its measurement is dropped again harmlessly.
+  for (const database of madeDatabases)
+    await dropServerDatabase(database).catch(() => {});
+}

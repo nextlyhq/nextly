@@ -114,5 +114,6 @@ export const withCatchUp = definePlugin({
 
 - `ctx.publicAddresses.fingerprint()` changes whenever an address template, the language list or the fallback settings do. Store it, and catch up when it differs.
 - `ctx.publicAddresses.held({ type, after, limit })` pages through one type's documents oldest first, each with every address it holds now. Pass the returned `next` as `after` for the following page.
+- `ctx.publicAddresses.defaultLanguage()` is the language an address is held in where a read names none: the site's default language as it is now, one chosen in Settings included, or `"en"` on a site with no languages. Look up a page read without a language under it, rather than under the `localization` block in code.
 
 Where two documents clash after a deploy, the one already holding the address keeps it.

@@ -22,12 +22,13 @@ import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
-import {
-  WORKFLOW_PERMISSION_GROUP,
-  workflowPermissionActions,
-} from "../../workflows/permissions";
 
-import { entityPermissionSpelling } from "./entity-permission-spelling";
+import {
+  builtInEntityPermissions,
+  COLLECTION_SEEDED_ACTIONS,
+  SINGLE_SEEDED_ACTIONS,
+  workflowEntityPermissions,
+} from "./entity-permission-spelling";
 import { PermissionService } from "./permission-service";
 import { RolePermissionService } from "./role-permission-service";
 
@@ -439,29 +440,6 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
  * ```
  */
 /**
- * The actions the built-in seeder creates for every collection and every single.
- *
- * Stated once because two things read them: the seeding loops below, and the check that decides
- * whether a plugin may claim a permission. A second copy is how the reservation drifted from what
- * is actually seeded in the first place.
- */
-const COLLECTION_SEEDED_ACTIONS = [
-  "create",
-  "read",
-  "update",
-  "delete",
-  "publish",
-  "unpublish",
-] as const;
-
-const SINGLE_SEEDED_ACTIONS = [
-  "read",
-  "update",
-  "publish",
-  "unpublish",
-] as const;
-
-/**
  * Does this permission still answer for anything?
  *
  * Two ways to be rubbish, and they need different evidence.
@@ -700,16 +678,13 @@ export class PermissionSeedService extends BaseService {
     collectionSlug: string
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
-    const actions = COLLECTION_SEEDED_ACTIONS;
 
-    for (const action of actions) {
-      // Spelled by the one function a rename also spells them with, so a
-      // renamed entity's permissions read as if it had been created so.
-      const { name, slug, description } = entityPermissionSpelling(
-        action,
-        collectionSlug
-      );
-
+    // The permissions every collection gets, as a migration snapshot records them, each spelled by
+    // the one function a rename also spells them with.
+    for (const { action, name, slug, description } of builtInEntityPermissions(
+      "collection",
+      collectionSlug
+    )) {
       result.total++;
       try {
         const ensureResult = await this.permissionService.ensurePermission(
@@ -753,16 +728,13 @@ export class PermissionSeedService extends BaseService {
     singleSlug: string
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
-    const actions = SINGLE_SEEDED_ACTIONS;
 
-    for (const action of actions) {
-      // Spelled by the one function a rename also spells them with, so a
-      // renamed entity's permissions read as if it had been created so.
-      const { name, slug, description } = entityPermissionSpelling(
-        action,
-        singleSlug
-      );
-
+    // The permissions every Single gets, as a migration snapshot records them, each spelled by the
+    // one function a rename also spells them with.
+    for (const { action, name, slug, description } of builtInEntityPermissions(
+      "single",
+      singleSlug
+    )) {
       result.total++;
       try {
         const ensureResult = await this.permissionService.ensurePermission(
@@ -811,7 +783,14 @@ export class PermissionSeedService extends BaseService {
     if (!attached) return;
     // Held as the class itself, so the call below is read as the service's own member.
     const permissions: PermissionService = this.permissionService;
-    for (const action of workflowPermissionActions(attached.workflow)) {
+    // The workflow's permissions as a migration snapshot records them (`workflowEntityPermissions`).
+    for (const {
+      action,
+      name,
+      slug,
+      description,
+      group,
+    } of workflowEntityPermissions(entitySlug, attached.workflow)) {
       result.total++;
       try {
         // A row already there keeps its owner and group: an app's, a plugin's, or an admin's own
@@ -822,10 +801,6 @@ export class PermissionSeedService extends BaseService {
           result.skipped++;
           continue;
         }
-        const { name, slug, description } = entityPermissionSpelling(
-          action,
-          entitySlug
-        );
         // Stored under the workflow group, which is how the presets tell it is a workflow's.
         const ensured = await permissions.ensurePermission(
           action,
@@ -833,7 +808,7 @@ export class PermissionSeedService extends BaseService {
           name,
           slug,
           description,
-          { group: WORKFLOW_PERMISSION_GROUP }
+          { group: group ?? undefined }
         );
         if (ensured.created) {
           result.created++;

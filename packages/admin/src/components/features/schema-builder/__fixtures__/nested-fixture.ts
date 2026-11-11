@@ -15,6 +15,10 @@
  * Every test of the outline, and of what later builds on it (moves, focus,
  * the tree's keys, timing), reads this one fixture.
  */
+import {
+  blockCatalogKey,
+  type BlockCatalog,
+} from "@admin/lib/builder/outline/block-rows";
 import type { LoadedFieldGroup } from "@admin/lib/builder/outline/outline-model";
 
 import type { BuilderField } from "../types";
@@ -164,6 +168,7 @@ export function nestedFixtureFieldGroups(): Map<string, LoadedFieldGroup> {
       {
         slug: "seo",
         label: "SEO",
+        placedBy: 3,
         fields: [
           { name: "meta_title", label: "Meta title", type: "text" },
           // The field group uses another field group.
@@ -181,7 +186,37 @@ export function nestedFixtureFieldGroups(): Map<string, LoadedFieldGroup> {
       {
         slug: "social",
         label: "Social",
+        placedBy: 1,
         fields: [{ name: "handle", label: "Handle", type: "text" }],
+      },
+    ],
+  ]);
+}
+
+/**
+ * The blocks the fixture's blocks field ("core/heading", "acme/hero") accepts,
+ * as the block listing answers: the heading with two props; no block named
+ * "acme/hero" is registered.
+ */
+export function nestedFixtureBlockCatalogs(): Map<string, BlockCatalog> {
+  return new Map([
+    [
+      blockCatalogKey(["core/heading", "acme/hero"]),
+      {
+        state: "loaded",
+        items: [
+          {
+            name: "core/heading",
+            label: "Heading",
+            description: "A section heading.",
+            source: "@nextlyhq/plugin-page-builder",
+            matchedBy: ["core/heading"],
+            props: [
+              { name: "text", label: "Text", type: "string" },
+              { name: "level", label: "Level", type: "select" },
+            ],
+          },
+        ],
       },
     ],
   ]);
