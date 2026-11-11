@@ -24,6 +24,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
+import { idText } from "../import/records";
 import { mayChangePageSeo } from "../permissions";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
@@ -247,6 +248,34 @@ export function seoWith(
   return { ...(isRecord(current) ? current : {}), ...values };
 }
 
+/** A stored value as it compares with one sent: an image by its id. */
+function storedForm(value: unknown): string {
+  const id = idText(isRecord(value) ? value.id : value);
+  return id ?? JSON.stringify(value ?? null);
+}
+
+/**
+ * Refuse a save that kept the page but not every value sent into its `seo`
+ * group: a field rule inside the group (a site's own `fields`) leaves out a
+ * value the person may not set, and the save would otherwise answer as if it
+ * were made. Thrown on the save's transaction, so nothing of it is kept.
+ */
+export function refuseDroppedValues(
+  saved: unknown,
+  values: Readonly<Record<string, unknown>>,
+  label: string
+): void {
+  const seo =
+    isRecord(saved) && isRecord(saved[SEO_GROUP]) ? saved[SEO_GROUP] : {};
+  const dropped = Object.keys(values).filter(
+    name => storedForm(seo[name]) !== storedForm(values[name])
+  );
+  if (dropped.length === 0) return;
+  throw NextlyError.forbidden({
+    logContext: { reason: "seo-value-not-yours", page: label, fields: dropped },
+  });
+}
+
 /**
  * A refusal from saving one page, said about that page: a version
  * conflict names it, and anything else is passed on as it is.
@@ -355,6 +384,7 @@ async function save(
           },
           as
         );
+        refuseDroppedValues(saved, values, pageLabel(ctx, type, entry));
         if (typeof saved._rev === "string") revs[change.id] = saved._rev;
       } catch (error) {
         throw refusalAbout(error, pageLabel(ctx, type, entry));

@@ -382,3 +382,70 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+describe.each(getConfiguredTestDialects())(
+  "bulk edit where a field of the site's own SEO group refuses a change (%s)",
+  dialect => {
+    it("saves nothing, rather than answer for a title the field kept out", async () => {
+      const t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        plugins: [
+          seoPlugin({
+            collections: ["posts"],
+            sitemap: false,
+            // The title may never be changed; the description may.
+            fields: [
+              text({ name: "metaTitle", access: { update: () => false } }),
+              textarea({ name: "metaDescription" }),
+            ],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+      current = t;
+      const owner = await t.nextly.users.create({
+        data: {
+          email: "owner@example.com",
+          password: "Password123!",
+          name: "Owner",
+          isActive: true,
+        },
+      });
+      const keys = t.getService("apiKeyService") as unknown as {
+        createApiKey(
+          userId: string,
+          input: { name: string; tokenType: string; expiresIn: string }
+        ): Promise<{ key: string }>;
+      };
+      const { key } = await keys.createApiKey(String(owner.item.id), {
+        name: "owner key",
+        tokenType: "full-access",
+        expiresIn: "unlimited",
+      });
+      await post(t, { title: "Surfer", slug: "surfer" });
+      await post(t, { title: "Jasper", slug: "jasper" });
+      const read = (await (
+        await call(key, "GET", "/bulk/rows?type=posts")
+      ).json()) as BulkRowsBody;
+      const surfer = read.rows.find(row => row.label === "Surfer");
+      const jasper = read.rows.find(row => row.label === "Jasper");
+      const before = await seoBySlug(t);
+      const response = await call(key, "POST", "/bulk/save", {
+        type: "posts",
+        changes: [
+          { id: surfer?.id, rev: surfer?.rev, description: "Allowed" },
+          { id: jasper?.id, rev: jasper?.rev, title: "Not allowed" },
+        ],
+      });
+      expect(response.status).toBe(403);
+      expect(await seoBySlug(t)).toEqual(before);
+    });
+  }
+);

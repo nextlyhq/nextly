@@ -41,6 +41,7 @@ import {
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { typedCanonical } from "../../canonical";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../../redirects/collection";
 import { MANAGE_SEO_PERMISSION } from "../../permissions";
@@ -85,11 +86,18 @@ const PAGE_SEO = defineFieldGroup({
   ],
 });
 
-/** The slug of the post whose save is made to fail, while one is. */
-let failing: string | undefined;
+/** Which save of an import, counted from one, is made to fail, while one is. */
+let failing: number | undefined;
 
-/** Whether adding a redirect is made to fail. */
+/**
+ * Whether adding a redirect is made to fail, once a page has been written in
+ * the same import: so the dry run's own trial of the redirect, made before any
+ * page is written, passes, and the apply's fails after its pages.
+ */
 let failingRedirect = false;
+
+/** The posts an import's saves reached, in order, while one is being watched. */
+let attempted: string[] | undefined;
 
 /** Fails adding a redirect while `failingRedirect` is set. */
 const redirectFailure: PluginDefinition = definePlugin({
@@ -98,7 +106,9 @@ const redirectFailure: PluginDefinition = definePlugin({
   nextly: ">=0.0.0",
   init(ctx) {
     ctx.hooks.on("beforeCreate", REDIRECTS_SLUG, () => {
-      if (failingRedirect) throw new Error("this redirect fails");
+      if (failingRedirect && (attempted?.length ?? 0) > 0) {
+        throw new Error("this redirect fails");
+      }
     });
   },
 });
@@ -109,6 +119,7 @@ const stored: string[] = [];
 afterEach(async () => {
   failing = undefined;
   failingRedirect = false;
+  attempted = undefined;
   for (const id of stored.splice(0)) {
     await current?.nextly.media.delete({ id });
   }
@@ -188,7 +199,8 @@ async function boot(
             ({ data, originalData }) => {
               const slug = (originalData as { slug?: unknown } | undefined)
                 ?.slug;
-              if (failing !== undefined && slug === failing) {
+              if (typeof slug === "string") attempted?.push(slug);
+              if (failing !== undefined && attempted?.length === failing) {
                 throw new Error("this save fails");
               }
               return data;
@@ -532,6 +544,12 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       slug: "edition",
       pageSeo: { canonicalUrl: "/edition?edition=original" },
     });
+    // No address a page could name: left out.
+    await page(t, {
+      title: "Broken",
+      slug: "broken",
+      pageSeo: { canonicalUrl: "javascript:alert(1)" },
+    });
     const source: ImportSource = {
       kind: "group",
       field: "pageSeo",
@@ -544,7 +562,13 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       },
     };
     const dry = await dryRun(staff.importer, source);
-    expect(dry).toMatchObject({ checked: 4, pages: 3, same: 1 });
+    expect(dry).toMatchObject({ checked: 5, pages: 3, same: 1 });
+    expect(dry.warnings.join(" ")).toContain(
+      "1 official address (canonical) is on another site"
+    );
+    expect(dry.warnings.join(" ")).toContain(
+      "1 official address (canonical) isn't an address a page can name"
+    );
 
     const applied = await apply(staff.importer, source, dry.plan);
     expect(applied.status, await applied.clone().text()).toBe(200);
@@ -556,9 +580,18 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       noindex: true,
     });
     expect(after.about?.canonical ?? "").toBe("");
-    expect(after.elsewhere?.canonical).toBe(
-      "https://original.example/elsewhere"
-    );
+    expect(after.elsewhere).toMatchObject({
+      canonical: "https://original.example/elsewhere",
+      canonicalElsewhere: true,
+    });
+    // The page's head uses it, by the rule the head reads a typed one with.
+    expect(
+      typedCanonical(String(after.elsewhere?.canonical), {
+        productionAddresses: ["https://nextlyhq.com"],
+        elsewhere: after.elsewhere?.canonicalElsewhere === true,
+      })
+    ).toBe("https://original.example/elsewhere");
+    expect(after.broken?.canonical ?? "").toBe("");
     expect(after.edition?.canonical).toBe("/edition?edition=original");
   });
 
@@ -755,8 +788,15 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
   it("dry-runs and applies a Payload export", async () => {
     const { t, staff } = await boot(dialect);
     await page(t, { title: "Pricing", slug: "pricing" });
+    await page(t, { title: "Café", slug: "cafe" });
     const json = JSON.stringify({
       docs: [
+        // Matched by its address alone, written encoded, as an export may.
+        {
+          id: "65f2",
+          url: "https://old.example/caf%65/",
+          meta: { description: "Coffee, and where to find it." },
+        },
         {
           id: "65f0",
           title: "Pricing",
@@ -775,10 +815,13 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       text: json,
     };
     const dry = await dryRun(staff.importer, source);
-    expect(dry).toMatchObject({ checked: 1, pages: 1 });
+    expect(dry).toMatchObject({ checked: 2, pages: 2 });
     expect(dry.warnings.join(" ")).toContain("named only by Payload's id");
     const applied = await apply(staff.importer, source, dry.plan);
     expect(applied.status, await applied.clone().text()).toBe(200);
+    expect((await seoBySlug(t, "pages")).cafe).toMatchObject({
+      metaDescription: "Coffee, and where to find it.",
+    });
     expect((await seoBySlug(t, "pages")).pricing).toMatchObject({
       metaTitle: "Pricing that grows with you",
       metaDescription: "Plans for every team.",
@@ -807,10 +850,14 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     const before = await seoBySlug(t, "posts");
 
     // The second page written refuses its save; the first was already written.
-    failing = "second";
+    failing = 2;
+    attempted = [];
     const applied = await apply(staff.importer, source, dry.plan);
     expect(applied.status).toBeGreaterThanOrEqual(400);
+    // One page was written before the second refused its save.
+    expect(attempted).toHaveLength(2);
     failing = undefined;
+    attempted = undefined;
     expect(await seoBySlug(t, "posts")).toEqual(before);
 
     // A file whose redirect is added after its pages are written, and is
@@ -829,8 +876,12 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(fileDry).toMatchObject({ pages: 1, redirects: 1 });
     const beforeFile = await seoBySlug(t, "posts");
     failingRedirect = true;
+    attempted = [];
     const refused = await apply(staff.importer, fileSource, fileDry.plan);
+    // The page was written, and then the redirect after it was refused.
+    expect(attempted).toEqual(["first"]);
     failingRedirect = false;
+    attempted = undefined;
     expect(refused.status).toBeGreaterThanOrEqual(400);
     expect(await seoBySlug(t, "posts")).toEqual(beforeFile);
     expect(await redirectCount(t)).toBe(0);

@@ -63,22 +63,37 @@ function elementText(inner: string): string {
 
 /** The text of the first `<tag>` in `xml`, or none. */
 function first(xml: string, tag: string): string | undefined {
-  const open = new RegExp(`<${tag}(?:\\s[^>]*)?>`, "i");
-  const found = open.exec(xml);
-  if (found === null) return undefined;
-  const from = found.index + found[0].length;
-  const close = xml.indexOf(`</${tag}>`, from);
-  if (close === -1) return undefined;
-  return elementText(xml.slice(from, close));
+  const [found] = blocks(xml, tag, 1);
+  return found === undefined ? undefined : elementText(found);
 }
 
-/** Every block between `<tag>` and `</tag>` in `xml`. */
-function blocks(xml: string, tag: string): string[] {
+/**
+ * `xml` with the inside of every CDATA section blanked, at the same length:
+ * where its tags are, so a post's own content, which may hold text such as
+ * `</item>`, never ends or starts an element of the export.
+ */
+function structureOf(xml: string): string {
+  return xml.replace(
+    /<!\[CDATA\[[\s\S]*?\]\]>/g,
+    section => `<![CDATA[${" ".repeat(section.length - 12)}]]>`
+  );
+}
+
+/**
+ * The blocks between `<tag>` and `</tag>` in `xml`, at most `limit`: found
+ * in its structure, outside every CDATA section, and read from `xml` itself.
+ */
+function blocks(xml: string, tag: string, limit = Infinity): string[] {
+  const structure = structureOf(xml);
   const found: string[] = [];
   const open = new RegExp(`<${tag}(?:\\s[^>]*)?>`, "gi");
-  for (let match = open.exec(xml); match !== null; match = open.exec(xml)) {
+  for (
+    let match = open.exec(structure);
+    match !== null && found.length < limit;
+    match = open.exec(structure)
+  ) {
     const from = match.index + match[0].length;
-    const close = xml.indexOf(`</${tag}>`, from);
+    const close = structure.indexOf(`</${tag}>`, from);
     if (close === -1) break;
     found.push(xml.slice(from, close));
     open.lastIndex = close;

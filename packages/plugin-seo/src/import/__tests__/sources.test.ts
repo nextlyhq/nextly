@@ -219,3 +219,15 @@ describe("where a group's field names say values go", () => {
     ).toEqual(["title", "description", "image", "canonical", "hidden"]);
   });
 });
+
+describe("a WordPress export whose content holds markup", () => {
+  it("reads a post's values past an end tag written in its content", () => {
+    const parsed = readYoast(
+      wxr(`<item><title>Markup</title><wp:post_type>post</wp:post_type>
+        <content:encoded><![CDATA[<p>An example: </item><item><title>Fake</title></p>]]></content:encoded>
+        <wp:postmeta><wp:meta_key>_yoast_wpseo_metadesc</wp:meta_key><wp:meta_value><![CDATA[Kept]]></wp:meta_value></wp:postmeta></item>`)
+    );
+    expect(parsed.records.map(record => record.label)).toEqual(["Markup"]);
+    expect(parsed.records[0]?.values).toEqual({ description: "Kept" });
+  });
+});

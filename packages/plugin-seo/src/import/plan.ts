@@ -33,8 +33,13 @@ import {
   typeNamesOf,
   type ReadPage,
 } from "../bulk/pages";
-import { refusalAbout, seoWith, writablePages } from "../bulk/route";
-import { productionAddressesOf } from "../canonical";
+import {
+  refusalAbout,
+  refuseDroppedValues,
+  seoWith,
+  writablePages,
+} from "../bulk/route";
+import { productionAddressesOf, typedCanonical } from "../canonical";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
 import { putRedirect } from "../redirects/store";
@@ -57,6 +62,7 @@ import {
   count,
   fillTemplate,
   idText,
+  pathOfAddress,
   textValue,
   type ImageRef,
   type ImportedRecord,
@@ -90,6 +96,9 @@ const STORED: Readonly<
   canonical: "canonical",
   hidden: "noindex",
 };
+
+/** Where the group keeps that a page first appeared on another site. */
+const CANONICAL_ELSEWHERE = "canonicalElsewhere";
 
 /** The text places, in the order a page's values are decided. */
 const TEXT_PLACES = [
@@ -232,8 +241,11 @@ function matcher(pages: readonly ReadPage[]) {
   const bySlug = new Map<string, ReadPage[]>();
   for (const page of pages) {
     byKey.set(`${page.type}|${page.id}`, page);
-    if (page.path !== undefined) {
-      byPath.set(page.path, [...(byPath.get(page.path) ?? []), page]);
+    // Read as a file's address is, decoded and without a trailing slash,
+    // so `/blog/caf%C3%A9` here meets `/blog/café/` there.
+    const path = pathOfAddress(page.path);
+    if (path !== undefined) {
+      byPath.set(path, [...(byPath.get(path) ?? []), page]);
     }
     if (page.slug !== undefined) {
       bySlug.set(page.slug, [...(bySlug.get(page.slug) ?? []), page]);
@@ -270,6 +282,43 @@ function fileNameOf(url: string): string | undefined {
  * The media library's id for each image address: the file of the same
  * name, looked up once an address.
  */
+/** How many media items one page of a search reads. */
+const MEDIA_PAGE = 100;
+
+/** Whether a media item is the file named `name`. */
+function isFile(file: unknown, name: string): boolean {
+  return (
+    isRecord(file) &&
+    (file.filename === name ||
+      file.originalFilename === name ||
+      (typeof file.url === "string" && file.url.endsWith(`/${name}`)))
+  );
+}
+
+/**
+ * The media library's id for the file named `name`: its search for the
+ * name's stem, read page by page until the file is found or every match has
+ * been read, since the search also matches other text and newer files first.
+ */
+export async function mediaIdOf(
+  ctx: PluginContext,
+  name: string
+): Promise<string | undefined> {
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  for (let page = 1; ; page++) {
+    const { data } = await ctx.services.media.listMedia(
+      { search: stem, limit: MEDIA_PAGE, page },
+      {}
+    );
+    const items = data as unknown[];
+    const same = items.find(file => isFile(file, name));
+    if (same !== undefined) return isRecord(same) ? idText(same.id) : undefined;
+    if (items.length < MEDIA_PAGE) return undefined;
+  }
+}
+
+/** The media library's id for each image address: the file of the same name. */
 async function mediaIds(
   ctx: PluginContext,
   urls: readonly string[]
@@ -277,21 +326,7 @@ async function mediaIds(
   const found = new Map<string, string>();
   for (const url of new Set(urls)) {
     const name = fileNameOf(url);
-    if (name === undefined) continue;
-    const dot = name.lastIndexOf(".");
-    const stem = dot > 0 ? name.slice(0, dot) : name;
-    const { data } = await ctx.services.media.listMedia(
-      { search: stem, limit: 20, page: 1 },
-      {}
-    );
-    const same = (data as unknown[]).find(
-      file =>
-        isRecord(file) &&
-        (file.filename === name ||
-          file.originalFilename === name ||
-          (typeof file.url === "string" && file.url.endsWith(`/${name}`)))
-    );
-    const id = isRecord(same) ? idText(same.id) : undefined;
+    const id = name === undefined ? undefined : await mediaIdOf(ctx, name);
     if (id !== undefined) found.set(url, id);
   }
   return found;
@@ -363,6 +398,10 @@ interface Tally {
   kept: number;
   unfilled: number;
   missingImages: number;
+  /** Canonicals on another site, whose pages are marked as first there. */
+  elsewhere: number;
+  /** Canonicals that are no address a page could name. */
+  unusableCanonicals: number;
 }
 
 /** One page's writes, and the places they fill. */
@@ -422,8 +461,29 @@ function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
     at.tally.same++;
     return;
   }
+  if (place === "canonical" && !placeCanonical(at, value)) return;
   at.decision.writes[STORED[place]] = value;
   at.decision.places.push(place);
+}
+
+/**
+ * Whether an imported canonical can stand, as the page's head reads it
+ * (`typedCanonical`): one on another site does where the page is marked as
+ * having first appeared there, which the source's own canonical says it
+ * did, so the mark is written beside it; one that is no address is left out.
+ */
+function placeCanonical(at: Deciding, value: string): boolean {
+  const site = { productionAddresses: at.origins };
+  if (typedCanonical(value, { ...site, elsewhere: false }) !== undefined) {
+    return true;
+  }
+  if (typedCanonical(value, { ...site, elsewhere: true }) === undefined) {
+    at.tally.unusableCanonicals++;
+    return false;
+  }
+  at.decision.writes[CANONICAL_ELSEWHERE] = true;
+  at.tally.elsewhere++;
+  return true;
 }
 
 /** The id an image already chosen holds, as text, or none. */
@@ -694,6 +754,16 @@ function warningsOf(skipped: Skipped, tally: Tally): string[] {
         `${count(n, "share image")} ${either(n, "isn't", "aren't")} in the media library, so ${either(n, "it is", "they are")} left out. Upload ${either(n, "it", "them")} first to bring ${either(n, "it", "them")} across.`,
     ],
     [
+      tally.elsewhere,
+      n =>
+        `${count(n, "official address", "official addresses")} (canonical) ${either(n, "is", "are")} on another site, so ${either(n, "its page is", "those pages are")} marked as first appearing there, and search engines are sent to ${either(n, "it", "them")}.`,
+    ],
+    [
+      tally.unusableCanonicals,
+      n =>
+        `${count(n, "official address", "official addresses")} (canonical) ${either(n, "isn't an address", "aren't addresses")} a page can name, so ${either(n, "it is", "they are")} left out.`,
+    ],
+    [
       skipped.redirectsFromPages,
       n =>
         `${count(n, "redirect")} start at a page that is on this site, so ${either(n, "it is", "they are")} left out.`,
@@ -778,7 +848,14 @@ export async function planImport(
   const templates = templatesOf(rules);
   const origins = productionAddressesOf(rules.productionAddresses);
   const images = await mediaIds(ctx, imageUrls(parsed.records));
-  const tally: Tally = { same: 0, kept: 0, unfilled: 0, missingImages: 0 };
+  const tally: Tally = {
+    same: 0,
+    kept: 0,
+    unfilled: 0,
+    missingImages: 0,
+    elsewhere: 0,
+    unusableCanonicals: 0,
+  };
   const matched = matchRecords(
     parsed.records,
     matcher(pages),
@@ -855,7 +932,7 @@ async function writeAll(
 ): Promise<void> {
   for (const page of plan.pages) {
     try {
-      await ctx.services.collections.updateEntryInTransaction(
+      const saved = await ctx.services.collections.updateEntryInTransaction(
         transaction,
         page.type,
         page.id,
@@ -867,6 +944,7 @@ async function writeAll(
         },
         as
       );
+      refuseDroppedValues(saved, page.writes, page.label);
     } catch (error) {
       throw refusalAbout(error, page.label);
     }
