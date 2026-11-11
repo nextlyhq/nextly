@@ -135,11 +135,24 @@ const EMPTY = defineConfig({
   db: { migrationsDir: "./migrations" },
 });
 
+/** A config declaring no entity and only app permissions: `actions` of its own resource. */
+function permissionsOnly(actions: readonly string[]): unknown {
+  return defineConfig({
+    collections: [],
+    permissions: actions.map(action => ({ action, resource: "fr-reports" })),
+    db: { migrationsDir: "./migrations" },
+  });
+}
+
 /** The bookkeeping a run leaves, as two databases can be compared by it. */
 interface Bookkeeping {
   rows: Record<string, string[]>;
   permissions: string[];
   grants: string[];
+  /** The cache tags recorded as expired, each once: what a grants change announced. */
+  expired: string[];
+  /** Whether the release that set the preset grants is recorded. */
+  presetRelease: boolean;
   record:
     | {
         point: string | null;
@@ -459,11 +472,28 @@ describe.each(getConfiguredTestDialects())(
         )
           .map(g => `${String(g.role)}:${String(g.slug)}`)
           .sort();
+        const expired = [
+          ...new Set(
+            (
+              await adapter.executeQuery<{ tag: unknown }>(
+                `SELECT ${q}tag${q} AS tag FROM ${q}${CACHE_TAG_EXPIRIES_TABLE}${q}`
+              )
+            ).map(row => String(row.tag))
+          ),
+        ].sort();
+        const presetRelease =
+          (
+            await adapter.executeQuery<{ k: unknown }>(
+              `SELECT ${q}key${q} AS k FROM ${q}nextly_meta${q} WHERE ${q}key${q} = 'preset_grants_release'`
+            )
+          ).length === 1;
         const record = await recordOf(adapter);
         return {
           rows,
+          presetRelease,
           permissions,
           grants,
+          expired,
           record:
             record === undefined
               ? undefined
@@ -487,6 +517,27 @@ describe.each(getConfiguredTestDialects())(
     }
 
     describe("a migration without the registry metadata", () => {
+      it("is never one this release writes, a project declaring no entity included", async () => {
+        const url = await scratch();
+        use(url);
+        await migrateCreate("one", permissionsOnly(["export"]));
+        await migrate(permissionsOnly(["export"]));
+        expect((await bookkeeping(url)).record).toBeDefined();
+        // Written by this release for a configuration with no collection,
+        // Single or field group: it carries the (empty) registry metadata, so
+        // it applies after the record rather than being refused.
+        await migrateCreate("two", permissionsOnly(["export", "archive"]));
+
+        const { failure } = await migrateRun(
+          permissionsOnly(["export", "archive"])
+        );
+
+        expect(failure).toBeUndefined();
+        await on(url, async adapter => {
+          expect(await live(adapter, "archive-fr-reports")).toBe(true);
+        });
+      }, 180_000);
+
       it("is refused once the record exists, with nothing changed and the file named", async () => {
         const url = await scratch();
         use(url);
@@ -550,6 +601,8 @@ describe.each(getConfiguredTestDialects())(
         // Every permission the run added is in the baseline, and only those.
         expect(after.record?.baseline?.permissions).toEqual(after.permissions);
         expect(after.permissions).toContain("read-users");
+        // The release that set the preset grants, recorded in the same commit.
+        expect(after.presetRelease).toBe(true);
         expect(said).toContain(
           "First run on this release: 0 registry rows written from the configuration (0 declared, the rest already matched), and kept with the database's registry record as its baseline. From now on the registry rows come from the migrations."
         );
@@ -748,6 +801,9 @@ describe.each(getConfiguredTestDialects())(
           expect(state.rows).toEqual({});
           expect(state.permissions).toEqual([]);
           expect(state.grants).toEqual([]);
+          // What the grants change announced commits with it, or not at all.
+          expect(state.expired).toEqual([]);
+          expect(state.presetRelease).toBe(false);
         } else {
           expect(state.record.baseline).toBeDefined();
         }
