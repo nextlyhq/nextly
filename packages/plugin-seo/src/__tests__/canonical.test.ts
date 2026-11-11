@@ -22,6 +22,10 @@ describe("a usable canonical", () => {
     "javascript:alert(1)",
     "ftp://acme.example/file",
     "//elsewhere.example/page",
+    // A backslash reads as a slash: the first leaves the site, the second
+    // is no address at all.
+    "/\\elsewhere.example/page",
+    "/\\",
     "about",
   ])("%s is none", value => {
     expect(usableCanonical(value)).toBeUndefined();

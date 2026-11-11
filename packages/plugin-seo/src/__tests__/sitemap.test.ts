@@ -426,10 +426,7 @@ describe("buildSitemapUrls", () => {
     try {
       const services = stubServices({
         posts: [
-          [
-            { slug: "a", seo: { canonical: "https://x.de/a" } },
-            { slug: "b" },
-          ],
+          [{ slug: "a", seo: { canonical: "https://x.de/a" } }, { slug: "b" }],
         ],
       });
 
@@ -442,6 +439,23 @@ describe("buildSitemapUrls", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("lists an entry at its own address where its canonical is no address", async () => {
+    // A slash then a backslash is no address, and must not stop the rest.
+    const services = stubServices({
+      posts: [[{ slug: "a", seo: { canonical: "/\\" } }, { slug: "b" }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    expect(urls.map(u => u.loc)).toEqual([
+      "https://x.com/posts/a",
+      "https://x.com/posts/b",
+    ]);
   });
 
   it("lists an entry at its own address where an off-host canonical is not confirmed", async () => {

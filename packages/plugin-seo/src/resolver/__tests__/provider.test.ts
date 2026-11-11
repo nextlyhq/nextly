@@ -66,15 +66,15 @@ function context(
     config: {},
     services: {
       // The address record: who holds each path in English, read by the
-      // address's unique key as the record stores it.
+      // rows' unique keys as the record stores them.
       ownCollections: {
         listEntries: async (
           _slug: string,
-          options: { where?: { claimKey?: { equals?: string } } }
+          options: { where?: { claimKey?: { in?: string[] } } }
         ) => {
-          const key = options.where?.claimKey?.equals;
-          const path = Object.keys(holders).find(
-            held => addressKey("en", held) === key
+          const keys = options.where?.claimKey?.in ?? [];
+          const path = Object.keys(holders).find(held =>
+            keys.includes(addressKey("en", held))
           );
           const held = path === undefined ? undefined : holders[path];
           return {

@@ -309,10 +309,11 @@ function defaultLanguageOf(ctx: PluginContext): string {
 
 /**
  * Who the record says holds the address `path` in `locale`, or in the site's
- * default language where the route named none: one row, read by the
- * address's unique key, so a page that still holds `path` in another language
- * is never taken for its holder here. None where no page holds it, as before
- * the record has caught up with a site's content.
+ * default language where the route named none: the page holding it exactly,
+ * or holding a range it falls in, read by the rows' unique keys, so a page
+ * that still holds `path` in another language is never taken for its holder
+ * here. None where no page holds it, as before the record has caught up with
+ * a site's content.
  */
 export async function addressHolders(
   ctx: PluginContext,
@@ -320,11 +321,15 @@ export async function addressHolders(
   locale: string | undefined
 ): Promise<AddressHolder[]> {
   const language = locale ?? defaultLanguageOf(ctx);
+  const keys = [
+    claimKey("address", language, path),
+    ...[path, ...pathsAbove(path)].map(at => claimKey("range", language, at)),
+  ];
   const { data } = await ctx.services.ownCollections.listEntries(
     recordSlug(ctx),
     {
-      where: { claimKey: { equals: claimKey("address", language, path) } },
-      pagination: { limit: 1, page: 1 },
+      where: { claimKey: { in: keys } },
+      pagination: { limit: keys.length, page: 1 },
       depth: 0,
     }
   );

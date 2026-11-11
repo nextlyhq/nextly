@@ -9,14 +9,19 @@ import { describe, expect, it } from "vitest";
 
 import { addressHolders } from "../participant";
 
-/** An address row as the record stores it. */
-function row(locale: string, path: string, holderId: string) {
+/** An address or range row as the record stores it. */
+function row(
+  locale: string,
+  path: string,
+  holderId: string,
+  kind: "address" | "range" = "address"
+) {
   return {
     id: `${locale}${path}`,
     claimKey: createHash("sha256")
-      .update(`address:${locale}|${path}`, "utf8")
+      .update(`${kind}:${locale}|${path}`, "utf8")
       .digest("hex"),
-    kind: "address",
+    kind,
     locale,
     path,
     holderCollection: "pages",
@@ -25,7 +30,7 @@ function row(locale: string, path: string, holderId: string) {
 }
 
 type Where = {
-  claimKey?: { equals: string };
+  claimKey?: { equals?: string; in?: string[] };
   and?: [{ kind: { equals: string } }, { path: { equals: string } }];
 };
 
@@ -43,7 +48,8 @@ function context(
           const { where } = query;
           const data = rows.filter(entry =>
             where.claimKey !== undefined
-              ? entry.claimKey === where.claimKey.equals
+              ? entry.claimKey === where.claimKey.equals ||
+                (where.claimKey.in ?? []).includes(entry.claimKey)
               : entry.kind === where.and?.[0].kind.equals &&
                 entry.path === where.and?.[1].path.equals
           );
@@ -80,5 +86,20 @@ describe("addressHolders", () => {
     expect(await addressHolders(ctx, "/about", undefined)).toEqual([
       { collection: "pages", id: "c" },
     ]);
+  });
+
+  it("names the page holding a range the address falls in", async () => {
+    // Page r holds everything under /go, so /go/a is its, not page a's.
+    const ctx = context(
+      [row("en", "/go", "r", "range"), row("en", "/other", "a")],
+      undefined
+    );
+    expect(await addressHolders(ctx, "/go/a", undefined)).toEqual([
+      { collection: "pages", id: "r" },
+    ]);
+    expect(await addressHolders(ctx, "/go", undefined)).toEqual([
+      { collection: "pages", id: "r" },
+    ]);
+    expect(await addressHolders(ctx, "/gone", undefined)).toEqual([]);
   });
 });

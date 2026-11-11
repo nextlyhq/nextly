@@ -33,8 +33,22 @@ export function usableCanonical(
 ): string | undefined {
   const typed = value?.trim();
   if (typed === undefined || typed === "") return undefined;
-  if (typed.startsWith("/") && !typed.startsWith("//")) return typed;
+  if (typed.startsWith("/")) return onTheSite(typed) ? typed : undefined;
   return originOf(typed) === undefined ? undefined : typed;
+}
+
+/**
+ * Whether a path from the root stays on the site as a URL reads it: a
+ * backslash reads as a slash there, so `/\host` names another site and `/\`
+ * no address at all.
+ */
+function onTheSite(path: string): boolean {
+  const base = "https://site.invalid";
+  try {
+    return new URL(path, base).origin === base;
+  } catch {
+    return false;
+  }
 }
 
 /**
