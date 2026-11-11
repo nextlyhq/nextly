@@ -10,7 +10,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createTestQueryClient } from "@admin/__tests__/utils";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
@@ -19,9 +19,24 @@ import { moveWithinContainer } from "@admin/lib/builder/builder-rows";
 import { copyWithNewIds } from "@admin/lib/builder/copy-field";
 import type { FieldDefinition } from "@admin/types/collection";
 
+import { BuilderPageLayout } from "../BuilderPageLayout";
+import type { BuilderConfig } from "../builder-config";
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
 import { PendingChangesControls } from "../PendingChangesControls";
 import type { BuilderField } from "../types";
+
+// The layout's exits are watched, not followed, and it reads no field groups.
+vi.mock("@admin/lib/navigation", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/lib/navigation")>()),
+  navigateTo: vi.fn(),
+}));
+vi.mock("@admin/services/fieldGroupApi", () => ({
+  fieldGroupApi: {
+    fetchComponents: vi.fn(() =>
+      Promise.resolve({ items: [], meta: { hasNext: false } })
+    ),
+  },
+}));
 
 type Entity = { slug: string; name: string; fields: FieldDefinition[] };
 
@@ -293,5 +308,112 @@ describe("pending changes controls", () => {
     expect(
       screen.queryByRole("button", { name: "Discard all changes" })
     ).toBeNull();
+  });
+});
+
+const layoutConfig: BuilderConfig = {
+  kind: "collection",
+  basicsFields: ["singularName", "slug"],
+  advancedFields: [],
+  toolbar: { previewSchemaChange: true },
+  picker: {},
+};
+
+/** The whole builder page frame, on the real hooks. */
+function LayoutHarness() {
+  const fieldBuilder = useFieldBuilder({
+    resolver: async values => ({ values, errors: {} }),
+    defaultValues: {},
+  });
+  const state = useBuilderEntityState({
+    entity,
+    builder: fieldBuilder,
+    toFields: loaded => loaded.fields,
+    toSettings: settingsOf,
+    isDirty: (a, b) => !!a && !!b && a.singularName !== b.singularName,
+    onLoad: () => {},
+    identity: loaded => loaded.slug,
+  });
+  builder = fieldBuilder;
+  if (!state.settings) return null;
+  return (
+    <BuilderPageLayout
+      config={layoutConfig}
+      builder={fieldBuilder}
+      entitySlug="posts"
+      name="Post"
+      locked={false}
+      unsavedCount={state.unsavedCount}
+      pending={state.pending}
+      savedFieldIds={state.savedFieldIds}
+      onSave={() => {}}
+      settings={state.settings}
+      onSettingsChange={state.setSettings}
+      active={{ kind: "none" }}
+      onActiveChange={() => {}}
+      onDuplicateField={() => {}}
+      onRowDragEnd={() => {}}
+      isSaving={false}
+      savingLabel="Saving"
+    />
+  );
+}
+
+const row = (name: string) => screen.getByTestId(`field-row-${name}`);
+
+describe("pending changes in the outline", () => {
+  it("the count and the row marks", () => {
+    render(<LayoutHarness />, { wrapper: Providers });
+    act(() =>
+      builder.setFields(prev => {
+        const id = field("headline").id;
+        return moveWithinContainer(moveWithinContainer(prev, id, 1), id, 1);
+      })
+    );
+    act(() =>
+      builder.handleFieldUpdate({ ...field("summary"), label: "Excerpt" })
+    );
+    act(() => builder.handleFieldDelete(field("city").id));
+    expect(countText()).toBe("3 unsaved changes");
+    expect(within(row("headline")).getByText("Moved")).toBeInTheDocument();
+    expect(within(row("summary")).getByText("Changed")).toBeInTheDocument();
+    // Deleted, and still shown where it was saved until the save.
+    expect(within(row("city")).getByText("Deleted")).toBeInTheDocument();
+    for (const unchanged of ["street", "zip", "address"]) {
+      for (const mark of ["New", "Changed", "Moved", "Deleted"]) {
+        expect(within(row(unchanged)).queryByText(mark)).toBeNull();
+      }
+    }
+    act(() => builder.handleFieldAdd("text"));
+    expect(screen.getByTestId("field-row-")).toHaveTextContent("New");
+  });
+
+  it("deleting a container with three fields inside", async () => {
+    const user = userEvent.setup();
+    render(<LayoutHarness />, { wrapper: Providers });
+    row("address").focus();
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
+
+    // A pending delete, one change, naming the fields that go with it.
+    expect(countText()).toBe("1 unsaved change");
+    expect(row("address")).toHaveTextContent("Deleted · 3 fields inside");
+    for (const inside of ["street", "city", "zip"]) {
+      expect(within(row(inside)).getByText("Deleted")).toBeInTheDocument();
+    }
+    expect(
+      screen.getByText(
+        "Deleted Address and 3 fields inside. Undo brings them back."
+      )
+    ).toBeInTheDocument();
+
+    // A deleted row offers nothing to do to it until it is back.
+    row("address").focus();
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(countText()).toBe("No unsaved changes");
+    expect(within(row("address")).queryByText(/Deleted/)).toBeNull();
   });
 });
