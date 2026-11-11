@@ -273,6 +273,24 @@ function parseTogetherParam(value: string | undefined): string[] {
 }
 
 /**
+ * A collection update as it is written: the fields it sends (a settings save sends them as the
+ * editor read them) with each earlier-shaped relationship back in its stored shape, as the schema
+ * apply writes them (`fieldsAsStored`). An update without a field list, or for a collection the
+ * registry does not hold, is passed on as sent, for the service to judge.
+ */
+async function withFieldsAsStored(
+  collectionName: string,
+  body: object
+): Promise<object> {
+  const sent = (body as { fields?: unknown }).fields;
+  if (!Array.isArray(sent)) return body;
+  const collection =
+    await getCollectionRegistryFromDI()?.getCollectionBySlug(collectionName);
+  if (!collection) return body;
+  return { ...body, fields: fieldsAsStored(sent, collection) };
+}
+
+/**
  * Version-history reads for a collection entry.
  *
  * Split out so the dispatcher registration and the auth method set in
@@ -630,7 +648,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const result = await svc.updateCollection(
         { collectionName: p.collectionName },
-        body
+        await withFieldsAsStored(p.collectionName, body)
       );
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,

@@ -643,6 +643,29 @@ describeEachDialect(
       120_000
     );
 
+    it("keeps a stored relationship and its key through a save of the collection's settings alone", async () => {
+      // The admin sends a settings-only save the fields as its editor read them, with the
+      // fields a preview found nothing to change in.
+      const t = await boot(dialect, "oneToOne", {
+        legacy: true,
+        onDelete: "cascade",
+      });
+      const key = await personKey(t);
+      const stored = await storedPersonField(t);
+
+      await builder(
+        "updateCollection",
+        { collectionName: PROFILES },
+        {
+          labels: { singular: "Profile", plural: "Profiles renamed" },
+          fields: await asTheEditorSendsIt(),
+        }
+      );
+
+      expect(await storedPersonField(t)).toEqual(stored);
+      expect(await personKey(t)).toEqual(key);
+    }, 120_000);
+
     it.skipIf(writerCannotRebuildEarlierKey)(
       "changes only a stored relationship's cardinality when Unique is turned off",
       async () => {
