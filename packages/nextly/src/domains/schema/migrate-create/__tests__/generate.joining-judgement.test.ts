@@ -72,7 +72,7 @@ async function joinAt(
 const builder = (
   moved: string[],
   narrowed: string[] = []
-): GenerateArgs["joiningJudgement"] => ({
+): NonNullable<GenerateArgs["joiningJudgement"]> => ({
   slug: "docs",
   surface: "builder",
   retries: { moved: new Set(moved), narrowed: new Set(narrowed) },
