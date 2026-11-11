@@ -79,16 +79,22 @@ function labelOf(slug: string, meta: Record<string, unknown>): string {
   );
 }
 
+/** What the person asking may read of a type: its newest entry and how many there are. */
+interface ReadableEntries {
+  newest?: Record<string, unknown>;
+  count?: number;
+}
+
 /**
- * The newest entry of `slug` the person asking may read, read as them, so
- * the collection's row and field rules decide what the preview shows; none
- * where they may read none.
+ * The newest entry of `slug` the person asking may read, and how many they
+ * may read, from one read as them, so the collection's row and field rules
+ * decide both; nothing where they may read none.
  */
-async function newestEntry(
+async function readableEntries(
   ctx: PluginRouteContext,
   slug: string
-): Promise<Record<string, unknown> | undefined> {
-  if (ctx.user === null) return undefined;
+): Promise<ReadableEntries> {
+  if (ctx.user === null) return {};
   try {
     const page = await ctx.services.collections.listEntries(
       slug,
@@ -99,32 +105,16 @@ async function newestEntry(
       },
       { as: "user", user: ctx.user }
     );
-    const first: unknown = (page as { data?: unknown[] }).data?.[0];
-    return isRecord(first) ? first : undefined;
+    const first: unknown = page.data[0];
+    const total: unknown = page.pagination.total;
+    return {
+      ...(isRecord(first) ? { newest: first } : {}),
+      ...(typeof total === "number" ? { count: total } : {}),
+    };
   } catch (error) {
-    // A reader refused the type's entries gets no preview page, not an error.
-    if (NextlyError.isCode(error, "FORBIDDEN")) return undefined;
-    throw error;
-  }
-}
-
-/**
- * How many entries of `slug` the person asking may read, counted as them;
- * nothing where they may read none.
- */
-async function entryCount(
-  ctx: PluginRouteContext,
-  slug: string
-): Promise<number | undefined> {
-  if (ctx.user === null) return undefined;
-  try {
-    return await ctx.services.collections.count(
-      slug,
-      {},
-      { as: "user", user: ctx.user }
-    );
-  } catch (error) {
-    if (NextlyError.isCode(error, "FORBIDDEN")) return undefined;
+    // A reader refused the type's entries gets no preview page and no
+    // count, not an error.
+    if (NextlyError.isCode(error, "FORBIDDEN")) return {};
     throw error;
   }
 }
@@ -151,10 +141,7 @@ async function contentTypeOf(
   const isPublic = !withoutAddress.has(slug);
   // An example only from what the reader may read of the type's entries: the
   // settings permission alone must not show them a page's title.
-  const [entry, count] = await Promise.all([
-    newestEntry(ctx, slug),
-    entryCount(ctx, slug),
-  ]);
+  const { newest: entry, count } = await readableEntries(ctx, slug);
   let example: PatternExample | undefined;
   if (entry !== undefined) {
     example = exampleOf(entry, fields);
