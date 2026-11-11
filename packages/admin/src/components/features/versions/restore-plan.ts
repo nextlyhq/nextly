@@ -16,6 +16,7 @@ import type { FieldConfig } from "nextly/config";
 
 import { sameFormValue } from "./same-form-value";
 import { formFieldsOf, snapshotToFormValues } from "./snapshot-to-form-values";
+import type { VersionChanges } from "./version-changes";
 
 /** Why a field is listed but cannot be restored. */
 export type RestoreRowDisabled = "hidden" | "read-only" | "removed";
@@ -52,6 +53,8 @@ export interface RestorePlanInput {
   canEdit: (name: string) => boolean;
   /** The translated fields, where the document is translated. */
   translatable?: ReadonlySet<string>;
+  /** The fields the comparison names as no longer in the content type. */
+  removed?: ReadonlySet<string>;
 }
 
 /** The reasons R-8 gives the person, as they read them. */
@@ -60,17 +63,6 @@ const REASONS: Record<RestoreRowDisabled, string> = {
   "read-only": "You can't edit this field",
   removed: "No longer in this content type",
 };
-
-/**
- * Keys a document carries that no one edits: its id, its timestamps, its
- * status (which a restore never touches) and the transport keys the server
- * adds, all spelled with a leading underscore.
- */
-const NOT_EDITED = new Set(["id", "createdAt", "updatedAt", "status"]);
-
-function isEditedKey(key: string): boolean {
-  return !NOT_EDITED.has(key) && !key.startsWith("_");
-}
 
 export function restorePlan(input: RestorePlanInput): RestoreRow[] {
   const withheld = new Set(input.withheld.map(path => path.split(".")[0]));
@@ -103,10 +95,12 @@ export function restorePlan(input: RestorePlanInput): RestoreRow[] {
     );
   }
 
-  // A key the version holds that the content type no longer has.
+  // A field the version holds that the content type no longer has, as the
+  // comparison names it: a key the snapshot carries that is not a field may
+  // just as well be a column the system keeps, which no one restores.
   const known = new Set(formFields.map(field => field.name));
-  for (const key of Object.keys(input.snapshot)) {
-    if (known.has(key) || !isEditedKey(key)) continue;
+  for (const key of input.removed ?? []) {
+    if (known.has(key) || !Object.hasOwn(input.snapshot, key)) continue;
     rows.push({
       name: key,
       label: key,
@@ -142,4 +136,18 @@ export function restoresInEditor(
   editorLocale: string | undefined
 ): boolean {
   return !versionLocale || !editorLocale || versionLocale === editorLocale;
+}
+
+/**
+ * The fields a comparison names as no longer in the content type: the server
+ * tells them apart from the columns it keeps, which are named "system".
+ */
+export function removedFieldsOf(
+  changes: VersionChanges | null
+): ReadonlySet<string> {
+  const removed = new Set<string>();
+  for (const [name, node] of changes?.byField ?? []) {
+    if (node.kind === "unknown" && node.reason === "removed") removed.add(name);
+  }
+  return removed;
 }

@@ -8,11 +8,14 @@
 
 /**
  * Whether two form values are the same value: structural, key order aside,
- * array order kept. An absent value and null are the same empty value, as the
- * form renders both blank.
+ * array order kept. Values the form draws blank (absent, null, an empty
+ * string, list or group) are all the same empty value.
  */
 export function sameFormValue(a: unknown, b: unknown): boolean {
   if (a === b) return true;
+  // Two values the form draws blank are the same: an empty group the version
+  // never held is no change from one the form fills with empty inputs.
+  if (isBlank(a) && isBlank(b)) return true;
   if (a == null || b == null) return a == null && b == null;
   if (typeof a !== "object" || typeof b !== "object") return false;
   if (Array.isArray(a) !== Array.isArray(b)) return false;
@@ -28,4 +31,14 @@ export function sameFormValue(a: unknown, b: unknown): boolean {
     if (!sameFormValue(left[key], right[key])) return false;
   }
   return true;
+}
+
+/** Whether the form draws a value blank: nothing in it holds a value. */
+function isBlank(value: unknown): boolean {
+  if (value === undefined || value === null || value === "") return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).every(isBlank);
+  }
+  return false;
 }

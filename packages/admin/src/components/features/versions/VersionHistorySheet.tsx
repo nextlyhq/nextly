@@ -52,6 +52,7 @@ import { useMarkVersionSeen } from "./useMarkVersionSeen";
 import { newestInLocale, predecessorOf } from "./version-pairing";
 import { VersionLabelDialog } from "./VersionLabelDialog";
 import { versionsHref } from "./versions-href";
+import { useViewedRemovedFields } from "./viewed-version-host";
 
 // How many extra history pages the panel will auto-fetch while searching for a
 // previewed version's previous same-locale version before deferring to the
@@ -240,7 +241,9 @@ export function VersionHistorySheet({
   } = list;
   const detail = useVersion({ scope, versionNo: selected, enabled: open });
 
-  const { setViewing, setRestore, editor } = useDocumentHistory();
+  const { viewing, setViewing, setRestore, editor } = useDocumentHistory();
+  // The fields the version holds that the content type no longer has.
+  const removedFields = useViewedRemovedFields(scope, viewing);
   const viewedSnapshot = detail.data?.snapshot;
   const viewedLocale = detail.data?.locale ?? null;
   const viewedLoading = detail.isLoading;
@@ -357,8 +360,9 @@ export function VersionHistorySheet({
       withheld: viewedWithheld,
       canEdit: editor.canEdit,
       ...(editor.translatable ? { translatable: editor.translatable } : {}),
+      removed: removedFields,
     });
-  }, [confirmingRestore, editor, detail.data, viewedWithheld]);
+  }, [confirmingRestore, editor, detail.data, viewedWithheld, removedFields]);
 
   /**
    * Put the chosen fields into the editor as unsaved edits. Nothing is

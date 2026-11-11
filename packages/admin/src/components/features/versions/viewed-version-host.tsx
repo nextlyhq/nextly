@@ -42,6 +42,7 @@ import {
   type TakeoverType,
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
+import type { VersionScope } from "@admin/services/versionApi";
 
 import {
   ChangesLayoutProvider,
@@ -57,7 +58,7 @@ import {
   type ViewedVersion,
 } from "./document-history-context";
 import { restoreIntoEditor } from "./restore-into-editor";
-import { restorePlan, restoresInEditor } from "./restore-plan";
+import { removedFieldsOf, restorePlan, restoresInEditor } from "./restore-plan";
 import { snapshotToFormValues } from "./snapshot-to-form-values";
 import { useChangeNavigation } from "./useChangeNavigation";
 import {
@@ -446,6 +447,30 @@ function baselineOf(viewing: ViewedVersion): number | null {
 }
 
 /**
+ * The fields the version on screen holds that the content type no longer has,
+ * as the comparison the version view draws names them: the history's restore
+ * lists them disabled. Read from the same comparison, so it is fetched once.
+ */
+export function useViewedRemovedFields(
+  scope: VersionScope,
+  viewing: ViewedVersion | null
+): ReadonlySet<string> {
+  const from = viewing ? baselineOf(viewing) : null;
+  const to = viewing ? viewing.versionNo : null;
+  const diff = useVersionDiff({
+    scope,
+    from,
+    to,
+    enabled: from !== null && to !== null,
+  });
+  const data = to === null ? undefined : diffForPair(diff.data, from, to);
+  return useMemo(
+    () => removedFieldsOf(data ? versionChangesOf(data) : null),
+    [data]
+  );
+}
+
+/**
  * What the version on screen changed against the one it is compared with,
  * read from the same comparison the comparison page draws.
  */
@@ -581,7 +606,8 @@ function VersionContent({
 function useFieldRestore(
   viewing: ViewedVersion,
   editor: EditorRestoreSurface | undefined,
-  restore: RestoreAffordance | null
+  restore: RestoreAffordance | null,
+  changes: VersionChanges | null
 ): VersionFieldRestore | undefined {
   const offered = Boolean(
     editor &&
@@ -602,8 +628,9 @@ function useFieldRestore(
       withheld: viewing.withheld,
       canEdit: editor.canEdit,
       ...(editor.translatable ? { translatable: editor.translatable } : {}),
+      removed: removedFieldsOf(changes),
     });
-  }, [offered, editor, viewing]);
+  }, [offered, editor, viewing, changes]);
   return useMemo(() => {
     if (!rows || !editor) return undefined;
     const byName = new Map(rows.map(row => [row.name, row]));
@@ -641,8 +668,8 @@ function ViewedVersionFrame({
 }) {
   const { restore, editor } = useDocumentHistory();
   const actions = useVersionActions(actionsDisabled);
-  const restoreField = useFieldRestore(viewing, editor, restore);
   const { changes, state } = useViewedChanges(viewing);
+  const restoreField = useFieldRestore(viewing, editor, restore, changes);
   const layout = useMemo(() => layoutNames(fields), [fields]);
   const order = useMemo(
     () => (changes ? changeOrder(changes, layout) : []),

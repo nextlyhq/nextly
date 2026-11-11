@@ -8,7 +8,9 @@
 import type { FieldConfig } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
+import type { VersionChanges } from "../version-changes";
 import {
+  removedFieldsOf,
   restorePlan,
   restoresInEditor,
   type RestorePlanInput,
@@ -42,6 +44,21 @@ describe("restorePlan", () => {
     expect(names(rows)).toEqual(["title", "views"]);
     expect(rows.every(row => row.chosen && !row.disabled)).toBe(true);
     expect(rows[0]).toMatchObject({ label: "Title", replacesUnsaved: false });
+  });
+
+  it("does not list an empty group the version never held", () => {
+    const rows = restorePlan(
+      input({
+        snapshot: { title: "New", views: 2, tags: null },
+        current: {
+          title: "New",
+          views: 2,
+          tags: { metaTitle: "", keywords: [] },
+        },
+      })
+    );
+
+    expect(rows).toEqual([]);
   });
 
   it("compares structured values by content, not by reference", () => {
@@ -87,9 +104,12 @@ describe("restorePlan", () => {
     });
   });
 
-  it("disables a field that is no longer in the content type", () => {
+  it("disables a field the comparison names as no longer in the content type", () => {
     const rows = restorePlan(
-      input({ snapshot: { title: "New", views: 2, subtitle: "Gone" } })
+      input({
+        snapshot: { title: "New", views: 2, subtitle: "Gone" },
+        removed: new Set(["subtitle"]),
+      })
     );
 
     expect(rows).toEqual([
@@ -102,7 +122,7 @@ describe("restorePlan", () => {
     ]);
   });
 
-  it("leaves out the keys a document carries but no one edits", () => {
+  it("leaves out a key the comparison does not name as removed, such as a system column", () => {
     const rows = restorePlan(
       input({
         snapshot: {
@@ -113,6 +133,7 @@ describe("restorePlan", () => {
           updatedAt: "then",
           status: "published",
           _rev: "3",
+          firstPublishedAt: "then",
         },
       })
     );
@@ -154,5 +175,20 @@ describe("restoresInEditor", () => {
   it("restores a version that holds no language, or into an untranslated editor", () => {
     expect(restoresInEditor(null, "en")).toBe(true);
     expect(restoresInEditor("es", undefined)).toBe(true);
+  });
+});
+
+describe("removedFieldsOf", () => {
+  it("names the fields the comparison marks as no longer in the content type", () => {
+    const changes = {
+      byField: new Map([
+        ["subtitle", { kind: "unknown", reason: "removed", name: "subtitle" }],
+        ["firstPublishedAt", { kind: "unknown", reason: "system", name: "x" }],
+        ["title", { kind: "text", name: "title" }],
+      ]),
+    } as unknown as VersionChanges;
+
+    expect([...removedFieldsOf(changes)]).toEqual(["subtitle"]);
+    expect(removedFieldsOf(null).size).toBe(0);
   });
 });
