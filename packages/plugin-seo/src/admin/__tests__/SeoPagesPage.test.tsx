@@ -68,6 +68,22 @@ const ITEMS: SiteAddress[] = [
     canonical: "https://acme.example/contact",
     seo: { typed: { hidden: false }, automatic: {}, siteName: "Acme" },
   },
+  {
+    path: "/about",
+    name: "About",
+    source: "built",
+    from: "app/about/page.tsx",
+    standing: "listed",
+    canonical: "https://acme.example/about",
+    seo: {
+      typed: { hidden: false, image: "m1" },
+      automatic: {
+        image: { url: "https://cdn.example/route.png", from: "code" },
+      },
+      image: { url: "https://cdn.example/own.png", from: "page" },
+      siteName: "Acme",
+    },
+  },
 ];
 
 /** Every body a save sent, in order. */
@@ -107,7 +123,7 @@ describe("the list", () => {
     expect(screen.getByText("not connected").textContent).toBe(
       "1 not connected"
     );
-    expect(rows()).toHaveLength(3);
+    expect(rows()).toHaveLength(4);
 
     fireEvent.click(screen.getByRole("button", { name: "Not connected" }));
     expect(rows()).toHaveLength(1);
@@ -179,5 +195,24 @@ describe("the panel of a page built in code", () => {
     expect(within(panel).getByText("Hidden from search")).toBeTruthy();
     fireEvent.keyDown(panel, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("the share image of a page built in code", () => {
+  it("falls back to the image the page gets automatically once its own is removed", () => {
+    render(<SeoPagesPage />);
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit SEO" })[2]);
+    const panel = screen.getByRole("dialog", { name: "SEO for /about" });
+    fireEvent.click(within(panel).getByRole("tab", { name: "When shared" }));
+    fireEvent.click(within(panel).getByRole("button", { name: /Advanced/ }));
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Remove" }));
+
+    expect(panel.querySelector(".nx-seo-card img")?.getAttribute("src")).toBe(
+      "https://cdn.example/route.png"
+    );
+    expect(
+      within(panel).getByText("Uses the share image the route's code sets.")
+    ).toBeTruthy();
   });
 });

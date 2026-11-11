@@ -69,14 +69,22 @@ export interface PreviewImage {
   url: string;
   width?: number;
   height?: number;
-  /** Chosen for this address, rather than the site's default. */
-  own: boolean;
+  /** Where it comes from: chosen here, the route's code, or elsewhere. */
+  from: "page" | "code" | "other";
 }
 
 /** The SEO of a page built in code: what was typed, and what is automatic. */
 export interface CodePageSeo {
   typed: TypedCodePageSeo;
-  automatic: { title?: AutomaticValue; description?: AutomaticValue };
+  /**
+   * What the page would show with nothing typed for it: the values the panel
+   * offers beneath a person's own, and the share image it falls back to.
+   */
+  automatic: {
+    title?: AutomaticValue;
+    description?: AutomaticValue;
+    image?: PreviewImage;
+  };
   /** The share image the page is served, where it has one. */
   image?: PreviewImage;
   /** The site's name, as Google's result and the shared card show it. */

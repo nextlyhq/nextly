@@ -85,7 +85,10 @@ function previewImageOf(answer: SeoAnswer): PreviewImage | undefined {
   return {
     url,
     ...present({ width, height }),
-    own: answer.image.from === "page",
+    from:
+      answer.image.from === "page" || answer.image.from === "code"
+        ? answer.image.from
+        : "other",
   };
 }
 
@@ -111,12 +114,18 @@ async function automaticOf(
       : await resolveCodePage(
           ctx,
           route.path,
-          { ...row, metaTitle: undefined, metaDescription: undefined },
+          {
+            ...row,
+            metaTitle: undefined,
+            metaDescription: undefined,
+            ogImage: undefined,
+          },
           readRules
         );
   return present({
     title: automatic(beneath.title),
     description: automatic(beneath.description),
+    image: previewImageOf(beneath),
   });
 }
 

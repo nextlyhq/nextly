@@ -209,6 +209,8 @@ interface Shown {
   description: string;
   hidden: boolean;
   imageUrl: string | undefined;
+  /** Where the image shown comes from: chosen here, or automatic. */
+  imageFrom: "chosen" | "code" | "site";
 }
 
 /** The page in Google's results, faded where it is hidden from search. */
@@ -239,16 +241,20 @@ function GoogleResult({ shown }: { shown: Shown }): JSX.Element {
   );
 }
 
+/** What the card says of the image it shows. */
+const IMAGE_HELP: Record<Shown["imageFrom"], string> = {
+  chosen: "Uses the share image chosen for this address.",
+  code: "Uses the share image the route's code sets.",
+  site: "Uses the site's default share image.",
+};
+
 /** The card a link to the page makes when shared. */
 function SharedCard({ shown }: { shown: Shown }): JSX.Element {
   const domain = hostOf(shown.address) ?? shown.address;
-  let help = "Uses the site's default share image.";
-  if (shown.imageUrl === undefined) {
-    help =
-      "No share image yet: choose one under Advanced, or set the site's default in SEO settings.";
-  } else if (shown.item.seo?.image?.own === true) {
-    help = "Uses the share image chosen for this address.";
-  }
+  const help =
+    shown.imageUrl === undefined
+      ? "No share image yet: choose one under Advanced, or set the site's default in SEO settings."
+      : IMAGE_HELP[shown.imageFrom];
   return (
     <>
       <div className="nx-seo-card">
@@ -552,8 +558,9 @@ function shownOf(
   chosenUrl: string | undefined
 ): Shown {
   const automatic = automaticOf(item);
-  const image = item.seo?.image;
-  const siteImage = image?.own === true ? undefined : image?.url;
+  // With no image chosen, the one the page falls back to: its route's or
+  // the site's default.
+  const fallback = item.seo?.automatic.image?.url;
   return {
     item,
     siteName: item.seo?.siteName ?? host,
@@ -561,7 +568,13 @@ function shownOf(
     title: orAutomatic(draft.title, automatic.title),
     description: orAutomatic(draft.description, automatic.description),
     hidden: draft.hidden,
-    imageUrl: draft.image === null ? siteImage : chosenUrl,
+    imageUrl: draft.image === null ? fallback : chosenUrl,
+    imageFrom:
+      draft.image !== null
+        ? "chosen"
+        : item.seo?.automatic.image?.from === "code"
+          ? "code"
+          : "site",
   };
 }
 

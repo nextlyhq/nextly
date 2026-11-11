@@ -338,7 +338,16 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual({
         url: "https://cdn.example/webflow.png",
         width: 1200,
-        own: false,
+        from: "code",
+      });
+      // The image the page falls back to without one chosen: the same.
+      expect(
+        items?.find(item => item.path === "/integrations/webflow")?.seo
+          ?.automatic.image
+      ).toEqual({
+        url: "https://cdn.example/webflow.png",
+        width: 1200,
+        from: "code",
       });
       expect(items?.find(item => item.path === "/about")?.entry).toMatchObject({
         kind: "collection",
