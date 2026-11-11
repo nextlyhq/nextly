@@ -1005,6 +1005,11 @@ export class FieldGroupSchemaService {
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
 
+    if (isEmailField(field) || isPasswordField(field)) {
+      return isRequired
+        ? mysqlVarchar(colName, { length: 255 }).notNull()
+        : mysqlVarchar(colName, { length: 255 });
+    }
     // A text field's column as the CREATE makes it (`getColumnType`): bounded by its own
     // `maxLength`, and TEXT when it states none. Declared `varchar(255)` here, any save that reached
     // drizzle-kit narrowed a TEXT column, which MySQL refuses once a value is longer.
@@ -1013,11 +1018,6 @@ export class FieldGroupSchemaService {
         ? mysqlVarchar(colName, { length: field.maxLength })
         : mysqlText(colName);
       return isRequired ? column.notNull() : column;
-    }
-    if (isEmailField(field) || isPasswordField(field)) {
-      return isRequired
-        ? mysqlVarchar(colName, { length: 255 }).notNull()
-        : mysqlVarchar(colName, { length: 255 });
     }
     if (
       isTextareaField(field) ||

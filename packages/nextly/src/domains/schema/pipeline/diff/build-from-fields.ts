@@ -584,6 +584,18 @@ function referenceMarkerOn(
  * _order, _component_type) instead of collection system columns (title, slug).
  * Used by previewDesiredSchema when processing desired.components.
  */
+/** Gives each of a field group's system columns the default its creator gives it. */
+function declareStructuralDefaults(
+  columns: ColumnSpec[],
+  dialect: SupportedDialect
+): void {
+  const structuralDefaults = fieldGroupStructuralDefaults(dialect);
+  for (const column of columns) {
+    const columnDefault = structuralDefaults.get(column.name);
+    if (columnDefault !== undefined) column.default = columnDefault;
+  }
+}
+
 export function buildDesiredTableFromComponentFields(
   tableName: string,
   fields: MinimalFieldDef[],
@@ -801,11 +813,7 @@ export function buildDesiredTableFromComponentFields(
   // (`fieldGroupStructuralDefaults`), declared from the same answer. Left out, every table the
   // creator made read as carrying defaults the schema did not, and its first save dropped them, so
   // an insert that leaves `_order` or a timestamp to the database stored NULL or failed NOT NULL.
-  const structuralDefaults = fieldGroupStructuralDefaults(dialect);
-  for (const column of columns) {
-    const columnDefault = structuralDefaults.get(column.name);
-    if (columnDefault !== undefined) column.default = columnDefault;
-  }
+  declareStructuralDefaults(columns, dialect);
 
   // Component tables have no slug. They get a composite index on the parent-link
   // columns plus the system created_at index — mirroring field-group-schema-service.ts

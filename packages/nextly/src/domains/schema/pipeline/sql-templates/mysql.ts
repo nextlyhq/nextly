@@ -150,9 +150,9 @@ function generateChangeColumnNullable(op: ChangeColumnNullableOp): string {
 }
 
 function generateChangeColumnDefault(op: ChangeColumnDefaultOp): string {
-  return op.toDefault === undefined
-    ? `ALTER TABLE ${q(op.tableName)} ALTER COLUMN ${q(op.columnName)} DROP DEFAULT`
-    : `ALTER TABLE ${q(op.tableName)} ALTER COLUMN ${q(op.columnName)} SET DEFAULT ${settableDefault(op.toDefault)}`;
+  const column = `ALTER TABLE ${q(op.tableName)} ALTER COLUMN ${q(op.columnName)}`;
+  if (op.toDefault === undefined) return `${column} DROP DEFAULT`;
+  return `${column} SET DEFAULT ${settableDefault(op.toDefault)}`;
 }
 
 /** A number, a quoted string, or one of MySQL's literal keywords. */
