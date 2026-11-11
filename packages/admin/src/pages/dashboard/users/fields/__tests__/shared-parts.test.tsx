@@ -364,4 +364,86 @@ describe("user custom fields on the shared picker and panel", () => {
       })
     );
   });
+
+  it("does not save again on Enter while a save is under way", async () => {
+    const onSubmit = vi.fn();
+    render(
+      <UserFieldForm
+        mode="edit"
+        userField={TEAM}
+        isPending
+        onSubmit={onSubmit}
+      />
+    );
+    await userEvent
+      .setup()
+      .type(screen.getByRole("textbox", { name: "Label" }), "s{Enter}");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the default when the same type is chosen again", async () => {
+    const { user, onSubmit } = createForm();
+    await user.click(
+      screen.getByRole("button", { name: "Choose a field type" })
+    );
+    await choose(user, "text", "Nickname");
+    await user.type(
+      screen.getByRole("textbox", { name: "Default value" }),
+      "Sam"
+    );
+    await user.click(screen.getByRole("button", { name: "Change type…" }));
+    const picker = screen.getByRole("dialog");
+    await user.type(
+      within(picker).getByRole("combobox", { name: "Search field types" }),
+      "text{Enter}"
+    );
+    await user.click(within(picker).getByRole("button", { name: "Add field" }));
+    await user.click(screen.getByRole("button", { name: "Create Field" }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "text", defaultValue: "Sam" })
+    );
+  });
+
+  it("shows a refreshed field's choices, not the ones it opened with", () => {
+    const { rerender } = render(
+      <UserFieldForm
+        mode="edit"
+        userField={TEAM}
+        isPending={false}
+        onSubmit={vi.fn()}
+      />
+    );
+    expect(screen.getByDisplayValue("Support")).toBeInTheDocument();
+    rerender(
+      <UserFieldForm
+        mode="edit"
+        userField={{
+          ...TEAM,
+          options: [{ label: "Billing", value: "billing" }],
+          updatedAt: "2026-02-01T00:00:00.000Z",
+        }}
+        isPending={false}
+        onSubmit={vi.fn()}
+      />
+    );
+    expect(screen.getByDisplayValue("Billing")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Support")).toBeNull();
+  });
+
+  it("reads as unchanged once an edit is undone", async () => {
+    render(
+      <UserFieldForm
+        mode="edit"
+        userField={TEAM}
+        isPending={false}
+        onSubmit={vi.fn()}
+      />
+    );
+    const user = userEvent.setup();
+    const label = screen.getByRole("textbox", { name: "Label" });
+    await user.type(label, "s");
+    expect(screen.getByText("You have unsaved changes")).toBeInTheDocument();
+    await user.type(label, "{Backspace}");
+    expect(screen.queryByText("You have unsaved changes")).toBeNull();
+  });
 });

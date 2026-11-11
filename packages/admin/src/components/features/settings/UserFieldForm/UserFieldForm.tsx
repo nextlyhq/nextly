@@ -17,14 +17,7 @@ import {
   Switch,
 } from "@nextlyhq/ui";
 import { USER_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
-import {
-  useEffect,
-  useId,
-  useMemo,
-  useState,
-  type JSX,
-  type KeyboardEvent,
-} from "react";
+import { useId, useMemo, useState, type JSX, type KeyboardEvent } from "react";
 
 import {
   describeFieldTypes,
@@ -107,9 +100,11 @@ function withType(
 ): UserFieldFormValues {
   const nameFollowedLabel =
     values.name === "" || values.name === userFieldName(values.label);
+  // The same type chosen again (to retype the label) keeps all it had.
+  const sameType = choice.type === values.type;
   return {
     ...values,
-    ...keptFor(values, choice.type),
+    ...(sameType ? {} : keptFor(values, choice.type)),
     type: choice.type,
     label: choice.label,
     name: nameFollowedLabel ? choice.name : values.name,
@@ -166,16 +161,19 @@ export function UserFieldForm({
   const [values, setValues] = useState<UserFieldFormValues | null>(() =>
     userField ? fieldToFormValues(userField) : null
   );
-  const [dirty, setDirty] = useState(false);
   // Opened by the person, not on arrival: a dialog that opens by itself hides
   // the page it sits on before anyone has seen it.
   const [picking, setPicking] = useState(false);
   const [problems, setProblems] = useState<string[]>([]);
 
-  // The field arrives after the page does when it is opened directly.
-  useEffect(() => {
-    if (userField && isEdit) setValues(fieldToFormValues(userField));
-  }, [userField, isEdit]);
+  // The record the values were taken from. A field that arrives after the
+  // page (opened directly) or comes back refreshed is taken up in the same
+  // render, so nothing below draws from the values it replaces.
+  const [shownRecord, setShownRecord] = useState(userField);
+  if (isEdit && userField && userField !== shownRecord) {
+    setShownRecord(userField);
+    setValues(fieldToFormValues(userField));
+  }
 
   // Name, type and a dropdown's "several choices" identify the stored values,
   // which the server never moves: fixed once the field exists, as it refuses.
@@ -196,9 +194,18 @@ export function UserFieldForm({
 
   const change = (next: UserFieldFormValues) => {
     setValues(next);
-    setDirty(true);
     setProblems([]);
   };
+
+  // Unsaved while the values differ from those the page started from: a new
+  // field once it has a type, an existing one until its edits are undone.
+  const dirty = useMemo(() => {
+    if (!values) return false;
+    if (!userField) return true;
+    return (
+      JSON.stringify(values) !== JSON.stringify(fieldToFormValues(userField))
+    );
+  }, [values, userField]);
 
   const pick = (choice: FieldPickerChoice) => {
     change(withType(values ?? DEFAULT_VALUES, choice));
@@ -219,7 +226,7 @@ export function UserFieldForm({
     <div
       className="space-y-6"
       onKeyDown={event => {
-        if (isLocked || !enterSaves(event)) return;
+        if (isLocked || isPending || !enterSaves(event)) return;
         event.preventDefault();
         submit();
       }}
@@ -238,6 +245,9 @@ export function UserFieldForm({
       {values && panelField ? (
         <div className="overflow-hidden rounded-md border border-border">
           <FieldSettingsPanel
+            // A refreshed record starts the panel afresh, so controls that keep
+            // their own rows (the choices list) show the record as it is now.
+            key={shownRecord?.updatedAt ?? "new"}
             surface={surface}
             field={panelField}
             ancestors={[]}

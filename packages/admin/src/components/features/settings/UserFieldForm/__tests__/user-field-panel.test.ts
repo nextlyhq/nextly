@@ -105,4 +105,14 @@ describe("a user field in the panel and back", () => {
     expect(valuesToPanelField(EVERY_TYPE[7]!).defaultValue).toBe(true);
     expect(valuesToPanelField(EVERY_TYPE[5]!).defaultValue).toBe(3);
   });
+
+  it("clears a choice default whose option is gone, as the panel says", () => {
+    const select = valuesToPanelField(EVERY_TYPE[8]!);
+    expect(
+      panelFieldToValues(
+        { ...select, options: [{ label: "Two", value: "two" }] },
+        EVERY_TYPE[8]!
+      ).defaultValue
+    ).toBe("");
+  });
 });

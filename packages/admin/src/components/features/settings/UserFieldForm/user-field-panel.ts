@@ -56,6 +56,19 @@ function storedDefault(field: FieldSettingsField): string {
     : value;
 }
 
+/**
+ * A choice field's default only while one of its options still has it: the
+ * panel says a default whose option was removed or renamed is cleared on
+ * save, so it is.
+ */
+function choiceSafe(field: FieldSettingsField, stored: string): string {
+  if (field.type !== "select" && field.type !== "radio") return stored;
+  if (stored === "") return stored;
+  return (field.options ?? []).some(option => option.value === stored)
+    ? stored
+    : "";
+}
+
 /** The form values as the panel's field. */
 export function valuesToPanelField(
   values: UserFieldFormValues
@@ -98,7 +111,7 @@ export function panelFieldToValues(
     name: field.name,
     type: field.type,
     required: validation.required === true,
-    defaultValue: storedDefault(field),
+    defaultValue: choiceSafe(field, storedDefault(field)),
     // The options editor's drag ids are its own; a user field stores label
     // and value alone.
     options: (field.options ?? []).map(({ label, value }) => ({
