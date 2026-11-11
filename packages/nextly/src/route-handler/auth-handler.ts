@@ -19,12 +19,16 @@ import {
   registeredLocalization,
 } from "../di/registered-localization";
 import { awaitBootMigrations } from "../init/boot-migrations-gate";
-import { buildServiceConfig } from "../init/build-service-config";
+import {
+  buildServiceConfig,
+  type GetNextlyOptions,
+} from "../init/build-service-config";
 import {
   awaitBootSeeding,
   holdBootSeeding,
   seedPermissionsAndRolePresets,
 } from "../init/seed-permissions";
+import { awaitStartInFlight } from "../init/start-in-flight";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 // Only the type: the class is loaded by `getDispatcherInstance`.
 import type { ServiceDispatcher } from "../services/dispatcher";
@@ -336,23 +340,30 @@ export function _recordRegisteredLocalizationForTest(
 export function requestPathServiceConfig(
   nextlyConfig: SanitizedNextlyConfig | null
 ): NextlyServiceConfig {
+  if (!nextlyConfig) return { imageProcessor: getImageProcessor() };
+  return buildServiceConfig(requestPathStartOptions(nextlyConfig));
+}
+
+/**
+ * The options a start a request begins hands `getNextly`, from which
+ * {@link requestPathServiceConfig} derives the services' configuration: the
+ * route's config, with the `db` directories forwarded as the request path
+ * always has.
+ */
+function requestPathStartOptions(
+  nextlyConfig: SanitizedNextlyConfig
+): GetNextlyOptions {
   // Never `getMediaStorage()` here: storage plugins are registered by
   // `registerServices()` -> `initializeMediaStorage()`, so touching the
   // singleton first builds one with no plugins and a local-only fallback.
-  const imageProcessor = getImageProcessor();
-  if (!nextlyConfig) return { imageProcessor };
-
-  const serviceConfig = buildServiceConfig({
+  const options: GetNextlyOptions = {
     config: nextlyConfig,
-    imageProcessor,
-  });
-
+    imageProcessor: getImageProcessor(),
+  };
   const dbConfig = nextlyConfig.db;
-  if (dbConfig?.schemasDir) serviceConfig.schemasDir = dbConfig.schemasDir;
-  if (dbConfig?.migrationsDir)
-    serviceConfig.migrationsDir = dbConfig.migrationsDir;
-
-  return serviceConfig;
+  if (dbConfig?.schemasDir) options.schemasDir = dbConfig.schemasDir;
+  if (dbConfig?.migrationsDir) options.migrationsDir = dbConfig.migrationsDir;
+  return options;
 }
 
 /**
@@ -375,6 +386,11 @@ export function requestPathServiceConfig(
  * consumes no request body, so a handler that parses its own body still can.
  */
 export async function ensureServicesInitialized(): Promise<void> {
+  // A start another entry point began (the start-up hook, which no longer
+  // waits for it, or code calling the Direct API) is the start: this request
+  // waits for it rather than registering the services, seeding and running
+  // the rest of a start a second time beside it.
+  await awaitStartInFlight();
   // Single-flight: concurrent requests share one recovery+registration pass
   // instead of interleaving. Without this, two dev requests could both
   // detect a stale localization block and overlap shutdownServices() — the
@@ -384,15 +400,15 @@ export async function ensureServicesInitialized(): Promise<void> {
   while (_initInFlight) {
     await _initInFlight;
   }
-  // Taken before a pass that registers the services, cold or again after a
-  // development config change, which is when the instrumentation boot would
-  // start finding them registered: it waits on this hold until the pass has
-  // seeded. Released before this boot waits on the gate itself, so it never
-  // waits on its own hold.
-  const releaseSeeding =
-    !isServicesRegistered() || needsLocalizationReregistration()
-      ? holdBootSeeding()
-      : undefined;
+  // Taken before a pass that tears the services down to register them again
+  // after a development config change, from before the teardown, which is
+  // when the instrumentation boot would start finding them unregistered and
+  // then registered: it waits on this hold until the pass has seeded. Released
+  // before this boot waits on the gate itself, so it never waits on its own
+  // hold. A pass that registers cold takes its hold where it registers.
+  const releaseSeeding = needsLocalizationReregistration()
+    ? holdBootSeeding()
+    : undefined;
   const run = initializeServicesOnce().finally(() => {
     if (_initInFlight === run) _initInFlight = null;
   });
@@ -442,7 +458,8 @@ async function initializeServicesOnce(): Promise<void> {
   // differs from the registered one, tear services down so the block below
   // re-registers them with the current config. Gated to development: config
   // modules never hot-change in production.
-  if (needsLocalizationReregistration()) {
+  const reregistering = needsLocalizationReregistration();
+  if (reregistering) {
     consoleLogger.info(
       "[Nextly] `localization` config changed — re-registering services to apply it..."
     );
@@ -456,13 +473,6 @@ async function initializeServicesOnce(): Promise<void> {
 
   if (!isServicesRegistered()) {
     const nextlyConfig = _storedConfig;
-
-    // Build service config from stored nextly.config.ts
-    // IMPORTANT: Do NOT call getMediaStorage() here. The storage plugins from
-    // config need to be registered first via registerServices(), which calls
-    // initializeMediaStorage() with the correct plugins. Calling getMediaStorage()
-    // before that creates a singleton with zero plugins (local fallback only).
-    const serviceConfig = requestPathServiceConfig(nextlyConfig);
 
     // Warn (dev only) when an app boots through the request path instead
     // of via Next.js's instrumentation.ts. The request-path boot still
@@ -492,95 +502,148 @@ async function initializeServicesOnce(): Promise<void> {
       );
     }
 
-    await registerServices(serviceConfig);
-    // Services now match the block this config was registered from, so that
-    // is the value a later request compares against.
-    recordRegisteredLocalization(nextlyConfig);
-
-    // Seed built-in email templates (password-reset, welcome, etc.)
-    // This mirrors init.ts runPostInitTasks() so external apps using
-    // createDynamicHandlers() get templates auto-seeded on first request.
-    try {
-      const emailTemplateService = getService("emailTemplateService");
-      await emailTemplateService.ensureBuiltInTemplates();
-    } catch {
-      // Silently skip — email_templates table may not exist yet
-    }
-
-    // The same seeding the instrumentation boot performs, so an app that cold
-    // boots only through `createDynamicHandlers` ends up with the same rows.
-    // Shared rather than mirrored: this path used to seed system, collection
-    // and single permissions and stop there, which left a plugin's declared
-    // permission with no row and no super-admin grant on the one boot path
-    // that never runs post-init tasks. The PRESET roles were the next thing to
-    // be missing from it for the same reason, so the two are now one call.
-    await seedPermissionsAndRolePresets();
-
-    // Sync user extension fields and ensure user_ext table exists
-    // This mirrors the init.ts flow so route handler requests work
-    // with UI-created custom user fields (e.g., "designation")
-    try {
-      const userExtSchemaService = getService("userExtSchemaService");
-      await userExtSchemaService.loadMergedFields();
-
-      if (userExtSchemaService.hasMergedFields()) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter shape varies by driver
-        const adapter = getService("adapter") as any;
-        const drizzleDb = adapter.getDrizzle();
-        await userExtSchemaService.ensureUserExtSchema(drizzleDb);
+    // A cold start begun by this request is `getNextly`'s start, the one the
+    // start-up hook and the Direct API run: the same steps, the same
+    // statements, and one start whichever of them begins it, since a start any
+    // of them begins later joins this one. Loaded here, as the registry is,
+    // so importing the route handler does not load the start.
+    if (nextlyConfig && !reregistering) {
+      const { getNextly } = await import("../init");
+      await getNextly(requestPathStartOptions(nextlyConfig));
+      // Registered unless `getNextly` answered from an instance it kept
+      // whose services were shut down without it (a test harness tearing
+      // down the services alone): then this pass registers them, below, as
+      // it always has.
+      if (isServicesRegistered()) {
+        logRequestPathStart(nextlyConfig);
+        return;
       }
-    } catch (err: unknown) {
-      consoleLogger.error("[Auth Handler] Error during user_ext schema setup", {
-        detail: err instanceof Error ? err.message : String(err),
-      });
     }
 
-    if (nextlyConfig) {
-      const pluginCount = Array.isArray(nextlyConfig.plugins)
-        ? nextlyConfig.plugins.length
-        : 0;
-      const collectionCount = Array.isArray(nextlyConfig.collections)
-        ? nextlyConfig.collections.length
-        : 0;
-      const storageCount = Array.isArray(nextlyConfig.storage)
-        ? nextlyConfig.storage.length
-        : 0;
-      consoleLogger.info(
-        `[Auth Handler] Services auto-initialized with config (${pluginCount} plugin(s), ${collectionCount} collection(s), ${storageCount} storage adapter(s))`
-      );
-    } else {
-      consoleLogger.info(
-        "[Auth Handler] Services auto-initialized with defaults"
-      );
+    // Without a config, or registering again after a development change to
+    // `localization`, this pass registers the services itself: `getNextly`
+    // needs a config, and keeps the instance whose services were just shut
+    // down, so it would not register them again. Held from before the
+    // services read as registered until this pass has seeded, so a boot that
+    // finds them registered waits for the seeding (`awaitBootSeeding`). Taken
+    // here rather than around the whole pass: a pass that runs `getNextly`'s
+    // start may join one a Direct API caller began, which can itself be
+    // waiting on the seeding gate, and a hold around it would never release.
+    const releaseSeeding = holdBootSeeding();
+    try {
+      await registerFromThisRequest(registerServices, nextlyConfig);
+    } finally {
+      releaseSeeding();
     }
-
-    // Boot-time auto-apply for code-first schema changes (dev only).
-    // The route-handler path (here) and the direct-API path
-    // (`init.ts:getNextly`) both must call this so dev restart correctly
-    // applies code-first field renames/drops to the actual table columns,
-    // not just to `dynamic_collections.fields` JSON. See
-    // `init/boot-apply.ts` for full rationale.
-    const { runBootTimeApplyIfDev } = await import("../init/boot-apply");
-    await runBootTimeApplyIfDev({ caller: "auth-handler" });
-
-    // No production migration call here. `registerServices` above already ran
-    // them — before any plugin initialised, from the `db` block
-    // `requestPathServiceConfig` forwards and the schema the boot actually runs
-    // (transformed plugins, folded entities, deferred Builder extends). A
-    // second run from this store would compile a narrower schema than the one
-    // just applied, and the instrumentation boot (`getNextly`) makes no such
-    // second call, so both boot paths apply migrations exactly once, the same
-    // way.
-
-    // Open the HMR listener so live edits to nextly.config.ts during a
-    // running dev session reach reloadNextlyConfig(). Without this, only
-    // the boot-time apply above runs and in-session config edits silently
-    // no-op. Mirrors the symmetric call in init.ts:getNextly so the
-    // route-handler path and the direct-API path both wire HMR the same
-    // way. ensureHmrListener is idempotent and gated on NODE_ENV / the
-    // NEXTLY_DISABLE_HMR escape hatch.
-    ensureHmrListener();
   }
+}
+
+/**
+ * Register the services from this route's config, and run the start's other
+ * steps the request path runs for a registration of its own.
+ */
+async function registerFromThisRequest(
+  registerServices: (config: NextlyServiceConfig) => Promise<void>,
+  nextlyConfig: SanitizedNextlyConfig | null
+): Promise<void> {
+  // Build service config from stored nextly.config.ts
+  // IMPORTANT: Do NOT call getMediaStorage() here. The storage plugins from
+  // config need to be registered first via registerServices(), which calls
+  // initializeMediaStorage() with the correct plugins. Calling getMediaStorage()
+  // before that creates a singleton with zero plugins (local fallback only).
+  await registerServices(requestPathServiceConfig(nextlyConfig));
+  // Services now match the block this config was registered from, so that
+  // is the value a later request compares against.
+  recordRegisteredLocalization(nextlyConfig);
+
+  // Seed built-in email templates (password-reset, welcome, etc.)
+  // This mirrors init.ts runPostInitTasks() so external apps using
+  // createDynamicHandlers() get templates auto-seeded on first request.
+  try {
+    const emailTemplateService = getService("emailTemplateService");
+    await emailTemplateService.ensureBuiltInTemplates();
+  } catch {
+    // Silently skip — email_templates table may not exist yet
+  }
+
+  // The same seeding the instrumentation boot performs, so an app that cold
+  // boots only through `createDynamicHandlers` ends up with the same rows.
+  // Shared rather than mirrored: this path used to seed system, collection
+  // and single permissions and stop there, which left a plugin's declared
+  // permission with no row and no super-admin grant on the one boot path
+  // that never runs post-init tasks. The PRESET roles were the next thing to
+  // be missing from it for the same reason, so the two are now one call.
+  await seedPermissionsAndRolePresets();
+
+  // Sync user extension fields and ensure user_ext table exists
+  // This mirrors the init.ts flow so route handler requests work
+  // with UI-created custom user fields (e.g., "designation")
+  try {
+    const userExtSchemaService = getService("userExtSchemaService");
+    await userExtSchemaService.loadMergedFields();
+
+    if (userExtSchemaService.hasMergedFields()) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter shape varies by driver
+      const adapter = getService("adapter") as any;
+      const drizzleDb = adapter.getDrizzle();
+      await userExtSchemaService.ensureUserExtSchema(drizzleDb);
+    }
+  } catch (err: unknown) {
+    consoleLogger.error("[Auth Handler] Error during user_ext schema setup", {
+      detail: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  logRequestPathStart(nextlyConfig);
+
+  // Boot-time auto-apply for code-first schema changes (dev only).
+  // The route-handler path (here) and the direct-API path
+  // (`init.ts:getNextly`) both must call this so dev restart correctly
+  // applies code-first field renames/drops to the actual table columns,
+  // not just to `dynamic_collections.fields` JSON. See
+  // `init/boot-apply.ts` for full rationale.
+  const { runBootTimeApplyIfDev } = await import("../init/boot-apply");
+  await runBootTimeApplyIfDev({ caller: "auth-handler" });
+
+  // No production migration call here. `registerServices` above already ran
+  // them — before any plugin initialised, from the `db` block
+  // `requestPathServiceConfig` forwards and the schema the boot actually runs
+  // (transformed plugins, folded entities, deferred Builder extends). A
+  // second run from this store would compile a narrower schema than the one
+  // just applied, and the instrumentation boot (`getNextly`) makes no such
+  // second call, so both boot paths apply migrations exactly once, the same
+  // way.
+
+  // Open the HMR listener so live edits to nextly.config.ts during a
+  // running dev session reach reloadNextlyConfig(). Without this, only
+  // the boot-time apply above runs and in-session config edits silently
+  // no-op. Mirrors the symmetric call in init.ts:getNextly so the
+  // route-handler path and the direct-API path both wire HMR the same
+  // way. ensureHmrListener is idempotent and gated on NODE_ENV / the
+  // NEXTLY_DISABLE_HMR escape hatch.
+  ensureHmrListener();
+}
+
+/** Say that a request started the services, and with what. */
+function logRequestPathStart(nextlyConfig: SanitizedNextlyConfig | null): void {
+  if (!nextlyConfig) {
+    consoleLogger.info(
+      "[Auth Handler] Services auto-initialized with defaults"
+    );
+    return;
+  }
+  const pluginCount = Array.isArray(nextlyConfig.plugins)
+    ? nextlyConfig.plugins.length
+    : 0;
+  const collectionCount = Array.isArray(nextlyConfig.collections)
+    ? nextlyConfig.collections.length
+    : 0;
+  const storageCount = Array.isArray(nextlyConfig.storage)
+    ? nextlyConfig.storage.length
+    : 0;
+  consoleLogger.info(
+    `[Auth Handler] Services auto-initialized with config (${pluginCount} plugin(s), ${collectionCount} collection(s), ${storageCount} storage adapter(s))`
+  );
 }
 
 async function getDispatcherInstance(): Promise<ServiceDispatcher> {

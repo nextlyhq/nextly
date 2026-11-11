@@ -25,6 +25,8 @@
  * every round trip delayed by `DELAY_MS`, and with `EXTRA_COLLECTIONS` more
  * collections. Each is pinned as growth over the plain start; a start that
  * does a fixed amount of work grows by nothing, and that pin can only fall.
+ * The delayed start also fails when the admin page's first byte, asked for as
+ * the server listens, takes longer than `FIRST_BYTE_LIMIT_MS`.
  *
  * PostgreSQL and MySQL need `E2E_DB_SERVER_URL_POSTGRESQL` and
  * `E2E_DB_SERVER_URL_MYSQL` (a server address with no database), or the
@@ -72,6 +74,12 @@ const SCREEN_STATEMENT_SLACK = 0.15;
 const GROWTH_SLACK_MIN = 5;
 const ROUND_SLACK = 1;
 const DELAY_MS = 100;
+/**
+ * How soon the admin page's first byte must arrive after the server listens,
+ * on the delayed start: the page needs no database, so the start under way
+ * must not hold it (about 104 s before the start stopped holding requests).
+ */
+const FIRST_BYTE_LIMIT_MS = 1000;
 const EXTRA_COLLECTIONS = 45;
 const QUIET_MS = 1500;
 /** How long an open request is waited for once nothing else happens. */
@@ -696,7 +704,20 @@ function compare(measured, pins) {
         )
       );
   }
-  return [...problems, ...growthProblems(measured.growth, pins)];
+  return [
+    ...problems,
+    ...growthProblems(measured.growth, pins),
+    ...firstByteProblems(measured.delayed),
+  ];
+}
+
+/** The admin page's first byte on the delayed start, against its limit. */
+function firstByteProblems(delayed) {
+  if (delayed === undefined || delayed.firstByteMs <= FIRST_BYTE_LIMIT_MS)
+    return [];
+  return [
+    `admin page first byte with ${DELAY_MS} ms per round trip: ${delayed.firstByteMs} ms, above its limit of ${FIRST_BYTE_LIMIT_MS} ms`,
+  ];
 }
 
 async function main() {
