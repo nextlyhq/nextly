@@ -913,6 +913,68 @@ should depend on, so reaching into core for a constant would tie your plugin to 
 layout for the sake of one string. A host config, which already imports from `nextly`,
 can use the constant, and does so below.
 
+### A standalone plugin's panel
+
+A standalone plugin's panel lists its collections, then its menu items. The plugin can
+group those items under headings, and show a number beside each, all as data: no code
+of yours runs in the browser to draw the panel. This is experimental.
+
+```ts
+contributes: {
+  collections: [patterns],
+  dashboard: { attention: [bindingsToFix] }, // id "acme/bindings-to-fix"
+  admin: {
+    pages: [{ path: "bindings", component: "@acme/plugin/admin#Bindings" }],
+    panel: {
+      groups: [
+        { id: "library", label: "Library" },
+        { id: "checks", label: "Checks" },
+      ],
+    },
+    menu: [
+      {
+        label: "Patterns",
+        to: "/admin/collections/patterns",
+        collection: "patterns",
+        group: "library",
+        count: { collection: "patterns" },
+      },
+      {
+        label: "Bindings to fix",
+        to: "/admin/plugins/acme-plugin/bindings",
+        group: "checks",
+        badge: { attention: "acme/bindings-to-fix" },
+      },
+    ],
+  },
+},
+```
+
+Groups are drawn in the order declared, each under its heading; items naming no group
+come first, under no heading, as every item does today. A heading with no item the
+reader may see is not drawn.
+
+An item takes a `count` or a `badge`, never both. A count is a quiet number, shown at 0
+too: how many there are. A badge is a pill shown only while its number is above 0: how
+many need doing. Either names what it counts in one of two forms:
+
+- `{ collection, where? }` counts one of the plugin's own collections, by its declared
+  slug (a host's rename is followed), narrowed by `where` in the entry list's grammar.
+  The number is the reader's: a collection they may not read shows no number.
+- `{ attention }` reads one of the plugin's own Needs your attention items, by its id:
+  the count that item's line shows the reader, and 0 when nothing is waiting for them.
+
+The numbers are read while the panel is open, in one request for the whole panel, and
+never hold it up: the items are drawn first, and a number that cannot be read is left
+out. A link's accessible name includes its number ("Patterns, 12").
+
+A development start reports a `group` the plugin does not declare (the item is listed
+with the ungrouped ones), a count naming a collection the plugin does not contribute or
+an attention item it does not declare (the item is drawn without a number), and a menu
+item linking to one of the plugin's own pages (`/admin/plugins/<slug>/<path>`) that
+`contributes.admin.pages` does not register, which is left out of the admin in every
+environment.
+
 ## Host overrides (D49)
 
 An integrator can override a plugin's placement without forking it, via
