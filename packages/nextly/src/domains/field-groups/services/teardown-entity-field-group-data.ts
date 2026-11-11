@@ -271,7 +271,22 @@ async function listRegisteredComponentTables(
 
   const rows = await adapter.select<Record<string, unknown>>(declared, {});
 
-  // Each row's table, as the catalog spells it, or nothing for one that does not resolve.
+  const tableOf = registeredTablesOf(rows, catalog, registryTable);
+  return {
+    tables: [...new Set(tableOf.values())],
+    childTablesOf: childTablesOfRows(rows, tableOf),
+  };
+}
+
+/**
+ * Each registry row's table, keyed by its slug, as the catalog spells it; a row whose table does
+ * not resolve is left out.
+ */
+function registeredTablesOf(
+  rows: readonly Record<string, unknown>[],
+  catalog: ReturnType<typeof indexCatalog>,
+  registryTable: string
+): Map<string, string> {
   const tableOf = new Map<string, string>();
   for (const row of rows) {
     const named = row.table_name ?? row.tableName;
@@ -287,30 +302,58 @@ async function listRegisteredComponentTables(
     // out; a caller comparing against the constant alone would miss a
     // case-different spelling and probe the registry as an instance table.
     if (table === undefined || table === registryTable) continue;
-    if (typeof row.slug === "string") tableOf.set(row.slug, table);
-    else tableOf.set(table, table);
+    tableOf.set(typeof row.slug === "string" ? row.slug : table, table);
   }
+  return tableOf;
+}
 
-  // Read from the same rows: a component's rows are parents only to the components its fields
-  // place directly in it, which are stored as rows of their own.
+/**
+ * For each registered component table, the tables of the components its fields place directly in
+ * it, read from the same rows: a component's rows are parents only to those, which are stored as
+ * rows of their own. A row whose fields cannot be read is left out, so the sweep reads every
+ * table beneath it.
+ */
+function childTablesOfRows(
+  rows: readonly Record<string, unknown>[],
+  tableOf: ReadonlyMap<string, string>
+): Map<string, string[]> {
   const childTablesOf = new Map<string, string[]>();
   for (const row of rows) {
     const own =
       typeof row.slug === "string" ? tableOf.get(row.slug) : undefined;
     const fields = parseFields(row.fields);
-    // Unreadable fields say nothing about what it holds: left out, so the sweep reads every table.
     if (own === undefined || fields === undefined) continue;
-    const children = new Set<string>();
-    for (const placement of fieldGroupPlacements(fields)) {
-      if (!placement.direct) continue;
-      for (const slug of placement.slugs) {
-        const table = tableOf.get(slug);
-        if (table !== undefined) children.add(table);
-      }
-    }
-    childTablesOf.set(own, [...children]);
+    const placed = fieldGroupPlacements(fields)
+      .filter(placement => placement.direct)
+      .flatMap(placement => placement.slugs);
+    childTablesOf.set(own, [
+      ...new Set(placed.flatMap(slug => tableOf.get(slug) ?? [])),
+    ]);
   }
-  return { tables: [...new Set(tableOf.values())], childTablesOf };
+  return childTablesOf;
+}
+
+/**
+ * The tables a level can hold rows in: every component table beneath the entity itself; below
+ * that, those of the components its frontier's tables place directly in them, and every table no
+ * definition describes. A frontier table with no definition known reads every table.
+ */
+function tablesBeneath(
+  level: readonly Frontier[],
+  known: {
+    componentTables: readonly string[];
+    childTablesOf: ReadonlyMap<string, readonly string[]>;
+    undescribed: readonly string[];
+  }
+): readonly string[] {
+  if (level.some(entry => entry.ids === null)) return known.componentTables;
+  const tables = new Set(known.undescribed);
+  for (const entry of level) {
+    const children = known.childTablesOf.get(entry.table);
+    if (children === undefined) return known.componentTables;
+    for (const child of children) tables.add(child);
+  }
+  return known.componentTables.filter(table => tables.has(table));
 }
 
 /** A registry row's fields, parsed when stored as JSON text; undefined when unreadable. */
@@ -378,21 +421,6 @@ export async function teardownEntityComponentData(
   const undescribed = componentTables.filter(
     table => !registered.childTablesOf.has(table)
   );
-  /**
-   * The tables a level can hold rows in: every component table beneath the entity itself; below
-   * that, those of the components its frontier's tables place directly in them, and every table
-   * no definition describes. A frontier table with no definition known reads every table.
-   */
-  const tablesBeneath = (level: Frontier[]): string[] => {
-    if (level.some(entry => entry.ids === null)) return componentTables;
-    const tables = new Set(undescribed);
-    for (const entry of level) {
-      const children = registered.childTablesOf.get(entry.table);
-      if (children === undefined) return componentTables;
-      for (const child of children) tables.add(child);
-    }
-    return componentTables.filter(table => tables.has(table));
-  };
   let instancesDeleted = 0;
   // The entity's own table owns every instance pointing at it, hence `ids: null`.
   let frontier: Frontier[] = [{ table: parentTable, ids: null }];
@@ -404,7 +432,11 @@ export async function teardownEntityComponentData(
   while (frontier.length > 0) {
     const nextFrontier: Frontier[] = [];
 
-    for (const componentTable of tablesBeneath(frontier)) {
+    for (const componentTable of tablesBeneath(frontier, {
+      componentTables,
+      childTablesOf: registered.childTablesOf,
+      undescribed,
+    })) {
       if (
         !resolvable.has(componentTable) &&
         (unresolvable.has(componentTable) ||

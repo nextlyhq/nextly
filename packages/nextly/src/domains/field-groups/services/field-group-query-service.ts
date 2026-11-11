@@ -273,6 +273,27 @@ interface BatchPopulateRead {
   executor?: unknown;
 }
 
+/**
+ * `instances` by the field group each is an instance of: the one `field` names, or, in a zone,
+ * the one each instance says it is, among those the zone allows.
+ */
+function instancesBySlug(
+  instances: Record<string, unknown>[],
+  field: FieldGroupFieldConfig
+): Map<string, Record<string, unknown>[]> {
+  const bySlug = new Map<string, Record<string, unknown>[]>();
+  if (!field.components || field.components.length === 0) {
+    if (field.component) bySlug.set(field.component, instances);
+    return bySlug;
+  }
+  for (const instance of instances) {
+    const slug = readFieldGroupType(instance);
+    if (slug === undefined || !field.components.includes(slug)) continue;
+    bySlug.set(slug, [...(bySlug.get(slug) ?? []), instance]);
+  }
+  return bySlug;
+}
+
 /** The instance objects one field-group field's read values hold: a single one, a list's, or none. */
 function instancesIn(values: readonly unknown[]): Record<string, unknown>[] {
   const found: Record<string, unknown>[] = [];
@@ -883,23 +904,14 @@ export class FieldGroupQueryService extends BaseService {
         values?.forEach((value, index) => {
           results[index][fieldName] = value;
         });
-        // The field groups placed directly in what was read, at every depth: each language's
-        // copy holds its own instances, so each is read in its own language.
-        for (const [index, language] of languages.entries()) {
-          await this.populateNestedInstances(
-            instancesIn([values?.[index]]),
-            f,
-            {
-              depth,
-              currentDepth,
-              locale: language.locale,
-              fallbackLocale: language.fallbackLocale,
-              access,
-              strict,
-              executor,
-            }
-          );
-        }
+        // The field groups placed directly in what was read, at every depth.
+        await this.populateNestedInEachLanguage(values, f, languages, {
+          depth,
+          currentDepth,
+          access,
+          strict,
+          executor,
+        });
       } catch (error) {
         // A rule that could not run never answered: the request ends with
         // that, not with the component replaced by a default.
@@ -936,17 +948,7 @@ export class FieldGroupQueryService extends BaseService {
     read: BatchPopulateRead
   ): Promise<void> {
     if (instances.length === 0) return;
-    const bySlug = new Map<string, Record<string, unknown>[]>();
-    if (field.components && field.components.length > 0) {
-      for (const instance of instances) {
-        const slug = readFieldGroupType(instance);
-        if (slug === undefined || !field.components.includes(slug)) continue;
-        bySlug.set(slug, [...(bySlug.get(slug) ?? []), instance]);
-      }
-    } else if (field.component) {
-      bySlug.set(field.component, instances);
-    }
-    for (const [slug, group] of bySlug) {
+    for (const [slug, group] of instancesBySlug(instances, field)) {
       const meta = await this.registryService.getComponent(slug, read.executor);
       if (!meta.fields.some(isFieldGroupField)) continue;
       const filled = await this.populateComponentDataMany({
@@ -962,6 +964,26 @@ export class FieldGroupQueryService extends BaseService {
         executor: read.executor,
       });
       filled.forEach((value, index) => Object.assign(group[index], value));
+    }
+  }
+
+  /**
+   * {@link populateNestedInstances} for what one field read in each language: each language's copy
+   * holds its own instances, so each is read in its own language.
+   */
+  private async populateNestedInEachLanguage(
+    values: readonly unknown[] | undefined,
+    field: FieldGroupFieldConfig,
+    languages: readonly ComponentReadLanguage[],
+    read: Omit<BatchPopulateRead, "locale" | "fallbackLocale">
+  ): Promise<void> {
+    if (values === undefined) return;
+    for (const [index, language] of languages.entries()) {
+      await this.populateNestedInstances(instancesIn([values[index]]), field, {
+        ...read,
+        locale: language.locale,
+        fallbackLocale: language.fallbackLocale,
+      });
     }
   }
 

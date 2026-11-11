@@ -1391,65 +1391,26 @@ export class FieldGroupMutationService extends BaseService {
           locale
         );
 
-        if (instanceId && existingMap.has(instanceId)) {
-          incomingIds.add(instanceId);
-          const updateData = this.serializeComponentRow(main, componentFields);
-          updateData[STORAGE_FORMAT.columns.order] = i;
-          updateData.updated_at = this.formatDateForDb();
-
-          await this.adapter.update(
-            tableName,
-            updateData,
-            this.whereEq("id", instanceId),
-            { returning: ["id"] }
-          );
-          if (schema) {
-            await this.upsertLocalizedComponent(
-              schema,
-              instanceId,
-              companion,
-              locale
-            );
-          }
-          await this.writeNestedPooled(
-            {
-              id: instanceId,
-              tableName,
-              fields: componentFields,
-              data: instance,
-            },
-            { locale, req, assembledFromStorage }
-          );
-        } else {
-          const row = this.buildInsertRow({
-            data: main,
-            componentFields,
-            parentId,
-            parentTable,
-            fieldName,
-            order: i,
-            componentType: null,
-          });
-
-          await this.adapter.insert(tableName, row, { returning: ["id"] });
-          if (schema) {
-            await this.upsertLocalizedComponent(
-              schema,
-              row.id as string,
-              companion,
-              locale
-            );
-          }
-          await this.writeNestedPooled(
-            {
-              id: row.id as string,
-              tableName,
-              fields: componentFields,
-              data: instance,
-            },
-            { locale, req, assembledFromStorage }
-          );
-        }
+        const existingRow =
+          instanceId && existingMap.has(instanceId)
+            ? { id: instanceId, tableName }
+            : undefined;
+        if (existingRow) incomingIds.add(existingRow.id);
+        // The row this instance was written as, which the field groups placed in it name as parent.
+        const written = await this.writeInstanceRow(this.adapter, undefined, {
+          existing: existingRow,
+          tableName,
+          split: { schema, main, companion },
+          componentFields,
+          parent: { parentId, parentTable, fieldName },
+          order: i,
+          componentType: null,
+          locale,
+        });
+        await this.writeNestedPooled(
+          { ...written, fields: componentFields, data: instance },
+          { locale, req, assembledFromStorage }
+        );
       }
 
       await this.deleteRemovedInstances(
@@ -1554,7 +1515,12 @@ export class FieldGroupMutationService extends BaseService {
           fields: componentFields,
           data: instance,
         };
-        const carried = { locale, req, write: params.write, assembledFromStorage };
+        const carried = {
+          locale,
+          req,
+          write: params.write,
+          assembledFromStorage,
+        };
         // Validation only: judge every instance, and the field groups placed directly in it, store
         // none.
         if (validateOnly) {
@@ -1584,61 +1550,32 @@ export class FieldGroupMutationService extends BaseService {
           { adapter: this.txWriteAdapter(tx) }
         );
 
-        if (instanceId && existingMap.has(instanceId)) {
-          incomingIds.add(instanceId);
-          const updateData = this.serializeComponentRow(main, componentFields);
-          updateData[STORAGE_FORMAT.columns.order] = i;
-          updateData.updated_at = this.formatDateForDb();
-
-          await tx.update(
+        const existingRow =
+          instanceId && existingMap.has(instanceId)
+            ? { id: instanceId, tableName }
+            : undefined;
+        if (existingRow) incomingIds.add(existingRow.id);
+        // The row this instance was written as, which the field groups placed in it name as parent.
+        const written = await this.writeInstanceRow(
+          tx,
+          this.txWriteAdapter(tx),
+          {
+            existing: existingRow,
             tableName,
-            updateData,
-            this.whereEq("id", instanceId),
-            { returning: ["id"] }
-          );
-          if (schema) {
-            await this.upsertLocalizedComponent(
-              schema,
-              instanceId,
-              companion,
-              locale,
-              this.txWriteAdapter(tx)
-            );
-          }
-          await this.writeNestedInTx(
-            tx,
-            { ...nested, id: instanceId },
-            carried,
-            false
-          );
-        } else {
-          const row = this.buildInsertRow({
-            data: main,
+            split: { schema, main, companion },
             componentFields,
-            parentId,
-            parentTable,
-            fieldName,
+            parent: { parentId, parentTable, fieldName },
             order: i,
             componentType: null,
-          });
-
-          await tx.insert(tableName, row, { returning: ["id"] });
-          if (schema) {
-            await this.upsertLocalizedComponent(
-              schema,
-              row.id as string,
-              companion,
-              locale,
-              this.txWriteAdapter(tx)
-            );
+            locale,
           }
-          await this.writeNestedInTx(
-            tx,
-            { ...nested, id: row.id as string },
-            carried,
-            false
-          );
-        }
+        );
+        await this.writeNestedInTx(
+          tx,
+          { ...nested, ...written },
+          carried,
+          false
+        );
       }
 
       // Validation only: nothing was stored, so nothing is removed either.
@@ -1783,85 +1720,35 @@ export class FieldGroupMutationService extends BaseService {
           locale
         );
 
-        if (instanceId && existingEntry) {
-          incomingIds.add(instanceId);
-          const updateData = this.serializeComponentRow(main, componentFields);
-          updateData[STORAGE_FORMAT.columns.order] = i;
-          updateData[STORAGE_FORMAT.columns.type] = componentType;
-          updateData.updated_at = this.formatDateForDb();
-
-          await this.adapter.update(
-            existingEntry.tableName,
-            updateData,
-            this.whereEq("id", instanceId),
-            { returning: ["id"] }
-          );
-          if (schema) {
-            await this.upsertLocalizedComponent(
-              schema,
-              instanceId,
-              companion,
-              locale
-            );
-          }
-          await this.writeNestedPooled(
-            {
-              id: instanceId,
-              tableName: existingEntry.tableName,
-              fields: componentFields,
-              data: instance,
-            },
-            { locale, req, assembledFromStorage }
-          );
-        } else {
-          const row = this.buildInsertRow({
-            data: main,
-            componentFields,
-            parentId,
-            parentTable,
-            fieldName,
-            order: i,
-            componentType,
-          });
-
-          await this.adapter.insert(meta.tableName, row, {
-            returning: ["id"],
-          });
-          if (schema) {
-            await this.upsertLocalizedComponent(
-              schema,
-              row.id as string,
-              companion,
-              locale
-            );
-          }
-          await this.writeNestedPooled(
-            {
-              id: row.id as string,
-              tableName: meta.tableName,
-              fields: componentFields,
-              data: instance,
-            },
-            { locale, req, assembledFromStorage }
-          );
-        }
-      }
-
-      const fieldsByTable = new Map(
-        [...metaCache.values()].map(meta => [meta.tableName, meta.fields])
-      );
-      for (const [id, entry] of globalExistingMap) {
-        if (incomingIds.has(id)) continue;
-        // The field groups placed directly in a removed instance go with it, at every depth.
-        await this.deleteNestedInstances(
-          this.adapter,
-          undefined,
-          entry.tableName,
-          fieldsByTable.get(entry.tableName) ?? [],
-          [id]
+        const existingRow =
+          instanceId && existingEntry
+            ? { id: instanceId, tableName: existingEntry.tableName }
+            : undefined;
+        if (existingRow) incomingIds.add(existingRow.id);
+        // The row this instance was written as, which the field groups placed in it name as parent.
+        const written = await this.writeInstanceRow(this.adapter, undefined, {
+          existing: existingRow,
+          tableName: meta.tableName,
+          split: { schema, main, companion },
+          componentFields,
+          parent: { parentId, parentTable, fieldName },
+          order: i,
+          componentType,
+          locale,
+        });
+        await this.writeNestedPooled(
+          { ...written, fields: componentFields, data: instance },
+          { locale, req, assembledFromStorage }
         );
-        await this.adapter.delete(entry.tableName, this.whereEq("id", id));
       }
+
+      await this.deleteRemovedZoneInstances(
+        this.adapter,
+        undefined,
+        metaCache,
+        globalExistingMap,
+        incomingIds
+      );
 
       this.logger.debug("Saved multi-component instances", {
         parentId,
@@ -1987,7 +1874,12 @@ export class FieldGroupMutationService extends BaseService {
           fields: componentFields,
           data: instance,
         };
-        const carried = { locale, req, write: params.write, assembledFromStorage };
+        const carried = {
+          locale,
+          req,
+          write: params.write,
+          assembledFromStorage,
+        };
         // Validation only: judge every instance, and the field groups placed directly in it, store
         // none.
         if (validateOnly) {
@@ -2011,81 +1903,43 @@ export class FieldGroupMutationService extends BaseService {
           { adapter: this.txWriteAdapter(tx) }
         );
 
-        if (instanceId && existingEntry) {
-          incomingIds.add(instanceId);
-          const updateData = this.serializeComponentRow(main, componentFields);
-          updateData[STORAGE_FORMAT.columns.order] = i;
-          updateData[STORAGE_FORMAT.columns.type] = componentType;
-          updateData.updated_at = this.formatDateForDb();
-
-          await tx.update(
-            existingEntry.tableName,
-            updateData,
-            this.whereEq("id", instanceId),
-            { returning: ["id"] }
-          );
-          if (schema) {
-            await this.upsertLocalizedComponent(
-              schema,
-              instanceId,
-              companion,
-              locale,
-              this.txWriteAdapter(tx)
-            );
-          }
-          await this.writeNestedInTx(
-            tx,
-            { ...nested, tableName: existingEntry.tableName, id: instanceId },
-            carried,
-            false
-          );
-        } else {
-          const row = this.buildInsertRow({
-            data: main,
+        const existingRow =
+          instanceId && existingEntry
+            ? { id: instanceId, tableName: existingEntry.tableName }
+            : undefined;
+        if (existingRow) incomingIds.add(existingRow.id);
+        // The row this instance was written as, which the field groups placed in it name as parent.
+        const written = await this.writeInstanceRow(
+          tx,
+          this.txWriteAdapter(tx),
+          {
+            existing: existingRow,
+            tableName: meta.tableName,
+            split: { schema, main, companion },
             componentFields,
-            parentId,
-            parentTable,
-            fieldName,
+            parent: { parentId, parentTable, fieldName },
             order: i,
             componentType,
-          });
-
-          await tx.insert(meta.tableName, row, { returning: ["id"] });
-          if (schema) {
-            await this.upsertLocalizedComponent(
-              schema,
-              row.id as string,
-              companion,
-              locale,
-              this.txWriteAdapter(tx)
-            );
+            locale,
           }
-          await this.writeNestedInTx(
-            tx,
-            { ...nested, id: row.id as string },
-            carried,
-            false
-          );
-        }
+        );
+        await this.writeNestedInTx(
+          tx,
+          { ...nested, ...written },
+          carried,
+          false
+        );
       }
 
       // Validation only stored nothing, so it removes nothing either.
       if (validateOnly) return;
-      const fieldsByTable = new Map(
-        [...metaCache.values()].map(meta => [meta.tableName, meta.fields])
+      await this.deleteRemovedZoneInstances(
+        tx,
+        tx.getDrizzle(),
+        metaCache,
+        globalExistingMap,
+        incomingIds
       );
-      for (const [id, entry] of globalExistingMap) {
-        if (incomingIds.has(id)) continue;
-        // The field groups placed directly in a removed instance go with it, at every depth.
-        await this.deleteNestedInstances(
-          tx,
-          tx.getDrizzle(),
-          entry.tableName,
-          fieldsByTable.get(entry.tableName) ?? [],
-          [id]
-        );
-        await tx.delete(entry.tableName, this.whereEq("id", id));
-      }
     } catch (error) {
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
       // map raw DB errors via fromDatabaseError. Normalise raw driver errors
@@ -2227,6 +2081,76 @@ export class FieldGroupMutationService extends BaseService {
       });
       return [];
     }
+  }
+
+  /**
+   * Write one field-group instance's row and its translated values, alike through the pool or a
+   * transaction: an update of the stored row `existing` names, else an insert into `tableName`.
+   * Returns the row it was written as, which the field groups placed in it name as their parent.
+   */
+  private async writeInstanceRow(
+    store: Pick<TransactionContext, "insert" | "update">,
+    // The transaction's companion writer; omitted, the pooled adapter writes the companion row.
+    companionWriter:
+      | ReturnType<FieldGroupMutationService["txWriteAdapter"]>
+      | undefined,
+    params: {
+      existing: { id: string; tableName: string } | undefined;
+      tableName: string;
+      split: Pick<
+        Awaited<
+          ReturnType<FieldGroupMutationService["splitLocalizedComponent"]>
+        >,
+        "schema" | "main" | "companion"
+      >;
+      componentFields: FieldConfig[];
+      parent: { parentId: string; parentTable: string; fieldName: string };
+      order: number;
+      // A zone's row records which field group it holds; a repeatable's table says so already.
+      componentType: string | null;
+      locale: string | undefined;
+    }
+  ): Promise<{ id: string; tableName: string }> {
+    const { existing, split, componentFields, order, componentType } = params;
+    let written: { id: string; tableName: string };
+    if (existing) {
+      const updateData = this.serializeComponentRow(
+        split.main,
+        componentFields
+      );
+      updateData[STORAGE_FORMAT.columns.order] = order;
+      if (componentType !== null) {
+        updateData[STORAGE_FORMAT.columns.type] = componentType;
+      }
+      updateData.updated_at = this.formatDateForDb();
+      await store.update(
+        existing.tableName,
+        updateData,
+        this.whereEq("id", existing.id),
+        { returning: ["id"] }
+      );
+      written = existing;
+    } else {
+      const row = this.buildInsertRow({
+        data: split.main,
+        componentFields,
+        ...params.parent,
+        order,
+        componentType,
+      });
+      await store.insert(params.tableName, row, { returning: ["id"] });
+      written = { id: row.id as string, tableName: params.tableName };
+    }
+    if (split.schema) {
+      await this.upsertLocalizedComponent(
+        split.schema,
+        written.id,
+        split.companion,
+        params.locale,
+        companionWriter
+      );
+    }
+    return written;
   }
 
   private buildInsertRow(params: {
@@ -2834,18 +2758,11 @@ export class FieldGroupMutationService extends BaseService {
     existingMap: Map<string, ComponentRow>,
     incomingIds: Set<string>
   ): Promise<void> {
-    const removed = [...existingMap.keys()].filter(id => !incomingIds.has(id));
-    // The field groups placed directly in each removed instance go with it, at every depth.
-    await this.deleteNestedInstances(
-      this.adapter,
-      undefined,
+    await this.deleteRemovedFrom(this.adapter, undefined, {
       tableName,
       componentFields,
-      removed
-    );
-    for (const id of removed) {
-      await this.adapter.delete(tableName, this.whereEq("id", id));
-    }
+      removed: [...existingMap.keys()].filter(id => !incomingIds.has(id)),
+    });
   }
 
   private async deleteRemovedInstancesInTx(
@@ -2855,17 +2772,59 @@ export class FieldGroupMutationService extends BaseService {
     existingMap: Map<string, ComponentRow>,
     incomingIds: Set<string>
   ): Promise<void> {
-    const removed = [...existingMap.keys()].filter(id => !incomingIds.has(id));
-    // The field groups placed directly in each removed instance go with it, at every depth.
-    await this.deleteNestedInstances(
-      tx,
-      tx.getDrizzle(),
+    await this.deleteRemovedFrom(tx, tx.getDrizzle(), {
       tableName,
       componentFields,
-      removed
+      removed: [...existingMap.keys()].filter(id => !incomingIds.has(id)),
+    });
+  }
+
+  /**
+   * Delete the instances `removed` of the field group stored in `tableName`, each with the field
+   * groups placed directly in it, at every depth: on the transaction or the pooled adapter.
+   */
+  private async deleteRemovedFrom(
+    store: RowStore,
+    executor: unknown,
+    removed: {
+      tableName: string;
+      componentFields: readonly FieldConfig[];
+      removed: readonly string[];
+    }
+  ): Promise<void> {
+    await this.deleteNestedInstances(
+      store,
+      executor,
+      removed.tableName,
+      removed.componentFields,
+      removed.removed
     );
-    for (const id of removed) {
-      await tx.delete(tableName, this.whereEq("id", id));
+    for (const id of removed.removed) {
+      await store.delete(removed.tableName, this.whereEq("id", id));
+    }
+  }
+
+  /**
+   * Delete each stored instance of a zone that the write no longer holds, with the field groups
+   * placed directly in it, at every depth, finding its fields by the table it is stored in.
+   */
+  private async deleteRemovedZoneInstances(
+    store: RowStore,
+    executor: unknown,
+    metaCache: ReadonlyMap<string, DynamicFieldGroupRecord>,
+    existing: ReadonlyMap<string, { tableName: string }>,
+    incomingIds: ReadonlySet<string>
+  ): Promise<void> {
+    const fieldsByTable = new Map(
+      [...metaCache.values()].map(meta => [meta.tableName, meta.fields])
+    );
+    for (const [id, entry] of existing) {
+      if (incomingIds.has(id)) continue;
+      await this.deleteRemovedFrom(store, executor, {
+        tableName: entry.tableName,
+        componentFields: fieldsByTable.get(entry.tableName) ?? [],
+        removed: [id],
+      });
     }
   }
 

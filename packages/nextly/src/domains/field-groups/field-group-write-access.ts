@@ -484,26 +484,39 @@ async function keepProtectedStoredInstances(params: {
         )
       : await keptInstanceList(name, sent, storedRows, slugOf, params);
     if (kept !== undefined) params.data[name] = kept;
-    // A stored instance the write keeps can still remove a field group placed directly in it,
-    // which its save then deletes with every row below: judged in turn, against its stored self.
-    const pairs = keptPairs(params.data[name], storedRows, {
-      holdsOne,
-      zone: many !== undefined,
-      slugOf,
+    await keepProtectedNestedInstances(
+      params,
+      keptPairs(params.data[name], storedRows, {
+        holdsOne,
+        zone: many !== undefined,
+        slugOf,
+      }),
+      slugOf
+    );
+  }
+}
+
+/**
+ * A stored instance the write keeps can still remove a field group placed directly in it, which
+ * its save then deletes with every row below: each kept instance judged in turn, against its
+ * stored self.
+ */
+async function keepProtectedNestedInstances(
+  params: Parameters<typeof keepProtectedStoredInstances>[0],
+  pairs: Array<[Record<string, unknown>, Record<string, unknown>]>,
+  slugOf: (row: Record<string, unknown>) => string | undefined
+): Promise<void> {
+  for (const [sentRow, storedRow] of pairs) {
+    const slug = slugOf(storedRow);
+    const inner =
+      slug === undefined ? undefined : params.fieldGroupFields.get(slug);
+    if (!inner) continue;
+    await keepProtectedStoredInstances({
+      ...params,
+      data: sentRow,
+      stored: storedRow,
+      fields: inner,
     });
-    for (const [sentRow, storedRow] of pairs) {
-      const slug = slugOf(storedRow);
-      const inner =
-        slug === undefined ? undefined : params.fieldGroupFields.get(slug);
-      if (inner) {
-        await keepProtectedStoredInstances({
-          ...params,
-          data: sentRow,
-          stored: storedRow,
-          fields: inner,
-        });
-      }
-    }
   }
 }
 
@@ -675,15 +688,25 @@ function indexStoredInstances(
   for (const field of directFieldGroupFields(fields)) {
     const name = nameOf(field);
     if (name === undefined) continue;
-    const { single, many } = extractFieldGroupReferences(field);
     for (const row of rowsOf(level[name])) {
-      if (typeof row.id !== "string") continue;
-      found.set(row.id, [...(found.get(row.id) ?? []), row]);
-      const slug = many !== undefined ? readFieldGroupType(row) : single;
-      const inner = slug === undefined ? undefined : fieldGroupFields.get(slug);
-      if (inner) indexStoredInstances(row, inner, fieldGroupFields, found);
+      indexStoredInstance(row, field, fieldGroupFields, found);
     }
   }
+}
+
+/** {@link indexStoredInstances} for one stored instance of `field`, and what is placed in it. */
+function indexStoredInstance(
+  row: Record<string, unknown>,
+  field: FieldConfig,
+  fieldGroupFields: FieldGroupFieldsBySlug,
+  found: Map<string, Record<string, unknown>[]>
+): void {
+  if (typeof row.id !== "string") return;
+  found.set(row.id, [...(found.get(row.id) ?? []), row]);
+  const { single, many } = extractFieldGroupReferences(field);
+  const slug = many !== undefined ? readFieldGroupType(row) : single;
+  const inner = slug === undefined ? undefined : fieldGroupFields.get(slug);
+  if (inner) indexStoredInstances(row, inner, fieldGroupFields, found);
 }
 
 /**

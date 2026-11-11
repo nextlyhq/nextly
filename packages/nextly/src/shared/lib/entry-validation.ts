@@ -44,7 +44,6 @@ import type {
   PluginStoredValue,
   PluginStoredValueTarget,
 } from "../../plugins/contributions";
-
 import { addressableFields } from "../addressable-fields";
 
 import { detachedField } from "./detached-field";
