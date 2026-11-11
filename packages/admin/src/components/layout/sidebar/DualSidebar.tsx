@@ -103,42 +103,26 @@ interface RailSectionAnswers {
   hasMediaSection: boolean;
   hasSettingsSection: boolean;
   hasBuildersSection: boolean;
-  locales: LocalizationConfig;
+  branding: { locales?: LocalizationConfig } | null | undefined;
 }
 
-/** Whether each rail entry's section has anything to show, by the entry's id. */
-function useRailSections(answers: RailSectionAnswers): RailSections {
-  const {
-    hasCollectionsSection,
-    hasSinglesSection,
-    pluginsSectionVisible,
-    hasMediaSection,
-    hasSettingsSection,
-    hasBuildersSection,
-    locales,
-  } = answers;
-  return useMemo(
-    () => ({
-      // Shown while either kind has something to list; the panel shows only
-      // the kinds that do.
-      [CONTENT_RAIL_ID]: hasCollectionsSection || hasSinglesSection,
-      plugins: pluginsSectionVisible,
-      media: hasMediaSection,
-      settings: hasSettingsSection,
-      builders: hasBuildersSection,
-      // Only a site with two or more locales has anything to translate.
-      translations: isMultilingual(locales),
-    }),
-    [
-      hasCollectionsSection,
-      hasSinglesSection,
-      pluginsSectionVisible,
-      hasMediaSection,
-      hasSettingsSection,
-      hasBuildersSection,
-      locales,
-    ]
-  );
+/**
+ * Whether each rail entry's section has anything to show, by the entry's id.
+ * Six booleans, cheap enough to build on every render.
+ */
+function railSections(answers: RailSectionAnswers): RailSections {
+  return {
+    // Shown while either kind has something to list; the panel shows only the
+    // kinds that do.
+    [CONTENT_RAIL_ID]:
+      answers.hasCollectionsSection || answers.hasSinglesSection,
+    plugins: answers.pluginsSectionVisible,
+    media: answers.hasMediaSection,
+    settings: answers.hasSettingsSection,
+    builders: answers.hasBuildersSection,
+    // Only a site with two or more locales has anything to translate.
+    translations: isMultilingual(answers.branding?.locales),
+  };
 }
 
 /**
@@ -349,14 +333,14 @@ export function DualSidebar({
   // Whether an entry shows, with an answer still loading read as "shown" for
   // the entries that say so below. The panel and the routes read this; what the
   // rail DRAWS is held to the entries already decided (`rail.items`).
-  const sections = useRailSections({
+  const sections = railSections({
     hasCollectionsSection,
     hasSinglesSection,
     pluginsSectionVisible,
     hasMediaSection,
     hasSettingsSection,
     hasBuildersSection,
-    locales: branding?.locales,
+    branding,
   });
 
   const isMenuItemShown = useCallback(
