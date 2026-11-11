@@ -257,25 +257,10 @@ async function renamedFieldMove(
     change.dialect
   ).detectFieldRename(change.previousFields, change.fields);
   if (!rename) return null;
-  const fromColumn = getColumnDescriptor(
-    rename.from,
-    change.dialect,
-    change.builtBy
-  )?.name;
-  const toColumn = getColumnDescriptor(
-    rename.to,
-    change.dialect,
-    change.builtBy
-  )?.name;
+  const fromColumn = columnOf(rename.from, change);
+  const toColumn = columnOf(rename.to, change);
   if (!fromColumn || !toColumn) return null;
-  const { isFieldLocalized } = await import("../i18n/classify-fields");
-  const companionTable = `${change.mainTable}_locales`;
-  const fromTable = isFieldLocalized(rename.from, change.wasLocalized)
-    ? companionTable
-    : change.mainTable;
-  const toTable = isFieldLocalized(rename.to, change.isLocalized)
-    ? companionTable
-    : change.mainTable;
+  const { fromTable, toTable } = await tablesOfMove(rename, change);
   // A rename that keeps its column where it is moves nothing. One that keeps the column's name
   // while its values move between the tables still lands on a column that may be there.
   if (fromTable === toTable && fromColumn === toColumn) return null;
@@ -285,6 +270,34 @@ async function renamedFieldMove(
     fromColumn,
     toTable,
     toColumn,
+  };
+}
+
+/** The column `field` names, as the entity's tables were built (`getColumnDescriptor`). */
+function columnOf(
+  field: FieldDefinition,
+  change: RenamedFieldChange
+): string | undefined {
+  return getColumnDescriptor(field, change.dialect, change.builtBy)?.name;
+}
+
+/**
+ * The tables a renamed field's values move between: the one holding them before the change and
+ * the one holding them after, each the companion for a translated field and the main table
+ * otherwise (`isFieldLocalized`).
+ */
+async function tablesOfMove(
+  rename: { from: FieldDefinition; to: FieldDefinition },
+  change: RenamedFieldChange
+): Promise<{ fromTable: string; toTable: string }> {
+  const { isFieldLocalized } = await import("../i18n/classify-fields");
+  const tableOf = (field: FieldDefinition, localized: boolean) =>
+    isFieldLocalized(field, localized)
+      ? `${change.mainTable}_locales`
+      : change.mainTable;
+  return {
+    fromTable: tableOf(rename.from, change.wasLocalized),
+    toTable: tableOf(rename.to, change.isLocalized),
   };
 }
 
