@@ -113,6 +113,16 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * request needs them, and a config reload loads the terminal's prompt at its
  * first question. 59 and 1,298 measured; both hold whether CI measures one
  * fewer.
+ * They came down again, to 59 and 1,319, when six more imports stopped
+ * loading what their files never run: a plugin's public-address helpers load
+ * the listing of held addresses, and the public-address readers the boot
+ * entry, when they are first called; the list dispatchers and the collection
+ * read load the route handler's config store where they read it; the
+ * collection dispatcher bumps the schema version in a module of its own
+ * rather than in the route handler; and the CLI's fresh reset and first
+ * administrator load the seeders when they seed. 56 and 1,284 measured. Four
+ * request-path tests joined the heavy files by design: the request path now
+ * starts Nextly through `getNextly`, so they load the boot.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -120,7 +130,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 61, tailMeanModules: 1_332 };
+export const BUDGET = { heavyFiles: 59, tailMeanModules: 1_319 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",

@@ -14,10 +14,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../../di";
 import { whenServicesRegistered } from "../../di/service-access";
+import { PAGINATION_DEFAULTS } from "../../types/pagination";
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { appLocalization } from "../i18n/configured-locales";
 import { resolveLocaleChain } from "../i18n/resolve-locale";
-import { PAGINATION_DEFAULTS } from "../../types/pagination";
 
 import { addressLanguages, heldIn, readEveryLanguage } from "./held-addresses";
 import type { HeldAddressUpdate } from "./participants";
@@ -130,7 +130,7 @@ export async function heldPage(args: {
     limit: limit + 1,
     status: "all",
   } as never);
-  const documents = (page.items as Record<string, unknown>[]).slice(0, limit);
+  const documents = page.items.slice(0, limit);
   if (documents.length === 0) return { items: [] };
 
   // Each document read exactly as a save reads it, so a catch-up records
