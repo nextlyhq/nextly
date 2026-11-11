@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 import { Users } from "@admin/components/icons";
 
 import { StatsCard } from "./StatsCard";
@@ -34,17 +34,15 @@ describe("StatsCard", () => {
     );
 
     expect(screen.getByText("+12.5%")).toBeInTheDocument();
-    // The colour is on the BADGE, not on the span holding the text — the text
-    // sits in a bare child, so the old assertion read an element with no class
-    // at all and could never have passed.
-    //
-    // Asserted by the status's text token: an up trend is coloured with the
-    // success status and never the danger one. Both halves are needed — a class
-    // list carrying both would satisfy either check alone, and swapping the two
-    // branches is exactly the regression this guards.
+    // A quiet chip: no tinted fill or ink on the chip itself, and the arrow alone in the
+    // success status's solid colour, never the danger one. Both halves are needed: swapping the
+    // two branches is exactly the regression this guards.
     const badge = trendBadge("+12.5%");
-    expect(badge.className).toMatch(/\btext-success-text\b/);
-    expect(badge.className).not.toMatch(/\btext-danger-text\b/);
+    expect(badge).toHaveClass("bg-card", "text-foreground");
+    expect(badge.className).not.toMatch(/-(surface|text)\b/);
+    const mark = within(badge).getByTestId("trend-mark");
+    expect(mark).toHaveClass("text-success-solid");
+    expect(mark).not.toHaveClass("text-danger-solid");
   });
 
   it("renders with negative trend indicator", () => {
@@ -54,8 +52,10 @@ describe("StatsCard", () => {
 
     expect(screen.getByText("-5.2%")).toBeInTheDocument();
     const badge = trendBadge("-5.2%");
-    expect(badge.className).toMatch(/\btext-danger-text\b/);
-    expect(badge.className).not.toMatch(/\btext-success-text\b/);
+    expect(badge).toHaveClass("bg-card", "text-foreground");
+    const mark = within(badge).getByTestId("trend-mark");
+    expect(mark).toHaveClass("text-danger-solid");
+    expect(mark).not.toHaveClass("text-success-solid");
   });
 
   it("does not render trend when change is undefined", () => {

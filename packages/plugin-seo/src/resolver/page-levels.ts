@@ -18,18 +18,35 @@ import {
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
 
+import { addressHolders } from "../address-record/participant";
+import { productionAddressesOf } from "../canonical";
+import { isRecord, textOf } from "../plain-values";
+import type { AiCrawlerChoice } from "../settings/contract";
+import { fillPattern } from "../settings/patterns";
+
 import type { Levels } from "./order";
 
 /**
- * The site's own SEO rules: its name and defaults, and each content type's
- * pattern, keyed by the collection slug or `single:<slug>`. Read from the
- * SEO settings; empty where none are set.
+ * The site's own SEO rules: its name and defaults, the patterns a type uses
+ * where it has none of its own, and each content type's pattern, keyed by the
+ * collection slug or `single:<slug>`. Read from the SEO settings.
  */
 export interface SiteRules {
   siteName?: string;
+  /** Where the site itself is served: bare origins, such as `https://example.com`. */
+  productionAddresses?: readonly string[];
   description?: string;
   image?: PageMetadataImage;
+  /** The patterns a type uses where it has none of its own. */
+  defaultPatterns?: { title?: string; description?: string };
   patterns: Record<string, { title?: string; description?: string }>;
+  /**
+   * The content types hidden from search as a whole, keyed as `patterns`
+   * are: every page of one is served `noindex` and left out of the sitemap.
+   */
+  hiddenTypes?: readonly string[];
+  /** What robots.txt asks AI crawlers to do, where the site has chosen. */
+  aiCrawlers?: AiCrawlerChoice;
 }
 
 /** No rules set: every value comes from the page, its route or its content. */
@@ -44,12 +61,6 @@ const CONTENT_FIELDS = {
   description: ["excerpt", "summary", "description", "subtitle"],
   image: ["coverImage", "cover", "featuredImage", "heroImage", "image"],
 } as const;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const textOf = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim() !== "" ? value : undefined;
 
 /** `values` without the keys whose value is undefined. */
 function defined<T extends Record<string, unknown>>(values: T): Partial<T> {
@@ -116,40 +127,6 @@ export async function imageOf(
   return asImage(await mediaOf(ctx, value));
 }
 
-/** A token's name as matched: letters and digits only, any case. */
-const tokenKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, "");
-
-/**
- * `pattern` filled in from the page: `{Title}` and `{Site name}`, and any of
- * the page's own text fields by name. Nothing where a token has no value, so
- * the next level supplies the value rather than a pattern with a hole in it.
- */
-export function fillPattern(
-  pattern: string,
-  values: { title?: string; siteName?: string },
-  document: Readonly<Record<string, unknown>>
-): string | undefined {
-  const fields = new Map(
-    Object.entries(document).map(([name, value]) => [tokenKey(name), value])
-  );
-  let missing = false;
-  const filled = pattern.replace(/\{([^{}]+)\}/g, (_, name: string) => {
-    const key = tokenKey(name);
-    const value =
-      key === "title"
-        ? values.title
-        : key === "sitename"
-          ? values.siteName
-          : (textOf(fields.get(key)) ??
-            (typeof fields.get(key) === "number"
-              ? String(fields.get(key))
-              : undefined));
-    if (value === undefined) missing = true;
-    return value ?? "";
-  });
-  return missing ? undefined : textOf(filled.trim());
-}
-
 /** The first of `names` the document has a value for, and which. */
 function firstField(
   document: Readonly<Record<string, unknown>>,
@@ -168,13 +145,19 @@ function firstField(
  * language's own domain. None where its type declares no address.
  */
 export async function addressOf(
-  type: PublicAddressType,
+  ctx: PluginContext,
+  page: { type: PublicAddressType; key: string },
   document: Readonly<Record<string, unknown>>,
   locale: string | undefined,
   served: string | undefined
 ): Promise<string | undefined> {
-  const address = await publicAddressOf(type, document, locale);
+  const address = await publicAddressOf(page.type, document, locale);
   if (address.status !== "resolved") return undefined;
+  // An address another page holds is that page's: this one lost it in a
+  // clash and has no canonical until it is given a new address.
+  if (await heldByAnother(ctx, page.key, document, address.path, locale)) {
+    return undefined;
+  }
   let origin = "";
   let path = address.path;
   if (locale !== undefined) {
@@ -184,6 +167,22 @@ export async function addressOf(
     path = inLanguage.path;
   }
   return `${origin}${laterListPage(path, served) ?? path}`;
+}
+
+/** Whether the record says a page other than this one holds `path`. */
+async function heldByAnother(
+  ctx: PluginContext,
+  key: string,
+  document: Readonly<Record<string, unknown>>,
+  path: string,
+  locale: string | undefined
+): Promise<boolean> {
+  const holders = await addressHolders(ctx, path, locale);
+  const id = String(document.id ?? "");
+  return (
+    holders.length > 0 &&
+    !holders.some(holder => holder.collection === key && holder.id === id)
+  );
 }
 
 /**
@@ -218,6 +217,7 @@ async function pageLevel(
     socialDescription: textOf(seo.socialDescription),
     image: await imageOf(ctx, seo.ogImage),
     canonical: textOf(seo.canonical),
+    canonicalElsewhere: seo.canonicalElsewhere === true ? true : undefined,
     hidden: seo.noindex === true ? true : undefined,
   });
 }
@@ -304,13 +304,20 @@ export async function levelsOf(
     hasImage(input.code.image) ||
     hasImage(input.derived.image);
   const content = await contentLevel(ctx, document, !higherImage);
-  const address = await addressOf(type, document, input.locale, input.path);
+  const address = await addressOf(
+    ctx,
+    { type, key },
+    document,
+    input.locale,
+    input.path
+  );
   return {
     page,
     code: input.code,
     template: input.derived,
     pattern: patternLevel(
-      rules.patterns[key] ?? {},
+      // The type's own patterns, else the site's default for that part.
+      { ...rules.defaultPatterns, ...rules.patterns[key] },
       defined({ title: content.title?.value, siteName: rules.siteName }),
       document
     ),
@@ -319,7 +326,11 @@ export async function levelsOf(
       title: rules.siteName,
       description: rules.description,
       image: rules.image,
+      // The environment's addresses win over the settings', as the staging
+      // guard reads them, so the two never disagree about the site's own.
+      productionAddresses: productionAddressesOf(rules.productionAddresses),
     }),
     ...(address === undefined ? {} : { address }),
+    ...(rules.hiddenTypes?.includes(key) === true ? { typeHidden: true } : {}),
   };
 }

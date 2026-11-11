@@ -241,6 +241,33 @@ describe("a field group the outline cannot show", () => {
       "zone/@social/handle",
     ]);
   });
+
+  it("counts each field group where it is used, on its own row", () => {
+    const [single, several] = buildOutline(
+      [
+        {
+          id: "f-meta",
+          name: "meta_seo",
+          label: "SEO",
+          type: "component",
+          component: "seo",
+        },
+        {
+          id: "f-zone",
+          name: "zone",
+          label: "Zone",
+          type: "component",
+          components: ["seo", "social"],
+        },
+      ],
+      { entityReadOnly: false, fieldGroups: nestedFixtureFieldGroups() }
+    );
+    // A field using one field group stands for it, and carries its count.
+    expect(single.usedIn).toBe(3);
+    // One accepting several stands for none of them; each entry carries its own.
+    expect(several.usedIn).toBeUndefined();
+    expect(several.children.map(entry => entry.usedIn)).toEqual([3, 1]);
+  });
 });
 
 describe("the rows drawn", () => {

@@ -105,6 +105,20 @@ describe("WidgetCard", () => {
     expect(screen.queryByText("42")).not.toBeInTheDocument();
   });
 
+  it("marks the error with the danger status's solid colour, never the action colour", () => {
+    render(
+      <WidgetCard
+        title="Published posts"
+        state={{ kind: "error", message: "Source unavailable." }}
+      >
+        <p>42</p>
+      </WidgetCard>
+    );
+    const mark = screen.getByTestId("widget-card-error-mark");
+    expect(mark).toHaveClass("text-danger-solid");
+    expect(mark).not.toHaveClass("text-destructive");
+  });
+
   it("shows the error as ordinary content, never as its own live region", () => {
     // The grid owns announcing for the batch; a card that announced its own
     // error would speak over the grid's one polite region.

@@ -218,7 +218,8 @@ async function namedEntry(
   // The entry's address in the page's language, as the page's own canonical
   // is formed: the language's prefix or its own domain included.
   const address = await addressOf(
-    { kind: "collection", slug: collection },
+    ctx,
+    { type: { kind: "collection", slug: collection }, key: collection },
     entry,
     locale,
     undefined

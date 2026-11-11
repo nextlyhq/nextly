@@ -3,7 +3,7 @@
  * page: a field group used inside another needs no second round, no field
  * group is asked for on its own, and one past the first page is still read.
  */
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -91,5 +91,37 @@ describe("useOutlineFieldGroups", () => {
     const { result } = renderHook(() => useOutlineFieldGroups(), { wrapper });
     await waitFor(() => expect(result.current.load).toBe("failed"));
     expect(result.current.fieldGroups.size).toBe(0);
+  });
+
+  it("reads the use counts again on the next visit, under the admin's own cache settings", async () => {
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: 5 * 60_000, gcTime: 10 * 60_000 },
+      },
+    });
+    const withClient = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    fetchComponents.mockResolvedValueOnce(
+      page([{ slug: "seo", label: "SEO", fields: [], placedBy: 1 }])
+    );
+    const first = renderHook(() => useOutlineFieldGroups(), {
+      wrapper: withClient,
+    });
+    await waitFor(() =>
+      expect(first.result.current.fieldGroups.get("seo")?.placedBy).toBe(1)
+    );
+    first.unmount();
+
+    // A collection now places it too; its save refreshed only its own keys.
+    fetchComponents.mockResolvedValueOnce(
+      page([{ slug: "seo", label: "SEO", fields: [], placedBy: 2 }])
+    );
+    const next = renderHook(() => useOutlineFieldGroups(), {
+      wrapper: withClient,
+    });
+    await waitFor(() =>
+      expect(next.result.current.fieldGroups.get("seo")?.placedBy).toBe(2)
+    );
   });
 });

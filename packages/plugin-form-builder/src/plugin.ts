@@ -32,6 +32,7 @@ import {
 import { submissionAnswers } from "./emails/answers";
 import { formsEmailTemplates } from "./emails/starter-messages";
 import { addressedFormPages, FORM_EDITOR_VIEW } from "./form-pages";
+import { registerFormClosing } from "./handlers/form-closing-hold";
 import {
   sameSubmittedPayload,
   submissionMarks,
@@ -627,6 +628,13 @@ export function formBuilder(
           ctx.data.editedBy = ctx.user?.id ?? null;
         }
         return ctx.data;
+      });
+
+      // Each form's closing time and limit, held inside the transaction that
+      // stores a submission, whatever stores it.
+      registerFormClosing(nextly, {
+        forms: formsSlug,
+        submissions: submissionSlug,
       });
 
       // Inject a real submissionCount into form reads (spam excluded — the

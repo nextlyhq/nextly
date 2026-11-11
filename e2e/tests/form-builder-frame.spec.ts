@@ -21,6 +21,15 @@ const PAGES: [string, string][] = [
   ["Submissions", "/submissions"],
 ];
 
+/** The sections of a form's Settings, in order. */
+const SETTINGS_SECTIONS = [
+  "Form",
+  "After someone submits",
+  "Availability",
+  "One response per person",
+  "Spam protection",
+];
+
 const formPages = (page: Page) =>
   page.getByRole("navigation", { name: "Form pages" });
 
@@ -125,6 +134,31 @@ test("is an Editor page at 1920px: one banner, one heading, edge to edge", async
   await expect(frame).toHaveCount(1);
   const box = await frame.boundingBox();
   expect(Math.round((box?.x ?? 0) + (box?.width ?? 0))).toBe(1920);
+});
+
+test("draws Settings as a Form page: its sections in order, at the form's measure", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const form = await seededForm(page);
+  await gotoAdmin(page, `${form}/settings`);
+  await waitForShellAnswers(page);
+
+  const body = page.locator('[data-form-page="settings"]');
+  await expect(
+    body.getByRole("region", { name: "Spam protection" })
+  ).toBeVisible();
+  // One page in sections, read top to bottom.
+  const sections = body.getByRole("region");
+  await expect(sections).toHaveCount(SETTINGS_SECTIONS.length);
+  for (const [index, name] of SETTINGS_SECTIONS.entries()) {
+    await expect(sections.nth(index)).toHaveAccessibleName(name);
+  }
+  // A Form page: the column stops at the form measure (56rem) rather than
+  // filling the 1440px window.
+  const box = await body.boundingBox();
+  expect(box?.width ?? 0).toBeGreaterThan(600);
+  expect(box?.width ?? Infinity).toBeLessThanOrEqual(56 * 16);
 });
 
 test("starts with the Forms panel folded, docks a field's settings at the edge, and the toggle brings the panel back", async ({
