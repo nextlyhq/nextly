@@ -30,6 +30,8 @@ import type { EmailProviderAdapter } from "../../email/types";
 import type { JobRegistry } from "../../jobs/job-registry";
 import { runJobsPass } from "../../jobs/jobs-runner";
 import type { NoticesService } from "../../notices/notices-service";
+import type { SingleEntryService } from "../../singles/services/single-entry-service";
+import { resolveSingleDocumentId } from "../../singles/services/single-document-access";
 import { workflowDefinitionHash } from "../hash";
 import {
   createReviewState,
@@ -40,6 +42,7 @@ import {
   takeWorkflowStep,
   type WorkflowCaller,
 } from "../steps";
+import { WORKFLOW_CHANGES_REQUESTED_NOTICE } from "../workflow-notices";
 import {
   writeWorkflowSettings,
   type WorkflowSettings,
@@ -87,14 +90,19 @@ const capturing = defineEmailProvider<Record<string, never>>({
 
 /** The step install, with email set up unless told not to. */
 async function boot(dialect: TestDialect, withEmail = true) {
-  const n = await bootSteps(dialect, [
-    definePlugin({
-      name: "mailer",
-      version: "1.0.0",
-      nextly: ">=0.0.0",
-      contributes: { emailProviders: [capturing] },
-    } as never),
-  ]);
+  const n = await bootSteps(
+    dialect,
+    [
+      definePlugin({
+        name: "mailer",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: { emailProviders: [capturing] },
+      } as never),
+    ],
+    // A table prefix of this file's own, so its tables are never another file's.
+    { tablePrefix: "wn_" }
+  );
   t = n;
   if (withEmail) {
     await n.nextly.emailProviders.create({
@@ -703,6 +711,88 @@ describe.each(getConfiguredTestDialects())(
         { retentionMs: null }
       );
       expect(sent).toEqual([]);
+    });
+
+    it("judges each notice in its own part's language, and a Single as a Single", async () => {
+      await boot(dialect);
+      // Letters may be read in every language but Spanish; Carol may read neither entity.
+      await person(app(), "alice", [
+        ["read", "letters"],
+        ["read", "banner"],
+      ]);
+      await person(app(), "carol", []);
+      const letter = await entry(app(), "letters");
+      const singles = app().getService(
+        "singleEntryService"
+      ) as SingleEntryService;
+      await singles.update(
+        "banner",
+        { title: "Banner", _overwrite: true },
+        { overrideAccess: true }
+      );
+      const banner = await resolveSingleDocumentId("banner");
+      if (banner === null) throw new Error("no banner");
+      const service = container.get<NoticesService>("noticesService");
+      // Notices as a request for changes writes them, one per part.
+      const told = (
+        userId: string,
+        subjectId: string,
+        part: string | null,
+        title: string
+      ) =>
+        service.record({
+          kind: WORKFLOW_CHANGES_REQUESTED_NOTICE,
+          userId,
+          subjectId,
+          occurrence: JSON.stringify([part, title]),
+          data: {
+            collection: "Letters",
+            title,
+            part,
+            localized: part !== null,
+            step: "Bounce",
+            actor: "bob",
+            comment: "Rework it",
+          },
+        });
+      await told("alice", `collection:letters:${letter}`, "en", "Hello");
+      await told("alice", `collection:letters:${letter}`, "es", "Hola");
+      await told("alice", `single:banner:${banner}`, null, "Banner");
+      await told("carol", `single:banner:${banner}`, null, "Banner");
+
+      const shown = (await service.find({ userId: "alice" })).rows.map(row => ({
+        title: row.title,
+        link: row.subject.link,
+        gone: row.subject.gone,
+      }));
+      expect(shown).toEqual(
+        expect.arrayContaining([
+          {
+            title: "Changes were requested on “Hello”",
+            link: `/admin/collections/letters/${letter}`,
+            gone: false,
+          },
+          // The Spanish part, refused in Spanish: nothing of what it says.
+          {
+            title: "This notice can no longer be shown.",
+            link: null,
+            gone: false,
+          },
+          // A Single that exists is linked, not read as deleted.
+          {
+            title: "Changes were requested on “Banner”",
+            link: "/admin/singles/banner",
+            gone: false,
+          },
+        ])
+      );
+      expect(shown).toHaveLength(3);
+      expect(JSON.stringify(shown)).not.toContain("Hola");
+
+      // Carol may not read the Single: nothing of it.
+      const [carols] = (await service.find({ userId: "carol" })).rows;
+      expect(carols?.title).toBe("This notice can no longer be shown.");
+      expect(carols?.subject.link).toBeNull();
     });
 
     it("links each notice to the document's edit page, and says so once the document is deleted", async () => {

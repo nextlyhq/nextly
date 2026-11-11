@@ -57,6 +57,14 @@ export interface NoticeRenderContext {
  *
  * @typeParam TData - The snapshot each notice of this kind stores.
  */
+/** One notice as its kind's `readable` is asked about it. */
+export interface NoticeToJudge<TData> {
+  id: string;
+  subjectId: string;
+  /** Its snapshot, as the kind's schema reads it. */
+  data: TData;
+}
+
 export interface NoticeKind<TData = unknown> {
   /**
    * Unique, and namespaced by the feature that owns it: `releases.stopped`,
@@ -88,15 +96,17 @@ export interface NoticeKind<TData = unknown> {
    */
   visible?: (userId: string) => Promise<boolean>;
   /**
-   * Which of these subjects this person may be told about now, for a kind whose subject is
-   * something the person reads through access rules, such as a document. A notice whose subject
-   * is not among them is listed with none of its snapshot's text and no link, and its email is
-   * not sent: what the person may not read, a notice does not tell them. A subject `link` finds
-   * gone is listed as gone, since there is nothing left to ask. Omitted, every subject may be.
+   * Which of these notices this person may be told about now, by id, for a kind whose subject is
+   * something the person reads through access rules, such as a document. Asked per notice, with
+   * its snapshot, so a kind can judge what a notice names beyond its subject, such as the
+   * language it is about. A notice not among them is listed with none of its snapshot's text and
+   * no link, and its email is not sent: what the person may not read, a notice does not tell
+   * them. A subject `link` finds gone is listed as gone, since there is nothing left to ask.
+   * Omitted, every notice may be.
    */
   readable?: (
     userId: string,
-    subjectIds: readonly string[]
+    notices: readonly NoticeToJudge<TData>[]
   ) => Promise<ReadonlySet<string>>;
 }
 

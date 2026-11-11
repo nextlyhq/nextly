@@ -447,7 +447,7 @@ export class NoticesService {
   }
 
   /**
-   * Render a page for `userId`: each kind's text, and its links and readable subjects resolved
+   * Render a page for `userId`: each kind's text, and its links and readable notices resolved
    * once per kind. A notice whose subject the person may not read is shown without its text or
    * link, but still shown, so the count and the list agree.
    */
@@ -460,10 +460,16 @@ export class NoticesService {
     for (const kindKey of new Set(rows.map(row => row.kind))) {
       const kind = registeredNoticeKind(kindKey);
       if (kind?.readable !== undefined) {
-        const ids = rows
+        // A snapshot that no longer parses is shown as no longer showable whatever is decided.
+        const judged = rows
           .filter(row => row.kind === kindKey)
-          .map(r => r.subjectId);
-        readable.set(kindKey, await kind.readable(userId, [...new Set(ids)]));
+          .flatMap(row => {
+            const parsed = kind.data.safeParse(row.data);
+            return parsed.success
+              ? [{ id: row.id, subjectId: row.subjectId, data: parsed.data }]
+              : [];
+          });
+        readable.set(kindKey, await kind.readable(userId, judged));
       }
       if (kind?.link === undefined) {
         links.set(kindKey, null);
@@ -484,7 +490,7 @@ export class NoticesService {
       const gone = known !== null && link === null;
       // A subject that still exists but that the person may not read: nothing of what the
       // snapshot says. One that is gone has no rules left to ask, so its kind says it is gone.
-      if (!gone && readable.get(row.kind)?.has(row.subjectId) === false) {
+      if (!gone && readable.get(row.kind)?.has(row.id) === false) {
         return [
           {
             id: row.id,

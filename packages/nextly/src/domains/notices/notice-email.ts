@@ -299,13 +299,17 @@ async function stillShown(
     return null;
   }
   // Their list withholds what a notice says of a subject they may not read, so no email says it.
-  if (
-    kind.readable !== undefined &&
-    !(await kind.readable(notice.userId, [notice.subjectId])).has(
-      notice.subjectId
-    )
-  ) {
-    return null;
+  if (kind.readable !== undefined) {
+    const parsed = kind.data.safeParse(notice.data);
+    if (!parsed.success) return null;
+    const judged = {
+      id: notice.id,
+      subjectId: notice.subjectId,
+      data: parsed.data,
+    };
+    if (!(await kind.readable(notice.userId, [judged])).has(notice.id)) {
+      return null;
+    }
   }
   return { notice, kind };
 }
