@@ -1079,6 +1079,14 @@ export type {
 export type { PluginEmitOptions } from "nextly";
 
 /**
+ * A plugin's durable events: what an `onDurable` subscriber receives (the
+ * event's id, which it de-duplicates on, its name, payload and which try
+ * this is) and the handler that receives it.
+ * @experimental
+ */
+export type { DurableEvent, DurableHandler } from "nextly";
+
+/**
  * Event-name constants (D69) — document/auth/media families. The event names
  * (and payloads) are part of the semver-protected surface (D40).
  * @public

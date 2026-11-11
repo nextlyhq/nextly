@@ -1183,6 +1183,13 @@ export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from
 // to `ResolvedDraftSplitCollection` however faithfully the record carries them.
 export { resolvedCollectionView } from "./domains/versions/resolved-collection-view";
 
+// A plugin's durable events (`ctx.events.emitDurable` / `onDurable`): what a
+// subscriber receives, and the handler that receives it.
+export type {
+  DurableEvent,
+  DurableHandler,
+} from "./domains/plugin-events/subscribers";
+
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {
   EventBus,

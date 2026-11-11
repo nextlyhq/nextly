@@ -55,7 +55,7 @@ interface PluginContributions {
   extend?: Array<{ target: string | string[]; fields: FieldConfig[] }>;
   permissions?: PluginPermission[]; // { action, resource, label?, description?, group? }
   fieldTypes?: PluginFieldType[]; // custom field types — see below
-  events?: Array<{ name: string }>; // each must begin with your slug and a dot, or boot fails
+  events?: Array<{ name: string; durable?: boolean }>; // each must begin with your slug and a dot, or boot fails; `durable: true` lets you emitDurable it
   routes?: PluginRoute[]; // { method, path, handler, requiredPermission?, public?, middleware?, rateLimit?, rawBody?, csrf?, noStore?, formatTimestamps?, mount? }
   auth?: PluginAuthContributions; // hooks, challenges, ui — see Auth extensibility
   settings?: ZodObject; // gives ctx.settings
@@ -283,6 +283,44 @@ await ctx.db.transaction(async tx => {
 Before this release `emit` delivered at once wherever it was called, even inside a
 transaction that later rolled back. A listener now hears an event emitted inside a
 transaction only after that transaction commits.
+
+### Durable events (`@experimental`)
+
+An `emit` reaches the listeners running in this process when it is delivered, and
+no further: a handler that throws, or a server that stops, loses it. A **durable**
+event is written to the database with the work that emits it, and handed to every
+subscriber until each has it.
+
+```ts
+// Declared in contributes.events with `durable: true`.
+await ctx.db.transaction(async tx => {
+  await tx.insert(orders).values(order);
+  await ctx.events.emitDurable("acme-billing.charged", { orderId: order.id }, { tx });
+});
+
+// Any plugin, in its init: a subscriber named within the plugin.
+ctx.events.onDurable("acme-billing.charged", "award-points", async event => {
+  // May run again for one event: de-duplicate on event.id.
+  await awardPointsOnce(event.id, event.payload.orderId);
+});
+```
+
+- `emitDurable(name, payload, { tx }?)` records the event by the same rule as
+  `emit`: in the transaction `tx` names, else in the one your code is running in,
+  else in one of its own. It commits and rolls back with that work, a savepoint
+  included, and resolves with the event's `id`. Only names your plugin declares
+  `durable: true` are accepted; the payload is a JSON object of at most 64 KB.
+- `onDurable(name, subscriber, handler)` subscribes under a name unique within
+  your plugin, 1 to 64 lower-case letters, digits, dots, dashes or underscores.
+  A delivery is owed to that name, so it reaches the same handler after a restart,
+  however subscribers were added or reordered. Each subscriber registered when an
+  event is dispatched gets one delivery.
+- Deliveries run on the `events:dispatch` job, and promptly once the emitting work
+  commits inside a request. A handler that throws is tried again with backoff,
+  across restarts, up to 10 times; a delivery whose subscriber is no longer
+  registered is held for it. `nextly events report` lists the deliveries that need
+  an operator, and `nextly events abandon` gives them up.
+- Finished events are removed 30 days after their last delivery settles.
 
 A hook that learns something true about the state a write leaves behind, rather
 than something that failed, tells the person whose write it is with

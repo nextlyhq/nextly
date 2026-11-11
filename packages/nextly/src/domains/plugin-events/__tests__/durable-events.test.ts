@@ -27,6 +27,9 @@ function recorder() {
       uses.push("transaction");
       throw new Error("a refused event reached the database");
     },
+    afterCommit: async () => {
+      uses.push("afterCommit");
+    },
   };
   return {
     uses,
