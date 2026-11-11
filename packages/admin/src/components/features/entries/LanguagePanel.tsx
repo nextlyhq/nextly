@@ -714,6 +714,61 @@ function publishOptions(
   return hasStatus === undefined ? {} : { hasStatus };
 }
 
+/**
+ * The box that narrows a long language list by name; nothing where the list
+ * is short enough not to need it.
+ */
+function LanguageFilter({
+  offered,
+  id,
+  value,
+  onChange,
+}: {
+  offered: boolean;
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+}): JSX.Element | null {
+  if (!offered) return null;
+  return (
+    <div className="border-b border-border px-3 py-2">
+      <label className="sr-only" htmlFor={id}>
+        Filter languages
+      </label>
+      <Input
+        id={id}
+        type="search"
+        value={value}
+        onChange={event => onChange(event.target.value)}
+        placeholder="Filter languages…"
+        className="h-7 text-xs"
+      />
+    </div>
+  );
+}
+
+/**
+ * Says, in whichever language is on screen, that the document's shared fields
+ * hold unpublished changes; nothing while they hold none.
+ */
+function SharedChangesNotice({
+  pending,
+}: {
+  pending?: boolean;
+}): JSX.Element | null {
+  if (pending !== true) return null;
+  return (
+    <p
+      role="status"
+      aria-label="Shared changes pending"
+      className="border-b border-border px-3 py-2 text-xs text-muted-foreground"
+    >
+      Shared fields have unpublished changes. They go live with the next
+      publish, in every language.
+    </p>
+  );
+}
+
 export function LanguagePanel({
   translations,
   activeLocale,
@@ -722,7 +777,7 @@ export function LanguagePanel({
   actionsDisabled = false,
   publishAllDisabled = actionsDisabled,
   navigationDisabled = actionsDisabled,
-  sharedChangesPending = false,
+  sharedChangesPending,
   className,
 }: LanguagePanelProps): JSX.Element | null {
   const [confirmPublishAll, setConfirmPublishAll] = useState(false);
@@ -767,16 +822,7 @@ export function LanguagePanel({
         onTranslate={() => onEnterTranslationMode?.(defaultLocale)}
       />
 
-      {sharedChangesPending && (
-        <p
-          role="status"
-          aria-label="Shared changes pending"
-          className="border-b border-border px-3 py-2 text-xs text-muted-foreground"
-        >
-          Shared fields have unpublished changes. They go live with the next
-          publish, in every language.
-        </p>
-      )}
+      <SharedChangesNotice pending={sharedChangesPending} />
 
       <PublishAllConfirm
         open={confirmPublishAll}
@@ -786,21 +832,12 @@ export function LanguagePanel({
         publish={publish}
       />
 
-      {offersFilter && (
-        <div className="border-b border-border px-3 py-2">
-          <label className="sr-only" htmlFor={filterId}>
-            Filter languages
-          </label>
-          <Input
-            id={filterId}
-            type="search"
-            value={filter}
-            onChange={event => setFilter(event.target.value)}
-            placeholder="Filter languages…"
-            className="h-7 text-xs"
-          />
-        </div>
-      )}
+      <LanguageFilter
+        offered={offersFilter}
+        id={filterId}
+        value={filter}
+        onChange={setFilter}
+      />
 
       <LanguageRows
         shown={shown}
