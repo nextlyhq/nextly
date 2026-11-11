@@ -7,7 +7,9 @@
  * makes: one read shared by every concurrent request, none while the last
  * read is fresh, one reload per change and none without one, and a change
  * marked in this process read at once and answered with the new version
- * rather than the one before it.
+ * rather than the one before it. A read or reload slower than the interval
+ * still answers, and schedules only later reads; a reload that failed leaves
+ * the served version where it was and is tried again.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,14 +17,24 @@ const read = vi.hoisted(() => ({
   seq: 1,
   count: 0,
   gate: null as null | Promise<void>,
+  /** How long each read takes, on the faked clock. */
+  takesMs: 0,
 }));
-const reloads = vi.hoisted(() => ({ count: 0 }));
+const reloads = vi.hoisted(() => ({
+  count: 0,
+  /** What each reload answers: whether every entity registered. */
+  loads: true,
+  takesMs: 0,
+}));
+/** Moves the faked clock, as a slow read or reload would. */
+const clock = vi.hoisted(() => ({ spend: (_ms: number) => {} }));
 const forgets = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("../../init/reload-dynamic-tables", () => ({
   reloadDynamicTables: () => {
     reloads.count += 1;
-    return Promise.resolve();
+    clock.spend(reloads.takesMs);
+    return Promise.resolve(reloads.loads);
   },
 }));
 vi.mock("../../di/service-access", () => ({
@@ -37,6 +49,10 @@ const database = {
         limit: async () => {
           read.count += 1;
           if (read.gate) await read.gate;
+          // A slow read, but not forever: a check that reads again because its
+          // own read took long finds a quick one from the fourth on, so it
+          // stops and the count says how often it read.
+          if (read.count <= 3) clock.spend(read.takesMs);
           return [
             { value: JSON.stringify({ migration: null, seq: read.seq }) },
           ];
@@ -68,6 +84,10 @@ const handler = {
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["performance"] });
+  clock.spend = ms => vi.advanceTimersByTime(ms);
+  read.takesMs = 0;
+  reloads.loads = true;
+  reloads.takesMs = 0;
   // A process that has read nothing yet.
   delete (globalThis as { __nextly_servedSchema?: unknown })
     .__nextly_servedSchema;
@@ -130,6 +150,56 @@ describe("the schema version a server copy serves", () => {
     // Within the interval, and still the new version: the mark forces the read.
     expect(await servedSchemaVersion()).toBe(2);
     expect(read.count).toBe(2);
+  });
+
+  it("answers a read slower than the interval with what it read, and reads nothing more at once", async () => {
+    read.takesMs = SCHEMA_VERSION_READ_INTERVAL_MS + 500;
+    expect(await servedSchemaVersion()).toBe(1);
+    expect(read.count).toBe(1);
+    // The interval runs from the read's answer: the next request is within it.
+    read.takesMs = 0;
+    expect(await servedSchemaVersion()).toBe(1);
+    expect(read.count).toBe(1);
+  });
+
+  it("reads nothing at once after a reload slower than the interval", async () => {
+    reloads.takesMs = SCHEMA_VERSION_READ_INTERVAL_MS + 500;
+    expect(await servedSchemaVersion()).toBe(1);
+    expect(await servedSchemaVersion()).toBe(1);
+    expect(read.count).toBe(1);
+    expect(reloads.count).toBe(1);
+  });
+
+  it("answers no request with the version before a change marked here while the read of it runs", async () => {
+    await servedSchemaVersion();
+    read.seq = 2;
+    bumpSchemaVersion();
+    let open = () => {};
+    read.gate = new Promise(resolve => {
+      open = resolve;
+    });
+    // The first request starts the read the mark asked for; the second
+    // arrives while it runs, within the interval of the read before it.
+    const first = servedSchemaVersion();
+    await vi.waitFor(() => expect(read.count).toBe(2));
+    const second = servedSchemaVersion();
+    open();
+    expect(await Promise.all([first, second])).toEqual([2, 2]);
+  });
+
+  it("keeps the served version where a reload failed, and tries it again", async () => {
+    await servedSchemaVersion();
+    read.seq = 2;
+    reloads.loads = false;
+    vi.advanceTimersByTime(SCHEMA_VERSION_READ_INTERVAL_MS + 1);
+    // The definitions did not load: the change is not served, nor said to be.
+    expect(await servedSchemaVersion()).toBe(1);
+    expect(reloads.count).toBe(2);
+
+    reloads.loads = true;
+    vi.advanceTimersByTime(SCHEMA_VERSION_READ_INTERVAL_MS + 1);
+    expect(await servedSchemaVersion()).toBe(2);
+    expect(reloads.count).toBe(3);
   });
 
   it("starts afresh on another database connection", async () => {

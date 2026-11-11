@@ -15,13 +15,16 @@
  *   request to find the last read too old; every request arriving while that
  *   read runs waits for it rather than reading again. Every other request
  *   reads nothing. One indexed read of one row, every couple of seconds while
- *   requests arrive, and none while they do not.
+ *   requests arrive, and none while they do not. The interval runs from when
+ *   a read finished, so a slow read answers its requests and only schedules
+ *   the next one.
  * - **A change reloads the definitions before the request goes on.** When the
  *   `seq` read differs from the one this copy's definitions were loaded at,
  *   they are loaded again from the registry rows (`reloadDynamicTables`, and
  *   the collection read path's own table cache dropped), and only then do the
  *   waiting requests run. So a change is served everywhere within the interval
- *   plus the reload, with no restart.
+ *   plus the reload, with no restart. A reload that did not register every
+ *   entity leaves the version served where it was, and is tried again.
  * - **The first read loads them again too.** Nothing records which `seq` the
  *   start loaded the definitions at, so a change made between that load and
  *   this copy's first read would otherwise never be seen. The first read of a
@@ -58,7 +61,11 @@ interface ServedSchema {
   database: object | undefined;
   /** The `seq` this process's definitions were loaded at. */
   seq: number | undefined;
-  /** When the read that settled `seq` began, on a clock that never steps back. */
+  /**
+   * When the last read (and any reload after it) finished, on a clock that
+   * never steps back: the interval runs from here, so it only ever schedules
+   * later reads, however long that one took.
+   */
   readAt: number | undefined;
   /** Set by {@link bumpSchemaVersion}: the next request reads again. */
   stale: boolean;
@@ -106,6 +113,16 @@ export async function servedSchemaVersion(): Promise<number | undefined> {
   if (adapter === undefined) return undefined;
   const state = served();
   for (;;) {
+    if (state.inFlight !== null) {
+      // Joined rather than repeated. A request arriving while a read runs
+      // waits for it, never for the version before it: that read may be the
+      // one a change marked here asked for.
+      await state.inFlight;
+      // What it settled answers this request, however long it took, unless a
+      // change was marked while it ran, which asks for a read of its own.
+      if (state.database === adapter && !state.stale) return state.seq;
+      continue;
+    }
     if (
       state.database === adapter &&
       !state.stale &&
@@ -113,32 +130,23 @@ export async function servedSchemaVersion(): Promise<number | undefined> {
     ) {
       return state.seq;
     }
-    if (state.inFlight !== null) {
-      // Joined rather than repeated; what it settled is judged again above,
-      // since a change marked while it ran asks for a read of its own.
-      await state.inFlight;
-      continue;
-    }
     const reading = followStoredVersion(state, adapter).finally(() => {
       if (state.inFlight === reading) state.inFlight = null;
     });
     state.inFlight = reading;
-    // Awaited before judging again: the read clears `stale` as it begins, so
-    // the fresh-enough test above would otherwise pass on the old read.
-    await reading;
   }
 }
 
 /**
  * Read the stored version and, where it is not the one the definitions were
- * loaded at, load them again. Always settles `readAt` and `database`, so a
- * failure is retried after the interval rather than by every request.
+ * loaded at, load them again; the version is advanced only once they loaded.
+ * Always settles `readAt` and `database`, so a failure (a read, or a reload)
+ * is tried again after the interval rather than by every request.
  */
 async function followStoredVersion(
   state: ServedSchema,
   adapter: DrizzleAdapter
 ): Promise<void> {
-  const startedAt = monotonicNow();
   // Cleared as the read begins: a change marked while it runs marks it again.
   state.stale = false;
   const known = state.database === adapter ? state.seq : undefined;
@@ -152,15 +160,17 @@ async function followStoredVersion(
     );
     // No stored version: no registry write has recorded one yet.
     const seq = stored.present ? (stored.version?.seq ?? 0) : 0;
-    if (seq !== known) await loadDefinitionsAgain();
-    state.seq = seq;
+    // A reload that did not register every entity leaves the version served
+    // where it was, so the next read, seeing it still differ, tries again.
+    if (seq === known || (await loadDefinitionsAgain())) state.seq = seq;
+    else if (state.database !== adapter) state.seq = undefined;
   } catch {
     // The version could not be read (a database `nextly migrate` has not
     // prepared, a dropped connection): this copy keeps serving what it has.
     if (state.database !== adapter) state.seq = undefined;
   }
   state.database = adapter;
-  state.readAt = startedAt;
+  state.readAt = monotonicNow();
 }
 
 /**
@@ -168,10 +178,11 @@ async function followStoredVersion(
  * tables the adapter resolves (`reloadDynamicTables`, which also drops the
  * cached registry rows), and the tables the collection read path keeps a
  * cache of its own of, dropped so each is built from the rows on next use.
+ * Answers whether every entity registered.
  */
-async function loadDefinitionsAgain(): Promise<void> {
+async function loadDefinitionsAgain(): Promise<boolean> {
   const { reloadDynamicTables } = await import("../init/reload-dynamic-tables");
-  await reloadDynamicTables("[Nextly]");
+  const loaded = await reloadDynamicTables("[Nextly]");
   let handler: CollectionsHandler | undefined;
   try {
     handler = container.get<CollectionsHandler>("collectionsHandler");
@@ -180,6 +191,7 @@ async function loadDefinitionsAgain(): Promise<void> {
     handler = undefined;
   }
   handler?.forgetCollectionSchemas();
+  return loaded;
 }
 
 /**

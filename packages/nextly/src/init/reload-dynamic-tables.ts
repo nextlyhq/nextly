@@ -45,11 +45,17 @@ import { consoleLogger } from "../shared/types";
  * would be several guards.
  */
 const globalForReload = globalThis as unknown as {
-  __nextly_registryReloadInFlight?: Promise<void>;
-  __nextly_registryReloadQueued?: Promise<void>;
+  __nextly_registryReloadInFlight?: Promise<boolean>;
+  __nextly_registryReloadQueued?: Promise<boolean>;
 };
 
-export function reloadDynamicTables(label: string): Promise<void> {
+/**
+ * Reload the registries, answering whether every entity registered: false
+ * where the reload was incomplete or could not run. It never throws, so a
+ * caller that must not act on a failed reload (the schema version a server
+ * copy serves, which is advanced only once its definitions loaded) asks this.
+ */
+export function reloadDynamicTables(label: string): Promise<boolean> {
   // Checked before the running one: the queued run clears itself inside its own
   // continuation, a microtask later than the running one's cleanup, so a caller
   // landing between the two would otherwise start a second concurrent run
@@ -62,7 +68,7 @@ export function reloadDynamicTables(label: string): Promise<void> {
     globalForReload.__nextly_registryReloadQueued = running
       // A failed reload must not swallow the rows that landed during it: the
       // tables are read either way, and this caller sees its own outcome.
-      .catch(() => undefined)
+      .catch(() => false)
       .then(() => {
         delete globalForReload.__nextly_registryReloadQueued;
         return startReload(label);
@@ -73,7 +79,7 @@ export function reloadDynamicTables(label: string): Promise<void> {
   return startReload(label);
 }
 
-function startReload(label: string): Promise<void> {
+function startReload(label: string): Promise<boolean> {
   const started = runReload(label).finally(() => {
     delete globalForReload.__nextly_registryReloadInFlight;
   });
@@ -117,13 +123,13 @@ interface ReloadDeps {
  * calls this before `allowBootMigrations()`, and an exception escaping here
  * would leave that gate closed — hanging every consumer waiting on it.
  */
-async function runReload(label: string): Promise<void> {
+async function runReload(label: string): Promise<boolean> {
   // A reload follows a change to the registry made outside the registry
   // services (a migration, a schema apply), so the cached rows go first.
   clearRegistryRowCache();
   try {
     const deps = await resolveDeps(label);
-    if (!deps) return;
+    if (!deps) return false;
 
     // Both entity registries, one pass each, through one loader. They differ
     // only in the table read; spelling the body twice is how the two drift.
@@ -173,19 +179,21 @@ async function runReload(label: string): Promise<void> {
         `${label} Schema registry reload INCOMPLETE (${failures.join("; ")}). ` +
           `Entities this boot registered may not be queryable until a restart.`
       );
-      return;
+      return false;
     }
 
     consoleLogger.info(
       `${label} Schema registry reloaded: ${registered} entities, ` +
         `${components} field groups.`
     );
+    return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     consoleLogger.warn(
       `${label} Schema registry reload failed: ${msg}. ` +
         `Entities this boot registered are not queryable until a restart.`
     );
+    return false;
   }
 }
 
