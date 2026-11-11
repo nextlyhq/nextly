@@ -222,14 +222,22 @@ export function SeoProblemsPage(): JSX.Element {
     path: PROBLEMS_CHECK_ROUTE_PATH,
     invalidates: [PROBLEMS_ROUTE_PATH],
   });
-  // The list a check answered, shown until the read it refreshes arrives.
-  const [checked, setChecked] = useState<ProblemListBody | undefined>();
-  const list = read.pending ? checked : (read.data ?? checked);
+  // The list a check answered, with the read it was answered over: shown
+  // until a read newer than that one arrives, so a refresh that fails never
+  // puts the older list back.
+  const [checked, setChecked] = useState<
+    { list: ProblemListBody; over: ProblemListBody | undefined } | undefined
+  >();
+  const list =
+    checked !== undefined && read.data === checked.over
+      ? checked.list
+      : (read.data ?? checked?.list);
 
   const check = () => {
+    const over = read.data;
     void recheck.write().then(answer => {
       if (answer === undefined) return;
-      setChecked(answer);
+      setChecked({ list: answer, over });
       toastMutationResult(answer.message, []);
     });
   };

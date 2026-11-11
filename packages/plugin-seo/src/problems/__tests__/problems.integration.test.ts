@@ -421,5 +421,15 @@ describe.each(getConfiguredTestDialects())(
         ],
       ]);
     });
+
+    it("a full check keeps a page it did not reach while the page is still public", async () => {
+      const { t, ctx } = await boot(dialect);
+      const id = await publish(t, { title: "Harbour", slug: "harbour" });
+      await until(t, checkedSince(id));
+      // A full check that reached no page of posts, as one that passed
+      // posts before this page was published.
+      await checkSite(ctx, { ...CHECKS, targets: ["notes"] });
+      expect((await rows(t)).some(row => row.holderId === id)).toBe(true);
+    });
   }
 );

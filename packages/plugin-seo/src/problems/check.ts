@@ -11,6 +11,7 @@
  * @module problems/check
  */
 import {
+  addressOfRequest,
   typesWithoutAddress,
   type PageMetadataInput,
   type PluginContext,
@@ -174,8 +175,10 @@ async function examine(
     brokenLinks: await brokenLinks(content.links, {
       shapes: addressShapes(ctx.config.collections ?? []),
       productionAddresses,
-      isHeld: async path =>
-        (await addressHolders(ctx, path, undefined)).length > 0,
+      // Read by the same rule a visitor's request is, as the Proxy reads it.
+      keptOf: url => addressOfRequest(url),
+      isHeld: async (path, locale) =>
+        (await addressHolders(ctx, path, locale)).length > 0,
     }),
   });
   // A page kept out of search shares its title with no page in results, so
@@ -280,9 +283,16 @@ async function runSiteCheck(
   for (const slug of checks.targets) {
     if (siteTypes.has(slug)) await checkType(ctx, checks, slug, seen);
   }
+  // A page the walk did not reach may have been published after its type
+  // was walked, its row written by its save's own check: it is checked
+  // again in its turn, which keeps it while it is public and forgets it
+  // where it is not.
   for (const row of await readPages(ctx)) {
     const { type, id } = row.subject;
-    if (!seen.has(pageKey(type, id))) await removePage(ctx, type, id);
+    if (seen.has(pageKey(type, id))) continue;
+    await inTurn(ctx, type, id, "The SEO plugin could not check a page", () =>
+      checkPage(ctx, checks, type, id)
+    );
   }
   await saveSiteCheck(ctx, {
     checkedAt: new Date().toISOString(),
@@ -415,7 +425,7 @@ function inTurn(
   id: string,
   failed: string,
   work: () => Promise<void>
-): void {
+): Promise<void> {
   const key = pageKey(type, id);
   const run = async () => {
     try {
@@ -429,6 +439,7 @@ function inTurn(
   void next.finally(() => {
     if (pageQueue.get(key) === next) pageQueue.delete(key);
   });
+  return next;
 }
 
 /** Check a page after it is saved, in its turn. */
@@ -438,8 +449,12 @@ export function recheckSaved(
   type: string,
   id: string
 ): void {
-  inTurn(ctx, type, id, "The SEO plugin could not check a saved page", () =>
-    checkPage(ctx, checks, type, id)
+  void inTurn(
+    ctx,
+    type,
+    id,
+    "The SEO plugin could not check a saved page",
+    () => checkPage(ctx, checks, type, id)
   );
 }
 
@@ -452,7 +467,7 @@ export function forgetDeleted(
   type: string,
   id: string
 ): void {
-  inTurn(
+  void inTurn(
     ctx,
     type,
     id,

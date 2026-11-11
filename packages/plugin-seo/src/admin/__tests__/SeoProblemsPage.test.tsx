@@ -158,4 +158,17 @@ describe("SeoProblemsPage", () => {
     render(<SeoProblemsPage />);
     expect(screen.getByText("No problems found in 83 pages.")).toBeTruthy();
   });
+
+  it("shows the list a check answered, though the read it refreshes has not arrived", async () => {
+    serving(LIST);
+    write.mockImplementation(async () => ({
+      ...LIST,
+      problems: LIST.problems.slice(0, 1),
+      message: "Checked 83 pages.",
+    }));
+    render(<SeoProblemsPage />);
+    expect(screen.getByText("3 problems")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Check now/ }));
+    await vi.waitFor(() => expect(screen.getByText("1 problem")).toBeTruthy());
+  });
 });

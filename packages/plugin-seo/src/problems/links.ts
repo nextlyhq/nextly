@@ -68,8 +68,36 @@ export interface LinkJudge {
   shapes: readonly AddressShape[];
   /** Where the site itself is served, so a full address on it is judged too. */
   productionAddresses: readonly string[];
-  /** Whether a page holds `path` in the site's default language. */
-  isHeld: (path: string) => Promise<boolean>;
+  /**
+   * The language a request for `url` is served in and the path its pages
+   * are kept at, as the site's language rule reads it; none where no
+   * language serves it.
+   */
+  keptOf: (url: URL) => Promise<{ locale: string; path: string } | undefined>;
+  /** Whether a page holds `path` in `locale`. */
+  isHeld: (path: string, locale: string) => Promise<boolean>;
+}
+
+/** The origin a path from the root is read on where the site names none. */
+const NO_ORIGIN = "https://site.invalid";
+
+/**
+ * A link as the address a visitor's request would ask for: a path from the
+ * root on the site's first production address, or a full address on one
+ * of them. Nothing for any other link.
+ */
+function requestOf(
+  url: string,
+  productionAddresses: readonly string[]
+): URL | undefined {
+  const own = productionAddresses.flatMap(each => originOf(each) ?? []);
+  if (url.startsWith("/") && !url.startsWith("//")) {
+    return new URL(url, own[0] ?? NO_ORIGIN);
+  }
+  const origin = originOf(url);
+  return origin !== undefined && own.includes(origin)
+    ? new URL(url)
+    : undefined;
 }
 
 /**
@@ -91,7 +119,8 @@ export function sitePath(
 
 /**
  * The links in `links` to an address a content type serves that no page
- * holds. Each address is asked about once, however many links name it.
+ * holds in the language the address is served in. Each address is asked
+ * about once in each language, however many links name it.
  */
 export async function brokenLinks(
   links: readonly LinkFact[],
@@ -100,13 +129,17 @@ export async function brokenLinks(
   const answers = new Map<string, Promise<boolean>>();
   const broken: LinkFact[] = [];
   for (const link of links) {
-    const path = sitePath(link.url, judge.productionAddresses);
-    if (path === undefined) continue;
+    const request = requestOf(link.url, judge.productionAddresses);
+    const kept =
+      request === undefined ? undefined : await judge.keptOf(request);
+    if (kept === undefined) continue;
+    const path = pathOf(kept.path);
     if (!judge.shapes.some(shape => shape.pattern.test(path))) continue;
-    let held = answers.get(path);
+    const key = `${kept.locale}\u0000${path}`;
+    let held = answers.get(key);
     if (held === undefined) {
-      held = judge.isHeld(path);
-      answers.set(path, held);
+      held = judge.isHeld(path, kept.locale);
+      answers.set(key, held);
     }
     if (!(await held)) broken.push(link);
   }

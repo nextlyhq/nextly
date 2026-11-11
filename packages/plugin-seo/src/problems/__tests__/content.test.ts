@@ -85,6 +85,12 @@ describe("contentFacts", () => {
   });
 });
 
+/** A site with one language: every address is kept as it is asked for. */
+const inDefaultLanguage = async (url: URL) => ({
+  locale: "en",
+  path: url.pathname,
+});
+
 describe("brokenLinks", () => {
   const shapes = addressShapes([
     { slug: "posts", publicAddress: "/blog/{slug}" },
@@ -110,6 +116,7 @@ describe("brokenLinks", () => {
       {
         shapes,
         productionAddresses: ["https://example.com"],
+        keptOf: inDefaultLanguage,
         isHeld: async path => held.has(path),
       }
     );
@@ -129,6 +136,7 @@ describe("brokenLinks", () => {
       {
         shapes,
         productionAddresses: [],
+        keptOf: inDefaultLanguage,
         isHeld: async path => {
           asked.push(path);
           return false;
@@ -148,9 +156,39 @@ describe("brokenLinks", () => {
       {
         shapes,
         productionAddresses: ["https://example.com"],
+        keptOf: inDefaultLanguage,
         isHeld: async path => path === "/blog/caf%C3%A9",
       }
     );
     expect(found).toEqual([]);
+  });
+
+  it("asks who holds a link's address in the language it is served in", async () => {
+    // French is served on its own domain, and German under a prefix.
+    const keptOf = async (url: URL) =>
+      url.host === "fr.example.com"
+        ? { locale: "fr", path: url.pathname }
+        : url.pathname.startsWith("/de/")
+          ? { locale: "de", path: url.pathname.slice(3) }
+          : { locale: "en", path: url.pathname };
+    const held = new Set(["fr /blog/bonjour", "en /blog/hello"]);
+    const found = await brokenLinks(
+      [
+        { field: "body", url: "https://fr.example.com/blog/bonjour" },
+        { field: "body", url: "https://fr.example.com/blog/hello" },
+        { field: "body", url: "/de/blog/hello" },
+        { field: "body", url: "/blog/hello" },
+      ],
+      {
+        shapes,
+        productionAddresses: ["https://example.com", "https://fr.example.com"],
+        keptOf,
+        isHeld: async (path, locale) => held.has(`${locale} ${path}`),
+      }
+    );
+    expect(found).toEqual([
+      { field: "body", url: "https://fr.example.com/blog/hello" },
+      { field: "body", url: "/de/blog/hello" },
+    ]);
   });
 });
