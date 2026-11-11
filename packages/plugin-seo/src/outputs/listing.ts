@@ -255,14 +255,19 @@ async function* collectionPages(
 /** Whether `type` is one the listing covers: public, and not narrowed away. */
 async function covered(
   type: PublicAddressType,
-  options: ListingOptions
+  options: ListingOptions,
+  language: string
 ): Promise<boolean> {
   const narrowedAway =
     type.kind === "collection" &&
     options.collections !== undefined &&
     !options.collections.includes(type.slug);
-  // A type that declares no address has no page to list.
-  return !narrowedAway && (await publicAddressOf(type)).status !== "none";
+  // A type that declares no address has no page to list, asked in the
+  // language the record keeps addresses in, as a page's own is.
+  return (
+    !narrowedAway &&
+    (await publicAddressOf(type, undefined, language)).status !== "none"
+  );
 }
 
 /** Every page of the site that may be listed, a read at a time. */
@@ -271,7 +276,7 @@ async function* candidates(
   options: ListingOptions
 ): AsyncGenerator<Candidate[]> {
   for (const type of await ctx.publicAddresses.types()) {
-    if (!(await covered(type, options))) continue;
+    if (!(await covered(type, options, recordLanguage(ctx)))) continue;
     yield* type.kind === "single"
       ? singlePages(type)
       : collectionPages(ctx, type);
@@ -345,10 +350,17 @@ async function listedAt(
   candidate: Candidate,
   answer: SeoAnswer,
   origin: string,
-  locale: string | undefined
+  locale: string | undefined,
+  language: string
 ): Promise<{ loc: string; path: string } | { lost: string } | null> {
   if (!answer.robots.value.index) return null;
-  const own = await publicAddressOf(candidate.type, candidate.document);
+  // Asked in the language the record keeps it in, so the address compared
+  // with the record is the one the record was made from.
+  const own = await publicAddressOf(
+    candidate.type,
+    candidate.document,
+    language
+  );
   if (own.status !== "resolved") return null;
   if (answer.canonical === undefined) return { lost: own.path };
   const loc = absolute(answer.canonical.value, origin);
@@ -393,7 +405,13 @@ async function listed(
     },
     options.readRules
   );
-  const at = await listedAt(candidate, answer, options.origin, locale);
+  const at = await listedAt(
+    candidate,
+    answer,
+    options.origin,
+    locale,
+    recordLanguage(ctx)
+  );
   if (at === null) return null;
   if ("lost" in at) return { lost: { holder, path: at.lost } };
   const lastModified = toLastModified(document.updatedAt);

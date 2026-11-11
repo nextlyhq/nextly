@@ -14,16 +14,26 @@ import type { SeoAnswer } from "../../resolver/order";
 import { listPages } from "../listing";
 
 const answers = new Map<string, SeoAnswer>();
+/**
+ * Whether the type's address is supplied only for a named language, as a
+ * Schema Builder type's template may be.
+ */
+const supplied = { onlyInALanguage: false };
 
 vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk")>()),
   publicAddressOf: async (
     _type: PublicAddressType,
-    entry?: Readonly<Record<string, unknown>>
-  ) =>
-    entry === undefined
+    entry?: Readonly<Record<string, unknown>>,
+    locale?: string
+  ) => {
+    if (supplied.onlyInALanguage && locale === undefined) {
+      return { status: "none" };
+    }
+    return entry === undefined
       ? { status: "unavailable" }
-      : { status: "resolved", path: `/${String(entry.slug)}` },
+      : { status: "resolved", path: `/${String(entry.slug)}` };
+  },
   // Every language under its code.
   languageAddressOf: async (path: string, locale: string) => ({
     status: "resolved",
@@ -241,5 +251,23 @@ describe("the pages the site lists", () => {
       { origin: SITE }
     );
     expect(pages.map(page => page.loc)).toEqual([`${SITE}/en/about`]);
+  });
+
+  it("asks a type's address in the language the record keeps it in", async () => {
+    supplied.onlyInALanguage = true;
+    try {
+      answers.set("1", {
+        robots: listed,
+        canonical: { value: "/about", from: "address" },
+      });
+      const { pages, problems } = await listPages(
+        context([{ id: "1", slug: "about" }], [holds("1", "/about")]),
+        { origin: SITE }
+      );
+      expect(pages.map(page => page.loc)).toEqual([`${SITE}/about`]);
+      expect(problems).toEqual([]);
+    } finally {
+      supplied.onlyInALanguage = false;
+    }
   });
 });
