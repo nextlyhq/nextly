@@ -33,6 +33,8 @@ export {
   type PluginCapabilities,
   type PluginConfig,
   type PluginContext,
+  type PluginEmitOptions,
+  type PluginEvents,
   type PluginDatabase,
   type PluginDefinition,
   type PluginEmailService,
