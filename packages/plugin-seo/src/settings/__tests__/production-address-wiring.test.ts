@@ -4,10 +4,7 @@
  * sitemap robots.txt names, and the AI crawler choice for robots.txt, with
  * the plugin's options answering until the site has chosen.
  */
-import type {
-  PluginContext,
-  PluginRouteContext,
-} from "@nextlyhq/plugin-sdk";
+import type { PluginContext, PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 /** The settings as stored, which each test sets. */
@@ -64,7 +61,8 @@ const ctx = {
 describe("the saved production address", () => {
   it("is what the staging guard keeps every other host out of search by", async () => {
     saved = { productionAddresses: ["https://acme.example"] };
-    const [guard] = seoPlugin({ collections: ["posts"] }).contributes?.proxy ?? [];
+    const [guard] =
+      seoPlugin({ collections: ["posts"] }).contributes?.proxy ?? [];
 
     expect(
       await guard?.handle(new Request("https://copy.acme.example/"), ctx)
@@ -92,7 +90,10 @@ describe("the saved production address", () => {
 describe("the saved AI crawler choice", () => {
   it("is what robots.txt asks AI crawlers, over the plugin's option", async () => {
     saved = { aiCrawlers: "block" };
-    const body = await robotsBody({ collections: ["posts"], aiCrawlers: "all" });
+    const body = await robotsBody({
+      collections: ["posts"],
+      aiCrawlers: "all",
+    });
 
     expect(body).toContain("User-agent: GPTBot\nDisallow: /");
     expect(body).toContain("User-agent: PerplexityBot\nDisallow: /");
@@ -100,7 +101,10 @@ describe("the saved AI crawler choice", () => {
 
   it("leaves the plugin's option in force until the site chooses", async () => {
     saved = {};
-    const body = await robotsBody({ collections: ["posts"], aiCrawlers: "search" });
+    const body = await robotsBody({
+      collections: ["posts"],
+      aiCrawlers: "search",
+    });
 
     expect(body).toContain("User-agent: GPTBot\nDisallow: /");
     expect(body).not.toContain("User-agent: PerplexityBot");

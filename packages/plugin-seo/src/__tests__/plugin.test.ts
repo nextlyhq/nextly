@@ -87,6 +87,13 @@ describe("seoPlugin", () => {
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
       ["GET", "/settings/document", undefined, undefined],
+      // The redirects screen's routes, for those the redirects' permissions allow.
+      ["GET", "/redirects", undefined, undefined],
+      ["POST", "/redirects", undefined, undefined],
+      ["PATCH", "/redirects/:id", undefined, undefined],
+      ["DELETE", "/redirects/:id", undefined, undefined],
+      ["POST", "/redirects/import", undefined, undefined],
+      ["GET", "/not-found", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
       // The problem list, read and checked again by a signed-in reader.
       ["GET", "/problems", undefined, undefined],
@@ -106,6 +113,37 @@ describe("seoPlugin", () => {
     expect(route?.public).toBeUndefined();
   });
 
+  it("asks for the redirects' and not-found log's permissions under the names an installation gives them", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    const renamed = {
+      plugin: "@nextlyhq/plugin-seo",
+      collection: (slug: string, action: string) =>
+        `${action}-site_${slug.slice("nx_seo_".length)}`,
+      single: (slug: string, action: string) => `${action}-${slug}`,
+    };
+
+    const asked = (plugin.contributes?.routes ?? [])
+      .filter(
+        ({ path }) => path.startsWith("/redirects") || path === "/not-found"
+      )
+      .map(({ method, path, requiredPermission }) => [
+        method,
+        path,
+        typeof requiredPermission === "function"
+          ? requiredPermission(renamed)
+          : requiredPermission,
+      ]);
+
+    expect(asked).toEqual([
+      ["GET", "/redirects", "read-site_redirects"],
+      ["POST", "/redirects", "create-site_redirects"],
+      ["PATCH", "/redirects/:id", "update-site_redirects"],
+      ["DELETE", "/redirects/:id", "delete-site_redirects"],
+      ["POST", "/redirects/import", "create-site_redirects"],
+      ["GET", "/not-found", "read-site_not_found"],
+    ]);
+  });
+
   it("omits the sitemap routes when sitemap is disabled, and keeps robots.txt", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
@@ -113,6 +151,12 @@ describe("seoPlugin", () => {
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/redirects",
+      "/redirects",
+      "/redirects/:id",
+      "/redirects/:id",
+      "/redirects/import",
+      "/not-found",
       "/resolve",
       "/problems",
       "/problems/check",
@@ -131,6 +175,12 @@ describe("seoPlugin", () => {
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/redirects",
+      "/redirects",
+      "/redirects/:id",
+      "/redirects/:id",
+      "/redirects/import",
+      "/not-found",
       "/resolve",
       "/problems",
       "/problems/check",

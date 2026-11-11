@@ -29,7 +29,8 @@ const CSS = `
 .nx-seo-tab{flex:none;border:0;background:transparent;padding:9px 12px;font:inherit;font-size:13px;font-weight:500;color:var(--nx-muted-foreground);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
 .nx-seo-tab:hover{color:var(--nx-foreground)}
 .nx-seo-tab[aria-selected="true"]{color:var(--nx-foreground);border-bottom-color:var(--nx-foreground);font-weight:600}
-.nx-seo-cnt{min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--nx-warning-surface);color:var(--nx-warning-text);border:1px solid var(--nx-warning-border);font-size:12px;font-weight:600;display:inline-grid;place-items:center;line-height:1}
+/* The border in longhands, so the neutral .n count changes its colour alone. */
+.nx-seo-cnt{min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--nx-warning-surface);color:var(--nx-warning-text);border-width:1px;border-style:solid;border-color:var(--nx-warning-border);font-size:12px;font-weight:600;display:inline-grid;place-items:center;line-height:1}
 .nx-seo-body{padding:20px 24px 32px}
 .nx-seo-lead{margin:0 0 16px;color:var(--nx-muted-foreground);font-size:13px}
 .nx-seo-form2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 20px;max-width:880px}
@@ -159,6 +160,10 @@ const CSS = `
 .nx-seo-where .nx-seo-mono{display:block;color:var(--nx-muted-foreground);font-size:12px!important;overflow-wrap:anywhere}
 .nx-seo-what{line-height:1.45;overflow-wrap:anywhere}
 .nx-seo-fixes{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+/* The SEO screens' one select: a native select in the admin's select styling. */
+.nx-seo-select{appearance:none;-webkit-appearance:none;height:var(--nx-control-height-md);width:100%;max-width:170px;border:1px solid var(--nx-input);border-radius:6px;padding:0 30px 0 10px;background-color:var(--nx-background);background-image:linear-gradient(45deg,transparent 50%,var(--nx-muted-foreground) 50%),linear-gradient(135deg,var(--nx-muted-foreground) 50%,transparent 50%);background-position:calc(100% - 15px) 52%,calc(100% - 10px) 52%;background-size:5px 5px;background-repeat:no-repeat;color:var(--nx-foreground);font:inherit;font-size:14px;cursor:pointer;transition:border-color .15s}
+.nx-seo-select:hover,.nx-seo-select:focus,.nx-seo-select:focus-visible{border-color:var(--nx-primary);outline:none}
+.nx-seo-select[aria-invalid="true"]{border-color:var(--nx-warning-border)}
 @media (max-width:1100px){
 .nx-seo-prow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"where fixes" "what what";gap:6px 14px}
 .nx-seo-where{grid-area:where}
@@ -166,6 +171,7 @@ const CSS = `
 .nx-seo-fixes{grid-area:fixes}
 }
 @media (max-width:720px){
+.nx-seo-select{max-width:none}
 .nx-seo-prow{grid-template-columns:minmax(0,1fr);grid-template-areas:"where" "what" "fixes"}
 .nx-seo-fixes{justify-content:flex-start}
 .nx-seo-head{padding:18px 16px 0}
@@ -211,6 +217,8 @@ export type IconName =
   | "lock"
   | "check"
   | "arrow"
+  | "upload"
+  | "pen"
   | "refresh";
 
 const PATHS: Record<IconName, JSX.Element> = {
@@ -243,6 +251,13 @@ const PATHS: Record<IconName, JSX.Element> = {
   ),
   check: <path d="M20 6 9 17l-5-5" />,
   arrow: <path d="M5 12h14M13 6l6 6-6 6" />,
+  upload: (
+    <>
+      <path d="M12 15V3M7 8l5-5 5 5" />
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    </>
+  ),
+  pen: <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />,
   refresh: (
     <>
       <path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" />

@@ -44,8 +44,10 @@ import { PROBLEMS_PAGE, PROBLEMS_PAGE_HREF } from "./problems/contract";
 import { watchSaves } from "./problems/hooks";
 import { problemRoutes } from "./problems/route";
 import { problemsCollection } from "./problems/store";
-import { redirectsCollection } from "./redirects/collection";
+import { REDIRECTS_SLUG, redirectsCollection } from "./redirects/collection";
+import { REDIRECTS_PAGE } from "./redirects/contract";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
+import { redirectRoutes } from "./redirects/routes";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import {
   contentTypesRoute,
@@ -54,6 +56,7 @@ import {
 import {
   SEO_SETTINGS_SLUG,
   SETTINGS_PAGE,
+  SEO_ADMIN_SLUG,
   SETTINGS_PAGE_HREF,
 } from "./settings/contract";
 import { readSeoRules, rememberSettingsSingle } from "./settings/rules";
@@ -83,6 +86,9 @@ import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
+/** Where the redirects screen is, for the admin's menu. */
+const REDIRECTS_PAGE_HREF = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
+
 const require = createRequire(import.meta.url);
 const { version: PLUGIN_VERSION } = require("../package.json") as {
   version: string;
@@ -434,8 +440,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   };
 
   // The site's sitemap and robots.txt, the action that makes a share image
-  // of the right size, the SEO tab's own and the problem list's; all added
-  // below.
+  // of the right size, the settings and redirects screens' routes, the SEO
+  // tab's own and the problem list's; all added below.
   const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
@@ -503,6 +509,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // the pages of the types they may read, and says so where none.
         { label: "Problems", to: PROBLEMS_PAGE_HREF, icon: "AlertTriangle" },
         {
+          label: "Redirects",
+          to: REDIRECTS_PAGE_HREF,
+          icon: "Route",
+          requiredPermission: `read-${REDIRECTS_SLUG}`,
+        },
+        {
           label: "Settings",
           to: SETTINGS_PAGE_HREF,
           icon: "Settings",
@@ -512,6 +524,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       pages: [
         PROBLEMS_PAGE,
         { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
+        { ...REDIRECTS_PAGE, requiredPermission: `read-${REDIRECTS_SLUG}` },
       ],
     },
   };
@@ -538,6 +551,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Single holds the settings.
     contentTypesRoute(targets),
     settingsDocumentRoute(),
+    // What the redirects screen reads and writes.
+    ...redirectRoutes(),
     ...tab.routes,
     ...problemRoutes(problemChecks)
   );
