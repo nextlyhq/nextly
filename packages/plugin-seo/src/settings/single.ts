@@ -26,7 +26,11 @@ import {
 import { SEO_PLUGIN_NAME, SEO_SETTINGS_SLUG, SETUP_STEPS } from "./contract";
 import { SEPARATORS } from "./patterns";
 import { productionAddressesProblem } from "./production-addresses";
-import { patternsProblem, socialProfilesProblem } from "./stored-values";
+import {
+  hiddenTypesProblem,
+  patternsProblem,
+  socialProfilesProblem,
+} from "./stored-values";
 import { structuredDataSettingsProblem } from "./structured-data-choices";
 
 /**
@@ -111,6 +115,11 @@ export function seoSettingsSingle(): SingleConfig {
         name: "patterns",
         label: "Title patterns",
         validate: refusing(patternsProblem),
+      }),
+      json({
+        name: "hiddenTypes",
+        label: "Content types hidden from search",
+        validate: refusing(hiddenTypesProblem),
       }),
       json({
         name: "structuredData",

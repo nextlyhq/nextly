@@ -31,7 +31,11 @@ import {
 } from "./contract";
 import { defaultTitlePattern, SEPARATORS, type Separator } from "./patterns";
 import { productionAddressesProblem } from "./production-addresses";
-import { patternsProblem, socialProfilesProblem } from "./stored-values";
+import {
+  hiddenTypesProblem,
+  patternsProblem,
+  socialProfilesProblem,
+} from "./stored-values";
 import { structuredDataSettingsProblem } from "./structured-data-choices";
 
 /** A content type's patterns: the title's, and the description's. */
@@ -59,8 +63,13 @@ export interface SeoRules {
   defaultPatterns: TypePatterns;
   /** Per content type: the collection slug, or `single:<slug>` for a Single. */
   patterns: Record<string, TypePatterns>;
-  /** What AI tools are asked to do with the site's pages: `all` by default. */
-  aiCrawlers: AiCrawlerChoice;
+  /** What AI tools are asked to do with the site's pages, once chosen. */
+  aiCrawlers?: AiCrawlerChoice;
+  /**
+   * The content types hidden from search as a whole, keyed as `patterns`
+   * are, once the settings name any.
+   */
+  hiddenTypes?: string[];
 }
 
 /** One of the brand's official accounts. */
@@ -83,6 +92,13 @@ export interface BrandFacts {
 /** The SEO settings as stored, as far as the readers below take them. */
 type SeoSettingsDocument = Readonly<Record<string, unknown>>;
 
+/** `{ [key]: value }` where the value is set, and nothing where it is not. */
+const withDefined = <K extends string, V>(
+  key: K,
+  value: V | undefined
+): Partial<Record<K, V>> =>
+  value === undefined ? {} : ({ [key]: value } as Partial<Record<K, V>>);
+
 /** A stored text value, trimmed, where it is not blank. */
 const trimmed = (value: unknown): string | undefined => textOf(value)?.trim();
 
@@ -97,9 +113,16 @@ function separatorOf(document: SeoSettingsDocument): Separator {
   return oneOf(SEPARATORS, document.separator) ?? "|";
 }
 
-/** What AI tools are asked to do: all are allowed until the site says otherwise. */
-function aiCrawlersOf(document: SeoSettingsDocument): AiCrawlerChoice {
-  return oneOf(AI_CRAWLER_CHOICES, document.aiCrawlers) ?? "all";
+/** What AI tools are asked to do, where the site has chosen. */
+function aiCrawlersOf(
+  document: SeoSettingsDocument
+): AiCrawlerChoice | undefined {
+  return oneOf(AI_CRAWLER_CHOICES, document.aiCrawlers);
+}
+
+/** The content types hidden from search as a whole, where the settings name any. */
+function hiddenTypesOf(document: SeoSettingsDocument): string[] | undefined {
+  return checked<string[]>(document.hiddenTypes, hiddenTypesProblem);
 }
 
 /**
@@ -159,7 +182,8 @@ async function rulesOf(
         productionAddressesProblem
       ) ?? [],
     defaultPatterns: { title: defaultTitlePattern(separatorOf(document)) },
-    aiCrawlers: aiCrawlersOf(document),
+    ...withDefined("aiCrawlers", aiCrawlersOf(document)),
+    ...withDefined("hiddenTypes", hiddenTypesOf(document)),
     patterns: patternsOf(document),
   };
 }

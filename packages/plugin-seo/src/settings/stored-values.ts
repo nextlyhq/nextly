@@ -34,6 +34,15 @@ function typePatternsProblem(type: string, patterns: unknown): string | null {
   return null;
 }
 
+/** Why a stored list of hidden content types is not one; null when it is. */
+export function hiddenTypesProblem(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (!Array.isArray(value) || value.some(key => typeof key !== "string")) {
+    return "Hidden content types must be a list of content types.";
+  }
+  return null;
+}
+
 /** Why `url` is not the whole address of a profile; null when it is. */
 export function profileAddressProblem(url: string): string | null {
   return /^https:\/\/[^\s/]+\.\S+$/i.test(url)

@@ -21,8 +21,8 @@ import {
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import { isRecord, textOf } from "../plain-values";
+import type { AiCrawlerChoice } from "../settings/contract";
 import { fillPattern } from "../settings/patterns";
-import type { SeoRules } from "../settings/rules";
 
 import type { Levels } from "./order";
 
@@ -31,15 +31,26 @@ import type { Levels } from "./order";
  * where it has none of its own, and each content type's pattern, keyed by the
  * collection slug or `single:<slug>`. Read from the SEO settings.
  */
-export type SiteRules = SeoRules;
+export interface SiteRules {
+  siteName?: string;
+  /** Where the site itself is served: bare origins, such as `https://example.com`. */
+  productionAddresses?: readonly string[];
+  description?: string;
+  image?: PageMetadataImage;
+  /** The patterns a type uses where it has none of its own. */
+  defaultPatterns?: { title?: string; description?: string };
+  patterns: Record<string, { title?: string; description?: string }>;
+  /**
+   * The content types hidden from search as a whole, keyed as `patterns`
+   * are: every page of one is served `noindex` and left out of the sitemap.
+   */
+  hiddenTypes?: readonly string[];
+  /** What robots.txt asks AI crawlers to do, where the site has chosen. */
+  aiCrawlers?: AiCrawlerChoice;
+}
 
 /** No rules set: every value comes from the page, its route or its content. */
-export const NO_RULES: SiteRules = {
-  productionAddresses: [],
-  defaultPatterns: {},
-  patterns: {},
-  aiCrawlers: "all",
-};
+export const NO_RULES: SiteRules = { patterns: {} };
 
 /**
  * The fields a page's content offers a value from, in the order they are
@@ -320,5 +331,6 @@ export async function levelsOf(
       productionAddresses: productionAddressesOf(rules.productionAddresses),
     }),
     ...(address === undefined ? {} : { address }),
+    ...(rules.hiddenTypes?.includes(key) === true ? { typeHidden: true } : {}),
   };
 }

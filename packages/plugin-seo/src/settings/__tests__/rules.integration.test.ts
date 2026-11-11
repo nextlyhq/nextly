@@ -108,7 +108,6 @@ describe.each(getConfiguredTestDialects())(
         productionAddresses: [],
         defaultPatterns: { title: "{Title} | {Site name}" },
         patterns: {},
-        aiCrawlers: "all",
       });
       expect(await readBrandFacts(ctx)).toEqual({
         otherNames: [],

@@ -11,17 +11,7 @@
  * @module canonical
  */
 
-/** A bare origin as `URL.origin` spells it, or nothing for anything else. */
-function originOf(address: string): string | undefined {
-  try {
-    const url = new URL(address);
-    return url.protocol === "http:" || url.protocol === "https:"
-      ? url.origin
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
+import { originOf } from "./origin";
 
 /**
  * `value`, trimmed, where search engines can follow it as a canonical: a

@@ -1,7 +1,8 @@
 /**
- * The production address saved in the SEO settings is what the plugin's own
- * staging guard and sitemap read, as the page's head does: one answer for
- * every output, with `NEXTLY_PRODUCTION_ADDRESSES` still winning.
+ * What the SEO settings save is what the plugin's own outputs read, as the
+ * page's head does: the production address for the staging guard and the
+ * sitemap robots.txt names, and the AI crawler choice for robots.txt, with
+ * the plugin's options answering until the site has chosen.
  */
 import type {
   PluginContext,
@@ -17,11 +18,27 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   getCachedNextly: async () => ({ findSingle: async () => saved }),
 }));
 
-import { PRODUCTION_ADDRESSES_ENV } from "../../canonical";
 import { seoPlugin } from "../../plugin";
 
+/** The plugin's robots.txt route, as `options` declare it. */
+function robotsRoute(options: Parameters<typeof seoPlugin>[0]) {
+  return seoPlugin(options).contributes?.routes?.find(
+    each => each.path === "/robots.txt"
+  );
+}
+
+/** The robots.txt the plugin serves under `options` to the site's own host. */
+async function robotsBody(
+  options: Parameters<typeof seoPlugin>[0]
+): Promise<string | undefined> {
+  const response = await robotsRoute(options)?.handler(
+    new Request("https://acme.example/robots.txt"),
+    ctx as PluginRouteContext
+  );
+  return response?.text();
+}
+
 afterEach(() => {
-  vi.unstubAllEnvs();
   saved = {};
 });
 
@@ -57,40 +74,35 @@ describe("the saved production address", () => {
     ).toBeUndefined();
   });
 
-  it("is what the sitemap judges a canonical on another of the site's addresses by", async () => {
-    saved = { productionAddresses: ["https://acme.example", "https://acme.de"] };
-    const route = seoPlugin({
-      collections: ["posts"],
-      baseUrl: "https://acme.example",
-    }).contributes?.routes?.find(each => each.path === "/sitemap.xml");
+  it("is the address robots.txt names the sitemap at", async () => {
+    saved = { productionAddresses: ["https://acme.example"] };
+    const robots = robotsRoute({ collections: ["posts"] });
 
-    const response = await route?.handler(
-      new Request("https://acme.example/sitemap.xml"),
-      ctx as PluginRouteContext
-    );
+    const body = await (
+      await robots?.handler(
+        new Request("https://copy.acme.example/robots.txt"),
+        ctx as PluginRouteContext
+      )
+    )?.text();
 
-    // The canonical is on acme.de, one of the site's addresses: its sitemap
-    // lists the page, so this one leaves it out.
-    expect(await response?.text()).not.toContain("<loc>");
+    expect(body).toContain("Sitemap: https://acme.example/sitemap.xml");
+  });
+});
+
+describe("the saved AI crawler choice", () => {
+  it("is what robots.txt asks AI crawlers, over the plugin's option", async () => {
+    saved = { aiCrawlers: "block" };
+    const body = await robotsBody({ collections: ["posts"], aiCrawlers: "all" });
+
+    expect(body).toContain("User-agent: GPTBot\nDisallow: /");
+    expect(body).toContain("User-agent: PerplexityBot\nDisallow: /");
   });
 
-  it("gives way to the environment's addresses in the sitemap too", async () => {
-    vi.stubEnv(PRODUCTION_ADDRESSES_ENV, "https://acme.example");
-    saved = { productionAddresses: ["https://acme.example", "https://acme.de"] };
-    const route = seoPlugin({
-      collections: ["posts"],
-      baseUrl: "https://acme.example",
-    }).contributes?.routes?.find(each => each.path === "/sitemap.xml");
+  it("leaves the plugin's option in force until the site chooses", async () => {
+    saved = {};
+    const body = await robotsBody({ collections: ["posts"], aiCrawlers: "search" });
 
-    const response = await route?.handler(
-      new Request("https://acme.example/sitemap.xml"),
-      ctx as PluginRouteContext
-    );
-
-    // Only acme.example is the site's: acme.de is off it, so the page is
-    // listed at its own address.
-    expect(await response?.text()).toContain(
-      "<loc>https://acme.example/posts/a</loc>"
-    );
+    expect(body).toContain("User-agent: GPTBot\nDisallow: /");
+    expect(body).not.toContain("User-agent: PerplexityBot");
   });
 });

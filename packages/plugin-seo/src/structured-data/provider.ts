@@ -16,6 +16,8 @@ import type {
 } from "@nextlyhq/plugin-sdk";
 
 import { seoPageMetadata, type ReadRules } from "../resolver/provider";
+import { readSeoRules } from "../settings/rules";
+import { structuredDataFromSettings } from "../settings/structured-data-rules";
 
 import {
   buildStructuredData,
@@ -59,9 +61,9 @@ export function withStructuredData(
 
 /** Where a page's head and structured data read their rules from. */
 export interface StructuredDataReaders {
-  /** The resolver's rules, as the head reads them. */
+  /** The resolver's rules, as the head reads them: the SEO settings when not given. */
   readRules?: ReadRules;
-  /** The structured data rules, as the page reads them. */
+  /** The structured data rules beneath the SEO settings, as the page reads them. */
   readStructuredDataRules?: ReadStructuredDataRules;
 }
 
@@ -75,9 +77,15 @@ export async function pageStructuredData(
   input: PageMetadataInput,
   readers: StructuredDataReaders = {}
 ): Promise<PageStructuredData> {
-  const answer = await seoPageMetadata(ctx, readers.readRules).resolve(input);
-  const readStructured =
-    readers.readStructuredDataRules ?? noStructuredDataRules;
+  // The same readers the page's own markup is built with: the SEO settings,
+  // over the rules a caller gives, so a diagnosis describes what is served.
+  const answer = await seoPageMetadata(
+    ctx,
+    readers.readRules ?? readSeoRules
+  ).resolve(input);
+  const readStructured = structuredDataFromSettings(
+    readers.readStructuredDataRules ?? noStructuredDataRules
+  );
   return buildStructuredData(
     ctx,
     input,

@@ -31,17 +31,24 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest"
   },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
   "peerDependencies": {
     "@nextlyhq/admin": "0.0.2-alpha.74",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "nextly": "0.0.2-alpha.74",
-    "react": "^19.3.0"
+    "react": "^19.3.0",
+    "sharp": "^0.35.5"
   },
   "peerDependenciesMeta": {
     "@nextlyhq/admin": {
       "optional": true
     },
     "react": {
+      "optional": true
+    },
+    "sharp": {
       "optional": true
     }
   },
@@ -58,6 +65,7 @@
     "nextly": "workspace:*",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "sharp": "^0.35.5",
     "tsdown": "^0.23.1",
     "typescript": "7.0.2",
     "vitest": "^5.0.5"
