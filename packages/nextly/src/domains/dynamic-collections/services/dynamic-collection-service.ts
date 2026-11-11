@@ -1584,8 +1584,12 @@ export class DynamicCollectionService extends BaseService {
           previousFields: oldUserFields,
           fields: userDefinedFields,
           mainTable: collection.tableName,
-          wasLocalized: collectionWasLocalized,
-          isLocalized: collectionIsLocalized,
+          // Where its translatable values are stored, before and after: per language when it is
+          // translated, or always under per-language storage.
+          wasLocalized: storesPerLanguage({
+            localized: collectionWasLocalized,
+          }),
+          isLocalized: storesPerLanguage({ localized: collectionIsLocalized }),
           dialect: this.adapter.getCapabilities().dialect,
           builtBy: "collection",
         },

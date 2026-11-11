@@ -135,7 +135,8 @@ export function identifierKey(dialect: SupportedDialect, name: string): string {
 /**
  * The moves whose new column is already there while the old one still is. The new column is looked
  * for on the table the move ends on, and, for a move between tables, on the table it starts from
- * too, where its rename may run first. A move whose old column is gone is not among them: an
+ * too, where its rename may run first; a move that keeps its column's name renames nothing there,
+ * and its own old column is not in its way. A move whose old column is gone is not among them: an
  * earlier run already made it.
  *
  * @param liveColumns - Each table's columns as they are now, by `identifierKey`.
@@ -150,8 +151,12 @@ export function movesOntoTakenColumns(
   const taken: TakenMove[] = [];
   for (const move of moves) {
     if (!has(move.fromTable, move.fromColumn)) continue;
+    const keepsName =
+      identifierKey(dialect, move.fromColumn) ===
+      identifierKey(dialect, move.toColumn);
+    if (keepsName && move.fromTable === move.toTable) continue;
     const tables =
-      move.fromTable === move.toTable
+      move.fromTable === move.toTable || keepsName
         ? [move.toTable]
         : [move.toTable, move.fromTable];
     const holding = tables.find(table => has(table, move.toColumn));
@@ -162,7 +167,11 @@ export function movesOntoTakenColumns(
 
 /** The refusal's message for one move onto a taken column. */
 export function renameTargetTakenMessage({ move, table }: TakenMove): string {
-  return `Column '${move.fromColumn}' cannot be renamed to '${move.toColumn}': table '${table}' already has a column '${move.toColumn}'. Remove or rename that column first, then save again.`;
+  const what =
+    move.fromColumn === move.toColumn
+      ? `Column '${move.fromColumn}' cannot be moved from table '${move.fromTable}' to table '${move.toTable}'`
+      : `Column '${move.fromColumn}' cannot be renamed to '${move.toColumn}'`;
+  return `${what}: table '${table}' already has a column '${move.toColumn}'. Remove or rename that column first, then save again.`;
 }
 
 /**
@@ -258,18 +267,23 @@ async function renamedFieldMove(
     change.dialect,
     change.builtBy
   )?.name;
-  if (!fromColumn || !toColumn || fromColumn === toColumn) return null;
+  if (!fromColumn || !toColumn) return null;
   const { isFieldLocalized } = await import("../i18n/classify-fields");
   const companionTable = `${change.mainTable}_locales`;
+  const fromTable = isFieldLocalized(rename.from, change.wasLocalized)
+    ? companionTable
+    : change.mainTable;
+  const toTable = isFieldLocalized(rename.to, change.isLocalized)
+    ? companionTable
+    : change.mainTable;
+  // A rename that keeps its column where it is moves nothing. One that keeps the column's name
+  // while its values move between the tables still lands on a column that may be there.
+  if (fromTable === toTable && fromColumn === toColumn) return null;
   return {
     field: rename.to.name,
-    fromTable: isFieldLocalized(rename.from, change.wasLocalized)
-      ? companionTable
-      : change.mainTable,
+    fromTable,
     fromColumn,
-    toTable: isFieldLocalized(rename.to, change.isLocalized)
-      ? companionTable
-      : change.mainTable,
+    toTable,
     toColumn,
   };
 }

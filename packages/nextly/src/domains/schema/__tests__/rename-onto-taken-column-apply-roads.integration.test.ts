@@ -20,7 +20,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
@@ -215,6 +215,8 @@ describeEachDialect(
       expect(await headingsIn("dc_posts")).toEqual(["Kept"]);
     });
 
+    // An untranslated collection's dialog writes its change as a migration and runs it (the Builder
+    // save writer), so the refusal must come before the file is written.
     it("refuses the collection dialog that would drop the old column onto the one there", async () => {
       await posts();
       await query(
@@ -232,7 +234,9 @@ describeEachDialect(
             fields: RENAMED,
             confirmed: true,
             schemaVersion: version,
-            eventResolutions: confirmDrop("dc_posts"),
+            eventResolutions: [],
+            // As the admin sends it: a per-field confirmation of the drop.
+            resolutions: { heading: { action: "confirm_drop" } },
             renameResolutions: [],
           }
         )
@@ -247,6 +251,7 @@ describeEachDialect(
       expect(await headingsIn("dc_posts")).toEqual(["Kept"]);
     });
 
+    // A translated collection's dialog pushes its change, which carries values across the tables.
     it("refuses the collection dialog's rename of a translated field onto a column its companion has", async () => {
       await posts(true);
       await query(
@@ -267,7 +272,9 @@ describeEachDialect(
             ],
             confirmed: true,
             schemaVersion: version,
-            eventResolutions: confirmDrop("dc_posts_locales"),
+            eventResolutions: [],
+            // As the admin sends it: a per-field confirmation of the drop.
+            resolutions: { heading: { action: "confirm_drop" } },
             renameResolutions: [],
           }
         )
@@ -357,6 +364,88 @@ describeEachDialect(
       expect(await columnsOf("comp_promo")).toEqual(columnsBefore);
     });
 
+    // A rename that keeps the column's name but moves its values between the tables: a field named
+    // in camelCase, whose column is already snake_case, renamed to that spelling as it stops being
+    // translated. Its values move from the companion's `foo_bar` to the main table's, where a
+    // leftover `foo_bar` holds a value of its own. The schema dialog takes the field lists as sent,
+    // so it renames the field; the Builder save keeps a field whose column is unchanged under its
+    // stored name.
+    it("refuses a rename whose column keeps its name but moves onto the main table's", async () => {
+      expect(
+        await answerOf(() =>
+          dispatchCollections(
+            {} as ServiceContainer,
+            "createCollection",
+            {},
+            {
+              name: "posts",
+              label: "Posts",
+              localized: true,
+              fields: [
+                { name: "fooBar", type: "text", localized: true },
+                BEFORE[1],
+              ],
+            }
+          )
+        )
+      ).toBe("accepted");
+      await current.nextly.create({
+        collection: "posts",
+        data: { fooBar: "Kept" },
+        locale: "en",
+      });
+      await query(
+        `ALTER TABLE ${q("dc_posts")} ADD COLUMN ${q("foo_bar")} TEXT`
+      );
+      await query(`UPDATE ${q("dc_posts")} SET ${q("foo_bar")} = 'Stale'`);
+      const mainBefore = await columnsOf("dc_posts");
+      const companionBefore = await columnsOf("dc_posts_locales");
+      const { version } = await registered("dynamic_collections", "posts");
+
+      const answer = await answerOf(() =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "posts" },
+          {
+            fields: [
+              { name: "foo_bar", type: "text", localized: false },
+              BEFORE[1],
+            ],
+            confirmed: true,
+            schemaVersion: version,
+            eventResolutions: [],
+            // The rename the dialog offers on the companion, answered as a rename.
+            renameResolutions: [
+              {
+                tableName: "dc_posts_locales",
+                fromColumn: "foo_bar",
+                toColumn: "foo_bar",
+                choice: "rename",
+              },
+            ],
+          }
+        )
+      );
+
+      expect(answer).toEqual([
+        expect.objectContaining({
+          code: "RENAME_TARGET_TAKEN",
+          message: expect.stringContaining(
+            "table 'dc_posts' already has a column 'foo_bar'"
+          ),
+        }),
+      ]);
+      expect((await registered("dynamic_collections", "posts")).names).toEqual([
+        "fooBar",
+        "body",
+      ]);
+      expect(await columnsOf("dc_posts")).toEqual(mainBefore);
+      expect(await columnsOf("dc_posts_locales")).toEqual(companionBefore);
+      expect(await headingsIn("dc_posts", "foo_bar")).toEqual(["Stale"]);
+      expect(await headingsIn("dc_posts_locales", "foo_bar")).toEqual(["Kept"]);
+    });
+
     // The control: with nothing in the way, the dialog's rename goes through and the value follows.
     it("applies the collection dialog's rename onto a free name", async () => {
       await posts();
@@ -410,6 +499,44 @@ describeEachDialect(
         "headline",
         "body",
       ]);
+    });
+
+    // Under per-language storage a collection that is not translated still keeps its translatable
+    // values in its companion, so the rename is judged there.
+    describe("under per-language storage", () => {
+      beforeEach(async () => {
+        await current.destroy();
+        current = await createTestNextly({
+          dialect,
+          collections: [],
+          localization,
+          perLanguageStorage: true,
+        });
+      });
+
+      it("refuses the collection Builder save onto a column the companion has", async () => {
+        await posts();
+        await query(
+          `ALTER TABLE ${q("dc_posts_locales")} ADD COLUMN ${q("headline")} TEXT`
+        );
+        const companionBefore = await columnsOf("dc_posts_locales");
+
+        const answer = await answerOf(() =>
+          dispatchCollections(
+            {} as ServiceContainer,
+            "updateCollection",
+            { collectionName: "posts" },
+            { fields: RENAMED }
+          )
+        );
+
+        expect(answer).toEqual(takenOn("dc_posts_locales"));
+        expect(
+          (await registered("dynamic_collections", "posts")).names
+        ).toEqual(["heading", "body"]);
+        expect(await columnsOf("dc_posts_locales")).toEqual(companionBefore);
+        expect(await headingsIn("dc_posts_locales")).toEqual(["Kept"]);
+      });
     });
   }
 );
