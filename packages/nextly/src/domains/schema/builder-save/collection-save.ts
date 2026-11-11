@@ -50,6 +50,7 @@ import type {
   UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
 import {
@@ -72,6 +73,7 @@ import {
   buildDesiredSnapshotFromConfig,
   generateMigration,
   type AddedStatements,
+  type GenerateArgs,
 } from "../migrate-create/generate";
 import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
 import { countRowsBreakingNotNull } from "../pipeline/classifier/count-helpers";
@@ -704,6 +706,43 @@ function refuseUnconfirmedConversions(
   });
 }
 
+/**
+ * How the generator judges the save's fields joining translation: worded for
+ * the Builder, and knowing which of them an earlier apply of the same change
+ * already moved here and which of those the save narrows (`joinRetries`), as
+ * the push's preflight judges them. The file is generated before that push runs, so without it a retry
+ * the push would finish, or refuse with how to finish it, is refused first as
+ * a first attempt, in the words for code.
+ */
+async function joiningJudgementOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<NonNullable<GenerateArgs["joiningJudgement"]>> {
+  return {
+    slug: save.slug,
+    surface: "builder",
+    retries:
+      save.previous !== null && save.entity !== null
+        ? await joinRetries({
+            adapter: deps.adapter,
+            tableName: table,
+            // The Builder's column rule, which made the collection's tables.
+            builtBy: "collection",
+            oldFields: namedFields(save.previous),
+            newFields: namedFields(save.entity),
+          })
+        : { moved: new Set(), narrowed: new Set() },
+  };
+}
+
+/** The collection's fields that carry a column's name; a layout field has none. */
+function namedFields(entity: UiSchemaEntity) {
+  return entity.fields.flatMap(f =>
+    f.name === undefined ? [] : [{ ...f, name: f.name }]
+  );
+}
+
 /** The files a save writes, adopt first. */
 interface SaveFiles {
   adopt: string | undefined;
@@ -776,6 +815,7 @@ async function writeFiles(
     ...held,
     manifest: plan.next,
     save,
+    joiningJudgement: await joiningJudgementOf(deps, save, plan.table),
     name: `${migrationSlug(save.slug)}_${save.change}`,
     table: plan.table,
     now: new Date(now.getTime() + offset),
@@ -981,6 +1021,8 @@ async function generateFor(
     resolutions?: readonly ColumnResolution[];
     /** Collections the database holds that no snapshot records (`appMigrationInputs`). */
     held?: readonly UiSchemaEntity[];
+    /** How the collection's fields joining translation are judged (`joiningJudgementOf`). */
+    joiningJudgement?: GenerateArgs["joiningJudgement"];
   }
 ): Promise<string[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -1035,6 +1077,9 @@ async function generateFor(
     ...(args.resolutions === undefined
       ? {}
       : { resolutions: args.resolutions }),
+    ...(args.joiningJudgement === undefined
+      ? {}
+      : { joiningJudgement: args.joiningJudgement }),
     decideRenames: candidates =>
       Promise.resolve(renamesOf(candidates, args.save.renamedFields ?? [])),
     now: args.now,

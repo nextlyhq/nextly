@@ -38,6 +38,13 @@ export function defaultSeoFields(): FieldConfig[] {
       name: "canonical",
       label: "Canonical URL",
     }),
+    // Set when the page first appeared on another site, which is the one
+    // case a typed canonical may point off this site.
+    checkbox({
+      name: "canonicalElsewhere",
+      label: "This page first appeared on another site",
+      defaultValue: false,
+    }),
     checkbox({
       name: "noindex",
       label: "Hide from search engines",

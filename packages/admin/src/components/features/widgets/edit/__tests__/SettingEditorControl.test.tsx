@@ -175,9 +175,11 @@ describe("a setting with its own editor", () => {
     await userEvent.click(screen.getByRole("button", { name: "Double" }));
     expect(screen.getByText("Goal: 40 for Q4")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(
-      await screen.findByText('"Goal" is at most 30.', { selector: "p" })
-    ).toBeTruthy();
+    const refusal = await screen.findByText('"Goal" is at most 30.', {
+      selector: "p",
+    });
+    // In the danger status's text colour, not the colour of a destructive action.
+    expect(refusal).toHaveClass("text-danger-text");
     expect(onSave).not.toHaveBeenCalled();
   });
 

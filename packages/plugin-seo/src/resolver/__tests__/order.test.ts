@@ -181,7 +181,10 @@ describe("visibility and the canonical", () => {
     expect(
       resolveOrder({
         ...none,
-        page: { canonical: "https://elsewhere.example/original" },
+        page: {
+          canonical: "https://elsewhere.example/original",
+          canonicalElsewhere: true,
+        },
         address: "/de/ueber",
       }).canonical
     ).toEqual({ value: "https://elsewhere.example/original", from: "page" });
@@ -189,5 +192,27 @@ describe("visibility and the canonical", () => {
 
   it("has none where the page has no declared address", () => {
     expect(resolveOrder(none).canonical).toBeUndefined();
+  });
+});
+
+describe("a hidden group of pages", () => {
+  it("keeps every page in it hidden, whatever the page's own setting", () => {
+    for (const page of [{}, { hidden: true }]) {
+      expect(resolveOrder({ ...none, page, typeHidden: true }).robots).toEqual({
+        value: { index: false, follow: true },
+        from: "type",
+      });
+    }
+  });
+
+  it("returns each page to its own setting once shown again", () => {
+    expect(
+      resolveOrder({ ...none, page: { hidden: true }, typeHidden: false })
+        .robots
+    ).toEqual({ value: { index: false, follow: true }, from: "page" });
+    expect(resolveOrder({ ...none, typeHidden: false }).robots).toEqual({
+      value: { index: true, follow: true },
+      from: "site",
+    });
   });
 });

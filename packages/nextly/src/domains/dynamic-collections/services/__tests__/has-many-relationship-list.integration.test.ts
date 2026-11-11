@@ -9,7 +9,7 @@ process.env.NEXTLY_SECRET =
   "test-secret-must-be-at-least-32-characters-long!!";
 
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,6 +21,7 @@ import {
   createDatabaseStatement,
   dropDatabaseStatement,
 } from "../../../../database/test-database-ddl";
+import { container } from "../../../../di/container";
 import { clearServices } from "../../../../di/register";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
@@ -33,6 +34,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
+import { SchemaEventsRepository } from "../../../schema/events/schema-events-repository";
 import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
 import { _resetApplyDesiredSchemaForTests } from "../../../schema/pipeline/index";
 
@@ -773,5 +775,116 @@ for (const dialect of getConfiguredTestDialects()) {
       });
       expect(await foreignKeyColumns("dc_posts")).not.toContain("subject");
     });
+
+    // One switch, the same outcome whichever road the save takes: the Schema Builder's writer (the
+    // save writes its migration and runs it) or the push the save took before it (here, the writer
+    // left unregistered). A relation switching its storage shape is applied by the push either
+    // way, so its refusals, conversions and repairs are one implementation.
+    describe.each(["the Schema Builder's writer", "the push"])(
+      "a relationship switch through %s",
+      road => {
+        beforeEach(() => {
+          if (road !== "the push") return;
+          const has = container.has.bind(container);
+          vi.spyOn(container, "has").mockImplementation(name =>
+            name === "builderSaveSetup" ? false : has(name)
+          );
+        });
+
+        it("switches one to many, keeping the value as a one-item list", async () => {
+          const t = await boot();
+          const { a } = await postsWithAuthors(t, false);
+          const post = (
+            await t.nextly.create({
+              collection: "posts",
+              data: { title: "P1", author: a },
+            })
+          ).item.id as string;
+          // The writer's migrations, which the push road never writes to.
+          const { migrationsDir } = container.get<{ migrationsDir: string }>(
+            "builderSaveSetup"
+          );
+          const sqlFiles = async () =>
+            (await readdir(migrationsDir).catch(() => [])).filter(file =>
+              file.endsWith(".sql")
+            );
+          const before = await sqlFiles();
+
+          expect(await switchAuthor(database.adapter, true)).toEqual({
+            accepted: true,
+          });
+          expect(await authorOf(t, post)).toEqual([a]);
+
+          // The writer still writes the switch's migration, recorded applied once the push ran it.
+          const added = (await sqlFiles()).filter(
+            file => !before.includes(file)
+          );
+          if (road === "the push") {
+            expect(added).toEqual([]);
+          } else {
+            expect(added).toHaveLength(1);
+            expect(
+              await new SchemaEventsRepository(
+                database.adapter.getDrizzle(),
+                dialect
+              ).isFileApplied(added[0])
+            ).toBe(true);
+          }
+        });
+
+        it("refuses many to one while a row holds several, naming the field and its rows", async () => {
+          const t = await boot();
+          const { a, b } = await postsWithAuthors(t, true);
+          await t.nextly.create({
+            collection: "posts",
+            data: { title: "P1", author: [a, b] },
+          });
+          const outcome = await switchAuthor(database.adapter, false);
+          expect(outcome).toEqual({
+            refused: expect.stringContaining("'author'") as unknown as string,
+          });
+          expect((outcome as { refused: string }).refused).toContain("1 row");
+        });
+
+        it("refuses a switch to several collections while a row holds a value, naming the field", async () => {
+          const t = await boot();
+          const { a } = await postsWithAuthors(t, false);
+          await t.nextly.create({
+            collection: "posts",
+            data: { title: "P1", author: a },
+          });
+          expect(
+            await switchAuthor(database.adapter, {
+              relationTo: ["authors", "tags"],
+            })
+          ).toEqual({
+            refused: expect.stringContaining("'author'") as unknown as string,
+          });
+        });
+
+        it("switches to several collections over no value, then saves one", async () => {
+          const t = await boot();
+          const { a } = await postsWithAuthors(t, false);
+          expect(
+            await switchAuthor(database.adapter, {
+              relationTo: ["authors", "tags"],
+            })
+          ).toEqual({ accepted: true });
+          const post = (
+            await t.nextly.create({
+              collection: "posts",
+              data: {
+                title: "P1",
+                author: { relationTo: "authors", value: a },
+              },
+            })
+          ).item.id as string;
+          expect(await authorOf(t, post)).toMatchObject({
+            relationTo: "authors",
+            value: a,
+          });
+        });
+      }
+    );
   });
 }

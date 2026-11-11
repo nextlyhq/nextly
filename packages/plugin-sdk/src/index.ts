@@ -441,7 +441,10 @@ export type {
  *   `security.breachedPasswords`; `OpaqueSecrets` (`ctx.security.opaque`); and
  *   `OneTimeSecrets` (`ctx.security.secrets`) with `SecretData` and
  *   `TxOption`. Held experimental until a first-party plugin signs people in
- *   with them (see STABILITY.md). `PluginReceivedWebhooks`
+ *   with them (see STABILITY.md). `KeyedDigests` (`ctx.security.digests`),
+ *   keyed one-way digests under the plugin's own key that survive a secret
+ *   rotation, is experimental until a first-party plugin has shipped with it.
+ *   `PluginReceivedWebhooks`
  *   (`ctx.security.webhooks`), verifying a received webhook against a
  *   `standardWebhooks` or a plugin's own `InboundWebhookScheme` and claiming
  *   it once (`claimDelivery`, with `ClaimDeliveryOptions`, `DeliveryClaim`,
@@ -456,6 +459,7 @@ export type {
   PasswordCheck,
   BreachedPasswordsConfig,
   OpaqueSecrets,
+  KeyedDigests,
   OneTimeSecrets,
   SecretData,
   TxOption,
@@ -558,6 +562,17 @@ export type {
  */
 export { publicAddressOf, typesWithoutAddress } from "nextly";
 export type { PublicAddress, PublicAddressType } from "nextly";
+
+/**
+ * The paths every robots.txt of a Nextly site keeps crawlers out of: the
+ * admin and the API, on a path boundary. A plugin that serves robots.txt
+ * reads them here, as `nextlyRobots` does in core, so a correction reaches
+ * every such file. Intended to become stable once the SEO plugin's robots.txt
+ * has shipped on it.
+ *
+ * @experimental
+ */
+export { FRAMEWORK_CRAWL_EXCLUSIONS } from "nextly";
 
 /**
  * Where a page kept in one language is opened: `languageAddressOf(path,
