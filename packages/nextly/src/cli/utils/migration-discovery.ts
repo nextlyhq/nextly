@@ -17,6 +17,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
 import { dialectVariantOf } from "../../domains/schema/migrate/dialect-variant";
+import { groupMigrationFiles } from "../../domains/schema/migrate/migration-groups";
 import { compareMigrationBaseNames } from "../../domains/schema/migrate/migration-order";
 import {
   classifyMigrationFile,
@@ -332,35 +333,6 @@ export async function readableMigrationFiles(
     }
   }
   return files;
-}
-
-/** `files` grouped by base name, each group with its dialect variants. */
-function groupMigrationFiles(
-  files: readonly string[]
-): Map<string, MigrationGroup> {
-  const sqlFiles = [...files].sort((a, b) => a.localeCompare(b));
-
-  const migrationGroups = new Map<string, MigrationGroup>();
-
-  for (const file of sqlFiles) {
-    // A dialect suffix (`.mysql.sql`) names a variant of its base's group;
-    // read once, as the old-Builder reading reads it.
-    const variant = dialectVariantOf(file);
-    const baseName = variant?.baseName ?? basename(file, ".sql");
-    const dialect = variant?.dialect;
-
-    // Get or create the group for this base name
-    let group = migrationGroups.get(baseName);
-    if (!group) {
-      group = { baseName, variants: [] };
-      migrationGroups.set(baseName, group);
-    }
-
-    // Add this variant to the group
-    group.variants.push({ file, dialect });
-  }
-
-  return migrationGroups;
 }
 
 /**

@@ -20,12 +20,14 @@
  * ```
  */
 
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 
 import { warnIfCacheComponentsOff } from "./cache-components";
 import {
   BUILD_SCHEMA_VERSION_ENV,
   newestMigrationIn,
+  type RunnersFolderReading,
 } from "./domains/schema/build-schema-version";
 import { statedDialect } from "./shared/lib/stated-dialect";
 import { DEFAULT_MIGRATIONS_DIR } from "./shared/types/migrations-dir-default";
@@ -290,6 +292,22 @@ function withRootFileRewrites(
   };
 }
 
+/**
+ * The runner's reading of the migrations folder (`readMigrationFolderSync`),
+ * loaded when it is first needed: it brings the core schema with it, which
+ * would add most of a second to every load of `next.config`, and a folder
+ * needs it only when it holds a file an earlier Schema Builder wrote.
+ *
+ * Required synchronously, since `withNextly` returns the config at once: the
+ * built `cli/utils` entry, which sits beside this one in `dist`.
+ */
+function loadRunnersReading(): RunnersFolderReading {
+  const loaded = createRequire(import.meta.url)("./cli/utils/index.mjs") as {
+    readMigrationFolderSync: RunnersFolderReading;
+  };
+  return loaded.readMigrationFolderSync;
+}
+
 export function withNextly<T extends Record<string, unknown>>(
   nextConfig: T,
   options: WithNextlyOptions = {}
@@ -342,10 +360,12 @@ export function withNextly<T extends Record<string, unknown>>(
   // that passes none. No migration, no version, and a production start then
   // compares nothing.
   // Read as the runner reads it on the app's dialect, so a file the runner
-  // sets aside is never named.
+  // sets aside is never named; its reading is loaded only for a folder that
+  // could hold one (`loadRunnersReading`).
   const buildVersion = newestMigrationIn(
     resolve(process.cwd(), options.migrationsDir ?? DEFAULT_MIGRATIONS_DIR),
-    options.dialect ?? statedDialect(process.env)
+    options.dialect ?? statedDialect(process.env),
+    loadRunnersReading
   );
   if (buildVersion !== undefined) {
     process.env[BUILD_SCHEMA_VERSION_ENV] = buildVersion;

@@ -104,7 +104,11 @@ describe("the newest migration", () => {
     ]) {
       writeFileSync(join(dir, file), "-- UP\n");
     }
-    expect(newestMigrationIn(dir, "postgresql")).toBe(NEWER);
+    // No file named as the Builder named its files: the runner's reading,
+    // which loads the core schema, is not loaded.
+    const load = vi.fn(() => readMigrationFolderSync);
+    expect(newestMigrationIn(dir, "postgresql", load)).toBe(NEWER);
+    expect(load).not.toHaveBeenCalled();
   });
 
   it("in a folder, is never a file an earlier Schema Builder wrote, which the runner sets aside", () => {
@@ -125,14 +129,19 @@ describe("the newest migration", () => {
         file => file.file
       )
     ).toEqual([builderFile]);
-    expect(newestMigrationIn(dir, "postgresql")).toBe(handNamed);
+    // A file named as the Builder named its files: the runner's own reading
+    // decides, and sets it aside.
+    const load = vi.fn(() => readMigrationFolderSync);
+    expect(newestMigrationIn(dir, "postgresql", load)).toBe(handNamed);
+    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it("is none for a folder that is not there", () => {
     expect(
       newestMigrationIn(
         join(tmpdir(), "nextly-no-such-folder-schema-version"),
-        "postgresql"
+        "postgresql",
+        () => readMigrationFolderSync
       )
     ).toBeUndefined();
   });

@@ -13,14 +13,15 @@
  *
  * @module domains/schema/build-schema-version
  */
+import { readdirSync } from "node:fs";
+
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import {
-  readMigrationFolderSync,
-  type MigrationFolder,
-} from "../../cli/utils/migration-discovery";
+import type { MigrationFolder } from "../../cli/utils/migration-discovery";
 
+import { groupMigrationFiles } from "./migrate/migration-groups";
 import { compareMigrationBaseNames } from "./migrate/migration-order";
+import { hasOldBuilderName } from "./migrate/old-builder-name";
 
 /** The environment variable that carries the build's schema version. */
 export const BUILD_SCHEMA_VERSION_ENV = "NEXTLY_BUILD_SCHEMA_VERSION";
@@ -42,26 +43,38 @@ export function newestMigrationName(
   return newest;
 }
 
+/** The runner's reading of the folder, as far as this needs it. */
+export type RunnersFolderReading = (
+  dir: string,
+  dialect: SupportedDialect
+) => Pick<MigrationFolder, "groups">;
+
 /**
  * The newest app migration in `dir` that `nextly migrate` runs on `dialect`,
- * by base name: the folder as the runner reads it (`readMigrationFolderSync`),
- * so a dialect's variant counts as its base and a file an earlier Schema
- * Builder wrote, which the runner sets aside, is never the build's version.
+ * by base name: the folder as the runner groups it (`groupMigrationFiles`),
+ * so a dialect's variant counts as its base. Only a file named as an earlier
+ * Schema Builder named its files (`hasOldBuilderName`) can be one the runner
+ * sets aside, so where the folder holds one, the runner's own reading decides
+ * (`readMigrationFolderSync`, which `loadRunnersReading` loads only then: it
+ * brings the core schema with it, too heavy for every load of `next.config`).
  * Undefined for a folder with no migration, or one that cannot be read: the
  * comparison this feeds only ever logs, so a folder it cannot read leaves it
  * with nothing to compare rather than failing the build.
  */
 export function newestMigrationIn(
   dir: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  loadRunnersReading: () => RunnersFolderReading
 ): string | undefined {
-  let folder: MigrationFolder;
   try {
-    folder = readMigrationFolderSync(dir, dialect);
+    const files = readdirSync(dir).filter(file => file.endsWith(".sql"));
+    const groups = files.some(hasOldBuilderName)
+      ? loadRunnersReading()(dir, dialect).groups
+      : groupMigrationFiles(files);
+    return newestMigrationName(groups.keys());
   } catch {
     return undefined;
   }
-  return newestMigrationName(folder.groups.keys());
 }
 
 /**
