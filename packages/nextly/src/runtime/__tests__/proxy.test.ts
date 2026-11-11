@@ -4,6 +4,7 @@ import type { SanitizedNextlyConfig } from "../../collections/config/define-conf
 import type { PluginContext } from "../../plugins/plugin-context";
 import {
   clearProxyHandlers,
+  markProxyHandlersReady,
   registerProxyHandler,
 } from "../../plugins/proxy/proxy-registry";
 import type { ProxyAnswer } from "../../plugins/proxy/proxy-types";
@@ -25,11 +26,13 @@ function fakeNext() {
   return { deps, calls };
 }
 
+/** A handler answering `answer`, registered and ready, as a finished start leaves it. */
 function answering(answer: ProxyAnswer | undefined): void {
   registerProxyHandler(
     { pluginName: "p", handler: { name: "h", handle: () => answer } },
     ctx
   );
+  markProxyHandlersReady();
 }
 
 const request = () =>

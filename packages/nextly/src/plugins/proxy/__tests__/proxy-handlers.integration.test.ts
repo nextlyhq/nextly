@@ -4,14 +4,14 @@
  * from a row it reads through its context, and a row saved afterwards decides
  * the very next request.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields/helpers";
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
 import { createNextlyProxy } from "../../../runtime/proxy";
 import { definePlugin } from "../../plugin-context";
-import { hasProxyHandlers, proxyHandlersRegistered } from "../proxy-registry";
+import { hasProxyHandlers, proxyHandlersReady } from "../proxy-registry";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -104,6 +104,35 @@ describe("a start that fails after registering proxy handlers", () => {
 
     // The handlers belonged to plugins the failed start destroyed.
     expect(hasProxyHandlers()).toBe(false);
-    expect(proxyHandlersRegistered()).toBe(false);
+    expect(proxyHandlersReady()).toBe(false);
   });
+});
+
+describe("a start whose plugin is still getting ready", () => {
+  it("keeps its proxy handlers out until every plugin's onReady has finished", async () => {
+    let finishReady: () => void = () => {};
+    const slow = definePlugin({
+      name: "@test/proxy-slow-ready",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      contributes: {
+        proxy: [{ name: "marks", handle: () => ({ headers: { "x-m": "1" } }) }],
+      },
+      onReady: () =>
+        new Promise<void>(resolve => {
+          finishReady = resolve;
+        }),
+    });
+
+    const booting = createTestNextly({ plugins: [slow] });
+    // The handler is registered, and its plugin is not ready yet.
+    await vi.waitFor(() => expect(hasProxyHandlers()).toBe(true), {
+      timeout: 60_000,
+    });
+    expect(proxyHandlersReady()).toBe(false);
+
+    finishReady();
+    current = await booting;
+    expect(proxyHandlersReady()).toBe(true);
+  }, 120_000);
 });

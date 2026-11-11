@@ -222,6 +222,7 @@ import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import {
   clearProxyHandlers,
   collectProxyHandlers,
+  markProxyHandlersReady,
   registerProxyHandlers,
   type CollectedProxyHandler,
 } from "../plugins/proxy/proxy-registry";
@@ -5125,6 +5126,9 @@ async function initializePlugins(
     }
   }
 
+  // Every plugin is ready, so the Proxy may now run their handlers; until
+  // here it lets each request through as the page alone.
+  markProxyHandlersReady();
   return teardown;
 }
 
