@@ -63,6 +63,14 @@ export function TopBarPlacesProvider({
   );
 }
 
+/** What a page hands one of the bar's places. */
+export interface TopBarPlaceProps {
+  /** `start`, the bar's left part, or `end`, its right part. */
+  name: TopBarPlaceName;
+  /** Drawn in the bar, inside the page's own tree and context. */
+  children: ReactNode;
+}
+
 /**
  * Draw `children` into the bar's `name` place for as long as this is mounted.
  * Outside the shell, draws them here instead.
@@ -70,10 +78,7 @@ export function TopBarPlacesProvider({
 export function TopBarPlace({
   name,
   children,
-}: {
-  name: TopBarPlaceName;
-  children: ReactNode;
-}): JSX.Element | null {
+}: TopBarPlaceProps): JSX.Element | null {
   const places = useContext(TopBarPlacesContext);
   if (places === null) return <>{children}</>;
   const target = places.targets[name];
