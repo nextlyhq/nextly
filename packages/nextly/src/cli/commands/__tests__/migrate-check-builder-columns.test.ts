@@ -92,9 +92,10 @@ afterEach(() => {
 
 /** Run a command over the project; its exit code, if any, and what it said. */
 async function run(
-  command: (context: CommandContext) => Promise<void>
+  command: (context: CommandContext) => Promise<void>,
+  config: unknown = project
 ): Promise<{ code: number | undefined; said: string[] }> {
-  loaded.config = project;
+  loaded.config = config;
   const said: string[] = [];
   const capture = (message: string) => {
     said.push(message);
@@ -366,3 +367,51 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
     );
   }
 );
+
+/** The project with app localization configured, which a translated Builder collection needs. */
+const translatedProject = defineConfig({
+  collections: [],
+  localization: { locales: ["en", "es"], defaultLocale: "en" },
+  db: { migrationsDir: "./migrations" },
+});
+
+describe("turning translation off for a Builder collection on MySQL", () => {
+  const manifest = (localized: boolean) => ({
+    collections: [
+      {
+        slug: "cases",
+        localized,
+        fields: [{ name: "code", type: "text", unique: true }],
+      },
+    ],
+  });
+
+  async function create(localized: boolean) {
+    process.env.DB_DIALECT = "mysql";
+    process.env.DATABASE_URL = URLS.mysql();
+    _resetEnvCache();
+    await writeFile(
+      join(dir, "ui-schema.json"),
+      JSON.stringify(manifest(localized))
+    );
+    return run(context => {
+      setNonInteractive(true);
+      return runMigrateCreate("translation", { cwd: dir }, context).finally(
+        () => setNonInteractive(false)
+      );
+    }, translatedProject);
+  }
+
+  it("refuses for a translated unique field that states no width, writing nothing", async () => {
+    expect((await create(true)).code).toBeUndefined();
+    const before = sqlFiles();
+
+    const refused = await create(false);
+
+    // Translated, `code` is TEXT keyed per language; shared, it is varchar(255) keyed whole, which
+    // its values may not fit: the disable is refused before any file is written.
+    expect(refused.code).toBe(1);
+    expect(refused.said.join("\n")).toContain("states no width");
+    expect(sqlFiles()).toEqual(before);
+  });
+});

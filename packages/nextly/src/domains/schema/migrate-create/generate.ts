@@ -1909,6 +1909,21 @@ function disableEntryFor(
 ): CompanionPlanEntry | undefined {
   const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
   if (prevMain?.localized !== true) return undefined;
+  // Turning translation off moves every translated field out of it at once, so each is judged as
+  // a field leaving translation alone is (`refusalsForFieldsLeavingTranslation`): one whose shared
+  // column is shaped otherwise than its translated one is refused before any file is written.
+  refuseMigration(
+    c,
+    refusalsForFieldsLeavingTranslation({
+      leaving: new Set(
+        c.fields.filter(f => isFieldLocalized(f, true)).map(f => f.name)
+      ),
+      newFields: c.fields,
+      dialect,
+      builtBy: columnOriginOf(c, entityKind),
+      surface: "code",
+    })
+  );
   // The snapshot's recorded column list is the AUTHORITATIVE description of what the
   // companion actually holds; the current config is not, because the same edit that
   // flipped the switch may also have added or unflagged fields. Restoring exactly the

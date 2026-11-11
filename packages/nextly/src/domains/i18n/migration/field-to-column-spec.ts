@@ -56,14 +56,23 @@ export function fieldToLocalizedColumnSpec(
   // Deciding it here instead left a translatable field bounded on the companion while the same
   // declaration was unbounded on the main table, so a value saved in one language was refused in
   // another.
-  builtBy: ColumnOrigin
+  builtBy: ColumnOrigin,
+  /**
+   * `translated` (the default): the companion column. `shared`: the same field's column on the
+   * main table once it stops being translated, which a unique field's whole-column key can bound.
+   */
+  shape: "translated" | "shared" = "translated"
 ): LocalizedColumnSpec | null {
-  // Asked without the field's `unique` flag: a translated field is unique per language, keyed by
-  // an index over an expression or a prefix that MySQL builds on a TEXT column, so its uniqueness
-  // never bounds the column the way a shared unique field's whole-column key does. Bounding it
-  // here would make a later localization disable restore longer values into `varchar(255)`.
-  const { unique: _unique, ...shape } = field as FieldDefinition;
-  const desc = getColumnDescriptor(shape, dialect, builtBy);
+  // A translated column is asked without the field's `unique` flag: a translated field is unique
+  // per language, keyed by an index over an expression or a prefix that MySQL builds on a TEXT
+  // column, so its uniqueness never bounds the column the way a shared unique field's
+  // whole-column key does.
+  const { unique: _unique, ...withoutUnique } = field as FieldDefinition;
+  const desc = getColumnDescriptor(
+    shape === "shared" ? (field as FieldDefinition) : withoutUnique,
+    dialect,
+    builtBy
+  );
   if (!desc || desc.kind === "skip") return null;
   // Extension-only kinds cannot reach here: a companion column mirrors a
   // FIELD's column, and no collection field produces one. Narrowed explicitly
