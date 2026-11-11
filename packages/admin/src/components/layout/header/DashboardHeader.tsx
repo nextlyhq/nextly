@@ -53,10 +53,8 @@ export function DashboardHeader({
         "h-(--admin-bar-height) shrink-0 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
         "flex items-center gap-3 px-6 max-lg:px-3",
         // A container, so the trail answers to the bar's own width: a sidebar
-        // narrows it as much as a small window does. Named `toolbar` as well:
-        // an open document's controls, drawn into the bar's right part, size
-        // themselves against the bar as they did against their own bar.
-        "[container-type:inline-size] [container-name:topbar_toolbar]",
+        // narrows it as much as a small window does.
+        "@container/topbar",
         className
       )}
     >
@@ -70,10 +68,11 @@ export function DashboardHeader({
           <Menu className="h-5 w-5" aria-hidden="true" />
         </button>
       )}
-      {/* The page's place keeps its own width and gives way first; the right
-          part takes the rest, so an open document's status sits right after
-          the trail and its actions at the bar's right end. */}
-      <div className="flex min-w-0 items-center gap-4">
+      {/* The page's place keeps its own width, at most half the bar, and
+          gives way first; the right part takes the rest, so an open
+          document's status sits right after the trail and its actions at the
+          bar's right end. */}
+      <div className="flex min-w-0 max-w-1/2 items-center gap-4">
         <PanelFoldToggle />
         <HeaderTrail />
         <TopBarPlaceTarget
@@ -83,7 +82,11 @@ export function DashboardHeader({
       </div>
       <TopBarPlaceTarget
         name="end"
-        className="flex min-w-0 flex-1 items-center justify-end gap-2 empty:hidden"
+        // The `toolbar` container: an open document's controls size themselves
+        // against the room this part actually has, after the trail, as they did
+        // against a bar of their own. Its width comes from the bar, not from
+        // its content, so it can be one.
+        className="@container/toolbar flex min-w-0 flex-1 items-center justify-end gap-2 empty:hidden"
       />
       {pluginItems.length > 0 && (
         <div

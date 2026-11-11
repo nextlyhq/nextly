@@ -159,11 +159,13 @@ describe("the top bar's trail", () => {
     expect(
       toList[0]?.querySelector("svg")?.getAttribute("class") ?? ""
     ).toContain("@max-[37.5rem]/topbar:inline");
-    // Measured against the bar itself, so a sidebar narrowing it counts: the bar is a size
-    // container named `topbar` (and `toolbar`, for an open document's controls).
-    const bar = screen.getByRole("banner").className;
-    expect(bar).toContain("[container-type:inline-size]");
-    expect(bar).toContain("[container-name:topbar_toolbar]");
+    // Measured against the bar itself, so a sidebar narrowing it counts.
+    expect(screen.getByRole("banner").className).toContain("@container/topbar");
+    // An open document's controls measure the bar's right part, the room they have.
+    expect(
+      screen.getByRole("banner").querySelector('[data-top-bar-place="end"]')
+        ?.className
+    ).toContain("@container/toolbar");
   });
 
   it("lets a long list name shrink and truncate rather than push into the controls, keeping it whole in the tooltip", () => {

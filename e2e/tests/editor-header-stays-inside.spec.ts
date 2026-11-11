@@ -1,17 +1,15 @@
 /**
- * The document's own verbs stay inside the editor when the preview pane
- * narrows it. On a desktop screen no control folds into the document's menu,
- * so every one is drawn; with the divider at its narrowest the editor is too
- * narrow for them on one line. They wrap within the editor as the header's
- * controls around them do, rather than running past its edge, where Save draft
- * would sit behind the navigation and out of reach.
+ * The document's own verbs stay in reach when the preview pane narrows the
+ * editor. They are drawn in the admin's one top bar, which spans the editor and
+ * the preview, so narrowing the editor takes no width from them: each control
+ * stays inside the bar, on its one row, and inside the window.
  */
 import { expect } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
-test("keeps Save draft and Publish inside an editor narrowed by the preview", async ({
+test("keeps Save draft and Publish inside the bar while the preview narrows the editor", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1024, height: 900 });
@@ -33,30 +31,32 @@ test("keeps Save draft and Publish inside an editor narrowed by the preview", as
   // The editor at the narrowest the divider allows.
   await page.keyboard.press("Home");
 
-  // `:visible`: a hidden copy of this page, which Next.js may keep mounted,
-  // holds the same id.
-  const editorPane = page.locator(
-    `[id="${await divider.getAttribute("aria-controls")}"]:visible`
-  );
+  const bar = page
+    .getByRole("banner")
+    .filter({ has: page.getByTestId("document-bar") });
   const controls = page.getByRole("button", {
     name: /^(Save draft|Publish|More actions)$/,
   });
   await expect(controls).toHaveCount(3);
-  // Each control lies within the editor pane, on both sides.
+  // Each control lies within the bar, on its row, and within the window.
   await expect
     .poll(async () => {
-      const pane = await editorPane.evaluate(el => {
-        const box = el.getBoundingClientRect();
-        return { left: box.left, right: box.right };
+      const box = await bar.evaluate(el => {
+        const r = el.getBoundingClientRect();
+        return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
       });
       const edges = await controls.evaluateAll(elements =>
         elements.map(el => {
-          const box = el.getBoundingClientRect();
-          return { left: box.left, right: box.right };
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
         })
       );
       return edges.every(
-        edge => edge.left >= pane.left - 1 && edge.right <= pane.right + 1
+        edge =>
+          edge.left >= box.left - 1 &&
+          edge.right <= Math.min(box.right, 1024) + 1 &&
+          edge.top >= box.top - 1 &&
+          edge.bottom <= box.bottom + 1
       );
     })
     .toBe(true);
