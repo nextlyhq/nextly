@@ -9,7 +9,9 @@
  * variables written as plain `{{ name }}` are listed and nothing is judged
  * blank. A template kept on the previous engine is never the analysis's to
  * parse: its plain `{{ name }}` uses are listed as the old editor read them,
- * and nothing is judged blank.
+ * and nothing is judged blank. The envelope fields (From, Reply-To) are
+ * always rendered by the Liquid engine and are always analyzed with it,
+ * regardless of the body engine the template is kept on.
  */
 import { useEffect, useMemo, useState } from "react";
 
@@ -34,16 +36,23 @@ export interface TemplateVariableCheck {
 
 export function useTemplateVariables({
   sources,
+  liquidSources,
   declared,
   data,
   isLayoutRow,
   liquid,
 }: {
   sources: ReadonlyArray<string | undefined>;
+  /**
+   * Fields that are always rendered by the Liquid engine, even when the
+   * template body is kept on the previous engine (e.g. From address,
+   * Reply-To). These are always analyzed with Liquid, never the legacy regex.
+   */
+  liquidSources?: ReadonlyArray<string | undefined>;
   declared: ReadonlyArray<{ name: string }>;
   data: Record<string, unknown>;
   isLayoutRow: boolean;
-  /** Whether the template is on the Liquid engine, rather than kept on the old one. */
+  /** Whether the template body is on the Liquid engine, rather than kept on the old one. */
   liquid: boolean;
 }): TemplateVariableCheck {
   const [analysis, setAnalysis] = useState<VariableAnalysis | null>(null);
@@ -59,18 +68,28 @@ export function useTemplateVariables({
 
   // Tracked by content: the caller builds a new list on every render.
   const key = JSON.stringify(sources.map(source => source ?? ""));
+  const liquidKey = JSON.stringify(
+    (liquidSources ?? []).map(source => source ?? "")
+  );
   return useMemo(() => {
     const texts = JSON.parse(key) as string[];
+    const liquidTexts = JSON.parse(liquidKey) as string[];
+    const allLiquidTexts = [...liquidTexts, ...(liquid ? texts : [])];
     const supplied = suppliedNamesFor(isLayoutRow);
     const declaredNames = new Set(declared.map(v => v.name).filter(Boolean));
 
     // The analysis reads the template as the Liquid engine does; a template
     // kept on the old one is read as the old editor read it, and nothing is
-    // judged blank.
-    const parsed = liquid && analysis;
-    const paths = parsed
-      ? parsed.usedVariables(texts).map(use => use.path)
-      : [...new Set(texts.flatMap(collectVariableNames))];
+    // judged blank. The envelope fields are always Liquid.
+    const parsed = analysis;
+    const liquidPaths = parsed
+      ? parsed.usedVariables(allLiquidTexts).map(use => use.path)
+      : [...new Set(liquidTexts.flatMap(collectVariableNames))];
+    const legacyPaths = !liquid
+      ? [...new Set(texts.flatMap(collectVariableNames))]
+      : [];
+    const paths = [...new Set([...liquidPaths, ...legacyPaths])];
+
     const undeclared = new Map<string, string[]>();
     for (const path of paths) {
       const name = path.split(/[.[]/)[0] ?? path;
@@ -81,7 +100,7 @@ export function useTemplateVariables({
     const missing = parsed
       ? [
           ...new Set(
-            texts.flatMap(text =>
+            allLiquidTexts.flatMap(text =>
               parsed.missingValues(text, data, supplied).map(use => use.path)
             )
           ),
@@ -95,5 +114,5 @@ export function useTemplateVariables({
       })),
       missing,
     };
-  }, [analysis, key, declared, data, isLayoutRow, liquid]);
+  }, [analysis, key, liquidKey, declared, data, isLayoutRow, liquid]);
 }

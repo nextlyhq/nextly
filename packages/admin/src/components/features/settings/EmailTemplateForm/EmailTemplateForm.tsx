@@ -265,14 +265,10 @@ export function EmailTemplateForm({
 
   // What the template uses but doesn't declare, and what would show blank.
   const variableCheck = useTemplateVariables({
-    sources: [
-      subject,
-      preheader,
-      fromOverride,
-      replyTo,
-      htmlContent,
-      plainTextContent,
-    ],
+    sources: [subject, preheader, htmlContent, plainTextContent],
+    // From address and Reply-To are always rendered by the Liquid engine,
+    // even when the body is kept on the previous one.
+    liquidSources: [fromOverride, replyTo],
     declared: variables ?? [],
     data: derived.sampleData,
     isLayoutRow,

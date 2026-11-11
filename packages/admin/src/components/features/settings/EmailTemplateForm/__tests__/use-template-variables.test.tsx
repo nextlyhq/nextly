@@ -132,4 +132,28 @@ describe("the workbench's variable check", () => {
       })
     );
   });
+
+  it("always reads envelope fields (From, Reply-To) with Liquid, even for a kept template", async () => {
+    // `fromOverride` and `replyTo` are always rendered by the Liquid engine:
+    // the body engine flag must not send them through the legacy regex path.
+    const { result } = renderHook(() =>
+      useTemplateVariables({
+        sources: ["{{ body_only }}"],
+        liquidSources: ["{{ from_field }}", "{{ reply_field }}"],
+        declared: [],
+        data: {},
+        isLayoutRow: false,
+        liquid: false,
+      })
+    );
+    // Liquid analysis lists the envelope names through usedVariables; the body
+    // falls back to the legacy regex and lists `body_only` through {{…}} matching.
+    await waitFor(() =>
+      expect(result.current.undeclared.map(u => u.name).sort()).toEqual([
+        "body_only",
+        "from_field",
+        "reply_field",
+      ])
+    );
+  });
 });
