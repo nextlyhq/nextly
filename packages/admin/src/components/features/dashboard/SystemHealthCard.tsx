@@ -31,6 +31,7 @@ import {
   CardFooterContent,
 } from "../widgets/frame/footer-slot";
 
+import { reportRuns } from "./report-runs";
 import {
   healthSummary,
   pluginDetails,
@@ -45,6 +46,7 @@ import {
   useCopyDiagnostics,
   type CopyDiagnostics,
 } from "./use-copy-diagnostics";
+import { useToastAboveFooter } from "./use-toast-above-footer";
 
 /**
  * System health, for super-admins: one status line, then the Nextly version,
@@ -280,6 +282,10 @@ function SystemDetails({
   const runtime = runtimeDetails(data);
   const plugins = pluginDetails(data);
   const reportRef = useRef<HTMLPreElement>(null);
+  // Toasts said while Details is open ("Diagnostics copied") stand above its footer, not over
+  // the Copy diagnostics button there.
+  const footerRef = useRef<HTMLDivElement>(null);
+  useToastAboveFooter(footerRef, open);
   const { selectPending, selectRequest } = diagnostics;
   // A copy refused from Details' own button, with Details already open: the
   // report is selected again where it stands. Opening Details is handled
@@ -363,7 +369,10 @@ function SystemDetails({
             </p>
           </DetailsSection>
         </div>
-        <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3">
+        <div
+          ref={footerRef}
+          className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3"
+        >
           <CopyDiagnosticsButton
             diagnostics={diagnostics}
             variant="default"
@@ -409,7 +418,7 @@ function DiagnosticsReport({
         data-testid="system-health-report"
         className="m-0 rounded-lg border border-border bg-background px-3 py-2.5 font-mono text-[11.5px] leading-[1.55] break-words whitespace-pre-wrap text-foreground focus:outline-2 focus:outline-offset-2 focus:outline-primary"
       >
-        {report.text}
+        <ReportLines text={report.text} />
       </pre>
     );
   }
@@ -439,6 +448,29 @@ function DiagnosticsReport({
       Building the report…
     </p>
   );
+}
+
+/**
+ * The report's text, line by line, with each phrase that reads as one fact
+ * ("24 h", "3 locales (en, es, ar)") kept on one line where the block wraps
+ * (`reportRuns`). The text is the report's own, character for character, so
+ * selecting and copying it gives exactly what "Copy diagnostics" copies.
+ */
+function ReportLines({ text }: { text: string }) {
+  return text.split("\n").map((line, index) => (
+    <Fragment key={index}>
+      {index > 0 && "\n"}
+      {reportRuns(line).map((run, at) =>
+        run.whole ? (
+          <span key={at} className="whitespace-nowrap">
+            {run.text}
+          </span>
+        ) : (
+          run.text
+        )
+      )}
+    </Fragment>
+  ));
 }
 
 /** A section of Details: a small heading, ruled from the one before. */

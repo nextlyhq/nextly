@@ -1,8 +1,10 @@
 /**
  * The dashboard held to WCAG 2.2 AA across its surfaces (dashboard-experience R-23): an axe scan
- * of the whole page at rest, in customise mode, with the add gallery open, at its add step and
- * with a card's settings drawer open, at rest and while customising, and with the bar's
- * Customize dashboard cog focused and its tooltip shown, in light and in dark; a keyboard-only
+ * of the whole page at rest with every core card on it, System health's Details, customise mode,
+ * the add drawer and a card's settings drawer, at rest and while customising, at a desktop's
+ * width and a phone's, and with the Customize dashboard cog focused and its tooltip shown, in
+ * light and in dark; on a phone used by touch, every control at least 24 by 24 and none shown
+ * only on hover, at rest, while customising and in each drawer; a keyboard-only
  * visit that adds a collection widget through its add step, changes its settings in the drawer
  * and saves, then retitles the card from its drawer, with focus back on the control that opened
  * each menu and drawer as it closes, drawn with a ring that can be seen (3:1 against what is
@@ -26,6 +28,7 @@ import {
   scanAxe,
   settleTransitions,
 } from "./support/axe-scan.mjs";
+import { defaultSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 import { createEntry } from "./support/runtime-collection";
 import { test } from "./support/test";
@@ -309,15 +312,52 @@ async function focusIsIn(within: Locator): Promise<boolean> {
   return within.evaluate(node => node.contains(document.activeElement));
 }
 
-/** Puts an Over time card on the reader's dashboard, at its default size. */
+/**
+ * The cards the scans add to the default dashboard, so every core card's colours are on the page
+ * at once: a chart, a count, a note with a link, the people and the install's health.
+ */
+const SCANNED_CARDS = [
+  {
+    id: "e2e-a11y-count",
+    widgetId: "core/count",
+    config: { collection: "posts" },
+  },
+  {
+    id: "e2e-a11y-note",
+    widgetId: "core/note",
+    config: {
+      text: "**This week:** review the drafts.\n- Read the [guide](https://example.com)",
+    },
+  },
+  { id: "e2e-a11y-team", widgetId: "core/team", config: {} },
+  { id: "e2e-a11y-health", widgetId: "core/system-health", config: {} },
+] as const;
+
+/**
+ * Puts an Over time card first on the reader's dashboard, at its default size, and the cards of
+ * `SCANNED_CARDS` after the default ones, each at its own default size; the Over time card's id.
+ */
 async function placeOverTime(page: Page): Promise<string> {
   const layout = await readLayout(page);
   const id = "e2e-a11y-over-time";
+  const ours = new Set<string>([id, ...SCANNED_CARDS.map(card => card.id)]);
+  // Each widget once: a default card of the same widget gives way to ours.
+  const widgets = new Set<string>(SCANNED_CARDS.map(card => card.widgetId));
+  const added = await Promise.all(
+    SCANNED_CARDS.map(async card => ({
+      ...card,
+      ...(await defaultSizeOf(page, card.widgetId)),
+      removed: false,
+    }))
+  );
   const write = await page.request.put("/admin/api/dashboard/layout", {
     data: {
       placements: [
         { id, widgetId: OVER_TIME, w: 6, h: 3, removed: false },
-        ...layout.placements.filter(p => p.id !== id),
+        ...layout.placements.filter(
+          p => !ours.has(p.id) && !widgets.has(p.widgetId)
+        ),
+        ...added,
       ],
       version: layout.version,
       scope: layout.scope,
@@ -327,66 +367,83 @@ async function placeOverTime(page: Page): Promise<string> {
   return id;
 }
 
+/** The widths the surfaces are scanned at: a desktop's and a phone's. */
+const SCANNED_WIDTHS = [
+  { width: 1440, height: 900 },
+  { width: 390, height: 844 },
+] as const;
+
 for (const theme of ["light", "dark"] as Theme[]) {
-  test(`every surface passes axe (${theme}): at rest, customising, the gallery, its add step, the settings drawer`, async ({
-    page,
-  }) => {
-    await gotoAdmin(page, "/", theme);
-    const card = await placeOverTime(page);
-    await dashboardAtRest(page, theme);
-    const cell = page.locator(`${CELLS}[data-placement-id="${card}"]`);
+  for (const viewport of SCANNED_WIDTHS) {
+    test(`every surface passes axe (${theme}, ${viewport.width}px): at rest with every core card, System health's Details, customising, the add drawer, the settings drawer`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await gotoAdmin(page, "/", theme);
+      const card = await placeOverTime(page);
+      await dashboardAtRest(page, theme);
+      const cell = page.locator(`${CELLS}[data-placement-id="${card}"]`);
 
-    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
-    await scan(page, "at rest");
+      await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+      await scan(page, "at rest");
 
-    // The card's menu at rest.
-    await cell.getByTestId("card-menu").click();
-    await expect(page.getByRole("menu")).toBeVisible();
-    await scan(page, "card menu at rest");
+      // System health's Details, with the report it copies.
+      const health = page.getByTestId("widget-cell-core/system-health");
+      await health.getByRole("button", { name: "Details" }).click();
+      await expect(page.getByTestId("system-health-report")).toBeVisible();
+      await scan(page, "System health's Details");
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("system-health-details")).toBeHidden();
 
-    // Its settings drawer, opened from Settings… in that menu, beside the dashboard it changes:
-    // the preview, then Content, Display and Size, all open.
-    await page.getByRole("menuitem", { name: "Settings…" }).click();
-    const settings = page.getByTestId("widget-settings-drawer");
-    await expect(settings).toBeVisible();
-    await expect(settings.getByLabel("Title", { exact: true })).toBeVisible();
-    await expect(
-      settings.getByRole("radiogroup", { name: "Width" })
-    ).toBeVisible();
-    await scan(page, "settings drawer at rest");
-    await settings.getByRole("button", { name: "Cancel" }).click();
-    await expect(settings).toBeHidden();
+      // The card's menu at rest.
+      await cell.getByTestId("card-menu").click();
+      await expect(page.getByRole("menu")).toBeVisible();
+      await scan(page, "card menu at rest");
 
-    await page.getByTestId("dashboard-edit-begin").click();
-    await expect(bar(page)).toBeVisible();
-    await scan(page, "customise mode");
+      // Its settings drawer, opened from Settings… in that menu, beside the dashboard it changes:
+      // the preview, then Content, Display and Size, all open.
+      await page.getByRole("menuitem", { name: "Settings…" }).click();
+      const settings = page.getByTestId("widget-settings-drawer");
+      await expect(settings).toBeVisible();
+      await expect(settings.getByLabel("Title", { exact: true })).toBeVisible();
+      await expect(
+        settings.getByRole("radiogroup", { name: "Width" })
+      ).toBeVisible();
+      await scan(page, "settings drawer at rest");
+      await settings.getByRole("button", { name: "Cancel" }).click();
+      await expect(settings).toBeHidden();
 
-    // The card's menu while customising, with its moves and Remove.
-    await cell.getByTestId("card-actions").click();
-    await expect(page.getByRole("menu")).toBeVisible();
-    await scan(page, "card menu in customise mode");
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("menu")).toHaveCount(0);
+      await page.getByTestId("dashboard-edit-begin").click();
+      await expect(bar(page)).toBeVisible();
+      await scan(page, "customise mode");
 
-    // The settings drawer while customising, opened from Settings… in the card's menu.
-    await cell.getByTestId("card-actions").click();
-    await page.getByRole("menuitem", { name: "Settings…" }).click();
-    await expect(
-      settings.getByRole("radiogroup", { name: "Width" })
-    ).toBeVisible();
-    await scan(page, "settings drawer in customise mode");
-    await page.keyboard.press("Escape");
-    await expect(settings).toBeHidden();
+      // The card's menu while customising, with its moves and Remove.
+      await cell.getByTestId("card-actions").click();
+      await expect(page.getByRole("menu")).toBeVisible();
+      await scan(page, "card menu in customise mode");
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu")).toHaveCount(0);
 
-    await bar(page).getByRole("button", { name: "Add widget" }).click();
-    const panel = gallery(page);
-    await expect(panel.getByTestId("add-panel-list")).toBeVisible();
-    await scan(page, "add panel");
+      // The settings drawer while customising, opened from Settings… in the card's menu.
+      await cell.getByTestId("card-actions").click();
+      await page.getByRole("menuitem", { name: "Settings…" }).click();
+      await expect(
+        settings.getByRole("radiogroup", { name: "Width" })
+      ).toBeVisible();
+      await scan(page, "settings drawer in customise mode");
+      await page.keyboard.press("Escape");
+      await expect(settings).toBeHidden();
 
-    // Contrast of the panel's text is inside the scan above; nothing here saves.
-    await page.keyboard.press("Escape");
-    await expect(panel).toBeHidden();
-  });
+      await bar(page).getByRole("button", { name: "Add widget" }).click();
+      const panel = gallery(page);
+      await expect(panel.getByTestId("add-panel-list")).toBeVisible();
+      await scan(page, "add panel");
+
+      // Contrast of the panel's text is inside the scan above; nothing here saves.
+      await page.keyboard.press("Escape");
+      await expect(panel).toBeHidden();
+    });
+  }
 }
 
 test("a keyboard alone adds a collection card from the list, changes its settings in the drawer and saves, focus coming back each time", async ({
@@ -610,4 +667,127 @@ test("the add panel says how many it lists for the search that is on", async ({
   await search.fill("zzzz");
   await expect(panel.getByTestId("add-panel-none")).toBeVisible();
   await expect(live).toHaveText("0 widgets.");
+});
+
+/**
+ * The controls drawn in `scopes` that a finger cannot use: smaller than 24 by 24 px, or drawn
+ * so faintly (opacity under 0.1, its own and its ancestors') that only a hover would show them.
+ * A control out of reach (inside `inert` or `aria-hidden`) or not drawn at all is not counted.
+ * Each is named by its accessible name, test id or text, with its size, so a failure says which.
+ */
+async function untouchable(page: Page, scopes: string[]): Promise<string[]> {
+  return page.evaluate(selectors => {
+    const CONTROL =
+      'button, a[href], input:not([type="hidden"]), select, textarea, [role="button"], [role="radio"], [role="combobox"], [role="switch"], [role="checkbox"], [role="menuitem"], [role="tab"]';
+    const found: string[] = [];
+    const seen = new Set<Element>();
+    for (const selector of selectors) {
+      for (const scope of document.querySelectorAll(selector)) {
+        for (const control of scope.querySelectorAll(CONTROL)) {
+          if (seen.has(control)) continue;
+          seen.add(control);
+          if (control.closest("[inert], [aria-hidden='true']")) continue;
+          const box = control.getBoundingClientRect();
+          const style = getComputedStyle(control);
+          if (box.width === 0 || box.height === 0) continue;
+          if (style.visibility === "hidden") continue;
+          // A visually hidden control (`sr-only`) is clipped to one pixel and is not drawn.
+          if (box.width <= 1 && box.height <= 1) continue;
+          let opacity = 1;
+          for (let at: Element | null = control; at; at = at.parentElement)
+            opacity *= Number(getComputedStyle(at).opacity);
+          const name =
+            control.getAttribute("aria-label") ??
+            control.getAttribute("data-testid") ??
+            (control.textContent ?? "").trim().slice(0, 40);
+          const size = `${Math.round(box.width)}x${Math.round(box.height)}`;
+          if (box.width < 24 || box.height < 24)
+            found.push(`${name} is ${size}`);
+          else if (opacity < 0.1) found.push(`${name} is shown only on hover`);
+        }
+      }
+    }
+    return found;
+  }, scopes);
+}
+
+/** Whether the page scrolls sideways: wider than the window it is drawn in. */
+async function scrollsSideways(page: Page): Promise<boolean> {
+  return page.evaluate(
+    () =>
+      document.documentElement.scrollWidth >
+      document.documentElement.clientWidth
+  );
+}
+
+test.describe("on a phone, by touch", () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test("every control is at least 24 by 24 and shown without hover, at rest, while customising and in each drawer", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoAdmin(page, "/", "light");
+    const card = await placeOverTime(page);
+    await dashboardAtRest(page, "light");
+    // The touch screen this test means: one that cannot hover.
+    expect(await page.evaluate(() => matchMedia("(hover: none)").matches)).toBe(
+      true
+    );
+    // The page's own content and the dashboard's action. The bar's breadcrumb is the shell's.
+    const PAGE = ["main"];
+    const MENU = ['[role="menu"]'];
+    const DRAWER = ['[role="dialog"]'];
+    const BAR = ['[data-testid="dashboard-edit-bar"]'];
+
+    expect(await untouchable(page, PAGE)).toEqual([]);
+    expect(await scrollsSideways(page)).toBe(false);
+
+    // A card's menu, opened by a tap.
+    const cell = page.locator(`${CELLS}[data-placement-id="${card}"]`);
+    await cell.getByTestId("card-menu").tap();
+    await expect(page.getByRole("menu")).toBeVisible();
+    expect(await untouchable(page, MENU)).toEqual([]);
+
+    // Its settings drawer.
+    await page.getByRole("menuitem", { name: "Settings…" }).tap();
+    const settings = page.getByTestId("widget-settings-drawer");
+    await expect(
+      settings.getByRole("radiogroup", { name: "Width" })
+    ).toBeVisible();
+    expect(await untouchable(page, DRAWER)).toEqual([]);
+    expect(await scrollsSideways(page)).toBe(false);
+    await settings.getByRole("button", { name: "Cancel" }).tap();
+    await expect(settings).toBeHidden();
+
+    // System health's Details.
+    const health = page.getByTestId("widget-cell-core/system-health");
+    await health.getByRole("button", { name: "Details" }).tap();
+    await expect(page.getByTestId("system-health-report")).toBeVisible();
+    expect(await untouchable(page, DRAWER)).toEqual([]);
+    expect(await scrollsSideways(page)).toBe(false);
+    await page
+      .getByTestId("system-health-details")
+      .getByRole("button", { name: "Close" })
+      .tap();
+    await expect(page.getByTestId("system-health-details")).toBeHidden();
+
+    // Customising: the cards, their menus and the bar's controls.
+    await page.getByTestId("dashboard-edit-begin").tap();
+    await expect(bar(page)).toBeVisible();
+    expect(await untouchable(page, [...PAGE, ...BAR])).toEqual([]);
+    expect(await scrollsSideways(page)).toBe(false);
+    await cell.getByTestId("card-actions").tap();
+    await expect(page.getByRole("menu")).toBeVisible();
+    expect(await untouchable(page, MENU)).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+
+    // The add drawer, from the bar's Add widget, drawn as its icon on a phone.
+    await bar(page).getByRole("button", { name: "Add widget" }).tap();
+    const panel = gallery(page);
+    await expect(panel.getByTestId("add-panel-list")).toBeVisible();
+    expect(await untouchable(page, DRAWER)).toEqual([]);
+    expect(await scrollsSideways(page)).toBe(false);
+  });
 });

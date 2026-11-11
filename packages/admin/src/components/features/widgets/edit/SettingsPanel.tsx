@@ -727,8 +727,8 @@ function TitleField({
         aria-invalid={problem !== undefined}
         onChange={event => onChange(event.target.value)}
       />
-      <p id={hintId} className="text-sm text-muted-foreground">
-        Leave it empty to title the card from its settings.
+      <p id={hintId} className="text-xs text-muted-foreground">
+        Leave empty to use the name shown.
       </p>
       {problem === undefined ? null : (
         <p id={problemId} role="alert" className="text-sm text-danger-text">
@@ -770,7 +770,8 @@ function SectionHeading({
           size="sm"
           // In the text's own colour, underlined: the link variant's primary colour falls under
           // 4.5:1 on the drawer when a brand colour replaces the default primary.
-          className="h-auto p-0 text-xs text-foreground underline"
+          // At least 24px tall, a target a finger can hit beside the heading.
+          className="h-auto min-h-6 p-0 text-xs text-foreground underline"
           disabled={saving}
           aria-label={`Reset ${label} to defaults`}
           onClick={onReset}

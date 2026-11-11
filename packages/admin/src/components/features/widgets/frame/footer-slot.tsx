@@ -78,10 +78,10 @@ export function drawnClaim(
 /**
  * A card footer's link, whichever body draws it: foreground, with the brand on the
  * underline. A brand primary is any colour its owner picked, and small text in it can fall under
- * AA contrast.
+ * AA contrast. At least 24px tall, a target a finger can hit, however short its text.
  */
 export const CARD_FOOTER_LINK_CLASS =
-  "text-xs font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:decoration-primary";
+  "inline-flex min-h-6 items-center text-xs font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:decoration-primary";
 
 /**
  * Draws `children` in the card's footer, or where it stands outside a frame.

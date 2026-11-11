@@ -417,6 +417,33 @@ test("a 50% card's edge dragged to the end of the row makes it 100%, and the car
   await expect(card.getByTestId("card-size-label")).toContainText("100%");
 });
 
+test("a card in the row's last column widens to its widest once its edge is taken past the grid's right edge, inside the window", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  await customize(page);
+  const card = cell(page, CONTINUE);
+  await expect(card.getByTestId("card-size-label")).toContainText("50%");
+  const grid = page.getByRole("region", { name: "Dashboard widgets" });
+  const gridBox = await boxOf(grid);
+  // The card ends where the grid does: there is no column to its right to drag into.
+  const cardBox = await boxOf(card);
+  expect(
+    Math.abs(cardBox.x + cardBox.width - (gridBox.x + gridBox.width))
+  ).toBeLessThan(2);
+
+  // Just past the grid's right edge, short of the window's: no next width is in reach by
+  // counting columns, so the edge asks for the widest.
+  const viewport = page.viewportSize();
+  if (viewport === null) throw new Error("no viewport");
+  const past = gridBox.x + gridBox.width + 24;
+  expect(past).toBeLessThan(viewport.width);
+  await holdEdgeAndMove(page, card, past);
+  await expect(page.getByTestId("widget-resize-width")).toHaveText("100%");
+  await page.mouse.up();
+  await expect(card.getByTestId("card-size-label")).toContainText("100%");
+});
+
 test("a card's edge stops at the widget's widest width however far it is dragged", async ({
   page,
 }) => {
