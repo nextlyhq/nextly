@@ -135,31 +135,13 @@ export function renamedFieldsOf(
  */
 function answersOf(
   answers: SchemaChangeAnswers,
-  fields: {
-    /** The fields this save keeps or adds, which a fill or a change settles. */
-    now: readonly NamedField[];
-    /** The fields before it, among them the ones it removes. */
-    before: readonly NamedField[];
-  },
+  fields: AnsweredFields,
   table: string
 ): Answer[] {
   const out: Answer[] = [];
   for (const resolution of answers.eventResolutions ?? []) {
-    if (resolution.kind === "abort") throw new PromptCancelledError();
-    // A drop's confirmation names a field this save removes, so it is read against the fields
-    // before the save; it still names a field of this collection, and needs nothing in the file.
-    if (resolution.kind === "confirm_drop") {
-      fieldOfEvent(resolution.eventId, fields.before, table);
-      continue;
-    }
-    const field = fieldOfEvent(resolution.eventId, fields.now, table);
-    if (resolution.kind === "provide_default") {
-      out.push({ field, kind: "fill", value: resolution.value });
-    } else if (resolution.kind === "delete_nonconforming") {
-      out.push({ field, kind: "delete_nonconforming" });
-    } else if (resolution.kind === "make_optional") {
-      out.push({ field, kind: "make_optional" });
-    }
+    const answer = answerOfEvent(resolution, fields, table);
+    if (answer !== undefined) out.push(answer);
   }
   for (const [field, resolution] of Object.entries(answers.resolutions ?? {})) {
     if (resolution.action === "cancel") throw new PromptCancelledError();
@@ -170,6 +152,34 @@ function answersOf(
     }
   }
   return out;
+}
+
+/** The fields an answer is matched against, as the save changes them. */
+interface AnsweredFields {
+  /** The fields this save keeps or adds, which a fill or a change settles. */
+  now: readonly NamedField[];
+  /** The fields before it, among them the ones it removes. */
+  before: readonly NamedField[];
+}
+
+/** One typed answer, by field; undefined for one the file needs nothing for. A cancel stops. */
+function answerOfEvent(
+  resolution: Resolution,
+  fields: AnsweredFields,
+  table: string
+): Answer | undefined {
+  if (resolution.kind === "abort") throw new PromptCancelledError();
+  // A drop's confirmation names a field this save removes, so it is read against the fields
+  // before the save; it still names a field of this collection, and needs nothing in the file.
+  if (resolution.kind === "confirm_drop") {
+    fieldOfEvent(resolution.eventId, fields.before, table);
+    return undefined;
+  }
+  const field = fieldOfEvent(resolution.eventId, fields.now, table);
+  if (resolution.kind === "provide_default") {
+    return { field, kind: "fill", value: resolution.value };
+  }
+  return { field, kind: resolution.kind };
 }
 
 /**
