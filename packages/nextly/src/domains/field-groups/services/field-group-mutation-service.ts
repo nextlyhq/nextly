@@ -1472,12 +1472,7 @@ export class FieldGroupMutationService extends BaseService {
         );
       }
 
-      await this.deleteRemovedInstances(
-        tableName,
-        componentFields,
-        existingMap,
-        incomingIds
-      );
+      await this.deleteRemovedInstances(tableName, existingMap, incomingIds);
 
       this.logger.debug("Saved repeatable component instances", {
         componentSlug,
@@ -1642,7 +1637,6 @@ export class FieldGroupMutationService extends BaseService {
       await this.deleteRemovedInstancesInTx(
         tx,
         tableName,
-        componentFields,
         existingMap,
         incomingIds
       );
@@ -1804,7 +1798,6 @@ export class FieldGroupMutationService extends BaseService {
       await this.deleteRemovedZoneInstances(
         this.adapter,
         undefined,
-        metaCache,
         globalExistingMap,
         incomingIds
       );
@@ -1995,7 +1988,6 @@ export class FieldGroupMutationService extends BaseService {
       await this.deleteRemovedZoneInstances(
         tx,
         tx.getDrizzle(),
-        metaCache,
         globalExistingMap,
         incomingIds
       );
@@ -2033,7 +2025,6 @@ export class FieldGroupMutationService extends BaseService {
           this.adapter,
           undefined,
           meta.tableName,
-          meta.fields,
           rows.map(row => row.id)
         );
         await this.adapter.delete(meta.tableName, where);
@@ -2079,7 +2070,6 @@ export class FieldGroupMutationService extends BaseService {
           tx,
           tx.getDrizzle(),
           meta.tableName,
-          meta.fields,
           rows.map(row => row.id)
         );
         await tx.delete(meta.tableName, where);
@@ -2813,13 +2803,11 @@ export class FieldGroupMutationService extends BaseService {
 
   private async deleteRemovedInstances(
     tableName: string,
-    componentFields: readonly FieldConfig[],
     existingMap: Map<string, ComponentRow>,
     incomingIds: Set<string>
   ): Promise<void> {
     await this.deleteRemovedFrom(this.adapter, undefined, {
       tableName,
-      componentFields,
       removed: [...existingMap.keys()].filter(id => !incomingIds.has(id)),
     });
   }
@@ -2827,13 +2815,11 @@ export class FieldGroupMutationService extends BaseService {
   private async deleteRemovedInstancesInTx(
     tx: TransactionContext,
     tableName: string,
-    componentFields: readonly FieldConfig[],
     existingMap: Map<string, ComponentRow>,
     incomingIds: Set<string>
   ): Promise<void> {
     await this.deleteRemovedFrom(tx, tx.getDrizzle(), {
       tableName,
-      componentFields,
       removed: [...existingMap.keys()].filter(id => !incomingIds.has(id)),
     });
   }
@@ -2847,7 +2833,6 @@ export class FieldGroupMutationService extends BaseService {
     executor: unknown,
     removed: {
       tableName: string;
-      componentFields: readonly FieldConfig[];
       removed: readonly string[];
     }
   ): Promise<void> {
@@ -2855,7 +2840,6 @@ export class FieldGroupMutationService extends BaseService {
       store,
       executor,
       removed.tableName,
-      removed.componentFields,
       removed.removed
     );
     for (const id of removed.removed) {
@@ -2865,23 +2849,18 @@ export class FieldGroupMutationService extends BaseService {
 
   /**
    * Delete each stored instance of a zone that the write no longer holds, with the field groups
-   * placed directly in it, at every depth, finding its fields by the table it is stored in.
+   * placed directly in it, at every depth.
    */
   private async deleteRemovedZoneInstances(
     store: RowStore,
     executor: unknown,
-    metaCache: ReadonlyMap<string, DynamicFieldGroupRecord>,
     existing: ReadonlyMap<string, { tableName: string }>,
     incomingIds: ReadonlySet<string>
   ): Promise<void> {
-    const fieldsByTable = new Map(
-      [...metaCache.values()].map(meta => [meta.tableName, meta.fields])
-    );
     for (const [id, entry] of existing) {
       if (incomingIds.has(id)) continue;
       await this.deleteRemovedFrom(store, executor, {
         tableName: entry.tableName,
-        componentFields: fieldsByTable.get(entry.tableName) ?? [],
         removed: [id],
       });
     }
@@ -2948,63 +2927,79 @@ export class FieldGroupMutationService extends BaseService {
   }
 
   /**
-   * Delete, beneath the instances `ids` of the field group stored in `tableName`, the instances of
-   * every field group placed directly in its `fields`, and theirs, at every depth. They name this
-   * table and these ids as their parent, so nothing else reaches them; a row's translations go with
-   * it through the companion's foreign key. Each level's ids are read before its rows are deleted,
-   * so the level below can be found from them. `reached` keeps a row named as its own ancestor,
-   * which only a damaged table holds, from being followed for ever.
+   * Delete, beneath the instances `ids` of the field group stored in `tableName`, every row whose
+   * parent they are, and theirs, at every depth; a row's translations go with it through the
+   * companion's foreign key. Each level's ids are read before its rows are deleted, so the level
+   * below can be found from them. `reached` keeps a row named as its own ancestor, which only a
+   * damaged table holds, from being followed for ever.
+   *
+   * Every field group's table is read at each level, not only those the definitions place now: a
+   * row's parent is where it was written, which a definition as it stands cannot vouch for, since
+   * one that stops placing a field group leaves that one's rows stored beneath its own. Each read is
+   * a lookup on the parent index, and the tables are listed once, when something is removed.
    */
   private async deleteNestedInstances(
     store: RowStore,
     executor: unknown,
     tableName: string,
-    fields: readonly FieldConfig[],
     ids: readonly string[],
-    reached: Set<string> = new Set()
+    reached: Set<string> = new Set(),
+    listed?: readonly string[]
   ): Promise<void> {
     const fresh = ids.filter(id => !reached.has(`${tableName}:${id}`));
     if (fresh.length === 0) return;
     for (const id of fresh) reached.add(`${tableName}:${id}`);
-    for (const field of this.storedFieldGroupFields(fields)) {
-      for (const slug of this.getComponentSlugs(field)) {
-        const meta = await this.registryService.getComponent(slug, executor);
-        for (let at = 0; at < fresh.length; at += NESTED_ID_CHUNK) {
-          const where: WhereClause = {
-            and: [
-              {
-                column: STORAGE_FORMAT.columns.parentTable,
-                op: "=",
-                value: tableName,
-              },
-              {
-                column: STORAGE_FORMAT.columns.parentField,
-                op: "=",
-                value: field.name,
-              },
-              {
-                column: STORAGE_FORMAT.columns.parentId,
-                op: "IN",
-                value: fresh.slice(at, at + NESTED_ID_CHUNK),
-              },
-            ],
-          };
-          const rows = await store.select<{ id: string }>(meta.tableName, {
-            where,
-            columns: ["id"],
-          });
-          if (rows.length === 0) continue;
-          await this.deleteNestedInstances(
-            store,
-            executor,
-            meta.tableName,
-            meta.fields,
-            rows.map(row => row.id),
-            reached
-          );
-          await store.delete(meta.tableName, where);
-        }
+    const tables =
+      listed ?? (await this.registryService.getAllTableNames(executor));
+    for (const childTable of tables) {
+      for (let at = 0; at < fresh.length; at += NESTED_ID_CHUNK) {
+        const where: WhereClause = {
+          and: [
+            {
+              column: STORAGE_FORMAT.columns.parentTable,
+              op: "=",
+              value: tableName,
+            },
+            {
+              column: STORAGE_FORMAT.columns.parentId,
+              op: "IN",
+              value: fresh.slice(at, at + NESTED_ID_CHUNK),
+            },
+          ],
+        };
+        const rows = await this.rowsBeneath(store, childTable, where);
+        if (rows.length === 0) continue;
+        await this.deleteNestedInstances(
+          store,
+          executor,
+          childTable,
+          rows.map(row => row.id),
+          reached,
+          tables
+        );
+        await store.delete(childTable, where);
       }
+    }
+  }
+
+  /**
+   * The ids of `table`'s rows matching `where`; none for a table this running instance has not
+   * registered, which no write of it can have stored a row in. The refusal comes before any
+   * statement is built, so a transaction it is asked in stays usable.
+   */
+  private async rowsBeneath(
+    store: RowStore,
+    table: string,
+    where: WhereClause
+  ): Promise<{ id: string }[]> {
+    try {
+      return await store.select<{ id: string }>(table, {
+        where,
+        columns: ["id"],
+      });
+    } catch (error) {
+      if (isUnregisteredTable(error)) return [];
+      throw error;
     }
   }
 

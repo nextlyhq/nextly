@@ -4,6 +4,7 @@
  * @module domains/i18n/per-language-fields
  */
 import { isFieldGroupField } from "../../collections/fields/guards";
+import { directComponentFields } from "../field-groups/direct-component-fields";
 import { fieldGroupSlugList } from "../field-groups/storage/field-group-field-type";
 
 /**
@@ -30,8 +31,10 @@ export async function perLanguageFieldNames(
   fieldsOf?: (slug: string) => Promise<readonly FieldShape[] | null>
 ): Promise<Set<string>> {
   const names = new Set(localizedFieldNames);
-  for (const field of fieldConfigs) {
-    if (!isFieldGroupField(field)) continue;
+  // Through groups with no name, which only lay fields out: the field groups in one are stored
+  // where it sits, as those beside it are.
+  for (const field of directComponentFields(fieldConfigs)) {
+    if (field.name === undefined) continue;
     if (
       await holdsPerLanguageComponent(
         fieldGroupSlugList(field),
@@ -62,9 +65,11 @@ async function holdsPerLanguageComponent(
     if (asked.has(slug)) continue;
     asked.add(slug);
     if (await isComponentLocalized(slug)) return true;
-    for (const field of (fieldsOf ? await fieldsOf(slug) : null) ?? []) {
-      if (isFieldGroupField(field)) reached.push(...fieldGroupSlugList(field));
-    }
+    // Those placed directly in it, a group with no name included, are rows of their own.
+    const placed = directComponentFields(
+      (fieldsOf ? await fieldsOf(slug) : null) ?? []
+    );
+    for (const field of placed) reached.push(...fieldGroupSlugList(field));
   }
   return false;
 }

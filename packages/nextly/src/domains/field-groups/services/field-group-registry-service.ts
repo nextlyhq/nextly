@@ -193,6 +193,29 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     return this.getAllRecordsWithColumns(["fields"]);
   }
 
+  /**
+   * Every stored field group's table: where a row placed under a field-group instance can be,
+   * whatever the definitions place now. Read on `executor` when a write's transaction supplies
+   * one, so the read waits on no second connection, and as stored rather than cached.
+   */
+  async getAllTableNames(executor?: unknown): Promise<string[]> {
+    try {
+      const rows = await this.adapter.select<Record<string, unknown>>(
+        await this.resolveRegistryTableName(),
+        { columns: ["slug", "table_name"] },
+        executor
+      );
+      return rows
+        .map(row => this.deserializeRecord(row).tableName)
+        .filter(
+          (name): name is string => typeof name === "string" && name !== ""
+        );
+    } catch (error) {
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+  }
+
   async listComponents(
     options?: ListComponentsOptions
   ): Promise<ListComponentsResult> {

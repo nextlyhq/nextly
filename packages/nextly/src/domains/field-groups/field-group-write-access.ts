@@ -391,12 +391,19 @@ export async function keepDeniedFieldGroupsInDraft(params: {
 }
 
 /**
- * A stored instance's identity: the field holding it, its field group, and
- * its id there. The save looks an instance up among its own field's rows, so
- * an id from another field holding the same field group names no row here.
+ * A stored instance's identity: the identity of the stored instance holding it
+ * ("" for one on the document), the field holding it, its field group, and its
+ * id there. The save looks an instance up among the rows its own field holds
+ * under its own parent row, so an id from another field, or from under another
+ * instance, names no row here, and the instance is created.
  */
-function instanceKey(field: string, slug: string, id: string): string {
-  return `${field}\u0000${slug}\u0000${id}`;
+function instanceKey(
+  parent: string,
+  field: string,
+  slug: string,
+  id: string
+): string {
+  return JSON.stringify([parent, field, slug, id]);
 }
 
 /**
@@ -405,8 +412,12 @@ function instanceKey(field: string, slug: string, id: string): string {
  * instance is, so any instance sent for it is that row. A dynamic zone's
  * blocks, even a single one, are matched by id.
  */
-function singleInstanceKey(field: string, slug: string): string {
-  return instanceKey(field, slug, "");
+function singleInstanceKey(
+  parent: string,
+  field: string,
+  slug: string
+): string {
+  return instanceKey(parent, field, slug, "");
 }
 
 /**
@@ -419,26 +430,22 @@ async function storedInstanceKeys(
   fields: readonly FieldConfig[],
   fieldGroupFields: FieldGroupFieldsBySlug
 ): Promise<Map<string, string>> {
-  const holdsOne = new Set(
-    directFieldGroupFields(fields)
-      .filter(
-        field =>
-          (field as { repeatable?: unknown }).repeatable !== true &&
-          extractFieldGroupReferences(field).many === undefined
-      )
-      .map(nameOf)
-  );
   const keys = new Map<string, string>();
+  // Each stored instance's own identity, which the instances placed directly in
+  // it name as their parent. The walk reaches an instance before what it holds.
+  const identity = new WeakMap<object, string>();
   await forEachFieldGroupInstance(
     detachData(document),
     fields,
     fieldGroupFields,
-    ({ instance, slug, field, inline }) => {
-      if (!inline && typeof instance.id === "string") {
-        keys.set(instanceKey(field, slug, instance.id), instance.id);
-        if (holdsOne.has(field)) {
-          keys.set(singleInstanceKey(field, slug), instance.id);
-        }
+    ({ instance, slug, field, single, inline, outer }) => {
+      const parent = outer === undefined ? "" : identity.get(outer);
+      if (!inline && typeof instance.id === "string" && parent !== undefined) {
+        const key = instanceKey(parent, field, slug, instance.id);
+        identity.set(instance, key);
+        keys.set(key, instance.id);
+        if (single)
+          keys.set(singleInstanceKey(parent, field, slug), instance.id);
       }
       return Promise.resolve();
     },
@@ -610,7 +617,7 @@ async function keptInstanceList(
     rowsOf(kept).flatMap(row => {
       const slug = slugOf(row);
       return typeof row.id === "string" && slug
-        ? [instanceKey(field, slug, row.id)]
+        ? [instanceKey("", field, slug, row.id)]
         : [];
     })
   );
@@ -618,7 +625,7 @@ async function keptInstanceList(
   for (const [index, row] of storedRows.entries()) {
     const slug = slugOf(row);
     if (!slug || typeof row.id !== "string") continue;
-    if (sentKeys.has(instanceKey(field, slug, row.id))) continue;
+    if (sentKeys.has(instanceKey("", field, slug, row.id))) continue;
     if (!(await holdsProtectedValue(row, slug, params))) continue;
     kept.splice(Math.min(index, kept.length), 0, row);
     changed = true;
@@ -889,24 +896,46 @@ function walkFieldsOnce(
 function standingOf(
   reached: FieldGroupInstanceVisit,
   existing: ReadonlyMap<string, string> | undefined,
-  created: WeakSet<object>
+  seen: { created: WeakSet<object>; identity: WeakMap<object, string> }
 ): { isNew: boolean; storedId: string | undefined } {
-  const { instance, slug, field, inline, outer } = reached;
+  const { instance, inline, outer } = reached;
   if (inline) {
     return {
-      isNew: outer !== undefined && created.has(outer),
+      isNew: outer !== undefined && seen.created.has(outer),
       storedId: undefined,
     };
   }
-  const id = typeof instance.id === "string" ? instance.id : undefined;
-  const storedId =
-    (id === undefined
-      ? undefined
-      : existing?.get(instanceKey(field, slug, id))) ??
-    existing?.get(singleInstanceKey(field, slug));
-  const isNew = existing !== undefined && storedId === undefined;
-  if (isNew) created.add(instance);
-  return { isNew, storedId };
+  // The stored row this instance's parent was matched to: none for a parent this
+  // write creates, under which every instance is created too, whatever id it
+  // carries.
+  const parent = outer === undefined ? "" : seen.identity.get(outer);
+  const match = matchedStored(existing, parent, reached);
+  if (match) seen.identity.set(instance, match.key);
+  const isNew = existing !== undefined && match === undefined;
+  if (isNew) seen.created.add(instance);
+  return { isNew, storedId: match?.id };
+}
+
+/**
+ * The stored instance one in its own table is matched to under `parent`, by the id it carries or
+ * as its field's one instance, with the identity the instances placed in it name as their parent;
+ * none without stored instances, or under a parent that matched none.
+ */
+function matchedStored(
+  existing: ReadonlyMap<string, string> | undefined,
+  parent: string | undefined,
+  at: Pick<FieldGroupInstanceVisit, "instance" | "field" | "slug">
+): { id: string; key: string } | undefined {
+  if (existing === undefined || parent === undefined) return undefined;
+  const { instance, field, slug } = at;
+  const byId =
+    typeof instance.id === "string"
+      ? existing.get(instanceKey(parent, field, slug, instance.id))
+      : undefined;
+  const id = byId ?? existing.get(singleInstanceKey(parent, field, slug));
+  return id === undefined
+    ? undefined
+    : { id, key: instanceKey(parent, field, slug, id) };
 }
 
 /** The one judgment both passes make, over the instances the walk reaches. */
@@ -927,14 +956,17 @@ async function judgeFieldGroupInstances(params: {
   existing?: ReadonlyMap<string, string>;
 }): Promise<void> {
   const { access, existing } = params;
-  const created = new WeakSet<object>();
+  const seen = {
+    created: new WeakSet<object>(),
+    identity: new WeakMap<object, string>(),
+  };
   await forEachFieldGroupInstance(
     params.data,
     params.fields,
     params.fieldGroupFields,
     async reached => {
       const { instance, slug, inline } = reached;
-      const { isNew, storedId } = standingOf(reached, existing, created);
+      const { isNew, storedId } = standingOf(reached, existing, seen);
       if (params.inlineOnly && !inline) return;
       await applyFieldWriteAccess({
         kind: "fieldGroup",

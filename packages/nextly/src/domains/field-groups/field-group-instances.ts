@@ -115,6 +115,11 @@ export interface FieldGroupInstanceVisit {
   /** The name of the field holding the instance, at its own level. */
   field: string;
   /**
+   * Whether that field holds one instance of one field group, which its save replaces in place
+   * whatever id the instance is sent with; a list or a zone matches its instances by id.
+   */
+  single: boolean;
+  /**
    * Whether the instance sits inside a container's value (a group or a repeater
    * row, or anything held in one) rather than in a field-group field of the
    * document or of a stored instance. One in such a field is stored in its field
@@ -239,6 +244,9 @@ export async function forEachFieldGroupInstance(
         instance,
         slug,
         field: nameOf(field) ?? "",
+        single:
+          (field as { repeatable?: unknown }).repeatable !== true &&
+          extractFieldGroupReferences(field).many === undefined,
         inline,
         outer,
       });

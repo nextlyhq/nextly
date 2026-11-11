@@ -51,6 +51,7 @@ import { applyFieldDefaults } from "./field-defaults";
 import {
   attachFieldValidators,
   getFieldFunctions,
+  storedAtThisLevel,
 } from "./field-level-registry";
 
 export type ValidationIssue = ValidationPublicData["errors"][number];
@@ -1444,7 +1445,22 @@ async function validateFields(
   issues: ValidationIssue[]
 ): Promise<void> {
   for (const field of fields) {
-    if (!field.name) continue;
+    if (!field.name) {
+      // A container with no name only lays fields out when its children are stored at the level it
+      // sits in (a group; a repeater's are per row): they are judged here, with this level's value,
+      // as their validators are attached here.
+      if (field.fields && storedAtThisLevel(field)) {
+        await validateFields(
+          field.fields,
+          data,
+          write,
+          basePath,
+          options,
+          issues
+        );
+      }
+      continue;
+    }
     if (!isJudgedOnWrite(field)) continue;
     const path = basePath ? `${basePath}.${field.name}` : field.name;
     // Own keys only. Field names may be camelCase, so `toString` is a legal

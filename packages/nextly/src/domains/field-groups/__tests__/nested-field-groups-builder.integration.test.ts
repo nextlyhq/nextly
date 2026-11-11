@@ -198,6 +198,132 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await rowCounts(t, slugs)).toEqual([0, 0, 0]);
     }, 120_000);
 
+    it("requires a required field group placed inside a group with no name", async () => {
+      await start();
+      await createFieldGroup("rqchild", [{ name: "note", type: "text" }]);
+      await createFieldGroup("rqouter", [
+        { name: "label", type: "text" },
+        laidOut([{ ...placing("child", "rqchild"), required: true }]),
+      ]);
+      const t = await start([
+        defineCollection({
+          slug: "rqpages",
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "panel", component: "rqouter" }),
+          ],
+        }),
+      ]);
+
+      const refused = await t.nextly
+        .create({
+          collection: "rqpages" as never,
+          data: { title: "P", panel: { label: "L" } } as never,
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        );
+      expect(refused).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "REQUIRED",
+              path: expect.stringMatching(/child$/),
+            }),
+          ],
+        },
+      });
+      expect(await rowCounts(t, ["rqouter", "rqchild"])).toEqual([0, 0]);
+
+      await t.nextly.create({
+        collection: "rqpages" as never,
+        data: {
+          title: "P",
+          panel: { label: "L", child: { note: "N" } },
+        } as never,
+      });
+      expect(await rowCounts(t, ["rqouter", "rqchild"])).toEqual([1, 1]);
+    }, 120_000);
+
+    it("deletes the rows of a placement the Builder removed with the instance holding them", async () => {
+      await start();
+      await createFieldGroup("rlchild", [{ name: "note", type: "text" }]);
+      await createFieldGroup("rlouter", [
+        { name: "label", type: "text" },
+        placing("child", "rlchild"),
+      ]);
+      const t = await start([
+        defineCollection({
+          slug: "rlpages",
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "panel", component: "rlouter" }),
+            fieldGroup({
+              name: "panels",
+              component: "rlouter",
+              repeatable: true,
+            }),
+          ],
+        }),
+      ]);
+      const holding = (label: string) => ({ label, child: { note: label } });
+      const created = await t.nextly.create({
+        collection: "rlpages" as never,
+        data: {
+          title: "P",
+          panel: holding("solo"),
+          panels: [holding("first"), holding("second")],
+        } as never,
+      });
+      const id = (created.item as { id: string }).id;
+      const counts = () => rowCounts(t, ["rlouter", "rlchild"]);
+      expect(await counts()).toEqual([3, 3]);
+
+      // The outer field group stops placing the child; the child rows stay stored.
+      const outer = await t
+        .getService("fieldGroupRegistryService")
+        .getComponentBySlug("rlouter");
+      await dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "rlouter" },
+        {
+          fields: [{ name: "label", type: "text" }],
+          confirmed: true,
+          schemaVersion: outer?.schemaVersion,
+        }
+      );
+      expect(await counts()).toEqual([3, 3]);
+      const stored = (await t.nextly.findByID({
+        collection: "rlpages" as never,
+        id: id as never,
+      })) as { panels: { id: string; label: string }[] };
+
+      // Clearing the single instance takes the child row it held.
+      await t.nextly.update({
+        collection: "rlpages" as never,
+        id: id as never,
+        data: { panel: null, _overwrite: true } as never,
+      });
+      expect(await counts()).toEqual([2, 2]);
+
+      // Removing a list item takes the child row it held.
+      await t.nextly.update({
+        collection: "rlpages" as never,
+        id: id as never,
+        data: { panels: [stored.panels[0]], _overwrite: true } as never,
+      });
+      expect(await counts()).toEqual([1, 1]);
+
+      // Deleting the entry takes the rest.
+      await t.nextly.delete({
+        collection: "rlpages" as never,
+        id: id as never,
+      });
+      expect(await counts()).toEqual([0, 0]);
+    }, 120_000);
+
     it("deletes the rows of a placement the Builder removed, with the entity that owns them", async () => {
       await start();
       await createFieldGroup("rmchild", [{ name: "note", type: "text" }]);

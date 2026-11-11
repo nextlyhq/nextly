@@ -33,4 +33,6 @@ A field group placed directly in another field group's fields is now stored, rea
 
 A filter path that goes past a field group's own fields (`hero.cta.label`) is refused as a field that cannot be filtered on. It used to be read as a column named after the whole path, which answered with the wrong rows.
 
-A plugin's write to a field-group row nested more than eight levels deep now still expires its document's cached reads, and an entity's teardown reads only the field-group tables that can hold its rows below the first level.
+A plugin's write to a field-group row nested more than eight levels deep now still expires its document's cached reads. Removing a field-group instance, or deleting the collection or Single holding it, also removes rows that a field group stopped placing in it after they were stored.
+
+A required field inside a group without a name is now enforced; a save that leaves it empty, accepted before, is refused. Existing entries with that field empty must fill it on their next save, as for any required field.
