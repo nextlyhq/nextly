@@ -24,7 +24,9 @@ import {
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
+import { bulkRoutes } from "./bulk/route";
 import { defaultSeoFields } from "./fields";
+import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
 import { keepSeoContext } from "./not-found/report";
@@ -539,7 +541,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     contentTypesRoute(targets),
     settingsDocumentRoute(),
     ...tab.routes,
-    ...problemRoutes(problemChecks)
+    ...problemRoutes(problemChecks),
+    // The bulk edit table, and the import beside it.
+    ...bulkRoutes({ targets, readRules, checks: problemChecks }),
+    ...importRoutes({ targets, readRules, checks: problemChecks })
   );
 
   return definePlugin({
