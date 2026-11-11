@@ -121,6 +121,42 @@ function named(holder: AddressHolder | null | undefined): string {
   return `${who} in ${holder.collection}`;
 }
 
+/**
+ * Let go of every address a deleted collection's entries held, inside the
+ * delete's own transaction: a collection deleted whole removes its entries
+ * without a save of each, so no save would release them, and an address left
+ * held by a document that no longer exists could never be taken again.
+ */
+export function releaseOnCollectionDelete(ctx: PluginContext): void {
+  ctx.hooks.onCollectionDelete({
+    inTransaction: async ({ slug, transaction }) => {
+      for (;;) {
+        const { data } =
+          await ctx.services.ownCollections.listEntriesInTransaction(
+            transaction,
+            ADDRESS_RECORD_SLUG,
+            {
+              where: { holderCollection: { equals: slug } },
+              pagination: { limit: READ_PAGE, page: 1 },
+              depth: 0,
+            },
+            { lock: "update" }
+          );
+        const rows = (data as unknown[]).map(rowOf);
+        for (const row of rows) {
+          await ctx.services.collections.deleteEntryInTransaction(
+            transaction,
+            ADDRESS_RECORD_SLUG,
+            row.id
+          );
+        }
+        // Each page is deleted before the next is read, so page 1 again.
+        if (rows.length < READ_PAGE) return;
+      }
+    },
+  });
+}
+
 /** The participant, bound to the SEO plugin's context. */
 export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   const collections = ctx.services.collections;
@@ -234,7 +270,8 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
       "share"
     );
     if (asked.range !== true) return atOrAbove;
-    // `like` matches anywhere, and its wildcards are not escaped, so the
+    // `contains` matches the text literally on every dialect (a `like` there
+    // would read `_` and `%` as wildcards), and anywhere in the path, so the
     // rows it finds are only candidates; `overlaps` keeps those truly below.
     const below = await rowsWhere(
       transaction,
@@ -242,7 +279,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
         and: [
           held,
           inLocale,
-          { path: { like: asked.path === "/" ? "/" : `${asked.path}/` } },
+          { path: { contains: asked.path === "/" ? "/" : `${asked.path}/` } },
         ],
       },
       "share"
