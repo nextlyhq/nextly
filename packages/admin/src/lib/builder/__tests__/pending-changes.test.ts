@@ -27,7 +27,9 @@ const group = (
 
 /** The kinds and fields of the changes, in order. */
 const summary = (baseline: BuilderField[], current: BuilderField[]) =>
-  pendingChanges(baseline, current).map(change => `${change.kind} ${change.fieldId}`);
+  pendingChanges(baseline, current).map(
+    change => `${change.kind} ${change.fieldId}`
+  );
 
 const saved = [
   text("title"),
@@ -91,6 +93,36 @@ describe("pending changes", () => {
     });
   });
 
+  it("a saved field moved into a new container is its own move, not part of the add", () => {
+    const current = [
+      text("title"),
+      group("seo", [text("summary")]),
+      group("address", [text("street"), text("city"), text("zip")]),
+    ];
+    const changes = pendingChanges(saved, current);
+    expect(changes.map(c => `${c.kind} ${c.fieldId}`)).toEqual([
+      "added seo",
+      "moved summary",
+    ]);
+    expect(changes[0]?.inside).toBeUndefined();
+    expect([...(rowMarks(saved, current).get("summary") ?? [])]).toEqual([
+      "moved",
+    ]);
+  });
+
+  it("a field moved out of a container before its delete is not counted with it", () => {
+    const current = [text("title"), text("summary"), text("street")];
+    const changes = pendingChanges(saved, current);
+    expect(changes.map(c => `${c.kind} ${c.fieldId}`)).toEqual([
+      "moved street",
+      "deleted address",
+    ]);
+    expect(changes[1]?.inside).toBe(2);
+    expect([...(rowMarks(saved, current).get("street") ?? [])]).toEqual([
+      "moved",
+    ]);
+  });
+
   it("a deleted field inside a saved group is its own change", () => {
     const current = [
       text("title"),
@@ -139,7 +171,12 @@ describe("pending changes", () => {
   it("a field moved into another container is a move", () => {
     const current = [
       text("title"),
-      group("address", [text("street"), text("city"), text("zip"), text("summary")]),
+      group("address", [
+        text("street"),
+        text("city"),
+        text("zip"),
+        text("summary"),
+      ]),
     ];
     expect(summary(saved, current)).toEqual(["moved summary"]);
   });
@@ -178,6 +215,12 @@ describe("pending changes", () => {
     const back = structuredClone(edited);
     back[0] = text("title");
     expect(pendingChanges(saved, back)).toEqual([]);
+  });
+
+  it("settings put back in another key order count as none", () => {
+    const baseline = [text("title", { admin: { width: "50%", hidden: true } })];
+    const current = [text("title", { admin: { hidden: true, width: "50%" } })];
+    expect(pendingChanges(baseline, current)).toEqual([]);
   });
 
   it("a field added and then deleted counts as none", () => {
