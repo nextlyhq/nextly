@@ -10,6 +10,7 @@ import {
   restartSessionCheck,
   useAuthSession,
 } from "@admin/hooks/queries/useAuthSession";
+import { holdLoginRedirect } from "@admin/lib/api/refreshInterceptor";
 import {
   forgetSignedInHere,
   hasSignedInHere,
@@ -138,15 +139,24 @@ export function PrivateRoute({
 
   const retry = () => void restartSessionCheck(queryClient);
 
-  switch (
-    guardScreen({
-      unavailable: status === "error" && fetchStatus !== "fetching",
-      settled,
-      confirmed,
-      signedInHere,
-      signInInPlace,
-    })
-  ) {
+  const screen = guardScreen({
+    unavailable: status === "error" && fetchStatus !== "fetching",
+    settled,
+    confirmed,
+    signedInHere,
+    signInInPlace,
+  });
+
+  // While the sign-in form is drawn here, a background query refused for
+  // want of a session leaves the visitor on it rather than moving them to the
+  // sign-in page, which would draw the form afresh and lose what they typed.
+  const signInShown = screen === "sign-in";
+  useEffect(
+    () => (signInShown ? holdLoginRedirect() : undefined),
+    [signInShown]
+  );
+
+  switch (screen) {
     case "unavailable":
       return <AdminUnavailable onRetry={retry} />;
     case "screen":
