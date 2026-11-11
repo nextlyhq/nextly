@@ -824,9 +824,40 @@ describe.each(getConfiguredTestDialects())(
         entryId: post,
         overrideAccess: true,
       });
+      // Gone, it can no longer be judged, so even its reader is told only that it was deleted.
       const [gone] = (await service.find({ userId: "alice" })).rows;
       expect(gone?.subject).toMatchObject({ link: null, gone: true });
-      expect(gone?.body).toContain("The document has since been deleted.");
+      expect(gone?.title).toBe("This notice can no longer be shown.");
+      expect(gone?.body).toBe("The document has since been deleted.");
+      expect(JSON.stringify(gone)).not.toContain("Hello");
+    });
+
+    it("tells a recipient who may not read the document nothing of it once it is deleted", async () => {
+      await boot(dialect);
+      // Alice may edit Posts but not read them.
+      await person(app(), "alice", [["update", "posts"]]);
+      const bob = await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
+      const post = await postInLegal();
+      const comment = "Rework the intro";
+      await take("posts", post, ["en"], "bounce", bob, comment);
+
+      const handler = app().getService(
+        "collectionsHandler"
+      ) as CollectionsHandler;
+      await handler.deleteEntry({
+        collectionName: "posts",
+        entryId: post,
+        overrideAccess: true,
+      });
+      const service = container.get<NoticesService>("noticesService");
+      const [shown] = (await service.find({ userId: "alice" })).rows;
+      expect(shown?.title).toBe("This notice can no longer be shown.");
+      expect(shown?.subject).toMatchObject({ link: null, gone: true });
+      expect(JSON.stringify(shown)).not.toContain("Hello");
+      expect(JSON.stringify(shown)).not.toContain(comment);
     });
   }
 );

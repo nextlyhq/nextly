@@ -228,14 +228,15 @@ function documentPhrase(data: WorkflowNoticeData): string {
   return data.localized ? `${named} (shared fields)` : named;
 }
 
+/** What a notice says of a document deleted since. */
+const DOCUMENT_GONE = "The document has since been deleted.";
+
 /** One sentence of what happened, and that the document is gone where it is. */
 function bodyOf(
   sentence: string,
   { subjectGone }: NoticeRenderContext
 ): string {
-  return subjectGone
-    ? `${sentence} The document has since been deleted.`
-    : sentence;
+  return subjectGone ? `${sentence} ${DOCUMENT_GONE}` : sentence;
 }
 
 /**
@@ -272,6 +273,7 @@ function workflowNoticeKind(
     },
     link: documentNoticeLinks,
     readable: readableDocumentNotices,
+    goneText: DOCUMENT_GONE,
   });
 }
 
