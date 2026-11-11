@@ -20,7 +20,9 @@ import { createPublicContentRoute, type ContentEntry } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../../plugin";
-import { noRules } from "../../resolver/provider";
+import { putRedirect } from "../../redirects/store";
+import { readSeoRules } from "../../settings/rules";
+import { structuredDataFromSettings } from "../../settings/structured-data-rules";
 import { noSocialCardRules } from "../../social/card";
 import { rulesFromOptions } from "../../structured-data/rules";
 import { checkSite, problemList, type ProblemChecks } from "../check";
@@ -34,12 +36,14 @@ afterEach(async () => {
   current = undefined;
 });
 
-/** The checks as the plugin runs them for `posts`, with no settings yet. */
+/** The checks as the plugin runs them for `posts`, with nothing set. */
 const CHECKS: ProblemChecks = {
   targets: ["posts", "notes"],
   readers: {
-    readRules: noRules,
-    readStructuredDataRules: rulesFromOptions(undefined, undefined),
+    readRules: readSeoRules,
+    readStructuredDataRules: structuredDataFromSettings(
+      rulesFromOptions(undefined, undefined)
+    ),
     readSocialCardRules: noSocialCardRules,
   },
 };
@@ -172,7 +176,8 @@ describe.each(getConfiguredTestDialects())(
     it("checks a saved page, and a fix clears its problem on the next save", async () => {
       const { t, ctx } = await boot(dialect);
       const id = await publish(t, {
-        title: "A walk along the harbour at dawn, with every boat named and drawn",
+        title:
+          "A walk along the harbour at dawn, with every boat named and drawn",
         slug: "harbour",
         body: body("/blog/missing", ""),
       });
@@ -276,12 +281,18 @@ describe.each(getConfiguredTestDialects())(
 
       await checkSite(ctx, CHECKS);
       list = await problemList(ctx, CHECKS, () => true);
-      expect(list).toMatchObject({ pagesChecked: 1, outOfDate: false, due: false });
+      expect(list).toMatchObject({
+        pagesChecked: 1,
+        outOfDate: false,
+        due: false,
+      });
       const checkedAt = String(list.checkedAt);
 
       // A day and a minute later, the list is due a full check again.
       const later = Date.parse(checkedAt) + 24 * 60 * 60 * 1000 + 60_000;
-      expect((await problemList(ctx, CHECKS, () => true, later)).due).toBe(true);
+      expect((await problemList(ctx, CHECKS, () => true, later)).due).toBe(
+        true
+      );
 
       const [before] = await rows(t).then(found =>
         found.filter(row => row.holderId === id)
@@ -315,6 +326,29 @@ describe.each(getConfiguredTestDialects())(
       // Given a moment, as a save's check would have had.
       await new Promise(resolve => setTimeout(resolve, 300));
       expect(await rows(t)).toEqual(kept);
+    });
+
+    it("a full check reports a redirect that takes more than one hop", async () => {
+      const { ctx } = await boot(dialect);
+      const save = (source: string, target: string) =>
+        ctx.services.collections.withTransaction(tx =>
+          putRedirect(ctx, tx, {
+            locale: "en",
+            origin: "person",
+            source,
+            target,
+          })
+        );
+      // A redirect to an address a pattern added after it moves on again.
+      await save("/a", "/new/x");
+      await save("/b", "/elsewhere");
+      await save("/new/*", "/newer/*");
+
+      await checkSite(ctx, CHECKS);
+      const list = await problemList(ctx, CHECKS, () => true);
+      expect(
+        list.problems.filter(p => p.kind === "redirectChain").map(p => p.what)
+      ).toEqual(["/a → /new/x → /newer/x"]);
     });
   }
 );

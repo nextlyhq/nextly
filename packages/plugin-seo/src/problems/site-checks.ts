@@ -79,7 +79,11 @@ function shared(
         subject: page.subject,
         what: `${words.label}: “${page[key]}”, ${alsoOn(group.filter(other => other !== page))}`,
         action: words.action,
-        fix: { place: "page" as const, tab: "seo" as const, field: words.field },
+        fix: {
+          place: "page" as const,
+          tab: "seo" as const,
+          field: words.field,
+        },
       }))
     );
 }
@@ -148,7 +152,33 @@ export function noAddressProblems(
         }
       : {
           action: "Set an address",
-          fix: { place: "settings" as const, tab: "content-types" as const },
+          fix: { place: "settings" as const, tab: "types" as const },
         }),
+  }));
+}
+
+/** A redirect whose To address is itself redirected, and where that goes. */
+export interface RedirectChain {
+  source: string;
+  target: string;
+  end: string;
+}
+
+/** Each redirect that takes more than one hop. */
+export function redirectChainProblems(
+  chains: readonly RedirectChain[]
+): Problem[] {
+  return chains.map(chain => ({
+    kind: "redirectChain",
+    subject: { label: chain.source },
+    what: `${chain.source} → ${chain.target} → ${chain.end}`,
+    action: "Copy a note for a developer",
+    // Saving the redirect again follows its chain to the end, which is what
+    // a person fixes it with; until the redirects screen offers that, a
+    // developer does it.
+    fix: {
+      place: "developer",
+      note: `Point ${chain.source} straight at ${chain.end}: its redirect now passes through ${chain.target} first. Saving the redirect again does this.`,
+    },
   }));
 }

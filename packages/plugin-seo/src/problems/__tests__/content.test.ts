@@ -55,7 +55,9 @@ describe("contentFacts", () => {
       author: {
         id: "a1",
         createdAt: "2026-11-01",
-        bio: { root: { type: "root", children: [{ type: "link", url: "/x" }] } },
+        bio: {
+          root: { type: "root", children: [{ type: "link", url: "/x" }] },
+        },
       },
       // The share image is the card's, not an image the page shows.
       seo: { ogImage: MEDIA },

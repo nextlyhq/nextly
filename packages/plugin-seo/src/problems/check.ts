@@ -18,6 +18,11 @@ import {
 
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
+import { isRecord, textOf } from "../plain-values";
+import { destinationOf, pathOf } from "../redirects/addresses";
+import { redirectsSlug } from "../redirects/collection";
+import { redirectMeeting } from "../redirects/meeting";
+import { redirectOf, type StoredRedirect } from "../redirects/store";
 import { addressOf } from "../resolver/page-levels";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import type { ReadSocialCardRules } from "../social/card";
@@ -38,7 +43,9 @@ import { pageProblems } from "./page-checks";
 import {
   noAddressProblems,
   productionAddressProblems,
+  redirectChainProblems,
   sharedValueProblems,
+  type RedirectChain,
 } from "./site-checks";
 import {
   markOutOfDate,
@@ -63,12 +70,6 @@ export interface ProblemChecks {
   targets: readonly string[];
   readers: CheckReaders;
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const textOf = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim() !== "" ? value : undefined;
 
 /** The fields a page is named by in the list, in the order they are tried. */
 const LABEL_FIELDS = ["title", "name", "heading", "slug"] as const;
@@ -161,13 +162,19 @@ async function examine(
     brokenLinks: await brokenLinks(content.links, {
       shapes: addressShapes(ctx.config.collections ?? []),
       productionAddresses,
-      isHeld: async path => (await addressHolders(ctx, path, undefined)).length > 0,
+      isHeld: async path =>
+        (await addressHolders(ctx, path, undefined)).length > 0,
     }),
   });
+  // A page kept out of search shares its title with no page in results, so
+  // it is left out of the comparison.
+  const listed = answer.robots.value.index;
   return {
     subject,
-    ...(answer.title === undefined ? {} : { title: answer.title.value }),
-    ...(answer.description === undefined
+    ...(answer.title === undefined || !listed
+      ? {}
+      : { title: answer.title.value }),
+    ...(answer.description === undefined || !listed
       ? {}
       : { description: answer.description.value }),
     problems,
@@ -260,7 +267,60 @@ async function runSiteCheck(
   await saveSiteCheck(ctx, {
     checkedAt: new Date().toISOString(),
     pagesChecked: seen.size,
+    problems: redirectChainProblems(await redirectChains(ctx)),
   });
+}
+
+/** Redirects read per step of a full check. */
+const REDIRECT_PAGE = 100;
+
+/** Every stored redirect, in pages of {@link REDIRECT_PAGE}. */
+async function everyRedirect(ctx: PluginContext): Promise<StoredRedirect[]> {
+  const found: StoredRedirect[] = [];
+  for (let page = 1; ; page++) {
+    const { data } = await ctx.services.ownCollections.listEntries(
+      redirectsSlug(ctx),
+      {
+        pagination: { limit: REDIRECT_PAGE, page },
+        sort: { field: "id", direction: "asc" },
+        depth: 0,
+      }
+    );
+    const rows = data as unknown[];
+    found.push(...rows.map(redirectOf));
+    if (rows.length < REDIRECT_PAGE) return found;
+  }
+}
+
+/** Whether an address is one exact address on this site, not a pattern or another site. */
+const exactOnSite = (address: string) =>
+  address.startsWith("/") && !address.endsWith("/*");
+
+/**
+ * Each redirect from an exact address whose To address another redirect
+ * answers, asked by the same matching the Proxy follows. Saving a redirect
+ * takes it to the end of its chain, so one arises where a pattern added
+ * later covers an address a redirect already pointed at.
+ */
+async function redirectChains(ctx: PluginContext): Promise<RedirectChain[]> {
+  const redirects = await everyRedirect(ctx);
+  const byId = new Map(redirects.map(redirect => [redirect.id, redirect]));
+  const chains: RedirectChain[] = [];
+  for (const redirect of redirects) {
+    if (!exactOnSite(redirect.source) || !exactOnSite(redirect.target)) {
+      continue;
+    }
+    const path = pathOf(redirect.target);
+    const id = await redirectMeeting(ctx, { locale: redirect.locale, path });
+    const next = id === null || id === redirect.id ? undefined : byId.get(id);
+    if (next === undefined) continue;
+    chains.push({
+      source: redirect.source,
+      target: redirect.target,
+      end: destinationOf(next, path),
+    });
+  }
+  return chains;
 }
 
 /** The full check under way, which a second request waits on rather than repeats. */
@@ -349,10 +409,9 @@ function declared(
 /** The problems that belong to the whole site, worked out now. */
 async function siteProblems(
   ctx: PluginContext,
-  checks: ProblemChecks
+  checks: ProblemChecks,
+  addresses: readonly string[]
 ): Promise<Problem[]> {
-  const rules = await checks.readers.readRules(ctx, undefined);
-  const addresses = productionAddressesOf(rules.productionAddresses);
   const standing = addresses.length > 0 ? undefined : await readStanding(ctx);
   const targets = new Set(checks.targets);
   const without = (await typesWithoutAddress()).filter(
@@ -408,8 +467,13 @@ export async function problemList(
 ): Promise<ProblemListBody> {
   const site = await readSiteCheck(ctx);
   const pages = (await readPages(ctx)).filter(row => canRead(row.subject.type));
+  const rules = await checks.readers.readRules(ctx, undefined);
+  const addresses = productionAddressesOf(rules.productionAddresses);
+  const host =
+    addresses[0] === undefined ? undefined : new URL(addresses[0]).host;
   const problems = once([
-    ...(await siteProblems(ctx, checks)),
+    ...(await siteProblems(ctx, checks, addresses)),
+    ...site.problems,
     ...pages.flatMap(row => row.problems),
     ...sharedValueProblems(pages),
   ]).sort(byKind);
@@ -417,6 +481,7 @@ export async function problemList(
   const age = checkedAt === undefined ? Infinity : now - Date.parse(checkedAt);
   return {
     problems,
+    ...(host === undefined ? {} : { site: host }),
     ...(checkedAt === undefined ? {} : { checkedAt }),
     pagesChecked: site.pagesChecked,
     outOfDate: site.outOfDate,

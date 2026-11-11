@@ -1,12 +1,14 @@
 /**
  * What the problem list's server and the admin's screens agree on: the kinds
  * of problem, the words each kind is explained with, where each is fixed,
- * and the shape the list's routes answer with. Plain data only, and no
- * imports, so the admin's client bundle and any other screen reading the
- * list (a page's SEO tab) take it without bringing server code along.
+ * and the shape the list's routes answer with. Plain data only, importing
+ * nothing but the settings' contract, itself import-free, so the admin's
+ * client bundle and any other screen reading the list (a page's SEO tab)
+ * take it without bringing server code along.
  *
  * @module problems/contract
  */
+import { SEO_ADMIN_SLUG, SETTINGS_PAGE_HREF } from "../settings/contract";
 
 /** Where the list is read, under the plugin's routes. */
 export const PROBLEMS_ROUTE_PATH = "/problems";
@@ -27,6 +29,7 @@ export const DESCRIPTION_LIMIT = 160;
 export type ProblemKind =
   | "productionAddress"
   | "noAddress"
+  | "redirectChain"
   | "noTitle"
   | "noDescription"
   | "sharedTitle"
@@ -40,12 +43,99 @@ export type ProblemKind =
   | "structuredData";
 
 /**
+ * Each kind's heading and the one sentence that explains it, said once above
+ * every problem of that kind, and whether it belongs to the whole site
+ * rather than to a page.
+ */
+export const KIND_TEXT: Readonly<
+  Record<ProblemKind, { title: string; explain: string; siteWide: boolean }>
+> = {
+  productionAddress: {
+    title: "Production address missing",
+    explain: "Nextly can't tell the real site from a test copy.",
+    siteWide: true,
+  },
+  redirectChain: {
+    title: "Redirect that takes more than one hop",
+    explain:
+      "Each extra hop slows the visit, and search engines may stop following before the end.",
+    siteWide: true,
+  },
+  noAddress: {
+    title: "Content type with no public address",
+    explain: "The site can't tell search engines where these pages live.",
+    siteWide: true,
+  },
+  noTitle: {
+    title: "Page with no title",
+    explain:
+      "Search engines make up a title for a page that has none. Give it its own, or a pattern for its content type.",
+    siteWide: false,
+  },
+  noDescription: {
+    title: "Page with no description",
+    explain:
+      "Search engines show a piece of the page instead, which may not say what it is about.",
+    siteWide: false,
+  },
+  sharedTitle: {
+    title: "Same title on several pages",
+    explain: "Google may show only one of them. Give each page its own title.",
+    siteWide: false,
+  },
+  sharedDescription: {
+    title: "Same description on several pages",
+    explain:
+      "Each page should say what makes it different. Give each one its own description.",
+    siteWide: false,
+  },
+  longTitle: {
+    title: "Title longer than Google shows",
+    explain: `Google cuts a title after about ${TITLE_LIMIT} characters.`,
+    siteWide: false,
+  },
+  longDescription: {
+    title: "Description longer than Google shows",
+    explain: `Google cuts a description after about ${DESCRIPTION_LIMIT} characters.`,
+    siteWide: false,
+  },
+  canonical: {
+    title: "Official address points elsewhere",
+    explain:
+      "The page tells search engines another address is the official one, so this page is left out of results.",
+    siteWide: false,
+  },
+  brokenLink: {
+    title: "Broken internal link",
+    explain: "A link on your site points to a page that doesn't exist.",
+    siteWide: false,
+  },
+  shareImage: {
+    title: "Share image missing or the wrong size",
+    explain: "Networks crop images that aren't about 1200 × 630.",
+    siteWide: false,
+  },
+  imageAlt: {
+    title: "Images with no alt text",
+    explain:
+      "Describe each image in a few words for people who can't see it. Mark purely decorative images as decorative.",
+    siteWide: false,
+  },
+  structuredData: {
+    title: "Structured data missing a detail",
+    explain: "Google needs this detail to show the page's extra information.",
+    siteWide: false,
+  },
+};
+
+/**
  * The order the list draws its groups in: what keeps the whole site or a
  * whole type out of search first, then what changes how a page shows.
  */
 export const KIND_ORDER: readonly ProblemKind[] = [
   "productionAddress",
   "noAddress",
+  "redirectChain",
   "noTitle",
   "sharedTitle",
   "canonical",
@@ -75,11 +165,32 @@ export interface ProblemSubject {
   detail?: string;
 }
 
+/** Where the plugin's screens are served. */
+const ADMIN_BASE = `/admin/plugins/${SEO_ADMIN_SLUG}`;
+
+/** The problem list's screen: its path under the plugin, and its component. */
+export const PROBLEMS_PAGE: {
+  readonly path: "problems";
+  readonly component: "@nextlyhq/plugin-seo/admin#SeoProblemsPage";
+} = {
+  path: "problems",
+  component: "@nextlyhq/plugin-seo/admin#SeoProblemsPage",
+};
+
+/** Where the problem list's screen is, for a link. */
+export const PROBLEMS_PAGE_HREF: string = `${ADMIN_BASE}/${PROBLEMS_PAGE.path}`;
+
+/**
+ * The id the page's SEO tab is opened by in an editor's address
+ * (`?tab=<id>`). An editor without the tab opens its content instead.
+ */
+const SEO_TAB_ID = "nextlyhq-plugin-seo.tab";
+
 /** What a problem of the whole site is about. */
 export const WHOLE_SITE: ProblemSubject = { label: "Whole site" };
 
 /** The SEO settings' tabs a fix can land on. */
-export type SettingsTab = "general" | "content-types" | "brand";
+export type SettingsTab = "general" | "types" | "brand";
 
 /**
  * Where a problem is fixed:
@@ -106,9 +217,36 @@ export interface Problem {
   fix: ProblemFix;
 }
 
+/**
+ * Where a problem's fix is, as an admin address; none for a note handed to
+ * a developer, which is copied rather than opened.
+ */
+export function fixHref(problem: Problem): string | undefined {
+  const { fix, subject } = problem;
+  switch (fix.place) {
+    case "page": {
+      if (subject.type === undefined || subject.id === undefined) {
+        return undefined;
+      }
+      const editor = subject.type.startsWith("single:")
+        ? `/admin/singles/${encodeURIComponent(subject.type.slice(7))}`
+        : `/admin/collections/${encodeURIComponent(subject.type)}/${encodeURIComponent(subject.id)}`;
+      return fix.tab === "seo" ? `${editor}?tab=${SEO_TAB_ID}` : editor;
+    }
+    case "settings":
+      return `${SETTINGS_PAGE_HREF}?tab=${fix.tab}`;
+    case "media":
+      return "/admin/media";
+    case "developer":
+      return undefined;
+  }
+}
+
 /** What the list's routes answer. */
 export interface ProblemListBody {
   problems: Problem[];
+  /** The site's host, from its first production address, where it has one. */
+  site?: string;
   /** When the whole site was last checked, as ISO text; absent before the first. */
   checkedAt?: string;
   /** How many pages the last full check read. */

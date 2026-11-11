@@ -7,10 +7,9 @@
  */
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
-import { forgetDeleted, recheckSaved, type ProblemChecks } from "./check";
+import { isRecord } from "../plain-values";
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+import { forgetDeleted, recheckSaved, type ProblemChecks } from "./check";
 
 /** The id of the document a hook was handed, as text. */
 function idOf(context: { data?: unknown }): string | undefined {

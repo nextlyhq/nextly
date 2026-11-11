@@ -1,0 +1,77 @@
+{
+  "migrationHash": "63236e8dbbcd47afa595be6558ad1f24d4114c906ae33ae3dcc723d22052bb49",
+  "snapshot": {
+    "tables": [
+      {
+        "columns": [
+          {
+            "name": "_component_type",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "_order",
+            "nullable": true,
+            "type": "integer"
+          },
+          {
+            "name": "_parent_field",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "name": "_parent_id",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "name": "_parent_table",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "type": "integer"
+          },
+          {
+            "name": "heading",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "id",
+            "nullable": false,
+            "primaryKey": true,
+            "type": "text"
+          },
+          {
+            "name": "updated_at",
+            "nullable": false,
+            "type": "integer"
+          },
+          {
+            "name": "views",
+            "nullable": true,
+            "type": "integer"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": ["created_at"],
+            "name": "idx_comp_card_created_at",
+            "unique": false
+          },
+          {
+            "columns": ["_parent_id", "_parent_table", "_parent_field"],
+            "name": "idx_comp_card_parent",
+            "unique": false
+          }
+        ],
+        "name": "comp_card"
+      }
+    ]
+  },
+  "translatedFieldsRecorded": true,
+  "version": 1
+}

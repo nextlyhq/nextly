@@ -11,6 +11,7 @@
  * @module problems/links
  */
 import { originOf } from "../origin";
+import { isRecord } from "../plain-values";
 
 import type { LinkFact } from "./page-checks";
 
@@ -20,9 +21,6 @@ export interface AddressShape {
   pattern: RegExp;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
 /** `text` as a regular expression matching it literally. */
 const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -31,10 +29,7 @@ const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * or one or more where `slugPaths` lets a slug span several. None for a
  * template whose first segment is a placeholder (see the module's note).
  */
-function shapeOf(
-  template: string,
-  slugPaths: boolean
-): RegExp | undefined {
+function shapeOf(template: string, slugPaths: boolean): RegExp | undefined {
   const segments = template.split("/").slice(1);
   const placeholder = /^\{([^{}]+)\}$/;
   if (segments.length === 0 || placeholder.test(segments[0] ?? "")) {

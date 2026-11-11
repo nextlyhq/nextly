@@ -53,6 +53,7 @@ import {
   getDashboardRecentEntries,
   getDashboardActivity,
 } from "./api/dashboard";
+import { getDashboardDiagnostics } from "./api/dashboard-diagnostics";
 import { getDashboardGallery } from "./api/dashboard-gallery";
 import {
   getDashboardNewTypes,
@@ -135,6 +136,7 @@ import {
   SYSTEM_WRITE_POLICY,
   type RouteGrant,
 } from "./domains/auth/system-write-policy";
+import { recordIfServerError } from "./domains/health/server-errors";
 import {
   appLocalization,
   withCurrentLanguages,
@@ -219,6 +221,7 @@ import {
   bumpSchemaVersion,
   getSchemaVersionHeader,
 } from "./route-handler/schema-version";
+import { handleStartupRequest } from "./route-handler/startup-request";
 import { handleWebhookRequest } from "./route-handler/webhook-dispatch";
 import { registerNextCacheRevalidator } from "./runtime/cache/register";
 import type { CollectionsHandler } from "./services/collections-handler";
@@ -495,6 +498,8 @@ async function handleDashboardRequest(
       return postDashboardNewType(req);
     case "getDashboardSetup":
       return getDashboardSetup(req);
+    case "getDashboardDiagnostics":
+      return getDashboardDiagnostics(req);
     case "putDashboardSetup":
       return putDashboardSetup(req);
     default:
@@ -807,6 +812,12 @@ const ROLE_AWARE_READ_METHODS = new Set([
   // A document's events run the same document gate, which reads roles.
   "listEntryEvents",
   "listSingleEvents",
+  // Where a field group is used, and the field-group list's use counts, name
+  // only the collections and Singles the reader may read, by the read
+  // decision that reads roles: without them a role-admitted owner is left out
+  // and the field group looks used less, or not at all.
+  "listComponents",
+  "getComponentUsedBy",
 ]);
 
 /**
@@ -2548,7 +2559,7 @@ async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
 // CRUD Handler Wrappers
 // ============================================================================
 
-async function handleGet(req: Request, params: string[]) {
+async function handleGet(req: Request, params: string[]): Promise<Response> {
   // Matched before the bare `admin-meta` branch, which would otherwise answer
   // for every path beneath it and serve the public payload from the
   // authenticated route's URL.
@@ -2853,6 +2864,9 @@ export function createDynamicHandlers(options?: {
       response,
       effectiveRequestId
     );
+    // Every verb's server error, counted toward System health's "errors in
+    // the last 24 hours"; once per request, however many boundaries it passed.
+    recordIfServerError(req, identifiedResponse.status);
     // Imported here rather than at module scope, matching how this file already
     // reaches the logger, so the route entry point keeps its import graph.
     const { getNextlyLogger: resolveLogger } = await import(
@@ -2886,23 +2900,38 @@ export function createDynamicHandlers(options?: {
     return applySecurityHeaders(corsResponse);
   }
 
-  return {
-    GET: async (
-      req: Request,
-      ctx: { params: Promise<{ params?: string[] }> }
-    ) => {
-      const resolvedParams = await ctx.params;
-      const paramsList = resolvedParams.params || [];
+  const GET = async (
+    req: Request,
+    ctx: { params: Promise<{ params?: string[] }> }
+  ): Promise<Response> => {
+    const resolvedParams = await ctx.params;
+    const paramsList = resolvedParams.params || [];
+    // The admin's startup request: several of its own GETs answered at once,
+    // each sent through this whole GET (security, limits, its own route and
+    // checks, date formatting), exactly as the admin sending it would be.
+    if (paramsList.length === 1 && paramsList[0] === "startup") {
       return withSecurity(
         req,
         limitBeforeRouting(paramsList, "GET", true),
-        async () => {
-          if (isAuthRoute(paramsList))
-            return handleAuthRequest(req, paramsList, "GET");
-          return handleGet(req, paramsList);
-        }
+        () =>
+          handleStartupRequest(req, (sub, subParams) =>
+            GET(sub, { params: Promise.resolve({ params: subParams }) })
+          )
       );
-    },
+    }
+    return withSecurity(
+      req,
+      limitBeforeRouting(paramsList, "GET", true),
+      async () => {
+        if (isAuthRoute(paramsList))
+          return handleAuthRequest(req, paramsList, "GET");
+        return handleGet(req, paramsList);
+      }
+    );
+  };
+
+  return {
+    GET,
     POST: async (
       req: Request,
       ctx: { params: Promise<{ params?: string[] }> }
@@ -3087,6 +3116,10 @@ async function requestCallerFor(
   needsRoles: boolean
 ): Promise<RequestCaller | undefined> {
   if (!authorizedUser) return undefined;
+  // The role lookup reads the app's services, which a route signed-in alone
+  // has not started yet (its gate reads none): started first, as the
+  // dispatch would only later. Idempotent where a gate already started them.
+  if (needsRoles) await ensureServicesInitialized();
   const roles = needsRoles
     ? ((await resolveRoleSlugs(authorizedUser)) ?? [])
     : undefined;

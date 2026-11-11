@@ -60,9 +60,7 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
         // Asked before the check, which reads and writes as the system.
         const readable = await readableTypes(ctx, checks.targets);
         await checkSite(ctx, checks);
-        const list = await problemList(ctx, checks, type =>
-          readable.has(type)
-        );
+        const list = await problemList(ctx, checks, type => readable.has(type));
         const pages = `${list.pagesChecked} ${list.pagesChecked === 1 ? "page" : "pages"}`;
         return respondAction(`Checked ${pages}.`, { ...list });
       },

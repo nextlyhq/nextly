@@ -23,6 +23,8 @@ import {
   type CollectionConfig,
 } from "nextly/config";
 
+import { isRecord, textOf } from "../plain-values";
+
 import type { Problem, ProblemSubject } from "./contract";
 
 export const PROBLEMS_SLUG = "nx_seo_problems";
@@ -40,7 +42,11 @@ export function problemsCollection(): CollectionConfig {
       // it race.
       text({ name: "rowKey", label: "Row key", required: true, unique: true }),
       text({ name: "kind", label: "Kind", required: true, index: true }),
-      text({ name: "holderCollection", label: "Holder collection", index: true }),
+      text({
+        name: "holderCollection",
+        label: "Holder collection",
+        index: true,
+      }),
       text({ name: "holderId", label: "Holder id" }),
       // Long text: a title or address of any length fits on every dialect.
       textarea({ name: "label", label: "Label" }),
@@ -104,13 +110,9 @@ export interface SiteCheck {
   checkedAt?: string;
   pagesChecked: number;
   outOfDate: boolean;
+  /** What the full check found that belongs to no page, such as a redirect chain. */
+  problems: Problem[];
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const textOf = (value: unknown): string | undefined =>
-  typeof value === "string" && value !== "" ? value : undefined;
 
 /** The problems a row holds; none where what is stored is not a list. */
 function problemsOf(value: unknown): Problem[] {
@@ -187,7 +189,10 @@ async function writeRow(
   const existing = await rowAt(ctx, key);
   if (existing === undefined) {
     try {
-      await ctx.services.collections.createEntry(slug, { rowKey: key, ...fields });
+      await ctx.services.collections.createEntry(slug, {
+        rowKey: key,
+        ...fields,
+      });
       return;
     } catch (error) {
       if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
@@ -202,7 +207,10 @@ async function writeRow(
 }
 
 /** Keep what one page's check found. */
-export async function savePage(ctx: PluginContext, row: PageRow): Promise<void> {
+export async function savePage(
+  ctx: PluginContext,
+  row: PageRow
+): Promise<void> {
   const { subject } = row;
   await writeRow(ctx, pageKey(subject.type, subject.id), {
     kind: "page",
@@ -226,7 +234,10 @@ export async function removePage(
   const row = await rowAt(ctx, pageKey(type, id));
   if (row === undefined) return false;
   try {
-    await ctx.services.collections.deleteEntry(problemsSlug(ctx), String(row.id));
+    await ctx.services.collections.deleteEntry(
+      problemsSlug(ctx),
+      String(row.id)
+    );
   } catch (error) {
     // Another check removed it first.
     if (!NextlyError.isCode(error, "NOT_FOUND")) throw error;
@@ -262,21 +273,22 @@ export async function readSiteCheck(ctx: PluginContext): Promise<SiteCheck> {
   const checkedAt = textOf(row?.checkedAt);
   return {
     ...(checkedAt === undefined ? {} : { checkedAt }),
-    pagesChecked:
-      typeof row?.pagesChecked === "number" ? row.pagesChecked : 0,
+    pagesChecked: typeof row?.pagesChecked === "number" ? row.pagesChecked : 0,
     outOfDate: row?.outOfDate === true,
+    problems: problemsOf(row?.problems),
   };
 }
 
 /** Record a full check, which brings the list up to date. */
 export async function saveSiteCheck(
   ctx: PluginContext,
-  check: { checkedAt: string; pagesChecked: number }
+  check: { checkedAt: string; pagesChecked: number; problems: Problem[] }
 ): Promise<void> {
   await writeRow(ctx, META_KEY, {
     kind: "meta",
     checkedAt: check.checkedAt,
     pagesChecked: check.pagesChecked,
+    problems: check.problems,
     outOfDate: false,
   });
 }
@@ -288,8 +300,12 @@ export async function saveSiteCheck(
 export async function markOutOfDate(ctx: PluginContext): Promise<void> {
   const row = await rowAt(ctx, META_KEY);
   if (row === undefined || row.outOfDate === true) return;
-  await ctx.services.collections.updateEntry(problemsSlug(ctx), String(row.id), {
-    outOfDate: true,
-    _overwrite: true,
-  });
+  await ctx.services.collections.updateEntry(
+    problemsSlug(ctx),
+    String(row.id),
+    {
+      outOfDate: true,
+      _overwrite: true,
+    }
+  );
 }

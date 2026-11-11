@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   noAddressProblems,
   productionAddressProblems,
+  redirectChainProblems,
   sharedValueProblems,
   type CheckedPage,
 } from "../site-checks";
@@ -23,7 +24,10 @@ function page(id: string, title?: string, description?: string): CheckedPage {
 describe("sharedValueProblems", () => {
   it("passes pages whose titles and descriptions all differ", () => {
     expect(
-      sharedValueProblems([page("1", "One", "First"), page("2", "Two", "Second")])
+      sharedValueProblems([
+        page("1", "One", "First"),
+        page("2", "Two", "Second"),
+      ])
     ).toEqual([]);
   });
 
@@ -115,6 +119,28 @@ describe("noAddressProblems", () => {
     const note = problems[0]?.fix;
     expect(note?.place === "developer" && note.note).toContain(
       'publicAddress: "/cases/{slug}"'
+    );
+  });
+});
+
+describe("redirectChainProblems", () => {
+  it("passes redirects that each take one hop", () => {
+    expect(redirectChainProblems([])).toEqual([]);
+  });
+
+  it("reports a redirect whose To address redirects again, and where it should go", () => {
+    const [problem] = redirectChainProblems([
+      { source: "/a", target: "/new/x", end: "/newer/x" },
+    ]);
+    expect(problem).toMatchObject({
+      kind: "redirectChain",
+      subject: { label: "/a" },
+      what: "/a → /new/x → /newer/x",
+      fix: { place: "developer" },
+    });
+    const fix = problem?.fix;
+    expect(fix?.place === "developer" && fix.note).toContain(
+      "Point /a straight at /newer/x"
     );
   });
 });

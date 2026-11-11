@@ -43,7 +43,10 @@ function context(readable: string[] | null): PluginRouteContext {
     caller:
       readable === null
         ? null
-        : { can: async (_action: string, slug: string) => readable.includes(slug) },
+        : {
+            can: async (_action: string, slug: string) =>
+              readable.includes(slug),
+          },
   } as unknown as PluginRouteContext;
 }
 
@@ -54,7 +57,10 @@ async function status(
   readable: string[] | null
 ): Promise<number> {
   try {
-    const response = await route!.handler(new Request("http://x/"), context(readable));
+    const response = await route!.handler(
+      new Request("http://x/"),
+      context(readable)
+    );
     return response.status;
   } catch (error) {
     return (error as { statusCode: number }).statusCode;

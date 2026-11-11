@@ -203,7 +203,11 @@ function shareImageProblems(facts: PageFacts): Problem[] {
     ];
   }
   return facts.shareImage.map(problem => {
-    const base = { kind: "shareImage" as const, subject, what: problem.message };
+    const base = {
+      kind: "shareImage" as const,
+      subject,
+      what: problem.message,
+    };
     if (problem.fix === "route") {
       return {
         ...base,
@@ -262,7 +266,7 @@ function structuredDataProblems(facts: PageFacts): Problem[] {
         return {
           ...base,
           action: "Choose a field",
-          fix: { place: "settings" as const, tab: "content-types" as const },
+          fix: { place: "settings" as const, tab: "types" as const },
         };
       case "settings":
         return {
@@ -339,8 +343,16 @@ function brokenLinkProblems(facts: PageFacts): Problem[] {
   }));
 }
 
-/** Every problem `facts` show. */
+/**
+ * Every problem `facts` show. A page kept out of search on purpose (its own
+ * setting, or its whole type hidden) is checked only for what its visitors
+ * meet, a link that leads nowhere and an image with no alt text: how it
+ * would show in search or when shared is not a problem it has.
+ */
 export function pageProblems(facts: PageFacts): Problem[] {
+  if (!facts.answer.robots.value.index) {
+    return [...brokenLinkProblems(facts), ...imageAltProblems(facts)];
+  }
   return [
     ...textProblems(facts),
     ...canonicalProblem(facts),

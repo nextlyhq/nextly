@@ -170,7 +170,11 @@ describe("pageProblems", () => {
     );
     expect(sized.map(p => [p.what, p.action, p.fix.place])).toEqual([
       ["800 × 600, LinkedIn will crop it", "Make a share image", "page"],
-      ["800 × 600, LinkedIn will crop it", "Copy a note for a developer", "developer"],
+      [
+        "800 × 600, LinkedIn will crop it",
+        "Copy a note for a developer",
+        "developer",
+      ],
       ["The share image has no full address", "Set the address", "settings"],
     ]);
     // The site's missing address is the whole site's, not this page's.
@@ -213,11 +217,7 @@ describe("pageProblems", () => {
         "Add the author",
         { place: "page", tab: "content", field: "writer" },
       ],
-      [
-        "structuredData",
-        "Choose a field",
-        { place: "settings", tab: "content-types" },
-      ],
+      ["structuredData", "Choose a field", { place: "settings", tab: "types" }],
       [
         "structuredData",
         "Set the address",
@@ -233,7 +233,13 @@ describe("pageProblems", () => {
         images: [
           { field: "body", name: "chart.png", media: false, alt: "" },
           { field: "body", name: "table.png", media: false, alt: undefined },
-          { field: "body", name: "rule.png", media: false, alt: "", decorative: true },
+          {
+            field: "body",
+            name: "rule.png",
+            media: false,
+            alt: "",
+            decorative: true,
+          },
           { field: "body", name: "map.png", media: false, alt: "A map" },
           { field: "cover", name: "cover.jpg", media: true, alt: null },
         ],
@@ -261,5 +267,29 @@ describe("pageProblems", () => {
         fix: { place: "page", tab: "content", field: "body" },
       },
     ]);
+  });
+
+  it("reports only what visitors meet on a page kept out of search on purpose", () => {
+    const problems = pageProblems({
+      ...withAnswer({
+        title: undefined,
+        description: undefined,
+        image: undefined,
+        canonical: { value: "/elsewhere", from: "page" },
+        robots: { value: { index: false, follow: true }, from: "page" },
+      }),
+      structuredData: [
+        {
+          type: "blogPosting",
+          detail: "author",
+          message: "Missing: author.",
+          fix: "content",
+          field: "writer",
+        },
+      ],
+      images: [{ field: "body", name: "chart.png", media: false, alt: "" }],
+      brokenLinks: [{ field: "body", url: "/blog/gone" }],
+    });
+    expect(kinds(problems)).toEqual(["brokenLink", "imageAlt"]);
   });
 });

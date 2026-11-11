@@ -11,6 +11,8 @@
  *
  * @module problems/content
  */
+import { isRecord, textOf } from "../plain-values";
+
 import type { ImageFact, LinkFact } from "./page-checks";
 
 /** A page's images and the links in it. */
@@ -24,12 +26,6 @@ const NOT_CONTENT = new Set(["id", "seo", "createdAt", "updatedAt"]);
 
 /** How deep into nested content the walk goes before it stops. */
 const MAX_DEPTH = 64;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const textOf = (value: unknown): string | undefined =>
-  typeof value === "string" && value !== "" ? value : undefined;
 
 /** The last segment of an address, which names the file. */
 function fileName(address: string): string {
@@ -83,7 +79,12 @@ const galleryNode: NodeReader = (node, field, facts) => {
     if (!isRecord(image)) continue;
     const src = textOf(image.src);
     if (src === undefined) continue;
-    facts.images.push({ field, name: fileName(src), media: false, alt: image.alt });
+    facts.images.push({
+      field,
+      name: fileName(src),
+      media: false,
+      alt: image.alt,
+    });
   }
 };
 
@@ -111,10 +112,7 @@ const NODE_READERS: Readonly<Record<string, NodeReader>> = {
 };
 
 /** A media library picture, as a media field reads it. */
-function mediaImage(
-  value: Record<string, unknown>,
-  field: string
-): ImageFact {
+function mediaImage(value: Record<string, unknown>, field: string): ImageFact {
   return {
     field,
     name: textOf(value.filename) ?? fileName(String(value.url)),
