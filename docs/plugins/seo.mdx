@@ -383,6 +383,47 @@ instead.
 builds a sitemap from its own route. They are deprecated, and list pages by the old rules:
 they do not read each page's answer.
 
+## llms.txt and plain-text copies
+
+Two optional outputs for AI tools, both off until someone switches them on in **SEO >
+Settings > Connections**. Few tools read them today, so neither is on by default.
+
+- **`/llms.txt`** is a plain list of the site's pages, in the format the
+  [llms.txt proposal](https://llmstxt.org) sets out: the site's name as the heading, its
+  default description beneath it, and each page as a link under its content type, with the
+  title and description its head carries, worked out from what the public may read of the
+  page; a page the public may not read is listed by its address alone. It lists exactly the pages the sitemap lists, by
+  the same rules, so a draft, a hidden page or a page whose canonical points elsewhere is
+  never in it. Until it is switched on, `/llms.txt` is not found. Like the sitemap, it
+  answers `503` while the address record catches up at start.
+- **Plain-text copies** add a text version of each page the sitemap lists, at the page's
+  address with `.md` added: `/blog/hello.md` for `/blog/hello`, and `/index.html.md` for
+  the home page. The copy is the page's title as a heading, then the words of its text,
+  long text and rich text fields, in the order its type declares them, those inside its
+  groups and repeaters included, with rich text's headings, lists, links, quotes, code,
+  tables and images written as Markdown. A field group's rich text is read too. A page's SEO
+  fields, its address, fields holding a choice, a number or a date, and other documents
+  read with it, such as an author, are left out. Each copy is served as
+  `text/markdown; charset=utf-8` and names its page as canonical in a `Link` header, so
+  search engines keep listing the page. With copies on, `/llms.txt` links each page's copy.
+
+A copy is read as a visitor with no session reads the page: the Public role's grants, the
+type's read rule and each field's read rule decide what is in it, so a field kept from the
+public is never in a copy, and a page the public may not read has none. Where a page of the
+site already has a copy's address, such as a page at `/guide.md`, that page is served there
+and no copy is, and `/llms.txt` links the page itself. A page at `/index.html` keeps
+`/index.html.md`, and the home page is then linked as itself. A copy's words are escaped
+where Markdown would read them as markup, so it says what the page shows.
+
+Every reader gets the same answer: neither output looks at who is asking. Neither changes a
+page either: llms.txt is its own file, and a copy is answered only at a copy's address. A
+copy is answered by the site's [Proxy](/docs/plugins/proxy), so the site needs its
+`proxy.ts`, as [redirects](#redirects) do; a site that ships its own `public/llms.txt` or
+`app/llms.txt/route.ts` keeps serving it.
+
+A copy is made from the page as it is stored, the fields the site renders, not from the
+rendered page: the words of a Page Builder layout are not in it.
+
 ## Languages
 
 On a site with [several languages](/docs/localization), each page's head links to the page in
@@ -434,6 +475,7 @@ with a line on the page to finish later. Every answer stays editable on the tabs
 | Content types | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from |
 | Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                                                                                                                                                           |
 | Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none                                                                                                                                    |
+| Connections   | Optional outputs for AI tools, each off until switched on: [llms.txt and plain-text copies of pages](#llmstxt-and-plain-text-copies)                                                                                                            |
 
 The production addresses saved on General are the ones the page's canonical, the sitemap,
 robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over

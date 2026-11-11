@@ -49,6 +49,10 @@ export interface SiteRules {
   hiddenTypes?: readonly string[];
   /** What robots.txt asks AI crawlers to do, where the site has chosen. */
   aiCrawlers?: AiCrawlerChoice;
+  /** Whether `/llms.txt` is served: only once switched on. */
+  llmsTxt?: boolean;
+  /** Whether each listed page has a plain-text copy: only once switched on. */
+  plainTextCopies?: boolean;
 }
 
 /** No rules set: every value comes from the page, its route or its content. */
