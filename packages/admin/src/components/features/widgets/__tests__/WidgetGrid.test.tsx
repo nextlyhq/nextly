@@ -1183,15 +1183,10 @@ describe("the grid distinguishes 'nothing to draw' from 'nothing has arrived'", 
     // that supplied widgets.
     mockBrandingStatus = { ...mockBrandingStatus, isPending: true };
     renderGrid();
+    // The dashboard's outline stands in the grid's place: the screen's wait,
+    // drawn from 0.4 s by the frame's one outline, never an empty page.
     const loading = screen.getByTestId("widget-grid-loading");
-    expect(loading).toHaveClass("auto-rows-auto");
-    // Each placeholder holds a short card's height itself, the rows holding nothing of their own.
-    const placeholders = [...loading.children] as HTMLElement[];
-    expect(placeholders).toHaveLength(3);
-    for (const placeholder of placeholders) {
-      expect(placeholder).toHaveClass("h-[160px]");
-      expect(placeholder.style.gridRow).toBe("");
-    }
+    expect(loading).toContainElement(screen.getByTestId("screen-outline"));
   });
 
   it("says so when the workspace never answered", () => {

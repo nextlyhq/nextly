@@ -645,7 +645,15 @@ export const EntryTable: ForwardRefExoticComponent<
           />
         ) : undefined
       }
-      skeleton={<EntryTableSkeleton />}
+      // The real heads over the outline rows: the columns are known before
+      // the rows are.
+      skeleton={
+        <EntryTableSkeleton
+          headers={columns
+            .filter(column => !column.hidden)
+            .map(column => column.header)}
+        />
+      }
       loading={isLoading}
       columns={columns}
       rows={entries}

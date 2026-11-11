@@ -36,6 +36,10 @@ import {
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import {
+  DashboardCardsOutline,
+  ScreenOutline,
+} from "@admin/components/shared/loading-frame/outlines";
+import {
   useBranding,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
@@ -81,7 +85,7 @@ import {
 } from "./hidden-while-empty";
 import { WidenLonePairContext, widensLonePair } from "./lone-pair";
 import { resolveDashboardWidgets } from "./resolve-widgets";
-import { drawnSize, GRID_CLASS } from "./sizes";
+import { drawnSize } from "./sizes";
 import { DashboardWidthProvider, useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
@@ -127,25 +131,15 @@ function NothingToDraw({
   }
 
   if (isPending) {
-    // Placeholders rather than nothing, so the page does not reflow from empty
-    // to full as the answer lands. Three, matching the sections a default
-    // install draws; `aria-hidden` because the grid's own live region already
-    // speaks for it and a screen reader gains nothing from three empty boxes.
+    // The dashboard's still outline rather than nothing, the one the frame
+    // drew for the dashboard while the session was checked, so it stays put
+    // until the cards replace it. The frame's own status line speaks for a
+    // long wait, so the outline is hidden from assistive technology.
     return (
-      <section
-        aria-label="Dashboard widgets"
-        data-testid="widget-grid-loading"
-        // The grid the cards will be drawn on. The placeholders hold nothing a row could take its
-        // height from, so each is drawn at a short card's height.
-        className={GRID_CLASS}
-      >
-        {[0, 1, 2].map(row => (
-          <div
-            key={row}
-            aria-hidden
-            className="col-span-12 h-[160px] animate-pulse rounded-lg bg-muted"
-          />
-        ))}
+      <section aria-label="Dashboard widgets" data-testid="widget-grid-loading">
+        <ScreenOutline>
+          <DashboardCardsOutline />
+        </ScreenOutline>
       </section>
     );
   }
@@ -407,22 +401,18 @@ function useSettingsWriteAtRest(
 }
 
 /**
- * What the grid's place holds while the first arrangement read is in flight.
- *
- * A line of text, not card-shaped placeholders: which cards there will be,
- * and how wide, is exactly what is not known yet, and a guessed block that
- * the real dashboard then differs from is itself the jump this avoids.
+ * What the grid's place holds while the first arrangement read is in flight:
+ * the dashboard's still outline, the same one shown while the workspace and
+ * the session were on their way, so one outline stands for the whole wait and
+ * the cards replace it where it stands.
  */
 function ArrangementLoading() {
   return (
-    <p
-      role="status"
-      aria-label="Loading your dashboard"
-      className="text-sm text-muted-foreground"
-      data-testid="widget-grid-loading"
-    >
-      Loading your dashboard…
-    </p>
+    <div data-testid="widget-grid-loading">
+      <ScreenOutline>
+        <DashboardCardsOutline />
+      </ScreenOutline>
+    </div>
   );
 }
 
