@@ -1762,7 +1762,13 @@ async function writerSaveOf(change: WriterChange): Promise<
   if (!container.has("builderSaveSetup")) return undefined;
   const setup = container.get<BuilderSaveSetup>("builderSaveSetup");
   const adapter = getAdapterFromDI();
-  if (!adapter) throw new Error("Database adapter not initialized");
+  // A writer registered with no adapter is a wiring fault of the app, not the editor's: reported
+  // as an internal error, with what was missing in the log.
+  if (!adapter) {
+    throw NextlyError.internal({
+      logContext: { reason: "database adapter not initialized" },
+    });
+  }
   const logger = getLoggerFromDI() ?? consoleLogger;
   const dynamic = new DynamicCollectionService(adapter, logger);
   const before = change.collection.fields ?? [];
