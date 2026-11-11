@@ -272,8 +272,10 @@ test("a dragged card moves the others aside across a row and down a row, and lan
   expect(await heldOrder(page)).toEqual(before);
   await expect(page.getByTestId("dashboard-edit-save")).toBeDisabled();
 
-  // Down a row, into the right half of the card now there.
-  const down = await pointAt(card(diagonal), 0.75, 0.5);
+  // Down a row, into the right half of the card now there, near its top: the rows above it
+  // close up as the cards move aside, since each row is as tall as its tallest card, so a point
+  // low in it can end a row further down once they have.
+  const down = await pointAt(card(diagonal), 0.75, 0.2);
   await page.mouse.move(down.x, down.y, { steps: 12 });
   const after = [beside, below, diagonal, held, ...before.slice(4)];
   await expect.poll(() => drawnOrder(page)).toEqual(after);

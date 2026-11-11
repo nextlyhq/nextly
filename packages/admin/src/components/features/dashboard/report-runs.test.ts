@@ -40,22 +40,32 @@ describe("reportRuns", () => {
 
   it("keeps a number with its unit, and a count with the list that names it", () => {
     expect(whole(LINES[4])).toEqual([
-      "2 queued",
-      "0 running",
+      "2 queued ·",
+      "0 running ·",
       "0 failed",
       "24 h",
     ]);
     expect(whole(LINES[5])).toContain("3 locales (en, es, ar)");
-    expect(whole(LINES[3])).toEqual(["SQLite 3.45.1", "4 ms"]);
+    expect(whole(LINES[3])).toEqual(["SQLite 3.45.1 ·", "4 ms"]);
   });
 
   it("keeps a name with its version, and a short bracketed note whole", () => {
     expect(whole(LINES[2])).toEqual([
-      "Node 24.11.0",
-      "Next.js 16.4.2",
+      "Node 24.11.0 ·",
+      "Next.js 16.4.2 ·",
       "React 19.2.0",
     ]);
     expect(whole(LINES[1])).toEqual(["(latest: 0.0.2-alpha.74)"]);
+  });
+
+  it("keeps a separator with the fact before it, so no wrapped line starts with one", () => {
+    const runs = reportRuns("Storage: Local disk · last write OK");
+    expect(runs.find(run => run.whole)?.text).toBe("disk ·");
+    for (const line of LINES) {
+      for (const run of reportRuns(line).filter(run => !run.whole)) {
+        expect(run.text).not.toMatch(/^\s*·/);
+      }
+    }
   });
 
   it("lets a long bracketed note wrap at its spaces", () => {

@@ -284,8 +284,8 @@ function SystemDetails({
   const reportRef = useRef<HTMLPreElement>(null);
   // Toasts said while Details is open ("Diagnostics copied") stand above its footer, not over
   // the Copy diagnostics button there.
-  const footerRef = useRef<HTMLDivElement>(null);
-  useToastAboveFooter(footerRef, open);
+  const [footer, setFooter] = useState<HTMLDivElement | null>(null);
+  useToastAboveFooter(footer);
   const { selectPending, selectRequest } = diagnostics;
   // A copy refused from Details' own button, with Details already open: the
   // report is selected again where it stands. Opening Details is handled
@@ -378,7 +378,7 @@ function SystemDetails({
           </DetailsSection>
         </div>
         <div
-          ref={footerRef}
+          ref={setFooter}
           className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3"
         >
           <CopyDiagnosticsButton

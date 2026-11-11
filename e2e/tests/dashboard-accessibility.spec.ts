@@ -353,7 +353,15 @@ async function placeOverTime(page: Page): Promise<string> {
   const write = await page.request.put("/admin/api/dashboard/layout", {
     data: {
       placements: [
-        { id, widgetId: OVER_TIME, w: 6, h: 3, removed: false },
+        {
+          id,
+          widgetId: OVER_TIME,
+          w: 6,
+          h: 3,
+          removed: false,
+          // A collection, so the chart and its "View as table" are drawn.
+          config: { collection: "posts" },
+        },
         ...layout.placements.filter(
           p => !ours.has(p.id) && !widgets.has(p.widgetId)
         ),
