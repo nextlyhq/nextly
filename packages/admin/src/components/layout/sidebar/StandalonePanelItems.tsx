@@ -128,7 +128,10 @@ function DeclaredPanelItems({
   );
 }
 
-/** One group: its heading, naming the list of items under it. */
+/**
+ * One group: its heading, naming the list of items under it. Spaced and
+ * headed as the Settings panel's groups are, so every panel reads alike.
+ */
 function PanelGroup({
   label,
   children,
@@ -138,10 +141,10 @@ function PanelGroup({
 }): JSX.Element {
   const headingId = useId();
   return (
-    <div role="group" aria-labelledby={headingId} className="pt-2">
+    <div role="group" aria-labelledby={headingId} className="space-y-1 pt-8">
       <p
         id={headingId}
-        className="px-3 pb-1.5 pt-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
+        className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2"
       >
         {label}
       </p>
