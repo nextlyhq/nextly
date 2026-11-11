@@ -570,6 +570,14 @@ export class CollectionsHandler {
     this.fileManager.invalidateSchemaForSlug(slug);
   }
 
+  // Drop every Drizzle table the FileManager built from registry rows, so each
+  // collection's next read builds it from the rows as they are now: the
+  // registry changed in a way this process did not make (another server
+  // copy's save, a migration), and any cached table may predate it.
+  forgetCollectionSchemas(): void {
+    this.fileManager.forgetBuiltSchemas();
+  }
+
   /**
    * Register dynamic schemas with the file manager.
    * @param schemas - Map of schema names to schema objects

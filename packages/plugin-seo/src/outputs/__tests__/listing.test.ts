@@ -215,6 +215,28 @@ describe("the pages the site lists", () => {
     expect(readRules).toHaveBeenCalledTimes(1);
   });
 
+  it("stops reading pages once it has listed as many as it was asked for", async () => {
+    answers.set("1", {
+      robots: listed,
+      canonical: { value: "/en/a", from: "address" },
+    });
+    const ctx = context([{ id: "1", slug: "a" }], [holds("1", "/a")]);
+    // A collection with many pages: every read says more follow.
+    let reads = 0;
+    ctx.services.collections.listEntries = (async () => {
+      reads++;
+      return {
+        data: [{ id: "1", slug: "a" }],
+        pagination: { hasMore: reads < 5 },
+      };
+    }) as unknown as typeof ctx.services.collections.listEntries;
+
+    const { pages } = await listPages(ctx, { origin: SITE, limit: 1 });
+
+    expect(pages.map(page => page.loc)).toEqual([`${SITE}/en/a`]);
+    expect(reads).toBe(1);
+  });
+
   it("lists a page at its canonical as its answer gives it", async () => {
     answers.set("1", {
       robots: listed,

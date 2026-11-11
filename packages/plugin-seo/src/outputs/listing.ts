@@ -99,6 +99,11 @@ export interface ListingOptions {
    * here would reach their head and the two could disagree.
    */
   codeRoutes?: () => readonly CodeRoute[];
+  /**
+   * Stop once at least this many pages are listed, where given: a reader
+   * that shows only the first pages reads no more of the site than that.
+   */
+  limit?: number;
 }
 
 /** How many documents one read takes. */
@@ -238,8 +243,14 @@ export async function listPages(
       },
       found
     );
+    if (options.limit !== undefined && found.pages.length >= options.limit) {
+      break;
+    }
   }
-  if (options.codeRoutes !== undefined) {
+  // Read only where a limit still leaves room for them.
+  const room =
+    options.limit === undefined || found.pages.length < options.limit;
+  if (options.codeRoutes !== undefined && room) {
     await listCodePages(
       ctx,
       options.codeRoutes(),

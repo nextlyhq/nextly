@@ -673,6 +673,33 @@ export { TopBarPlace } from "@nextlyhq/admin";
 export type { TopBarPlaceName, TopBarPlaceProps } from "@nextlyhq/admin";
 
 /**
+ * A page's frame and its header, the pieces core's pages are drawn from
+ * (@experimental), so a plugin's page looks like a core one.
+ *
+ * - `PageFrame` takes the page's `type`, and the type decides its width:
+ *   `"list"` runs full width within the gutter, `"form"` is a 56rem column
+ *   under the page's left edge, `"editor"` runs full width with no gutter so
+ *   a side panel meets the window's edge, and `"workspace"` takes no gutter and
+ *   no padding, for a page that lays out its own surface.
+ * - `PageHeader` draws the page's title as its `h1`, with an optional
+ *   `description`, `actions` trailing the title, `meta` chips beside it, a
+ *   leading `media` visual and a `tabs` row (`PageTabs` with a `PageTab` per
+ *   section, each a link with its own address).
+ *
+ * A plugin page that draws no `PageFrame` is drawn as a Workspace page. A page
+ * that draws one gets no second frame from the admin. Content for the admin's
+ * top bar still goes through `TopBarPlace`.
+ */
+export { PageFrame, PageHeader, PageTab, PageTabs } from "@nextlyhq/admin";
+export type {
+  PageFrameProps,
+  PageHeaderProps,
+  PageTabProps,
+  PageTabsProps,
+  PageType,
+} from "@nextlyhq/admin";
+
+/**
  * The live values of the document being edited (@experimental), for any
  * component a plugin draws inside the editor: a block, a side panel section
  * or a tab, on an entry, a new one or a Single. A place's `entry` prop is the

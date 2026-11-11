@@ -13,6 +13,8 @@ import {
   definePlugin,
   group,
   type FieldConfig,
+  type PageMetadataResolver,
+  type PluginContext,
   type PluginContributions,
   type PluginDefinition,
   type PluginRoute,
@@ -45,8 +47,16 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
-import { redirectsCollection } from "./redirects/collection";
+import { PROBLEMS_PAGE, PROBLEMS_PAGE_HREF } from "./problems/contract";
+import { watchSaves } from "./problems/hooks";
+import { problemRoutes } from "./problems/route";
+import { problemsCollection } from "./problems/store";
+import { RECEIVED_PAGE, RECEIVED_PAGE_HREF } from "./received/contract";
+import { receivedRoutes } from "./received/route";
+import { REDIRECTS_SLUG, redirectsCollection } from "./redirects/collection";
+import { REDIRECTS_PAGE } from "./redirects/contract";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
+import { redirectRoutes } from "./redirects/routes";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import {
   contentTypesRoute,
@@ -55,10 +65,12 @@ import {
 import {
   SEO_SETTINGS_SLUG,
   SETTINGS_PAGE,
+  SEO_ADMIN_SLUG,
   SETTINGS_PAGE_HREF,
 } from "./settings/contract";
 import { readSeoRules, rememberSettingsSingle } from "./settings/rules";
 import { seoSettingsSingle } from "./settings/single";
+import { socialCardFromSettings } from "./settings/social-card-rules";
 import { structuredDataFromSettings } from "./settings/structured-data-rules";
 import {
   resolveBaseOrigin,
@@ -74,13 +86,18 @@ import { shareImageRoute } from "./social/route";
 import { decideStanding, stagingGuard } from "./staging/guard";
 import { withStructuredData } from "./structured-data/provider";
 import {
+  checkedTypeRules,
   rulesFromOptions,
   type StructuredDataOptions,
 } from "./structured-data/rules";
+import { seoTabParts } from "./tab/install";
 import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
+/** Where the redirects screen is, for the admin's menu. */
+const REDIRECTS_PAGE_HREF = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
+
 const require = createRequire(import.meta.url);
 const { version: PLUGIN_VERSION } = require("../package.json") as {
   version: string;
@@ -93,9 +110,13 @@ export interface SeoPluginOptions {
    */
   collections: string[];
   /**
+   * The Singles to extend with the SEO field group, such as a homepage. None
+   * when absent. A Single's page gets the same SEO tab a collection's has.
+   */
+  singles?: string[];
+  /**
    * The fields placed INSIDE the `seo` group. Defaults to
-   * {@link defaultSeoFields} (metaTitle, metaDescription, ogImage, canonical,
-   * noindex). Custom fields are still nested under `seo` (e.g. a `focusKeyword`
+   * {@link defaultSeoFields}. Custom fields are still nested under `seo` (e.g. a `focusKeyword`
    * override lands at `entry.seo.focusKeyword`), so consumers always read SEO
    * data from one predictable place.
    */
@@ -193,9 +214,10 @@ export interface SeoPluginOptions {
    */
   structuredData?: StructuredDataOptions;
   /**
-   * @experimental What every page's social card states beyond the page,
-   * until the SEO settings hold it: the site's name, and the language of a
-   * page the route read in no particular language, as a language tag.
+   * @experimental What every page's social card states beyond the page:
+   * the site's name, until one is saved in the SEO settings, and the
+   * language of a page the route read in no particular language, as a
+   * language tag.
    *
    * ```ts
    * seoPlugin({
@@ -205,8 +227,9 @@ export interface SeoPluginOptions {
    * });
    * ```
    *
-   * A share image stored with a path from the root is stated on `baseUrl`,
-   * since a network reading the card needs its full address.
+   * A share image stored with a path from the root is stated on the site's
+   * production address, else on `baseUrl`, since a network reading the card
+   * needs its full address.
    */
   socialCard?: SocialCardOptions;
   /**
@@ -396,6 +419,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // twice (a duplicate-field error), and would list the same URLs twice in the
   // sitemap.
   const targets = [...new Set(options.collections)];
+  const singleTargets = [...new Set(options.singles ?? [])];
 
   const sitemapSubset = subsetOf(options.sitemap, targets);
   const readRules = rulesReader(options);
@@ -413,42 +437,75 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options.baseUrl,
     options.structuredData
   );
-  const readSocialCardRules = socialCardRulesFromOptions(
-    options.baseUrl,
-    options.socialCard
+  const readSocialCardRules = socialCardFromSettings(
+    socialCardRulesFromOptions(options.baseUrl, options.socialCard)
   );
 
-  // The site's sitemap and robots.txt, and the action that makes a share
-  // image of the right size; all added below.
+  // The SEO tab on each page the group is added to, and the route it reads
+  // a page's automatic values from.
+  const tab = seoTabParts({
+    collections: targets,
+    singles: singleTargets,
+    fields: seoFields,
+    baseUrl: options.baseUrl,
+    readRules,
+    readStructuredDataRules,
+    readSocialCardRules,
+  });
+
+  // Every page's head, worked out by the one order of who wins, with its
+  // links to its other languages, its social card completed, and its
+  // structured data, worked out from that same answer and the settings'
+  // brand facts, with the plugin's options where the settings say nothing.
+  // What the site's routes are answered, and what the check of what search
+  // engines received compares each page with.
+  const pageMetadata = (ctx: PluginContext): PageMetadataResolver =>
+    withStructuredData(
+      ctx,
+      withSocialCard(
+        ctx,
+        withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
+        readSocialCardRules
+      ),
+      structuredDataFromSettings(readStructuredDataRules)
+    );
+
+  // What the problem list checks, read with the rules every page's head is
+  // worked out by, so the list and the page never disagree.
+  const problemChecks = {
+    targets,
+    readers: {
+      readRules,
+      readStructuredDataRules: structuredDataFromSettings(
+        readStructuredDataRules
+      ),
+      readSocialCardRules,
+    },
+  };
+
+  // The site's sitemap and robots.txt, the action that makes a share image
+  // of the right size, the settings and redirects screens' routes, the
+  // check of what search engines received, the SEO tab's own and the
+  // problem list's; all added below.
   const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
-    extend: [{ target: targets, fields: [seoGroup] }],
+    extend: [{ target: [...targets, ...singleTargets], fields: [seoGroup] }],
     // The record that keeps each public address to one page, the redirects
-    // whose From addresses it holds, and the log of addresses not found.
+    // whose From addresses it holds, the log of addresses not found, and
+    // what the problem list's checks found.
     collections: [
       addressRecordCollection(),
       redirectsCollection(),
       notFoundCollection(),
+      problemsCollection(),
       // The SEO of each page a route renders from its own code, by address.
       codePagesCollection(),
     ],
-    // Every page's head, worked out by the one order of who wins, with its
-    // links to its other languages, its social card completed, and its
-    // structured data, worked out from that same answer and the settings'
-    // brand facts, with the plugin's options where the settings say nothing.
+    // Every page's head, as worked out above.
     services: {
-      pageMetadata: ctx =>
-        withStructuredData(
-          ctx,
-          withSocialCard(
-            ctx,
-            withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
-            readSocialCardRules
-          ),
-          structuredDataFromSettings(readStructuredDataRules)
-        ),
+      pageMetadata,
       // The pages the site lists and the problems that left any out, read by
       // the same rules as the head: one reading for every listing output.
       listedPages: (ctx): ListedPagesService => ({
@@ -471,16 +528,41 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
-    // robots.txt asks AI tools until the site chooses: not a secret, it is
-    // what the site's own robots.txt says.
+    // the plugin's options answer until the site chooses: what robots.txt
+    // asks AI tools and which types are hidden, which the site's own
+    // robots.txt and pages already say.
     admin: {
-      clientConfig: { aiCrawlers: options.aiCrawlers ?? "all" },
+      ...tab.admin,
+      clientConfig: {
+        aiCrawlers: options.aiCrawlers ?? "all",
+        hiddenTypes: [...new Set(options.hiddenTypes ?? [])],
+        // Each type's structured data choice the options make, which the
+        // screen shows until the site chooses its own.
+        structuredData: checkedTypeRules(options.structuredData?.types),
+      },
       menu: [
+        // Shown to everyone in the admin: the list answers each person with
+        // the pages of the types they may read, and says so where none.
+        { label: "Problems", to: PROBLEMS_PAGE_HREF, icon: "AlertTriangle" },
         {
           label: "Pages and addresses",
           to: PAGES_PAGE_HREF,
           icon: "FileText",
           requiredPermission: `read-${SEO_SETTINGS_SLUG}`,
+        },
+        {
+          label: "Redirects",
+          to: REDIRECTS_PAGE_HREF,
+          icon: "Route",
+          requiredPermission: `read-${REDIRECTS_SLUG}`,
+        },
+        // Shown to everyone in the admin: the check fetches only the site's
+        // own public pages, and compares only those whose type the person
+        // may read.
+        {
+          label: "What search engines received",
+          to: RECEIVED_PAGE_HREF,
+          icon: "Eye",
         },
         {
           label: "Settings",
@@ -490,7 +572,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         },
       ],
       pages: [
+        PROBLEMS_PAGE,
         { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
+        { ...REDIRECTS_PAGE, requiredPermission: `read-${REDIRECTS_SLUG}` },
+        RECEIVED_PAGE,
         { ...PAGES_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
       ],
     },
@@ -518,6 +603,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Single holds the settings.
     contentTypesRoute(targets),
     settingsDocumentRoute(),
+    // What the redirects screen reads and writes.
+    ...redirectRoutes(),
+    // What the "What search engines received" screen reads and checks.
+    ...receivedRoutes({
+      collections: targets,
+      singles: singleTargets,
+      ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+      readRules,
+      pageMetadata,
+    }),
+    ...tab.routes,
+    ...problemRoutes(problemChecks),
     // The Pages and addresses screen's list, and its save of a page with no
     // entry's SEO.
     ...codePageRoutes({
@@ -587,6 +684,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // Kept for the site's not-found page, which logs through it, and for
       // the pages built in code, which read their SEO through it.
       keepSeoContext(ctx);
+      // Each saved page checked again for the problem list.
+      watchSaves(ctx, problemChecks);
       keepCodeRoutes(codeRoutes);
     },
     onReady(ctx) {

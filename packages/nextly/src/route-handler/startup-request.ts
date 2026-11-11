@@ -16,6 +16,9 @@
  *   status and error body; the other parts are answered as usual.
  * - **Bounded.** At most {@link MAX_STARTUP_PATHS} paths, each a plain path
  *   within the admin API, never this route again.
+ * - **Whole.** No part is answered "unchanged" (`304`): the request names
+ *   paths, not the answers the admin holds, so each part is sent in full,
+ *   and a metadata part's tag (`ETag`) is not carried in it.
  *
  * The admin names the paths rather than this choosing them, because the admin
  * is what knows the exact URLs (and query strings) its screens ask for: one
@@ -123,7 +126,13 @@ async function answerPath(
     .split("/")
     .filter(segment => segment !== "")
     .map(segment => decodeURIComponent(segment));
-  const sub = new Request(target, { method: "GET", headers: req.headers });
+  // Every part is answered in full: the startup request carries no tag of a
+  // part's answer, so a conditional header it was sent with is not passed on,
+  // or a metadata part matching it would come back as an empty "unchanged".
+  const headers = new Headers(req.headers);
+  headers.delete("if-none-match");
+  headers.delete("if-modified-since");
+  const sub = new Request(target, { method: "GET", headers });
   let response: Response;
   try {
     response = await answer(sub, params);

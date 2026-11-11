@@ -10,6 +10,7 @@
  * @module redirects/addresses
  */
 import { within } from "../address-record/rows";
+import { notAPageAddress } from "../not-found/page-address";
 
 /** A From address read: what is stored, and the address it holds. */
 export type ParsedSource =
@@ -18,6 +19,8 @@ export type ParsedSource =
 
 const START_FROM = "Start the From address with /, for example /old-page.";
 const STAR_FROM = "Use * only at the end of the From address, as in /old/*.";
+const NOT_A_PAGE =
+  "Redirects answer page addresses only: the admin, the API and files such as images never reach them.";
 
 /**
  * Whether a path has a `.` or `..` part, spelled plainly or encoded: a
@@ -90,6 +93,11 @@ export function parseSource(text: string): ParsedSource {
       ok: false,
       error: "Write the From address without . or .. parts.",
     };
+  }
+  // The Proxy passes these by before it looks for a redirect, so one saved
+  // from them would never answer.
+  if (notAPageAddress(value.endsWith("/*") ? value.slice(0, -2) : value)) {
+    return { ok: false, error: NOT_A_PAGE };
   }
   const stars = value.split("*").length - 1;
   if (stars === 0) {

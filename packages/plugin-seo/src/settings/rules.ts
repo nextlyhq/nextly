@@ -315,6 +315,47 @@ async function originIn(
   return addresses[0];
 }
 
+/** The site's own name and address, as every output names the site. */
+export interface SiteIdentity {
+  /** The production address the language is served from. */
+  origin?: string;
+  siteName?: string;
+}
+
+/** The site's name and the production address `locale` is served from. */
+async function identityOf(
+  document: SeoSettingsDocument,
+  locale: string | undefined
+): Promise<SiteIdentity> {
+  const origin = await originIn(
+    productionAddressesOf(
+      checked<string[]>(
+        document.productionAddresses,
+        productionAddressesProblem
+      )
+    ),
+    locale
+  );
+  const siteName = trimmed(document.siteName);
+  return {
+    ...(origin === undefined ? {} : { origin }),
+    ...(siteName === undefined ? {} : { siteName }),
+  };
+}
+
+/**
+ * The site's name and the production address `locale` is served from (the
+ * environment's addresses winning, as for every output), with no media read:
+ * what a page's social card names the site by. Never awaited while the site
+ * starts.
+ */
+export async function readSiteIdentity(
+  ctx: PluginContext,
+  locale?: string
+): Promise<SiteIdentity> {
+  return identityOf(await readSeoSettingsDocument(ctx, locale), locale);
+}
+
 /**
  * What the SEO settings hold for structured data in `locale`, from one read:
  * the production address the language is served from (the environment's
@@ -330,19 +371,8 @@ export async function readStructuredDataSettings(
     document,
     mediaImages(ctx)
   );
-  const origin = await originIn(
-    productionAddressesOf(
-      checked<string[]>(
-        document.productionAddresses,
-        productionAddressesProblem
-      )
-    ),
-    locale
-  );
-  const siteName = trimmed(document.siteName);
   return {
-    ...(origin === undefined ? {} : { origin }),
-    ...(siteName === undefined ? {} : { siteName }),
+    ...(await identityOf(document, locale)),
     brand,
     types:
       checked<Record<string, StructuredDataTypeRule>>(

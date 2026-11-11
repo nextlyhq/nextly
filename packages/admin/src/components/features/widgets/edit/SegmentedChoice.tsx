@@ -69,11 +69,33 @@ const SIZES = {
     track: "h-7 gap-0.5 rounded-md p-0.5",
     radio: "h-full rounded-sm px-2 text-xs",
   },
-  // The drawer's: a 32px track, wrapping onto another line where its options do not fit. Its
-  // 12.5px text keeps four short options, such as Count's "Under the number", on one line.
+  // The drawer's: one bordered row of 30px options, parted by rules, the chosen one filled in
+  // the primary colour, as the drawer's other controls are bordered; wrapping onto another line
+  // where its options do not fit. Its 12.5px text keeps four short options, such as Count's
+  // "Under the number", on one line.
   drawer: {
-    track: "max-w-full flex-wrap gap-0.5 self-start rounded-md p-0.5",
-    radio: "h-7 rounded-sm px-2.5 text-[12.5px] tabular-nums",
+    track:
+      "max-w-full flex-wrap self-start overflow-hidden rounded-lg border border-control-border bg-card",
+    radio:
+      "h-[30px] border-l border-border px-2.5 text-[12.5px] tabular-nums first:border-l-0 focus-visible:ring-inset",
+  },
+} as const;
+
+/**
+ * How the chosen option and the others are drawn in each place: raised on the muted track in a
+ * card's header, filled in the primary colour in the drawer, so the choice holds 3:1 against the
+ * options beside it.
+ */
+const STATES = {
+  header: {
+    checked: "bg-background font-semibold text-foreground shadow-sm",
+    unchecked: "font-medium text-muted-foreground hover:text-foreground",
+  },
+  drawer: {
+    // Focus is drawn inside the option, in the colour of its text, so it shows on the fill.
+    checked:
+      "bg-primary font-medium text-primary-foreground focus-visible:ring-primary-foreground",
+    unchecked: "font-medium text-foreground hover:bg-accent",
   },
 } as const;
 
@@ -139,7 +161,11 @@ export function SegmentedChoice({
       {...rest}
       aria-disabled={disabled || undefined}
       title={title}
-      className={cn("inline-flex items-center bg-muted", classes.track)}
+      className={cn(
+        "inline-flex items-center",
+        size === "header" && "bg-muted",
+        classes.track
+      )}
     >
       {options.map((option, index) => {
         const checked = index === chosen;
@@ -164,9 +190,7 @@ export function SegmentedChoice({
               "disabled:cursor-not-allowed disabled:opacity-50",
               option.disabled === true && "line-through",
               classes.radio,
-              checked
-                ? "bg-background font-semibold text-foreground shadow-sm"
-                : "font-medium text-muted-foreground hover:text-foreground"
+              checked ? STATES[size].checked : STATES[size].unchecked
             )}
           >
             {option.label}
