@@ -81,9 +81,20 @@ describe("the ops module stays server-safe", () => {
       "./composition-actions",
       "./condition-ops",
       "./op-vocabulary",
+      "./prop-label",
       "./template-actions",
       "@nextlyhq/blocks-engine",
     ]);
+  });
+
+  it("reaches through the prop labels only the engine", () => {
+    // Re-exported by the entry so a server answer names props as the
+    // inspector does; bundled into it, so held to the same whole list.
+    const specifiers = [
+      ...importedSpecifiers(read("src/prop-label.ts"), "prop-label.ts"),
+    ];
+
+    expect(specifiers).toEqual(["@nextlyhq/blocks-engine"]);
   });
 
   it("reaches through the op vocabulary only the engine", () => {

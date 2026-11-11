@@ -106,3 +106,13 @@ export {
   templateActionSchema,
   type TemplateAction,
 } from "./template-actions";
+
+/**
+ * What an author calls a stored key and a block's prop, by the rule the
+ * inspector labels its controls with, for a server answer that names props
+ * as the editor does.
+ *
+ * @experimental Intended for first-party server readers such as the page
+ * builder's block listing; it may move once a shared labels module exists.
+ */
+export { fieldLabel, propLabel } from "./prop-label";
