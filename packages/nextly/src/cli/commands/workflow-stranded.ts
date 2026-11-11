@@ -48,18 +48,32 @@ import { installRegistryResolver } from "../utils/registry-resolver";
 import { commandRun } from "./command-run";
 
 /** What both commands run on: the database, and the configuration's workflows. */
-interface StrandedRun {
+interface StrandedRun extends StrandedOptions {
   adapter: DrizzleAdapter;
   workflows: Iterable<RegisteredWorkflow>;
-  /** Only this collection's documents. */
+}
+
+/** The scope both commands take: one collection's documents, or one Single's. */
+interface StrandedOptions {
   collection?: string;
+  single?: string;
+}
+
+/** The scope a command was given, with only the options it was given. */
+function scopeOf(options: StrandedOptions): StrandedOptions {
+  return {
+    ...(options.collection !== undefined
+      ? { collection: options.collection }
+      : {}),
+    ...(options.single !== undefined ? { single: options.single } : {}),
+  };
 }
 
 /** The stranded parts, ordered by document and part. */
 function runListStranded(run: StrandedRun): Promise<StrandedReviewState[]> {
   return strandedReviewStates(run.adapter, {
     workflows: run.workflows,
-    ...(run.collection !== undefined ? { collection: run.collection } : {}),
+    ...scopeOf(run),
   });
 }
 
@@ -73,7 +87,7 @@ function runMoveStranded(
 ) {
   return moveStrandedReviewStates(run.adapter, {
     workflows: run.workflows,
-    ...(run.collection !== undefined ? { collection: run.collection } : {}),
+    ...scopeOf(run),
     to: run.to,
     as: run.as,
     comment: run.comment,
@@ -87,7 +101,7 @@ function runMoveStranded(
  * other is judged at boot.
  */
 async function withStrandedRun<T>(
-  options: { config?: string; cwd?: string; collection?: string },
+  options: { config?: string; cwd?: string } & StrandedOptions,
   context: CommandContext,
   work: (run: StrandedRun) => Promise<T>
 ): Promise<T> {
@@ -114,9 +128,7 @@ async function withStrandedRun<T>(
     return await work({
       adapter: drizzleAdapter,
       workflows: registry.values(),
-      ...(options.collection !== undefined
-        ? { collection: options.collection }
-        : {}),
+      ...scopeOf(options),
     });
   } finally {
     await adapter.disconnect();
@@ -193,7 +205,7 @@ function strandedRow(state: StrandedReviewState): string[] {
 
 /** The action of `nextly workflow:stranded`, loaded when it runs. */
 export async function workflowStrandedAction(
-  cmdOptions: { collection?: string },
+  cmdOptions: StrandedOptions,
   cmd: Command
 ): Promise<void> {
   const { context, options } = commandRun(cmdOptions, cmd);
@@ -220,7 +232,7 @@ export async function workflowStrandedAction(
 
 /** The action of `nextly workflow:move-stranded`, loaded when it runs. */
 export async function workflowMoveStrandedAction(
-  cmdOptions: { to: string; as: string; comment: string; collection?: string },
+  cmdOptions: { to: string; as: string; comment: string } & StrandedOptions,
   cmd: Command
 ): Promise<void> {
   const { context, options } = commandRun(cmdOptions, cmd);

@@ -44,6 +44,7 @@ const MAX_MOVE_COMMENT_LENGTH = 4000;
 /** Why a move of stranded parts was refused, each the code of the error at its place. */
 const MOVE_STRANDED_ERROR_CODES = {
   notAttached: "WORKFLOW_NOT_ATTACHED",
+  oneScope: "WORKFLOW_ONE_SCOPE",
   unknownStage: "WORKFLOW_UNKNOWN_STAGE",
   stageAllowsPublish: "WORKFLOW_STAGE_ALLOWS_PUBLISH",
   personNotFound: "WORKFLOW_PERSON_NOT_FOUND",
@@ -113,40 +114,76 @@ function scopesOf(
   ];
 }
 
-/** The workflows to read, narrowed to the one attached to `collection` when it is named. */
+/** One collection's or one Single's documents, when either is named; every document otherwise. */
+interface StrandedEntity {
+  /** Only this collection's documents. */
+  collection?: string;
+  /** Only this Single's document. */
+  single?: string;
+}
+
+/**
+ * The workflows to read, narrowed to the one attached to the collection or Single `entity`
+ * names, when it names one. Naming both is refused: one move judges its stage by one scope.
+ */
 function workflowsFor(
   workflows: Iterable<RegisteredWorkflow>,
-  collection: string | undefined
+  entity: StrandedEntity
 ): RegisteredWorkflow[] {
   const all = [...workflows];
-  if (collection === undefined) return all;
+  if (entity.collection !== undefined && entity.single !== undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "single",
+          code: MOVE_STRANDED_ERROR_CODES.oneScope,
+          message: "Name a collection or a Single, not both.",
+        },
+      ],
+    });
+  }
+  const named =
+    entity.collection !== undefined
+      ? { kind: "collection" as const, slug: entity.collection }
+      : entity.single !== undefined
+        ? { kind: "single" as const, slug: entity.single }
+        : undefined;
+  if (named === undefined) return all;
   const attached = all.find(registered =>
-    registered.collections.includes(collection)
+    (named.kind === "collection"
+      ? registered.collections
+      : registered.singles
+    ).includes(named.slug)
   );
   if (!attached) {
     throw NextlyError.validation({
       errors: [
         {
-          path: "collection",
+          path: named.kind,
           code: MOVE_STRANDED_ERROR_CODES.notAttached,
-          message: `No workflow is attached to the collection "${collection}".`,
+          message: `No workflow is attached to the ${named.kind === "collection" ? "collection" : "Single"} "${named.slug}".`,
         },
       ],
     });
   }
-  return [{ ...attached, collections: [collection], singles: [] }];
+  return [
+    {
+      ...attached,
+      collections: named.kind === "collection" ? [named.slug] : [],
+      singles: named.kind === "single" ? [named.slug] : [],
+    },
+  ];
 }
 
-/** Which stranded parts to read: of these workflows' documents, or one collection's. */
-interface StrandedScope {
+/** Which stranded parts to read: of these workflows' documents, or one collection's or Single's. */
+interface StrandedScope extends StrandedEntity {
   /** The install's registered workflows by default. */
   workflows?: Iterable<RegisteredWorkflow>;
-  collection?: string;
 }
 
 /**
  * Every stranded part of the documents `scope.workflows` are attached to, or of one collection's
- * when `scope.collection` is named, ordered by document and part: one read per collection or
+ * or Single's when `scope.collection` or `scope.single` names it, ordered by document and part: one read per collection or
  * Single, on a transaction of its own, since the review states surface is a transaction's.
  *
  * @experimental
@@ -157,7 +194,7 @@ export function strandedReviewStates(
 ): Promise<StrandedReviewState[]> {
   const workflows = workflowsFor(
     scope.workflows ?? registeredWorkflows(),
-    scope.collection
+    scope
   );
   return adapter.transaction(tx => readStranded(tx, workflows));
 }
@@ -309,11 +346,9 @@ function checkTarget(workflows: readonly RegisteredWorkflow[], to: string) {
 }
 
 /** What a move of stranded parts names. */
-interface MoveStrandedInput {
+interface MoveStrandedInput extends StrandedEntity {
   /** The workflows whose stranded parts move: the install's registered ones by default. */
   workflows?: Iterable<RegisteredWorkflow>;
-  /** Only this collection's documents. */
-  collection?: string;
   /** The stage they move to: a stage of each workflow, one that does not allow publishing. */
   to: string;
   /** The email of the person the moves are recorded as: an active person. */
@@ -330,7 +365,7 @@ interface MovedStranded {
 }
 
 /**
- * Moves every stranded part (of one collection's documents, when named) to `to`, in one
+ * Moves every stranded part (of one collection's or Single's documents, when named) to `to`, in one
  * transaction of `adapter`, and records one `workflow-stranded-moved` event per document, as the
  * person `as` names, with the comment as its note and the stages the parts left. Each part leaves
  * its approval behind, since the stage it was given in is gone, and enters `to` as though from
@@ -346,7 +381,7 @@ export async function moveStrandedReviewStates(
 ): Promise<MovedStranded[]> {
   const workflows = workflowsFor(
     input.workflows ?? registeredWorkflows(),
-    input.collection
+    input
   );
   checkMoveComment(input.comment);
   const mover = await moverByEmail(adapter, input.as);

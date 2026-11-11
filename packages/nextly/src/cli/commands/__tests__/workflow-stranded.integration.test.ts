@@ -11,7 +11,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import { defineCollection, defineSingle, text } from "../../../config";
 import { defineWorkflow } from "../../../domains/workflows/define-workflow";
 import { workflowDefinitionHash } from "../../../domains/workflows/hash";
 import { registeredWorkflows } from "../../../domains/workflows/registry";
@@ -127,6 +127,20 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         ...drafts,
         workflow: memo,
         fields: [text({ name: "title" })],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: "home",
+        ...drafts,
+        workflow: desk,
+        fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
+        slug: "about",
+        ...drafts,
+        workflow: memo,
+        fields: [text({ name: "headline" })],
       }),
     ],
   });
@@ -268,6 +282,80 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(await stateOf(app(), partOf("pages", page, null))).toMatchObject({
         stage: "legal",
+      });
+    });
+
+    it("moves one Single's stranded parts where the workflows' stages differ, and only one scope at a time", async () => {
+      await boot(dialect);
+      await person(app(), "ann", []);
+      const singlePart = (slug: string) => ({
+        scopeKind: "single" as const,
+        scopeSlug: slug,
+        entryId: `${slug}-entry`,
+        part: null,
+      });
+      // Each Single's workflow is stranded in a stage of its own; `memo` has no `draft`.
+      await seedState(app(), singlePart("home"), "archive", {
+        definitionHash: HASH,
+      });
+      await seedState(app(), singlePart("about"), "retired", {
+        definitionHash: workflowDefinitionHash(memo),
+      });
+      const workflows = registeredWorkflows();
+      const move = (over: { single?: string; collection?: string }) =>
+        moveStrandedReviewStates(app().adapter, {
+          workflows,
+          to: "draft",
+          as: "ann@example.test",
+          comment: "Archive was retired.",
+          ...over,
+        });
+      const refusal = (attempt: Promise<unknown>) =>
+        attempt.then(
+          () => null,
+          (thrown: unknown) =>
+            (
+              thrown as {
+                publicData?: { errors?: { path: string; code: string }[] };
+              }
+            ).publicData?.errors?.[0]
+        );
+
+      // Unscoped, `memo` has no `draft`, so nothing moves.
+      expect(await refusal(move({}))).toMatchObject({
+        path: "to",
+        code: "WORKFLOW_UNKNOWN_STAGE",
+      });
+      // Named, only `home` is judged and moved.
+      const moved = await move({ single: "home" });
+      expect(moved.map(each => each.document.scopeSlug)).toEqual(["home"]);
+      expect(await stateOf(app(), singlePart("home"))).toMatchObject({
+        stage: "draft",
+        enteredBy: "ann",
+      });
+      expect(await stateOf(app(), singlePart("about"))).toMatchObject({
+        stage: "retired",
+      });
+      expect(
+        (
+          await strandedReviewStates(app().adapter, {
+            workflows,
+            single: "about",
+          })
+        ).map(state => state.scopeSlug)
+      ).toEqual(["about"]);
+
+      // A Single no workflow is attached to, and both scopes at once, are refused.
+      expect(await refusal(move({ single: "nowhere" }))).toMatchObject({
+        path: "single",
+        code: "WORKFLOW_NOT_ATTACHED",
+      });
+      expect(
+        await refusal(move({ single: "about", collection: "posts" }))
+      ).toMatchObject({ path: "single", code: "WORKFLOW_ONE_SCOPE" });
+      expect(await stateOf(app(), singlePart("about"))).toMatchObject({
+        stage: "retired",
+        revision: 1,
       });
     });
 

@@ -566,7 +566,26 @@ function startsOf(workflow: Workflow): Array<{ stage: string; why: string }> {
       stage,
       why: `\`removedStages.${removed}\``,
     })),
+    ...renameDestinations(workflow).map(({ index, stage }) => ({
+      stage,
+      why: `\`stages[${index}].renamedFrom\``,
+    })),
   ];
+}
+
+/**
+ * Each stage recording a name it was renamed from, with its place: a deploy moves the parts
+ * stored under that name into it, as it moves a removed stage's into the stage `removedStages`
+ * names, so each is judged as that destination is.
+ */
+function renameDestinations(
+  workflow: Workflow
+): Array<{ index: number; stage: string; from: string }> {
+  return workflow.stages.flatMap((stage, index) =>
+    stage.renamedFrom === undefined
+      ? []
+      : [{ index, stage: stage.name, from: stage.renamedFrom }]
+  );
 }
 
 /** Every rule that reads the definition whole, once its parts are sound. */
@@ -607,6 +626,14 @@ function checkWhole(problems: Problems, workflow: Workflow): void {
       code: "workflow_removed_stage_to_publishable",
       stage,
       why: "a removed stage's parts would become publishable without an approval",
+    })),
+    // A deploy moves the parts stored under the old name here as they are, approvals or none, so
+    // a part that was never approved would become publishable.
+    ...renameDestinations(workflow).map(({ index, stage, from }) => ({
+      path: `stages[${index}].renamedFrom`,
+      code: "workflow_renamed_stage_publishable",
+      stage,
+      why: `the parts of \`${from}\` would become publishable without an approval`,
     })),
   ];
   for (const { path, code, stage: name, why } of unapproved) {
