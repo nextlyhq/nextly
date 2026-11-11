@@ -8,13 +8,15 @@
  * cancels the releases it made. The linked-documents tests share one
  * collection, made once for them through the Schema Builder's own call, which
  * a production build refuses, so this runs on the dev server (`DEV_SPECS` in
- * `playwright.config.ts`).
+ * `playwright.config.ts`). The picker and its linked-documents screen are
+ * checked with axe, and the picker gives focus back when it closes.
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { STORAGE_STATE } from "../global-setup";
 
 import { gotoAdmin } from "./support/admin";
+import { expectNoAxeViolations } from "./support/axe";
 import { cancel, membersOf, ok, post } from "./support/releases-api";
 import { LOCK } from "./support/locks";
 import { removeMigrationsOf } from "./support/runtime-collection";
@@ -102,6 +104,39 @@ test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
 });
 
+test("holds focus while open, gives it back on Escape, and passes axe", async ({
+  page,
+}) => {
+  const stamp = stamped();
+  await post(page, `${stamp}-a`);
+  const releaseId = await emptyRelease(page, `Picker a11y ${stamp}`);
+  try {
+    await gotoAdmin(page, `/releases/${releaseId}`);
+    const opener = page.getByRole("button", { name: "Add documents" });
+    await opener.click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel("Find a document")).toBeVisible();
+    // Focus is inside the picker, not left on the page behind it.
+    await expect
+      .poll(() =>
+        dialog.evaluate(element => element.contains(document.activeElement))
+      )
+      .toBe(true);
+    await dialog.getByLabel("Find a document").fill(stamp);
+    await expect(
+      dialog.getByRole("checkbox", { name: `Release e2e ${stamp}-a` })
+    ).toBeVisible();
+    await expectNoAxeViolations(page, { include: '[role="dialog"]' });
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(opener).toBeFocused();
+  } finally {
+    await cancel(page, releaseId).catch(() => undefined);
+  }
+});
+
 test("adds three documents from two collections in one action", async ({
   page,
 }) => {
@@ -186,6 +221,7 @@ test.describe("the linked documents offered next", () => {
         })
       ).toBeVisible();
       await expect(dialog).toContainText(`Linked author ${stamp}`);
+      await expectNoAxeViolations(page, { include: '[role="dialog"]' });
       await dialog.getByRole("button", { name: "Add 1 document" }).click();
       await expect(dialog).toHaveCount(0);
 

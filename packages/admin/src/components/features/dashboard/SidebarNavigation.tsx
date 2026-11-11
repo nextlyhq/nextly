@@ -51,7 +51,8 @@ interface SidebarNavigationProps {
   hideLabels?: string[];
 }
 
-export function SidebarNavigationItem({
+// One entry of the sections below; drawn only by this file, so it is not exported.
+function SidebarNavigationItem({
   item,
   isActive,
   isCollapsed,
@@ -250,7 +251,11 @@ export function SidebarNavigation({
   const isCollapsed = state === "collapsed";
   const { capabilities, hasPermission } = useCurrentUserPermissions();
   const branding = useBranding();
-  const showBuilder = branding?.showBuilder ?? true;
+  // Only the server's explicit `true` offers the builder: it answers `false` in production, and
+  // an answer still in flight (or never received) says nothing, which is not a yes. This drawer
+  // does not wait for the answer the way the desktop rail does, so a default of "on" would offer
+  // a production admin the builder until the answer landed.
+  const showBuilder = branding?.showBuilder === true;
   const [search, setSearch] = React.useState("");
 
   const showCollectionsSection = capabilities.canViewCollections;

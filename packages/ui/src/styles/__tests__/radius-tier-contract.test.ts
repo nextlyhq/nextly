@@ -80,7 +80,9 @@ const COMPONENT_CLAIMS: { component: string; classes: string[] }[] = [
   // Dialog: lg panel, md close icon button.
   { component: "dialog", classes: ["rounded-lg", "rounded-md"] },
   // rounded-sm adornments. Checkbox is here, not in the control tier.
-  { component: "badge", classes: ["rounded-sm"] },
+  // The chip is sm; its status dot is a circle, which the scale leaves out
+  // (theme.css and the authoring doc name status dots as rounded-full).
+  { component: "badge", classes: ["rounded-full", "rounded-sm"] },
   { component: "checkbox", classes: ["rounded-sm"] },
   { component: "dropdown-menu", classes: ["rounded-lg", "rounded-sm"] },
   // Deliberately outside the scale, each with a stated reason in the source.

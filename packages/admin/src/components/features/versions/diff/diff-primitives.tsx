@@ -120,13 +120,13 @@ export function TextSegmentSpan({
     return (
       // Underlined as well as coloured, so an addition reads as one without
       // telling colours apart, as a removal reads by its strike.
-      <ins className="rounded-sm px-0.5 underline decoration-1 underline-offset-2 bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100">
+      <ins className="rounded-sm px-0.5 underline decoration-1 underline-offset-2 bg-success-surface text-success-text">
         {segment.text}
       </ins>
     );
   }
   return (
-    <del className="rounded-sm px-0.5 bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100">
+    <del className="rounded-sm px-0.5 bg-danger-surface text-danger-text">
       {segment.text}
     </del>
   );

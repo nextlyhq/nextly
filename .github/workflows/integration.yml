@@ -19,15 +19,15 @@ name: Integration
 # more skipped the changes that went on to break `main`.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   # The merge queue tests each pull request again on the latest `main`, and
   # merges it only if the required checks pass there too.
   merge_group:
     types: [checks_requested]
-  # main-catch-up.yml starts a run on main's newest commit when no run has
-  # tested it; a dispatched run tests everything (`scripts/change-scope.mjs`
+  # main-catch-up.yml starts a run on the newest commit of `main` and of `dev`
+  # when no run has tested it; a dispatched run tests everything (`scripts/change-scope.mjs`
   # has no narrower rule for it).
   workflow_dispatch:
 
@@ -54,11 +54,11 @@ permissions:
 # drifts back into firing on variance.
 env:
   INTEGRATION_SUITE_BUDGET: 55m
-  # Turborepo's shared remote cache, written only by `main`'s pushes and read
-  # everywhere else, the merge queue included: the reasons are beside the same
-  # block in ci.yml.
+  # Turborepo's shared remote cache, written only by pushes to `main` and
+  # `dev`, and read everywhere else, the merge queue included: the reasons are
+  # beside the same block in ci.yml.
   TURBO_TEAM: ${{ vars.TURBO_TEAM }}
-  TURBO_CACHE: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'local:rw,remote:rw' || 'local:rw,remote:r' }}
+  TURBO_CACHE: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) && 'local:rw,remote:rw' || 'local:rw,remote:r' }}
 
 # Keyed per commit on `main` for the same reason as the CI workflow: a shared
 # `github.ref` group cancelled the previous commit's run on every merge, and
@@ -130,6 +130,8 @@ jobs:
             Integration (mysql) shard (1)
             Integration (mysql) shard (2)
             Integration (mysql) shard (3)
+            Integration (mysql) shard (4)
+            Integration (mysql) shard (5)
             Integration (sqlite) shard (1)
             Integration (sqlite) shard (2)
           token: ${{ github.token }}
@@ -172,10 +174,10 @@ jobs:
     # suite; only a cancelled workflow stays cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
-    # The remote cache's credentials, unlocked only on `main` and in the
-    # merge queue (see `env:` at the top of this file).
+    # The remote cache's credentials, unlocked only for a push to `main` or
+    # `dev` (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
@@ -327,7 +329,7 @@ jobs:
     # Not a required check: `Integration (mysql)` below is, and it passes
     # only when every shard did. GitHub appends the matrix value to a name
     # with no expression in it, so the shards report as `... shard (1)` to
-    # `... shard (3)`, and a skipped run as one `... shard`.
+    # `... shard (5)`, and a skipped run as one `... shard`.
     name: Integration (mysql) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
@@ -338,10 +340,10 @@ jobs:
     # suite; only a cancelled workflow stays cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
-    # The remote cache's credentials, unlocked only on `main` and in the
-    # merge queue (see `env:` at the top of this file).
+    # The remote cache's credentials, unlocked only for a push to `main` or
+    # `dev` (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
@@ -349,12 +351,14 @@ jobs:
     strategy:
       # Each shard's verdict is its own, as on the postgres leg.
       fail-fast: false
-      # Three, because two are not enough here: on a database per worker, the
-      # slowest shard of three still took 27 to 34 minutes, so two would project
-      # to about 45, past the quarter of INTEGRATION_SUITE_BUDGET every leg
+      # Five, because three are no longer enough: the leg runs the nextly suite
+      # beside the plugin suites on one runner and one MySQL server, and each
+      # shard of three grew to about 55 minutes, the whole of
+      # INTEGRATION_SUITE_BUDGET, so a slow runner stopped every shard short of
+      # its last files. Five project to about 33, inside the quarter every leg
       # keeps spare (the rule is beside the sqlite leg's matrix, below).
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
     # The same backstop as the postgres leg, for the same reasons.
     timeout-minutes: 75
 
@@ -545,10 +549,10 @@ jobs:
     # suite; only a cancelled workflow stays cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
-    # The remote cache's credentials, unlocked only on `main` and in the
-    # merge queue (see `env:` at the top of this file).
+    # The remote cache's credentials, unlocked only for a push to `main` or
+    # `dev` (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}

@@ -10,7 +10,7 @@
  *
  * @module runtime/routing/resolve-content
  */
-import { requireNextly } from "../../direct-api/nextly";
+import { requireNextlyOnceStarted } from "../../direct-api/nextly";
 import type { Nextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
@@ -36,7 +36,7 @@ export type NextlyContentReader = Pick<Nextly, "find" | "findByID">;
 /** Options for {@link resolveContent}. */
 interface ResolveContentOptionsBase {
   /**
-   * A booted Nextly instance. Defaults to the runtime singleton (`requireNextly()`),
+   * A booted Nextly instance. Defaults to the runtime singleton (`requireNextly()`, once any start in flight has finished),
    * which requires services to be registered — pass one explicitly (e.g. the
    * value from `await getNextly({ config })` from `nextly`) from a frontend read
    * path that boots
@@ -274,7 +274,9 @@ export async function resolveContent(
   slug: string,
   options: ResolveContentOptions = {}
 ): Promise<ContentEntry | null> {
-  const nextly = options.nextly ?? requireNextly();
+  // Waits for a start in flight, as the start-up hook no longer holds requests
+  // until Nextly has started.
+  const nextly = options.nextly ?? (await requireNextlyOnceStarted());
   const slugField = options.slugField ?? "slug";
   const draft = options.draft ?? false;
   const grantedEntryId = options.entryId;

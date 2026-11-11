@@ -20,11 +20,41 @@ import { ownershipFromConfig } from "../domains/email/template-ownership";
 import { provisionUserFieldStorage } from "../domains/users/services/provision-user-field-storage";
 
 /**
+ * Sync the code-defined user fields, merge them with the admin's, and make sure
+ * user_ext has a column for each.
+ *
+ * Part of the start, not of the work it leaves running: until the merged
+ * fields are loaded, the user services see the code's fields alone, so a
+ * request served before then reads a person without the admin's fields and an
+ * update to one is dropped while reporting success. `nextly migrate` runs the
+ * same step (`provisionUserFieldStorage`); here it also keeps a development
+ * database current as fields change. Never throws: nothing here may stop the
+ * app starting.
+ */
+export async function provisionUserFieldsAtStart(): Promise<void> {
+  try {
+    await provisionUserFieldStorage({
+      codeFields: getService("config").users?.fields ?? [],
+      fieldDefService: getService("userFieldDefinitionService"),
+      userExtSchemaService: getService("userExtSchemaService"),
+      db: getService("adapter").getDrizzle(),
+      // A sync that fails (its table not migrated yet) doesn't stop the table
+      // being made for the fields already recorded, and nothing here may stop
+      // the app starting.
+      bestEffort: true,
+    });
+  } catch {
+    // Silently skip — the user services may not be registered
+  }
+}
+
+/**
  * Run idempotent post-initialization tasks after services are registered.
  *
  * - Seeds built-in email templates (welcome, password-reset, email-verification, layout)
- * - Syncs code-defined user fields into `user_field_definitions` (when service exists)
- * - Loads merged fields (code + UI) into `UserExtSchemaService` for consumers
+ *
+ * The user fields are not here: the start waits for them
+ * (`provisionUserFieldsAtStart`), for the reason given there.
  *
  * Permission and role seeding is not here: the boot waits for it
  * (`seedPermissionsAndRolePresets`), because a role's permissions must not be
@@ -47,25 +77,6 @@ export async function runPostInitTasks(): Promise<void> {
   } catch {
     // Silently skip — email services may not be registered,
     // or the email_templates table may not exist yet (migrations not run)
-  }
-
-  // Sync the code-defined user fields, merge them with the admin's, and make
-  // sure user_ext has a column for each. `nextly migrate` runs the same step
-  // (`provisionUserFieldStorage`); here it keeps a development database current
-  // as fields change.
-  try {
-    await provisionUserFieldStorage({
-      codeFields: getService("config").users?.fields ?? [],
-      fieldDefService: getService("userFieldDefinitionService"),
-      userExtSchemaService: getService("userExtSchemaService"),
-      db: getService("adapter").getDrizzle(),
-      // A sync that fails (its table not migrated yet) doesn't stop the table
-      // being made for the fields already recorded, and nothing here may stop
-      // the app starting.
-      bestEffort: true,
-    });
-  } catch {
-    // Silently skip — the user services may not be registered
   }
 
   // Rewrite timestamps an older SQLite writer stored as text. Runs once and
@@ -98,24 +109,28 @@ export async function runPostInitTasks(): Promise<void> {
 
   // Name each configured translated unique field whose per-language index is not there yet. The
   // boot never creates it, so until a migration or `db:sync` does, the rule is not enforced.
-  try {
-    const { storedLocalizableEntities, warnAboutUnindexedTranslatedUnique } =
-      await import("../domains/i18n/runtime/translated-unique-boot-check");
-    const logger = getService("logger");
-    await warnAboutUnindexedTranslatedUnique(
-      getService("adapter"),
-      getService("config"),
-      message => logger.warn(message),
-      // The Schema Builder's entities too, which no configuration names.
-      await storedLocalizableEntities({
-        collections: getService("collectionRegistryService"),
-        singles: getService("singleRegistryService"),
-        fieldGroups: getService("fieldGroupRegistryService"),
-      })
-    );
-  } catch {
-    // Silently skip — the adapter may not be registered, or the tables may not exist yet. A
-    // diagnostic must never be the reason a server fails to start.
+  // Development starts only: it reads each such companion table's indexes, and a production
+  // start compares nothing with the live schema; there `nextly migrate:create` writes the index.
+  if (process.env.NODE_ENV === "development") {
+    try {
+      const { storedLocalizableEntities, warnAboutUnindexedTranslatedUnique } =
+        await import("../domains/i18n/runtime/translated-unique-boot-check");
+      const logger = getService("logger");
+      await warnAboutUnindexedTranslatedUnique(
+        getService("adapter"),
+        getService("config"),
+        message => logger.warn(message),
+        // The Schema Builder's entities too, which no configuration names.
+        await storedLocalizableEntities({
+          collections: getService("collectionRegistryService"),
+          singles: getService("singleRegistryService"),
+          fieldGroups: getService("fieldGroupRegistryService"),
+        })
+      );
+    } catch {
+      // Silently skip — the adapter may not be registered, or the tables may not exist yet. A
+      // diagnostic must never be the reason a server fails to start.
+    }
   }
 
   // Say so when a stored provider needs a package this install does not have.

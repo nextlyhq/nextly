@@ -14,7 +14,7 @@ import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
 import {
   createRuntimeCollection,
-  removeMigrationsOf,
+  removeRuntimeCollection,
 } from "./support/runtime-collection";
 
 // Creating a collection changes the schema and the dashboard's cards, as for the
@@ -58,15 +58,15 @@ test("adds three fields between two existing ones, in order", async ({
     });
 
     // "+" between the two rows adds before the lower one; "Add and add
-    // another" keeps each next field after the one before it.
-    await page
-      .getByRole("button", { name: "Add a field before Last field" })
-      .click();
+    // another" keeps each next field after the one before it. The "+" is for a
+    // pointer and stays out of the accessibility tree, so it is found by its
+    // title; a keyboard reaches the same place with "/" on the row above.
+    await page.getByTitle("Add a field before Last field").click();
     await addField(page, "One", "Add and add another");
     await addField(page, "Two", "Add and add another");
     await addField(page, "Three", "Add field");
-    // The last add opens the new field for editing; close it.
-    await page.keyboard.press("Escape");
+    // The last add opens the new field in the settings panel; close it.
+    await page.getByRole("button", { name: "Close field settings" }).click();
 
     expect(await fieldOrder(page)).toEqual([
       "first_field",
@@ -91,6 +91,9 @@ test("adds three fields between two existing ones, in order", async ({
       "last_field",
     ]);
   } finally {
-    await removeMigrationsOf(slug);
+    // The collection only. Its migration files stay: the server's ledger
+    // records them as applied, and deleting them while it runs makes it
+    // refuse every later schema change, in the specs after this one too.
+    await removeRuntimeCollection(page.request, slug);
   }
 });

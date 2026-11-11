@@ -10,7 +10,7 @@
  * - build output in an idle checkout, as its `turbo.jsonc` declares it, plus
  *   turbo's logs and the browser suites' reports, which the next build or run
  *   writes again;
- * - a stale checkout whose work is all on a remote or already in `main`, and
+ * - a stale checkout whose work is all on a remote or already in `dev`, and
  *   which holds no ignored file that might be someone's work.
  *
  * 🔴 Each is reported and nothing is removed until `--apply`. Removing is the
@@ -47,6 +47,7 @@ import { connect } from "node:net";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { heldRecords } from "./bounded.mjs";
+import { INTEGRATION_BASE } from "./integration-branch.mjs";
 import { parseJsonc } from "./jsonc.mjs";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -54,8 +55,11 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 /** How long each kind must have been left alone before it is offered. */
 export const IDLE_DAYS = { builds: 3, stale: 7 };
 
-/** The ref a stale checkout's work must already be in, when it is on no remote. */
-const MAIN_REF = "origin/main";
+/**
+ * The ref a stale checkout's work must already be in, when it is on no remote:
+ * the branch pull requests merge into, which holds merged work before `main`.
+ */
+const MAIN_REF = INTEGRATION_BASE;
 
 /**
  * What a checkout's builds and tools write and write again, so a sweep may
@@ -458,7 +462,7 @@ function expand(walk, entry, info) {
  * Why a checkout is not stale, or an empty list when it is: no uncommitted or
  * untracked change, and no commit that is on no remote and not already in
  * `mainRef`. "Already in" is content, not ancestry: a squash merge leaves the
- * branch's commits unmerged to git while `main` holds what they changed.
+ * branch's commits unmerged to git while `mainRef` holds what they changed.
  */
 export function staleReasons(checkout, mainRef = MAIN_REF) {
   const state = gitState(checkout);
@@ -497,7 +501,7 @@ function aheadReason(checkout, { ahead }, mainRef) {
  * that wrote a merged tree would leave an object behind on a report run. Both
  * lists are read NUL-separated, since line output C-quotes a name with a
  * non-ASCII byte, a tab or a newline, and a quoted name matches no real path.
- * A path `main` has changed again since reads as different, which keeps the
+ * A path `mainRef` has changed again since reads as different, which keeps the
  * checkout: the safe direction.
  */
 function contentInMain(checkout, mainRef) {

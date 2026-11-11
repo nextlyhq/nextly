@@ -9,7 +9,7 @@ import { posix, win32 } from "node:path";
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 
-import { DRY_RUN_HELP, dryRunLines, shownPath, withDryRun } from "../dry-run";
+import { DRY_RUN_HELP, dryRunLines, projectPath, withDryRun } from "../dry-run";
 
 describe("dryRunLines", () => {
   it("says what each change would be, then that nothing was changed", () => {
@@ -52,37 +52,6 @@ describe("dryRunLines", () => {
   });
 });
 
-describe("shownPath", () => {
-  // Windows' own path functions, on whatever machine runs the suite: the
-  // project and the file as a Windows run resolves them.
-  it("names a file with forward slashes from a Windows path", () => {
-    expect(
-      shownPath(
-        "C:\\Users\\you\\app",
-        "C:\\Users\\you\\app\\src\\types\\nextly-types.ts",
-        win32
-      )
-    ).toBe("src/types/nextly-types.ts");
-    expect(
-      shownPath(
-        "C:\\Users\\you\\app",
-        "C:\\Users\\you\\app\\migrations\\meta\\0001_init.snapshot.json",
-        win32
-      )
-    ).toBe("migrations/meta/0001_init.snapshot.json");
-  });
-
-  it("names a file the same way from a POSIX path", () => {
-    expect(
-      shownPath(
-        "/home/you/app",
-        "/home/you/app/src/types/nextly-types.ts",
-        posix
-      )
-    ).toBe("src/types/nextly-types.ts");
-  });
-});
-
 describe("withDryRun", () => {
   it("adds --dry-run with the one help line every command shares", () => {
     const option = withDryRun(new Command("x")).options.find(
@@ -98,5 +67,21 @@ describe("withDryRun", () => {
     expect(command.opts<{ dryRun?: boolean }>().dryRun).toBeFalsy();
     command.parse(["--dry-run"], { from: "user" });
     expect(command.opts<{ dryRun?: boolean }>().dryRun).toBe(true);
+  });
+});
+
+describe("projectPath", () => {
+  // What a dry run names, read on any machine: the path from the project
+  // folder, with `/` between its parts, whichever separator the machine uses.
+  it("names a file from the project folder with forward slashes on Windows", () => {
+    expect(
+      projectPath("C:\\site", "C:\\site\\migrations\\0001_init.sql", win32)
+    ).toBe("migrations/0001_init.sql");
+  });
+
+  it("names it the same way on POSIX", () => {
+    expect(projectPath("/site", "/site/src/types/nextly-types.ts", posix)).toBe(
+      "src/types/nextly-types.ts"
+    );
   });
 });

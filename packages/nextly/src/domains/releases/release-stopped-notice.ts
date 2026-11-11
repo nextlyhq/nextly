@@ -12,7 +12,6 @@
  * Registered by the releases feature's registration (`register-releases`).
  *
  * @module domains/releases/release-stopped-notice
- * @experimental Until the notices feature is complete.
  */
 import { z } from "zod";
 
@@ -36,10 +35,8 @@ const stoppedData = z.object({
   timezone: z.string().nullable().optional(),
 });
 
-/** @experimental */
 export type ReleaseStoppedNoticeData = z.infer<typeof stoppedData>;
 
-/** @experimental */
 export const RELEASE_STOPPED_NOTICE =
   defineNoticeKind<ReleaseStoppedNoticeData>({
     key: "releases.stopped",

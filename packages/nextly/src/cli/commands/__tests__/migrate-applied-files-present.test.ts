@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { NextlyError } from "../../../errors/nextly-error";
+import { CliError } from "../../errors/cli-error";
 import {
   assertAppliedFilesPresent,
   assertAppliedFilesUnchanged,
@@ -132,6 +133,16 @@ describe("applied app migrations the folder lacks", () => {
         new NextlyError({ code: "INTERNAL_ERROR", publicMessage: "boom" })
       )
     ).toBeUndefined();
+  });
+
+  it("reports an old Builder file that gained a snapshot as a dry run's refusal", () => {
+    // Raised by the same history check: a dry run reports it and exits 0, as for any other refusal.
+    const refusal = new CliError("OLD_BUILDER_FILE_SNAPSHOT_ADDED", {
+      what: "A snapshot now stands beside an old Schema Builder file.",
+      why: "A file was marked as an old Builder file without one.",
+      next: "Remove the snapshot.",
+    });
+    expect(historyRefusalOf(refusal)).toBe(refusal.publicMessage);
   });
 
   it("holds a removal to the applied outcome it was recorded for, not to the filename", async () => {

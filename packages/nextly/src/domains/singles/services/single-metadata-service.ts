@@ -58,6 +58,7 @@ import type {
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import { assertAddressAllowed } from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
+import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { appLocalization } from "../../i18n/configured-locales";
@@ -73,7 +74,11 @@ import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translat
 import {
   publishesPerLanguage,
   storesPerLanguage,
+  translationLayoutChange,
+  type TranslationLayoutChange,
 } from "../../i18n/per-language-storage";
+import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
+import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
@@ -193,6 +198,12 @@ export interface UpdateSingleSchemaInput {
    * would turn the repair into a no-op.
    */
   statusRequested: boolean;
+  /**
+   * Where the Single's translatable values live and how each language publishes, before and after
+   * this save (`translationLayoutChange`), derived inside the exclusion. Absent in the caller's
+   * input. With it, `isLocalized`/`wasLocalized` above say where the values are stored.
+   */
+  layout?: TranslationLayoutChange;
 }
 
 /** The updated row, and the status the caller reports back to the user. */
@@ -325,11 +336,15 @@ function mayIssueSchemaDdl(input: UpdateSingleSchemaInput): boolean {
 }
 
 function requestsSchemaWork(input: UpdateSingleSchemaInput): boolean {
-  const { fields, isLocalized, wasLocalized, statusRequested } = input;
+  const { fields, isLocalized, wasLocalized, statusRequested, layout } = input;
   if (fields !== undefined) return true;
   return (
     isLocalized !== wasLocalized ||
-    (statusRequested && (isLocalized || wasLocalized))
+    (statusRequested && (isLocalized || wasLocalized)) ||
+    // A translation toggle under the setting stores nothing elsewhere, but changes how each
+    // language publishes.
+    (layout !== undefined &&
+      layout.isPublishedPerLanguage !== layout.wasPublishedPerLanguage)
   );
 }
 
@@ -591,6 +606,18 @@ export class SingleMetadataService {
     }
     const tableName = current?.tableName ?? callerTableName;
 
+    // Before anything is dropped, inside the same exclusion as the drops: a
+    // declared key into its tables or another owner's element on them refuses
+    // the delete by name, and so does either that cannot be read. Asked of a
+    // Single whose row is already gone too, since its tables may remain.
+    if (tableName) {
+      await this.registry.assertNothingDependsOn({
+        slug,
+        tableName,
+        fields: current?.fields ?? [],
+      });
+    }
+
     const adapter = this.adapter;
     if (tableName && adapter) {
       await this.dropSingleStorage(slug, tableName, adapter);
@@ -735,18 +762,44 @@ export class SingleMetadataService {
     // the companion is created without `_status` while the row ends up saying it has one.
     const wasLocalized = current.localized === true;
     const wasStatus = current.status === true;
+    const hasStatus = args.statusRequested ? args.hasStatus : wasStatus;
+    // Where the values live and how each language publishes, before and after: under
+    // `experimental.perLanguageStorage` a translation toggle moves no value, and only gives each
+    // language a publish state of its own, or takes it away. Every step below reads storage.
+    const layout = translationLayoutChange({
+      wasLocalized,
+      isLocalized: args.localizedRequested ? args.isLocalized : wasLocalized,
+      wasStatus,
+      hasStatus,
+    });
     const input: UpdateSingleSchemaInput = {
       ...args,
       existing: current,
-      wasLocalized,
+      wasLocalized: layout.wasStored,
       wasStatus,
-      isLocalized: args.localizedRequested ? args.isLocalized : wasLocalized,
-      hasStatus: args.statusRequested ? args.hasStatus : wasStatus,
+      isLocalized: layout.isStored,
+      hasStatus,
+      layout,
     };
+
+    // A precondition, so before anything changes: turning translation off drops each language's
+    // own publish state, which loses nothing only where it is the entry's.
+    if (layout.languagesMustAgreeWithEntry && this.adapter) {
+      await assertLanguageStatesAgreeWithEntry(this.adapter, {
+        kind: "single",
+        slug: args.slug,
+        tableName: current.tableName,
+      });
+    }
 
     // Asked here, from the flags this exclusion just re-derived, because the caller's reading can
     // be stale: a concurrent save that turned translation on would make this edit a field leaving
     // translation that the caller never saw as one.
+    // A field renamed onto a column that is already there is refused here, before anything
+    // changes: the archive write of a field leaving translation, just below, is the first write a
+    // save makes.
+    await this.refuseRenameOntoTakenColumn(input);
+
     await this.assertFieldsMayLeaveTranslation(input);
 
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
@@ -813,6 +866,39 @@ export class SingleMetadataService {
    * leaves nothing to update, and a Single that became `locked` in the same window is code-first
    * now, so applying a UI edit to it would write a row the config is about to contradict.
    */
+  /**
+   * Refuse the field this save renames when the column it moves to is already there, naming the
+   * table and both columns, before anything changes.
+   *
+   * The renamed field is the one the main table's rule (`detectFieldRename`) finds on the whole
+   * field lists, as the plan finds it. Its values move from the table that holds it before the
+   * save to the one that holds it after: the companion for a translated field, the main table
+   * otherwise (`isFieldLocalized`), so a field leaving or joining translation as it is renamed is
+   * judged on both tables. The columns are the ones each spelling names (`renamedColumns`), which
+   * a companion column mirrors. A rename an earlier stopped save already made passes.
+   */
+  private async refuseRenameOntoTakenColumn(
+    input: UpdateSingleSchemaInput
+  ): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter || input.fields === undefined) return;
+    await refuseRenamedFieldOntoTakenColumn(
+      adapter,
+      {
+        previousFields: (input.existing.fields ??
+          []) as unknown as FieldDefinition[],
+        fields: input.fields,
+        mainTable: input.existing.tableName,
+        wasLocalized: input.wasLocalized,
+        isLocalized: input.isLocalized,
+        dialect: adapter.getCapabilities().dialect,
+        // A Single's table is built by the collection's generator.
+        builtBy: "collection",
+      },
+      { single: input.slug }
+    );
+  }
+
   /**
    * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`), for a
    * save whose flags were derived inside the exclusion. Nothing is asked when the save sends no
@@ -973,6 +1059,8 @@ export class SingleMetadataService {
           isSingle: true,
           hasStatus,
           localized: isLocalized,
+          // A relationship to a renamed collection keys the table it kept.
+          targetTables: await collectionTablesBySlug(adapter, fields),
         }),
         fields,
         previousFields,
@@ -1067,6 +1155,11 @@ export class SingleMetadataService {
           columnsContainingNull: liveFacts.columnsContainingNull,
           columnsAbsentFromTable: liveFacts.columnsAbsentFromTable,
           liveColumnTypes: liveFacts.liveColumnTypes,
+          // A key this save adds or changes references the table a renamed target kept.
+          targetTables: await collectionTablesBySlug(adapter, [
+            ...previousFields,
+            ...fields,
+          ]),
           ...groupMigration,
           onSqliteNullability: (column, required) =>
             sqliteNullability.set(column, required),
@@ -1565,8 +1658,9 @@ export class SingleMetadataService {
       newFields: plan.fields,
       wasLocalized: input.wasLocalized,
       isLocalized: input.isLocalized,
-      wasStatus: input.wasStatus,
-      status: input.hasStatus,
+      // The companion's own `_status`, before and after.
+      wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
+      status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
     });
   }
 
@@ -1832,8 +1926,11 @@ export class SingleMetadataService {
           newFields: plan.fields,
           localized: input.isLocalized,
           wasLocalized: input.wasLocalized,
-          status: input.hasStatus,
-          wasStatus: input.wasStatus,
+          // The companion's own `_status`, before and after this save.
+          status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
+          wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
+          statusFromEntryInEveryLanguage:
+            input.layout?.statusFromEntryInEveryLanguage,
           adapter,
           joinedBefore,
           // One rename rule for every column: the main table's decides a translated field's too.
@@ -2186,7 +2283,16 @@ export class SingleMetadataService {
       // the companion `<table>_locales`, provisioned separately. `isSingle` skips the slug column
       // and adds `updated_at`; `hasStatus` adds the column the runtime schema expects when the user
       // opted into Draft/Published.
-      { isSingle: true, hasStatus, localized: isLocalized }
+      {
+        isSingle: true,
+        hasStatus,
+        localized: isLocalized,
+        // A relationship to a renamed collection keys the table it kept. With no adapter the
+        // statements are never run, and each target's table is spelled from its slug.
+        targetTables: this.adapter
+          ? await collectionTablesBySlug(this.adapter, fields)
+          : undefined,
+      }
     );
 
     return { migrationSQL, fields, isLocalized, hasStatus };

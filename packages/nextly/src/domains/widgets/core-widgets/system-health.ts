@@ -95,7 +95,7 @@ export function provideSystemHealth(read: SystemHealthRead): void {
   provided.read = read;
 }
 
-/** A healthy install, for the preview page. */
+/** A healthy install, for the preview board. */
 const HEALTHY: SystemHealthData = {
   version: "0.0.2-alpha.66",
   migrations: { status: "ok", failed: 0, pending: 0 },
@@ -103,7 +103,7 @@ const HEALTHY: SystemHealthData = {
   storage: { status: "ok" },
 };
 
-/** An install with a problem on every line, for the preview page. */
+/** An install with a problem on every line, for the preview board. */
 const WITH_PROBLEMS: SystemHealthData = {
   version: "0.0.2-alpha.66",
   migrations: { status: "failed", failed: 1, pending: 0 },
@@ -118,6 +118,8 @@ const WITH_PROBLEMS: SystemHealthData = {
 
 export const systemHealthWidget = defineWidget({
   id: CORE_WIDGET_ID.systemHealth,
+  // Drawn beside its name in the add panel.
+  icon: "Shield",
   title: "System health",
   description:
     "The Nextly version, and whether migrations and storage are working. For super-admins.",

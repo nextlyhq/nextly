@@ -9,6 +9,8 @@ What the command was agreed to do changed before it could act on it, so it chang
 
 A command that deletes or moves data lists what it will do and asks you to agree first: `nextly prune` lists the tables it would drop, and `nextly db:sync --promote` and `--demote` list what they would change. Once you agree, the command takes the schema lock and reads the database again. If what it would do now differs from what you agreed to (another process changed the database in between), it stops without changing anything, because your agreement was for the earlier list and no other.
 
+`nextly migrate` stops the same way when a migration file is edited or added after the run judged what each file deletes and before it ran them: that file's deletions were never judged, so none of the app's migration files run.
+
 ## Fix
 
 Run the command again to see what it would do now, and agree to that list if it is what you want.

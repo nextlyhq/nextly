@@ -28,6 +28,7 @@ import {
   appLocalization,
   configuredLocales,
 } from "../domains/i18n/configured-locales";
+import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import {
   resolveSingleDocumentId,
   singleDocumentEditable,
@@ -40,7 +41,6 @@ import {
   fieldsCarryingReadRules,
   nestedWithheldPaths,
 } from "../domains/versions/component-read-access";
-import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
 import { HistoryDividers } from "../domains/versions/history-dividers";
@@ -63,7 +63,6 @@ import {
 } from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
 import { rethrowIfRuleCouldNotRun } from "../errors/rule-could-not-run";
-import { getCachedNextly } from "../init";
 import type {
   ResolvedVersionsConfig,
   VersionScopeKind,
@@ -93,6 +92,9 @@ export async function requireRouteVersionReadAccess(
   slug: string,
   entryId: string
 ): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
+  // The boot entry is loaded when a history is asked for, so the dispatchers
+  // that import this module's helpers do not load the whole boot with them.
+  const { getCachedNextly } = await import("../init");
   await getCachedNextly();
 
   // A history names one document: a caller who may not read it is answered
@@ -301,7 +303,9 @@ export async function historyLanguagesOf(
 ): Promise<ReadonlySet<string>> {
   const configured = configuredLocales() ?? new Set<string>();
   const entity = await registryEntityOf(scopeKind, slug);
-  if ((entity as { localized?: boolean } | null)?.localized === true) {
+  // A save of an entity kept per language is recorded in its language: a translated one, or any
+  // under `experimental.perLanguageStorage`.
+  if (entity !== null && storesPerLanguage(entity)) {
     return configured;
   }
   const defaultLocale = appLocalization()?.defaultLocale ?? null;
@@ -1460,6 +1464,9 @@ export async function diffDocumentVersions(args: {
   const lookupKind = args.scopeKind === "single" ? "single" : "collection";
   const fields = await resolveEnrichedFields(lookupKind, args.slug);
 
+  // Loaded here, by the one request that compares two versions: no other
+  // route needs the diff engine.
+  const { computeVersionDiff } = await import("../domains/versions/diff");
   const body = computeVersionDiff(
     snapshotObject(fromRow.snapshot),
     snapshotObject(toRow.snapshot),

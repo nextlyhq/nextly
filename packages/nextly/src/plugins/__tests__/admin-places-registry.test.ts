@@ -480,3 +480,40 @@ describe("in the CLI", () => {
     }
   );
 });
+
+describe("core's built-in names", () => {
+  it("every part a place keeps is one of its built-ins of that kind", () => {
+    // A name kept but not drawn would refuse a replacement of nothing; the
+    // list can only narrow what the page draws.
+    for (const [place, entry] of Object.entries(CORE_ADMIN_PLACES)) {
+      if (!("notReplaceable" in entry)) continue;
+      const builtIns = entry.builtIns as Record<string, readonly string[]>;
+      for (const [kind, names] of Object.entries(
+        entry.notReplaceable as Record<string, readonly string[]>
+      )) {
+        for (const name of names) {
+          expect(builtIns[kind] ?? [], `${place} ${kind} ${name}`).toContain(
+            name
+          );
+        }
+      }
+    }
+  });
+
+  it("every built-in name is unique within its place and spelled as a name", () => {
+    // Lower-case words joined by single dashes, and never a dot: every
+    // contribution id holds one, so a built-in name can never collide with
+    // one. Unique within the place across its kinds, so `before`, `after`
+    // and `replaces` each name exactly one part of the page.
+    const NAME = /^[a-z]+(-[a-z]+)*$/;
+    for (const [place, { builtIns }] of Object.entries(CORE_ADMIN_PLACES)) {
+      // Read as the catalogue holds it: each place's kinds, each a read-only
+      // list of names. Every place now names at least one part.
+      const names = Object.values(
+        builtIns as Readonly<Record<string, readonly string[]>>
+      ).flat();
+      expect(new Set(names).size, place).toBe(names.length);
+      for (const name of names) expect(name, `${place} ${name}`).toMatch(NAME);
+    }
+  });
+});

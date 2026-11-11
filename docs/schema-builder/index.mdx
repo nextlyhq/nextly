@@ -87,7 +87,7 @@ those rows would break.
 
 ### Container fields and nesting
 
-Repeater, Group, and Component fields can themselves contain fields. Nesting is capped at 4 levels deep — `MAX_NESTING_DEPTH = 4` in `packages/admin/src/components/features/schema-builder/types.ts`. Each level renders with a progressively darker background to make the hierarchy visible.
+Repeater, Group, and Component fields can themselves contain fields, to any depth. Each level renders with a progressively darker background to make the hierarchy visible. A field group cannot be placed inside itself, directly or through other field groups: a save that would do so is refused, naming the field groups in the cycle (see [Field group nesting](/docs/configuration/field-groups#field-group-nesting)).
 
 A Component field embeds a reusable field group definition (created via the Field Groups Builder or `defineFieldGroup()`). It can target a single field group or a list of allowed field groups, and can be marked repeatable to act as an inline content zone.
 
@@ -133,13 +133,12 @@ Applied migrations are not re-run: `nextly migrate` records a `file_apply` event
 
 ## Permissions and visibility
 
-The Visual Schema Builder is reached through the Builders top-level icon. That icon is gated by the `admin.branding.showBuilder` toggle:
+The Visual Schema Builder is reached through the Builders top-level icon.
 
-- Default behaviour: visible when `process.env.NODE_ENV !== "production"`, hidden in production.
-- Force visible: `admin.branding.showBuilder = true` in `nextly.config.ts`.
-- Force hidden: `admin.branding.showBuilder = false`.
+- In development and test it is on, unless `admin.branding.showBuilder` is `false` in `nextly.config.ts`.
+- In production it is off, whatever `showBuilder` says. Its pages, and every schema save, preview, repair and delete, are refused with `BUILDER_DISABLED`. Make the change in development and deploy it as a migration (see [Production migrations](/docs/guides/production-migrations)). Entry editing is unaffected.
 
-See [Branding > Schema Builder visibility](/docs/admin/branding#schema-builder-visibility) for the full toggle reference.
+See [Branding > Schema Builder visibility](/docs/admin/branding#schema-builder-visibility) for the full reference.
 
 ## Builder vs code-first
 
@@ -157,7 +156,7 @@ You can mix both — define core collections in code and let editors prototype n
 ## Next steps
 
 - [Admin Panel Overview](/docs/admin) — full navigation guide
-- [Branding](/docs/admin/branding) — control Builder visibility with `showBuilder`
+- [Branding](/docs/admin/branding) — turn the Builder off outside production with `showBuilder`
 - [Collections](/docs/configuration/collections) — code-first collection definitions
 - [Singles](/docs/configuration/singles) — code-first Single definitions
 - [Field Groups](/docs/configuration/field-groups) — reusable field groups

@@ -9,6 +9,7 @@ import type {
   FieldStoragePrimitive,
   FieldSurface,
   FieldTypeCatalogEntry,
+  PluginFieldTypeSetting,
 } from "nextly/field-catalog";
 import { DEFAULT_FIELD_SURFACES } from "nextly/field-catalog";
 
@@ -77,6 +78,28 @@ export function pluginFieldTypeStorage(
   for (const plugin of plugins ?? []) {
     for (const fieldType of plugin.fieldTypes ?? []) {
       if (fieldType.type === type) return fieldType.storage;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The settings a plugin declared for one of its field types, or `undefined`
+ * when no plugin owns the type or it declares none. Like the storage above, a
+ * DISABLED plugin is still consulted: a field of its type keeps opening in the
+ * settings panel, and its stored settings are worth showing there.
+ */
+export function pluginFieldTypeSettings(
+  plugins: readonly PluginMetadata[] | undefined,
+  type: string
+): readonly PluginFieldTypeSetting[] | undefined {
+  for (const plugin of plugins ?? []) {
+    for (const fieldType of plugin.fieldTypes ?? []) {
+      if (fieldType.type === type) {
+        return fieldType.settings && fieldType.settings.length > 0
+          ? fieldType.settings
+          : undefined;
+      }
     }
   }
   return undefined;

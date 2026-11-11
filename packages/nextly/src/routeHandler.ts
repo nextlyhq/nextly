@@ -160,6 +160,7 @@ import {
   withSideEffectWarnings,
 } from "./hooks/side-effect-warnings";
 import { awaitBootSeeding } from "./init/seed-permissions";
+import { awaitStartInFlight } from "./init/start-in-flight";
 import {
   SKIP_TIMEZONE_FORMAT_HEADER,
   withTimezoneFormatting,
@@ -214,13 +215,17 @@ import {
   getHandlerConfig,
 } from "./route-handler";
 import { handleDevSchemaRequest } from "./route-handler/dev-schema-handler";
+import {
+  bumpSchemaVersion,
+  getSchemaVersionHeader,
+} from "./route-handler/schema-version";
 import { handleWebhookRequest } from "./route-handler/webhook-dispatch";
 import { registerNextCacheRevalidator } from "./runtime/cache/register";
 import type { CollectionsHandler } from "./services/collections-handler";
 import type { GeneralSettingsService } from "./services/general-settings/general-settings-service";
 import { resolveRoleSlugs } from "./services/lib/permissions";
 import {
-  builderDisabledError,
+  builderRefusal,
   isBuilderEnabled,
   isBuilderRoute,
 } from "./shared/builder-access";
@@ -235,21 +240,10 @@ import {
 // Schema Version Header
 // ============================================================================
 
-// Global schema version counter for cross-flow notification.
-// Bumped from collection-dispatcher.ts:applySchemaChanges after a
-// successful pipeline apply (F8 PR 3 — was previously SchemaChangeService).
-// The admin UI reads X-Nextly-Schema-Version from response headers
-// and invalidates caches when the version increases.
-let globalSchemaVersion = 0;
-
-export function bumpSchemaVersion(): number {
-  globalSchemaVersion++;
-  return globalSchemaVersion;
-}
-
-function getSchemaVersionHeader(): number {
-  return globalSchemaVersion;
-}
+// The schema version counter lives in `route-handler/schema-version`, so the
+// collection dispatcher bumps it after a schema apply without loading this
+// module. Re-exported here for `nextly/runtime`.
+export { bumpSchemaVersion };
 
 // ============================================================================
 // Global API Date/Time Formatting
@@ -1524,15 +1518,19 @@ async function serveServiceRequest(
   if (refusedBuiltIn) return refusedBuiltIn;
 
   // The builder writes DDL straight to the live database, so it is off in
-  // production by default. Refuse its routes here, at the one point every
-  // dispatched request passes through — hiding the navigation would still
-  // leave these reachable by URL. Entry CRUD is untouched, and boot-time
-  // code-first sync goes through the registry services, not this dispatcher.
+  // production whatever the configuration says, and off wherever showBuilder
+  // is false. Refuse its routes here, at the one point every dispatched
+  // request passes through — hiding the navigation would still leave these
+  // reachable by URL. Entry CRUD is untouched, and boot-time code-first sync
+  // goes through the registry services, not this dispatcher.
   //
   // Returned rather than thrown: this runs outside the dispatcher's
   // NextlyError-to-response mapping, so a throw would surface as a 500.
-  if (isBuilderRoute(service, method) && !isBuilderEnabled()) {
-    const err = builderDisabledError(`${service}.${method}`);
+  const builderRefused = isBuilderRoute(service, method)
+    ? builderRefusal(`${service}.${method}`)
+    : null;
+  if (builderRefused) {
+    const err = builderRefused;
     const requestId = readOrGenerateRequestId(req);
     return new Response(
       JSON.stringify({ error: err.toResponseJSON(requestId) }),
@@ -2117,13 +2115,6 @@ async function buildAdminMeta(
   // would dial exists.
   workspace.devReload = isDevServerRuntime();
 
-  // Whether the widget preview page exists, from the same comparison that
-  // gates its read below, so the admin registers the page exactly when the
-  // read it draws from answers. Its own field rather than `devReload`: each
-  // says what the admin may do with it, and a later rule for one (a config
-  // switch, say) must not move the other.
-  workspace.widgetPreviews = isDevServerRuntime();
-
   // The site's languages for the admin (present only when i18n is enabled): the language list as
   // it is now, so a language added in Settings shows without a restart.
   const localization = appLocalization() ?? config?.localization;
@@ -2371,6 +2362,11 @@ export { withSessionCacheHeaders };
  * choose those fields rather than this package.
  */
 async function handleAdminMetaRequest(): Promise<Response> {
+  // A start already under way is waited for, never begun here: the start-up
+  // hook no longer holds the admin page until Nextly has started, so the page
+  // can ask for this before the saved settings can be read, and the answer it
+  // caches would carry the default name and logo instead of the saved ones.
+  await awaitStartInFlight();
   const { branding } = await buildAdminMeta(NO_WIDGETS, NOBODY);
   return respondAdminMeta(branding);
 }

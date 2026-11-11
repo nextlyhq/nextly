@@ -134,6 +134,8 @@ describe("the flag vocabulary", () => {
 const WRITES = [
   "add",
   "build",
+  "db:sync",
+  "events abandon",
   "generate:manifest",
   "generate:types",
   "generate:widget",
@@ -147,6 +149,7 @@ const WRITES = [
   "migrate:down",
   "migrate:resolve",
   "permissions:cleanup",
+  "plugins add",
   "plugins install",
   "plugins uninstall",
   "prune",
@@ -158,11 +161,6 @@ const WRITES = [
   "users:create-admin",
   "webhooks:prune",
 ];
-/**
- * Commands that write by default and do not offer `--dry-run` yet. This list
- * may only shrink: a command leaves it in the change that gives it the flag.
- */
-const WRITES_WITHOUT_DRY_RUN_YET = ["db:sync"];
 const PREVIEWS = [
   "media orphans",
   "media remove-sizes",
@@ -170,6 +168,8 @@ const PREVIEWS = [
   "users:clear-plaintext-passwords",
 ];
 const READS = [
+  "events",
+  "events report",
   "generate:schema",
   "media",
   "migrate:check",
@@ -187,12 +187,7 @@ describe("--dry-run and --apply by what a command does", () => {
     named(name).options.map(option => option.long);
 
   it("places every command the program defines exactly once", () => {
-    const placed = [
-      ...WRITES,
-      ...WRITES_WITHOUT_DRY_RUN_YET,
-      ...PREVIEWS,
-      ...READS,
-    ];
+    const placed = [...WRITES, ...PREVIEWS, ...READS];
     expect([...placed].sort()).toEqual([...paths].sort());
   });
 
@@ -200,14 +195,6 @@ describe("--dry-run and --apply by what a command does", () => {
     expect(WRITES.filter(name => !longs(name).includes("--dry-run"))).toEqual(
       []
     );
-  });
-
-  it("names, among the rest, none that already offers --dry-run", () => {
-    expect(
-      WRITES_WITHOUT_DRY_RUN_YET.filter(name =>
-        longs(name).includes("--dry-run")
-      )
-    ).toEqual([]);
   });
 
   it("describes --dry-run in the same words on every command", () => {
@@ -281,6 +268,31 @@ describe("--dry-run and --apply by what a command does", () => {
     });
     expect(written).toContain(
       "option '--dry-run' cannot be used with option '--check'"
+    );
+    expect(ran).toBe(false);
+  });
+
+  it("refuses db:sync --dry-run together with --watch, which never ends", async () => {
+    const run = createProgram();
+    const command = commandAt(run, ["db:sync"]);
+    let written = "";
+    command
+      .exitOverride()
+      .configureOutput({ writeErr: text => void (written += text) });
+    // The action is replaced, so reaching it would show the run went on.
+    let ran = false;
+    command.action(() => {
+      ran = true;
+    });
+
+    await expect(
+      run.parseAsync(["node", "nextly", "db:sync", "--watch", "--dry-run"])
+    ).rejects.toMatchObject({
+      code: "commander.conflictingOption",
+      exitCode: 1,
+    });
+    expect(written).toContain(
+      "option '--dry-run' cannot be used with option '-w, --watch'"
     );
     expect(ran).toBe(false);
   });

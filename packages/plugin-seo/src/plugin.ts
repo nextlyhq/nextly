@@ -17,13 +17,25 @@ import {
   type PluginDefinition,
 } from "@nextlyhq/plugin-sdk";
 
+import { startCatchUp } from "./address-record/catch-up";
+import { addressRecordCollection } from "./address-record/collection";
+import {
+  addressRecord,
+  releaseOnCollectionDelete,
+} from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
+import { seoPageMetadata } from "./resolver/provider";
 import {
   generateSitemap,
   resolveBaseOrigin,
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
+import { withStructuredData } from "./structured-data/provider";
+import {
+  rulesFromOptions,
+  type StructuredDataOptions,
+} from "./structured-data/rules";
 import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
@@ -96,6 +108,31 @@ export interface SeoPluginOptions {
    * narrowing this list or disabling the route.
    */
   sitemap?: boolean | { collections?: string[] };
+  /**
+   * @experimental Each content type's structured data type, the fields that
+   * hold each detail it needs, and the brand facts every page names, until the
+   * SEO settings hold them. Keyed by collection slug, or `single:<slug>`:
+   *
+   * ```ts
+   * seoPlugin({
+   *   collections: ["posts"],
+   *   baseUrl: "https://example.com",
+   *   structuredData: {
+   *     brand: { name: "Example", profiles: [{ url: "https://x.com/example" }] },
+   *     types: {
+   *       posts: {
+   *         type: "blogPosting",
+   *         details: { blogPosting: { author: "writer", datePublished: "date" } },
+   *       },
+   *     },
+   *   },
+   * });
+   * ```
+   *
+   * Structured data is written with absolute addresses, so `baseUrl` is
+   * needed for any to be served.
+   */
+  structuredData?: StructuredDataOptions;
 }
 
 /**
@@ -157,9 +194,23 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     );
   }
 
+  // Checked here, so a misspelled type or detail fails when the site starts.
+  const readStructuredDataRules = rulesFromOptions(
+    options.baseUrl,
+    options.structuredData
+  );
+
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
+    // The record that keeps each public address to one page.
+    collections: [addressRecordCollection()],
+    // Every page's head, worked out by the one order of who wins, and its
+    // structured data, worked out from that same answer.
+    services: {
+      pageMetadata: ctx =>
+        withStructuredData(ctx, seoPageMetadata(ctx), readStructuredDataRules),
+    },
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -256,6 +307,20 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     },
     category: "seo",
     tags: ["seo", "meta"],
+    // The route helpers ask this plugin for each page's head.
+    provides: ["page-metadata"],
     contributes,
+    init(ctx) {
+      // The site-wide record that keeps each public address to one page:
+      // asked on every save, and told what each document holds after it.
+      ctx.publicAddresses.participate(addressRecord(ctx));
+      releaseOnCollectionDelete(ctx);
+    },
+    onReady(ctx) {
+      // Started, not awaited: it waits for the boot to finish, and brings the
+      // record up to date with content saved while the plugin was absent or
+      // addresses a deploy moved.
+      void startCatchUp(ctx);
+    },
   });
 }

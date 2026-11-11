@@ -15,8 +15,6 @@
  * @module cli/commands/component-map-check-command
  */
 
-import { relative, sep } from "node:path";
-
 import {
   checkComponentMapFiles,
   componentMapAgrees,
@@ -28,6 +26,7 @@ import {
   unbackedContributions,
 } from "../../plugins/codegen/unbacked-contributions";
 import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
+import { projectPath } from "../dry-run";
 import { componentMapOutOfDate } from "../errors/areas/commands";
 import { printCliError } from "../errors/report";
 import type { CommandContext } from "../program";
@@ -65,7 +64,9 @@ export async function runComponentMapCheck(
       cwd,
       loaded.configPath,
       // The site's own widgets, which the map lists beside the plugins'.
-      loaded.config.admin?.dashboard
+      loaded.config.admin?.dashboard,
+      // And the views the site's own collections name.
+      loaded.config.collections
     );
     // The contributions the map leaves out, named as `generate:types` names
     // them: the check passes without them, and their places draw fallbacks.
@@ -95,7 +96,7 @@ function outOfDateReport(
   found: ComponentMapAgreement,
   cwd: string
 ): { files: string; disagreements: string[] } {
-  const shown = (file: string) => relative(cwd, file).split(sep).join("/");
+  const shown = (file: string) => projectPath(cwd, file);
   const [map, list] = found.files.map(shown) as [string, string];
   return {
     files: `${map} and ${list}`,

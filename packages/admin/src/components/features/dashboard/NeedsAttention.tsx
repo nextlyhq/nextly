@@ -1,22 +1,18 @@
 "use client";
 
-import { Button } from "@nextlyhq/ui";
 import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
-import { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AlertTriangle } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
 import { EntityRow, ENTITY_LEADING_CLASS } from "../widgets/frame/entity-row";
-import { leavesRowsEmpty, useCardFitsContent } from "../widgets/frame/fit";
-import { useRowFold, type RowFold } from "../widgets/frame/fold";
-import { CardFooterContent } from "../widgets/frame/footer-slot";
 import { LIST_ROW_HEIGHT_CLASS } from "../widgets/frame/geometry";
-import { CardHeightContext } from "../widgets/frame/tier";
 import { useCardTitleCount } from "../widgets/frame/title-count";
 import { useRevealedWhileViewed } from "../widgets/hidden-while-empty";
 
+import { AttentionReleaseNames } from "./AttentionReleaseNames";
 import {
   attentionRows,
   type AttentionRow,
@@ -36,17 +32,11 @@ import {
  * something went unread. Nothing here dismisses an item: it leaves when the
  * work it counts is done.
  *
- * The card never scrolls: it draws the rows its height holds and folds the
- * rest, the least urgent, behind "Show N more", which grows the card in place
- * until "Show less" (`useRowFold`). That control sits in the card's footer,
- * whose room the frame keeps for every card, so the rows have the whole body.
- * The title carries how many items there are ("Needs your attention 2").
- *
- * With fewer items than its rows hold, and none of them folded, the card asks for the height its
- * items take rather than its stored rows (`frame/fit`): one item would otherwise sit above three
- * rows of empty room. Its row of the dashboard is then as tall as the taller of it and the card
- * beside it, Upcoming releases on the default dashboard. Its rows are drawn at the default
- * density, the one they are counted at.
+ * The card draws every item, as tall as they are: an item is one kind of
+ * waiting work, not a document, so there are few of them and no list page to
+ * send the rest to, and nothing is folded behind "Show N more". The title
+ * carries how many items there are ("Needs your attention 2"). Its rows are
+ * drawn at the default density.
  *
  * A card that joins the dashboard while the reader is on it (hidden at first,
  * then found with something waiting) says how many items arrived, politely,
@@ -59,110 +49,39 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
   placementId,
 }) => {
   const rows = useMemo(() => attentionRows(data), [data]);
-  const fold = useRowFold(rows.length);
   useCardTitleCount(rows.length);
-  useFitsItsItems(fold, rows.length);
   const arrival = useArrivalAnnouncement(
     useRevealedWhileViewed(placementId),
     rows.length
   );
-  const listId = useId();
-  const { listRef, revealed, toggle } = useRevealedRows(fold, rows.length);
-
   return (
-    <div
-      ref={fold.listRef}
-      className="grid min-w-0 gap-2"
-      data-testid="needs-attention"
-    >
+    <div className="grid min-w-0 gap-2" data-testid="needs-attention">
       {/* min-w-0 down the grid: a grid item is otherwise as wide as its unwrapped text, which
           pushed the Review button out of a narrow card instead of cutting the reason line. */}
-      <ul
-        id={listId}
-        ref={listRef}
-        className="grid min-w-0 divide-y divide-border"
-      >
-        {rows.slice(0, fold.shown).map(row => (
-          // Focusable from script only, so "Show N more" can move focus to
-          // the first row it revealed.
+      <ul className="grid min-w-0 divide-y divide-border">
+        {rows.map(row => (
           <li
             key={row.id}
-            data-fold-row
-            tabIndex={-1}
-            className="min-w-0 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="min-w-0"
             data-testid="needs-attention-item"
           >
             <AttentionItem row={row} refreshing={refreshing} retry={retry} />
+            {/* A stopped or overdue release row names those releases, so the
+                card says which as well as how many. */}
+            {row.releases !== undefined && (
+              <AttentionReleaseNames reason={row.releases} />
+            )}
           </li>
         ))}
       </ul>
-      {fold.hasControl && (
-        <CardFooterContent>
-          <Button
-            ref={fold.controlRef}
-            variant="ghost"
-            size="sm"
-            aria-expanded={fold.expanded}
-            aria-controls={listId}
-            onClick={toggle}
-          >
-            {fold.expanded
-              ? "Show less"
-              : `Show ${rows.length - fold.shown} more`}
-          </Button>
-        </CardFooterContent>
-      )}
       <p className="sr-only" aria-live="polite">
-        {fold.expanded && revealed !== null
-          ? `${revealed.count} more ${revealed.count === 1 ? "item" : "items"} shown`
-          : arrival}
+        {arrival}
       </p>
     </div>
   );
 };
 
 NeedsAttention.displayName = "NeedsAttention";
-
-/**
- * Asks the card's cell for the height of its `count` items while they leave a whole row of its
- * stored body empty (`frame/fit`). Never while the fold holds rows back: those rows are folded
- * because the body it measured is too short for them, as when their text wraps, and a card drawn
- * at the folded rows' height would be measured again with them all drawn and grow, then fold them
- * again.
- */
-function useFitsItsItems(fold: RowFold, count: number): void {
-  const storedRows = useContext(CardHeightContext);
-  useCardFitsContent(
-    fold.listRef,
-    leavesRowsEmpty(count, storedRows, "default") && fold.shown >= count,
-    count
-  );
-}
-
-/**
- * The rows the reader's "Show N more" revealed, while they are shown: focus moves to the first of
- * them, and the live region says how many. `toggle` is the fold's control, which records them.
- */
-function useRevealedRows(fold: RowFold, total: number) {
-  const listRef = useRef<HTMLUListElement | null>(null);
-  const [revealed, setRevealed] = useState<{
-    from: number;
-    count: number;
-  } | null>(null);
-  useEffect(() => {
-    if (!fold.expanded || revealed === null) return;
-    listRef.current
-      ?.querySelectorAll<HTMLElement>("[data-fold-row]")
-      [revealed.from]?.focus();
-  }, [fold.expanded, revealed]);
-  const toggle = () => {
-    setRevealed(
-      fold.expanded ? null : { from: fold.shown, count: total - fold.shown }
-    );
-    fold.toggle();
-  };
-  return { listRef, revealed, toggle };
-}
 
 /**
  * One item's row: its severity, label and count, why it is waiting and its Review, or, for an

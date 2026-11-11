@@ -31,11 +31,18 @@ export {
   slugToPath,
 } from "./slug-param";
 
-export { createContentRoute, createPublicContentRoute } from "./content-route";
+export {
+  contentPageMetadata,
+  contentPageStructuredData,
+  createContentRoute,
+  createPublicContentRoute,
+} from "./content-route";
 export type {
   ContentRoute,
   StaticContentRoute,
   ContentRouteArgs,
+  ContentRouteParams,
+  ContentStaticParamsArgs,
   ContentRouteConfig,
   RenderContext,
   ResolvedContext,
@@ -44,12 +51,24 @@ export type {
 export { createSingleRoute, createPublicSingleRoute } from "./single-route";
 export type {
   SingleRoute,
+  SingleRouteArgs,
   SingleRouteConfig,
   SingleContext,
   SingleDraftRequest,
   SingleDocument,
   NextlySingleReader,
 } from "./single-route";
+
+// The language a request is served in, from a `[locale]` segment, and the
+// address it is served at in that language: for a route built on the content
+// route that reads the segment itself (`@nextlyhq/blocks-react`'s).
+// @experimental
+export {
+  confirmedLanguage,
+  requestLanguage,
+  servedAddress,
+} from "./request-language";
+export type { RequestLanguage } from "./request-language";
 
 export { nextlySitemap } from "./sitemap";
 export type { NextlySitemapEntry, NextlySitemapOptions } from "./sitemap";

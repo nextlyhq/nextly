@@ -108,6 +108,10 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
     plugins: [accounts],
+    // The accounts plugin's `determineUser` hook decides who is signed in, so
+    // the app must list it (D13); the plugin itself is cast loosely above, so
+    // the listing is written by name.
+    pluginConsent: { rawSql: [], login: [accounts.name] },
     collections: [
       // No rule at all: staff with a grant, and a super-admin, read it.
       defineCollection({ slug: "notes", fields: [text({ name: "title" })] }),

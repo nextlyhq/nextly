@@ -183,4 +183,48 @@ describe("DynamicCollectionRegistryService.listCollections — slugAllowlist", (
       "zebra",
     ]);
   });
+
+  it("counts and pages without the denied collections", async () => {
+    // 🔴 A denylist is a condition on the same query, so the total a client
+    // pages by counts only the rows it can be shown: two here, on two pages.
+    const first = await registry.listCollections({
+      slugDenylist: ["mango"],
+      limit: 1,
+      page: 1,
+      sortBy: "slug",
+      sortOrder: "asc",
+    });
+    const second = await registry.listCollections({
+      slugDenylist: ["mango"],
+      limit: 1,
+      page: 2,
+      sortBy: "slug",
+      sortOrder: "asc",
+    });
+
+    expect(first.total).toBe(2);
+    expect(first.totalPages).toBe(2);
+    expect(first.collections.map(c => c.slug)).toEqual(["alpha"]);
+    expect(second.collections.map(c => c.slug)).toEqual(["zebra"]);
+  });
+
+  it("denies nothing for an empty denylist", async () => {
+    const result = await registry.listCollections({
+      slugDenylist: [],
+      limit: 10,
+    });
+
+    expect(result.total).toBe(3);
+  });
+
+  it("only narrows an allowlist, counting what both admit", async () => {
+    const result = await registry.listCollections({
+      slugAllowlist: ["alpha", "mango"],
+      slugDenylist: ["mango", "zebra"],
+      limit: 10,
+    });
+
+    expect(result.collections.map(c => c.slug)).toEqual(["alpha"]);
+    expect(result.total).toBe(1);
+  });
 });

@@ -63,6 +63,7 @@ import type {
   LegacyFieldResolution,
   LegacyResolutionsBundle,
 } from "../../schema/pipeline/prompt-dispatcher/browser";
+import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import {
   columnsThatMayHoldNull,
   fieldProducesColumn,
@@ -77,6 +78,10 @@ import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 
 import {
+  type CollectionTables,
+  collectionTablesBySlug,
+} from "./collection-tables";
+import {
   DynamicCollectionRegistryService,
   type CollectionMetadata,
   type ListCollectionsOptions,
@@ -86,6 +91,7 @@ import {
 import { DynamicCollectionSchemaService } from "./dynamic-collection-schema-service";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 import { namesKeptFromStored } from "./field-names";
+import { refuseNewJunctionsOnRenamedCollection } from "./junctions-on-renamed-collections";
 import { refusalsForCollectionSave } from "./save-preconditions";
 
 export interface CollectionArtifacts {
@@ -106,6 +112,12 @@ export interface CollectionArtifacts {
   localMigrationSQL?: string;
   migrationFileName: string;
   tableName: string;
+  /**
+   * The collection as the Schema Builder's definition file records it, the
+   * entry its registry upsert is built from. Set by a create, which a Builder
+   * save writes into the definition and generates its migration from.
+   */
+  manifestEntity?: UiSchemaEntity;
   metadata: {
     id: string;
     slug: string;
@@ -593,7 +605,15 @@ export class DynamicCollectionService extends BaseService {
       userDefinedFields,
       // i18n: omit translatable columns from the main table when localized — they
       // live in the companion `_locales` table created below.
-      { hasStatus: data.status === true, localized: storesPerLanguage(data) }
+      {
+        hasStatus: data.status === true,
+        localized: storesPerLanguage(data),
+        // A relationship to a renamed collection keys the table it kept.
+        targetTables: await collectionTablesBySlug(
+          this.adapter,
+          userDefinedFields
+        ),
+      }
     );
 
     // i18n: for a localized collection, append the companion `<table>_locales`
@@ -632,9 +652,14 @@ export class DynamicCollectionService extends BaseService {
     //
     // The update path already draws this distinction and names it the same way;
     // the create path simply never needed it before.
+    const manifestEntity = this.manifestEntityFor(
+      normalizedName,
+      data,
+      userDefinedFields
+    );
     const fullMigrationSQL = this.appendMetadataUpsertSQL(
       withCompanion,
-      this.manifestEntityFor(normalizedName, data, userDefinedFields)
+      manifestEntity
     );
 
     const schemaHash = this.generateSchemaHash(userDefinedFields);
@@ -692,6 +717,7 @@ export class DynamicCollectionService extends BaseService {
       migrationFileName: `${Date.now()}_create_${normalizedName}.sql`,
       tableName,
       metadata,
+      manifestEntity,
     };
   }
 
@@ -821,7 +847,7 @@ export class DynamicCollectionService extends BaseService {
       versionsMaxPerDoc: data.versionsMaxPerDoc,
       revalidate: data.revalidate,
       webhooks: data.webhooks,
-      fields: fields as unknown as UiSchemaEntity["fields"],
+      fields,
     };
   }
 
@@ -1457,6 +1483,12 @@ export class DynamicCollectionService extends BaseService {
           collection.tableName,
           recorded
         ),
+        // Where each relationship's target is stored, so a key this save adds or changes
+        // references the table a renamed target kept rather than one spelled from its new slug.
+        targetTables: await collectionTablesBySlug(this.adapter, [
+          ...recorded,
+          ...(updates.fields ?? []),
+        ]),
       };
     };
 
@@ -1525,6 +1557,14 @@ export class DynamicCollectionService extends BaseService {
         (f: FieldDefinition) => !RESERVED_FIELD_NAMES.includes(f.name)
       );
 
+      // A many-to-many added to a renamed collection would get a junction its reads can't find.
+      refuseNewJunctionsOnRenamedCollection({
+        slug: collectionName,
+        tableName: collection.tableName,
+        oldFields: oldUserFields,
+        newFields: userDefinedFields,
+      });
+
       // Asked here rather than in the generator, because only this side can
       // ask the database. The generator refuses a move onto a table this
       // collection's own fields name; a junction left behind by an older
@@ -1535,6 +1575,25 @@ export class DynamicCollectionService extends BaseService {
         collection.tableName,
         oldUserFields,
         userDefinedFields
+      );
+      // A field renamed onto a column that is already there is refused before anything here is
+      // written: the archive write just below is the first.
+      await refuseRenamedFieldOntoTakenColumn(
+        this.adapter,
+        {
+          previousFields: oldUserFields,
+          fields: userDefinedFields,
+          mainTable: collection.tableName,
+          // Where its translatable values are stored, before and after: per language when it is
+          // translated, or always under per-language storage.
+          wasLocalized: storesPerLanguage({
+            localized: collectionWasLocalized,
+          }),
+          isLocalized: storesPerLanguage({ localized: collectionIsLocalized }),
+          dialect: this.adapter.getCapabilities().dialect,
+          builtBy: "collection",
+        },
+        { collection: collectionName }
       );
       // A field leaving or joining translation has preconditions of its own, asked before anything
       // here is written or altered.
@@ -1936,17 +1995,20 @@ export class DynamicCollectionService extends BaseService {
   /**
    * The foreign keys a collection's own relationship columns hold, as the
    * schema service declares them. Read for a stored definition, so an action
-   * the current rules would refuse is reported rather than refused.
+   * the current rules would refuse is reported rather than refused. With
+   * `targetTables`, a key to a renamed collection names the table it kept.
    */
   relationshipForeignKeys(
     tableName: string,
-    fields: readonly FieldDefinition[]
+    fields: readonly FieldDefinition[],
+    targetTables?: CollectionTables
   ): ForeignKeySpec[] {
     return fields.flatMap(field => {
       const key = this.schemaService.relationshipForeignKey(
         tableName,
         field,
-        false
+        false,
+        targetTables
       );
       return key === null ? [] : [key];
     });
@@ -1966,6 +2028,93 @@ export class DynamicCollectionService extends BaseService {
       tableName,
       fields
     );
+  }
+
+  /**
+   * The statements that take a collection's many-to-many junction tables from
+   * `oldFields` to `newFields` (`junctionLifecycle`: drops, renames, action
+   * changes, creates), and the ones that take them back. A Schema Builder save
+   * writes them into its migration file, since the generator `migrate:create`
+   * shares writes no junction table.
+   */
+  junctionStatements(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    targetTables?: CollectionTables
+  ): { up: string[]; down: string[] } {
+    return {
+      up: this.schemaService.junctionLifecycle(
+        tableName,
+        oldFields,
+        newFields,
+        targetTables
+      ),
+      down: this.schemaService.junctionLifecycle(
+        tableName,
+        newFields,
+        oldFields,
+        targetTables
+      ),
+    };
+  }
+
+  /**
+   * What a Builder save writes for a collection's relationships going from
+   * `oldFields` to `newFields`: a renamed field-group field's association
+   * move, its junction statements and its foreign keys before and after,
+   * every key and junction naming the table each target is stored in
+   * (`collectionTablesBySlug`), so a key or a junction to a collection whose
+   * slug was renamed references the table it kept. One reading for every
+   * writer of a save: create, update, the schema dialog and delete.
+   */
+  async writerRelations(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): Promise<{
+    junctions: { up: string[]; down: string[] };
+    keys: { before: ForeignKeySpec[]; after: ForeignKeySpec[] };
+  }> {
+    const targetTables = await collectionTablesBySlug(this.adapter, [
+      ...oldFields,
+      ...newFields,
+    ]);
+    const junctions = this.junctionStatements(
+      tableName,
+      oldFields,
+      newFields,
+      targetTables
+    );
+    // A renamed field-group field's rows moved to its new name, as the push
+    // moves them (`associationStatements`); its groups' tables are resolved
+    // only when there is a rename to move.
+    const renamesGroup =
+      this.schemaService.detectFieldGroupAssociationRename(
+        oldFields,
+        newFields
+      ) !== null;
+    const fieldGroupTableNames = renamesGroup
+      ? await this.resolveFieldGroupTableNames([...oldFields, ...newFields])
+      : new Map<string, string>();
+    const moved = (from: FieldDefinition[], to: FieldDefinition[]) =>
+      this.schemaService.associationStatements(tableName, from, to, {
+        fieldGroupTableNames,
+      });
+    return {
+      junctions: {
+        up: [...moved(oldFields, newFields), ...junctions.up],
+        down: [...junctions.down, ...moved(newFields, oldFields)],
+      },
+      keys: {
+        before: this.relationshipForeignKeys(
+          tableName,
+          oldFields,
+          targetTables
+        ),
+        after: this.relationshipForeignKeys(tableName, newFields, targetTables),
+      },
+    };
   }
 
   /** One migration dropping every table of collections deleted together (see the schema service). */

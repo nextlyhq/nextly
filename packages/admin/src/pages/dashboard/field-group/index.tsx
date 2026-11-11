@@ -11,7 +11,7 @@
  * - Bulk delete operations
  */
 
-import { Button } from "@nextlyhq/ui";
+import { Button, PageHeader } from "@nextlyhq/ui";
 import type React from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -41,28 +41,25 @@ const FieldGroupsPage: React.FC = () => {
         />
 
         {/* Page header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">
-              Field Groups
-            </h1>
-            {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-            <p className="text-sm font-normal text-muted-foreground mt-1">
-              Manage reusable field groups for your collections and singles
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link
-              href={ROUTES.BUILDER_FIELD_GROUPS_NEW}
-              className="w-full sm:w-auto"
-            >
-              <Button size="md">
-                <Icons.Plus className="h-4 w-4" />
-                <span>New Field Group</span>
-              </Button>
-            </Link>
-          </div>
-        </div>
+        <PageHeader
+          title="Field Groups"
+          description="Manage reusable field groups for your collections and singles"
+          actions={
+            <>
+              <div className="flex items-center gap-2">
+                <Link
+                  href={ROUTES.BUILDER_FIELD_GROUPS_NEW}
+                  className="w-full sm:w-auto"
+                >
+                  <Button size="md">
+                    <Icons.Plus className="h-4 w-4" />
+                    <span>New Field Group</span>
+                  </Button>
+                </Link>
+              </div>
+            </>
+          }
+        />
 
         {/* Field group table */}
         <FieldGroupTablePage />

@@ -56,11 +56,11 @@ function MigrationIndicator({
 
   const colors: Record<FieldGroupMigrationStatus, string> = {
     synced: "",
-    pending: "bg-warning-500",
+    pending: "bg-warning-solid",
     generated: "bg-primary",
-    applied: "bg-success-500",
-    failed: "bg-destructive-500",
-    diverged: "bg-destructive-500",
+    applied: "bg-success-solid",
+    failed: "bg-danger-solid",
+    diverged: "bg-danger-solid",
   };
 
   const titles: Record<FieldGroupMigrationStatus, string> = {

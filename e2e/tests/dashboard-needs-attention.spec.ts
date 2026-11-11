@@ -3,8 +3,9 @@
  * while something is.
  *
  * A stopped and an overdue release are left as the release runner would leave
- * them. The card then draws a critical row for each, with its reason, and each
- * Review opens Releases' Needs attention tab narrowed to that row's part. A
+ * them. The card then draws a critical row for each, with its reason and the
+ * release named under it, linked to its page, and each Review opens Releases'
+ * Needs attention tab narrowed to that row's part. A
  * reader who may not read releases has nothing waiting, so their dashboard
  * draws no card at all, rather than one that says all is clear.
  *
@@ -59,6 +60,18 @@ test("rows for stopped and overdue releases, each with its reason and Review; no
     const overdue = row("Overdue releases");
     await expect(overdue).toContainText("Still scheduled after its time.");
     await expect(overdue.getByTestId("needs-attention-critical")).toBeVisible();
+    // Each row names its releases as well as counting them, each linked to
+    // its page.
+    for (const { id, outcome } of seeded) {
+      const named = (outcome === "stopped" ? stopped : overdue).getByRole(
+        "link",
+        { name: `Attention e2e ${outcome} ${stamp}` }
+      );
+      await expect(named).toHaveAttribute(
+        "href",
+        new RegExp(`/admin/releases/${id}$`)
+      );
+    }
     // Nothing on the card dismisses an item.
     await expect(
       card.getByRole("button", { name: /dismiss|mark/i })
@@ -144,6 +157,32 @@ async function readCardAsEmpty(page: Page): Promise<void> {
       layout.hiddenWhileEmpty = [...(layout.hiddenWhileEmpty ?? []), card.id];
     }
     // A read the page gave up while it was answered is already settled: nothing waits for it.
+    await route.fulfill({ response, json: body }).catch(() => {});
+  });
+}
+
+/**
+ * Passes the layout read through without the setup card, so the cards after it pair as a
+ * dashboard without setup pairs them: the setup card shows to the suite's super-admin until
+ * setup is done, and drawn beside Needs attention it would set that row's height.
+ */
+async function readWithoutSetupCard(page: Page): Promise<void> {
+  await page.route(isLayoutRead, async (route: Route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    let response: Awaited<ReturnType<Route["fetch"]>>;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
+    const body = (await response.json()) as Record<string, unknown>;
+    const layout = (Array.isArray(body.placements) ? body : body.data) as {
+      placements: Array<{ id: string; widgetId: string }>;
+    };
+    layout.placements = layout.placements.filter(
+      p => p.widgetId !== "core/setup"
+    );
     await route.fulfill({ response, json: body }).catch(() => {});
   });
 }
@@ -387,6 +426,7 @@ test("stands at its one item's height, its row beside Upcoming releases at the s
   const id = await overdueRelease(page, Date.now().toString(36));
   try {
     await answerWithOneItem(page, [CARD, RELEASES]);
+    await readWithoutSetupCard(page);
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoAdmin(page, "");
     const card = page
@@ -398,13 +438,25 @@ test("stands at its one item's height, its row beside Upcoming releases at the s
     await expect(card.getByTestId("needs-attention-item")).toHaveCount(1);
     await expect(releases).toBeVisible();
 
-    // 🔴 At least a row shorter than its stored rows: fixed rows draw it at their full height,
-    // one item over three empty rows. The row it shares sizes to the taller of the two, and
-    // both stand at it, their tops and bottoms aligned.
+    // 🔴 As tall as its content, not its stored rows: fixed rows drew it at their full height,
+    // one item over empty rows. The row it shares is as tall as the taller content of the two,
+    // read with each cell unstretched (`align-self: start`), and both stand at it, their tops and
+    // bottoms aligned.
     const stored = cardHeightPx((await defaultSizeOf(page, CARD)).h);
     const heightOf = async (cell: typeof card) =>
       (await cell.boundingBox())?.height ?? Number.POSITIVE_INFINITY;
-    await expect.poll(() => heightOf(card)).toBeLessThan(stored - 72);
+    await expect.poll(() => heightOf(card)).toBeLessThan(stored);
+    const contentOf = (cell: typeof card) =>
+      cell.evaluate(element => {
+        const style = (element as HTMLElement).style;
+        const before = style.alignSelf;
+        style.alignSelf = "start";
+        const height = element.getBoundingClientRect().height;
+        style.alignSelf = before;
+        return height;
+      });
+    const tallest = Math.max(await contentOf(card), await contentOf(releases));
+    expect(await heightOf(card)).toBeCloseTo(tallest, 0);
     const [attentionBox, releasesBox] = await Promise.all([
       card.boundingBox(),
       releases.boundingBox(),
@@ -418,6 +470,7 @@ test("stands at its one item's height, its row beside Upcoming releases at the s
     ).toBeLessThanOrEqual(1);
   } finally {
     await page.unroute(isBatchRead).catch(() => {});
+    await page.unroute(isLayoutRead).catch(() => {});
     await cancel(page, id);
   }
 });

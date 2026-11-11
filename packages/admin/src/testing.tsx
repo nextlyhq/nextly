@@ -1,6 +1,7 @@
 /**
  * `@nextlyhq/admin/testing`: a widget's card drawn as the dashboard draws it,
- * for tests. For tests; never imported by the admin itself.
+ * and the board of every widget's preview cases the browser tests check for
+ * accessibility. For tests; never imported by the admin itself.
  *
  * The card is resolved from the widget's published definition by the admin's
  * own `resolveDashboardWidgets` and drawn by its own `WidgetRenderer` inside
@@ -21,7 +22,8 @@ import type { RegisteredWidgetMeta } from "./types/branding";
 
 /**
  * A card's grid size, `w` columns by `h` rows, and the tier the dashboard's
- * width draws it at, medium when left out.
+ * width draws it at, medium when left out. The card is drawn at that tier; its
+ * height is its content's, whatever `h` says.
  */
 interface CardSize {
   w: number;
@@ -57,7 +59,6 @@ export function widgetCardElement(
   if (widget === undefined) {
     throw new Error(`widgetCardElement: ${definition.id} could not be drawn`);
   }
-  const size = options.size ?? definition.size?.default;
   return (
     <div
       className={`nextly-admin${options.theme === "dark" ? " dark" : ""}`}
@@ -66,11 +67,20 @@ export function widgetCardElement(
       <WidgetRenderer
         definition={widget}
         slot={options.slot}
-        answerSize={{
-          tier: options.size?.tier ?? "medium",
-          ...(size === undefined ? {} : { h: size.h }),
-        }}
+        // The tier the card's size is drawn at, medium when left out; its rows are its
+        // "Number of entries", whatever its size, as a card is as tall as its content.
+        tier={options.size?.tier ?? "medium"}
       />
     </div>
   );
 }
+
+/**
+ * Every widget the reader may see, drawn from its preview cases in each state,
+ * with an accessibility check of each drawn state. Drawn inside the admin by
+ * the browser tests' own page, on a development server, which alone serves its
+ * read.
+ *
+ * @experimental For tests; its markup is what the browser tests read.
+ */
+export { WidgetPreviewBoard } from "./components/features/widgets/preview/WidgetPreviewBoard";

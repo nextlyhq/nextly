@@ -174,7 +174,7 @@ export const BackgroundJobsContent: React.FC = () => {
 export default function BackgroundJobsPage(): React.JSX.Element {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="wide">
+      <PageContainer type="list">
         <SettingsLayout {...BACKGROUND_JOBS_PAGE}>
           <BackgroundJobsContent />
         </SettingsLayout>

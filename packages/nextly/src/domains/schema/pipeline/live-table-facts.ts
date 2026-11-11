@@ -789,6 +789,43 @@ interface LiveIndex {
 }
 
 /** A PostgreSQL collation, with the schema that holds it. */
+/**
+ * MySQL: by lower-cased table name, the lower-cased columns whose character set is not their
+ * table's default. A `MODIFY` or `CHANGE` that names no character set gives the column the
+ * table's default, converting every stored value, so only a column absent here keeps its values
+ * through a type change that widens it. A table read with no such column maps to an empty set.
+ */
+export async function readMysqlOtherCharsets(
+  db: unknown,
+  tableNames: readonly string[]
+): Promise<Map<string, Set<string>>> {
+  const found = new Map<string, Set<string>>(
+    tableNames.map(name => [name.toLowerCase(), new Set<string>()])
+  );
+  if (tableNames.length === 0) return found;
+  const rows = mysqlRows<{ TABLE_NAME: string; COLUMN_NAME: string }>(
+    await (db as PgMysqlExecute).execute(
+      sql`SELECT c.TABLE_NAME, c.COLUMN_NAME
+          FROM information_schema.COLUMNS c
+          JOIN information_schema.TABLES t
+            ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
+          JOIN information_schema.COLLATIONS co
+            ON co.COLLATION_NAME = t.TABLE_COLLATION
+          WHERE c.TABLE_SCHEMA = DATABASE()
+            AND c.TABLE_NAME IN (${sql.join(
+              tableNames.map(name => sql`${name}`),
+              sql`, `
+            )})
+            AND c.CHARACTER_SET_NAME IS NOT NULL
+            AND c.CHARACTER_SET_NAME <> co.CHARACTER_SET_NAME`
+    )
+  );
+  for (const row of rows) {
+    found.get(row.TABLE_NAME.toLowerCase())?.add(row.COLUMN_NAME.toLowerCase());
+  }
+  return found;
+}
+
 export interface PgCollation {
   schema: string;
   name: string;
