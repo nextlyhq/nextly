@@ -15,7 +15,10 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
-import { withSchemaLock } from "../../pipeline/schema-lock";
+import {
+  readSchemaLockState,
+  withSchemaLock,
+} from "../../pipeline/schema-lock";
 import { applyRepairs } from "../apply";
 import { dryRunReport } from "../run-report";
 import type { RepairEntity } from "../types";
@@ -418,6 +421,27 @@ describe.each(getConfiguredTestDialects())(
         expect(await printed()).toEqual(before);
       }
     );
+
+    it("reads the entities it converts towards only once it holds the schema lock", async () => {
+      // Read before the lock, a migration finishing while the run waited would leave it comparing
+      // the migrated columns with the definitions from before, and converting them back.
+      await tools.createTable(TABLE, [TITLE, AUTHOR]);
+      await tools.insert(TABLE, [{ id: "p1", title: "a", author: "u1" }]);
+      const seen: string[] = [];
+      const document = await applyRepairs({
+        adapter: handle.adapter,
+        dialect,
+        nextlyVersion: "test",
+        entities: async () => {
+          seen.push((await readSchemaLockState(handle.adapter)).state);
+          return [collection(TABLE, [TITLE, AUTHOR])];
+        },
+      });
+      expect(seen).toEqual(["held"]);
+      expect(recordOf(document.result?.records, "author").outcome).toBe(
+        "converted"
+      );
+    });
 
     it("changes nothing while the schema lock is held", async () => {
       await tools.createTable(TABLE, [TITLE, AUTHOR]);

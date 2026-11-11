@@ -323,6 +323,26 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
       expect(await snapshot(shape)).toEqual(before);
     });
 
+    it("a stopped conversion whose field now names another target is not resumed towards it", async () => {
+      const shape = shapes[0];
+      await stopAt(shape, 0, 0);
+      // The record began a conversion to a target the field no longer names.
+      await run(
+        `UPDATE ${q(COLUMN_REPAIRS_TABLE)} SET ${q("to_type")} = 'varchar(40)'`
+      );
+      const before = await snapshot(shape);
+      const applied = await applyRepairs({
+        adapter: handle.adapter,
+        dialect,
+        entities: [shape.entity()],
+        nextlyVersion: "test",
+      });
+      expect(recordOf(applied.result?.records, "author").outcome).toBe(
+        "interrupted"
+      );
+      expect(await snapshot(shape)).toEqual(before);
+    });
+
     it("a column changed by hand to no step is failed and left with its record", async () => {
       const shape = shapes[0];
       await stopAt(shape, 0, 0);

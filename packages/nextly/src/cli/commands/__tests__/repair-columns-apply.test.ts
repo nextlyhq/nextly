@@ -81,9 +81,14 @@ describe("repair-columns --apply reaches the run that converts", () => {
       command({ cwd: "/project" })
     );
     expect(runs.apply).toHaveBeenCalledTimes(1);
-    expect(runs.apply).toHaveBeenCalledWith(
-      expect.objectContaining({ dialect: "sqlite", entities: [] })
-    );
+    // The entities are handed over as a read the apply makes once it holds the schema lock,
+    // never read before it.
+    const [{ dialect, entities }] = runs.apply.mock.calls[0] as [
+      { dialect: string; entities: unknown },
+    ];
+    expect(dialect).toBe("sqlite");
+    expect(typeof entities).toBe("function");
+    await expect((entities as () => Promise<unknown>)()).resolves.toEqual([]);
     expect(runs.dryRun).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(0);
   });

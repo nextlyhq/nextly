@@ -227,9 +227,19 @@ export async function insertRepair(
     db,
     dialect,
     sql`INSERT INTO ${id(COLUMN_REPAIRS_TABLE)} (${id("id")}, ${id("table_name")}, ${id("column_name")}, ${id("from_type")}, ${id("from_nullable")}, ${id("to_type")}, ${id("to_nullable")}, ${id("class")}, ${id("consent")}, ${id("values_cleared")}, ${id("state")}, ${id("step")}, ${id("steps")}, ${id("started_at")}, ${id("ended_at")})
-      VALUES (${rowId}, ${facts.table}, ${facts.column}, ${facts.from.type}, ${flag(facts.from.nullable, dialect)}, ${facts.to.type}, ${flag(facts.to.nullable, dialect)}, ${facts.class}, ${flag(facts.consent, dialect)}, ${facts.valuesCleared}, ${progress.state}, ${progress.step}, ${progress.steps}, ${now}, ${ended})`
+      VALUES (${rowId}, ${facts.table}, ${facts.column}, ${typeText(facts.from)}, ${flag(facts.from.nullable, dialect)}, ${typeText(facts.to)}, ${flag(facts.to.nullable, dialect)}, ${facts.class}, ${flag(facts.consent, dialect)}, ${facts.valuesCleared}, ${progress.state}, ${progress.step}, ${progress.steps}, ${now}, ${ended})`
   );
   return rowId;
+}
+
+/**
+ * A type as the record keeps it: with the size PostgreSQL reports beside it (`numeric` and
+ * `10,2` as `numeric(10,2)`), so the record says exactly what was converted.
+ */
+function typeText(state: ColumnState): string {
+  return state.typeModifier === undefined
+    ? state.type
+    : `${state.type}(${state.typeModifier})`;
 }
 
 /** A boolean as the dialect's declared column takes it. */

@@ -106,21 +106,23 @@ async function report(
     // The services log with a metadata argument the CLI logger has no place for, and nothing they
     // log here is a finding, so it goes to debug output.
     const debug = (message: string) => logger.debug(message);
-    const entities = await readRepairEntities({
-      adapter,
-      dialect,
-      config,
-      // The manifest and the plugins' extensions of it: a Builder entity is configured as the next
-      // migration would apply it, not only as the registry last saved it.
-      projectRoot,
-      ...(deferredExtends !== undefined ? { deferredExtends } : {}),
-      migrationsDir: resolve(cwd, config.db.migrationsDir),
-      logger: { debug, info: debug, warn: debug, error: debug },
-    });
-    const run = { adapter, dialect, entities, nextlyVersion: getCoreVersion() };
+    // An apply reads them once it holds the schema lock; a dry run takes no lock and reads now.
+    const readEntities = () =>
+      readRepairEntities({
+        adapter,
+        dialect,
+        config,
+        // The manifest and the plugins' extensions of it: a Builder entity is configured as the next
+        // migration would apply it, not only as the registry last saved it.
+        projectRoot,
+        ...(deferredExtends !== undefined ? { deferredExtends } : {}),
+        migrationsDir: resolve(cwd, config.db.migrationsDir),
+        logger: { debug, info: debug, warn: debug, error: debug },
+      });
+    const run = { adapter, dialect, nextlyVersion: getCoreVersion() };
     return options.apply === true
-      ? await applyRepairs(run)
-      : await dryRunReport(run);
+      ? await applyRepairs({ ...run, entities: readEntities })
+      : await dryRunReport({ ...run, entities: await readEntities() });
   } finally {
     await adapter.disconnect();
   }

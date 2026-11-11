@@ -33,6 +33,7 @@ import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import type { SupportedDialect } from "../services/field-column-descriptor";
 
 import { classifyDifference } from "./classify";
+import { compareColumn } from "./column-comparison";
 import { findColumnDifferences } from "./find-differences";
 import {
   findingClass,
@@ -79,7 +80,11 @@ export interface ConversionStepAt {
 export interface ApplyRepairsArgs {
   adapter: DrizzleAdapter;
   dialect: SupportedDialect;
-  entities: readonly RepairEntity[];
+  /**
+   * The entities to compare, or how to read them. Read here, once the schema lock is held, so a
+   * migration that ends while the run waits for the lock is the state the run converts towards.
+   */
+  entities: readonly RepairEntity[] | (() => Promise<readonly RepairEntity[]>);
   nextlyVersion: string;
   /** How long to wait for the schema lock; the lock's own wait for a command-line run when left out. */
   schemaLockWaitMs?: number;
@@ -111,7 +116,15 @@ export async function applyRepairs(
         ? { waitMs: args.schemaLockWaitMs }
         : {}),
     },
-    () => new ApplyRun(args).run()
+    async () => {
+      // Under the lock: the definitions, the live columns and the progress rows the run decides
+      // from are all read from the one schema state no other change can move.
+      const entities =
+        typeof args.entities === "function"
+          ? await args.entities()
+          : args.entities;
+      return new ApplyRun({ ...args, entities }).run();
+    }
   );
   if (!held.ran) {
     // Only a lock taken with `isSettled` can end without running, and this one is not.
@@ -204,7 +217,11 @@ class ApplyRun {
   /** SQLite's one writer was held past a try: no further conversion tries this run. */
   private databaseHeld = false;
 
-  constructor(private readonly args: ApplyRepairsArgs) {
+  constructor(
+    private readonly args: ApplyRepairsArgs & {
+      entities: readonly RepairEntity[];
+    }
+  ) {
     this.adapter = args.adapter;
     this.dialect = args.dialect;
     this.tryMs = args.tableTryMs ?? TABLE_TRY_MS;
@@ -617,9 +634,13 @@ class ApplyRun {
       return interrupted;
     const now = await this.rejudge(this.db, finding);
     const steps = now.conversion?.steps ?? [];
-    // The conversion the column needs now must be the one its record began; anything else is
-    // left for its owner, never run in its place.
-    if (findingClass(now) !== "safe" || steps.length !== progress.steps) {
+    // The conversion the column needs now must be the one its record began, towards the same
+    // target; anything else is left for its owner, never run in its place.
+    if (
+      findingClass(now) !== "safe" ||
+      steps.length !== progress.steps ||
+      compareColumn(now.expected, progress.to) !== null
+    ) {
       return { ...interrupted, finding: now };
     }
     if (reached !== progress.step) {
