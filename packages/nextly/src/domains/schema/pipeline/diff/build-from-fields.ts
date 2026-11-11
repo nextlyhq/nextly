@@ -164,6 +164,13 @@ interface CollectionIndexContext<F> {
    */
   isSingleRelation?: (field: F) => boolean;
   /**
+   * Whether a field's column is unique. Defaults to the Builder's rule for a collection or Single
+   * (`builderColumnIsUnique`: its Unique mark, or a relationship stored one-to-one); a component
+   * passes the rule its creator follows, the Unique mark alone, so the two declare the same
+   * indexes.
+   */
+  columnIsUnique?: (field: F) => boolean;
+  /**
    * Compound indexes the config declared, which nothing emitted before.
    *
    * `CollectionConfig.indexes` has been validated and then discarded since it
@@ -277,7 +284,9 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     // Unique by its mark, or by a relationship the Builder stored one-to-one: one rule for every
     // road (`builderColumnIsUnique`), so a migration file, a push and a save's preview all make a
     // one-to-one's column unique, and take the uniqueness away when it stops being one.
-    const unique = builderColumnIsUnique(field as unknown as FieldDefinition);
+    const unique = context.columnIsUnique
+      ? context.columnIsUnique(field)
+      : builderColumnIsUnique(field as unknown as FieldDefinition);
     // Asked through the same rule the generators use. Where a dialect cannot key the column they
     // keep the uniqueness inline and write no index, so declaring one here would make every diff
     // propose a `CREATE UNIQUE INDEX` the server refuses.
@@ -853,6 +862,9 @@ export function buildDesiredTableFromComponentFields(
       // relation holding a JSON list (a many-to-many included) never does. Asked through the rule
       // the creator asks, so the two declare the same indexes.
       isSingleRelation: componentRelationIsSingleReference,
+      // The creator makes a component column unique by its Unique mark alone, never by a
+      // relationship's cardinality.
+      columnIsUnique: field => field.unique === true,
       hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
       localizedNames,
       columnNameFor: field =>

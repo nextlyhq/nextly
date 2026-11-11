@@ -60,7 +60,9 @@ import type { Resolution } from "../../domains/schema/pipeline/resolution/types"
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import {
   applyCollectionSchemaChange,
+  fieldsAsStored,
   recordedFieldsOf,
+  refuseUniqueOverRepeats,
 } from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -703,9 +705,7 @@ const COLLECTIONS_METHODS: Record<
         stored: collection.fields ?? [],
       });
       // Planned as the apply will write them: an earlier-shaped relationship in its stored shape.
-      const fields = (
-        await import("../../domains/schema/services/editor-relationship-fields")
-      ).withStoredRelationshipOptions(sentFields, collection.fields ?? []);
+      const fields = fieldsAsStored(sentFields, collection);
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -904,12 +904,13 @@ const COLLECTIONS_METHODS: Record<
           if (!collection) throw new Error("Collection not found");
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
           // An earlier-shaped relationship the editor read is written back in its stored shape,
-          // against the row this save is checked and written against.
-          const fields = (
-            await import(
-              "../../domains/schema/services/editor-relationship-fields"
-            )
-          ).withStoredRelationshipOptions(sentFields, collection.fields ?? []);
+          // through a rename the save makes, against the row this save is checked and written
+          // against.
+          const fields = fieldsAsStored(
+            sentFields,
+            collection,
+            renameResolutions
+          );
           // A field name the collection already holds keeps working whatever its case; one this
           // save creates is the Builder's own. Judged against the row as stored now.
           assertBuilderFieldNames(fields, collection.fields ?? []);
@@ -967,6 +968,18 @@ const COLLECTIONS_METHODS: Record<
           }
           // `dialect` is an abstract readonly property on DrizzleAdapter, not a method.
           const dialect = adapter.dialect;
+
+          // A column made unique over entries that already repeat a value is refused before
+          // anything runs, on either road below: the save writer runs no push that would ask it.
+          await refuseUniqueOverRepeats({
+            adapter,
+            tableName,
+            oldFields: collection.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            wasLocalized,
+            isLocalized,
+            renames: renameResolutions,
+          });
 
           // One apply of the schema pipeline, with the admin's answers from the dialog, then the
           // companion brought in step: the same path a Builder save of the collection takes. Legacy

@@ -198,6 +198,17 @@ describe("withStoredRelationshipOptions", () => {
     }
   });
 
+  it("writes back a relationship the save renames, matched to the field it was", () => {
+    const renamed = { ...sentFrom(legacy("oneToOne")), name: "owner" };
+    const renames = [{ from: { name: "person" }, to: { name: "owner" } }];
+    expect(
+      withStoredRelationshipOptions([renamed], [legacy("oneToOne")], renames)
+    ).toEqual([{ ...legacy("oneToOne"), name: "owner" }]);
+    expect(
+      withStoredRelationshipOptions([renamed], [legacy("oneToOne")])
+    ).toEqual([renamed]);
+  });
+
   it("matches by name, not by position", () => {
     const other = {
       name: "person",

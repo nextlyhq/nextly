@@ -92,6 +92,7 @@ import { recoverInterruptedSqliteRebuilds } from "../pipeline/sqlite-rebuild-rec
 import type { DesiredCollection, DesiredSchema } from "../pipeline/types";
 
 import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
+import { withStoredRelationshipOptions } from "./editor-relationship-fields";
 import { toSnakeCase } from "./field-column-descriptor";
 import { withSchemaChangeExcluded } from "./schema-change-exclusion";
 
@@ -352,31 +353,88 @@ export async function applyCollectionSchemaChange(
 }
 
 /**
- * Refuse a change that makes a main-table column unique, by its Unique mark or by a relationship
- * becoming one-to-one, while the column's entries already repeat a value.
+ * The fields a schema save sends, as it writes them: each relationship the editor read from an
+ * earlier-shaped one written back in its stored shape (`withStoredRelationshipOptions`), matched
+ * through the renames the save accepted.
  *
- * The database refuses the unique index part-way through the apply, and MySQL keeps every schema
- * statement that ran before it. So the question is asked first, by the precondition the service's
- * save asks (`refusalsForCollectionSave`, uniqueness only), and the two roads refuse alike. A
- * translated field's column is its companion's, whose per-language uniqueness is judged where the
- * companion's unique indexes are made.
+ * @param sent the field list the save sends
+ * @param entity the collection's or Single's row the save is checked and written against
+ * @param renames the dialog's answers to the renames its preview paired, when it has any
  */
-async function refuseUniqueOverRepeats(args: {
-  adapter: DrizzleAdapter;
-  tableName: string;
-  oldFields: FieldDefinition[];
-  newFields: FieldDefinition[];
-  wasLocalized: boolean;
-  isLocalized: boolean;
-  /** The renames the admin accepted: a renamed field's values are checked under its old column. */
+export function fieldsAsStored<F>(
+  sent: readonly F[],
+  entity: { tableName: string; fields?: readonly unknown[] | null },
+  renames: readonly BrowserRenameResolution[] = []
+): F[] {
+  const stored = (entity.fields ?? []) as unknown as FieldDefinition[];
+  return withStoredRelationshipOptions(
+    sent,
+    stored,
+    acceptedFieldRenames(
+      renames,
+      entity.tableName,
+      stored,
+      sent as unknown as FieldDefinition[]
+    )
+  );
+}
+
+/**
+ * Each rename the admin accepted on `tableName`, as the fields it pairs: the stored field and the
+ * field the save renames it to, matched by their columns. A rename naming a column neither list
+ * holds pairs nothing.
+ */
+function acceptedFieldRenames<F extends { name: string }>(
   renames: readonly {
     tableName: string;
     fromColumn: string;
     toColumn: string;
     choice: string;
+  }[],
+  tableName: string,
+  oldFields: readonly F[],
+  newFields: readonly F[]
+): { from: F; to: F }[] {
+  const byColumn = (fields: readonly F[], column: string) =>
+    fields.find(field => toSnakeCase(field.name) === column);
+  return renames.flatMap(rename => {
+    if (rename.tableName !== tableName || rename.choice !== "rename") {
+      return [];
+    }
+    const from = byColumn(oldFields, rename.fromColumn);
+    const to = byColumn(newFields, rename.toColumn);
+    return from && to ? [{ from, to }] : [];
+  });
+}
+
+/**
+ * Refuse a change that makes a main-table column unique, by its Unique mark or by a relationship
+ * becoming one-to-one, while the column's entries already repeat a value.
+ *
+ * The database refuses the unique index part-way through the apply, and MySQL keeps every schema
+ * statement that ran before it. So the question is asked first, by the precondition the service's
+ * save asks (`refusalsForCollectionSave`, uniqueness only), and the two roads refuse alike. The
+ * schema dialog asks it before its save writer too, which runs no push. A
+ * translated field's column is its companion's, whose per-language uniqueness is judged where the
+ * companion's unique indexes are made.
+ */
+export async function refuseUniqueOverRepeats(args: {
+  adapter: DrizzleAdapter;
+  tableName: string;
+  /** The stored fields; none when the row records none. */
+  oldFields: FieldDefinition[] | undefined;
+  newFields: FieldDefinition[];
+  wasLocalized: boolean;
+  isLocalized: boolean;
+  /** The renames the admin accepted: a renamed field's values are checked under its old column. */
+  renames?: readonly {
+    tableName: string;
+    fromColumn: string;
+    toColumn: string;
+    choice: string;
   }[];
-  /** The one value an added Required field gives every existing entry. */
-  fills: readonly { field: string; value: unknown }[];
+  /** The one value an added Required field gives every existing entry; the dialog sends none. */
+  fills?: readonly { field: string; value: unknown }[];
 }): Promise<void> {
   const { adapter, tableName } = args;
   // A table still to be made holds no entries, so nothing can repeat yet.
@@ -399,29 +457,24 @@ async function refuseUniqueOverRepeats(args: {
     adapter.dialect,
     [tableName]
   );
-  const oldFields = onMain(args.oldFields, args.wasLocalized);
+  const oldFields = onMain(args.oldFields ?? [], args.wasLocalized);
   const newFields = onMain(args.newFields, args.isLocalized);
-  const byColumn = (fields: FieldDefinition[], column: string) =>
-    fields.find(field => toSnakeCase(field.name) === column);
   const refusals = await refusalsForCollectionSave({
     adapter,
     dialect: adapter.dialect,
     tableName,
     oldFields,
     newFields,
-    // Each rename the admin accepted on this table, as the fields it pairs.
-    renames: args.renames.flatMap(rename => {
-      if (rename.tableName !== tableName || rename.choice !== "rename") {
-        return [];
-      }
-      const from = byColumn(oldFields, rename.fromColumn);
-      const to = byColumn(newFields, rename.toColumn);
-      return from && to ? [{ from, to }] : [];
-    }),
+    renames: acceptedFieldRenames(
+      args.renames ?? [],
+      tableName,
+      oldFields,
+      newFields
+    ),
     // A column this apply adds takes NULL in every existing entry, which never repeats, unless
     // the change fills it with one value, which every entry then shares.
     addedColumnBackfill: field => {
-      const fill = args.fills.find(each => each.field === field.name);
+      const fill = args.fills?.find(each => each.field === field.name);
       return fill === undefined || fill.value === null
         ? null
         : JSON.stringify(fill.value);

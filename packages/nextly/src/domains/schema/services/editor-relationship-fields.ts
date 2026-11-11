@@ -169,15 +169,21 @@ function restoredRelationship(
  * (`withEditorRelationshipFields`) written back the way it was stored, at any depth inside groups
  * and repeaters. Read the other way, its stored `options` would be replaced by the editor's
  * `relationTo` and Unique mark, losing what only they record, such as its delete action. A field
- * is matched to the stored field of the same name at the same place; one pointed at another
- * target, or made to hold many, is saved as sent. Any other field is returned as it is.
+ * is matched to the stored field of the same name at the same place, or to the one it is renamed
+ * from; one pointed at another target, or made to hold many, is saved as sent. Any other field is
+ * returned as it is.
  *
  * @param sent the field list a save sends
  * @param stored the entity's stored field list the editor read
+ * @param renames the renames the save makes among `stored`'s fields (`acceptedFieldRenames`)
  */
 export function withStoredRelationshipOptions<F>(
   sent: readonly F[],
-  stored: readonly unknown[]
+  stored: readonly unknown[],
+  renames: readonly {
+    from: { name: string };
+    to: { name: string };
+  }[] = []
 ): F[] {
   const storedByName = new Map<unknown, StoredField>();
   for (const field of stored) {
@@ -189,7 +195,11 @@ export function withStoredRelationshipOptions<F>(
   return sent.map(field => {
     if (typeof field !== "object" || field === null) return field;
     const sentField = field as StoredField;
-    const storedField = storedByName.get(sentField.name);
+    // A field the save renames is matched to the stored field it was before.
+    const storedField = storedByName.get(
+      renames.find(rename => rename.to.name === sentField.name)?.from.name ??
+        sentField.name
+    );
     if (storedField === undefined) return field;
     const restored = restoredRelationship(sentField, storedField);
     if (restored !== undefined) return restored as F;
