@@ -114,7 +114,7 @@ export const PageContainer: React.ForwardRefExoticComponent<
     // What every page gets regardless of how its content is laid out: the panel
     // background and a floor of one viewport minus the header.
     const surface =
-      "w-full max-w-full min-h-[calc(100vh-4rem)] admin-page-container";
+      "w-full max-w-full min-h-[calc(100vh-var(--admin-bar-height))] admin-page-container";
 
     // Vertical padding scales with the content panel rather than the viewport,
     // which is what makes it agree with a sidebar that can open and close.

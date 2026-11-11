@@ -369,7 +369,7 @@ export default function EditUserPage(): ReactElement {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer type="form">
         {/* Breadcrumbs */}
-        <div className="mb-6">
+        <div className="mb-6 empty:hidden">
           <UserBreadcrumbs currentPage="edit" />
         </div>
 

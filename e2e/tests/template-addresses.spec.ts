@@ -9,6 +9,9 @@
  * reads the entry at `<address>/<slug>`. A role that may update templates but
  * not change routing sees the address read-only.
  *
+ * A production build turns the Schema Builder off and refuses its calls, so
+ * this runs on the dev server (`DEV_SPECS` in `playwright.config.ts`).
+ *
  * @module tests/template-addresses
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
