@@ -26,6 +26,11 @@ import {
 import { defaultSeoFields } from "./fields";
 import { seoPageMetadata } from "./resolver/provider";
 import { contentTypesRoute } from "./settings/content-types-route";
+import {
+  SEO_SETTINGS_SLUG,
+  SETTINGS_PAGE,
+  SETTINGS_PAGE_HREF,
+} from "./settings/contract";
 import { readSeoRules } from "./settings/rules";
 import { seoSettingsSingle } from "./settings/single";
 import {
@@ -179,6 +184,20 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     singles: [seoSettingsSingle()],
     // What the settings screen lists: the types SEO is added to.
     routes: [contentTypesRoute(targets)],
+    // The SEO settings screen, for whoever may read the settings.
+    admin: {
+      menu: [
+        {
+          label: "Settings",
+          to: SETTINGS_PAGE_HREF,
+          icon: "Settings",
+          requiredPermission: `read-${SEO_SETTINGS_SLUG}`,
+        },
+      ],
+      pages: [
+        { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
+      ],
+    },
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -271,6 +290,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // what installing this does. The other first-party plugins declare theirs
     // in the same place.
     admin: {
+      // Its own place in the admin's rail, after Media, as SEO.
+      placement: "standalone",
+      after: "media",
+      appearance: { icon: "Search", label: "SEO" },
       description:
         "Add an SEO meta field group to your collections, with title, description and social preview fields",
     },

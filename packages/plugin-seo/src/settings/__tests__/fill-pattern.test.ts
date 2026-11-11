@@ -31,24 +31,34 @@ describe("a pattern never adds the brand to a title that already ends with it", 
     ).toBe("Nextly pricing: MIT licensed and self-hosted | Nextly");
   });
 
-  it("matches the brand in any case, and keeps the rest of the pattern", () => {
+  it("matches the brand in any case", () => {
     expect(
       fillPattern(
-        "{Title} — Blog — {Site name}",
+        "{Title} — {Site name}",
         { title: "Our launch — rext ai", siteName: "Rext AI" },
         {}
       )
-    ).toBe("Our launch — rext ai — Blog");
+    ).toBe("Our launch — rext ai");
+  });
+
+  it("adds the brand where other words come between it and the title", () => {
+    expect(
+      fillPattern(
+        "{Title} · {Category} | {Site name}",
+        { title: "Surfer SEO vs Rext AI", siteName: "Rext AI" },
+        { category: "Comparisons" }
+      )
+    ).toBe("Surfer SEO vs Rext AI · Comparisons | Rext AI");
   });
 
   it("still adds the brand where the title only ends with a longer word", () => {
     expect(
       fillPattern(
         "{Title} | {Site name}",
-        { title: "Why teams pick Nextlyish tools", siteName: "Nextly" },
+        { title: "Moving from SuperNextly", siteName: "Nextly" },
         {}
       )
-    ).toBe("Why teams pick Nextlyish tools | Nextly");
+    ).toBe("Moving from SuperNextly | Nextly");
     expect(
       fillPattern(
         "{Title} | {Site name}",

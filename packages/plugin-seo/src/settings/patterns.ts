@@ -81,28 +81,29 @@ function endsWithBrand(title: string, siteName: string): boolean {
   return before === "" || /[^a-z0-9]$/.test(before);
 }
 
-/**
- * The separator and site name a pattern adds after the title, each found as
- * `{Site name}` with the spaces and the one separator character before it.
- */
-const SITE_NAME_AFTER_TITLE = /\s*[|\u2014\u2013\u00b7:,-]?\s*\{\s*site\s*name\s*\}/gi;
+/** Where `{Site name}` stands in a pattern while the rest is filled in. */
+const SITE_NAME_MARK = "\u0000";
+
+/** A separator between two parts of a title, and the spaces around it. */
+const SEPARATOR_BEFORE_MARK = /\s*[|\u2014\u2013\u00b7:,-]?\s*$/;
 
 /**
- * `pattern` without the site name it would add after a title that already
- * ends with it, so "{Title} | {Site name}" never gives "Pricing | Acme |
- * Acme". A site name the pattern puts before the title stays.
+ * `filled` with each mark of the site's name replaced by it, except where the
+ * text before the mark already ends with the name: there the mark and the
+ * separator before it go, so "{Title} | {Site name}" never gives
+ * "Pricing | Acme | Acme".
  */
-function withoutRepeatedBrand(
-  pattern: string,
-  values: { title?: string; siteName?: string }
-): string {
-  const { title, siteName } = values;
-  if (title === undefined || siteName === undefined) return pattern;
-  if (!endsWithBrand(title, siteName)) return pattern;
-  const titleAt = pattern.search(/\{\s*title\s*\}/i);
-  if (titleAt === -1) return pattern;
-  const head = pattern.slice(0, titleAt);
-  return head + pattern.slice(titleAt).replace(SITE_NAME_AFTER_TITLE, "");
+function withSiteName(filled: string, siteName: string): string {
+  const [first = "", ...rest] = filled.split(SITE_NAME_MARK);
+  let result = first;
+  for (const text of rest) {
+    const before = result.replace(SEPARATOR_BEFORE_MARK, "");
+    result =
+      before !== "" && endsWithBrand(before, siteName)
+        ? before + text
+        : result + siteName + text;
+  }
+  return result;
 }
 
 /**
@@ -123,22 +124,25 @@ export function fillPattern(
     Object.entries(document).map(([name, value]) => [tokenKey(name), value])
   );
   let missing = false;
-  const filled = withoutRepeatedBrand(pattern, values).replace(
-    /\{([^{}]+)\}/g,
-    (_, name: string) => {
-      const key = tokenKey(name);
-      const value =
-        key === "title"
-          ? values.title
-          : key === "sitename"
-            ? values.siteName
-            : (textOfValue(fields.get(key)) ??
-              (typeof fields.get(key) === "number"
-                ? String(fields.get(key))
-                : undefined));
-      if (value === undefined) missing = true;
-      return value ?? "";
+  const filled = pattern.replace(/\{([^{}]+)\}/g, (_, name: string) => {
+    const key = tokenKey(name);
+    // The site's name is put in last, once what comes before it is known.
+    if (key === "sitename") {
+      if (values.siteName === undefined) missing = true;
+      return SITE_NAME_MARK;
     }
-  );
-  return missing ? undefined : textOfValue(filled.trim());
+    const value =
+      key === "title"
+        ? values.title
+        : (textOfValue(fields.get(key)) ??
+          (typeof fields.get(key) === "number"
+            ? String(fields.get(key))
+            : undefined));
+    if (value === undefined) missing = true;
+    return value ?? "";
+  });
+  if (missing || values.siteName === undefined) {
+    return missing ? undefined : textOfValue(filled.trim());
+  }
+  return textOfValue(withSiteName(filled, values.siteName).trim());
 }

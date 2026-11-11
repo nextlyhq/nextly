@@ -32,6 +32,13 @@ export function patternsProblem(value: unknown): string | null {
   return null;
 }
 
+/** Why `url` is not the whole address of a profile; null when it is. */
+export function profileAddressProblem(url: string): string | null {
+  return /^https:\/\/[^\s/]+\.\S+$/i.test(url)
+    ? null
+    : "write the whole address of the profile, starting with https://.";
+}
+
 /** Why a stored list of social profiles is not one; null when it is. */
 export function socialProfilesProblem(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -44,8 +51,9 @@ export function socialProfilesProblem(value: unknown): string | null {
     if (typeof network !== "string" || typeof url !== "string") {
       return "Each social profile must have a network and an address.";
     }
-    if (!/^https:\/\/[^\s/]+\.[^\s]+$/i.test(url)) {
-      return `${url === "" ? "A profile" : url}: write the whole address of the profile, starting with https://.`;
+    const problem = profileAddressProblem(url);
+    if (problem !== null) {
+      return `${url === "" ? "A profile" : url}: ${problem}`;
     }
   }
   return null;

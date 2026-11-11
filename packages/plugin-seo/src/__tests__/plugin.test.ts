@@ -78,7 +78,9 @@ describe("seoPlugin", () => {
     // No public enumeration route when the sitemap is turned off: the one
     // route left is the settings screen's, which asks for a signed-in reader.
     const routes = plugin.contributes?.routes ?? [];
-    expect(routes.map(route => route.path)).toEqual(["/settings/content-types"]);
+    expect(routes.map(route => route.path)).toEqual([
+      "/settings/content-types",
+    ]);
     expect(routes.some(route => route.public === true)).toBe(false);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
@@ -148,7 +150,7 @@ describe("the dashboard card the plugin contributes", () => {
     // `admin.widgets`, and no data source under `widgetSources`.
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
-    expect(plugin.contributes?.admin).toBeUndefined();
+    expect(plugin.contributes?.admin).not.toHaveProperty("widgets");
     // Read as a property of the value: `widgetSources` is no field of the
     // contributions type, so a typed read of it does not compile.
     expect(plugin.contributes).toBeDefined();
