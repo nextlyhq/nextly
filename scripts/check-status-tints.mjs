@@ -33,7 +33,7 @@ import { fileURLToPath } from "node:url";
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 
 /** Where first-party admin colour is authored. */
-export const ROOTS = [
+const ROOTS = [
   "packages/admin/src",
   "packages/ui/src",
   "packages/plugin-*/src",
@@ -68,7 +68,7 @@ const PROPERTY =
  * mix of a status colour on any colour property, behind any variants, or a
  * shade's variable named directly.
  */
-export const TINT = new RegExp(
+const TINT = new RegExp(
   `(?<![\\w-])(?:[\\w\\[\\]&*>:.-]+:)?${PROPERTY}-${STATUS}(?=[-/])(?:-${SHADE})?(?:/(?:\\d{1,3}|\\[[^\\]\\s]+\\]))?(?![\\w-])` +
     `|--color-${STATUS}-${SHADE}(?![\\w-])`,
   "g"
@@ -80,7 +80,7 @@ export function tintsIn(text) {
 }
 
 /** The strings a script or component spells out, comments excluded. */
-export function stringsIn(source, fileName) {
+function stringsIn(source, fileName) {
   const strings = [];
   walk(parseSource(source, fileName).program, node => {
     if (node.type === "Literal" && typeof node.value === "string") {
@@ -95,7 +95,7 @@ export function stringsIn(source, fileName) {
 }
 
 /** CSS without its comments, the only part a browser applies. */
-export function cssWithoutComments(source) {
+function cssWithoutComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
@@ -114,7 +114,7 @@ export function isScanned(path) {
 }
 
 /** The tracked files under the roots that this check reads. */
-export function scannedFiles(cwd = process.cwd()) {
+function scannedFiles(cwd = process.cwd()) {
   const listed = execFileSync("git", ["ls-files", "-z", "--", ...ROOTS], {
     cwd,
     encoding: "utf8",
