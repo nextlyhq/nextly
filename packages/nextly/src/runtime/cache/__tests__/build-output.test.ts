@@ -162,6 +162,40 @@ describe("a miss while the start has not yet connected", () => {
     expect((await pending)?.value).toEqual(PAGE);
   });
 
+  it("serves at once a page that carries only its path tags", async () => {
+    // The page's own path tags, as the build writes them beside it: no
+    // database read is tagged, so nothing another process recorded about
+    // content can have changed it.
+    const shell = {
+      ...PAGE,
+      headers: {
+        "x-next-cache-tags": "_N_T_/layout,_N_T_/admin/layout,_N_T_/admin",
+      },
+    };
+    built.read.mockResolvedValue({ lastModified: BUILT_AT, value: shell });
+    const handler = new IncrementalHandler({ fs, serverDistDir: "/app/.next" });
+
+    const answer = await handler.get("/admin", {
+      kind: "APP_PAGE",
+      softTags: ["_N_T_/layout", "_N_T_/admin/layout", "_N_T_/admin"],
+    });
+
+    expect(answer?.value).toEqual(shell);
+  });
+
+  it("waits for a page whose build copy names a content tag", async () => {
+    built.read.mockResolvedValue({
+      lastModified: BUILT_AT,
+      value: {
+        ...PAGE,
+        headers: { "x-next-cache-tags": `_N_T_/admin,${SITE_STYLE}` },
+      },
+    });
+    const handler = new IncrementalHandler({ fs, serverDistDir: "/app/.next" });
+
+    expect(await handler.get("/admin", { kind: "APP_PAGE" })).toBeNull();
+  });
+
   it("is a miss when no start is under way to connect", async () => {
     const handler = new IncrementalHandler({ fs, serverDistDir: "/app/.next" });
 

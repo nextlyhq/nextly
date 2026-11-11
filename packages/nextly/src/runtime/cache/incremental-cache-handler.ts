@@ -49,6 +49,12 @@ interface CacheContext {
 }
 
 /** The tags a stored page or response carries in its cache-tags header. */
+/**
+ * How Next.js begins the tags it derives from a page's path (`_N_T_/admin`),
+ * as against the tags its reads name.
+ */
+const NEXT_IMPLICIT_TAG_PREFIX = "_N_T_";
+
 function headerTags(value: unknown): string[] {
   const header = (value as { headers?: Record<string, unknown> } | null)
     ?.headers?.["x-next-cache-tags"];
@@ -228,11 +234,19 @@ export default class NextlyIncrementalCacheHandler {
       ctx
     );
     if (!built) return undefined;
-    // The build's copy is served only once what expired since the build can
-    // be asked: before the ledger is published, a write another process
-    // recorded would go unseen, and the stale page could be kept by a shared
-    // cache too. A render on a miss waits for the start as it always has.
-    if (!(await expiriesCanBeAsked())) return undefined;
+    // A build copy naming a content tag is served only once what expired
+    // since the build can be asked: before the ledger is published, a write
+    // another process recorded would go unseen, and the stale page could be
+    // kept by a shared cache too. A render on a miss waits for the start as it
+    // always has. A copy carrying only its path tags read nothing tagged, so
+    // it is served at once; every later read asks about those tags as well.
+    const contentTags = [
+      ...headerTags(built.value),
+      ...(ctx?.tags ?? []),
+    ].filter(tag => !tag.startsWith(NEXT_IMPLICIT_TAG_PREFIX));
+    if (contentTags.length > 0 && !(await expiriesCanBeAsked())) {
+      return undefined;
+    }
     // A page stored while the disk was read is newer than the build's copy
     // (a regeneration another request finished first), so it stands.
     const storedMeanwhile = entries().get(key);
