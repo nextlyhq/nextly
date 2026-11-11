@@ -75,6 +75,21 @@ interface Widening {
  * before this is asked, so a type change names the column as it will be.
  */
 function wideningsOf(operations: readonly Operation[]): Widening[] {
+  const renames = renamesOf(operations);
+  return operations.flatMap(op => {
+    const widening = wideningOf(op, renames);
+    return widening === undefined ? [] : [widening];
+  });
+}
+
+/** The names a run's renames gave tables and columns, mapped back to the names they had. */
+interface Renames {
+  tableBefore: ReadonlyMap<string, string>;
+  /** Keyed `table.column`, by the names the run leaves. */
+  columnBefore: ReadonlyMap<string, string>;
+}
+
+function renamesOf(operations: readonly Operation[]): Renames {
   const tableBefore = new Map<string, string>();
   const columnBefore = new Map<string, string>();
   for (const op of operations) {
@@ -83,44 +98,63 @@ function wideningsOf(operations: readonly Operation[]): Widening[] {
       columnBefore.set(`${op.tableName}.${op.toColumn}`, op.fromColumn);
     }
   }
-  const widens = (from: string, to: string) =>
-    isMysqlTextOrBlobType(to) && !isMysqlTextOrBlobType(from);
-  const out: Widening[] = [];
-  for (const op of operations) {
-    const change =
-      op.type === "change_column_type"
-        ? {
-            table: op.tableName,
-            column: op.columnName,
-            recorded: undefined,
-            fromType: op.fromType,
-            toType: op.toType,
-          }
-        : op.type === "rename_column"
-          ? {
-              table: op.tableName,
-              column: op.toColumn,
-              recorded: op.fromColumn,
-              fromType: op.fromType,
-              toType: op.toType,
-            }
-          : undefined;
-    if (change === undefined || !widens(change.fromType, change.toType)) {
-      continue;
-    }
-    out.push({
-      table: change.table,
-      column: change.column,
-      recordedTable: tableBefore.get(change.table) ?? change.table,
-      recordedColumn:
-        change.recorded ??
-        columnBefore.get(`${change.table}.${change.column}`) ??
-        change.column,
-      fromType: change.fromType,
-      toType: change.toType,
-    });
+  return { tableBefore, columnBefore };
+}
+
+/** A column's type change, by its names as the run leaves them: a retype, or a rename's. */
+interface TypeChange {
+  table: string;
+  column: string;
+  /** The column's recorded name, where the operation itself is the rename. */
+  recorded: string | undefined;
+  fromType: string;
+  toType: string;
+}
+
+function typeChangeOf(op: Operation): TypeChange | undefined {
+  switch (op.type) {
+    case "change_column_type":
+      return {
+        table: op.tableName,
+        column: op.columnName,
+        recorded: undefined,
+        fromType: op.fromType,
+        toType: op.toType,
+      };
+    case "rename_column":
+      return {
+        table: op.tableName,
+        column: op.toColumn,
+        recorded: op.fromColumn,
+        fromType: op.fromType,
+        toType: op.toType,
+      };
+    default:
+      return undefined;
   }
-  return out;
+}
+
+/** `op` as a widening from a type MySQL keys whole into TEXT or BLOB, or undefined. */
+function wideningOf(op: Operation, renames: Renames): Widening | undefined {
+  const change = typeChangeOf(op);
+  if (
+    change === undefined ||
+    !isMysqlTextOrBlobType(change.toType) ||
+    isMysqlTextOrBlobType(change.fromType)
+  ) {
+    return undefined;
+  }
+  return {
+    table: change.table,
+    column: change.column,
+    recordedTable: renames.tableBefore.get(change.table) ?? change.table,
+    recordedColumn:
+      change.recorded ??
+      renames.columnBefore.get(`${change.table}.${change.column}`) ??
+      change.column,
+    fromType: change.fromType,
+    toType: change.toType,
+  };
 }
 
 /**
