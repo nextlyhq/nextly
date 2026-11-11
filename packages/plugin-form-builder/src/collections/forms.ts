@@ -17,6 +17,7 @@ import {
   checkbox,
   date,
   group,
+  number,
   json,
   relationship,
 } from "nextly";
@@ -835,14 +836,38 @@ export function formsCollection(
 
   // Add remaining settings fields
   settingsFields.push(
+    // Read as `oneResponse` and no longer written. Declared still, hidden,
+    // so a form saved before keeps the value its reader maps.
     checkbox({
       name: "allowMultipleSubmissions",
       label: "Allow Multiple Submissions",
-      defaultValue: true,
-      admin: {
-        description:
-          "Allow the same user/IP to submit this form multiple times",
-      },
+      admin: { hidden: true },
+    }),
+
+    // No stored default: unset is what lets the reader map a form's legacy
+    // key, including one an API caller still writes. The reader supplies the
+    // default.
+    select({
+      name: "oneResponse",
+      label: "One response per person",
+      options: [
+        { label: "Allow several responses", value: "off" },
+        { label: "One per email address", value: "email" },
+        { label: "One per browser", value: "browser" },
+        { label: "One per network (IP address)", value: "ip" },
+      ],
+    }),
+
+    text({
+      name: "oneResponseField",
+      label: "Email field for one response per person",
+    }),
+
+    number({
+      name: "oneResponseVersion",
+      label: "One-response version",
+      defaultValue: 0,
+      admin: { hidden: true },
     }),
 
     checkbox({
@@ -854,12 +879,47 @@ export function formsCollection(
       },
     }),
 
+    // Read as `botCheck` and no longer written; hidden, as above.
     checkbox({
       name: "captchaEnabled",
       label: "Enable reCAPTCHA",
-      admin: {
-        description:
-          "Per-form reCAPTCHA override; unset inherits the plugin default",
+      admin: { hidden: true },
+    }),
+
+    // No stored default: unset is what lets the reader map a form's legacy
+    // key, including one an API caller still writes. The reader supplies the
+    // default.
+    select({
+      name: "botCheck",
+      label: "Bot check",
+      options: [
+        { label: "Site default", value: "default" },
+        { label: "Off", value: "off" },
+        { label: "reCAPTCHA", value: "recaptcha" },
+        { label: "Turnstile", value: "turnstile" },
+      ],
+    }),
+
+    date({ name: "closesAt", label: "Closes at" }),
+
+    number({ name: "submissionLimit", label: "Submission limit", min: 1 }),
+
+    checkbox({
+      name: "storeIpAndBrowser",
+      label: "Store IP address and browser",
+      defaultValue: true,
+    }),
+
+    number({ name: "keepDays", label: "Keep submissions for (days)", min: 1 }),
+
+    textarea({
+      name: "internalNote",
+      label: "Internal note",
+      // For the people who manage the form. The public read of a form returns
+      // its row, and the Public role may read forms, so the note is withheld
+      // from anyone who cannot edit them.
+      access: {
+        read: ({ permissions }) => permissions.includes(`update-${slug}`),
       },
     }),
 
