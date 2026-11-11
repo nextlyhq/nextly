@@ -867,10 +867,13 @@ export class FieldGroupSchemaService {
       // where the dialect cannot key TEXT (`textKindFor`), so this creator and every description
       // of its table read one rule.
       if ("unique" in field && field.unique === true) {
-        return (
-          getComponentRowColumnDescriptor(field, this.dialect, "fieldGroup")
-            ?.dialectType ?? types.text
-        );
+        const described = getComponentRowColumnDescriptor(
+          field,
+          this.dialect,
+          "fieldGroup"
+        )?.dialectType;
+        // Bounded only where the rule bounds it (MySQL); elsewhere this creator's own spelling.
+        if (described?.startsWith("varchar(") === true) return described;
       }
       return types.text;
     }
