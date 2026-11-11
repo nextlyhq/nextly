@@ -2451,14 +2451,19 @@ function pluginModuleUnits(
   dialect: SupportedDialect
 ): RunUnit[] {
   const pending = pendingPluginModules(lists, applied, step);
+  // Every pending module, past the step as well: a run looks for where the database stands over
+  // a plugin's whole history before the step caps what it records.
+  const allPending = pendingPluginModules(lists, applied, undefined);
   const pluginOf = (migration: PluginMigration) =>
     lists.find(set => set.migrations.includes(migration));
-  return pending.map(({ filename, migration }, at) => {
+  return pending.map(({ filename, migration }) => {
     const statements = pluginModuleStatements(migration, dialect, "up");
     // Where a run may find the database already standing and adopt the module without running
-    // it: its snapshot and each later pending module's of the same plugin. Read only by the
-    // rename check (`refuseRenamesOntoTakenTargets`); the runner decides adoption itself.
-    const adoptableAt = pending
+    // it: its snapshot and each later pending module's of the same plugin, within the step or
+    // past it. Read only by the rename check (`refuseRenamesOntoTakenTargets`); the runner
+    // decides adoption itself.
+    const at = allPending.findIndex(later => later.migration === migration);
+    const adoptableAt = allPending
       .slice(at)
       .filter(later => pluginOf(later.migration) === pluginOf(migration))
       .flatMap(later => {

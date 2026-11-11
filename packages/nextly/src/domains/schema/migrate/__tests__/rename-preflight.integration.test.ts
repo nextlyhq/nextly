@@ -36,6 +36,7 @@ import { ensureSchemaEventsTable } from "../../events/schema-events-ddl";
 import { formatMigrationFile } from "../../migrate-create/format-file";
 import { NO_CONSENT, resolveDataLossConsent } from "../data-loss-consent";
 import { SchemaOwnersRepository } from "../../ownership/schema-owners-repository";
+import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { queryLiveColumnTypes } from "../../pipeline/live-column-types";
 import {
   LOCK_DIALECTS,
@@ -655,6 +656,73 @@ describe.each(LOCK_DIALECTS)(
           dialect,
         })
       ).resolves.toBeDefined();
+    });
+
+    // `--step 1` reaches only the first module, but a run looks for where the database stands over
+    // the plugin's whole history first: standing at the second module's snapshot, it adopts the
+    // first without running its rename.
+    it("does not refuse a module within the step that a run adopts at a snapshot past it", async () => {
+      await ownedByPlugin([NOTES]);
+      const [live] = (
+        await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [NOTES])
+      ).tables;
+      const at = (spec: typeof live) => ({
+        postgresql: { tables: [spec] },
+        mysql: { tables: [spec] },
+        sqlite: { tables: [spec] },
+      });
+      const nothing = { tables: [] };
+      const sides = { postgresql: nothing, mysql: nothing, sqlite: nothing };
+      const afterRename = {
+        ...live,
+        columns: live.columns.filter(column => column.name !== "heading"),
+      };
+      const module = (
+        name: string,
+        up: string[],
+        before: ReturnType<typeof at> | typeof sides,
+        snapshot: ReturnType<typeof at>
+      ) => {
+        const content: MigrationContent = {
+          name,
+          schemaVersion: 1,
+          dialects: {
+            postgresql: { up, down: [] },
+            mysql: { up, down: [] },
+            sqlite: { up, down: [] },
+          },
+          snapshot,
+          before,
+        };
+        return { ...content, checksum: migrationChecksum(content) };
+      };
+
+      await migrate({
+        step: 1,
+        pluginMigrationSets: [
+          {
+            pluginName: "rtx",
+            pluginVersion: "1.0.0",
+            migrations: [
+              module(
+                "20261111_000005_rename",
+                [renameColumn("heading", "headline")],
+                sides,
+                at(afterRename)
+              ),
+              module(
+                "20261111_000006_heading_again",
+                [`ALTER TABLE ${q(NOTES)} ADD COLUMN ${q("heading")} text`],
+                at(afterRename),
+                at(live)
+              ),
+            ],
+          },
+        ],
+      });
+
+      expect(await valueOf("heading")).toBe("Kept");
+      expect(await columnsOf(NOTES)).toEqual(["heading", "headline", "id"]);
     });
 
     // SQLite keeps a trigger's name apart from a table's.
