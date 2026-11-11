@@ -336,8 +336,16 @@ indexes still missing. A run limited by `--step` leaves this to one that runs ev
 migration file `migrate:create` writes later for the same uniqueness is applied without its index,
 which is already there.
 
-A migration file that makes any column unique is checked the same way, before any of its
-statements runs, and refused with the same message while the column's entries repeat a value.
+A migration file that makes any column unique is checked the same way, and refused with the same
+message while the column's entries repeat a value. The check runs before any of the file's
+statements, or just before the index's own statement when an earlier statement of the file changes
+the column's values (writes the table, adds the column, renames in a way that can't be followed
+with certainty) or when the index's statement carries something Nextly does not read (an index
+option, a schema-qualified table). On MySQL, and in a file marked `-- nextly:no-transaction`, the
+statements before it have then run and stay applied, and the refusal says so. A column the file
+adds with one constant default for every row is refused before anything runs once the table holds
+two rows. An index with a `WHERE` clause, one over an expression, or one on a table qualified by
+another schema than the connection's own is left to the database.
 
 ### A build older than the database
 

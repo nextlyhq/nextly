@@ -50,7 +50,10 @@ import { buildCollectionMetadataUpsert } from "../../ui-schema/metadata-sql";
 import { withMigrateLock } from "../../pipeline/locks";
 import { formatMigrationFile } from "../../migrate-create/format-file";
 import { diffSnapshots } from "../../pipeline/diff/diff";
-import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
+import {
+  introspectLiveColumns,
+  introspectLiveSnapshot,
+} from "../../pipeline/diff/introspect-live";
 import {
   readIndexUniqueness,
   readUniqueColumns,
@@ -951,6 +954,88 @@ describe.each(LOCK_DIALECTS)(
       // Nothing ran: the table keeps its name.
       expect(await personIsUnique()).toBe(false);
       expect(await ledger()).toEqual([]);
+    }, 120_000);
+
+    it("refuses a file that adds a column with one constant for every row and makes it unique, before the column is added", async () => {
+      await run([profile("p1", "ada"), profile("p2", "bob")]);
+      writeFileAs(NAME, [
+        `ALTER TABLE ${q(PROFILES)} ADD COLUMN ${q("code")} varchar(20) DEFAULT 'x'`,
+        createIndexSql(
+          PROFILES,
+          {
+            name: uniqueIndexNameForColumn(PROFILES, "code"),
+            columns: ["code"],
+            unique: true,
+          },
+          dialect,
+          q
+        ),
+      ]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toContain(
+        `${FILE} was not applied. Collection 'profiles': field 'code' cannot become unique while 1 value repeats, the most repeated one in 2 entries.`
+      );
+      const live = await introspectLiveColumns(adapter.getDrizzle(), dialect, [
+        PROFILES,
+      ]);
+      expect(live.tables[0]?.columns.map(c => c.name)).not.toContain("code");
+      expect(await ledger()).toEqual([]);
+    }, 120_000);
+
+    /** The schema an unqualified name reaches on this connection. */
+    async function ownSchema(): Promise<string> {
+      if (dialect === "sqlite") return "main";
+      const [row] = await adapter.executeQuery<{ s: string }>(
+        dialect === "postgresql"
+          ? `SELECT current_schema() AS ${q("s")}`
+          : `SELECT DATABASE() AS ${q("s")}`
+      );
+      return String(row?.s);
+    }
+
+    it("judges a unique index on its table qualified by the connection's own schema, refusing the repeat", async () => {
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+      writeFileAs(NAME, [
+        `CREATE UNIQUE INDEX ${q(UNIQUE)} ON ${q(await ownSchema())}.${q(PROFILES)} (${q("person")})`,
+      ]);
+
+      // The data-loss check cannot read a qualified name either, and asks for consent first.
+      const error = await migrate(undefined, true).then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+      expect(NextlyError.is(error)).toBe(true);
+      if (!NextlyError.is(error)) return;
+
+      expect(error.publicMessage).toContain(`${FILE} at statement 1`);
+      expect(error.publicMessage).toContain(
+        `field 'person' cannot become unique while 1 value repeats: "ada" (2 entries)`
+      );
+      expect(await personIsUnique()).toBe(false);
+    }, 120_000);
+
+    it("leaves to the database a unique index on a table another schema qualifies", async () => {
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+      writeFileAs(NAME, [
+        `CREATE UNIQUE INDEX ${q(UNIQUE)} ON ${q("nextly_elsewhere")}.${q(PROFILES)} (${q("person")})`,
+      ]);
+
+      const error = await migrate(undefined, true).then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+
+      // The database refuses the schema it does not have, at the index's statement; the profiles'
+      // repeats were not read.
+      expect(error).toBeDefined();
+      const told = NextlyError.is(error)
+        ? `${error.publicMessage} ${error.logMessage ?? ""}`
+        : String(error);
+      expect(told).not.toContain("cannot become unique");
+      expect(told).not.toContain("Deleting data needs consent");
+      expect(await personIsUnique()).toBe(false);
     }, 120_000);
   }
 );

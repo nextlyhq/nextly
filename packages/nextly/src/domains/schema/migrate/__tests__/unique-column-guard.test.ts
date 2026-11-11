@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   LISTED_REPEATS,
   uniqueColumnRepeatsError,
+  uniqueIndexCheckpoint,
   type RepeatedValue,
 } from "../unique-column-guard";
 
@@ -59,5 +60,72 @@ describe("uniqueColumnRepeatsError", () => {
     );
 
     expect(error.publicMessage).toContain(`"ada" (2 entries in "en")`);
+  });
+});
+
+// Which unique indexes a file's runner judges at their own statement: each one not judged with
+// certainty before the file runs.
+describe("uniqueIndexCheckpoint", () => {
+  const unit = { source: "0001_unique.sql", transaction: false };
+  const index = "CREATE UNIQUE INDEX `uq` ON `dc_profiles` (`person`)";
+  const judgedAtStatement = (statements: string[]) =>
+    uniqueIndexCheckpoint(statements, "mysql", unit) !== undefined;
+
+  it("leaves to the check before the file a unique index read whole over a column it already has", () => {
+    expect(judgedAtStatement([index])).toBe(false);
+    expect(
+      judgedAtStatement([
+        "ALTER TABLE `dc_profiles` RENAME COLUMN `owner` TO `person`",
+        index,
+      ])
+    ).toBe(false);
+  });
+
+  it("judges at its statement a unique index with an option after its key list", () => {
+    expect(
+      judgedAtStatement([
+        "CREATE UNIQUE INDEX `uq` ON `dc_profiles` (`person`) USING BTREE",
+      ])
+    ).toBe(true);
+  });
+
+  it("judges at its statement a unique index on a qualified table", () => {
+    expect(
+      judgedAtStatement([
+        "CREATE UNIQUE INDEX `uq` ON `app`.`dc_profiles` (`person`)",
+      ])
+    ).toBe(true);
+  });
+
+  it("judges at its statement a unique index after renames that swap two columns", () => {
+    expect(
+      judgedAtStatement([
+        "ALTER TABLE `dc_profiles` RENAME COLUMN `person` TO `partner`, RENAME COLUMN `partner` TO `person`",
+        index,
+      ])
+    ).toBe(true);
+    expect(
+      judgedAtStatement([
+        "ALTER TABLE `dc_profiles` RENAME COLUMN `person` TO `spare`",
+        "ALTER TABLE `dc_profiles` RENAME COLUMN `partner` TO `person`",
+        "ALTER TABLE `dc_profiles` RENAME COLUMN `spare` TO `partner`",
+        index,
+      ])
+    ).toBe(true);
+  });
+
+  it("judges at its statement a unique index over a column the file adds", () => {
+    expect(
+      judgedAtStatement([
+        "ALTER TABLE `dc_profiles` ADD COLUMN `person` varchar(36)",
+        index,
+      ])
+    ).toBe(true);
+    expect(
+      judgedAtStatement([
+        "ALTER TABLE `dc_profiles` ADD COLUMN `person` varchar(36) DEFAULT 'ada'",
+        index,
+      ])
+    ).toBe(true);
   });
 });

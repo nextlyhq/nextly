@@ -318,16 +318,43 @@ export interface UniqueIndexCreated {
 }
 
 /**
+ * A unique index a statement creates, read as far as its table and its key list. `exact` where the
+ * whole statement is a form read here (`uniqueIndexesCreatedBy`); not where anything around them is
+ * not read: an option after the key list, MySQL's index type before `ON`, an index left unnamed,
+ * another clause of the same ALTER, a qualified table.
+ */
+export interface UniqueIndexRead extends UniqueIndexCreated {
+  readonly exact: boolean;
+  /** A qualified table's schema, which the caller judges against the connection's own. */
+  readonly qualifier?: string;
+}
+
+/**
  * The unique index `statement` creates, as a list of one, or `undefined` for any other statement:
  * `CREATE UNIQUE INDEX [CONCURRENTLY] [IF NOT EXISTS] name ON [ONLY] table [USING method] (columns)` and
- * `ALTER TABLE table ADD CONSTRAINT name UNIQUE (columns)`. One over an expression, or with
- * anything after its columns (a predicate, an index option), is not read: it is not plain
- * uniqueness of its columns.
+ * `ALTER TABLE table ADD CONSTRAINT name UNIQUE (columns)`, read whole (`uniqueIndexesReadIn`,
+ * `exact`). One with anything else in it is not read here.
  */
 export function uniqueIndexesCreatedBy(
   statement: string,
   dialect: SupportedDialect
 ): UniqueIndexCreated[] | undefined {
+  const read = uniqueIndexesReadIn(statement, dialect);
+  if (read === undefined || !read.every(index => index.exact)) return undefined;
+  return read.map(({ table, name, columns }) => ({ table, name, columns }));
+}
+
+/**
+ * The unique indexes `statement` creates, each read as far as its table and plain key list:
+ * `CREATE UNIQUE INDEX … ON table … (columns) …`, and each `ADD [CONSTRAINT name] UNIQUE … (columns)`
+ * clause of an ALTER TABLE. Undefined for any other statement, and for an index over an expression
+ * or with a predicate (`WHERE`): that is not uniqueness of its whole columns, so the database alone
+ * judges it.
+ */
+export function uniqueIndexesReadIn(
+  statement: string,
+  dialect: SupportedDialect
+): UniqueIndexRead[] | undefined {
   // As `renamesIn` reads names: MySQL and SQLite compare them without regard to case, so a quoted
   // `Person` there is the column it names; PostgreSQL keeps a quoted name's case, so there only
   // the lower-case spelling is read.
@@ -336,59 +363,126 @@ export function uniqueIndexesCreatedBy(
     dialect,
     dialect === "postgresql" ? EXACT : {}
   );
-  const named = cursor.accept("CREATE", "UNIQUE", "INDEX")
-    ? createdUniqueIndex(cursor)
-    : cursor.accept("ALTER", "TABLE")
-      ? addedUniqueConstraint(cursor)
-      : undefined;
-  if (named === undefined || !cursor.accept("(")) return undefined;
-  const columns = columnList(cursor);
-  if (columns === undefined || !cursor.done()) return undefined;
-  // MySQL names an unnamed one after its first column.
-  return [{ table: named.table, name: named.name ?? columns[0], columns }];
+  if (cursor.accept("CREATE", "UNIQUE", "INDEX")) {
+    const index = createdUniqueIndex(cursor);
+    return index === undefined ? undefined : [index];
+  }
+  if (!cursor.accept("ALTER", "TABLE")) return undefined;
+  cursor.acceptCondition();
+  cursor.accept("ONLY");
+  const table = tableNamed(cursor);
+  if (table === undefined) return undefined;
+  const clauses = cursor.clauses();
+  const added = clauses.flatMap(
+    clause => addedUniqueKey(new StatementCursor(clause), table) ?? []
+  );
+  if (added.length === 0) return undefined;
+  // A clause beside the key is not read.
+  return clauses.length === 1
+    ? added
+    : added.map(index => ({ ...index, exact: false }));
+}
+
+/** A table named next, plain or with one qualifier (`s.t`), or undefined. */
+function tableNamed(
+  cursor: StatementCursor
+): { table: string; qualifier?: string } | undefined {
+  const qualified = cursor.qualifiedName();
+  if (qualified !== undefined) {
+    return { table: qualified.name, qualifier: qualified.qualifier };
+  }
+  const table = cursor.name();
+  return table === undefined ? undefined : { table };
 }
 
 /**
- * The table and name of `CREATE UNIQUE INDEX`, read after it, up to its key list: PostgreSQL's
- * `CONCURRENTLY` and `ON ONLY` included.
+ * The index `CREATE UNIQUE INDEX` makes, read after it: PostgreSQL's `CONCURRENTLY`, `ON ONLY` and
+ * method before the key list included, and exact only when it is named and MySQL's index type does
+ * not come before `ON`.
  */
 function createdUniqueIndex(
   cursor: StatementCursor
-): { table: string; name: string | undefined } | undefined {
+): UniqueIndexRead | undefined {
   cursor.accept("CONCURRENTLY");
   cursor.acceptCondition();
-  const name = cursor.name();
-  if (name === undefined || !cursor.accept("ON")) return undefined;
+  // PostgreSQL takes an index left unnamed.
+  const name = cursor.isWord("ON") ? undefined : cursor.name();
+  if (name === undefined && !cursor.isWord("ON")) return undefined;
+  // MySQL's index type, which it also takes before ON.
+  const typed = cursor.accept("USING");
+  if (typed) cursor.at += 1;
+  if (!cursor.accept("ON")) return undefined;
   cursor.accept("ONLY");
-  const table = cursor.name();
+  const table = tableNamed(cursor);
   if (table === undefined) return undefined;
   // PostgreSQL names the index's method before its columns.
   if (cursor.accept("USING")) cursor.at += 1;
-  return { table, name };
+  return keyList(cursor, table, name, name !== undefined && !typed);
 }
 
 /**
- * The table and name of a unique key an ALTER TABLE adds, read after ALTER TABLE:
- * `ADD CONSTRAINT name UNIQUE [INDEX|KEY]`, and MySQL's `ADD UNIQUE [INDEX|KEY] [name]`, whose
- * name may be left out.
+ * The unique key one ALTER TABLE clause adds: `ADD CONSTRAINT name UNIQUE [INDEX|KEY]`, and
+ * MySQL's `ADD UNIQUE [INDEX|KEY] [name] [USING type]`, whose name may be left out.
  */
-function addedUniqueConstraint(
-  cursor: StatementCursor
-): { table: string; name: string | undefined } | undefined {
-  cursor.acceptCondition();
-  cursor.accept("ONLY");
-  const table = cursor.name();
-  if (table === undefined || !cursor.accept("ADD")) return undefined;
-  if (cursor.accept("CONSTRAINT")) {
-    const name = cursor.name();
-    if (name === undefined || !cursor.accept("UNIQUE")) return undefined;
-    if (!cursor.accept("INDEX")) cursor.accept("KEY");
-    return { table, name };
-  }
-  if (!cursor.accept("UNIQUE")) return undefined;
+function addedUniqueKey(
+  cursor: StatementCursor,
+  table: { table: string; qualifier?: string }
+): UniqueIndexRead | undefined {
+  if (!cursor.accept("ADD")) return undefined;
+  const name = cursor.accept("CONSTRAINT")
+    ? constraintName(cursor)
+    : uniqueKeyName(cursor);
+  if (name === null) return undefined;
+  const typed = cursor.accept("USING");
+  if (typed) cursor.at += 1;
+  return keyList(cursor, table, name, !typed);
+}
+
+/**
+ * After `ADD CONSTRAINT`: the constraint's name, read through `UNIQUE [INDEX|KEY]`, or null where
+ * the constraint is no unique key.
+ */
+function constraintName(cursor: StatementCursor): string | null {
+  const name = cursor.name();
+  if (name === undefined || !cursor.accept("UNIQUE")) return null;
   if (!cursor.accept("INDEX")) cursor.accept("KEY");
-  // The key list opens next when the statement names no index.
-  return { table, name: cursor.isWord("(") ? undefined : cursor.name() };
+  return name;
+}
+
+/**
+ * After `ADD`: MySQL's `UNIQUE [INDEX|KEY] [name]`, its name, undefined where it is left out (the
+ * key list or the index type opens next then), or null where the clause adds no unique key.
+ */
+function uniqueKeyName(cursor: StatementCursor): string | undefined | null {
+  if (!cursor.accept("UNIQUE")) return null;
+  if (!cursor.accept("INDEX")) cursor.accept("KEY");
+  if (cursor.isWord("(") || cursor.isWord("USING")) return undefined;
+  return cursor.name() ?? null;
+}
+
+/**
+ * The key list an index's reading reaches next, and what follows it: a predicate (`WHERE`) reads
+ * as no index of its whole columns, anything else as an index not read whole.
+ */
+function keyList(
+  cursor: StatementCursor,
+  table: { table: string; qualifier?: string },
+  name: string | undefined,
+  exact: boolean
+): UniqueIndexRead | undefined {
+  if (!cursor.accept("(")) return undefined;
+  const columns = columnList(cursor);
+  if (columns === undefined) return undefined;
+  const rest = cursor.rest();
+  if (rest.includes("WHERE")) return undefined;
+  return {
+    table: table.table,
+    // MySQL names an unnamed one after its first column.
+    name: name ?? columns[0],
+    columns,
+    exact: exact && table.qualifier === undefined && rest.length === 0,
+    ...(table.qualifier === undefined ? {} : { qualifier: table.qualifier }),
+  };
 }
 
 /** The plain column names of a key list already opened, consumed with its `)`, or undefined. */
@@ -403,6 +497,143 @@ function columnList(cursor: StatementCursor): string[] | undefined {
     columns.push(column);
   }
   return columns;
+}
+
+/** A column an ALTER TABLE adds, lower-cased, and the constant it gives every row there already. */
+export interface ColumnAdded {
+  readonly table: string;
+  readonly column: string;
+  /**
+   * The literal its DEFAULT names (a string, a number, TRUE or FALSE), which every existing row
+   * takes; undefined for no default, NULL, or anything else (an expression, a function call, a
+   * generated column), whose values are not read here.
+   */
+  readonly filledWith?: string;
+}
+
+/** What an ADD clause names first when it adds a key, an index or a check rather than a column. */
+const NOT_A_COLUMN = [
+  "CONSTRAINT",
+  "UNIQUE",
+  "PRIMARY",
+  "FOREIGN",
+  "CHECK",
+  "INDEX",
+  "KEY",
+  "FULLTEXT",
+  "SPATIAL",
+];
+
+/**
+ * The columns `statement` adds: each `ADD [COLUMN] [IF NOT EXISTS] name …` clause of an ALTER
+ * TABLE. Empty for any statement that is not an ALTER TABLE; undefined for one whose table, or one
+ * of whose ADD clauses, is not read (MySQL's `ADD (a …, b …)`, a qualified table), which may then
+ * add any column.
+ */
+export function columnsAddedBy(
+  statement: string,
+  dialect: SupportedDialect
+): ColumnAdded[] | undefined {
+  const cursor = cursorOf(
+    statement,
+    dialect,
+    dialect === "postgresql" ? EXACT : {}
+  );
+  if (!cursor.accept("ALTER", "TABLE")) return [];
+  cursor.acceptCondition();
+  cursor.accept("ONLY");
+  const table = cursor.name();
+  if (table === undefined) return undefined;
+  const added: ColumnAdded[] = [];
+  for (const tokens of cursor.clauses()) {
+    const clause = new StatementCursor(tokens);
+    if (!clause.accept("ADD") || NOT_A_COLUMN.some(w => clause.isWord(w))) {
+      continue;
+    }
+    clause.accept("COLUMN");
+    clause.acceptCondition();
+    const column = clause.name();
+    if (column === undefined) return undefined;
+    const filledWith = literalDefault(clause.rest());
+    added.push({
+      table,
+      column,
+      ...(filledWith === undefined ? {} : { filledWith }),
+    });
+  }
+  return added;
+}
+
+/** A word that may follow a literal default without changing it: a keyword, or a cast's `::`. */
+const AFTER_A_LITERAL = /^([A-Z_].*|:)$/;
+
+/**
+ * The literal a column definition's DEFAULT names, as text: a string, TRUE, FALSE or a number,
+ * followed by nothing that makes it an expression. Undefined otherwise, NULL included.
+ */
+function literalDefault(tokens: readonly StatementToken[]): string | undefined {
+  const at = tokens.indexOf("DEFAULT");
+  if (at < 0) return undefined;
+  const read = literalAt(tokens, at + 1);
+  if (read === undefined) return undefined;
+  const next = tokens[read.end];
+  const ends =
+    next === undefined ||
+    (typeof next === "string" && AFTER_A_LITERAL.test(next));
+  return ends ? read.literal : undefined;
+}
+
+/** The literal the tokens from `at` begin with, as text, and the position after it. */
+function literalAt(
+  tokens: readonly StatementToken[],
+  at: number
+): { literal: string; end: number } | undefined {
+  const value = tokens[at];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    return value.kind === "string" && value.text !== undefined
+      ? { literal: value.text, end: at + 1 }
+      : undefined;
+  }
+  if (value === "TRUE" || value === "FALSE") {
+    return { literal: value, end: at + 1 };
+  }
+  return numberAt(tokens, at);
+}
+
+/** The number the tokens from `at` begin with, read as one token per digit, sign and point. */
+function numberAt(
+  tokens: readonly StatementToken[],
+  at: number
+): { literal: string; end: number } | undefined {
+  let end = at;
+  let digits = "";
+  for (let part = tokens[end]; typeof part === "string"; part = tokens[end]) {
+    if (!/^[-0-9.]$/.test(part)) break;
+    digits += part;
+    end += 1;
+  }
+  return /^-?\d+(\.\d+)?$/.test(digits) ? { literal: digits, end } : undefined;
+}
+
+/**
+ * The table a CREATE TABLE makes, lower-cased, as `renamesIn` reads names, or undefined for any
+ * other statement.
+ */
+export function tablesCreatedBy(
+  statement: string,
+  dialect: SupportedDialect
+): string[] | undefined {
+  const cursor = cursorOf(
+    statement,
+    dialect,
+    dialect === "postgresql" ? EXACT : {}
+  );
+  if (!cursor.accept("CREATE")) return undefined;
+  cursor.accept("TEMPORARY");
+  if (!cursor.accept("TABLE")) return undefined;
+  cursor.acceptCondition();
+  return oneTable(cursor);
 }
 
 /**

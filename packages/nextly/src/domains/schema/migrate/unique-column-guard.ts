@@ -46,8 +46,12 @@ import {
   indexesDroppedBy,
   tablesChangedIn,
   renamesIn,
+  tablesCreatedBy,
   tablesDroppedBy,
   uniqueIndexesCreatedBy,
+  uniqueIndexesReadIn,
+  columnsAddedBy,
+  type ColumnAdded,
   type StatementRename,
 } from "./statement-targets";
 
@@ -254,6 +258,13 @@ interface UniqueTarget {
   column: string;
   /** The statement's position in the file. */
   at: number;
+  /**
+   * Whether its statement is read whole (`uniqueIndexesReadIn`): one that is not is judged only
+   * at its statement, never before the file runs.
+   */
+  exact: boolean;
+  /** A qualified table's schema: judged only when it is the connection's own (`ownSchema`). */
+  qualifier?: string;
 }
 
 /** The single-column unique indexes `statements` create, each with its position. */
@@ -262,9 +273,17 @@ function uniqueTargets(
   dialect: SupportedDialect
 ): UniqueTarget[] {
   return statements.flatMap((statement, at) =>
-    (uniqueIndexesCreatedBy(statement, dialect) ?? [])
+    (uniqueIndexesReadIn(statement, dialect) ?? [])
       .filter(index => index.columns.length === 1)
-      .map(index => ({ table: index.table, column: index.columns[0], at }))
+      .map(index => ({
+        table: index.table,
+        column: index.columns[0],
+        at,
+        exact: index.exact,
+        ...(index.qualifier === undefined
+          ? {}
+          : { qualifier: index.qualifier }),
+      }))
   );
 }
 
@@ -292,27 +311,137 @@ function writtenBefore(
 }
 
 /**
- * Where a target's values are before the file runs: its table and column traced back through the
- * file's own earlier renames (`renamesIn`), so an index made on a table or column the file renames
- * first is judged on the values that will be under it. Undefined where an earlier statement may
- * rename the table but is not read, a rename beside another clause say: then only the target's
- * own statement can judge it.
+ * Where the values a target's index must hold are before the file runs (`liveOrigin`): a column
+ * the table already has, under the names the file's renames start from; a column the file adds
+ * with a constant default, which every row the table holds then takes; or values only its own
+ * statement can judge.
+ */
+type TargetOrigin =
+  | { kind: "live"; table: string; column: string }
+  | { kind: "filled"; table: string; value: string }
+  | { kind: "atStatement" };
+
+const AT_STATEMENT: TargetOrigin = { kind: "atStatement" };
+
+/**
+ * Where a target's values are before the file runs, read back through the file's earlier
+ * statements: its table and column through their renames (`renamesIn`), and a column the file adds
+ * with a constant default (`columnsAddedBy`). Judged only at its statement where an earlier
+ * statement makes its table, adds its column any other way, renames in a way not read with
+ * certainty (a name renamed twice, a swap or a cycle, a rename beside another clause), or may add
+ * a column without being read.
  */
 function liveOrigin(
   statements: readonly string[],
   dialect: SupportedDialect,
   target: UniqueTarget
-): UniqueTarget | undefined {
-  let place = { table: target.table, column: target.column };
+): TargetOrigin {
+  const walk: OriginWalk = {
+    place: { table: target.table, column: target.column },
+    renamed: new Set(),
+  };
   for (let at = target.at - 1; at >= 0; at -= 1) {
-    const renames = renamesIn(statements[at], dialect);
-    if (renames !== undefined) {
-      place = beforeRenames(renames, place);
-    } else if (mayRenameUnread(statements[at], dialect, place.table)) {
-      return undefined;
-    }
+    if (!stepBack(statements[at], dialect, walk)) return AT_STATEMENT;
   }
-  return { ...place, at: target.at };
+  return walk.filledWith === undefined
+    ? { kind: "live", ...walk.place }
+    : { kind: "filled", table: walk.place.table, value: walk.filledWith };
+}
+
+/** `liveOrigin`'s reading so far, from the target back to the statement it has reached. */
+interface OriginWalk {
+  /** The target's table and column under the names the statements read so far start from. */
+  place: { table: string; column: string };
+  /** The constant a statement read so far adds the target's column with. */
+  filledWith?: string;
+  /** The names the renames read so far touched (`renamedOnce`). */
+  renamed: Set<string>;
+}
+
+/**
+ * Reads one earlier statement into `walk`, back to the names before it: false where what it does
+ * to the target is not read with certainty, which leaves the target to its own statement.
+ */
+function stepBack(
+  statement: string,
+  dialect: SupportedDialect,
+  walk: OriginWalk
+): boolean {
+  if (tablesCreatedBy(statement, dialect)?.includes(walk.place.table)) {
+    return false;
+  }
+  if (
+    walk.filledWith === undefined &&
+    !noteAddedColumn(statement, dialect, walk)
+  ) {
+    return false;
+  }
+  const renames = renamesIn(statement, dialect);
+  if (renames === undefined) {
+    return !mayRenameUnread(statement, dialect, walk.place.table);
+  }
+  if (!renamedOnce(walk.renamed, renames)) return false;
+  walk.place = beforeRenames(renames, walk.place);
+  return true;
+}
+
+/**
+ * Notes in `walk` the constant `statement` adds the target's column with: false where it adds the
+ * column any other way, or may add it without being read.
+ */
+function noteAddedColumn(
+  statement: string,
+  dialect: SupportedDialect,
+  walk: OriginWalk
+): boolean {
+  const added = columnAddedBy(statement, dialect, walk.place);
+  if (added === undefined) return true;
+  if (added === "unread" || added.filledWith === undefined) return false;
+  walk.filledWith = added.filledWith;
+  return true;
+}
+
+/**
+ * The column `place` names as `statement` adds it, undefined where it adds no such column, or
+ * `unread` where it alters the table in a way not read and may add it.
+ */
+function columnAddedBy(
+  statement: string,
+  dialect: SupportedDialect,
+  place: { table: string; column: string }
+): ColumnAdded | "unread" | undefined {
+  const added = columnsAddedBy(statement, dialect);
+  if (added === undefined) {
+    return (tablesChangedIn(statement, dialect)?.includes(place.table) ?? true)
+      ? "unread"
+      : undefined;
+  }
+  return added.find(
+    column => column.table === place.table && column.column === place.column
+  );
+}
+
+/**
+ * Notes one statement's renames in `renamed`, the names the file's renames before a target have
+ * touched, and whether none of them was touched already: a name renamed twice (a chain, a swap
+ * done in one statement, a cycle) is not undone here with certainty.
+ */
+function renamedOnce(
+  renamed: Set<string>,
+  renames: readonly StatementRename[]
+): boolean {
+  for (const rename of renames) {
+    const names =
+      rename.kind === "table"
+        ? [`table ${rename.from}`, `table ${rename.to}`]
+        : [
+            `column ${rename.table}.${rename.from}`,
+            `column ${rename.table}.${rename.to}`,
+          ];
+    if (names.some(name => renamed.has(name))) return false;
+    for (const name of names) renamed.add(name);
+  }
+  return true;
 }
 
 /**
@@ -349,23 +478,98 @@ function mayRenameUnread(
 }
 
 /**
+ * The schema an unqualified name reaches on this connection, lower-cased: PostgreSQL's
+ * `current_schema()`, MySQL's `DATABASE()`, SQLite's `main`.
+ */
+async function ownSchema(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<string> {
+  if (dialect === "sqlite") return "main";
+  const [row] = await querySqlRows<{ schema: unknown }>(
+    db,
+    dialect,
+    dialect === "postgresql"
+      ? sql`SELECT current_schema() AS ${sql.identifier("schema")}`
+      : sql`SELECT DATABASE() AS ${sql.identifier("schema")}`
+  );
+  // A name comes back as text on every driver; anything else names no schema.
+  return typeof row?.schema === "string" ? row.schema.toLowerCase() : "";
+}
+
+/**
+ * Whether an index's table is one an unqualified read reaches: unqualified, or qualified by the
+ * connection's own schema. Another schema's rows are not the ones read here.
+ */
+async function reachedUnqualified(
+  db: unknown,
+  dialect: SupportedDialect,
+  qualifier: string | undefined
+): Promise<boolean> {
+  return (
+    qualifier === undefined || qualifier === (await ownSchema(db, dialect))
+  );
+}
+
+/**
+ * The live table `table` names, through the registry's owner of it where it has one (whose
+ * spelling the database keeps), with how a refusal names its column: by the owner's entity and
+ * field, or by the table and column.
+ */
+async function ownedLiveTable(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string,
+  column: string
+) {
+  const owner = (await readRequiredColumnOwners(db, dialect)).owner(table);
+  const live = await introspectLiveColumns(db, dialect, [
+    owner?.table ?? table,
+  ]);
+  const ownField = owner?.fieldsByColumn.get(column);
+  return {
+    table: live.tables[0],
+    entity: owner?.entity,
+    ownField,
+  };
+}
+
+/** Whether the registry describes `field` of the entity whose table is `table` as a relationship. */
+async function isRelationship(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string,
+  field: string | undefined
+): Promise<boolean> {
+  if (field === undefined) return false;
+  const definition = (await registeredEntities(db, dialect))
+    .find(e => e.table.toLowerCase() === table.toLowerCase())
+    ?.fields.find(f => f.name === field);
+  return definition?.type === "relationship";
+}
+
+/**
  * One unique index's column judged as the database stands: undefined where the table or column
- * is not there, a unique index already holds it, or nothing repeats. A table the registry names
- * is named by its entity and field, any other (a plugin's, an extension's) by its table and
- * column, and only a relationship's values are shown.
+ * is not there, a unique index already holds it, or nothing repeats. A table qualified by another
+ * schema than the connection's own is not judged here: its rows are not the ones an unqualified
+ * read reaches, so the database alone judges it. A table the registry names is named by its
+ * entity and field, any other (a plugin's, an extension's) by its table and column, and only a
+ * relationship's values are shown.
  */
 async function judgeUniqueTarget(
   db: unknown,
   dialect: SupportedDialect,
-  target: UniqueTarget
+  target: Pick<UniqueTarget, "table" | "column" | "qualifier">
 ): Promise<UniqueColumnRepeats | undefined> {
-  const owner = (await readRequiredColumnOwners(db, dialect)).owner(
-    target.table
+  if (!(await reachedUnqualified(db, dialect, target.qualifier))) {
+    return undefined;
+  }
+  const { table, entity, ownField } = await ownedLiveTable(
+    db,
+    dialect,
+    target.table,
+    target.column
   );
-  const live = await introspectLiveColumns(db, dialect, [
-    owner?.table ?? target.table,
-  ]);
-  const table = live.tables[0];
   const spelled = table?.columns.find(
     c => c.name.toLowerCase() === target.column
   );
@@ -381,30 +585,76 @@ async function judgeUniqueTarget(
     spelled.name
   );
   if (repeats.length === 0) return undefined;
-  const field = owner?.fieldsByColumn.get(target.column);
-  const definition =
-    field === undefined
-      ? undefined
-      : (await registeredEntities(db, dialect))
-          .find(e => e.table.toLowerCase() === table.name.toLowerCase())
-          ?.fields.find(f => f.name === field);
   return {
-    entity: owner?.entity ?? { kind: "table", slug: table.name },
-    field: field ?? target.column,
+    entity: entity ?? { kind: "table", slug: table.name },
+    field: ownField ?? target.column,
     table: table.name,
     column: target.column,
     repeats,
-    showValues: definition?.type === "relationship",
+    showValues: await isRelationship(db, dialect, table.name, ownField),
   };
 }
 
 /**
+ * A column the file adds with a constant default, judged before the file runs: every row its
+ * table holds takes that one value, so two rows or more repeat it. Only how many is told: the
+ * column is not one the registry describes yet.
+ */
+async function judgeFilledTarget(
+  db: unknown,
+  dialect: SupportedDialect,
+  target: UniqueTarget,
+  origin: { table: string; value: string }
+): Promise<UniqueColumnRepeats | undefined> {
+  const { table, entity, ownField } = await ownedLiveTable(
+    db,
+    dialect,
+    origin.table,
+    target.column
+  );
+  if (table === undefined) return undefined;
+  const [row] = await querySqlRows<{ entries: unknown }>(
+    db,
+    dialect,
+    sql`SELECT COUNT(*) AS ${sql.identifier("entries")} FROM ${sql.identifier(table.name)}`
+  );
+  const entries = Number(row?.entries ?? 0);
+  if (entries < 2) return undefined;
+  return {
+    entity: entity ?? { kind: "table", slug: table.name },
+    field: ownField ?? target.column,
+    table: table.name,
+    column: target.column,
+    repeats: [{ value: origin.value, entries }],
+    showValues: false,
+  };
+}
+
+/**
+ * Where a target is judged: before the file runs (`live`, `filled`), or at its own statement,
+ * over the values the statements before it leave (`atStatement`): one whose statement is not read
+ * whole, whose table an earlier statement writes, or whose origin is not read with certainty.
+ */
+function judgedWhere(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  target: UniqueTarget
+): TargetOrigin {
+  if (!target.exact) return AT_STATEMENT;
+  if (writtenBefore(statements, dialect, target.table, target.at)) {
+    return AT_STATEMENT;
+  }
+  return liveOrigin(statements, dialect, target);
+}
+
+/**
  * Refuse, before any of its statements runs, a migration file that makes a column unique while
- * the column's entries repeat a value. Each single-column unique index the file creates
- * (`uniqueIndexesCreatedBy`) is judged over a column the table already has and no unique index
- * holds, under the names the file's earlier renames start from (`liveOrigin`). One whose table an
- * earlier statement of the file writes, or may rename without being read, is judged at its
- * statement instead (`uniqueIndexCheckpoint`), over the values the statements before it leave.
+ * the column's entries repeat a value. Each single-column unique index the file creates, read whole
+ * (`uniqueIndexesReadIn`), is judged over a column the table already has and no unique index
+ * holds, under the names the file's earlier renames start from (`liveOrigin`), or over a column the
+ * file adds with a constant default, which repeats once the table holds two rows. Any other is
+ * judged at its statement instead (`uniqueIndexCheckpoint`), over the values the statements before
+ * it leave.
  *
  * @param statements the file's statements, as the runner splits them
  * @param source the file's name, which the refusal names
@@ -417,22 +667,24 @@ export async function refuseUniqueIndexesOverRepeats(
 ): Promise<void> {
   const refused: UniqueColumnRepeats[] = [];
   for (const target of uniqueTargets(statements, dialect)) {
-    if (writtenBefore(statements, dialect, target.table, target.at)) continue;
-    // Judged where its values are now, under the names the file's earlier renames start from.
-    const origin = liveOrigin(statements, dialect, target);
-    if (origin === undefined) continue;
-    const found = await judgeUniqueTarget(db, dialect, origin);
+    const origin = judgedWhere(statements, dialect, target);
+    const found =
+      origin.kind === "live"
+        ? await judgeUniqueTarget(db, dialect, origin)
+        : origin.kind === "filled"
+          ? await judgeFilledTarget(db, dialect, target, origin)
+          : undefined;
     if (found !== undefined) refused.push(found);
   }
   if (refused.length > 0) throw uniqueColumnRepeatsError(refused, source);
 }
 
 /**
- * The check a unit's runner makes before each statement, for each unique index whose table an
- * earlier statement of the unit writes, through the handle the statements run on (the
- * transaction's, when there is one): the values those writes leave. Undefined when the unit has
- * no such index, so a runner pays nothing for it. Outside a transaction the statements before it
- * have run and stay applied, and the refusal says so.
+ * The check a unit's runner makes before each statement, for each unique index not judged before
+ * the file runs (`judgedWhere`), and each over a column the file adds, through the handle the
+ * statements run on (the transaction's, when there is one): the values the statements before it
+ * leave. Undefined when the unit has no such index, so a runner pays nothing for it. Outside a
+ * transaction the statements before it have run and stay applied, and the refusal says so.
  */
 export function uniqueIndexCheckpoint(
   statements: readonly string[],
@@ -440,9 +692,7 @@ export function uniqueIndexCheckpoint(
   unit: MigrationUnit
 ): ((db: unknown, index: number) => Promise<void>) | undefined {
   const atStatement = uniqueTargets(statements, dialect).filter(
-    target =>
-      writtenBefore(statements, dialect, target.table, target.at) ||
-      liveOrigin(statements, dialect, target) === undefined
+    target => judgedWhere(statements, dialect, target).kind !== "live"
   );
   if (atStatement.length === 0) return undefined;
   return async (db, index) => {

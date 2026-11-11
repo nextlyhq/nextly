@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { buildCollectionMetadataUpsert } from "../../ui-schema/metadata-sql";
 import {
   archiveWriteOf,
+  columnsAddedBy,
   indexesDroppedBy,
   indexesRenamedBy,
   registryRowWrittenBy,
@@ -14,6 +15,7 @@ import {
   tablesChangedIn,
   tablesDroppedBy,
   uniqueIndexesCreatedBy,
+  uniqueIndexesReadIn,
 } from "../statement-targets";
 
 describe.each(["postgresql", "mysql"] as const)(
@@ -674,6 +676,123 @@ describe("uniqueIndexesCreatedBy on postgresql", () => {
         columns: ["person"],
       },
     ]);
+  });
+});
+
+// What a unique index reads as when its statement is not read whole: its table and key list, and
+// that it is to be judged at its statement only.
+describe("uniqueIndexesReadIn", () => {
+  const person = { table: "dc_profiles", columns: ["person"] };
+
+  it("reads an index with an option after its key list as not read whole", () => {
+    const sql =
+      "CREATE UNIQUE INDEX `uq` ON `dc_profiles` (`person`) USING BTREE";
+    expect(uniqueIndexesReadIn(sql, "mysql")).toEqual([
+      { ...person, name: "uq", exact: false },
+    ]);
+    expect(uniqueIndexesCreatedBy(sql, "mysql")).toBeUndefined();
+  });
+
+  it("reads MySQL's index type before ON, and a key beside another clause, as not read whole", () => {
+    expect(
+      uniqueIndexesReadIn(
+        "CREATE UNIQUE INDEX `uq` USING BTREE ON `dc_profiles` (`person`)",
+        "mysql"
+      )
+    ).toEqual([{ ...person, name: "uq", exact: false }]);
+    expect(
+      uniqueIndexesReadIn(
+        "ALTER TABLE `dc_profiles` ADD COLUMN `x` int, ADD UNIQUE KEY `uq` (`person`)",
+        "mysql"
+      )
+    ).toEqual([{ ...person, name: "uq", exact: false }]);
+  });
+
+  it("reads an unnamed index and a qualified table as not read whole, keeping the qualifier", () => {
+    expect(
+      uniqueIndexesReadIn(
+        `CREATE UNIQUE INDEX ON "dc_profiles" ("person")`,
+        "postgresql"
+      )
+    ).toEqual([{ ...person, name: "person", exact: false }]);
+    expect(
+      uniqueIndexesReadIn(
+        `CREATE UNIQUE INDEX "uq" ON "public"."dc_profiles" ("person")`,
+        "postgresql"
+      )
+    ).toEqual([{ ...person, name: "uq", exact: false, qualifier: "public" }]);
+    expect(
+      uniqueIndexesReadIn(
+        `CREATE UNIQUE INDEX "uq" ON other.dc_profiles ("person")`,
+        "postgresql"
+      )
+    ).toEqual([{ ...person, name: "uq", exact: false, qualifier: "other" }]);
+  });
+
+  it("reads the forms read whole as exact", () => {
+    expect(
+      uniqueIndexesReadIn(
+        `CREATE UNIQUE INDEX "uq" ON "dc_profiles" USING btree ("person")`,
+        "postgresql"
+      )
+    ).toEqual([{ ...person, name: "uq", exact: true }]);
+  });
+
+  it("reads no index with a predicate, nor one over an expression", () => {
+    expect(
+      uniqueIndexesReadIn(
+        `CREATE UNIQUE INDEX "uq" ON public.dc_profiles ("person") WHERE "person" IS NOT NULL`,
+        "postgresql"
+      )
+    ).toBeUndefined();
+    expect(
+      uniqueIndexesReadIn(
+        "CREATE UNIQUE INDEX `uq` ON `dc_profiles` ((lower(`person`))) USING BTREE",
+        "mysql"
+      )
+    ).toBeUndefined();
+  });
+});
+
+// The columns a file adds, and the constant one gives every row the table already holds.
+describe("columnsAddedBy", () => {
+  const added = (sql: string) => columnsAddedBy(sql, "postgresql");
+
+  it.each([
+    [`ALTER TABLE "t" ADD COLUMN "c" varchar(20) DEFAULT 'x'`, "x"],
+    [
+      `ALTER TABLE "t" ADD "c" varchar(20) NOT NULL DEFAULT 'x'::character varying`,
+      "x",
+    ],
+    [`ALTER TABLE "t" ADD COLUMN IF NOT EXISTS "c" integer DEFAULT 12`, "12"],
+    [`ALTER TABLE "t" ADD COLUMN "c" numeric DEFAULT -1.5 NOT NULL`, "-1.5"],
+    [`ALTER TABLE "t" ADD COLUMN "c" boolean DEFAULT TRUE`, "TRUE"],
+  ])("reads the constant %s fills existing rows with", (sql, filledWith) => {
+    expect(added(sql)).toEqual([{ table: "t", column: "c", filledWith }]);
+  });
+
+  it.each([
+    `ALTER TABLE "t" ADD COLUMN "c" text`,
+    `ALTER TABLE "t" ADD COLUMN "c" text DEFAULT NULL`,
+    `ALTER TABLE "t" ADD COLUMN "c" uuid DEFAULT gen_random_uuid()`,
+    `ALTER TABLE "t" ADD COLUMN "c" text DEFAULT 'a' || 'b'`,
+    `ALTER TABLE "t" ADD COLUMN "c" integer DEFAULT 1 + 1`,
+  ])("reads no constant in %s", sql => {
+    expect(added(sql)).toEqual([{ table: "t", column: "c" }]);
+  });
+
+  it("reads a key, an index or a check as no column, and any other statement as adding none", () => {
+    expect(added(`ALTER TABLE "t" ADD CONSTRAINT "uq" UNIQUE ("c")`)).toEqual(
+      []
+    );
+    expect(added(`CREATE UNIQUE INDEX "uq" ON "t" ("c")`)).toEqual([]);
+  });
+
+  it("reads an ADD it cannot follow, or a qualified table, as possibly adding any column", () => {
+    expect(
+      columnsAddedBy("ALTER TABLE `t` ADD (`c` int, `d` int)", "mysql")
+    ).toBeUndefined();
+    expect(added(`ALTER TABLE public.t ADD COLUMN "c" text`)).toBeUndefined();
   });
 });
 
