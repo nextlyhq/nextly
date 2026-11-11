@@ -54,6 +54,7 @@ import {
   DraggableWidgetCell,
   type CellDrag,
   type CellResize,
+  type DraggableWidgetCellProps,
 } from "./DraggableWidgetCell";
 import { LazyWidgetSettingsSheet } from "./LazyWidgetSettingsSheet";
 import { requestSettingsPanel } from "./settings-panel-registry";
@@ -553,6 +554,33 @@ function useBodyCollapse(isEditing: boolean): CardCollapse {
   );
 }
 
+/**
+ * What the card's header holds at each end. While customising it keeps the room its controls are
+ * drawn over, and, wherever a handle is drawn, room before the title for it; at rest it holds the
+ * menu.
+ */
+function headerRoom(
+  props: ArrangedCellProps,
+  restingControls: ReactNode
+): { headerAction: ReactNode; leading: ReactNode } {
+  if (!props.isEditing)
+    return { headerAction: restingControls, leading: undefined };
+  return {
+    headerAction: <CardControlsSpace />,
+    leading: props.drag === undefined ? undefined : <CardHandleSpace />,
+  };
+}
+
+/** The cell's handle drag and edge resize, each only where it is offered. */
+function cellGestures(
+  props: ArrangedCellProps
+): Pick<DraggableWidgetCellProps, "drag" | "resize"> {
+  const gestures: Pick<DraggableWidgetCellProps, "drag" | "resize"> = {};
+  if (props.drag !== undefined) gestures.drag = props.drag;
+  if (props.resize !== undefined) gestures.resize = props.resize;
+  return gestures;
+}
+
 export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   const { row, isEditing, data } = props;
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
@@ -610,20 +638,14 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   const controls = useCardControls(props, widget, size, setSettingsOpen);
   const { quick, header: restingControls, done } = controls;
   const editActions = editActionsOf(props, size, controls);
-  // While customising, the card's header keeps the room its controls are drawn
-  // over; at rest it holds the menu.
-  const headerAction = isEditing ? <CardControlsSpace /> : restingControls;
-  // Room before the title for the handle, wherever one is drawn.
-  const leading =
-    isEditing && props.drag !== undefined ? <CardHandleSpace /> : undefined;
+  const { headerAction, leading } = headerRoom(props, restingControls);
 
   return (
     <DraggableWidgetCell
       id={row.placementId}
       isEditing={isEditing}
       highlighted={props.highlighted}
-      {...(props.drag === undefined ? {} : { drag: props.drag })}
-      {...(props.resize === undefined ? {} : { resize: props.resize })}
+      {...cellGestures(props)}
       data-testid={`widget-cell-${widget.id}`}
       className={cellClassName(props.drawnW ?? size.w, sheet.settingsOpen)}
       cellRef={held.cellRef}

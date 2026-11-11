@@ -44,7 +44,7 @@ import {
 import { isOneColumn } from "../../sizes";
 import type { ArrangedWidget } from "../useDashboardArrangement";
 
-import { CELL_PLACEMENT_ATTRIBUTE } from "./cell-placement";
+import { CELL_PLACEMENT_ATTRIBUTE, cellsOf } from "./cell-placement";
 import { dragMessages } from "./drag-messages";
 import { reflowTargetAt, reorderAround, type LaidOutCard } from "./reflow";
 import type { CardFlip } from "./useCardFlip";
@@ -110,18 +110,6 @@ function pointerAt(event: DragMoveEvent): { x: number; y: number } | undefined {
   if (!("clientX" in start) || !("clientY" in start)) return undefined;
   const { clientX, clientY } = start as MouseEvent;
   return { x: clientX + event.delta.x, y: clientY + event.delta.y };
-}
-
-/** Each cell on the page, by its placement. */
-function cellsOf(grid: HTMLElement): Map<string, HTMLElement> {
-  const cells = new Map<string, HTMLElement>();
-  for (const cell of grid.querySelectorAll<HTMLElement>(
-    `[${CELL_PLACEMENT_ATTRIBUTE}]`
-  )) {
-    const id = cell.getAttribute(CELL_PLACEMENT_ATTRIBUTE);
-    if (id !== null) cells.set(id, cell);
-  }
-  return cells;
 }
 
 /**

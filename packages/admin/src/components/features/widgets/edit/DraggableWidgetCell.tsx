@@ -151,6 +151,56 @@ function WidthTip({ w }: { w: number }) {
   );
 }
 
+/**
+ * The cell's own classes: a focus ring for the programmatic landing, the ring of a card just
+ * placed, and the held card drawn as its outline only.
+ */
+function heldCellClassName(
+  className: string | undefined,
+  highlighted: boolean,
+  held: boolean
+): string {
+  return cn(
+    className,
+    "group/cell rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring",
+    // Ringed in the primary colour, offset from the card so it reads in both schemes. It fades
+    // in only where motion is welcome; with reduced motion it simply appears.
+    highlighted &&
+      !held &&
+      "rounded-lg ring-2 ring-primary ring-offset-2 ring-offset-background motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-300",
+    // The held card keeps its place and its size, drawn as its outline only: the card itself is
+    // under the pointer. Spelled out in full, not built from `OUTLINE_ATTRIBUTE`: Tailwind
+    // generates only the classes it finds written in the source.
+    held && "[&>:not([data-cell-outline])]:invisible"
+  );
+}
+
+/** What is drawn over the card: the held card's outline, its edge, and its width while resized. */
+function CellOverlays({
+  held,
+  edge,
+  resizingTo,
+}: {
+  held: boolean;
+  edge: CardEdge | undefined;
+  resizingTo: number | undefined;
+}) {
+  return (
+    <>
+      {held ? (
+        <div
+          aria-hidden
+          {...{ [OUTLINE_ATTRIBUTE]: "" }}
+          data-testid="widget-drop-outline"
+          className="pointer-events-none absolute inset-0 rounded-lg border-[1.5px] border-dashed border-control-border"
+        />
+      ) : null}
+      {edge !== undefined && !held ? <ResizeEdge edge={edge} /> : null}
+      {resizingTo === undefined ? null : <WidthTip w={resizingTo} />}
+    </>
+  );
+}
+
 export function DraggableWidgetCell({
   id,
   isEditing,
@@ -165,7 +215,9 @@ export function DraggableWidgetCell({
 }: DraggableWidgetCellProps): JSX.Element {
   const draggable = isEditing && drag !== undefined;
   const held = draggable && drag.held;
-  const resizingTo = isEditing ? resize?.resizingTo : undefined;
+  // The edge and the width it is held at, only while customising.
+  const shown = isEditing ? resize : undefined;
+  const resizingTo = shown?.resizingTo;
   const { listeners, setNodeRef, setActivatorNodeRef } = useDraggable({
     id,
     disabled: !draggable,
@@ -190,38 +242,15 @@ export function DraggableWidgetCell({
       {...{ [CELL_PLACEMENT_ATTRIBUTE]: id }}
       data-highlighted={highlighted || undefined}
       data-held={held || undefined}
-      data-resizing={resizingTo === undefined ? undefined : true}
+      data-resizing={resizingTo !== undefined || undefined}
       style={style}
-      className={cn(
-        className,
-        "group/cell rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        // Ringed in the primary colour, offset from the card so it reads in both schemes. It
-        // fades in only where motion is welcome; with reduced motion it simply appears.
-        highlighted &&
-          !held &&
-          "rounded-lg ring-2 ring-primary ring-offset-2 ring-offset-background motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-300",
-        // The held card keeps its place and its size, drawn as its outline only: the card
-        // itself is under the pointer. Spelled out in full, not built from `OUTLINE_ATTRIBUTE`:
-        // Tailwind generates only the classes it finds written in the source.
-        held && "[&>:not([data-cell-outline])]:invisible"
-      )}
+      className={heldCellClassName(className, highlighted, held)}
     >
       {draggable ? (
         <DragHandle setHandle={setActivatorNodeRef} listeners={listeners} />
       ) : null}
       {children}
-      {held ? (
-        <div
-          aria-hidden
-          {...{ [OUTLINE_ATTRIBUTE]: "" }}
-          data-testid="widget-drop-outline"
-          className="pointer-events-none absolute inset-0 rounded-lg border-[1.5px] border-dashed border-control-border"
-        />
-      ) : null}
-      {resize !== undefined && isEditing && !held ? (
-        <ResizeEdge edge={resize.edge} />
-      ) : null}
-      {resizingTo === undefined ? null : <WidthTip w={resizingTo} />}
+      <CellOverlays held={held} edge={shown?.edge} resizingTo={resizingTo} />
     </div>
   );
 }

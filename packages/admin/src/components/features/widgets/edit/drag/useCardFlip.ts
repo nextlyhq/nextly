@@ -19,7 +19,7 @@ import { useCallback, useLayoutEffect, useRef, type RefObject } from "react";
 
 import { usePrefersReducedMotion } from "../../charts/reduced-motion";
 
-import { CELL_PLACEMENT_ATTRIBUTE } from "./cell-placement";
+import { cellsOf } from "./cell-placement";
 
 /** How long a card takes to slide to its new place. */
 export const SLIDE_MS = 180;
@@ -29,18 +29,6 @@ const SLIDE_EASING = "cubic-bezier(0.2, 0.8, 0.2, 1)";
 
 /** The slide's own name, so a new slide replaces it and leaves any other animation alone. */
 const SLIDE_ID = "dashboard-card-slide";
-
-/** Each cell on the page, by its placement. */
-function cellsOf(grid: HTMLElement): Map<string, HTMLElement> {
-  const cells = new Map<string, HTMLElement>();
-  for (const cell of grid.querySelectorAll<HTMLElement>(
-    `[${CELL_PLACEMENT_ATTRIBUTE}]`
-  )) {
-    const id = cell.getAttribute(CELL_PLACEMENT_ATTRIBUTE);
-    if (id !== null) cells.set(id, cell);
-  }
-  return cells;
-}
 
 /** Where each cell is drawn on the screen now, slides included. */
 function drawnPlaces(grid: HTMLElement): Map<string, DOMRect> {

@@ -885,9 +885,18 @@ describe("the cards' own content while customising", () => {
           .getByRole("button", { name: `Card actions for ${title}` })
           .closest("[inert]")
       ).toBeNull();
+      // The handle, a pointer's alone, is drawn over the card rather than inside its fence.
+      const cell = screen
+        .getByRole("button", { name: `Card actions for ${title}` })
+        .closest<HTMLElement>("[data-placement-id]");
       expect(
-        screen.getByRole("button", { name: `Move ${title}` }).closest("[inert]")
+        cell
+          ?.querySelector('[data-testid="widget-drag-handle"]')
+          ?.closest("[inert]")
       ).toBeNull();
+      expect(
+        cell?.querySelector('[data-testid="widget-drag-handle"]')
+      ).not.toBeNull();
     });
 
     it(`gives ${kind}'s content back once customising ends`, async () => {
