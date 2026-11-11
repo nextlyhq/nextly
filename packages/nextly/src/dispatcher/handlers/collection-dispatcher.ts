@@ -73,7 +73,7 @@ import {
   type CollectionWithAdmin,
 } from "../../plugins/admin-views";
 import { getHandlerConfig } from "../../route-handler/auth-handler";
-import { withSessionCacheHeaders } from "../../routeHandler";
+import { withSessionCacheHeaders } from "../../api/response-shapes";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";

@@ -76,7 +76,7 @@ import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks"
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
-import { withSessionCacheHeaders } from "../../routeHandler";
+import { withSessionCacheHeaders } from "../../api/response-shapes";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";

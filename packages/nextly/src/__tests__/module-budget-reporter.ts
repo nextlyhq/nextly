@@ -106,6 +106,13 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * column added two modules to the schema pipeline every heavy file already
  * loads: 1,385 measured, the heavy files' chains unchanged and no new edge to
  * make lazy; one test that sat at the heavy line crossed it.
+ * Both came down, to 61 and 1,332, when three imports stopped loading the
+ * boot into files that never boot: the collection and Single dispatchers take
+ * the session cache headers from the response helpers rather than the route
+ * handler, the versions routes load the boot entry and the diff engine when a
+ * request needs them, and a config reload loads the terminal's prompt at its
+ * first question. 59 and 1,298 measured; both hold whether CI measures one
+ * fewer.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -113,7 +120,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 85, tailMeanModules: 1_420 };
+export const BUDGET = { heavyFiles: 61, tailMeanModules: 1_332 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
