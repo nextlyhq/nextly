@@ -1500,12 +1500,16 @@ export async function diffDocumentVersions(args: {
   // wire stays id-stable for any non-admin consumer of this surface. Both
   // versions share a locale (asserted above), so the target reads resolve in
   // that language.
-  await hydrateDiffReferences(
-    body.fields,
-    args.user,
-    args.authenticatedScope,
-    pairLocale
-  );
+  // Labels are read as the person comparing may read them; trusted server
+  // code, which names no person, gets the ids alone.
+  if (args.user) {
+    await hydrateDiffReferences(
+      body.fields,
+      args.user,
+      args.authenticatedScope,
+      pairLocale
+    );
+  }
 
   return {
     from: args.from,

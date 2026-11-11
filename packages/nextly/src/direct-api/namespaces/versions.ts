@@ -99,6 +99,8 @@ export interface VersionsNamespace {
   /**
    * A typed comparison: an explicit pair (`from` and `to`), or a target and a
    * named baseline the server resolves, as REST's `versions/diff` takes them.
+   * A trusted call gets relationship and upload ids without their display
+   * labels, which are read as a person may read them.
    */
   compare(
     args: VersionCall & {
