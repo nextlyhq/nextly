@@ -25,7 +25,6 @@ import {
   intervalWindow,
 } from "../collections/query/timeseries-interval";
 
-import { USERS_READ_PERMISSION } from "./users-gate";
 import {
   isTimeseriesRange,
   openWindowEnd,
@@ -41,6 +40,7 @@ import {
 } from "./sources";
 import { USERS_SOURCE_ID } from "./system-source-ids";
 import { registerSystemSource } from "./system-sources";
+import { USERS_READ_PERMISSION } from "./users-gate";
 import { permissionVerdicts } from "./visibility";
 
 /** The one field a query may name: when each account was made. */

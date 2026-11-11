@@ -17,13 +17,7 @@ import {
   type AnyWidgetSetting,
   type WidgetSetting,
 } from "nextly/config";
-import {
-  Fragment,
-  useEffect,
-  useId,
-  type JSX,
-  type ReactNode,
-} from "react";
+import { Fragment, useEffect, useId, type JSX, type ReactNode } from "react";
 import { useController } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";

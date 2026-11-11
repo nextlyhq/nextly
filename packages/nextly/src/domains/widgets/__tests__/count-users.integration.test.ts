@@ -232,9 +232,7 @@ describe.each(getConfiguredTestDialects())(
       await service().saveLayout("user", reader, own, 0);
 
       const seen = await layout(reader);
-      expect(seen.placements.map(placement => placement.id)).toEqual([
-        "posts",
-      ]);
+      expect(seen.placements.map(placement => placement.id)).toEqual(["posts"]);
       // Their save carries the withheld card back in place.
       const res = await call(reader, "PUT", ["dashboard", "layout"], {
         placements: seen.placements,
@@ -242,8 +240,9 @@ describe.each(getConfiguredTestDialects())(
         scope: seen.scope,
       });
       expect(res.status).toBe(200);
-      expect((await service().getLayout("user", reader)).layout?.placements)
-        .toEqual(own);
+      expect(
+        (await service().getLayout("user", reader)).layout?.placements
+      ).toEqual(own);
     });
 
     it("counts every account, and those made in the last 7 days", async () => {

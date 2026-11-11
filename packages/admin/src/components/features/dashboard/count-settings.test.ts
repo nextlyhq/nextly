@@ -15,7 +15,11 @@ const SOURCES = [
 ] as unknown as readonly PublishedContentSource[];
 
 /** What the split is, beside the card's other settings. */
-const NO_SPLIT = { disabled: ["split"], fallback: "change", hint: SPLIT_NEEDS_ALL };
+const NO_SPLIT = {
+  disabled: ["split"],
+  fallback: "change",
+  hint: SPLIT_NEEDS_ALL,
+};
 
 describe("a Count card's settings, as the drawer holds them", () => {
   it("offers Count and Filter for a collection with a lifecycle", () => {
@@ -26,14 +30,20 @@ describe("a Count card's settings, as the drawer holds them", () => {
 
   it("hides Count for a collection without a lifecycle, keeping its Filter", () => {
     const values = { collection: "logs" };
-    expect(countSettingRule("count", values, SOURCES)).toEqual({ hidden: true });
+    expect(countSettingRule("count", values, SOURCES)).toEqual({
+      hidden: true,
+    });
     expect(countSettingRule("filter", values, SOURCES)).toBeUndefined();
   });
 
   it("hides Count and Filter for Users, which has no entries to choose among", () => {
     const values = { collection: "users", count: "draft" };
-    expect(countSettingRule("count", values, SOURCES)).toEqual({ hidden: true });
-    expect(countSettingRule("filter", values, SOURCES)).toEqual({ hidden: true });
+    expect(countSettingRule("count", values, SOURCES)).toEqual({
+      hidden: true,
+    });
+    expect(countSettingRule("filter", values, SOURCES)).toEqual({
+      hidden: true,
+    });
   });
 
   it("offers the status split with every entry of a collection with a lifecycle alone", () => {

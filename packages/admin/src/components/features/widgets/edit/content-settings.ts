@@ -334,7 +334,9 @@ export function collectionOptions(
     })),
     // The people, after the collections, where the setting offers them: the server tells the
     // setting with the offer only to a reader who may read users.
-    ...(setting.users === true ? [{ label: "Users", value: USERS_SOURCE }] : []),
+    ...(setting.users === true
+      ? [{ label: "Users", value: USERS_SOURCE }]
+      : []),
   ];
   const fallback = setting.defaultValue;
   if (

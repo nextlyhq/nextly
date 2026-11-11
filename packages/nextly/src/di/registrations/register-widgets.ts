@@ -73,7 +73,6 @@ import { clearWidgets } from "../../domains/widgets/registry";
 import type { ResolverOptions } from "../../domains/widgets/resolved-sources";
 import type { WidgetResult } from "../../domains/widgets/result";
 import { registerSetupCard } from "../../domains/widgets/setup-card";
-import { registerUsersWidgetSource } from "../../domains/widgets/users-source";
 import {
   clearSiteDashboardRules,
   setSiteDashboardRules,
@@ -83,6 +82,7 @@ import {
   clearSystemResolvers,
   systemResolver,
 } from "../../domains/widgets/system-sources";
+import { registerUsersWidgetSource } from "../../domains/widgets/users-source";
 import { NextlyError } from "../../errors/nextly-error";
 import {
   pluginAlternatives,

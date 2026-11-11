@@ -682,13 +682,16 @@ function SectionFields({
     <>
       {ruled.map(({ setting, rule }) =>
         rule?.hidden === true ? null : (
-        <div key={setting.name} className="flex flex-col gap-1.5">
-          <SettingControl
-            {...{ setting, sources, saving, widget, rule }}
-            opened={baseline[setting.name]}
-          />
-          <ResetNotice setting={setting} notice={resetNotices[setting.name]} />
-        </div>
+          <div key={setting.name} className="flex flex-col gap-1.5">
+            <SettingControl
+              {...{ setting, sources, saving, widget, rule }}
+              opened={baseline[setting.name]}
+            />
+            <ResetNotice
+              setting={setting}
+              notice={resetNotices[setting.name]}
+            />
+          </div>
         )
       )}
     </>

@@ -28,6 +28,7 @@ import {
 import { CORE_OWNER, declaredWidget } from "../declaration/declared-widgets";
 import type {
   WidgetCollectionDescription,
+  WidgetInterval,
   WidgetLoadSize,
   WidgetReadServices,
 } from "../declaration/define-widget";
@@ -109,7 +110,7 @@ function bound(options: { count?: CountRead } = {}) {
     })),
     timeseries: vi.fn(async () => ({
       points: POINTS,
-      interval: "day" as const,
+      interval: "day" as WidgetInterval,
     })),
     describe: vi.fn(async (collection: string) =>
       collection === "posts" ? POSTS : collection === "logs" ? LOGS : undefined
@@ -415,7 +416,11 @@ describe("Count's load", () => {
   it("counts every read under the card's Filter", async () => {
     const filter = { title: { equals: "launch" } };
     const split = bound();
-    await loadCount({ collection: "posts", filter, show: "split" }, SMALL, split);
+    await loadCount(
+      { collection: "posts", filter, show: "split" },
+      SMALL,
+      split
+    );
     expect(split.groupBy).toHaveBeenCalledWith("posts", {
       field: "status",
       status: "all",
@@ -434,7 +439,11 @@ describe("Count's load", () => {
       window: WEEK,
     });
     const trend = bound();
-    await loadCount({ collection: "posts", filter, show: "trend" }, SMALL, trend);
+    await loadCount(
+      { collection: "posts", filter, show: "trend" },
+      SMALL,
+      trend
+    );
     expect(trend.timeseries).toHaveBeenCalledWith(
       "posts",
       expect.objectContaining({ where: filter })

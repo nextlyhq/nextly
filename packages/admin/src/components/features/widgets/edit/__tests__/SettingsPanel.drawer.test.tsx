@@ -166,7 +166,9 @@ describe("the drawer for each kind of card", () => {
     const under = within(
       screen.getByRole("region", { name: "Display" })
     ).getByRole("radiogroup", { name: "Under the number" });
-    expect(within(under).getByRole("radio", { name: "Status split" })).toBeDisabled();
+    expect(
+      within(under).getByRole("radio", { name: "Status split" })
+    ).toBeDisabled();
   });
 
   it("rules a status split out beside Drafts, saying why, and a split held gives way to the change", () => {
@@ -179,7 +181,9 @@ describe("the drawer for each kind of card", () => {
     const under = within(display).getByRole("radiogroup", {
       name: "Under the number",
     });
-    expect(within(under).getByRole("radio", { name: "Status split" })).toBeDisabled();
+    expect(
+      within(under).getByRole("radio", { name: "Status split" })
+    ).toBeDisabled();
     expect(
       within(under).getByRole("radio", { name: "Change this week" })
     ).toHaveAttribute("aria-checked", "true");

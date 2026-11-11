@@ -154,7 +154,9 @@ describe("the Count card", () => {
 
   it("draws the number alone when it shows nothing under it", () => {
     drawAt(QUARTER, { total: 7, counted: "all", line: "none" });
-    expect(screen.getByRole("link", { name: "Entries in posts: 7" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Entries in posts: 7" })
+    ).toBeInTheDocument();
     expect(screen.queryByTestId("count-change")).toBeNull();
     expect(screen.queryByTestId("count-trend")).toBeNull();
     expect(screen.queryByTestId("count-split")).toBeNull();

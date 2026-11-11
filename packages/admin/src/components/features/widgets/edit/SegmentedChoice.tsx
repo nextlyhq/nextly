@@ -69,10 +69,11 @@ const SIZES = {
     track: "h-7 gap-0.5 rounded-md p-0.5",
     radio: "h-full rounded-sm px-2 text-xs",
   },
-  // The drawer's: a 32px track, wrapping onto another line where its options do not fit.
+  // The drawer's: a 32px track, wrapping onto another line where its options do not fit. Its
+  // 12.5px text keeps four short options, such as Count's "Under the number", on one line.
   drawer: {
     track: "max-w-full flex-wrap gap-0.5 self-start rounded-md p-0.5",
-    radio: "h-7 rounded-sm px-2.5 text-sm tabular-nums",
+    radio: "h-7 rounded-sm px-2.5 text-[12.5px] tabular-nums",
   },
 } as const;
 

@@ -163,7 +163,7 @@ function whereFor(
  * splits the set the number counts (`splittable`: every entry of a collection
  * with a lifecycle); the change this week in its place elsewhere.
  */
-export function lineFor(asked: CountLine, splittable: boolean): CountLine {
+function lineFor(asked: CountLine, splittable: boolean): CountLine {
   return asked === "split" && !splittable ? "change" : asked;
 }
 

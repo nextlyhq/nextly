@@ -162,20 +162,23 @@ function StatusSplit({
 }: {
   line: Extract<CountLineView, { kind: "split" }>;
 }) {
-  const parts: { key: keyof typeof SPLIT_TONE; word: string; part: CountPart }[] =
-    [
-      { key: "published", word: "published", part: line.published },
-      { key: "draft", word: "draft", part: line.draft },
-      ...(line.scheduled === undefined || line.scheduled.count === 0
-        ? []
-        : [
-            {
-              key: "scheduled" as const,
-              word: "scheduled",
-              part: line.scheduled,
-            },
-          ]),
-    ];
+  const parts: {
+    key: keyof typeof SPLIT_TONE;
+    word: string;
+    part: CountPart;
+  }[] = [
+    { key: "published", word: "published", part: line.published },
+    { key: "draft", word: "draft", part: line.draft },
+    ...(line.scheduled === undefined || line.scheduled.count === 0
+      ? []
+      : [
+          {
+            key: "scheduled" as const,
+            word: "scheduled",
+            part: line.scheduled,
+          },
+        ]),
+  ];
   const sum = parts.reduce((total, { part }) => total + part.count, 0);
   return (
     <div data-testid="count-split">
@@ -204,7 +207,10 @@ function StatusSplit({
             >
               <span
                 aria-hidden="true"
-                className={cn("size-1.5 shrink-0 rounded-full", SPLIT_TONE[key])}
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full",
+                  SPLIT_TONE[key]
+                )}
               />
               {`${whole(part.count)} ${word}`}
             </Link>

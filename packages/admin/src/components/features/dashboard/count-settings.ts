@@ -32,10 +32,12 @@ export function countSettingRule(
   const people = source === USERS_SOURCE;
   const lifecycle =
     sources.find(each => each.collection === source)?.lifecycle === true;
-  if (name === "count") return people || !lifecycle ? { hidden: true } : undefined;
+  if (name === "count")
+    return people || !lifecycle ? { hidden: true } : undefined;
   if (name === "filter") return people ? { hidden: true } : undefined;
   if (name !== "show") return undefined;
-  const counted = values.count === undefined || values.count === "" ? "all" : values.count;
+  const counted =
+    values.count === undefined || values.count === "" ? "all" : values.count;
   const splittable = !people && lifecycle && counted === "all";
   return splittable
     ? undefined
