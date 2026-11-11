@@ -247,6 +247,32 @@ describe.each(getConfiguredTestDialects())(
       expect(record.held()).toEqual({});
     });
 
+    it("a move that fails part-way rolls its transaction back, even when caught", async () => {
+      const { participant } = asPluginParticipant();
+      const { ctx } = await boot(dialect, participant);
+      const failing: PublicAddressParticipant = {
+        holderOf: () => Promise.resolve(null),
+        record: () => Promise.reject(new Error("second record failed")),
+      };
+      ctx.publicAddresses.participate(failing);
+
+      const outcome = ctx.services.collections.withTransaction(async tx => {
+        await ctx.publicAddresses
+          .move(
+            [
+              {
+                holder: { collection: "pages", id: "p" },
+                holds: [{ locale: "en", path: "/half" }],
+              },
+            ],
+            tx
+          )
+          .catch(() => undefined);
+      });
+
+      await expect(outcome).rejects.toThrow("second record failed");
+    });
+
     it("held pages through a type oldest first, each once", async () => {
       const { t, ctx } = await boot(dialect);
       const ids = [
@@ -378,6 +404,38 @@ describe.each(getConfiguredTestDialects())(
       ).ctx.publicAddresses.fingerprint();
 
       expect(off).not.toBe(on);
+    });
+
+    it("fingerprint changes when an address field becomes translated", async () => {
+      const fingerprintWith = async (slugTranslated: boolean) => {
+        const { plugin, seen } = recordPlugin(undefined);
+        current = await createTestNextly({
+          dialect,
+          plugins: [plugin],
+          localization: { locales: ["en", "fr"], defaultLocale: "en" },
+          collections: [
+            defineCollection({
+              slug: "articles",
+              localized: true,
+              status: true,
+              fields: [
+                text({ name: "title", localized: false }),
+                text({ name: "slug", localized: slugTranslated }),
+              ],
+              publicAddress: "/articles/{slug}",
+            }),
+          ],
+        });
+        const fingerprint = await seen.ctx?.publicAddresses.fingerprint();
+        await current.destroy();
+        current = undefined;
+        return fingerprint;
+      };
+
+      const shared = await fingerprintWith(false);
+      const translated = await fingerprintWith(true);
+
+      expect(translated).not.toBe(shared);
     });
 
     it("withdraw stops the asking", async () => {

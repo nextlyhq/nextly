@@ -91,18 +91,45 @@ async function translations(
     languages
   );
   const localization = appLocalization();
+  return translatedValues(
+    byColumn,
+    companion.localizedFields,
+    languages,
+    live,
+    language =>
+      resolveLocaleChain(localization, language, undefined) ?? [language]
+  );
+}
+
+/**
+ * Each language's value of each translated field, by field name, from the
+ * stored values `byColumn` (each language's, keyed by column): along the
+ * language's `chainOf` fallbacks, passing over a language not `live`, as a
+ * public read does, since a draft translation is never what a visitor is
+ * served.
+ */
+export function translatedValues(
+  byColumn: ReadonlyMap<string, Record<string, unknown>>,
+  fields: readonly { name: string; column: string }[],
+  languages: readonly string[],
+  live: ReadonlySet<string>,
+  chainOf: (language: string) => string[]
+): Map<string, Record<string, unknown>> {
   const byName = new Map<string, Record<string, unknown>>();
   for (const language of languages) {
-    // A fallback passes over a language not live there, as a public read's
-    // does: a draft translation is never what a visitor is served.
-    const chain = (
-      resolveLocaleChain(localization, language, undefined) ?? [language]
-    ).filter(code => code === language || live.has(code));
+    const chain = chainOf(language).filter(
+      code => code === language || live.has(code)
+    );
     const named: Record<string, unknown> = {};
-    for (const field of companion.localizedFields) {
+    for (const field of fields) {
       const perLocale = Object.fromEntries(
         chain.map(code => [code, byColumn.get(code)?.[field.column]])
       );
+      // Nothing read at all (a translations table not yet migrated reads no
+      // value, not null): the main row still holds the field, and it stands.
+      if (Object.values(perLocale).every(value => value === undefined)) {
+        continue;
+      }
       named[field.name] = resolveLocalizedValue(perLocale, chain);
     }
     byName.set(language, named);

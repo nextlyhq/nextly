@@ -14,6 +14,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../../di";
 import { whenServicesRegistered } from "../../di/service-access";
+import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { appLocalization } from "../i18n/configured-locales";
 import { resolveLocaleChain } from "../i18n/resolve-locale";
 import { getCachedNextly } from "../../init";
@@ -191,6 +192,15 @@ export async function addressFingerprint(): Promise<string> {
     ),
   ];
   for (const { type, row } of await siteTypes()) {
+    // Which fields are kept per language decides what an address field reads
+    // in each language, so a field becoming translated changes the digest.
+    const translated = resolveLocalizedFieldNames(
+      (row.fields ?? []) as Parameters<typeof resolveLocalizedFieldNames>[0],
+      row.localized === true
+    );
+    parts.push(
+      `${type.kind}:${type.slug}|translated:${[...translated].sort().join(",")}`
+    );
     for (const language of languages) {
       const declared = await declaredFor(type, language, row);
       parts.push(

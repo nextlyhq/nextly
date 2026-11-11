@@ -155,7 +155,15 @@ export function pluginPublicAddresses(
       // move settles, as every method taking this token is: a participant's
       // writes must never run after the caller's transaction is gone.
       scope.assertOpen();
-      return scope.track(settleMoves(updates, tx));
+      return scope.track(
+        settleMoves(updates, tx).catch((error: unknown) => {
+          // A participant may have recorded before another failed: the
+          // transaction must roll back for it even if the caller catches
+          // this, or the records would disagree about who holds an address.
+          scope.fail(error);
+          throw error;
+        })
+      );
     },
     held: args => heldPage(args),
     fingerprint: () => addressFingerprint(),
