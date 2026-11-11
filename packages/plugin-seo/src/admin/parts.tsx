@@ -128,6 +128,19 @@ export function AutomaticSource({
   );
 }
 
+/**
+ * A type's name inside a sentence: "Blog post" becomes "blog post", while a
+ * name that opens with an acronym, such as "SEO page", keeps its capitals.
+ */
+export function inSentence(name: string): string {
+  const [first = "", second = ""] = name;
+  return second !== "" &&
+    second === second.toUpperCase() &&
+    /[a-z]/i.test(second)
+    ? name
+    : first.toLowerCase() + name.slice(1);
+}
+
 /** The words after the chip, for each level that can supply a value. */
 function sourceWords(
   sourced: Pick<Sourced<unknown>, "from" | "pattern" | "field">,
@@ -147,7 +160,7 @@ function sourceWords(
   if (level === "content" && sourced.field !== undefined) {
     return (
       <>
-        from the {names.typeLabel.toLowerCase()}&apos;s{" "}
+        from the {inSentence(names.typeLabel)}&apos;s{" "}
         <b className="font-semibold text-foreground">
           {names.fieldLabels[sourced.field] ?? sourced.field}
         </b>

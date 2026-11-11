@@ -26,7 +26,13 @@
 import { formBuilder } from "@nextlyhq/plugin-form-builder";
 import { pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { seoPlugin } from "@nextlyhq/plugin-seo";
-import { defineCollection, defineConfig, text } from "nextly/config";
+import {
+  defineCollection,
+  defineConfig,
+  defineSingle,
+  text,
+  textarea,
+} from "nextly/config";
 
 import { JOURNAL, JOURNAL_COLLECTIONS } from "./src/blog-fixture/collections";
 import { Authors } from "./src/collections/authors";
@@ -81,14 +87,29 @@ const playgroundPlugins = new Set(
 const seoPluginEnabled = playgroundPlugins.has("seo");
 
 /**
- * The one collection the SEO plugin extends here, registered with it. Its own
- * collection rather than Posts, so the `seo` group the plugin adds reaches no
- * entry form, list or count another spec reads.
+ * The collection and the Single the SEO plugin extends here, registered with
+ * it. Their own rather than Posts or a Single another spec edits, so the `seo`
+ * group and the SEO tab the plugin adds reach no entry form, list or count
+ * another spec reads. Each page has an address and an excerpt, so its tab has
+ * automatic values to show.
  */
 const SeoPages = defineCollection({
   slug: "seo-pages",
   labels: { singular: "SEO page", plural: "SEO pages" },
-  fields: [text({ name: "title", label: "Title", required: true })],
+  fields: [
+    text({ name: "title", label: "Title", required: true }),
+    text({ name: "slug", label: "Slug" }),
+    textarea({ name: "excerpt", label: "Excerpt" }),
+  ],
+  publicAddress: "/seo/{slug}",
+});
+const SeoHome = defineSingle({
+  slug: "seo-home",
+  label: { singular: "SEO home" },
+  fields: [
+    text({ name: "title", label: "Title" }),
+    textarea({ name: "summary", label: "Summary" }),
+  ],
 });
 
 /**
@@ -275,6 +296,8 @@ export default defineConfig({
     // A Single with a field the public may not read, for the browser test of
     // the editor marking a bound value a visitor will not see.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ContactDetails] : []),
+    // The Single the SEO plugin extends, by the plugin's own switch.
+    ...(seoPluginEnabled ? [SeoHome] : []),
   ],
   fieldGroups: [
     Seo,
@@ -335,7 +358,13 @@ export default defineConfig({
     // and its Needs attention line, by the switch above. No sitemap: a public
     // route is not what that test is about.
     ...(seoPluginEnabled
-      ? [seoPlugin({ collections: [SeoPages.slug], sitemap: false })]
+      ? [
+          seoPlugin({
+            collections: [SeoPages.slug],
+            singles: [SeoHome.slug],
+            sitemap: false,
+          }),
+        ]
       : []),
     // A card whose data answers as late as a spec asks, for the slow-card
     // spec; off in a contributor's dev server, where it would be a test double.
