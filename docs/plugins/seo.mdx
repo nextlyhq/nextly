@@ -1,14 +1,15 @@
 ---
 title: SEO
-description: An SEO field group on the collections you name, every page's head, and the site's sitemap and robots.txt.
+description: An SEO tab and field group on the collections and Singles you name, every page's head, and the site's sitemap and robots.txt.
 ---
 
 > **Alpha (`0.x`): pin your versions.**
 >
 > The stability boundary is `@nextlyhq/plugin-sdk` (see [API stability](/docs/plugins/stability)). This package's own exports, `seoPlugin`, its option types and the sitemap generators below, are **not** covered by that guarantee and are alpha. Pin your versions and read the release notes before upgrading.
 
-The SEO plugin adds one field group to the collections you name, answers every page's head,
-and serves the site's sitemap and robots.txt.
+The SEO plugin adds one field group to the collections and Singles you name, an SEO tab
+that edits it on their pages in the admin, answers every page's head, and serves the
+site's sitemap and robots.txt.
 
 It is framework-agnostic and has no `next` dependency, so it works the same in an
 integrated site, a headless project and an admin-only install.
@@ -54,6 +55,8 @@ in one predictable place:
 ```ts
 entry.seo?.metaTitle;
 entry.seo?.metaDescription;
+entry.seo?.socialTitle;
+entry.seo?.socialDescription;
 entry.seo?.ogImage;
 entry.seo?.canonical;
 entry.seo?.noindex;
@@ -76,8 +79,11 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 | -------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `metaTitle`          | text     | Capped at 60 characters, which is roughly where search engines truncate a title                                                                                 |
 | `metaDescription`    | textarea | Capped at 160 characters, for the same reason                                                                                                                   |
+| `socialTitle`        | text     | The title a shared link's card uses, where it should differ from `metaTitle`                                                                                    |
+| `socialDescription`  | textarea | The description a shared link's card uses, where it should differ from `metaDescription`                                                                        |
 | `ogImage`            | upload   | Relates to `media`. The social preview image                                                                                                                    |
 | `canonical`          | text     | A per-page canonical URL                                                                                                                                        |
+| `canonicalElsewhere` | checkbox | Says the page first appeared on another site, so a `canonical` there is used                                                                                    |
 | `noindex`            | checkbox | Defaults to `false`. Drops the entry from this plugin's sitemap. The `robots` directive that actually tells a crawler comes from `buildMetadata`, which is core |
 | `structuredDataType` | text     | The [structured data type](#structured-data) this page is described as, where it differs from its content type's. Empty uses the content type's                 |
 
@@ -95,7 +101,7 @@ from `buildMetadata`.
 
 </Callout>
 
-All six are optional. `canonical` and `noindex` ship by default rather than being left for
+All nine are optional. `canonical` and `noindex` ship by default rather than being left for
 you to add, because a canonical URL and a search opt-out are baseline controls rather than
 advanced ones.
 
@@ -127,12 +133,63 @@ plugin-authoring surface and the type `fields` is declared against.
 `fields` replaces the defaults rather than adding to them, so list everything you want.
 Overrides stay nested under `seo`: the example above reads at `entry.seo.focusKeyword`.
 
+## The SEO tab
+
+On the edit page of every entry and Single the plugin adds the group to, while creating
+one too, the admin draws an **SEO** tab after the page's own content. The `seo` group is
+edited there, not among the page's fields, and the side panel holds none of it. What the
+tab sets is part of the document: Save and Publish store it with everything else, so it
+stays a draft until the page is published, as the page's other changes do.
+
+The tab shows, in order:
+
+- **A preview** of the page as Google lists it, and as the card a shared link shows on
+  LinkedIn, Slack and others. It follows what is typed, saved or not, in any field of
+  the page.
+- **Title on Google** and **Description on Google**, with a count against what Google
+  shows. An empty field shows, as its placeholder, the value the page will use, and under
+  it where that value comes from: the content type's pattern, one of the page's own fields
+  (its title, its excerpt), or the site's defaults. Typing marks it **Typed for this
+  page**, with one action, **Go back to automatic**, that empties it again.
+- **Advanced**, closed until opened: hiding the page from search, its official address
+  (the canonical), a different title and description when shared, the share image, and
+  the [structured data type](#structured-data), with what the type still lacks.
+
+The official address is the page's own public address. **Use another address** takes an
+address on the same site as typed; one on another site is used only once the person
+confirms the page first appeared there. Until then the page's own address stays in use.
+"The same site" means one of its production addresses, scheme and port included. The row
+is drawn only where the `seo` group has both `canonical` and `canonicalElsewhere`, since
+an address on another site is used only once marked confirmed.
+
+The count beside the tab's label is the number of problems the page's answer shows: a
+title longer than Google shows, a description that is too long, a title or a
+description that no level supplies, and each detail the page's structured data type
+lacks.
+
+The tab's values come from the same answer the page's head is built from, worked out by
+the plugin's `POST /resolve` route for the document as it is typed. The route answers
+anyone who may read that collection or Single, a reader shown the page read-only too.
+What a page's route sets in its own code is not known to the admin, so the tab does not
+show it.
+
+The tab's component is `@nextlyhq/plugin-seo/admin#SeoTab`. `nextly generate:types`
+adds it to your app's generated component map, as it does every component a plugin
+declares.
+
+The tab edits the fields the plugin ships, and offers a control only for the ones the
+group declares. A `fields` option whose group has fields the tab
+does not edit (a focus keyword, say), or a field it cannot honour as declared (read-only,
+disabled, hidden or shown under a condition), keeps the whole group among the page's own fields
+instead, where each one can still be edited, and no tab is drawn.
+
 ## Configuration
 
 | Option           | Type                                                             | Default            | What it does                                                                             |
 | ---------------- | ---------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------- |
 | `collections`    | `string[]`                                                       | required           | The collections that get the `seo` group                                                 |
-| `fields`         | `FieldConfig[]`                                                  | the five above     | The fields placed inside the group                                                       |
+| `singles`        | `string[]`                                                       | none               | The Singles that get the `seo` group, such as a homepage                                 |
+| `fields`         | `FieldConfig[]`                                                  | the nine above     | The fields placed inside the group                                                       |
 | `baseUrl`        | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name          |
 | `sitemap`        | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                   |
 | `robots`         | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                   |
