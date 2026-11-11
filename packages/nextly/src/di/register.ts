@@ -215,11 +215,12 @@ import type {
   PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
-import { pluginLandingWarnings } from "../plugins/plugin-landing";
 import {
   clearPluginDependencies,
   publishPluginDependencies,
 } from "../plugins/plugin-dependencies";
+import { pluginLandingWarnings } from "../plugins/plugin-landing";
+import { pluginPanelWarnings } from "../plugins/plugin-panel";
 import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import {
   clearProxyHandlers,
@@ -1658,7 +1659,8 @@ function registerPluginFieldTypes(plugins: PluginDefinition[]): void {
 
 /**
  * Name the boot's plugins, and warn about any without a description, and in
- * development about a landing a plugin or the site names wrongly or leaves out.
+ * development about a landing a plugin or the site names wrongly or leaves
+ * out, and about what a plugin's panel declares that the admin is not sent.
  */
 function logRegisteredPlugins(
   transformedConfig: NextlyServiceConfig,
@@ -1684,6 +1686,16 @@ function logRegisteredPlugins(
   for (const warning of pluginLandingWarnings(
     transformedConfig.plugins,
     transformedConfig.admin?.pluginOverrides,
+    process.env.NODE_ENV
+  )) {
+    getNextlyLogger().warn(warning);
+  }
+  // And what a plugin's panel declares that the admin is not sent: a menu
+  // item for a page it does not register, a group, count or badge naming
+  // nothing it declares or owns. Reported as the landing is, for the same
+  // reasons.
+  for (const warning of pluginPanelWarnings(
+    transformedConfig.plugins,
     process.env.NODE_ENV
   )) {
     getNextlyLogger().warn(warning);

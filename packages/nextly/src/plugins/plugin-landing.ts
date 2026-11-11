@@ -13,6 +13,7 @@ import type { PluginOverride } from "../shared/types/config";
 
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type { PluginDefinition } from "./plugin-context";
+import { ownPageRegistered } from "./plugin-panel";
 import { pluginAdminSlug } from "./plugin-slug";
 import { renamedSlug, retargetedTo } from "./served-collection-slug";
 
@@ -102,16 +103,8 @@ function ownedDestination(
     return undefined;
   }
 
-  // The address the admin mounts the plugin's pages at (`pluginPagePath`).
-  const pagesPrefix = `/admin/plugins/${pluginAdminSlug(plugin.name)}/`;
-  if (path.startsWith(pagesPrefix)) {
-    const named = path.slice(pagesPrefix.length);
-    const pages = plugin.contributes?.admin?.pages ?? [];
-    return pages.some(page => page.path.replace(/^\/+/, "") === named)
-      ? declared
-      : undefined;
-  }
-  return undefined;
+  // One of the plugin's pages, matched as a menu item linking to one is.
+  return ownPageRegistered(plugin, declared) === true ? declared : undefined;
 }
 
 /** One line of the start-up report about plugins' landings. */
