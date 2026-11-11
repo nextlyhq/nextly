@@ -14,7 +14,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text } from "nextly";
+import { defineCollection, text, textarea } from "nextly";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../../plugin";
@@ -58,6 +58,13 @@ async function boot(dialect: TestDialect) {
         status: true,
         fields: [text({ name: "title" }), text({ name: "slug" })],
         publicAddress: "/{slug}",
+      }),
+      // A title of any length: a long-text field.
+      defineCollection({
+        slug: "essays",
+        status: true,
+        fields: [textarea({ name: "title" }), text({ name: "slug" })],
+        publicAddress: "/essays/{slug}",
       }),
       defineCollection({
         slug: "links",
@@ -108,6 +115,20 @@ describe.each(getConfiguredTestDialects())(
           "/hello (en) is already the address of another page. Choose another address for this entry.",
       });
       expect(await recorded(t)).toEqual({ "en|/hello": `pages:${page}` });
+    });
+
+    it("records a page whose title is longer than a short text column holds", async () => {
+      const { t } = await boot(dialect);
+      const title = "A very long title ".repeat(20);
+
+      const created = await t.nextly.create({
+        collection: "essays",
+        data: { title, slug: "long", status: "published" },
+      });
+
+      expect(await recorded(t)).toEqual({
+        "en|/essays/long": `essays:${String(created.item.id)}`,
+      });
     });
 
     it("saving a holder again leaves the same rows", async () => {
