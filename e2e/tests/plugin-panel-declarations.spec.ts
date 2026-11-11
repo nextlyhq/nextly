@@ -2,10 +2,11 @@
  * A standalone plugin's panel, as the plugin declares it, in a browser: the
  * style fixture (apps/playground/src/plugins/style-fixture) lists an item
  * naming no group first, then its Library and Checks groups under their
- * headings; a quiet count of its own collection, narrowed by a `where`; a
- * badge read from one of its own Needs your attention items; and a badge at
- * 0, which is not drawn. Each number is read in one request while the panel
- * is open, and arriving moves no item.
+ * headings; a quiet count of its own collection, narrowed by a `where`, which
+ * is hidden from the navigation and so kept off the dashboard; a badge read
+ * from one of its own Needs your attention items; and a badge at 0, which is
+ * not drawn. Every number is read in one request naming only the plugin
+ * while the panel is open, and arriving moves no item.
  *
  * The fixture's attention items count swatches in a state only this file
  * stores, and it removes them again, so the dashboard's card reads as
@@ -72,14 +73,14 @@ test.afterAll(async () => {
   await admin?.dispose();
 });
 
-/** The batches the panel sent, as they leave the browser. */
+/** The panel's number requests, as they leave the browser. */
 function panelBatches(page: Page): Request[] {
   const sent: Request[] = [];
   page.on("request", request => {
     if (
-      request.method() === "POST" &&
-      request.url().endsWith("/admin/api/dashboard/query") &&
-      (request.postData() ?? "").includes(`collection:${SWATCHES}`)
+      request.method() === "GET" &&
+      new URL(request.url()).pathname ===
+        "/admin/api/admin-meta/plugin-panel-numbers"
     ) {
       sent.push(request);
     }
@@ -113,7 +114,8 @@ test("draws the fixture's groups, counts and badges in its own panel", async ({
   const before = await counted.boundingBox();
 
   // The quiet count of the fixture's own collection, narrowed by its where,
-  // named with its number.
+  // named with its number: a collection hidden from the navigation is
+  // counted all the same.
   const expected = toFixBefore + created.length;
   await expect(
     library.getByRole("link", { name: `Swatches to fix, ${expected}` })
@@ -132,14 +134,11 @@ test("draws the fixture's groups, counts and badges in its own panel", async ({
   // The number arriving moved nothing.
   expect(await counted.boundingBox()).toEqual(before);
 
-  // Every number came from one request.
+  // Every number came from one request, which names only the plugin.
   expect(batches).toHaveLength(1);
-  const queries = (
-    JSON.parse(batches[0].postData() ?? "{}") as {
-      queries: Array<{ source: string }>;
-    }
-  ).queries.map(query => query.source);
-  expect(queries).toEqual(["system:attention", `collection:${SWATCHES}`]);
+  expect([...new URL(batches[0].url()).searchParams]).toEqual([
+    ["plugin", "style-fixture"],
+  ]);
 });
 
 test("keeps the fixture's older pages in the Plugins panel, which asks no count", async ({

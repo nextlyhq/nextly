@@ -1,8 +1,9 @@
 /**
  * A standalone plugin's own panel draws the groups and numbers the plugin
  * declares: items naming no group first, then each group under its heading in
- * the order declared, each number read in one batch while the panel is drawn,
- * and a plugin that declares none of it drawn exactly as before.
+ * the order declared, each number read in one request naming only the plugin
+ * while the panel is drawn, and a plugin that declares none of it drawn
+ * exactly as before.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -20,11 +21,13 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
 }));
 // The request leaves the browser here: each call is one request.
-vi.mock("@admin/lib/api/refreshInterceptor", () => ({ authFetch: vi.fn() }));
+vi.mock("@admin/lib/api/protectedApi", () => ({
+  protectedApi: { get: vi.fn() },
+}));
 
 import { PluginMenuItems } from "@admin/components/features/dashboard/PluginMenuItems";
 import { SidebarProvider } from "@admin/components/layout/sidebar";
-import { authFetch } from "@admin/lib/api/refreshInterceptor";
+import { protectedApi } from "@admin/lib/api/protectedApi";
 
 import { StandalonePanelItems } from "../StandalonePanelItems";
 
@@ -46,23 +49,18 @@ function library(
   } as PluginMetadata;
 }
 
-/** The batch answers `results`, one slot per query, as JSON. */
-function answer(results: unknown[]) {
-  vi.mocked(authFetch).mockResolvedValue(
-    new Response(JSON.stringify({ results }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    })
-  );
+/** The server answers these numbers, each by its item's place in the menu. */
+function answer(
+  numbers: Array<[index: number, value: number, atLeast?: true]>
+) {
+  vi.mocked(protectedApi.get).mockResolvedValue({
+    numbers: numbers.map(([index, value, atLeast]) => ({
+      index,
+      value,
+      atLeast: atLeast === true,
+    })),
+  });
 }
-
-/** The queries the panel's request carried. */
-function sentQueries(call = 0): unknown[] {
-  const init = vi.mocked(authFetch).mock.calls[call][1] as RequestInit;
-  return (JSON.parse(String(init.body)) as { queries: unknown[] }).queries;
-}
-
-const count = (total: number) => ({ ok: true, result: { op: "count", total } });
 
 function wrap(children: ReactNode) {
   const client = new QueryClient({
@@ -86,7 +84,7 @@ const linkNames = () =>
   screen.getAllByRole("link").map(link => link.textContent ?? "");
 
 beforeEach(() => {
-  vi.mocked(authFetch).mockReset();
+  vi.mocked(protectedApi.get).mockReset();
 });
 afterEach(cleanup);
 
@@ -122,22 +120,17 @@ describe("a standalone plugin's panel", () => {
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     // No item shows a number, so nothing is asked for.
-    expect(authFetch).not.toHaveBeenCalled();
+    expect(protectedApi.get).not.toHaveBeenCalled();
   });
 
-  it("asks every count in one request and names each link with its number", async () => {
+  it("asks every number in one request naming the plugin, and names each link with its number", async () => {
+    // Quiet's badge counts 0.
     answer([
-      {
-        ok: true,
-        result: {
-          op: "list",
-          items: [{ id: "acme/fix", label: "Fix", count: 2 }],
-          total: 1,
-        },
-      },
-      count(12),
-      count(0),
-      count(5),
+      [0, 12],
+      [1, 0],
+      [2, 5],
+      [3, 2],
+      [4, 0],
     ]);
     branding = {
       plugins: [
@@ -182,25 +175,18 @@ describe("a standalone plugin's panel", () => {
     expect(screen.getAllByTestId("plugin-item-badge")).toHaveLength(1);
     expect(screen.getAllByTestId("plugin-item-count")).toHaveLength(3);
 
-    // One request for the whole panel, carrying each question once.
-    expect(authFetch).toHaveBeenCalledTimes(1);
-    expect(sentQueries()).toEqual([
-      { source: "system:attention", op: "list", limit: 50 },
-      { source: "collection:patterns", op: "count" },
-      { source: "collection:layouts", op: "count" },
-      {
-        source: "collection:patterns",
-        op: "count",
-        where: { a: { equals: 1 } },
-      },
-    ]);
+    // One request for the whole panel, naming only the plugin: the server
+    // reads what the plugin declared, never a collection the browser sends.
+    expect(protectedApi.get).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(protectedApi.get).mock.calls[0][0]).toBe(
+      "/admin-meta/plugin-panel-numbers?plugin=%40acme%2Flibrary"
+    );
   });
 
-  it("draws no number for a count that failed, and no error", async () => {
-    answer([
-      { ok: false, error: "unavailable", code: "unavailable" },
-      count(4),
-    ]);
+  it("draws no number for a count the server left out, and no error", async () => {
+    // The first item's collection is one the reader may not read: the server
+    // answers no number for it.
+    answer([[1, 4]]);
     branding = {
       plugins: [
         library([
@@ -217,7 +203,7 @@ describe("a standalone plugin's panel", () => {
   });
 
   it("draws no number at all when the request fails", async () => {
-    vi.mocked(authFetch).mockRejectedValue(new TypeError("offline"));
+    vi.mocked(protectedApi.get).mockRejectedValue(new TypeError("offline"));
     branding = {
       plugins: [
         library([
@@ -227,7 +213,7 @@ describe("a standalone plugin's panel", () => {
     } as AdminBranding;
     renderPanel();
 
-    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(protectedApi.get).toHaveBeenCalledTimes(1));
     expect(screen.getByRole("link", { name: "Patterns" })).toBeDefined();
     expect(screen.queryByTestId("plugin-item-count")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
@@ -256,6 +242,6 @@ describe("a standalone plugin's panel", () => {
     const plain = (html: string) => html.replace(/_r_[a-z0-9]+_/g, "_id_");
     expect(plain(declared)).toBe(plain(before));
     expect(declared).toContain("Overview");
-    expect(authFetch).not.toHaveBeenCalled();
+    expect(protectedApi.get).not.toHaveBeenCalled();
   });
 });

@@ -960,12 +960,15 @@ many need doing. Either names what it counts in one of two forms:
 
 - `{ collection, where? }` counts one of the plugin's own collections, by its declared
   slug (a host's rename is followed), narrowed by `where` in the entry list's grammar.
-  The number is the reader's: a collection they may not read shows no number.
+  The number is the reader's: a collection they may not read shows no number. A
+  collection hidden from the navigation (`admin.hidden`) is counted all the same, so a
+  library the plugin lists only in its own panel can show its size there.
 - `{ attention }` reads one of the plugin's own Needs your attention items, by its id:
   the count that item's line shows the reader, and 0 when nothing is waiting for them.
 
-The numbers are read while the panel is open, in one request for the whole panel, and
-never hold it up: the items are drawn first, and a number that cannot be read is left
+The numbers are read while the panel is open, in one request for the whole panel that
+names only the plugin: the server counts what the plugin declared, so nothing the browser
+sends chooses what is counted. They never hold the panel up: the items are drawn first, and a number that cannot be read is left
 out. A link's accessible name includes its number ("Patterns, 12").
 
 A development start reports a `group` the plugin does not declare (the item is listed

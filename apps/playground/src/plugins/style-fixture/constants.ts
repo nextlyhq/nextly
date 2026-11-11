@@ -26,9 +26,9 @@ export const FRAME_PAGE_PATHS = {
 } as const;
 
 /**
- * The fixture's own collection, listed in its standalone panel and counted
- * there, for e2e/tests/plugin-panel-declarations.spec.ts. Registered with the
- * fixture, so only on the e2e server.
+ * The fixture's own collection, hidden from the navigation and counted by
+ * its standalone panel, for e2e/tests/plugin-panel-declarations.spec.ts.
+ * Registered with the fixture, so only on the e2e server.
  */
 export const SWATCHES_SLUG = "style-fixture-swatches";
 

@@ -7,8 +7,8 @@
  * groups, or a count or badge on an item, has them drawn as declared: the
  * items naming no group first, under no heading, then each group under its
  * heading in the order declared, each item with its number once the panel's
- * one batch answers (`usePluginPanelCounts`). The numbers are read only while
- * this panel is drawn.
+ * one request answers (`usePluginPanelCounts`). The numbers are read only
+ * while this panel is drawn.
  *
  * @module components/layout/sidebar/StandalonePanelItems
  */
@@ -24,7 +24,10 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { usePluginPanelCounts } from "@admin/hooks/queries/usePluginPanelCounts";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { resolveVisibleMenuItems } from "@admin/lib/plugins/menu";
-import type { PanelItemNumber } from "@admin/lib/plugins/panel-counts";
+import {
+  declaresNumbers,
+  type PanelItemNumber,
+} from "@admin/lib/plugins/panel-counts";
 import { panelItemsByGroup } from "@admin/lib/plugins/panel-groups";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMenuItemMeta, PluginMetadata } from "@admin/types/branding";
@@ -66,9 +69,7 @@ function panelPlugin(
 /** Whether the plugin declares groups, or a number on any item. */
 function declaresPanel(plugin: PluginMetadata): boolean {
   if ((plugin.panel?.groups.length ?? 0) > 0) return true;
-  return (plugin.menu ?? []).some(
-    item => item.count !== undefined || item.badge !== undefined
-  );
+  return declaresNumbers(plugin.menu);
 }
 
 /** What an item shows: its declared kind, and its number once read. */
@@ -95,7 +96,7 @@ function DeclaredPanelItems({
   // The items the panel lists for the reader, by the same filter and order
   // every panel lists plugin items with.
   const items = resolveVisibleMenuItems([plugin], hasPermission, section);
-  const numbers = usePluginPanelCounts(plugin.name, items);
+  const numbers = usePluginPanelCounts(plugin);
   const { ungrouped, groups } = panelItemsByGroup(
     items,
     plugin.panel?.groups ?? []
