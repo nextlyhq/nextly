@@ -135,10 +135,13 @@ export async function takeBackLost(
           removeRedirect(ctx, transaction, left.id)
         );
       } catch (error) {
-        ctx.logger.warn("A redirect to a lost address could not be taken back", {
-          redirect: left.id,
-          error,
-        });
+        ctx.logger.warn(
+          "A redirect to a lost address could not be taken back",
+          {
+            redirect: left.id,
+            error,
+          }
+        );
       }
     }
   }

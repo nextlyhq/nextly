@@ -30,7 +30,9 @@ describe("following a redirect's To address to the end of its chain", () => {
   it("refuses a To address already caught in a loop of its own", async () => {
     expect(
       await followChain("/a", "/b", hops({ "/b": "/c", "/c": "/b" }))
-    ).toEqual({ error: "/b is already part of a loop. Fix that redirect first." });
+    ).toEqual({
+      error: "/b is already part of a loop. Fix that redirect first.",
+    });
   });
 
   it("follows no address on another site", async () => {

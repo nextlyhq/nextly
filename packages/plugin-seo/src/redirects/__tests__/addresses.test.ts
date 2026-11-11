@@ -65,7 +65,11 @@ describe("a redirect's To address", () => {
       "/old",
       "The To address can only use * when the From address does.",
     ],
-    ["/new/*/x", "/old/*", "Use * only at the end of the To address, as in /new/*."],
+    [
+      "/new/*/x",
+      "/old/*",
+      "Use * only at the end of the To address, as in /new/*.",
+    ],
     [
       "http://example.com/new",
       "/old",
@@ -104,9 +108,7 @@ describe("where a redirect sends a request", () => {
     const pattern = { source: "/old/*", target: "/new/*" };
     expect(destinationOf(pattern, "/old/a/b")).toBe("/new/a/b");
     expect(destinationOf(pattern, "/old")).toBe("/new");
-    expect(destinationOf({ source: "/old/*", target: "/*" }, "/old")).toBe(
-      "/"
-    );
+    expect(destinationOf({ source: "/old/*", target: "/*" }, "/old")).toBe("/");
     expect(
       destinationOf(
         { source: "/old/*", target: "https://example.com/new/*" },

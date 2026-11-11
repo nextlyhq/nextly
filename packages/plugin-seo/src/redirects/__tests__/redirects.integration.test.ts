@@ -100,7 +100,10 @@ function rename(t: TestNextly, collection: string, id: string, slug: string) {
 
 /** Every redirect, as `locale|from` → `to`, with how it was made. */
 async function redirects(t: TestNextly) {
-  const { items } = await t.nextly.find({ collection: REDIRECTS_SLUG, limit: 500 });
+  const { items } = await t.nextly.find({
+    collection: REDIRECTS_SLUG,
+    limit: 500,
+  });
   return Object.fromEntries(
     (items as Record<string, unknown>[]).map(row => [
       `${row.locale}|${row.source}`,
@@ -111,7 +114,10 @@ async function redirects(t: TestNextly) {
 
 /** The record's held rows, as `locale|path` → holder collection. */
 async function holders(t: TestNextly) {
-  const { items } = await t.nextly.find({ collection: ADDRESS_RECORD_SLUG, limit: 500 });
+  const { items } = await t.nextly.find({
+    collection: ADDRESS_RECORD_SLUG,
+    limit: 500,
+  });
   return Object.fromEntries(
     (items as Record<string, unknown>[])
       .filter(row => row.kind === "address" || row.kind === "range")
@@ -138,7 +144,10 @@ async function ask(path: string) {
 }
 
 /** Save a redirect as a person would, on a transaction of its own. */
-function put(ctx: PluginContext, input: Partial<RedirectInput> & { source: string; target: string }) {
+function put(
+  ctx: PluginContext,
+  input: Partial<RedirectInput> & { source: string; target: string }
+) {
   return ctx.services.collections.withTransaction(tx =>
     putRedirect(ctx, tx, { locale: "en", origin: "person", ...input })
   );
@@ -246,7 +255,9 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
     await publish(t, "pages", "old-kept");
     expect(await ask("/old/x")).toBe("served");
 
-    expect(await put(seo, { source: "/old/*", target: "/new/*" })).toHaveProperty("saved");
+    expect(
+      await put(seo, { source: "/old/*", target: "/new/*" })
+    ).toHaveProperty("saved");
     expect(await ask("/old/x/y")).toBe("301 https://example.com/new/x/y");
     expect(await ask("/old")).toBe("301 https://example.com/new");
 

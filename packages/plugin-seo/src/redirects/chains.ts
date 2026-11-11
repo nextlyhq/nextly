@@ -41,7 +41,9 @@ export async function followChain(
       };
     }
     if (seen.has(hop) || path.length >= LONGEST_CHAIN) {
-      return { error: `${to} is already part of a loop. Fix that redirect first.` };
+      return {
+        error: `${to} is already part of a loop. Fix that redirect first.`,
+      };
     }
     seen.add(hop);
     path.push(hop);

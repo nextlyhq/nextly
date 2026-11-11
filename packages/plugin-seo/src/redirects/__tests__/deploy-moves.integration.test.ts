@@ -47,7 +47,8 @@ async function boot(dialect: TestDialect) {
         nextly: ">=0.0.0",
         init(ctx: PluginContext) {
           ctx.hooks.on("beforeCreate", REDIRECTS_SLUG, () => {
-            if (faults.failRedirects) throw new Error("the redirect store is down");
+            if (faults.failRedirects)
+              throw new Error("the redirect store is down");
           });
         },
       }),
@@ -73,7 +74,10 @@ async function publish(t: TestNextly, collection: string, slug: string) {
 }
 
 async function rows(t: TestNextly) {
-  const { items } = await t.nextly.find({ collection: ADDRESS_RECORD_SLUG, limit: 500 });
+  const { items } = await t.nextly.find({
+    collection: ADDRESS_RECORD_SLUG,
+    limit: 500,
+  });
   return items as Record<string, unknown>[];
 }
 
@@ -87,15 +91,25 @@ async function heldBeforeTheDeploy(
   path: string
 ) {
   for (const row of await rows(t)) {
-    if (row.holderCollection === holder.collection && row.holderId === holder.id) {
+    if (
+      row.holderCollection === holder.collection &&
+      row.holderId === holder.id
+    ) {
       await t.nextly.update({
         collection: ADDRESS_RECORD_SLUG,
         id: String(row.id),
-        data: { path, claimKey: claimKey("address", "en", path), _overwrite: true },
+        data: {
+          path,
+          claimKey: claimKey("address", "en", path),
+          _overwrite: true,
+        },
       });
     }
     if (row.kind === "meta" && !String(row.path).startsWith("[")) {
-      await t.nextly.delete({ collection: ADDRESS_RECORD_SLUG, id: String(row.id) });
+      await t.nextly.delete({
+        collection: ADDRESS_RECORD_SLUG,
+        id: String(row.id),
+      });
     }
   }
 }
@@ -107,7 +121,10 @@ async function restart() {
 }
 
 async function redirects(t: TestNextly) {
-  const { items } = await t.nextly.find({ collection: REDIRECTS_SLUG, limit: 500 });
+  const { items } = await t.nextly.find({
+    collection: REDIRECTS_SLUG,
+    limit: 500,
+  });
   return Object.fromEntries(
     (items as Record<string, unknown>[]).map(row => [
       `${row.locale}|${row.source}`,
@@ -117,8 +134,13 @@ async function redirects(t: TestNextly) {
 }
 
 async function notFound(t: TestNextly) {
-  const { items } = await t.nextly.find({ collection: NOT_FOUND_SLUG, limit: 500 });
-  return (items as Record<string, unknown>[]).map(row => `${row.path} ${row.kind}`);
+  const { items } = await t.nextly.find({
+    collection: NOT_FOUND_SLUG,
+    limit: 500,
+  });
+  return (items as Record<string, unknown>[]).map(
+    row => `${row.path} ${row.kind}`
+  );
 }
 
 async function held(t: TestNextly) {
@@ -138,8 +160,13 @@ describe.each(getConfiguredTestDialects())("a deploy's moves (%s)", dialect => {
 
     await restart();
 
-    expect(await redirects(t)).toEqual({ "en|/old": "/new permanent automatic" });
-    expect(await held(t)).toEqual({ "en|/new": "pages", "en|/old": REDIRECTS_SLUG });
+    expect(await redirects(t)).toEqual({
+      "en|/old": "/new permanent automatic",
+    });
+    expect(await held(t)).toEqual({
+      "en|/new": "pages",
+      "en|/old": REDIRECTS_SLUG,
+    });
   });
 
   it("list the old address as a broken link where its redirect cannot be saved", async () => {
@@ -163,7 +190,10 @@ describe.each(getConfiguredTestDialects())("a deploy's moves (%s)", dialect => {
     // Made where a save could not refuse it: the record forgets the page
     // holding `/new` while a second page is published there.
     for (const row of await rows(t)) {
-      await t.nextly.delete({ collection: ADDRESS_RECORD_SLUG, id: String(row.id) });
+      await t.nextly.delete({
+        collection: ADDRESS_RECORD_SLUG,
+        id: String(row.id),
+      });
     }
     const loser = await publish(t, "posts", "new");
     await heldBeforeTheDeploy(t, { collection: "posts", id: loser }, "/old");
