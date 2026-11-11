@@ -35,7 +35,7 @@ import type { ReadRules } from "../resolver/provider";
 
 import {
   codePages,
-  heldByDocument,
+  heldByDocuments,
   resolveCodePage,
   type CodePage,
 } from "./answers";
@@ -225,10 +225,9 @@ async function entryAddressOf(
 ): Promise<SiteAddress> {
   const { type, holder, document } = candidate;
   const translation = options.language !== options.defaultLanguage;
-  // A translation is listed where its language serves it, such as `/de/…`.
-  const path = translation
-    ? ((await servedAt(own, options.language)) ?? own)
-    : own;
+  // Listed where its language serves it, such as `/de/…`, the site's own
+  // language included where the language rule prefixes it too.
+  const path = (await servedAt(own, options.language)) ?? own;
   const label = await options.label(type);
   const answer = await resolveIn(
     ctx,
@@ -369,13 +368,14 @@ export async function siteAddresses(
   const entryPaths = new Set(entries.map(entry => entry.path));
   // A route serving an address a document holds is serving that entry,
   // whatever language the address is in: its SEO is the entry's.
-  const routes: CodeRoute[] = [];
-  for (const route of options.routes) {
-    if (entryPaths.has(route.path)) continue;
-    if (!(await heldByDocument(ctx, route.path, options.origin))) {
-      routes.push(route);
-    }
-  }
+  const held = await heldByDocuments(
+    ctx,
+    options.routes.map(route => route.path),
+    options.origin
+  );
+  const routes = options.routes.filter(
+    route => !entryPaths.has(route.path) && !held.has(route.path)
+  );
   const pages = await codePages(ctx, routes, readRules);
   const rules = await readRules?.(ctx, undefined);
   const site = { origin: options.origin, name: rules?.siteName };

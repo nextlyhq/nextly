@@ -29,7 +29,7 @@ import {
   addressHolders,
   withAddressHolders,
 } from "../address-record/participant";
-import { codePages, heldByDocument } from "../code-pages/answers";
+import { codePages, heldByDocuments } from "../code-pages/answers";
 import { codePagesSlug } from "../code-pages/collection";
 import type { CodeRoute } from "../code-pages/routes";
 import { languageLinks } from "../languages/links";
@@ -273,15 +273,20 @@ async function listCodePages(
   options: { origin: string; language: string; readRules?: ReadRules },
   found: { pages: ListedPage[]; problems: ListingProblem[] }
 ): Promise<void> {
-  for (const { route, row, answer } of await codePages(
+  const connected = await codePages(ctx, routes, options.readRules);
+  // Who holds each address, read once per language for every connected one.
+  const held = await heldByDocuments(
     ctx,
-    routes,
-    options.readRules
-  )) {
+    connected.flatMap(({ route, row }) =>
+      row?.connected === true ? [route.path] : []
+    ),
+    options.origin
+  );
+  for (const { route, row, answer } of connected) {
     if (row?.connected !== true) continue;
     // An entry holds it in its language, hidden from search or not: the
     // address is the entry's.
-    if (await heldByDocument(ctx, route.path, options.origin)) continue;
+    if (held.has(route.path)) continue;
     const at = standingOf(answer, options.origin, route.path);
     if (at === null || at === "lost") continue;
     found.pages.push({

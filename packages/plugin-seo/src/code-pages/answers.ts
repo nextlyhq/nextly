@@ -7,7 +7,10 @@
  */
 import { addressOfRequest, type PluginContext } from "@nextlyhq/plugin-sdk";
 
-import { addressHolders } from "../address-record/participant";
+import {
+  addressHolders,
+  withAddressHolders,
+} from "../address-record/participant";
 import type { SeoAnswer } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 
@@ -23,22 +26,40 @@ export interface CodePage {
 }
 
 /**
- * Whether a document holds the address `path` is on the site at `origin`, in
- * whichever language that address is: a published entry, or a translation of
- * one, served there. Its SEO is then the entry's, hidden or not, never a
- * page built in code's.
+ * Which of `paths`, on the site at `origin`, a document holds, in whichever
+ * language each address is: a published entry, or a translation of one,
+ * served there. Its SEO is then the entry's, hidden or not, never a page
+ * built in code's. The record is read once per language for them all.
  */
-export async function heldByDocument(
+export async function heldByDocuments(
   ctx: PluginContext,
-  path: string,
+  paths: readonly string[],
   origin: string
-): Promise<boolean> {
-  const address = await addressOfRequest(new URL(path, origin));
-  if (address === undefined) return false;
+): Promise<Set<string>> {
+  const byLanguage = new Map<string, { path: string; at: string }[]>();
+  for (const path of paths) {
+    const address = await addressOfRequest(new URL(path, origin));
+    if (address === undefined) continue;
+    const each = byLanguage.get(address.locale) ?? [];
+    each.push({ path, at: address.path });
+    byLanguage.set(address.locale, each);
+  }
   const own = codePagesSlug(ctx);
-  return (await addressHolders(ctx, address.path, address.locale)).some(
-    holder => holder.collection !== own
-  );
+  const held = new Set<string>();
+  for (const [language, each] of byLanguage) {
+    await withAddressHolders(
+      ctx,
+      language,
+      each.map(({ at }) => at),
+      async () => {
+        for (const { path, at } of each) {
+          const holders = await addressHolders(ctx, at, language);
+          if (holders.some(holder => holder.collection !== own)) held.add(path);
+        }
+      }
+    );
+  }
+  return held;
 }
 
 /** The answer of the page built in code at `path`, from `row`. */

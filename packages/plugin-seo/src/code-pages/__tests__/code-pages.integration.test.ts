@@ -530,16 +530,17 @@ describe.each(getConfiguredTestDialects())(
         }))
       ).toEqual([
         {
-          path: "/about",
-          name: "About us",
-          source: "entry",
-          locale: undefined,
-        },
-        {
           path: "/de/pricing",
           name: "Über uns",
           source: "entry",
           locale: "de",
+        },
+        // The site's own language is prefixed too, as its rule says.
+        {
+          path: "/en/about",
+          name: "About us",
+          source: "entry",
+          locale: undefined,
         },
         {
           path: "/pricing",
