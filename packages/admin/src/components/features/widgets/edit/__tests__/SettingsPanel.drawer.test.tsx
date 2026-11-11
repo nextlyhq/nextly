@@ -8,12 +8,13 @@
  */
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { publishedWidgetDefinition } from "nextly/testing/widget-card";
+import type { AnyWidgetSetting } from "nextly/config";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { CORE_DECLARATIONS } from "../../../../../../../nextly/src/domains/widgets/core-widgets";
+import { sizeBounds } from "../../../../../../../nextly/src/domains/widgets/grid-size";
 import type { PanelKept } from "../panel-values";
 import { SettingsPanel } from "../SettingsPanel";
 
@@ -39,14 +40,24 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   }),
 }));
 
-/** One of core's cards, by its id, as the registry publishes it to the admin. */
+/**
+ * One of core's cards, by its id, with its settings and size as the registry publishes them to
+ * the admin (`toDefinition`): each setting named by its key, the size with every end filled in.
+ */
 function core(id: string): DashboardWidget {
   const declaration = CORE_DECLARATIONS.find(widget => widget.id === id);
   if (declaration === undefined) throw new Error(`no core widget ${id}`);
-  return publishedWidgetDefinition(
-    declaration,
-    "core"
-  ) as unknown as DashboardWidget;
+  const declared: Readonly<Record<string, object>> = declaration.settings ?? {};
+  const settings = Object.entries(declared).map(
+    ([name, setting]) => ({ ...setting, name }) as AnyWidgetSetting
+  );
+  return {
+    id: declaration.id,
+    title: declaration.title,
+    archetype: "custom",
+    size: sizeBounds(declaration.size),
+    ...(settings.length > 0 ? { settings } : {}),
+  };
 }
 
 /** A plugin's list card, declared as Forms' New submissions is: its own Number of entries. */

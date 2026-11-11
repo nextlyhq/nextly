@@ -25,7 +25,7 @@ export function isEntriesSetting(
 }
 
 /** The numbers of entries a list card offers, where its setting's bounds allow them. */
-export const ENTRIES_CHOICES: readonly number[] = [5, 10, 20];
+const ENTRIES_CHOICES: readonly number[] = [5, 10, 20];
 
 /**
  * The choices the drawer offers for a "Number of entries": 5, 10 and 20 where the setting's

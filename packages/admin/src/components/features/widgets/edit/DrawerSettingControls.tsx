@@ -20,6 +20,7 @@ import {
 import { Fragment, useId, type JSX, type ReactNode } from "react";
 import { useController, useFormContext } from "react-hook-form";
 
+import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import { cn } from "@admin/lib/utils";
 
 import { widthChoiceName } from "../sizes";
@@ -27,12 +28,14 @@ import { widthChoiceName } from "../sizes";
 import {
   descriptionParts,
   entriesChoices,
+  isEntriesSetting,
+  segmentedOptionsOf,
   type EntriesSetting,
 } from "./drawer-choices";
 import { SegmentedChoice, type SegmentedOption } from "./SegmentedChoice";
 
 /** What the drawer says under a setting, its examples in backticks drawn as code. */
-export function SettingDescription({
+function SettingDescription({
   id,
   text,
 }: {
@@ -98,21 +101,26 @@ function hintOf(setting: AnyWidgetSetting): string | undefined {
 }
 
 /**
- * A select setting drawn as a row of choices, its value the chosen option's, as the dropdown
- * stores it.
+ * A setting drawn as a row of choices: a select, its value the chosen option's, as the dropdown
+ * stores it; or a list's "Number of entries", stored as the number it is (`parse`). Only a value
+ * the row offered is ever chosen.
  */
-export function SegmentedSettingControl({
+function SegmentedSettingControl({
   setting,
   options,
   disabled,
+  parse,
 }: {
   setting: AnyWidgetSetting;
   options: readonly SegmentedOption[];
   disabled: boolean;
+  /** What the chosen option's value is stored as; the value itself when absent. */
+  parse?: (value: string) => unknown;
 }): JSX.Element {
   const { field } = useController({ name: setting.name });
   const id = useId();
   const hint = hintOf(setting);
+  const value: unknown = field.value;
   return (
     <ChoiceField
       labelId={`${id}-label`}
@@ -125,9 +133,13 @@ export function SegmentedSettingControl({
         aria-labelledby={`${id}-label`}
         aria-describedby={hint === undefined ? undefined : `${id}-hint`}
         options={options}
-        value={typeof field.value === "string" ? field.value : undefined}
+        value={
+          typeof value === "string" || typeof value === "number"
+            ? String(value)
+            : undefined
+        }
         disabled={disabled}
-        onSelect={field.onChange}
+        onSelect={next => field.onChange(parse ? parse(next) : next)}
         data-testid={`setting-choice-${setting.name}`}
       />
     </ChoiceField>
@@ -137,58 +149,40 @@ export function SegmentedSettingControl({
 /**
  * A list's "Number of entries" as a choice of 5, 10 or 20, stored as the number it is. A value
  * the drawer opened on that is none of those (7, saved before) is offered beside them and shown
- * as chosen, so it is never changed unless the reader picks another (`entriesChoices`).
+ * as chosen, so it is never changed unless the reader picks another (`entriesChoices`). Where
+ * the setting's bounds allow none of them, the plain number field.
  */
-export function EntriesSettingControl({
+function EntriesSettingControl({
   setting,
-  choices,
   disabled,
 }: {
   setting: EntriesSetting;
-  choices: readonly number[];
   disabled: boolean;
 }): JSX.Element {
-  const { field } = useController({ name: setting.name });
-  const id = useId();
-  const hint = hintOf(setting);
+  const { formState } = useFormContext<Record<string, unknown>>();
+  const choices = entriesChoices(
+    setting,
+    formState.defaultValues?.[setting.name]
+  );
+  if (choices.length === 0) {
+    // No cast: `WidgetSetting` is assignable to `FieldConfig` (`settings.compat.test-d.ts`).
+    return <FieldRenderer field={setting} mode="edit" />;
+  }
   return (
-    <ChoiceField
-      labelId={`${id}-label`}
-      label={labelOf(setting)}
-      hintId={`${id}-hint`}
-      hint={hint}
-    >
-      <SegmentedChoice
-        size="drawer"
-        aria-labelledby={`${id}-label`}
-        aria-describedby={hint === undefined ? undefined : `${id}-hint`}
-        options={choices.map(choice => ({
-          value: String(choice),
-          label: String(choice),
-        }))}
-        value={
-          typeof field.value === "number" ? String(field.value) : undefined
-        }
-        disabled={disabled}
-        // Narrowed rather than asserted: only a number this control offered is chosen.
-        onSelect={next => {
-          const chosen = Number(next);
-          if (choices.includes(chosen)) field.onChange(chosen);
-        }}
-        data-testid={`setting-choice-${setting.name}`}
-      />
-    </ChoiceField>
+    <SegmentedSettingControl
+      setting={setting}
+      options={choices.map(choice => ({
+        value: String(choice),
+        label: String(choice),
+      }))}
+      disabled={disabled}
+      parse={Number}
+    />
   );
 }
 
-/** The choices a "Number of entries" offers, read against the value the drawer opened on. */
-export function useEntriesChoices(setting: EntriesSetting): number[] {
-  const { formState } = useFormContext<Record<string, unknown>>();
-  return entriesChoices(setting, formState.defaultValues?.[setting.name]);
-}
-
 /** An on/off setting: its label, and a switch beside it at the row's end. */
-export function SwitchSettingControl({
+function SwitchSettingControl({
   setting,
   disabled,
 }: {
@@ -220,7 +214,7 @@ export function SwitchSettingControl({
 }
 
 /** How many characters a text has left under its bound, said as the drawer says it. */
-export function charactersLeftText(left: number): string {
+function charactersLeftText(left: number): string {
   const count = new Intl.NumberFormat("en").format(Math.abs(left));
   if (left >= 0)
     return `${count} ${left === 1 ? "character" : "characters"} left`;
@@ -233,7 +227,7 @@ export function charactersLeftText(left: number): string {
  * counts them (`textLength`). The bound is judged on Save (`overlongSetting`), not by the
  * textarea, whose own limit counts emoji as two.
  */
-export function TextareaSettingControl({
+function TextareaSettingControl({
   setting,
   disabled,
 }: {
@@ -356,4 +350,35 @@ export function WidthControl({
       />
     </ChoiceField>
   );
+}
+
+/**
+ * The drawer's own control for `setting`, where it draws one: a list's Number of entries, a
+ * short choice, an on/off or a text over several lines. `undefined` for any other setting, which
+ * the drawer draws as the entry editor draws a field.
+ */
+export function drawerControlOf(
+  setting: AnyWidgetSetting,
+  disabled: boolean
+): JSX.Element | undefined {
+  if (isEntriesSetting(setting)) {
+    return <EntriesSettingControl setting={setting} disabled={disabled} />;
+  }
+  const segmented = segmentedOptionsOf(setting);
+  if (segmented !== undefined) {
+    return (
+      <SegmentedSettingControl
+        setting={setting}
+        options={segmented}
+        disabled={disabled}
+      />
+    );
+  }
+  if (setting.type === "checkbox") {
+    return <SwitchSettingControl setting={setting} disabled={disabled} />;
+  }
+  if (setting.type === "textarea") {
+    return <TextareaSettingControl setting={setting} disabled={disabled} />;
+  }
+  return undefined;
 }

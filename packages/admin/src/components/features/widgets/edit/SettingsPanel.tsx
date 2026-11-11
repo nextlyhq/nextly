@@ -82,16 +82,8 @@ import {
   type SettingSection,
 } from "./content-settings";
 import { ContentSettingControl } from "./ContentSettingControl";
-import { isEntriesSetting, segmentedOptionsOf } from "./drawer-choices";
 import { DrawerHeader } from "./DrawerHeader";
-import {
-  EntriesSettingControl,
-  SegmentedSettingControl,
-  SwitchSettingControl,
-  TextareaSettingControl,
-  useEntriesChoices,
-  WidthControl,
-} from "./DrawerSettingControls";
+import { drawerControlOf, WidthControl } from "./DrawerSettingControls";
 import { closeFocusTo } from "./panel-close-focus";
 import {
   initialValues,
@@ -594,25 +586,9 @@ function SettingControl({
       />
     );
   }
-  if (isEntriesSetting(setting)) {
-    return <EntriesControl setting={setting} saving={saving} />;
-  }
-  const segmented = segmentedOptionsOf(setting);
-  if (segmented !== undefined) {
-    return (
-      <SegmentedSettingControl
-        setting={setting}
-        options={segmented}
-        disabled={saving}
-      />
-    );
-  }
-  if (setting.type === "checkbox") {
-    return <SwitchSettingControl setting={setting} disabled={saving} />;
-  }
-  if (setting.type === "textarea") {
-    return <TextareaSettingControl setting={setting} disabled={saving} />;
-  }
+  // A short choice, an on/off or a note's text: the drawer's own controls.
+  const own = drawerControlOf(setting, saving);
+  if (own !== undefined) return own;
   if (isContentSetting(setting)) {
     return (
       <ContentSettingControl
@@ -634,30 +610,6 @@ function SettingControl({
   // No cast: `WidgetSetting` is assignable to `FieldConfig`, and `settings.compat.test-d.ts` is
   // what keeps that true.
   return <FieldRenderer field={setting} mode="edit" />;
-}
-
-/**
- * A list's Number of entries as a choice of 5, 10 or 20, or as the plain number field where its
- * bounds allow none of those.
- */
-function EntriesControl({
-  setting,
-  saving,
-}: {
-  setting: Extract<AnyWidgetSetting, { type: "number" }>;
-  saving: boolean;
-}) {
-  const choices = useEntriesChoices(setting);
-  if (choices.length === 0) {
-    return <FieldRenderer field={setting} mode="edit" />;
-  }
-  return (
-    <EntriesSettingControl
-      setting={setting}
-      choices={choices}
-      disabled={saving}
-    />
-  );
 }
 
 /**
