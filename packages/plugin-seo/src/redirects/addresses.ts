@@ -88,12 +88,24 @@ export function checkTarget(target: string, source: string): string | null {
   }
   const star = starProblem(to, source);
   if (star !== null) return star;
-  if (to.startsWith("/")) {
-    return pathOf(to) === trimmed(source)
-      ? "That would send the address to itself."
-      : null;
-  }
+  if (to.startsWith("/")) return sameSiteProblem(to, source);
   return elsewhereProblem(to);
+}
+
+/**
+ * Why a To address on this site sends a request back where it started, or
+ * null: to the From address itself, or, for a pattern, to any address the
+ * pattern itself matches, which would redirect again and again.
+ */
+function sameSiteProblem(to: string, source: string): string | null {
+  if (pathOf(to) === trimmed(source)) {
+    return "That would send the address to itself.";
+  }
+  if (!source.endsWith("/*")) return null;
+  const lands = pathOf(to.endsWith("/*") ? to.slice(0, -2) : to) || "/";
+  return within(lands, source.slice(0, -2))
+    ? `That makes a loop: ${source} would send its addresses back under itself.`
+    : null;
 }
 
 /** Why a To address's `*` cannot be used, or null. */

@@ -15,7 +15,6 @@ import { createHash } from "node:crypto";
 
 import {
   NextlyError,
-  languageAddressOf,
   type HeldAddress,
   type ParticipantTransaction,
   type PluginContext,
@@ -248,10 +247,7 @@ async function pointedOn(
     }
     repointed += page.length;
   }
-  const served = await languageAddressOf(source, locale);
-  if (served.status === "resolved") {
-    await forgetNotFound(ctx, transaction, served.path);
-  }
+  await forgetNotFound(ctx, transaction, { locale, path: source });
   return repointed;
 }
 

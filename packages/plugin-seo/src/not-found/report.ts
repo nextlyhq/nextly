@@ -9,11 +9,11 @@
  *
  * @module not-found/report
  */
-import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import { addressOfRequest, type PluginContext } from "@nextlyhq/plugin-sdk";
 
 import { ASKED_FOR_HEADER } from "../redirects/proxy-handler";
 
-import { recordNotFound } from "./log";
+import { notAPageAddress, recordNotFound } from "./log";
 
 /**
  * The SEO plugin's context, once it has started, on `globalThis` so the
@@ -55,7 +55,12 @@ export async function logNotFound(headers: HeaderReader): Promise<void> {
   const asked = headers.get(ASKED_FOR_HEADER);
   if (ctx === undefined || asked === null || asked === "") return;
   try {
-    await recordNotFound(ctx, new URL(asked).pathname);
+    const url = new URL(asked);
+    if (notAPageAddress(url.pathname)) return;
+    // Kept by language and path, so `/gone` on two languages' domains is
+    // two addresses, each answered by its own language's redirect.
+    const address = await addressOfRequest(url);
+    if (address !== undefined) await recordNotFound(ctx, address);
   } catch (error) {
     ctx.logger.warn("An address not found could not be logged", { error });
   }

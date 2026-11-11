@@ -39,24 +39,27 @@ import {
   type HeldAddress,
   type HeldAddressUpdate,
   type HeldDocument,
+  type ParticipantTransaction,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
 import { redirectDeployMove } from "../redirects/moves";
 
 import { heldNow, recordSlug, rowOf, type RecordRow } from "./participant";
+import {
+  forgetPending,
+  keepPending,
+  pendingMoves,
+  type PendingMove,
+} from "./pending-moves";
+
+type Transaction = ParticipantTransaction["transaction"];
 
 /** A page left without an address another page holds. */
 export interface LostAddress {
   holder: AddressHolder;
   address: HeldAddress;
   heldBy: AddressHolder;
-}
-
-/** A page whose deploy moved it, and the addresses it let go of. */
-interface Moved {
-  page: HeldAddressUpdate;
-  released: HeldAddress[];
 }
 
 /** What a catch-up did. */
@@ -279,7 +282,8 @@ const sameHolds = (a: readonly HeldAddress[], b: readonly HeldAddress[]) =>
 async function moveIfCurrent(
   ctx: PluginContext,
   update: HeldAddressUpdate,
-  expected: Expected
+  expected: Expected,
+  alongside?: (transaction: Transaction) => Promise<void>
 ): Promise<
   { refused: { address: HeldAddress; heldBy: AddressHolder }[] } | "overtaken"
 > {
@@ -290,7 +294,9 @@ async function moveIfCurrent(
     async transaction => {
       const now = await heldNow(ctx, transaction, update.holder);
       if (!sameHolds(now, before)) return "overtaken" as const;
-      return ctx.publicAddresses.move([update], transaction);
+      const moved = await ctx.publicAddresses.move([update], transaction);
+      if (moved.refused.length === 0) await alongside?.(transaction);
+      return moved;
     }
   );
   if (outcome === "overtaken") expected.delete(key);
@@ -362,8 +368,7 @@ async function keepWhatStands(
   ctx: PluginContext,
   pages: readonly HeldAddressUpdate[],
   was: ReadonlyMap<string, { holds: HeldAddress[] }>,
-  expected: Expected,
-  moved: Moved[]
+  expected: Expected
 ): Promise<Map<string, HeldAddress[]>> {
   const kept = new Map<string, HeldAddress[]>();
   for (const page of pages) {
@@ -375,21 +380,18 @@ async function keepWhatStands(
     );
     kept.set(key, keep);
     if (keep.length !== before.length) {
-      const outcome = await moveIfCurrent(
+      // The route has moved with the deploy: each address let go of is kept
+      // on the same transaction, owed a redirect to the page's new one once
+      // every claim stands.
+      const released = before.filter(
+        b => !keep.some(held => sameAddress(b, held))
+      );
+      await moveIfCurrent(
         ctx,
         { holder: page.holder, holds: keep },
-        expected
+        expected,
+        transaction => keepPending(ctx, transaction, page.holder, released)
       );
-      // The route has moved with the deploy: each address let go of leaves
-      // a redirect to the page's new one, once every claim stands.
-      if (outcome !== "overtaken") {
-        moved.push({
-          page,
-          released: before.filter(
-            b => !keep.some(held => sameAddress(b, held))
-          ),
-        });
-      }
     }
   }
   return kept;
@@ -503,6 +505,42 @@ async function claimTheNew(
   return { recorded, lost };
 }
 
+/**
+ * Make the redirects every page's move owes, this start's and any an earlier
+ * start left owing, from each page's address now: none to an address the
+ * page lost (`lost`), and none for a page no longer listed. Each owed move
+ * is forgotten once its redirect is made or refused.
+ */
+async function redirectOwedMoves(
+  ctx: PluginContext,
+  pages: readonly HeldAddressUpdate[],
+  lost: readonly LostAddress[]
+): Promise<void> {
+  const owed = new Map<string, PendingMove[]>();
+  for (const move of await pendingMoves(ctx)) {
+    const key = holderKey(move.holder);
+    owed.set(key, [...(owed.get(key) ?? []), move]);
+  }
+  for (const [key, moves] of owed) {
+    const [first] = moves;
+    if (first === undefined) continue;
+    const page = pages.find(each => holderKey(each.holder) === key);
+    const lostHere = lost
+      .filter(each => holderKey(each.holder) === key)
+      .map(each => each.address);
+    await redirectDeployMove(
+      ctx,
+      { holder: first.holder, holds: page?.holds ?? [] },
+      moves.map(move => move.address),
+      lostHere
+    );
+    await forgetPending(
+      ctx,
+      moves.map(move => move.key)
+    );
+  }
+}
+
 async function runCatchUp(
   ctx: PluginContext,
   options: CatchUpOptions
@@ -511,7 +549,13 @@ async function runCatchUp(
   // The stored fingerprint by its key, and whether any address is recorded:
   // an unchanged start reads no more than that.
   const stored = await storedFingerprint(ctx);
-  if (stored?.value === fingerprint && (await holdsAny(ctx))) return NOTHING;
+  if (
+    stored?.value === fingerprint &&
+    (await holdsAny(ctx)) &&
+    (await pendingMoves(ctx)).length === 0
+  ) {
+    return NOTHING;
+  }
   const record = await readRecord(ctx);
   const siteTypes = await siteTypeKeys(ctx);
   const pages = await everyPage(ctx, options);
@@ -520,19 +564,13 @@ async function runCatchUp(
   const expected: Expected = new Map(
     [...was].map(([key, entry]) => [key, [...entry.holds]])
   );
-  const moved: Moved[] = [];
-  const kept = await keepWhatStands(ctx, pages, was, expected, moved);
+  const kept = await keepWhatStands(ctx, pages, was, expected);
   await letGoOfTheGone(ctx, was, kept, expected, {
     now: new Set(siteTypes),
     before: typesIn(record.siteTypes),
   });
   const { recorded, lost } = await claimTheNew(ctx, pages, kept, expected);
-  for (const { page, released } of moved) {
-    const lostHere = lost
-      .filter(each => holderKey(each.holder) === holderKey(page.holder))
-      .map(each => each.address);
-    await redirectDeployMove(ctx, page, released, lostHere);
-  }
+  await redirectOwedMoves(ctx, pages, lost);
   await storeMeta(
     ctx,
     record.siteTypes?.id,

@@ -40,9 +40,17 @@ interface NotFoundRow {
   kind: NotFoundKind;
 }
 
-/** The stored key of an address. */
-function pathKey(path: string): string {
-  return createHash("sha256").update(path, "utf8").digest("hex");
+/** An address as it is kept: a language and a path. */
+export interface LoggedAddress {
+  locale: string;
+  path: string;
+}
+
+/** The stored key of an address in a language. */
+function pathKey(address: LoggedAddress): string {
+  return createHash("sha256")
+    .update(`${address.locale}|${address.path}`, "utf8")
+    .digest("hex");
 }
 
 /** The first path segments no public page is ever served under. */
@@ -134,7 +142,7 @@ function bumpLogged(
  */
 export async function recordNotFound(
   ctx: PluginContext,
-  path: string,
+  address: LoggedAddress,
   kind: NotFoundKind = "missing",
   now: Date = new Date(),
   bound: { limit: number; slack: number } = {
@@ -142,15 +150,16 @@ export async function recordNotFound(
     slack: PRUNE_SLACK,
   }
 ): Promise<void> {
-  if (notAPageAddress(path)) return;
+  if (notAPageAddress(address.path)) return;
   const slug = notFoundSlug(ctx);
   const lastSeen = now.toISOString();
-  const key = pathKey(path);
+  const key = pathKey(address);
   if (await bumpLogged(ctx, key, lastSeen, kind)) return;
   try {
     await ctx.services.collections.createEntry(slug, {
       pathKey: key,
-      path,
+      locale: address.locale,
+      path: address.path,
       hits: 1,
       lastSeen,
       kind,
@@ -210,19 +219,19 @@ export async function pruneNotFound(
   }
 }
 
-/** Drop `path` from the log, as a redirect now answers it. */
+/** Drop `address` from the log, as a redirect now answers it. */
 export async function forgetNotFound(
   ctx: PluginContext,
   transaction: Parameters<
     PluginContext["services"]["collections"]["deleteEntryInTransaction"]
   >[0],
-  path: string
+  address: LoggedAddress
 ): Promise<void> {
   const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
     transaction,
     notFoundSlug(ctx),
     {
-      where: { pathKey: { equals: pathKey(path) } },
+      where: { pathKey: { equals: pathKey(address) } },
       pagination: { limit: 1, page: 1 },
       depth: 0,
     }

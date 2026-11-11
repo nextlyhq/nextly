@@ -20,17 +20,18 @@ import {
   resolveLocalizedValue,
 } from "../i18n/companion-join";
 import { appLocalization } from "../i18n/configured-locales";
-import { resolveLocaleChain } from "../i18n/resolve-locale";
-import { cachedCompanionReadiness } from "../i18n/runtime/companion-readiness";
-import { languageIsLive } from "../i18n/runtime/language-lifecycle";
-import {
-  buildCompanionSchema,
-  type CompanionSchema,
-} from "../i18n/runtime/companion-io";
+import { addressLanguagesOf } from "../i18n/language-addresses";
 import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../i18n/per-language-storage";
+import { resolveLocaleChain } from "../i18n/resolve-locale";
+import {
+  buildCompanionSchema,
+  type CompanionSchema,
+} from "../i18n/runtime/companion-io";
+import { cachedCompanionReadiness } from "../i18n/runtime/companion-readiness";
+import { languageIsLive } from "../i18n/runtime/language-lifecycle";
 import type { SingleRegistryService } from "../singles/services/single-registry-service";
 import { readCompanionValuesByLocale } from "../singles/services/single-webhook-doc";
 
@@ -55,11 +56,7 @@ export interface LanguageVersion {
  * address by two languages.
  */
 export function addressLanguages(): string[] {
-  const localization = appLocalization();
-  const codes = localization?.locales.map(locale => locale.code) ?? [];
-  if (codes.length > 0) return codes;
-  const fallback = localization?.defaultLocale;
-  return [fallback !== undefined && fallback !== "" ? fallback : "en"];
+  return addressLanguagesOf(appLocalization());
 }
 
 /** The type a write names: `single:<slug>` is a Single, anything else a collection. */
@@ -241,7 +238,7 @@ export async function readEveryLanguage(
   const executor = tx.getDrizzle();
   const record = await typeRecordOn(type, executor);
   const lifecycle = record?.status === true;
-  const shared = write.data as Record<string, unknown>;
+  const shared = write.data;
   const languages = addressLanguages();
 
   const companion = await companionOf(type, executor);

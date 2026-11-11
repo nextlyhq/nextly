@@ -24,15 +24,18 @@ export function notFoundCollection(): CollectionConfig {
     labels: { singular: "Address not found", plural: "Addresses not found" },
     internal: true,
     fields: [
-      // The SHA-256 of the address, so one address is one row on every
-      // dialect, whatever its length.
+      // The SHA-256 of the language and the address, so one address is one
+      // row on every dialect, whatever its length.
       text({
         name: "pathKey",
         label: "Path key",
         required: true,
         unique: true,
       }),
-      // The address as it was asked for, without its query.
+      // The address asked for, by its language and path as addresses are
+      // kept: `/de/alt` is `/alt` in `de`, and the same path on two
+      // languages' domains is two addresses.
+      text({ name: "locale", label: "Language", required: true }),
       textarea({ name: "path", label: "Address", required: true }),
       number({ name: "hits", label: "Visits", required: true, index: true }),
       date({

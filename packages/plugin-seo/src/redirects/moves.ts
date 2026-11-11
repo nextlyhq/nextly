@@ -6,11 +6,10 @@
  *
  * @module redirects/moves
  */
-import {
-  languageAddressOf,
-  type AddressHolder,
-  type HeldAddress,
-  type PluginContext,
+import type {
+  AddressHolder,
+  HeldAddress,
+  PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
 import { recordNotFound } from "../not-found/log";
@@ -45,13 +44,8 @@ export function movedRedirect(
 }
 
 /** List `old` as a broken link: its route moved, and no redirect could be saved. */
-async function listBroken(ctx: PluginContext, old: HeldAddress): Promise<void> {
-  const served = await languageAddressOf(old.path, old.locale);
-  await recordNotFound(
-    ctx,
-    served.status === "resolved" ? served.path : old.path,
-    "moved"
-  );
+function listBroken(ctx: PluginContext, old: HeldAddress): Promise<void> {
+  return recordNotFound(ctx, { locale: old.locale, path: old.path }, "moved");
 }
 
 /**

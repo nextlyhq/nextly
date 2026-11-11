@@ -33,10 +33,11 @@ afterEach(async () => {
   current = undefined;
 });
 
-const faults = { failRedirects: false };
+const faults = { failRedirects: false, failClaimOf: "" };
 
 async function boot(dialect: TestDialect) {
   faults.failRedirects = false;
+  faults.failClaimOf = "";
   current = await createTestNextly({
     dialect,
     plugins: [
@@ -49,6 +50,13 @@ async function boot(dialect: TestDialect) {
           ctx.hooks.on("beforeCreate", REDIRECTS_SLUG, () => {
             if (faults.failRedirects)
               throw new Error("the redirect store is down");
+          });
+          // A start that stops part-way: the record refuses one claim.
+          ctx.hooks.on("beforeCreate", ADDRESS_RECORD_SLUG, context => {
+            const data = (context as { data?: Record<string, unknown> }).data;
+            if (data?.kind === "address" && data.path === faults.failClaimOf) {
+              throw new Error("the start stopped here");
+            }
           });
         },
       }),
@@ -186,6 +194,28 @@ describe.each(getConfiguredTestDialects())("a deploy's moves (%s)", dialect => {
       "en|/b": "pages",
       "en|/c": "posts",
     });
+  });
+
+  it("still leave the redirect after a start that stopped between letting go and claiming", async () => {
+    const t = await boot(dialect);
+    const page = await publish(t, "pages", "new");
+    await restart();
+    await heldBeforeTheDeploy(t, { collection: "pages", id: page }, "/old");
+    faults.failClaimOf = "/new";
+    await restart();
+    expect(await held(t)).toEqual({});
+
+    faults.failClaimOf = "";
+    await restart();
+
+    expect(await redirects(t)).toEqual({
+      "en|/old": "/new permanent automatic",
+    });
+    expect(await held(t)).toEqual({
+      "en|/new": "pages",
+      "en|/old": REDIRECTS_SLUG,
+    });
+    expect((await rows(t)).filter(row => row.kind === "pending")).toEqual([]);
   });
 
   it("list the old address as a broken link where its redirect cannot be saved", async () => {

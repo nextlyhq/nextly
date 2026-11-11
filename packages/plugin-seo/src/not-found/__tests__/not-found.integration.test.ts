@@ -31,10 +31,16 @@ afterEach(async () => {
   current = undefined;
 });
 
-async function boot(dialect: TestDialect) {
+async function boot(dialect: TestDialect, languages = false) {
   current = await createTestNextly({
     dialect,
     plugins: [seoPlugin({ collections: [] })],
+    ...(languages
+      ? {
+          localization: { locales: ["en", "de"], defaultLocale: "en" },
+          languageAddresses: { by: "prefix", defaultLanguage: "unprefixed" },
+        }
+      : {}),
   });
   const seo = keptSeoContext();
   if (!seo) throw new Error("the SEO plugin never started");
@@ -92,7 +98,9 @@ describe.each(getConfiguredTestDialects())(
       const { t, seo } = await boot(dialect);
 
       await Promise.all(
-        Array.from({ length: 8 }, () => recordNotFound(seo, "/busy"))
+        Array.from({ length: 8 }, () =>
+          recordNotFound(seo, { locale: "en", path: "/busy" })
+        )
       );
 
       expect(await logged(t)).toEqual({ "/busy": 8 });
@@ -122,11 +130,29 @@ describe.each(getConfiguredTestDialects())(
       const bound = { limit: 10, slack: 2 };
       const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute));
       for (let visit = 0; visit < 5; visit++) {
-        await recordNotFound(seo, "/popular", "missing", at(0), bound);
+        await recordNotFound(
+          seo,
+          { locale: "en", path: "/popular" },
+          "missing",
+          at(0),
+          bound
+        );
       }
-      await recordNotFound(seo, "/once-early", "missing", at(1), bound);
+      await recordNotFound(
+        seo,
+        { locale: "en", path: "/once-early" },
+        "missing",
+        at(1),
+        bound
+      );
       for (let n = 0; n < 30; n++) {
-        await recordNotFound(seo, `/flood-${n}`, "missing", at(10 + n), bound);
+        await recordNotFound(
+          seo,
+          { locale: "en", path: `/flood-${n}` },
+          "missing",
+          at(10 + n),
+          bound
+        );
       }
 
       const after = await logged(t);
@@ -148,6 +174,38 @@ describe.each(getConfiguredTestDialects())(
         "/flood-28": 1,
         "/flood-29": 1,
       });
+    });
+
+    it("keeps one path in two languages apart, and a redirect in one takes off only its own", async () => {
+      const { t, seo } = await boot(dialect, true);
+      await logNotFound(await renderedWith("/gone"));
+      await logNotFound(await renderedWith("/de/gone"));
+      await logNotFound(await renderedWith("/de/gone"));
+
+      const byLanguage = async () => {
+        const { items } = await t.nextly.find({
+          collection: NOT_FOUND_SLUG,
+          limit: 50,
+        });
+        return Object.fromEntries(
+          (items as Record<string, unknown>[]).map(row => [
+            `${row.locale}|${row.path}`,
+            Number(row.hits),
+          ])
+        );
+      };
+      expect(await byLanguage()).toEqual({ "en|/gone": 1, "de|/gone": 2 });
+
+      await seo.services.collections.withTransaction(tx =>
+        putRedirect(seo, tx, {
+          locale: "de",
+          source: "/gone",
+          target: "/hier",
+          origin: "person",
+        })
+      );
+
+      expect(await byLanguage()).toEqual({ "en|/gone": 1 });
     });
 
     it("takes an address off once a redirect answers it", async () => {

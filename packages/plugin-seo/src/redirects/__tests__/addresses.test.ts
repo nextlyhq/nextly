@@ -47,6 +47,9 @@ describe("a redirect's From address", () => {
 describe("a redirect's To address", () => {
   it("accepts a path on the site, or a full https:// address", () => {
     expect(checkTarget("/new", "/old")).toBeNull();
+    // Next to the pattern, not under it.
+    expect(checkTarget("/older/*", "/old/*")).toBeNull();
+    expect(checkTarget("/*", "/old/*")).toBeNull();
     expect(checkTarget("https://example.com/new", "/old")).toBeNull();
     expect(checkTarget("/new/*", "/old/*")).toBeNull();
     expect(checkTarget("https://example.com/new/*", "/old/*")).toBeNull();
@@ -94,6 +97,16 @@ describe("a redirect's To address", () => {
     ["/old/*", "/old/*", "That would send the address to itself."],
     ["/a?ref=1", "/a", "That would send the address to itself."],
     ["/a/#top", "/a", "That would send the address to itself."],
+    [
+      "/old",
+      "/old/*",
+      "That makes a loop: /old/* would send its addresses back under itself.",
+    ],
+    [
+      "/old/new/*",
+      "/old/*",
+      "That makes a loop: /old/* would send its addresses back under itself.",
+    ],
   ])("refuses %j from %j", (target, source, message) => {
     expect(checkTarget(target, source)).toBe(message);
   });

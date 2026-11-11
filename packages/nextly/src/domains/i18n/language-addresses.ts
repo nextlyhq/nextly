@@ -82,11 +82,12 @@ export interface KeptAddress {
 }
 
 /**
- * The languages an address can be kept in: the site's, or the one it serves
- * without localization, its default (`"en"` where none is named), as the
- * address record keys them.
+ * The languages an address is kept in, by the site's localization: its
+ * languages, or the one it serves without localization, its default (`"en"`
+ * where none is named). The one rule for which language an address record
+ * keys a page's address by, and which a request is looked up in.
  */
-function keptLanguages(
+export function addressLanguagesOf(
   localization: SanitizedLocalizationConfig | undefined
 ): string[] {
   const codes = localization?.locales.map(language => language.code) ?? [];
@@ -111,7 +112,7 @@ export function addressFromRequest(
   localization: SanitizedLocalizationConfig | undefined,
   url: URL
 ): KeptAddress | undefined {
-  const languages = keptLanguages(localization);
+  const languages = addressLanguagesOf(localization);
   const roots = languages.flatMap(locale => {
     const root = languageAddressFrom(rule, localization, "/", locale);
     return root.status === "resolved" ? [{ locale, ...root }] : [];
@@ -174,7 +175,7 @@ function declaredRule(): LanguageAddressRule | undefined {
 async function languagesNow(): Promise<
   SanitizedLocalizationConfig | undefined
 > {
-  return withCurrentLanguages(async () => appLocalization());
+  return withCurrentLanguages(() => Promise.resolve(appLocalization()));
 }
 
 /**
