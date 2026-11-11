@@ -154,6 +154,8 @@ The tab shows, in order:
 - **Advanced**, closed until opened: hiding the page from search, its official address
   (the canonical), a different title and description when shared, the share image, and
   the [structured data type](#structured-data), with what the type still lacks.
+- **Check what search engines received**, once the page is saved and has an address: it
+  opens [What search engines received](#what-search-engines-received) for this page.
 
 The official address is the page's own public address. **Use another address** takes an
 address on the same site as typed; one on another site is used only once the person
@@ -855,6 +857,47 @@ Not checked yet: whether a response is small enough for every value to fall with
 fetched as a search engine fetches it. A link is judged only under a collection's own address
 prefix (`/blog/{slug}`): under one served from the root (`/{slug}`), pages built in code share
 every address, so a missing one can't be told from the record alone.
+
+## What search engines received
+
+The **What search engines received** screen, under SEO in the admin, fetches one of the
+site's pages as Googlebot, LinkedIn, X and Slack would, and shows what each received beside
+what Nextly holds for the page: its title, description, share image, official address
+(canonical) and whether it is listed in search. A value that differs is numbered in the
+table and explained below it in plain words, with its likely cause: a copy the host saved
+before the last change, a title template in the site's layout, an `opengraph-image` file
+beside the route, a `noindex` sent in a header, or a firewall that turned a crawler away.
+Where LinkedIn received something different, the explanation links its Post Inspector,
+which refreshes the card LinkedIn keeps for about a week.
+
+Open it from a page's SEO tab, or from the menu, where it checks the site's first listed
+page. Any address on the site can be typed in. What Nextly holds is the head the plugin
+answers for the published page at that address, shown only to someone who may read that
+page's content type; anyone signed in to the admin may run a check.
+
+What Google shows in its results can still differ from what Googlebot received: Google
+sometimes writes its own title, and keeps an older copy until it visits again. The check
+shows what the page serves today.
+
+### Which addresses can be checked
+
+The check makes your server fetch a page, so it fetches only the site's own pages, and
+refuses, before anything is fetched, an address that:
+
+- is not on one of the site's production addresses (`NEXTLY_PRODUCTION_ADDRESSES`, else
+  the production address in the SEO settings) or the plugin's `baseUrl`;
+- uses a port other than 80 or 443, unless it is exactly the port a production address
+  names;
+- carries a user name or password; or
+- resolves to an address inside a private network, on this machine, or link-local
+  (where cloud metadata services answer). A production address set on this machine by
+  number or as `localhost`, such as `http://localhost:3000`, may be checked there, at
+  exactly that address.
+
+Every redirect is held to the same rules before it is followed, and the connection is
+made to the very address that was checked, so a name whose answer changes in between
+reaches nothing new. A fetch stops after 10 seconds, 5 MB or 5 redirects, and says so.
+With no production address set, the screen asks for one and checks nothing.
 
 ## Next steps
 

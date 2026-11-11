@@ -94,6 +94,10 @@ describe("seoPlugin", () => {
       ["DELETE", "/redirects/:id", undefined, undefined],
       ["POST", "/redirects/import", undefined, undefined],
       ["GET", "/not-found", undefined, undefined],
+      // What search engines received: the pages it offers, and the check,
+      // for anyone signed in.
+      ["GET", "/received/pages", undefined, undefined],
+      ["POST", "/received", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
       // The problem list, read and checked again by a signed-in reader.
       ["GET", "/problems", undefined, undefined],
@@ -157,6 +161,8 @@ describe("seoPlugin", () => {
       "/redirects/:id",
       "/redirects/import",
       "/not-found",
+      "/received/pages",
+      "/received",
       "/resolve",
       "/problems",
       "/problems/check",
@@ -181,6 +187,8 @@ describe("seoPlugin", () => {
       "/redirects/:id",
       "/redirects/import",
       "/not-found",
+      "/received/pages",
+      "/received",
       "/resolve",
       "/problems",
       "/problems/check",
