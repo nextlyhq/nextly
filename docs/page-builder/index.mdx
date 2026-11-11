@@ -98,6 +98,42 @@ file in your admin page, `src/app/admin/[[...params]]/page.tsx`; see
 An admin page that still imports `@nextlyhq/plugin-page-builder/styles/editor.css` by hand
 keeps working: it loads the same stylesheet, once. You can remove the import.
 
+## In the admin
+
+The Page Builder has its own item in the admin's rail, right after **Forms** (after
+**Media** on a site without the form builder). Its panel lists the libraries pages are
+built from, each with how many you can see: **Patterns**, **Components**, **Layouts** and
+**Templates**. Under **Checks**, **Bindings to fix** shows a badge while any binding
+needs fixing.
+
+Clicking the item opens the **Page Builder** overview
+(`/admin/plugins/nextlyhq-plugin-page-builder/overview`):
+
+- **Bindings to fix**, first, only while there are any, with **Review** to open the
+  site-wide list.
+- The four libraries, each with its count and, if you may create there, a **New** action
+  that opens its create page.
+- **Where it is used**: the collections and Singles that have a Page Builder field, each
+  opening its list or, for a Single, its edit page. Only those you can read are listed.
+  Add a Blocks field to a collection or Single, in the Schema Builder or in code, and it
+  is listed here.
+
+The overview is for people who can edit pages. Anyone else opening the item lands on the
+first library they can read. To keep the Page Builder under **Plugins** instead, set its
+placement in `admin.pluginOverrides`:
+
+```ts
+import { defineConfig } from "nextly";
+
+export default defineConfig({
+  admin: {
+    pluginOverrides: {
+      "nextlyhq-plugin-page-builder": { placement: "plugins" },
+    },
+  },
+});
+```
+
 ## Render the pages
 
 A plugin cannot add routes to your Next.js app, so you declare one catch-all route and
@@ -521,7 +557,7 @@ deleted has no address left, so none of its entries is served, own design or not
 #### Collections made in the Schema Builder
 
 A collection made in the Schema Builder has no code to declare its address in, so
-its template stores it. Open **Templates** in the page builder's menu, open the
+its template stores it. Open **Templates** in the Page Builder's panel, open the
 collection's template and set its **Address**; once the template is published its
 entries are served there, with no restart. The same rules apply as to an address
 declared in code, and an address declared in code wins over a stored one. When you
