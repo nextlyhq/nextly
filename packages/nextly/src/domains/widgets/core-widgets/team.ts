@@ -80,6 +80,8 @@ function personOf(row: Record<string, unknown>): TeamPersonData | undefined {
 
 export const teamWidget = defineWidget({
   id: CORE_WIDGET_ID.team,
+  // Drawn beside its name in the add panel.
+  icon: "Users",
   title: "Team",
   description: "The people on this project, filterable by role.",
   // Half the row by default; from a third, where a person's row still reads,

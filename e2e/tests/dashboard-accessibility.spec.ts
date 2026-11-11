@@ -380,67 +380,47 @@ for (const theme of ["light", "dark"] as Theme[]) {
 
     await bar(page).getByRole("button", { name: "Add widget" }).click();
     const panel = gallery(page);
-    await expect(panel.getByTestId("add-panel-tiles")).toBeVisible();
-    await scan(page, "gallery");
+    await expect(panel.getByTestId("add-panel-list")).toBeVisible();
+    await scan(page, "add panel");
 
-    await panel.getByRole("button", { name: /Over time$/ }).click();
-    await expect(panel.getByTestId("add-panel-step")).toBeVisible();
-    await expect(panel.getByTestId("settings-preview")).toBeVisible();
-    await scan(page, "gallery add step");
-
-    // Contrast of the gallery's text is inside the scans above; nothing here saves.
+    // Contrast of the panel's text is inside the scan above; nothing here saves.
     await page.keyboard.press("Escape");
     await expect(panel).toBeHidden();
   });
 }
 
-test("a keyboard alone adds a collection card through its add step, changes its settings in the drawer and saves, focus coming back each time", async ({
+test("a keyboard alone adds a collection card from the list, changes its settings in the drawer and saves, focus coming back each time", async ({
   page,
 }) => {
   await dashboardAtRest(page, "light");
   const customize = page.getByTestId("dashboard-edit-begin");
 
-  // Into customise mode from the bar's cog, reached by Tab.
+  // Into customise mode from the cog, reached by Tab.
   await tabTo(page, customize);
   await page.keyboard.press("Enter");
   await expect(bar(page)).toBeFocused();
 
-  // The gallery, from Add widget: focus in its search.
+  // The panel, from Add widget: focus in its search.
   const addWidget = bar(page).getByRole("button", { name: "Add widget" });
   await tabTo(page, addWidget);
   await page.keyboard.press("Enter");
   const panel = gallery(page);
-  const search = panel.getByRole("searchbox", {
-    name: "Search widgets or collections",
-  });
+  const search = panel.getByRole("searchbox", { name: "Search widgets" });
   await expect(search).toBeFocused();
 
   // A search, its count said.
   await page.keyboard.type("over");
   const live = panel.getByTestId("add-panel-live");
-  await expect(live).toHaveText(/^\d+ results? for “over”\.$/);
+  await expect(live).toHaveText(/^\d+ widgets?\.$/);
 
-  // The widget's tile, then its add step: focus on the step's heading.
-  const tile = panel.getByRole("button", { name: /Over time$/ });
-  await tabTo(page, tile);
-  await page.keyboard.press("Enter");
-  const step = panel.getByTestId("add-panel-step");
-  await expect(step.getByRole("heading", { name: /Over time/ })).toBeFocused();
-  const collection = step.getByRole("combobox", { name: "Collection" });
-  await tabTo(page, collection);
-  if ((await collection.inputValue()) === "") {
-    await page.keyboard.press("ArrowDown");
-  }
-  await expect(collection).not.toHaveValue("");
-
-  // Added from the step: said, back in the gallery, focus on the tile it came from.
+  // The widget's Add: the card lands at once, said, focus still on its Add.
   const before = await page.locator(CELLS).count();
-  await tabTo(page, step.getByRole("button", { name: "Add to dashboard" }));
+  const add = panel.getByRole("button", { name: "Add Over time" });
+  await tabTo(page, add);
   await page.keyboard.press("Enter");
   await expect(page.locator(CELLS)).toHaveCount(before + 1);
   await expect(live).toHaveText(/^Added .+\.$/);
-  await expect(step).toBeHidden();
-  await expectVisibleFocus(tile);
+  await expectVisibleFocus(add);
 
   // Closed: focus on the new card's menu button.
   const added = page.locator(CELLS).last();
@@ -599,42 +579,35 @@ for (const theme of ["light", "dark"] as Theme[]) {
   });
 }
 
-test("the gallery says how many it lists for the chip and the search that are on", async ({
+test("the add panel says how many it lists for the search that is on", async ({
   page,
 }) => {
   await dashboardAtRest(page, "light");
   await page.getByTestId("dashboard-edit-begin").click();
   await bar(page).getByRole("button", { name: "Add widget" }).click();
   const panel = gallery(page);
-  await expect(panel.getByTestId("add-panel-tiles")).toBeVisible();
+  await expect(panel.getByTestId("add-panel-list")).toBeVisible();
   const live = panel.getByTestId("add-panel-live");
   const count = panel.getByTestId("add-panel-count");
-  const tiles = panel.locator('[data-testid^="add-panel-tile-"]');
-  const all = await tiles.count();
+  const rows = panel.locator('[data-testid^="add-panel-row-"]');
+  const all = await rows.count();
+  await expect(count).toHaveText(`${all} widgets`);
+  // Opening says nothing: the count line under the search already says it.
+  await expect(live).toHaveText("");
 
-  // A chip narrows the tiles; what is said, and the count line, follow it.
-  const content = panel
-    .getByRole("group", { name: "Filter widgets" })
-    .getByRole("button", { name: "Content" });
-  await content.focus();
-  await page.keyboard.press("Enter");
-  await expect(content).toHaveAttribute("aria-pressed", "true");
-  await expect.poll(() => tiles.count()).toBeLessThan(all);
-  const inContent = await tiles.count();
-  const contentCount = new RegExp(
-    `^${inContent} ${inContent === 1 ? "widget" : "widgets"}\\b`
+  // A search narrows the rows; what is said, and the count line, follow it.
+  const search = panel.getByRole("searchbox", { name: "Search widgets" });
+  await search.fill("collection");
+  await expect.poll(() => rows.count()).toBeLessThan(all);
+  const found = await rows.count();
+  const foundCount = new RegExp(
+    `^${found} ${found === 1 ? "widget" : "widgets"}\\b`
   );
-  await expect.soft(count).toHaveText(contentCount);
-  await expect.soft(live).toHaveText(contentCount);
+  await expect(count).toHaveText(foundCount);
+  await expect(live).toHaveText(foundCount);
 
-  // Nothing found under it, then Clear: the count said is the chip's, not every widget's.
-  await panel
-    .getByRole("searchbox", { name: "Search widgets or collections" })
-    .fill("zzzz");
+  // Nothing found.
+  await search.fill("zzzz");
   await expect(panel.getByTestId("add-panel-none")).toBeVisible();
-  await expect(live).toHaveText(/^0 results for “zzzz”/);
-  await panel.getByRole("button", { name: "Clear" }).click();
-  await expect(tiles).toHaveCount(inContent);
-  await expect.soft(live).toHaveText(contentCount);
-  await expect.soft(count).toHaveText(contentCount);
+  await expect(live).toHaveText("0 widgets.");
 });

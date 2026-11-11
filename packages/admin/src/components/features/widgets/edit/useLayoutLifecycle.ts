@@ -43,6 +43,12 @@ export interface SaveOptions {
    * drawer's Save applies them.
    */
   staged?: readonly StagedSettings[];
+  /**
+   * Cards added this session that are not saved: the card the add panel added as one the reader
+   * already has, while it still matches it (`useProvisionalCard`). Taken out of what is sent, as
+   * if never added.
+   */
+  leaveOut?: readonly string[];
 }
 
 /**
@@ -162,7 +168,11 @@ export function useLayoutLifecycle(
     async (options: SaveOptions = {}): Promise<SaveOutcome> => {
       // Nothing held is nothing lost: there is no draft to keep.
       if (!draft) return "saved";
-      const placements = withStaged(draft.placements, options.staged);
+      const leftOut = new Set(options.leaveOut);
+      const placements = withStaged(
+        draft.placements.filter(placement => !leftOut.has(placement.id)),
+        options.staged
+      );
       try {
         if (savesAsReset(draft, placements)) {
           // The guards the reset was staged against, so a stale tab cannot
