@@ -253,3 +253,70 @@ describe("a save that finishes late", () => {
     ).toBeTruthy();
   });
 });
+
+describe("a translation's entry", () => {
+  it("opens in its own language", () => {
+    vi.mocked(usePluginRoute).mockImplementation(
+      () =>
+        ({
+          data: {
+            items: [
+              {
+                path: "/de/ueber",
+                name: "Über uns",
+                source: "entry",
+                from: "Pages",
+                standing: "listed",
+                entry: {
+                  kind: "collection",
+                  slug: "pages",
+                  id: "7",
+                  locale: "de",
+                },
+              },
+            ],
+          },
+          pending: false,
+          error: null,
+          refetch: () => {},
+          fetching: false,
+        }) as unknown as ReturnType<typeof usePluginRoute>
+    );
+    render(<SeoPagesPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open entry" }));
+
+    expect(navigateTo).toHaveBeenCalledWith(
+      "/admin/collections/pages/7?locale=de"
+    );
+  });
+});
+
+describe("while a save is on its way", () => {
+  it("takes no edits, so what it sends is what the panel holds", () => {
+    vi.mocked(usePluginRouteMutation).mockImplementation(
+      () =>
+        ({
+          write: vi.fn(),
+          pending: true,
+          error: null,
+        }) as unknown as ReturnType<typeof usePluginRouteMutation>
+    );
+    render(<SeoPagesPage />);
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit SEO" })[0]);
+    const panel = screen.getByRole("dialog", { name: "SEO for /pricing" });
+
+    // Disabled by the fieldset holding them, as a browser reads it.
+    expect(
+      within(panel).getByLabelText("Title on Google").matches(":disabled")
+    ).toBe(true);
+    expect(
+      within(panel)
+        .getByRole("switch", {
+          name: "Hide this page from search",
+          hidden: true,
+        })
+        .matches(":disabled")
+    ).toBe(true);
+  });
+});

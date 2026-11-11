@@ -106,7 +106,13 @@ export interface SiteAddress {
   /** The page's official address, where it has one. */
   canonical?: string;
   /** The entry the address is, for an address that is one. */
-  entry?: { kind: "collection" | "single"; slug: string; id: string };
+  entry?: {
+    kind: "collection" | "single";
+    slug: string;
+    id: string;
+    /** The language of a translation, which its editor opens in. */
+    locale?: string;
+  };
   /** For a page with no entry: its SEO, typed and automatic. */
   seo?: CodePageSeo;
 }

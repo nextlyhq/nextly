@@ -101,9 +101,14 @@ function Standing({ item }: { item: SiteAddress }): JSX.Element {
 
 /** Where an entry is edited in the admin. */
 function entryHref(entry: NonNullable<SiteAddress["entry"]>): string {
-  return entry.kind === "single"
-    ? `/admin/singles/${encodeURIComponent(entry.slug)}`
-    : `/admin/collections/${encodeURIComponent(entry.slug)}/${encodeURIComponent(entry.id)}`;
+  const page =
+    entry.kind === "single"
+      ? `/admin/singles/${encodeURIComponent(entry.slug)}`
+      : `/admin/collections/${encodeURIComponent(entry.slug)}/${encodeURIComponent(entry.id)}`;
+  // A translation opens in its own language.
+  return entry.locale === undefined
+    ? page
+    : `${page}?locale=${encodeURIComponent(entry.locale)}`;
 }
 
 /** The list, its filters, and the panel of the address being edited. */

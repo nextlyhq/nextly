@@ -683,24 +683,33 @@ export function CodePagePanel({
       <div className="nx-seo-db">
         <ConnectionNote item={item} />
         <Preview shown={shown} />
-        <TextField
-          item={item}
-          field="title"
-          value={draft.title}
-          shownLength={shown.title.length}
-          placeholder={automatic.title}
-          onChange={title => change({ title })}
-          inputRef={titleField}
-        />
-        <TextField
-          item={item}
-          field="description"
-          value={draft.description}
-          shownLength={shown.description.length}
-          placeholder={automatic.description}
-          onChange={description => change({ description })}
-        />
-        <Advanced item={item} address={address} draft={draft} change={change} />
+        {/* Nothing is edited while a save is on its way, so what it sends
+            is what the panel holds when it closes. */}
+        <fieldset className="nx-seo-fields" disabled={save.pending}>
+          <TextField
+            item={item}
+            field="title"
+            value={draft.title}
+            shownLength={shown.title.length}
+            placeholder={automatic.title}
+            onChange={title => change({ title })}
+            inputRef={titleField}
+          />
+          <TextField
+            item={item}
+            field="description"
+            value={draft.description}
+            shownLength={shown.description.length}
+            placeholder={automatic.description}
+            onChange={description => change({ description })}
+          />
+          <Advanced
+            item={item}
+            address={address}
+            draft={draft}
+            change={change}
+          />
+        </fieldset>
         {save.error ? (
           <p className="nx-seo-error" role="alert">
             Not saved. {apiErrorMessage(save.error)}

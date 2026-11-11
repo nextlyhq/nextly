@@ -273,18 +273,14 @@ async function listCodePages(
   options: { origin: string; language: string; readRules?: ReadRules },
   found: { pages: ListedPage[]; problems: ListingProblem[] }
 ): Promise<void> {
-  const taken = new Set([
-    ...found.pages.map(page => page.path),
-    ...found.problems.map(problem => problem.path),
-  ]);
   for (const { route, row, answer } of await codePages(
     ctx,
     routes,
-    options.readRules,
-    taken
+    options.readRules
   )) {
     if (row?.connected !== true) continue;
-    // An entry holds it, hidden from search or not: the address is its.
+    // An entry holds it in its language, hidden from search or not: the
+    // address is the entry's.
     if (await heldByDocument(ctx, route.path, options.origin)) continue;
     const at = standingOf(answer, options.origin, route.path);
     if (at === null || at === "lost") continue;

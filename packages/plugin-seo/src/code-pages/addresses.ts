@@ -18,6 +18,7 @@ import {
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
 
+import { withAddressHolders } from "../address-record/participant";
 import {
   absolute,
   documentsIn,
@@ -207,20 +208,27 @@ function labelsOf(
   };
 }
 
-/** One published entry as the screen lists it, where it has an address. */
+/** What every entry of a listing is read with. */
+interface EntryListing {
+  defaultLanguage: string;
+  origin: string;
+  label: (type: PublicAddressType) => Promise<string>;
+  readRules: ReadRules | undefined;
+}
+
+/** One published entry as the screen lists it, its address found already. */
 async function entryAddressOf(
   ctx: PluginContext,
   candidate: Candidate,
+  own: string,
   options: EntryListing & { language: string }
-): Promise<SiteAddress | undefined> {
+): Promise<SiteAddress> {
   const { type, holder, document } = candidate;
-  const own = await publicAddressOf(type, document, options.language);
-  if (own.status !== "resolved") return undefined;
+  const translation = options.language !== options.defaultLanguage;
   // A translation is listed where its language serves it, such as `/de/…`.
-  const path =
-    options.language === options.defaultLanguage
-      ? own.path
-      : ((await servedAt(own.path, options.language)) ?? own.path);
+  const path = translation
+    ? ((await servedAt(own, options.language)) ?? own)
+    : own;
   const label = await options.label(type);
   const answer = await resolveIn(
     ctx,
@@ -239,16 +247,41 @@ async function entryAddressOf(
       title: answer.title?.value,
       canonical: canonicalOf(answer, options.origin),
     }),
-    entry: { kind: type.kind, slug: type.slug, id: holder.id },
+    entry: {
+      kind: type.kind,
+      slug: type.slug,
+      id: holder.id,
+      ...(translation ? { locale: options.language } : {}),
+    },
   };
 }
 
-/** What every entry of a listing is read with. */
-interface EntryListing {
-  defaultLanguage: string;
-  origin: string;
-  label: (type: PublicAddressType) => Promise<string>;
-  readRules: ReadRules | undefined;
+/**
+ * The entries of one read in `language`, as the screen lists them: who holds
+ * each one's address read once for them all, as the sitemap reads it.
+ */
+async function entriesIn(
+  ctx: PluginContext,
+  batch: readonly Candidate[],
+  options: EntryListing & { language: string }
+): Promise<SiteAddress[]> {
+  const owns = await Promise.all(
+    batch.map(({ type, document }) =>
+      publicAddressOf(type, document, options.language)
+    )
+  );
+  const paths = owns.flatMap(own =>
+    own.status === "resolved" ? [own.path] : []
+  );
+  return withAddressHolders(ctx, options.language, paths, async () => {
+    const found: SiteAddress[] = [];
+    for (const [at, candidate] of batch.entries()) {
+      const own = owns[at];
+      if (own?.status !== "resolved") continue;
+      found.push(await entryAddressOf(ctx, candidate, own.path, options));
+    }
+    return found;
+  });
 }
 
 /**
@@ -277,16 +310,11 @@ async function translationsOf(
       held.get(holder.id)?.has(language) === true ? [holder.id] : []
     );
     const documents = await documentsIn(ctx, first.type, ids, language);
-    for (const candidate of batch) {
+    const versions = batch.flatMap(candidate => {
       const document = documents.get(candidate.holder.id);
-      if (document === undefined) continue;
-      const address = await entryAddressOf(
-        ctx,
-        { ...candidate, document },
-        { ...options, language }
-      );
-      if (address !== undefined) found.push(address);
-    }
+      return document === undefined ? [] : [{ ...candidate, document }];
+    });
+    found.push(...(await entriesIn(ctx, versions, { ...options, language })));
   }
   return found;
 }
@@ -309,13 +337,12 @@ async function entryAddresses(
   };
   const found: SiteAddress[] = [];
   for await (const batch of candidates(ctx, { origin })) {
-    for (const candidate of batch) {
-      const address = await entryAddressOf(ctx, candidate, {
+    found.push(
+      ...(await entriesIn(ctx, batch, {
         ...options,
         language: defaultLanguage,
-      });
-      if (address !== undefined) found.push(address);
-    }
+      }))
+    );
     found.push(...(await translationsOf(ctx, batch, options)));
   }
   return found;

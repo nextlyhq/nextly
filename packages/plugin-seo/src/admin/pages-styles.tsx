@@ -44,6 +44,7 @@ const CSS = `
 .nx-seo-dh h2{margin:0;font-size:15px;font-weight:650;overflow-wrap:anywhere}
 .nx-seo-dh .nx-seo-help span{font-family:var(--seo-mono);font-size:12px}
 .nx-seo-db{padding:16px 18px;display:grid;gap:16px}
+.nx-seo-fields{border:0;padding:0;margin:0;min-width:0;display:grid;gap:16px}
 .nx-seo-df{position:sticky;bottom:0;background:var(--nx-background);border-top:1px solid var(--nx-border);padding:12px 18px;display:flex;justify-content:flex-end;gap:6px;margin-top:auto;z-index:2}
 .nx-seo-dnote{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--nx-border);background:var(--nx-muted);font-size:13px;line-height:1.45}
 .nx-seo-dnote > svg{margin-top:1px;color:var(--nx-muted-foreground);flex:none}

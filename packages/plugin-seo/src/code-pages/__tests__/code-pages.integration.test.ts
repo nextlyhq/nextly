@@ -142,6 +142,18 @@ async function addressesFor(cookie: string) {
   return { status: res.status, items: body.items };
 }
 
+/** The sitemap's addresses. */
+async function listed(): Promise<string[]> {
+  const response = await createDynamicHandlers().GET(
+    new Request(`${SITE}/admin/api/sitemap.xml`),
+    { params: Promise.resolve({ params: ["sitemap.xml"] }) }
+  );
+  const body = await response.text();
+  return [...body.matchAll(/<url><loc>([^<]*)<\/loc>/g)].map(
+    match => match[1] ?? ""
+  );
+}
+
 describe.each(getConfiguredTestDialects())(
   "pages with no entry (%s)",
   (dialect: TestDialect) => {
@@ -200,18 +212,6 @@ describe.each(getConfiguredTestDialects())(
       hidden: false,
       ...values,
     });
-
-    /** The sitemap's addresses. */
-    async function listed(): Promise<string[]> {
-      const response = await createDynamicHandlers().GET(
-        new Request(`${SITE}/admin/api/sitemap.xml`),
-        { params: Promise.resolve({ params: ["sitemap.xml"] }) }
-      );
-      const body = await response.text();
-      return [...body.matchAll(/<url><loc>([^<]*)<\/loc>/g)].map(
-        match => match[1] ?? ""
-      );
-    }
 
     it("serves what a person set for the address over the route's code, field by field, at the page's own address", async () => {
       const t = await boot();
@@ -447,6 +447,7 @@ writeFileSync(
   join(LANGUAGE_BUILD, "server/app-paths-manifest.json"),
   JSON.stringify({
     "/[locale]/[...slug]/page": "app/[locale]/[...slug]/page.js",
+    "/(site)/pricing/page": "app/(site)/pricing/page.js",
   })
 );
 writeFileSync(
@@ -455,7 +456,7 @@ writeFileSync(
     version: 4,
     routes: {
       "/en/about": { srcRoute: "/[locale]/[...slug]" },
-      "/de/ueber": { srcRoute: "/[locale]/[...slug]" },
+      "/de/pricing": { srcRoute: "/[locale]/[...slug]" },
     },
   })
 );
@@ -467,7 +468,7 @@ afterAll(() => {
 describe.each(getConfiguredTestDialects())(
   "pages with no entry on a site in several languages (%s)",
   (dialect: TestDialect) => {
-    it("lists each published translation as its entry, never as a page built in code", async () => {
+    it("lists each published translation as its entry, in its language, and leaves a page built in code at another language's path its own", async () => {
       const t = await createTestNextly({
         dialect,
         localization: { locales: ["en", "de"], defaultLocale: "en" },
@@ -504,7 +505,7 @@ describe.each(getConfiguredTestDialects())(
         id: String(about.item.id),
         locale: "de",
         data: {
-          slug: "ueber",
+          slug: "pricing",
           title: "Über uns",
           status: "published",
           _overwrite: true,
@@ -513,14 +514,41 @@ describe.each(getConfiguredTestDialects())(
       await lastCatchUp();
       const owner = await personWith(t, "owner", "all");
 
+      // The page built in code at the root's /pricing, which the German
+      // translation's /de/pricing does not hold.
+      process.env.NEXT_PHASE = "phase-production-build";
+      await seoMetadata("/pricing");
+
       const { items } = await addressesFor(owner);
 
       expect(
-        items?.map(({ path, name, source }) => ({ path, name, source }))
+        items?.map(({ path, name, source, entry }) => ({
+          path,
+          name,
+          source,
+          locale: entry?.locale,
+        }))
       ).toEqual([
-        { path: "/about", name: "About us", source: "entry" },
-        { path: "/de/ueber", name: "Über uns", source: "entry" },
+        {
+          path: "/about",
+          name: "About us",
+          source: "entry",
+          locale: undefined,
+        },
+        {
+          path: "/de/pricing",
+          name: "Über uns",
+          source: "entry",
+          locale: "de",
+        },
+        {
+          path: "/pricing",
+          name: "Pricing",
+          source: "built",
+          locale: undefined,
+        },
       ]);
+      expect(await listed()).toContain(`${SITE}/pricing`);
     });
   }
 );
