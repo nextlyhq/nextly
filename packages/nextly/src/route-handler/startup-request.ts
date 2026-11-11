@@ -43,7 +43,7 @@ import {
   SKIP_DATE_FORMATTING_HEADER,
 } from "../api/response-shapes";
 import { NextlyError } from "../errors/nextly-error";
-import { refreshEpoch } from "../services/lib/rbac-epoch";
+import { epochIsTrustworthy, refreshEpoch } from "../services/lib/rbac-epoch";
 
 import { servedSchemaVersion } from "./schema-version";
 
@@ -141,7 +141,8 @@ export async function handleStartupRequest(
  * - `X-Nextly-Permission-Version`: the RBAC epoch, which moves on every change
  *   to a role, a grant or an assignment anywhere in the install. Sent as a
  *   hash, since the admin only compares it: the raw value would tell anyone
- *   how often roles change, which the comparison does not need.
+ *   how often roles change, which the comparison does not need. Left out
+ *   while the epoch cannot be trusted (`epochIsTrustworthy`).
  *
  * Read after the parts, so a change one of them made is the version sent. A
  * version that cannot be read is left out, and the admin then keeps nothing
@@ -161,6 +162,11 @@ async function deviceMemoryHeaders(): Promise<Record<string, string>> {
   }
   try {
     const epoch = await refreshEpoch();
+    // A refresh that could not reach the shared row answers with this
+    // process's own value, which no other copy has seen: it would label the
+    // admin's memory with a version that cannot say when access changed, so
+    // none is sent and the admin keeps nothing labelled.
+    if (!epochIsTrustworthy()) return headers;
     headers["X-Nextly-Permission-Version"] = createHash("sha256")
       .update(epoch)
       .digest("base64url")
