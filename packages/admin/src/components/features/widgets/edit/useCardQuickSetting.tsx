@@ -24,19 +24,16 @@ import {
   resolveWidgetSettings,
   type AnyWidgetSetting,
   type GridSize,
-  type PublishedContentSource,
 } from "nextly/config";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { toast } from "@admin/components/ui";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { settingChangedSentence } from "../useGridAnnouncer";
 import { questionOf } from "../widget-as-asked";
 
 import { CardQuickSetting } from "./CardQuickSetting";
-import { dependentsOf, startingValue } from "./content-settings";
 import { initialValues, toStoredConfig } from "./panel-values";
 import {
   quickSettingOf,
@@ -97,34 +94,26 @@ function changesQuery(
 }
 
 /**
- * The settings to store when one quick setting changes to `next`: the stored ones with it
- * changed, and only what departs from a default kept, as the sheet's Done stores them. A new
- * collection resets the settings that work over it to where each starts on that collection, as
- * the sheet does, so no filter or sort names a field the new collection lacks.
+ * The settings to store when the quick setting changes to `next`: the stored ones with it
+ * changed, and only what departs from a default kept, as the drawer's Save stores them. A quick
+ * setting is a choice or an on/off, which no other setting works over, so nothing else changes.
  */
 function quickChangeConfig(
   settings: readonly AnyWidgetSetting[],
   config: Record<string, unknown> | undefined,
   name: string,
-  next: string | boolean,
-  sources: readonly PublishedContentSource[] | undefined
+  next: string | boolean
 ): Record<string, unknown> {
   const values = initialValues(settings, config);
-  const changed = values[name] !== next;
   values[name] = next;
-  if (changed) {
-    for (const dependent of dependentsOf(settings, name)) {
-      values[dependent.name] = startingValue(dependent, next, sources);
-    }
-  }
   return toStoredConfig(settings, values, config);
 }
 
 /**
- * What Undo of one quick setting stores: the card's settings as they are NOW, with that setting,
- * and the settings that work over it, put back as they were before the change. Only those: a
- * later save of another of the card's settings, from the sheet say, is the reader's too, and
- * putting back the whole earlier config would quietly undo it.
+ * What Undo of the quick setting stores: the card's settings as they are NOW, with that setting
+ * put back as it was before the change. Only it: a later save of another of the card's settings,
+ * from the drawer say, is the reader's too, and putting back the whole earlier config would
+ * quietly undo it.
  */
 function undoneConfig(
   settings: readonly AnyWidgetSetting[],
@@ -133,10 +122,7 @@ function undoneConfig(
   name: string
 ): Record<string, unknown> {
   const values = initialValues(settings, current);
-  const before = initialValues(settings, previous);
-  for (const each of [name, ...dependentsOf(settings, name).map(d => d.name)]) {
-    values[each] = before[each];
-  }
+  values[name] = initialValues(settings, previous)[name];
   return toStoredConfig(settings, values, current);
 }
 
@@ -228,7 +214,6 @@ interface ChangeContext {
   config: Record<string, unknown> | undefined;
   /** The card's stored settings as they are when asked, which a later save may have changed. */
   latestConfig: () => Record<string, unknown> | undefined;
-  sources: readonly PublishedContentSource[] | undefined;
   atRest: CellSettingsWrite;
   /** Say the change once the card shows it, offering `undo` with it. */
   announceLater: (
@@ -246,14 +231,8 @@ function changeSetting(
   next: string | boolean,
   reverted: () => void
 ) {
-  const { settings, config, sources, atRest } = ctx;
-  const stored = quickChangeConfig(
-    settings,
-    config,
-    setting.name,
-    next,
-    sources
-  );
+  const { settings, config, atRest } = ctx;
+  const stored = quickChangeConfig(settings, config, setting.name, next);
   const label = setting.label ?? setting.name;
   // Captured now: Undo puts back what this setting was just before THIS change.
   const previous = config ?? {};
@@ -358,9 +337,6 @@ export function useCardQuickSetting(args: {
   settingsWrite: CellSettingsWrite | undefined;
 }): CardQuickSettingState {
   const { isEditing, settingsWrite } = args;
-  // The same collections the grid asked the card with, so a change is judged
-  // against the query the card actually sent.
-  const sources = useBranding().widgetSources;
   const shownAt = args.updatedAt?.getTime() ?? null;
   const [pending, setPending] = useState<PendingAnnouncement | null>(null);
   useAnnouncement(
@@ -390,7 +366,6 @@ export function useCardQuickSetting(args: {
     settings,
     config: args.config,
     latestConfig: () => latestConfig.current,
-    sources,
     atRest: settingsWrite,
     announceLater: (setting, value, asksAgain, undo) =>
       setPending({
