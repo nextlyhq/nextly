@@ -572,6 +572,17 @@ export { languageAddressOf } from "nextly";
 export type { LanguageAddress, LanguageAddressRule } from "nextly";
 
 /**
+ * The other way round: `addressOfRequest(url)` answers the language and the
+ * kept path a request asks for, by the same rule, so a Proxy handler can look
+ * an address up in a record kept by language and path. Intended to become
+ * stable with `languageAddressOf`.
+ *
+ * @experimental
+ */
+export { addressOfRequest } from "nextly";
+export type { KeptAddress } from "nextly";
+
+/**
  * Keeping every public address to one page. A plugin that keeps a record of
  * who holds each address takes part through `ctx.publicAddresses.participate`
  * with a `PublicAddressParticipant`: core asks every participant, inside each

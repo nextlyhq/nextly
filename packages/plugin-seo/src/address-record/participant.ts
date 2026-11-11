@@ -27,6 +27,10 @@ import {
   type PublicAddressParticipant,
 } from "@nextlyhq/plugin-sdk";
 
+import { redirectsSlug } from "../redirects/collection";
+import { movedRedirect } from "../redirects/moves";
+import { dropReplacedRedirect, putRedirect } from "../redirects/store";
+
 import { ADDRESS_RECORD_SLUG } from "./collection";
 
 /** What a row of the record is. */
@@ -51,7 +55,11 @@ function sha256(text: string): string {
 }
 
 /** The stored claim key of an address, range or path lock row. */
-function claimKey(kind: RowKind, locale: string, path: string): string {
+export function claimKey(
+  kind: RowKind,
+  locale: string,
+  path: string
+): string {
   return sha256(`${kind}:${locale}|${path}`);
 }
 
@@ -66,7 +74,7 @@ function kindOf(address: HeldAddress): RowKind {
 }
 
 /** Every path above `path`, root first, the root itself included. */
-function pathsAbove(path: string): string[] {
+export function pathsAbove(path: string): string[] {
   if (path === "/") return [];
   const segments = path.split("/").filter(segment => segment !== "");
   const above = ["/"];
@@ -299,6 +307,85 @@ export async function heldNow(
 export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   const { slug, rowsWhere, holdLock, holdHolderLock, rowsOf } = recordRows(ctx);
   const collections = ctx.services.collections;
+  const redirects = redirectsSlug(ctx);
+  /** Whether `holder` is a redirect, holding its From address. */
+  const isRedirect = (holder: AddressHolder) =>
+    holder.collection === redirects;
+
+  /**
+   * Whether `held`, held by `holder`, keeps `asker` from holding `asked`.
+   *
+   * A page is kept off an address another page holds, and never off one a
+   * redirect holds: it replaces that redirect. A redirect is kept off an
+   * address a page holds, exactly or in a range above it, and off another
+   * redirect's same From address; a pattern above an exact address does not
+   * keep it off, since an exact redirect answers first. A pattern is kept off
+   * only by the same pattern, or by a page's range covering all of it: a page
+   * at an address inside a pattern is served, and the pattern redirects the
+   * rest.
+   */
+  function keepsOff(
+    holder: AddressHolder,
+    held: HeldAddress,
+    asker: AddressHolder,
+    asked: HeldAddress
+  ): boolean {
+    if (!isRedirect(asker)) return !isRedirect(holder) && overlaps(held, asked);
+    if (asked.range !== true) {
+      if (isRedirect(holder) && held.range === true) return false;
+      return overlaps(held, asked);
+    }
+    if (held.range !== true || held.locale !== asked.locale) return false;
+    if (held.path === asked.path) return true;
+    return !isRedirect(holder) && within(asked.path, held.path);
+  }
+
+  /**
+   * Leave a permanent redirect from each address `update`'s page let go of
+   * to the address it holds now in the same language, as a save of a moved
+   * page would want. None where the page holds nothing in that language now,
+   * or where another page holds the old address once every claim stands: the
+   * redirect's own claim is refused there, which is also why two pages
+   * swapping addresses in one batch make none. A
+   * redirect that cannot be saved fails the save, naming the address, so the
+   * page keeps its old one.
+   */
+  async function redirectReleased(
+    transaction: Transaction,
+    update: HeldAddressUpdate,
+    released: readonly HeldAddress[]
+  ): Promise<void> {
+    for (const old of released) {
+      const input = movedRedirect(old, update.holds);
+      if (input === undefined) continue;
+      let outcome: Awaited<ReturnType<typeof putRedirect>>;
+      try {
+        outcome = await putRedirect(ctx, transaction, input);
+      } catch (error) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message: `The old address ${old.path} (${old.locale}) could not be kept as a redirect, so the address was not changed. Try again, or remove the redirects that point to it first.`,
+          cause: error instanceof Error ? error : undefined,
+          logContext: {
+            reason: "automatic-redirect-failed",
+            old,
+            input,
+            holder: update.holder,
+          },
+        });
+      }
+      // Refused only where another page serves the old address, which then
+      // needs no redirect, or where the address cannot be one.
+      if ("refused" in outcome && outcome.reason !== "held") {
+        ctx.logger.warn("A moved page's old address was given no redirect", {
+          old,
+          input,
+          holder: update.holder,
+          refused: outcome.refused,
+        });
+      }
+    }
+  }
 
   /**
    * Take the lock rows of every address in `batch` and every path above each,
@@ -374,16 +461,20 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     return [...atOrAbove, ...below];
   }
 
-  /** Delete the rows `holder` keeps that `holds` no longer has; answer the rest. */
+  /**
+   * Delete the rows `holder` keeps that `holds` no longer has; answer the
+   * keys of the rest, and the addresses let go.
+   */
   async function release(
     transaction: Transaction,
     update: HeldAddressUpdate
-  ): Promise<Set<string>> {
+  ): Promise<{ still: Set<string>; released: HeldAddress[] }> {
     const wanted = new Set(
       update.holds.map(h => claimKey(kindOf(h), h.locale, h.path))
     );
     const rows = await rowsOf(transaction, update.holder);
     const still = new Set<string>();
+    const released: HeldAddress[] = [];
     for (const row of rows) {
       const key = row.address
         ? claimKey(row.kind, row.address.locale, row.address.path)
@@ -393,8 +484,9 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
         continue;
       }
       await collections.deleteEntryInTransaction(transaction, slug, row.id);
+      if (row.address) released.push(row.address);
     }
-    return still;
+    return { still, released };
   }
 
   /** Write `held` for `update.holder`, refused by the key where another holds it. */
@@ -404,6 +496,19 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     held: HeldAddress
   ): Promise<void> {
     const key = claimKey(kindOf(held), held.locale, held.path);
+    if (!isRedirect(update.holder)) {
+      // A published page taking a redirect's From address replaces the
+      // redirect: the page is meant to live there now.
+      const [taken] = await rowsWhere(
+        transaction,
+        { claimKey: { equals: key } },
+        "update"
+      );
+      if (taken?.holder && isRedirect(taken.holder)) {
+        await collections.deleteEntryInTransaction(transaction, slug, taken.id);
+        await dropReplacedRedirect(ctx, transaction, taken.holder.id);
+      }
+    }
     try {
       await collections.createEntryInTransaction(transaction, slug, {
         claimKey: key,
@@ -453,7 +558,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
       const found = [...stored, ...coming].find(
         candidate =>
           !sameHolder(candidate.holder, asker) &&
-          overlaps(candidate.address, asked)
+          keepsOff(candidate.holder, candidate.address, asker, asked)
       );
       return found?.holder ?? null;
     },
@@ -462,16 +567,27 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
       await holdLocks(transaction, batch);
       // Every release first, so an address passing between holders in one
       // batch is free by the time it is claimed.
-      const still = new Map<HeldAddressUpdate, Set<string>>();
+      const letGo = new Map<
+        HeldAddressUpdate,
+        { still: Set<string>; released: HeldAddress[] }
+      >();
       for (const update of batch) {
-        still.set(update, await release(transaction, update));
+        letGo.set(update, await release(transaction, update));
       }
       for (const update of batch) {
-        const kept = still.get(update) ?? new Set<string>();
+        const kept = letGo.get(update)?.still ?? new Set<string>();
         for (const held of update.holds) {
           if (!kept.has(claimKey(kindOf(held), held.locale, held.path))) {
             await claim(transaction, update, held);
           }
+        }
+      }
+      // Once every claim stands, so a redirect never meets an address the
+      // batch is about to take.
+      for (const update of batch) {
+        const released = letGo.get(update)?.released ?? [];
+        if (released.length > 0 && !isRedirect(update.holder)) {
+          await redirectReleased(transaction, update, released);
         }
       }
     },

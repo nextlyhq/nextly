@@ -24,6 +24,10 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
+import { notFoundCollection } from "./not-found/collection";
+import { keepSeoContext } from "./not-found/report";
+import { redirectsCollection } from "./redirects/collection";
+import { redirectsProxyHandler } from "./redirects/proxy-handler";
 import { seoPageMetadata } from "./resolver/provider";
 import {
   generateSitemap,
@@ -167,8 +171,15 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
-    // The record that keeps each public address to one page.
-    collections: [addressRecordCollection()],
+    // The record that keeps each public address to one page, the redirects
+    // whose From addresses it holds, and the log of addresses not found.
+    collections: [
+      addressRecordCollection(),
+      redirectsCollection(),
+      notFoundCollection(),
+    ],
+    // Redirects answer before the page is served, from the site's Proxy.
+    proxy: [redirectsProxyHandler()],
     // Every page's head, worked out by the one order of who wins.
     services: { pageMetadata: ctx => seoPageMetadata(ctx) },
   };
@@ -275,6 +286,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // asked on every save, and told what each document holds after it.
       ctx.publicAddresses.participate(addressRecord(ctx));
       releaseOnCollectionDelete(ctx);
+      // Kept for the site's not-found page, which logs through it.
+      keepSeoContext(ctx);
     },
     onReady(ctx) {
       // Started, not awaited: it waits for the boot to finish, and brings the

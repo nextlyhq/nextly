@@ -36,6 +36,12 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
+import {
+  redirectDeployMove,
+  takeBackLost,
+  type DeployRedirect,
+} from "../redirects/moves";
+
 import { heldNow, recordSlug, rowOf, type RecordRow } from "./participant";
 
 /** A page left without an address another page holds. */
@@ -348,7 +354,8 @@ async function keepWhatStands(
   ctx: PluginContext,
   pages: readonly HeldAddressUpdate[],
   was: ReadonlyMap<string, { holds: HeldAddress[] }>,
-  expected: Expected
+  expected: Expected,
+  made: DeployRedirect[]
 ): Promise<Map<string, HeldAddress[]>> {
   const kept = new Map<string, HeldAddress[]>();
   for (const page of pages) {
@@ -360,7 +367,19 @@ async function keepWhatStands(
     );
     kept.set(key, keep);
     if (keep.length !== before.length) {
-      await moveIfCurrent(ctx, { holder: page.holder, holds: keep }, expected);
+      const outcome = await moveIfCurrent(
+        ctx,
+        { holder: page.holder, holds: keep },
+        expected
+      );
+      // The route has moved with the deploy: each address let go of leaves
+      // a redirect to the page's new one, made once the release commits.
+      if (outcome !== "overtaken") {
+        const released = before.filter(
+          b => !keep.some(held => sameAddress(b, held))
+        );
+        await redirectDeployMove(ctx, page, released, made);
+      }
     }
   }
   return kept;
@@ -491,12 +510,14 @@ async function runCatchUp(
   const expected: Expected = new Map(
     [...was].map(([key, entry]) => [key, [...entry.holds]])
   );
-  const kept = await keepWhatStands(ctx, pages, was, expected);
+  const made: DeployRedirect[] = [];
+  const kept = await keepWhatStands(ctx, pages, was, expected, made);
   await letGoOfTheGone(ctx, was, kept, expected, {
     now: new Set(siteTypes),
     before: typesIn(record.siteTypes),
   });
   const { recorded, lost } = await claimTheNew(ctx, pages, kept, expected);
+  await takeBackLost(ctx, made, lost);
   await storeMeta(
     ctx,
     record.siteTypes?.id,
