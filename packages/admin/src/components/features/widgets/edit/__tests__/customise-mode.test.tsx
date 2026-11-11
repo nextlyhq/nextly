@@ -31,6 +31,7 @@ import {
   TopBarPlaceTarget,
 } from "@admin/components/layout/header/TopBarPlaces";
 
+import { GreetingActionProvider } from "../../../dashboard/GreetingAction";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { WidgetGrid } from "../../WidgetGrid";
 import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
@@ -202,7 +203,14 @@ const ELSEWHERE = "/admin/media";
  * top bar, whose two places the page fills; without it there is no bar, and
  * the controls are drawn where they stand.
  */
-function renderDashboard({ inBar = false }: { inBar?: boolean } = {}) {
+function renderDashboard({
+  inBar = false,
+  greeting = true,
+}: {
+  inBar?: boolean;
+  /** False for a page whose greeting a plugin replaced, which draws no row. */
+  greeting?: boolean;
+} = {}) {
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false, retryDelay: 0, gcTime: 0 },
@@ -215,7 +223,7 @@ function renderDashboard({ inBar = false }: { inBar?: boolean } = {}) {
   // The page's heading beside the grid, so the outline is the page's.
   const page = (
     <>
-      <WelcomeHeader />
+      {greeting ? <WelcomeHeader /> : <h1>A plugin&apos;s welcome</h1>}
       <WidgetGrid />
     </>
   );
@@ -226,7 +234,9 @@ function renderDashboard({ inBar = false }: { inBar?: boolean } = {}) {
           <TopBarPlaceTarget name="start" />
           <TopBarPlaceTarget name="end" />
         </header>
-        <main>{page}</main>
+        <main>
+          <GreetingActionProvider>{page}</GreetingActionProvider>
+        </main>
       </TopBarPlacesProvider>
     ) : (
       page
@@ -648,14 +658,24 @@ describe("in the admin's top bar", () => {
     return screen.getByTestId("top-bar");
   }
 
-  it("holds the breadcrumb and the cog at rest, and nothing of either in the page", async () => {
+  it("holds the breadcrumb at rest, and the cog at the greeting row's end rather than in the bar", async () => {
     renderDashboard({ inBar: true });
     const cog = await screen.findByTestId("dashboard-edit-begin");
-    expect(topBar()).toContainElement(cog);
+    const row = screen.getByTestId("dashboard-greeting-row");
+    expect(row).toContainElement(cog);
+    // After the greeting, so it reads and tabs after the heading it sits beside.
+    expect(row.lastElementChild).toContainElement(cog);
+    expect(topBar()).not.toContainElement(cog);
     expect(
       within(topBar()).getByRole("navigation", { name: "Breadcrumb" })
     ).toHaveTextContent(/^Dashboard$/);
-    expect(screen.getByRole("main")).not.toContainElement(cog);
+  });
+
+  it("puts the cog at the bar's right end on a page whose greeting a plugin replaced", async () => {
+    renderDashboard({ inBar: true, greeting: false });
+    const cog = await screen.findByTestId("dashboard-edit-begin");
+    expect(topBar()).toContainElement(cog);
+    expect(screen.queryByTestId("dashboard-greeting-row")).toBeNull();
   });
 
   it("the cog is named and tooltipped Customize dashboard", async () => {
@@ -685,11 +705,14 @@ describe("in the admin's top bar", () => {
     }
   );
 
-  it("puts the mode's controls in the bar in place of the cog, and the breadcrumb says Customizing", async () => {
+  it("puts the mode's controls in the bar, the cog leaves the greeting row, and the breadcrumb says Customizing", async () => {
     renderDashboard({ inBar: true });
     await beginEditing();
     expect(topBar()).toContainElement(bar());
     expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
+    expect(screen.getByTestId("dashboard-greeting-row")).not.toContainElement(
+      bar()
+    );
     const crumb = within(topBar()).getByRole("navigation", {
       name: "Breadcrumb",
     });

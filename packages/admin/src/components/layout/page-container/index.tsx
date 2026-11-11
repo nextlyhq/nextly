@@ -131,9 +131,10 @@ export const PageContainer: React.ForwardRefExoticComponent<
           type={type}
           className={cn(
             surface,
-            // A workspace draws its own surface edge to edge, so it takes no
-            // vertical rhythm either.
-            type !== "workspace" && rhythm,
+            // A workspace draws its own surface edge to edge, and an editor's
+            // banners and panel start directly under the bar, so neither
+            // takes the vertical rhythm.
+            type !== "workspace" && type !== "editor" && rhythm,
             className
           )}
           {...props}

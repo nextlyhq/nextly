@@ -511,73 +511,81 @@ function FormEditor({
         readOnly={readOnly}
       />
 
-      <FormEditorHeader
-        name={formData.name}
-        fieldCount={fields.length}
-        formId={formData.slug}
-        tabs={tabs}
-        current={page}
-      />
+      {/* The editor's column. The Editor frame draws no gutter, so the column
+          carries the editor's own inset, in the steps the entry editor's
+          field column uses, and its 72rem measure. */}
+      <div
+        data-slot="form-editor-column"
+        className="w-full max-w-[72rem] px-4 pb-16 pt-6 @3xl/content:px-6 @4xl/content:px-8 lg:pt-8"
+      >
+        <FormEditorHeader
+          name={formData.name}
+          fieldCount={fields.length}
+          formId={formData.slug}
+          tabs={tabs}
+          current={page}
+        />
 
-      {refusal === null ? null : (
-        <Alert variant="destructive" className="mb-6">
-          <AlertDescription>
-            <span>{refusal.message}</span>
-            {refusal.page === undefined || refusal.page === page ? null : (
-              <>
-                {" "}
-                <a
-                  href={pageHref(refusal.page)}
-                  className="font-medium underline underline-offset-2"
-                  onClick={event =>
-                    followTab(event, pageHref(refusal.page ?? "builder"), {
-                      saved,
-                      choose: () => choosePage(refusal.page ?? "builder"),
-                    })
-                  }
-                >
-                  Go to {pageLabel(refusal.page)}
-                </a>
-              </>
-            )}
-          </AlertDescription>
-        </Alert>
-      )}
+        {refusal === null ? null : (
+          <Alert variant="destructive" className="mb-6">
+            <AlertDescription>
+              <span>{refusal.message}</span>
+              {refusal.page === undefined || refusal.page === page ? null : (
+                <>
+                  {" "}
+                  <a
+                    href={pageHref(refusal.page)}
+                    className="font-medium underline underline-offset-2"
+                    onClick={event =>
+                      followTab(event, pageHref(refusal.page ?? "builder"), {
+                        saved,
+                        choose: () => choosePage(refusal.page ?? "builder"),
+                      })
+                    }
+                  >
+                    Go to {pageLabel(refusal.page)}
+                  </a>
+                </>
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
 
-      <PageBody page={page}>
-        {pageContent(page, {
-          builder: () => (
-            <FieldCards
-              enabledTypes={config.enabledTypes}
-              disabledFieldTypes={config.disabledFieldTypes}
-              onAddField={handleAddField}
-            />
-          ),
-          preview: () => <FormPreview fields={fields} formData={formData} />,
-          settings: () => (
-            <div className="flex flex-col gap-10">
-              <FormIdentitySection />
-              <FormSettingsTab
-                spamDefaults={config.spamDefaults}
-                redirectCollections={config.redirectCollections}
-                redirectConfigFailed={config.failed}
-              />
-            </div>
-          ),
-          notifications: () => (
-            <FormNotificationsTab defaults={config.notificationDefaults} />
-          ),
-          submissions: () =>
-            entryId === undefined ? null : (
-              <SubmissionsView
-                formId={entryId}
-                {...(config.submissionsSlug === undefined
-                  ? {}
-                  : { collectionSlug: config.submissionsSlug })}
+        <PageBody page={page}>
+          {pageContent(page, {
+            builder: () => (
+              <FieldCards
+                enabledTypes={config.enabledTypes}
+                disabledFieldTypes={config.disabledFieldTypes}
+                onAddField={handleAddField}
               />
             ),
-        })}
-      </PageBody>
+            preview: () => <FormPreview fields={fields} formData={formData} />,
+            settings: () => (
+              <div className="flex flex-col gap-10">
+                <FormIdentitySection />
+                <FormSettingsTab
+                  spamDefaults={config.spamDefaults}
+                  redirectCollections={config.redirectCollections}
+                  redirectConfigFailed={config.failed}
+                />
+              </div>
+            ),
+            notifications: () => (
+              <FormNotificationsTab defaults={config.notificationDefaults} />
+            ),
+            submissions: () =>
+              entryId === undefined ? null : (
+                <SubmissionsView
+                  formId={entryId}
+                  {...(config.submissionsSlug === undefined
+                    ? {}
+                    : { collectionSlug: config.submissionsSlug })}
+                />
+              ),
+          })}
+        </PageBody>
+      </div>
 
       <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
         <AlertDialogContent>

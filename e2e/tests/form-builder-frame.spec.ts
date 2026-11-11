@@ -84,7 +84,7 @@ test("opens each page of a form at its own address, directly and on reload", asy
   }
 });
 
-test("is one page at 1920px: one banner, one heading, and the width to work in", async ({
+test("is an Editor page at 1920px: one banner, one heading, edge to edge", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
@@ -101,10 +101,12 @@ test("is one page at 1920px: one banner, one heading, and the width to work in",
   await expect(
     page.getByRole("banner").locator('[data-slot="form-editor-bar"]')
   ).toBeVisible();
-  // An editor takes the width rather than the 72rem a document column is
-  // capped at, which leaves room for the docked field settings.
-  const body = await page.locator('[data-form-page="builder"]').boundingBox();
-  expect(body?.width ?? 0).toBeGreaterThan(72 * 16);
+  // An Editor page: its frame runs to the window's right edge, where the
+  // field settings dock.
+  const frame = page.locator('[data-page-type="editor"]');
+  await expect(frame).toHaveCount(1);
+  const box = await frame.boundingBox();
+  expect(Math.round((box?.x ?? 0) + (box?.width ?? 0))).toBe(1920);
 });
 
 test("starts with the Forms panel folded, and the bar's toggle brings it back", async ({
