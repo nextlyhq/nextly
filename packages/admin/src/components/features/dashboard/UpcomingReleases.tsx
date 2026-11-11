@@ -89,13 +89,6 @@ function attentionHref(reason: Reason): string {
   return `${ROUTES.RELEASES}?tab=attention&reason=${reason}`;
 }
 
-/**
- * The attention line's height and the gap under it, in pixels: what the rows under it may not
- * take. One line that never wraps (20 px, `h-5`) and a 12 px gap (`gap-3`), so the room it takes
- * is known before it is drawn.
- */
-const ATTENTION_LINE_PX = 20 + 12;
-
 /** "1 stopped · 2 overdue": one part per reason with any, each a link to its list. */
 const AttentionLine: React.FC<{
   counts: readonly { reason: Reason; count: number }[];
@@ -126,23 +119,15 @@ export type UpcomingReleasesCardProps = Omit<DeclaredComponentProps, "data"> & {
 
 export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
   data,
+  settings,
 }) => {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   const density = useListDensity();
-  // At most five rows, the most its `load` asks for before the one that says more exist: the
-  // card declares no "Number of items", so the rule's own default stands for it here and there.
-  const drawn = useRowsDrawn(tier, undefined, density);
-  // With the attention line above them, the rows have its room the less.
-  const drawnUnderLine = useRowsDrawn(
-    tier,
-    undefined,
-    density,
-    ATTENTION_LINE_PX
-  );
+  // Its "Number of entries", the rows its `load` asked for before the one that says more exist.
+  const drawn = useRowsDrawn(settings.limit);
 
   const { attention, releases } = rowsOf(data.items);
-  const rowsUnder = attention.length > 0 ? drawnUnderLine : drawn;
   if (attention.length === 0 && releases.length === 0) {
     return (
       <FrameState
@@ -168,7 +153,7 @@ export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
         <ListCard
           model={RELEASE_LIST_MODEL}
           rows={releases}
-          drawn={rowsUnder}
+          drawn={drawn}
           viewAllHref={ROUTES.RELEASES}
           tier={tier}
           density={density}

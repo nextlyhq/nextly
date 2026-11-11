@@ -3,8 +3,8 @@
  * collection's row and a Single's, the + only where the reader may create, Edit or View on a
  * Single by whether they may update it, Drafts linked to the list's Draft filter, zeros and
  * empty collections muted, the table at the medium and large tiers and narrowed on a narrow
- * medium card, the stacked form at the small tier, the rows a card's body holds filling it, the
- * subtitle counting the collections and Singles, and no footer, since the admin has no page
+ * medium card, the stacked form at the small tier, its "Number of entries" of rows whatever its
+ * size, the subtitle counting the collections and Singles, and no footer, since the admin has no page
  * listing the collections.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
@@ -78,17 +78,19 @@ function draw(
     total,
     totalByKind,
     h,
+    settings = {},
   }: {
     tier?: SizeTier;
     total?: number;
     totalByKind?: Record<string, number>;
     h?: number;
+    settings?: Record<string, unknown>;
   } = {}
 ) {
   const props: ContentTableProps = {
     widgetId: "core/content-table",
     placementId: "core/content-table",
-    settings: {},
+    settings,
     size: { w: 12, h: h ?? 4, tier },
     refreshing: false,
     retry: () => undefined,
@@ -261,19 +263,28 @@ describe("the Content table", () => {
   });
 
   // A card six columns wide is medium; twelve columns wide is large.
-  it.each([
-    ["6", "medium", 5],
-    ["12", "large", 10],
-  ] as const)(
-    "at width %s draws the rows its %s body holds",
-    (_width, tier, drawn) => {
-      const answered = Array.from({ length: 11 }, (_, i) =>
-        collectionRow(`c${String(i).padStart(2, "0")}`)
-      );
-      draw(answered, { tier, total: 14 });
-      expect(rows()).toHaveLength(drawn);
+  it.each(["medium", "large"] as const)(
+    "draws its Number of entries at the %s tier, whatever its height",
+    tier => {
+      // Its `load` asked ten, and one more that says more exist. 🔴 Counted by its height, the
+      // card two rows high drew none and the one eight rows high ten.
+      for (const h of [2, 8]) {
+        const { unmount } = draw(collectionRows(11), {
+          tier,
+          h,
+          total: 14,
+          settings: { limit: 10 },
+        });
+        expect(rows(), `${tier} at h ${h}`).toHaveLength(10);
+        unmount();
+      }
     }
   );
+
+  it("draws twenty rows for a Number of entries of twenty", () => {
+    draw(collectionRows(21), { settings: { limit: 20 }, total: 30 });
+    expect(rows()).toHaveLength(20);
+  });
 
   it("names what the last change was on hover, from the change the answer names", () => {
     draw([
@@ -336,15 +347,15 @@ describe("the Content table", () => {
     );
   });
 
-  it("draws the rows its body holds and nothing under them: no footer, no count, no link to all", () => {
+  it("draws five rows until its reader sets a number, and nothing under them: no footer, no count, no link to all", () => {
     draw([HOME, ...collectionRows(10)], {
       tier: "medium",
       h: 4,
       total: 14,
       totalByKind: { collection: 13, single: 1 },
     });
-    // 🔴 Rows that do not fit are cut, with nothing said under them.
-    expect(rows()).toHaveLength(4);
+    // 🔴 Rows past its number are cut, with nothing said under them.
+    expect(rows()).toHaveLength(5);
     expect(screen.queryByText(/more/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: /^View all|^Show all/ })
@@ -358,14 +369,13 @@ describe("the Content table", () => {
 
   describe("at a card's width", () => {
     it.each(["medium", "large"] as const)(
-      "draws the table at the %s tier, its rows filling a 6 x 4 card's body",
+      "draws the table at the %s tier, its rows in the default density's height",
       tier => {
         draw(collectionRows(5), { tier, h: 4 });
         expect(screen.getByTestId("content-table")).toBeInTheDocument();
         expect(screen.queryByTestId("content-list")).not.toBeInTheDocument();
-        // 🔴 The frame counts four 52 px rows for this body, and draws them that tall: a
-        // shorter row would leave the room of the rows it did not draw empty under them.
-        expect(rows()).toHaveLength(4);
+        // Every row 52 px tall, the height the frame's skeleton holds each row's place at.
+        expect(rows()).toHaveLength(5);
         for (const row of rows()) expect(row).toHaveClass("h-13");
       }
     );
@@ -498,9 +508,14 @@ describe("the Content table", () => {
       ).toHaveClass("text-muted-foreground");
     });
 
-    it("at four rows high draws the four whole rows its body holds", () => {
-      draw(collectionRows(5), { tier: "small", h: 4 });
-      expect(rows()).toHaveLength(4);
+    it("draws its Number of entries stacked, whatever its height", () => {
+      // 🔴 Counted by its height, a card four rows high drew four.
+      draw(collectionRows(11), {
+        tier: "small",
+        h: 4,
+        settings: { limit: 10 },
+      });
+      expect(rows()).toHaveLength(10);
       for (const row of rows()) expect(row).toHaveClass("h-13");
     });
   });
