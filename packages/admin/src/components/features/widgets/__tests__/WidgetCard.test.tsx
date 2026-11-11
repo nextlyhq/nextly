@@ -105,7 +105,7 @@ describe("WidgetCard", () => {
     expect(screen.queryByText("42")).not.toBeInTheDocument();
   });
 
-  it("marks the error with the danger status's solid colour, never the action colour", () => {
+  it("marks the error with the danger status's text colour, never the action colour", () => {
     render(
       <WidgetCard
         title="Published posts"
@@ -115,7 +115,7 @@ describe("WidgetCard", () => {
       </WidgetCard>
     );
     const mark = screen.getByTestId("widget-card-error-mark");
-    expect(mark).toHaveClass("text-danger-solid");
+    expect(mark).toHaveClass("text-danger-text");
     expect(mark).not.toHaveClass("text-destructive");
   });
 

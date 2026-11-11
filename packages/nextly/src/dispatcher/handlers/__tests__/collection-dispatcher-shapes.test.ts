@@ -16,6 +16,18 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/schema-version")
+  >()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
 // The respondAction test for applySchemaChanges and the respondData
 // test for previewSchemaChanges need to drive code paths that pull
 // dependencies out of the DI container (registry, adapter, migration

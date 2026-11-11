@@ -23,6 +23,7 @@ import type {
 } from "../../schemas/email-templates/types";
 
 import { parseLiquid } from "./services/liquid-engine";
+import { declarationSubstance, pluginDeclarations } from "./template-variables";
 import type { EmailConfig } from "./types";
 
 /** An owner as the registry records it: a plugin there is always running. */
@@ -268,7 +269,10 @@ function owned(
 }
 
 /** A plugin's contribution, in the shape core inserts. */
-function pluginDefaults(template: PluginEmailTemplate): OwnerTemplate {
+function pluginDefaults(
+  template: PluginEmailTemplate,
+  variables: EmailTemplateVariable[] | null
+): OwnerTemplate {
   return {
     name: template.name,
     slug: template.slug,
@@ -276,7 +280,7 @@ function pluginDefaults(template: PluginEmailTemplate): OwnerTemplate {
     subject: template.subject,
     htmlContent: template.htmlContent,
     plainTextContent: template.plainTextContent ?? null,
-    variables: (template.variables ?? null) as EmailTemplateVariable[] | null,
+    variables,
     useLayout: template.useLayout ?? true,
     description: template.description ?? null,
     replyTo: template.replyTo ?? null,
@@ -317,6 +321,18 @@ export function detailsOf(template: {
     description: template.description ?? null,
     variables: (template.variables ?? null) as EmailTemplateVariable[] | null,
   };
+}
+
+/**
+ * Whether two sets of details say the same thing, presentation aside: a
+ * variable's type, label, example and fields are never a change (see
+ * `declarationSubstance`).
+ */
+export function sameDetails(a: OwnerDetails, b: OwnerDetails): boolean {
+  return sameStoredValue(
+    { ...a, variables: declarationSubstance(a.variables) },
+    { ...b, variables: declarationSubstance(b.variables) }
+  );
 }
 
 /**
@@ -387,6 +403,17 @@ export interface RegistryConflict {
  * A contribution refused for its engine: it names one there is none of, or
  * declares Liquid and Liquid can't read it, which would fail every send.
  */
+/**
+ * A plugin template whose declared variables don't parse: kept as names,
+ * descriptions and whether each is required, without their presentation.
+ */
+export interface UnreadDeclarations {
+  slug: string;
+  plugin: string;
+  /** Why, in a sentence the log shows. */
+  reason: string;
+}
+
 export interface RefusedEngine {
   slug: string;
   plugin: string;
@@ -420,6 +447,105 @@ function engineRefusal(template: PluginEmailTemplate): string | null {
 }
 
 /**
+ * What one contributed template registers as: itself, or the notice that
+ * keeps it out. An unread declaration still registers — with the variables
+ * that parsed — so a plugin's bad example takes nothing away.
+ */
+type PluginTemplateDecision =
+  | { kind: "register"; entry: OwnedTemplate; unread?: UnreadDeclarations }
+  | { kind: "refused"; notice: RefusedEngine }
+  | { kind: "conflict"; notice: RegistryConflict };
+
+function pluginTemplateDecision(
+  plugin: string,
+  template: PluginEmailTemplate,
+  existingOwner: RegisteredOwner | undefined
+): PluginTemplateDecision {
+  // Checked here as well as by the type: a plugin built without it, or
+  // one older than a rename, must not have its template rendered on an
+  // engine it never named.
+  const reason = engineRefusal(template);
+  if (reason !== null) {
+    return {
+      kind: "refused",
+      notice: {
+        slug: template.slug,
+        plugin,
+        engine: template.engine,
+        reason,
+      },
+    };
+  }
+  if (existingOwner) {
+    return {
+      kind: "conflict",
+      notice: {
+        slug: template.slug,
+        kept: existingOwner,
+        ignored: plugin,
+      },
+    };
+  }
+  const declared = pluginDeclarations(template.variables);
+  return {
+    kind: "register",
+    entry: owned(
+      { kind: "plugin", name: plugin },
+      pluginDefaults(template, declared.variables),
+      { engine: template.engine }
+    ),
+    ...(declared.problem
+      ? {
+          unread: {
+            slug: template.slug,
+            plugin,
+            reason: declared.problem,
+          } satisfies UnreadDeclarations,
+        }
+      : {}),
+  };
+}
+
+/**
+ * Register every plugin's templates against what came first, collecting the
+ * notices: a refused engine or a taken slug keeps a template out; an unread
+ * declaration registers with what parsed, and says so.
+ */
+function registerPluginTemplates(
+  map: Map<string, OwnedTemplate>,
+  plugins: ReadonlyArray<{
+    name: string;
+    templates: ReadonlyArray<PluginEmailTemplate>;
+  }>
+): {
+  conflicts: RegistryConflict[];
+  refused: RefusedEngine[];
+  unread: UnreadDeclarations[];
+} {
+  const conflicts: RegistryConflict[] = [];
+  const refused: RefusedEngine[] = [];
+  const unread: UnreadDeclarations[] = [];
+  for (const plugin of plugins) {
+    for (const template of plugin.templates) {
+      const decision = pluginTemplateDecision(
+        plugin.name,
+        template,
+        map.get(template.slug)?.owner
+      );
+      if (decision.kind === "refused") {
+        refused.push(decision.notice);
+      } else if (decision.kind === "conflict") {
+        conflicts.push(decision.notice);
+      } else {
+        if (decision.unread) unread.push(decision.unread);
+        map.set(decision.entry.slug, decision.entry);
+      }
+    }
+  }
+  return { conflicts, refused, unread };
+}
+
+/**
  * Build the registry from what core ships and the running plugins contribute.
  *
  * Core is registered first, so a plugin cannot take over one of core's slugs;
@@ -431,10 +557,9 @@ export function buildTemplateOwnerRegistry(input: RegistryInput): {
   registry: TemplateOwnerRegistry;
   conflicts: RegistryConflict[];
   refused: RefusedEngine[];
+  unread: UnreadDeclarations[];
 } {
   const map = new Map<string, OwnedTemplate>();
-  const conflicts: RegistryConflict[] = [];
-  const refused: RefusedEngine[] = [];
 
   for (const template of input.builtIns) {
     map.set(
@@ -444,38 +569,7 @@ export function buildTemplateOwnerRegistry(input: RegistryInput): {
       })
     );
   }
-  for (const plugin of input.plugins) {
-    for (const template of plugin.templates) {
-      // Checked here as well as by the type: a plugin built without it, or
-      // one older than a rename, must not have its template rendered on an
-      // engine it never named.
-      const reason = engineRefusal(template);
-      if (reason !== null) {
-        refused.push({
-          slug: template.slug,
-          plugin: plugin.name,
-          engine: template.engine,
-          reason,
-        });
-        continue;
-      }
-      const existing = map.get(template.slug);
-      if (existing) {
-        conflicts.push({
-          slug: template.slug,
-          kept: existing.owner,
-          ignored: plugin.name,
-        });
-        continue;
-      }
-      map.set(
-        template.slug,
-        owned({ kind: "plugin", name: plugin.name }, pluginDefaults(template), {
-          engine: template.engine,
-        })
-      );
-    }
-  }
+  const notices = registerPluginTemplates(map, input.plugins);
 
   const setInCode = new Set<string>();
   for (const [slug, key] of Object.entries(CODE_TEMPLATE_KEYS)) {
@@ -483,9 +577,8 @@ export function buildTemplateOwnerRegistry(input: RegistryInput): {
   }
 
   return {
+    ...notices,
     registry: { owned: map, setInCode, complete: input.complete },
-    conflicts,
-    refused,
   };
 }
 

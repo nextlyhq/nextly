@@ -51,6 +51,7 @@ import {
 } from "../../schema/builder-save/update-save";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
 import type { BrowserRenameResolution } from "../../schema/pipeline/prompt-dispatcher/browser";
+import { writeRegistryRows } from "../../schema/schema-version";
 import {
   applyCollectionSchemaChange,
   refuseNewCollectionIndexNamesTaken,
@@ -696,12 +697,16 @@ export class CollectionMetadataService extends BaseService {
         // A migration the writer ran carries the registry row's upsert, as
         // every deploy needs it, so the row stands already: it takes the rest
         // of the metadata. Otherwise the row is written here.
-        collection = write.rowWritten
-          ? await this.collectionService.updateCollectionMetadata(
-              artifacts.metadata.slug,
-              artifacts.metadata
-            )
-          : await this.collectionService.registerCollection(artifacts.metadata);
+        // The row and the stored schema version in one transaction, so the
+        // version's count moves with the save it records (`writeRegistryRows`).
+        collection = await writeRegistryRows(this.adapter, () =>
+          write.rowWritten
+            ? this.collectionService.updateCollectionMetadata(
+                artifacts.metadata.slug,
+                artifacts.metadata
+              )
+            : this.collectionService.registerCollection(artifacts.metadata)
+        );
       } catch (dbError: unknown) {
         return errorToMetadataResult(
           dbError,
@@ -1218,9 +1223,13 @@ export class CollectionMetadataService extends BaseService {
       // cause chain.
       let updated;
       try {
-        updated = await this.collectionService.updateCollectionMetadata(
-          params.collectionName,
-          updateArtifacts.metadataUpdates
+        // The row and the stored schema version in one transaction
+        // (`writeRegistryRows`).
+        updated = await writeRegistryRows(this.adapter, () =>
+          this.collectionService.updateCollectionMetadata(
+            params.collectionName,
+            updateArtifacts.metadataUpdates
+          )
         );
       } catch (dbError: unknown) {
         return errorToMetadataResult(

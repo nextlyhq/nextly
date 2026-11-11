@@ -23,6 +23,10 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  parseSource,
+  walk as walkSyntax,
+} from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -59,6 +63,9 @@ const SCANNED = [
   "packages/plugin-form-builder/src",
   "packages/plugin-page-builder/src",
   "packages/builder/src",
+  // The SEO plugin draws its own admin screens and tab with the same ink
+  // utilities.
+  "packages/plugin-seo/src",
 ];
 const EXTENSIONS = new Set([".tsx", ".ts", ".jsx", ".js"]);
 
@@ -357,65 +364,88 @@ function withModes(found: Utility[]): Utility[] {
   });
 }
 
+/** One string a source spells out, and the line it starts on. */
+interface ClassSpan {
+  text: string;
+  line: number;
+}
+
 /**
- * Every quoted span in a source, which is where class strings live.
+ * Every string a source spells out, which is where class strings live, read
+ * from the parser's syntax tree rather than matched over the text.
  *
  * Spans are taken whole rather than searched for utilities, so the unit of
  * analysis is the same one the browser gets: a set of classes applied together.
- * A template literal with an interpolation splits into several spans, which is
- * harmless -- each piece is still a complete set of whitespace-delimited
- * tokens.
+ * A template literal with an interpolation yields one span per literal piece,
+ * each still a complete set of whitespace-delimited tokens.
+ *
+ * The parser decides where a string starts and ends, so nothing about the
+ * text can move those edges. A pattern over the raw text could not know that
+ * an apostrophe inside `"isn't"` is not a delimiter: it restarted inside the
+ * string, took the closing `"` as an opening one, and from there paired every
+ * closing quote with the next opening one, so the class strings of the rest
+ * of the file sat BETWEEN its spans and were never read. That is how a
+ * `text-danger-solid` icon went unmeasured beneath an `"...isn't available..."`
+ * constant while every assertion here passed.
+ *
+ * Comments are not part of the tree, so a class name discussed in prose is
+ * not counted as a class name that renders. That matters beyond tidiness:
+ * `observed` is what proves an accepted regression is still reachable, so a
+ * backticked utility in a comment would keep an acceptance alive after the
+ * last real use of it is deleted.
+ *
+ * `appliesClasses` is {@link APPLIES_CLASSES} asked of the source with every
+ * comment the parser found replaced by a space, so a module that only
+ * describes utilities in its comments is not read as markup.
  */
-const QUOTED_SPAN = /(["'`])([^"'`]*)\1/g;
+function classSpans(
+  source: string,
+  fileName: string
+): { appliesClasses: boolean; spans: ClassSpan[] } {
+  const { program, comments } = parseSource(source, fileName);
 
-/**
- * The source with comment BODIES blanked out, so a class name discussed in
- * prose is not counted as a class name that renders.
- *
- * This matters beyond tidiness. `observed` is what proves an accepted
- * regression is still reachable, so a backticked utility in a comment keeps an
- * acceptance alive after the last real use of it is deleted -- the acceptance
- * then sits in the file reading as live coverage while pre-approving whatever
- * paints that pair next. Measured: removing the only rendered
- * `text-destructive-600` while leaving a comment that mentions it kept every
- * test in this file green.
- *
- * Comments are replaced character-for-character with spaces rather than
- * removed, because every offset in this file is turned back into a line number.
- * Newlines are preserved for the same reason.
- *
- * String literals are tracked so that a `//` inside one -- a URL is the common
- * case -- does not start a comment and blank the rest of the line.
- */
-function blankComments(source: string): string {
-  const out = source.split("");
-  let i = 0;
-  while (i < source.length) {
-    const ch = source[i];
-    if (ch === '"' || ch === "'" || ch === "`") {
-      i++;
-      while (i < source.length && source[i] !== ch) {
-        i += source[i] === "\\" ? 2 : 1;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "/" && source[i + 1] === "/") {
-      while (i < source.length && source[i] !== "\n") out[i++] = " ";
-      continue;
-    }
-    if (ch === "/" && source[i + 1] === "*") {
-      const end = source.indexOf("*/", i + 2);
-      const stop = end === -1 ? source.length : end + 2;
-      while (i < stop) {
-        if (source[i] !== "\n") out[i] = " ";
-        i++;
-      }
-      continue;
-    }
-    i++;
+  const pieces: string[] = [];
+  let from = 0;
+  for (const comment of comments) {
+    pieces.push(source.slice(from, comment.start));
+    from = comment.end;
   }
-  return out.join("");
+  pieces.push(source.slice(from));
+  const code = pieces.join(" ");
+
+  // Offsets are UTF-16 indices, the same unit `slice` counts in, so a line is
+  // the newlines before a node's start plus one.
+  const lineStarts = [0];
+  for (
+    let i = source.indexOf("\n");
+    i !== -1;
+    i = source.indexOf("\n", i + 1)
+  ) {
+    lineStarts.push(i + 1);
+  }
+  const lineOf = (offset: number): number => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if ((lineStarts[mid] ?? 0) <= offset) low = mid;
+      else high = mid - 1;
+    }
+    return low + 1;
+  };
+
+  const spans: ClassSpan[] = [];
+  walkSyntax(program, node => {
+    if (node.type === "Literal" && typeof node.value === "string") {
+      spans.push({ text: node.value, line: lineOf(node.start) });
+    } else if (node.type === "TemplateElement") {
+      spans.push({
+        text: node.value.cooked ?? node.value.raw,
+        line: lineOf(node.start),
+      });
+    }
+  });
+  return { appliesClasses: APPLIES_CLASSES.test(code), spans };
 }
 
 /** The utilities in one class string, split on whitespace and matched whole. */
@@ -461,12 +491,14 @@ function* inkUsages(): Generator<{
   utilities: Utility[];
 }> {
   for (const path of sources) {
-    const source = blankComments(readFileSync(resolve(repo, path), "utf8"));
-    if (!APPLIES_CLASSES.test(source)) continue;
-    for (const span of source.matchAll(QUOTED_SPAN)) {
-      const utilities = parseUtilities(span[2] ?? "");
+    const { appliesClasses, spans } = classSpans(
+      readFileSync(resolve(repo, path), "utf8"),
+      path
+    );
+    if (!appliesClasses) continue;
+    for (const { text, line } of spans) {
+      const utilities = parseUtilities(text);
       if (utilities.length === 0) continue;
-      const line = source.slice(0, span.index).split("\n").length;
       for (const self of utilities) {
         if (!INK_PREFIXES.has(self.prefix) || self.decorative) continue;
         yield { path, line, self, utilities };
@@ -606,9 +638,7 @@ describe("ink utilities are readable on the surfaces they land on", () => {
       'const url = "https://example.com/x"; // trailing comment',
     ].join("\n");
 
-    const spans = [...blankComments(fixture).matchAll(QUOTED_SPAN)].map(
-      m => m[2]
-    );
+    const spans = classSpans(fixture, "fixture.ts").spans.map(s => s.text);
 
     expect(spans).toContain("text-muted-foreground");
     expect(spans).toContain("https://example.com/x");
@@ -616,17 +646,75 @@ describe("ink utilities are readable on the surfaces they land on", () => {
     expect(spans.join(" ")).not.toContain("text-destructive-500");
   });
 
-  it("keeps every offset, so reported lines stay true", () => {
-    // The blanking has to be length-preserving: every hit in this file is
-    // turned into a line number by slicing the source at the match index. A
-    // stripper that removed comments instead would renumber every finding
-    // below its first comment, and the assertions would still pass.
-    const fixture = 'a\n// gone\nconst c = "text-primary";\n';
-    const blanked = blankComments(fixture);
-    expect(blanked).toHaveLength(fixture.length);
-    expect(blanked.split("\n")).toHaveLength(fixture.split("\n").length);
-    const at = blanked.indexOf('"text-primary"');
-    expect(fixture.slice(0, at).split("\n")).toHaveLength(3);
+  it("reports the line a class string is written on", () => {
+    // Every finding is reported by line, so a line computed in the wrong unit
+    // points the reader at the wrong component. The comment is long and
+    // non-ASCII on purpose: an offset counted in UTF-8 bytes rather than
+    // UTF-16 units overshoots by two units per dash, past the next newline.
+    const fixture = [
+      `// ${"—".repeat(80)}`,
+      'const c = "text-primary";',
+      "",
+      "export const D = () => <p className={`text-foreground ${c} px-2`} />;",
+    ].join("\n");
+
+    const spans = classSpans(fixture, "fixture.tsx").spans;
+
+    expect(spans).toContainEqual({ text: "text-primary", line: 2 });
+    // A template with a substitution is read piece by piece, each piece on
+    // the line it starts on.
+    expect(spans).toContainEqual({ text: "text-foreground ", line: 4 });
+    expect(spans).toContainEqual({ text: " px-2", line: 4 });
+  });
+
+  it("reads every class string after a quote of another kind inside a string", () => {
+    // A quote of one kind inside a string of another -- `"isn't"`, `'say
+    // "hi"'`, an apostrophe in a template -- is a character of that string,
+    // not a delimiter. A pattern over the raw text read it as one, gave up on
+    // the string, took its CLOSING quote as an opening one, and from there
+    // paired each closing quote with the next opening one of the same kind, so
+    // every class string after it in that kind fell between its spans. A
+    // widget card's error icon was painted in `text-danger-solid` below an
+    // `"...isn't available..."` constant and nothing measured it. One fixture
+    // per kind of outer string, each followed by a class string written in
+    // that same kind, which is the one the pattern lost.
+    const fixtures = {
+      "apostrophe in a double-quoted string": [
+        'export const DETAIL = "What this card shows isn\'t available.";',
+        "// the card's own title",
+        'export const E = () => <X className="mb-1 h-5 w-5 text-danger-solid" />;',
+      ],
+      "double quotes in a single-quoted string": [
+        "export const SAY = 'Press \"Retry\" to try again';",
+        "export const E = () => <X className={cn('h-4 w-4 text-danger-solid')} />;",
+      ],
+      "apostrophe in a template literal": [
+        "export const T = `it's ${1}`;",
+        "export const E = () => <X className={`size-4 text-danger-solid`} />;",
+      ],
+    };
+
+    // Every shape is read before anything is asserted, so a failure names
+    // each shape the extraction misses rather than only the first.
+    const read = Object.fromEntries(
+      Object.entries(fixtures).map(([shape, lines]) => {
+        const { appliesClasses, spans } = classSpans(
+          lines.join("\n"),
+          "fixture.tsx"
+        );
+        const at = spans
+          .filter(span => span.text.includes("text-danger-solid"))
+          .map(span => span.line);
+        return [shape, { appliesClasses, at }];
+      })
+    );
+    const expected = Object.fromEntries(
+      Object.entries(fixtures).map(([shape, lines]) => [
+        shape,
+        { appliesClasses: true, at: [lines.length] },
+      ])
+    );
+    expect(read).toEqual(expected);
   });
 
   it("holds accepted pairs to their recorded ratio", () => {

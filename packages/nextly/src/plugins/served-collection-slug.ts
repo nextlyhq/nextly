@@ -62,3 +62,18 @@ export function servedCollectionSlug(
     : contributors.get(slug);
   return contributor ? renamedSlug(contributor.renameMap ?? {}, slug) : slug;
 }
+
+/**
+ * The slug a contribution's named Single is served under: a Single the plugin
+ * contributes itself through its rename map, as the host registered it; any
+ * other names one of the app's Singles, as written.
+ */
+export function servedSingleSlug(
+  owner: PluginDefinition,
+  slug: string
+): string {
+  const own = (owner.contributes?.singles ?? []).some(
+    single => single.slug === slug
+  );
+  return own ? renamedSlug(owner.renameMap ?? {}, slug) : slug;
+}

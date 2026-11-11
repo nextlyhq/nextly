@@ -41,6 +41,7 @@ import {
 } from "../services/index-name";
 
 import { dialectVariantOf } from "./dialect-variant";
+import { BUILDER_FILE_NAME, hasOldBuilderName } from "./old-builder-name";
 import { hasExecutableText, splitSqlStatements } from "./split-sql";
 import { isDownMarker, isUpMarker } from "./sql-sections";
 import {
@@ -102,9 +103,6 @@ export interface MigrationFileFacts {
    */
   declaredTables?: ReadonlySet<string>;
 }
-
-/** (a): the timestamp, the verb and the rest of the name the Builder gave it. */
-const BUILDER_FILE_NAME = /^\d{13}_(create|update|i18n|status|drop)_(.+)\.sql$/;
 
 /** A bulk delete's name: how many collections, then a hash of their names. */
 const BULK_DROP_NAME = /^\d+_collections_[0-9a-f]{12}$/;
@@ -450,13 +448,10 @@ function mayBeEntityCompanion(table: string): boolean {
   );
 }
 
-/**
- * Whether a file name is one an earlier Schema Builder gave, part (a) of the
- * signature: the files worth reading to classify.
- */
-export function hasOldBuilderName(name: string): boolean {
-  return BUILDER_FILE_NAME.test(name);
-}
+// The name test, part (a), lives in a module that imports nothing, so a
+// reader that only asks whether a folder could hold such a file need not load
+// this one; re-exported where its readers have always found it.
+export { hasOldBuilderName };
 
 /** Classify one file of the migrations folder by the Builder's signature. */
 export function classifyMigrationFile(

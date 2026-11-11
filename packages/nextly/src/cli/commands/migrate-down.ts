@@ -94,6 +94,10 @@ import {
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
 import { readDdlEventTriggers } from "../../domains/schema/pipeline/live-table-facts";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
+import {
+  storeSchemaVersion,
+  newestAppliedAppMigration,
+} from "../../domains/schema/schema-version";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import { exitWithError } from "../errors";
@@ -339,6 +343,15 @@ export interface MigrateDownCoreDeps {
    * supplies nothing.
    */
   recordPluginSchemaVersion?: (db: unknown) => Promise<void>;
+  /**
+   * Store the database's schema version after an app migration's DOWN,
+   * through `db`, the handle the DOWN and its `rolled_back` row were written
+   * on: its migration becomes the newest one still applied, so the version
+   * moves back with the registry rows the DOWN wrote, in its transaction.
+   *
+   * Optional so a caller with no schema version to keep supplies nothing.
+   */
+  recordSchemaVersion?: (db: unknown) => Promise<void>;
   /**
    * Records a `failed` event for an errored DOWN; `transaction` false says it
    * ran outside a transaction, so part of it may have applied.
@@ -636,6 +649,7 @@ export async function rollBackOne(
     | "execDown"
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
+    | "recordSchemaVersion"
     | "recordFailed"
     | "recordDownStarted"
     | "endDownAttempt"
@@ -668,6 +682,9 @@ export async function rollBackOne(
           });
         }
         if (deps.options.plugin) await deps.recordPluginSchemaVersion?.(db);
+        // An app migration's DOWN moves the stored schema version back, after
+        // its `rolled_back` row, so the ledger it is read from is current.
+        else await deps.recordSchemaVersion?.(db);
         // The rollback is recorded, and it resolves the start row, which is
         // older: failing to remove that row never fails a DOWN whose
         // statements ran. A start row is recorded only where a failed write
@@ -1138,6 +1155,7 @@ export async function downDatabaseDeps(args: {
     | "execDown"
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
+    | "recordSchemaVersion"
     | "recordFailed"
     | "recordDownStarted"
     | "endDownAttempt"
@@ -1159,6 +1177,11 @@ export async function downDatabaseDeps(args: {
     return registryExists ? await new OwnersRepo(db, dialect).read() : [];
   };
   const ownerRows = await readOwnerRows();
+  // Read once, before any DOWN opens its transaction: a database that has no
+  // `nextly_meta` table yet stores no schema version, and a DOWN's version
+  // write must not fail the DOWN there.
+  const versionTableExists =
+    plugin === undefined && (await adapter.tableExists("nextly_meta"));
   return {
     dialect,
     db,
@@ -1213,6 +1236,15 @@ export async function downDatabaseDeps(args: {
         introspectLive: () => Promise.resolve({ tables: [] }),
       });
       return true;
+    },
+    recordSchemaVersion: async handle => {
+      if (!versionTableExists) return;
+      await storeSchemaVersion(handle, dialect, {
+        wrote: false,
+        migration: newestAppliedAppMigration(
+          await repo.boundTo(handle).listFileApplies()
+        ),
+      });
     },
     recordPluginSchemaVersion: async handle => {
       if (plugin === undefined || !registryExists) return;
