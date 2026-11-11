@@ -17,7 +17,7 @@ import {
   toSnakeCase,
 } from "../services/field-column-descriptor";
 
-import type { NextlySchemaSnapshot } from "./diff/types";
+import type { NextlySchemaSnapshot, TableSpec } from "./diff/types";
 import type {
   DesiredCollection,
   DesiredFieldGroup,
@@ -90,6 +90,49 @@ function recordedShapes(
     }
   }
   return shapes;
+}
+
+/**
+ * Whether a change of `before` into `after` reaches a relation's storage, which only the push
+ * applies: a field kept by name that stores another shape now (one reference, a list, a reference
+ * naming its collection, a list of those), or a field storing a list or such a reference whose live
+ * column still carries a foreign key, as an older save left one reference's column.
+ *
+ * The push plans every such change from the live table: it counts the rows that refuse a switch
+ * before anything runs, converts the values and repairs an older column, and SQLite drops a key
+ * only by rebuilding the table. A Schema Builder save that writes its migration from the newest
+ * snapshot sees none of that, so a save this answers true for is applied by the push and its file
+ * recorded once it has run, as a translated collection's is. `liveTable` is read only where a
+ * field stores a list or a reference naming its collection.
+ */
+export async function reachesRelationStorage(args: {
+  before: readonly RecordedField[];
+  after: readonly RecordedField[];
+  liveTable: () => Promise<TableSpec | undefined>;
+}): Promise<boolean> {
+  const shapeOf = (fields: readonly RecordedField[]) =>
+    new Map(
+      fields.flatMap(field => {
+        const shape = relationStorageShape(field);
+        return typeof field.name === "string" && shape !== undefined
+          ? [[field.name, shape] as const]
+          : [];
+      })
+    );
+  const was = shapeOf(args.before);
+  const now = shapeOf(args.after);
+  for (const [name, shape] of now) {
+    const before = was.get(name);
+    if (before !== undefined && before !== shape) return true;
+  }
+  const keyless = [...now]
+    .filter(([, shape]) => shape !== "one")
+    .map(([name]) => toSnakeCase(name).toLowerCase());
+  if (keyless.length === 0) return false;
+  const table = await args.liveTable();
+  return (table?.foreignKeys ?? []).some(key =>
+    key.columns.some(column => keyless.includes(column.toLowerCase()))
+  );
 }
 
 /** `live` with each recorded relation's column given the shape its field stored. */

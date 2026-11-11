@@ -55,7 +55,9 @@ import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
+import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import {
@@ -962,11 +964,19 @@ const COLLECTIONS_METHODS: Record<
           const acknowledgedConversions = (
             body as { acknowledgedConversions?: string[] }
           ).acknowledgedConversions;
-          // A translated collection, or one turning translation on or off,
-          // keeps its push in development, which carries values across the
-          // change; the writer writes its migration and records it once the
-          // push has run.
-          const translated = wasLocalized || isLocalized;
+          // Whether the push applies the change in development, the writer recording its
+          // migration once the push has run (`pushAppliesChange`).
+          const viaPush = await pushAppliesChange({
+            translated: wasLocalized || isLocalized,
+            before: collection.fields ?? [],
+            after: fields as unknown as FieldDefinition[],
+            liveTable: async () =>
+              (
+                await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+                  tableName,
+                ])
+              ).tables[0],
+          });
           const change: Parameters<typeof applyCollectionSchemaChange>[0] = {
             slug: p.collectionName,
             collection,
@@ -987,7 +997,7 @@ const COLLECTIONS_METHODS: Record<
             pushedSummary = (await applyCollectionSchemaChange(change)).summary;
           };
           const written = await saveThroughWriter({
-            ...(translated ? { appliedBy: push } : {}),
+            ...(viaPush ? { appliedBy: push } : {}),
             slug: p.collectionName,
             collection: writerRowOf(collection),
             fields: fields as unknown as FieldDefinition[],
@@ -1784,6 +1794,24 @@ async function writerSaveOf(change: WriterChange): Promise<
     save,
     fields,
   };
+}
+
+/**
+ * Whether the push applies a Builder save's change in development, the writer recording its
+ * migration once the push has run:
+ *
+ * - a translated collection, or one turning translation on or off, whose push carries its values
+ *   across the change;
+ * - a change reaching a relation's storage (`reachesRelationStorage`), which the push plans from
+ *   the live table: refusing it while rows would not survive it, converting the values and
+ *   repairing a column an older save left, where the file alone, written from the newest
+ *   snapshot, sees none of that.
+ */
+async function pushAppliesChange(
+  args: { translated: boolean } & Parameters<typeof reachesRelationStorage>[0]
+): Promise<boolean> {
+  if (args.translated) return true;
+  return reachesRelationStorage(args);
 }
 
 /**
