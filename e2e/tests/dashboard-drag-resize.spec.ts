@@ -143,32 +143,28 @@ async function holdEdgeAndMove(page: Page, card: Locator, x: number) {
 
 /**
  * Passes the reader's widgets through with `widgetId`'s width bounds changed, for a widget
- * bounded as no widget on the default dashboard is.
+ * bounded as no widget on the default dashboard is. The widgets arrive in the admin's startup
+ * request (`/startup?path=…`), as its workspace part, or from the workspace read itself, so
+ * both are changed.
  */
 async function boundWidget(
   page: Page,
   widgetId: string,
   bounds: { min: number; default: number; max: number }
 ): Promise<void> {
-  await page.route(/\/admin-meta\/workspace/, async (route: Route) => {
-    if (route.request().method() !== "GET") return route.fallback();
-    // Aborted rather than thrown when the read is given up: a throw out of the handler prints
-    // the request, session cookie included.
-    let response: Awaited<ReturnType<Route["fetch"]>>;
-    try {
-      response = await route.fetch();
-    } catch {
-      await route.abort().catch(() => {});
-      return;
-    }
-    const body = (await response.json()) as Record<string, unknown>;
-    const meta = (Array.isArray(body.widgets) ? body : body.data) as {
-      widgets?: Array<{
-        id: string;
-        size: Record<"default" | "min" | "max", { w: number; h: number }>;
-      }>;
-    };
-    const widget = meta.widgets?.find(w => w.id === widgetId);
+  /** The workspace answer's widget declarations, with `widgetId`'s bounds changed in place. */
+  const rebound = (body: unknown) => {
+    if (typeof body !== "object" || body === null) return;
+    const record = body as Record<string, unknown>;
+    const meta = (Array.isArray(record.widgets) ? record : record.data) as
+      | {
+          widgets?: Array<{
+            id: string;
+            size: Record<"default" | "min" | "max", { w: number; h: number }>;
+          }>;
+        }
+      | undefined;
+    const widget = meta?.widgets?.find(w => w.id === widgetId);
     if (widget !== undefined) {
       widget.size = {
         default: { ...widget.size.default, w: bounds.default },
@@ -176,8 +172,38 @@ async function boundWidget(
         max: { ...widget.size.max, w: bounds.max },
       };
     }
-    await route.fulfill({ response, json: body }).catch(() => {});
-  });
+  };
+  await page.route(
+    url =>
+      url.pathname.endsWith("/admin-meta/workspace") ||
+      (url.pathname.endsWith("/startup") &&
+        url.searchParams
+          .getAll("path")
+          .some(path => path.includes("/admin-meta/workspace"))),
+    async (route: Route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      // Aborted rather than thrown when the read is given up: a throw out of the handler prints
+      // the request, session cookie included.
+      let response: Awaited<ReturnType<Route["fetch"]>>;
+      try {
+        response = await route.fetch();
+      } catch {
+        await route.abort().catch(() => {});
+        return;
+      }
+      const body = (await response.json()) as {
+        parts?: Array<{ path: string; body: unknown }>;
+      };
+      if (Array.isArray(body.parts)) {
+        for (const part of body.parts) {
+          if (part.path.includes("/admin-meta/workspace")) rebound(part.body);
+        }
+      } else {
+        rebound(body);
+      }
+      await route.fulfill({ response, json: body }).catch(() => {});
+    }
+  );
 }
 
 test.beforeEach(async ({ page }) => {
@@ -422,26 +448,49 @@ test("a card in the row's last column widens to its widest once its edge is take
 }) => {
   await gotoAdmin(page, "/");
   await customize(page);
-  const card = cell(page, CONTINUE);
-  await expect(card.getByTestId("card-size-label")).toContainText("50%");
   const grid = page.getByRole("region", { name: "Dashboard widgets" });
   const gridBox = await boxOf(grid);
-  // The card ends where the grid does: there is no column to its right to drag into.
-  const cardBox = await boxOf(card);
-  expect(
-    Math.abs(cardBox.x + cardBox.width - (gridBox.x + gridBox.width))
-  ).toBeLessThan(2);
+  const gridRight = gridBox.x + gridBox.width;
+  // A card that ends where the grid does, short of 100%, with an edge: there is no column to
+  // its right to drag into.
+  let card: Locator | undefined;
+  for (const candidate of await page.locator(CELLS).all()) {
+    if ((await candidate.getByTestId("widget-resize-edge").count()) === 0)
+      continue;
+    const box = await boxOf(candidate);
+    const label = await candidate.getByTestId("card-size-label").textContent();
+    if (
+      Math.abs(box.x + box.width - gridRight) < 2 &&
+      !/100%/.test(label ?? "")
+    ) {
+      card = candidate;
+      break;
+    }
+  }
+  if (card === undefined) throw new Error("no card in the row's last column");
+  const before = Number.parseInt(
+    (await card.getByTestId("card-size-label").textContent()) ?? "",
+    10
+  );
 
   // Just past the grid's right edge, short of the window's: no next width is in reach by
   // counting columns, so the edge asks for the widest.
   const viewport = page.viewportSize();
   if (viewport === null) throw new Error("no viewport");
-  const past = gridBox.x + gridBox.width + 24;
+  const past = gridRight + 24;
   expect(past).toBeLessThan(viewport.width);
   await holdEdgeAndMove(page, card, past);
-  await expect(page.getByTestId("widget-resize-width")).toHaveText("100%");
+  const tip = page.getByTestId("widget-resize-width");
+  await expect(tip).toBeVisible();
+  const widest = Number.parseInt((await tip.textContent()) ?? "", 10);
+  expect(widest).toBeGreaterThan(before);
+  // Dragged on to the window's edge, it is no wider: that was its widest.
+  await page.mouse.move(viewport.width - 2, (await boxOf(card)).y + 40, {
+    steps: 5,
+  });
+  await expect(tip).toHaveText(`${widest}%`);
   await page.mouse.up();
-  await expect(card.getByTestId("card-size-label")).toContainText("100%");
+  await expect(card.getByTestId("card-size-label")).toContainText(`${widest}%`);
 });
 
 test("a card's edge stops at the widget's widest width however far it is dragged", async ({

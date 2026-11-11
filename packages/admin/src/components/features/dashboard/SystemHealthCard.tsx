@@ -339,7 +339,15 @@ function SystemDetails({
             </Button>
           </SheetClose>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pt-4 pb-5">
+        {/* The part that scrolls takes focus itself, so a keyboard alone can scroll through
+            Details where nothing inside it can take focus (no action, and the report still
+            being read). */}
+        <div
+          tabIndex={0}
+          role="region"
+          aria-label="System health details"
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pt-4 pb-5 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        >
           <DetailsSection title="Checks">
             <StatusLine summary={summary} />
             <HealthFacts facts={facts} />
