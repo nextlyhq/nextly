@@ -234,6 +234,31 @@ export async function eraseUnnamedRecipientDeliveries(
 }
 
 /**
+ * Erase every delivery recorded for the sends whose key digests are
+ * `keyDigests`, and then the digests themselves, from those records and from
+ * the sends' claims. The records are erased first, each by its key digest,
+ * since clearing the digests is what would otherwise stop the rest of a
+ * send's records being found. The rows stay, with no address.
+ */
+export async function eraseKeyedDeliveries(
+  db: RecipientErasureCapableDb,
+  deliveries: ErasableDeliveriesTable,
+  keyDigests: readonly string[]
+): Promise<void> {
+  for (let start = 0; start < keyDigests.length; start += KEY_DIGEST_BATCH) {
+    const sends = inArray(
+      deliveries.keyDigest,
+      keyDigests.slice(start, start + KEY_DIGEST_BATCH)
+    );
+    await db
+      .update(deliveries)
+      .set({ recipientHash: ERASED_RECIPIENT_HASH })
+      .where(sends);
+    await clearSendKeyDigests(db, deliveries, sends);
+  }
+}
+
+/**
  * Erase the address digest of every delivery recorded for a plugin-defined
  * person, and name them on those rows by `digest` in place of their id.
  *
