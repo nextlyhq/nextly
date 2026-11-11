@@ -31,6 +31,7 @@ import {
   historyEnabledFrom,
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
+import { useEditorRestoreSurface } from "@admin/components/features/versions/useEditorRestoreSurface";
 import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
 import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
@@ -650,10 +651,22 @@ export function EntryForm({
       readDraft,
     ]
   );
+  // What a restore puts values back into: this form. The document's lock is
+  // decided further down, so a restore reads it when it asks.
+  const restoreReadOnly = useRef(false);
+  const editingLanguage = getLocale(locale)?.label;
+  const editorRestore = useEditorRestoreSurface({
+    form,
+    fields: allFields,
+    readOnly: () => restoreReadOnly.current,
+    localized: collection.localized === true,
+    ...(editingLanguage ? { language: editingLanguage } : {}),
+  });
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
-    versionFor
+    versionFor,
+    editorRestore
   );
   const {
     viewingVersion,
@@ -799,6 +812,9 @@ export function EntryForm({
       release: releaseVersionHold,
     }
   );
+  useEffect(() => {
+    restoreReadOnly.current = lock.readOnly;
+  }, [lock.readOnly]);
   useEffect(() => {
     setChangeAwaiting(lock.changeAwaitingAnswer);
   }, [lock.changeAwaitingAnswer]);

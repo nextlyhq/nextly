@@ -52,6 +52,7 @@ import {
 import {
   useDocumentHistory,
   type DocumentHistoryValue,
+  type EditorRestoreSurface,
   type RestoreAffordance,
   type ViewedVersion,
 } from "./document-history-context";
@@ -176,7 +177,9 @@ export function useViewedVersion(
   fields: FieldConfig[],
   takeoverTypes: TakeoverType[],
   /** The editor's version in a language; see `DocumentHistoryValue`. */
-  versionFor?: (locale: string | null) => Promise<string | undefined>
+  versionFor?: (locale: string | null) => Promise<string | undefined>,
+  /** The editor a restore puts values back into; see `DocumentHistoryValue`. */
+  editor?: EditorRestoreSurface
 ): ViewedVersionHost {
   // Which past version the document area is showing, or null for the live
   // document. Held by the component that swaps the document, and published
@@ -196,8 +199,9 @@ export function useViewedVersion(
       restore: restoreAffordance,
       setRestore: setRestoreAffordance,
       ...(versionFor ? { versionFor } : {}),
+      ...(editor ? { editor } : {}),
     }),
-    [viewingVersion, restoreAffordance, versionFor]
+    [viewingVersion, restoreAffordance, versionFor, editor]
   );
 
   // One normalization of the version's snapshot, over EVERY declared field.

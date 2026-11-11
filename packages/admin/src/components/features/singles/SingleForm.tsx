@@ -129,6 +129,7 @@ import {
   historyEnabledFrom,
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
+import { useEditorRestoreSurface } from "@admin/components/features/versions/useEditorRestoreSurface";
 import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
 import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
@@ -1003,10 +1004,21 @@ export function SingleForm({
       }),
     [locale, shownDefaultLocale, version, schema.slug, schema.draftsEnabled]
   );
+  // What a restore puts values back into: this form, under its lock.
+  const { getLocale: localeOf } = useLocalization();
+  const editingLanguage = localeOf(locale)?.label;
+  const editorRestore = useEditorRestoreSurface({
+    form,
+    fields: allFields,
+    readOnly: () => lock.readOnly,
+    localized: schema.localized === true,
+    ...(editingLanguage ? { language: editingLanguage } : {}),
+  });
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
-    versionFor
+    versionFor,
+    editorRestore
   );
   const {
     viewingVersion,
