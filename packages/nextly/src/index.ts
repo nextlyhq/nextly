@@ -708,6 +708,7 @@ export type {
   HeldAddressUpdate,
 } from "./domains/public-addresses/participants";
 export type {
+  ParticipantTransaction,
   PluginPublicAddresses,
   PublicAddressParticipant,
   RefusedAddressUpdate,
