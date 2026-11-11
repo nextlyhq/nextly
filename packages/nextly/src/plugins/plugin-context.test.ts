@@ -18,6 +18,7 @@ import {
   createPluginContext,
   type PluginContext,
   type PluginDefinition,
+  type PluginEvents,
 } from "./plugin-context";
 import { resolveTransformedPlugins } from "./resolve";
 import { standardWebhooks } from "./security/inbound-webhooks";
@@ -904,5 +905,18 @@ describe("the plugins ctx.db lets a plugin reach", () => {
     const ctx = await bootedReader();
     publishPluginDependencies([owner as never]);
     expect(() => ctx.db.table(notes)).toThrow(NextlyError);
+  });
+});
+
+describe("PluginEvents", () => {
+  it("is still what it was: an object with the bus's methods alone is one", () => {
+    // Checked by the compiler: a mock or wrapper written against the type
+    // before durable events existed keeps compiling. The durable methods are
+    // on `ctx.events` through a type of their own.
+    const bus = new EventBus() as Omit<EventBus, "emit"> & {
+      emit: PluginEvents["emit"];
+    };
+    const events: PluginEvents = bus;
+    expect(events).toBe(bus);
   });
 });

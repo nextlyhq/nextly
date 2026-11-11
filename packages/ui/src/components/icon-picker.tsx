@@ -1024,7 +1024,7 @@ function MissingIconWarning({
   return (
     <p
       id={id}
-      className="mt-1.5 flex items-start gap-2 rounded-md border border-warning-200 bg-warning-50 px-2.5 py-1.5 text-xs text-warning-900 dark:border-warning-900 dark:bg-warning-950 dark:text-warning-100"
+      className="mt-1.5 flex items-start gap-2 rounded-md border border-warning-border bg-warning-surface px-2.5 py-1.5 text-xs text-warning-text"
     >
       <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden="true" />
       <span>This icon is no longer available. Choose another.</span>

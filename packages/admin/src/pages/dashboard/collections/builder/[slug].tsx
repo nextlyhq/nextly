@@ -378,6 +378,7 @@ export default function CollectionBuilderEditPage({
     <BuilderPageLayout
       config={COLLECTION_BUILDER_CONFIG}
       builder={builder}
+      entitySlug={entitySlug}
       name={settings.singularName || slug}
       locked={isLocked}
       configPath={collection?.configPath}

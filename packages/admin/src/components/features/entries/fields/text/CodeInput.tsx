@@ -236,7 +236,7 @@ export function CodeInput<TFieldValues extends FieldValues = FieldValues>({
         // square across it. `inherit` tracks whatever radius the wrapper ends up
         // with instead of restating a step, and the editor keeps `overflow`
         // visible so CodeMirror's own popups are not clipped.
-        <div className="rounded-b-[inherit] border-t border-destructive bg-destructive/5 px-3 py-2 text-xs text-destructive">
+        <div className="rounded-b-[inherit] border-t border-danger-border bg-danger-surface px-3 py-2 text-xs text-danger-text">
           {error.message}
         </div>
       )}

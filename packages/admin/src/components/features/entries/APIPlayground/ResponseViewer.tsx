@@ -311,8 +311,8 @@ export function ResponseViewer({
             <p className="text-sm text-muted-foreground">Sending request…</p>
           </div>
         ) : error ? (
-          <div className="flex h-full flex-col items-center justify-center bg-destructive/5 p-12 text-center">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-md bg-destructive/10">
+          <div className="flex h-full flex-col items-center justify-center p-12 text-center">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-danger-border bg-danger-surface">
               <AlertCircle className="h-6 w-6 text-destructive" />
             </div>
             <h3 className="mb-1 text-base font-semibold tracking-tight text-foreground">
