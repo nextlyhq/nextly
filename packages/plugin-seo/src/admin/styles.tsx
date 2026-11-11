@@ -133,6 +133,7 @@ const CSS = `
 .nx-seo-types td[data-label]::before{content:attr(data-label);display:block;font-size:12px;font-weight:600;color:var(--nx-muted-foreground);margin-bottom:2px}
 .nx-seo-profile{grid-template-columns:minmax(0,1fr) auto}
 .nx-seo-profile .nx-seo-net{grid-column:1/-1}
+.nx-seo-dialog{width:calc(100% - 32px)!important}
 }
 `;
 
