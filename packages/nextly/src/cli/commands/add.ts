@@ -1,51 +1,108 @@
 /**
  * Add Command
  *
- * `nextly add <package>` — install sugar (D70). Installs a Nextly plugin with
- * the project's package manager, then prints exactly how to register it in
- * `defineConfig({ plugins })`. Low-friction install without the manual
- * "npm install + remember the config wiring" two-step.
+ * `nextly plugins add <package>`, also run as `nextly add <package>`: one
+ * command that adds a plugin to a site. It
+ *
+ * 1. installs the package with the project's package manager;
+ * 2. reads how the package is registered (its `nextly.plugin` declaration, or
+ *    the one plugin definition its entry exports) and settles the options the
+ *    install asks for, from `--option <name>=<value>` or a prompt;
+ * 3. makes the plugin from that, so a wrong declaration or refused options
+ *    stop the run before any file changes;
+ * 4. registers it in `nextly.config.ts`;
+ * 5. adds its `nextly plugins install` step to the build script, which a
+ *    production boot needs before it starts;
+ * 6. runs `nextly generate:types`, which writes the types and the admin
+ *    component map the plugin's screens are drawn from;
+ * 7. applies its schema with `nextly plugins install`, or, on a database
+ *    `nextly migrate` has not prepared yet, leaves that to the build.
+ *
+ * A step with nothing to do (a plugin already listed, a build that installs
+ * it already) is skipped, so running the command again changes nothing.
+ * `--dry-run` names each change and makes none.
  *
  * @module cli/commands/add
  *
  * @example
  * ```bash
- * nextly add @nextlyhq/plugin-form-builder
- * nextly add @acme/nextly-plugin-forms --dev
- * nextly add @acme/plugin --skip-install   # just print the wiring snippet
- * nextly add @acme/plugin --dry-run        # name the install; install nothing
+ * nextly plugins add @nextlyhq/plugin-form-builder
+ * nextly plugins add @acme/seo --option siteUrl=https://example.com
+ * nextly plugins add @acme/seo --skip-install   # already installed
+ * nextly plugins add @acme/seo --dry-run        # name every change; make none
  * ```
  */
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 
+import * as clack from "@clack/prompts";
 import type { Command } from "commander";
 import pc from "picocolors";
 
-import { reportDryRun } from "../dry-run";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import { reportDryRun, projectPath, type DryRunChange } from "../dry-run";
+import { environmentFolder } from "../environment";
 import { exitWithError } from "../errors";
 import { packageInstallFailed } from "../errors/areas/commands";
+import {
+  pluginConfigNotEditable,
+  pluginDeclarationInvalid,
+  pluginPackageNotInstalled,
+} from "../errors/areas/plugins";
+import { CliError } from "../errors/cli-error";
 import {
   createContext,
   type CommandContext,
   type GlobalOptions,
 } from "../program";
+import {
+  clearConfigCache,
+  findNextlyConfig,
+  loadConfig,
+} from "../utils/config-loader";
+import { answered } from "../utils/prompt-cancelled";
+
+import { buildScriptEdit } from "./plugins-add/build-script";
+import {
+  manualRegistrationLines,
+  pluginRegistrationEdit,
+} from "./plugins-add/config-registration";
+import {
+  findInstalledPackage,
+  importEntry,
+  packageNameOf,
+} from "./plugins-add/installed-package";
+import {
+  entryText,
+  optionProblem,
+  pluginFrom,
+  readDeclaration,
+  registrationFromExports,
+  settleOptions,
+  type AskOption,
+  type PluginShape,
+  type Registration,
+} from "./plugins-add/registration";
 
 export type PackageManager = "pnpm" | "yarn" | "npm";
 
 export interface AddCommandOptions {
   /** Install as a dev dependency. @default false */
   dev?: boolean;
-  /** Skip the package-manager install; only print the wiring snippet. @default false */
+  /** Skip the package-manager install: the package is installed already. @default false */
   skipInstall?: boolean;
-  /** Name the install command it would run and print the wiring snippet; install nothing. @default false */
+  /** Name every change the run would make; make none. @default false */
   dryRun?: boolean;
+  /** The options the plugin asks for, each as `<name>=<value>`. */
+  option?: string[];
 }
 
 interface ResolvedAddOptions extends AddCommandOptions {
   cwd?: string;
+  config?: string;
   verbose?: boolean;
   quiet?: boolean;
 }
@@ -74,25 +131,28 @@ export function buildInstallArgs(
   }
 }
 
-/** The install `nextly add` makes in `cwd`: the package manager and its arguments. */
-function installFor(
+/**
+ * What to install for `pkg`: as typed, except a Nextly package named without a
+ * version, which is installed at the version of the nextly the site has. The
+ * packages are released together, and a package manager left to choose can
+ * pick another release (pnpm's minimum release age passes over one published
+ * today), leaving the plugin a release apart from the core it runs on.
+ */
+async function installSpec(cwd: string, pkg: string): Promise<string> {
+  if (!pkg.startsWith("@nextlyhq/") || packageNameOf(pkg) !== pkg) return pkg;
+  const core = await findInstalledPackage(cwd, "nextly");
+  const version = core?.manifest.version;
+  return typeof version === "string" ? `${pkg}@${version}` : pkg;
+}
+
+/** The install the command makes in `cwd`: the package manager and its arguments. */
+async function installFor(
   cwd: string,
   pkg: string,
   dev: boolean
-): { pm: PackageManager; args: string[] } {
+): Promise<{ pm: PackageManager; args: string[] }> {
   const pm = detectPackageManager(cwd);
-  return { pm, args: buildInstallArgs(pm, pkg, dev) };
-}
-
-/** Best-effort local-name guess for the wiring snippet (e.g. `@acme/plugin-forms` → `forms`). */
-function suggestImportName(pkg: string): string {
-  const last = pkg.split("/").pop() ?? pkg;
-  const camel = last
-    .replace(/^nextly-plugin-/, "")
-    .replace(/^plugin-/, "")
-    .replace(/[-_]+([a-z0-9])/g, (_, c: string) => c.toUpperCase())
-    .replace(/[^a-zA-Z0-9]/g, "");
-  return /^[a-z]/.test(camel) ? camel : `plugin${camel}`;
+  return { pm, args: buildInstallArgs(pm, await installSpec(cwd, pkg), dev) };
 }
 
 function runInstall(
@@ -112,30 +172,337 @@ function runInstall(
   });
 }
 
-/** Print how to register the just-installed plugin in nextly.config.ts. */
-function showWiring(pkg: string, context: CommandContext): void {
-  const { logger } = context;
-  const name = suggestImportName(pkg);
+/** Asks for an option the plugin needs at the terminal, checking it as it is typed. */
+const askInTerminal: AskOption = async (name, option) =>
+  answered(
+    await clack.text({
+      message: `${option.description} (${name})`,
+      validate: value => optionProblem(name, option, value ?? ""),
+    })
+  );
 
-  logger.newline();
-  logger.info(pc.bold("Register it in nextly.config.ts:"));
-  logger.newline();
-  logger.info(pc.gray(`  import { defineConfig } from "nextly";`));
-  logger.info(pc.gray(`  import ${name} from "${pkg}";`));
-  logger.newline();
-  logger.info(pc.gray(`  export default defineConfig({`));
-  logger.info(pc.gray(`    plugins: [${name}()],`));
-  logger.info(pc.gray(`  });`));
-  logger.newline();
-  // There is no `nextly dev` command: user apps run their own dev server
-  // (`next dev`), and the in-process HMR listener applies the schema.
-  logger.info(
-    `Then start your dev server (${pc.yellow("next dev")}) to sync the plugin's schema.`
+/** What the run learned from the package: how it is registered, with what, and the plugin that makes. */
+interface Planned {
+  registration: Registration;
+  values: Record<string, string>;
+  plugin: PluginShape;
+}
+
+/**
+ * How the installed package is registered, the options it asks for, and the
+ * plugin those make: read and checked before any file is touched.
+ */
+async function planRegistration(
+  name: string,
+  cwd: string,
+  options: ResolvedAddOptions
+): Promise<Planned | undefined> {
+  const found = await findInstalledPackage(cwd, name);
+  if (found === undefined) return undefined;
+  const declared = readDeclaration(found.manifest);
+  if (declared.kind === "invalid") {
+    throw pluginDeclarationInvalid(name, declared.problem);
+  }
+  const exports = await importEntry(cwd, name);
+  const registration =
+    declared.kind === "declared"
+      ? declared.registration
+      : registrationFromExports(name, exports);
+  // A dry run asks nothing: an option it was not given is the refusal the
+  // real run would meet with no one at the terminal.
+  const ask =
+    options.dryRun !== true && canPrompt() ? askInTerminal : undefined;
+  const values = await settleOptions(
+    name,
+    registration.options,
+    options.option ?? [],
+    ask
   );
-  logger.info(
-    pc.gray("Check the plugin's README for its exact export name and options.")
+  const plugin = await pluginFrom(name, exports, registration, values);
+  return { registration, values, plugin };
+}
+
+/** The config file to register the plugin in: the one `--config` names, or the one the project has. */
+function configFileOf(cwd: string, options: ResolvedAddOptions) {
+  return options.config === undefined
+    ? findNextlyConfig(cwd)
+    : resolve(cwd, options.config);
+}
+
+/**
+ * Whether the site's config, loaded as every command loads it, registers a
+ * plugin named `pluginName` already. A config that does not load now says
+ * nothing either way; the steps after the edit load it and report why.
+ */
+async function alreadyConfigured(
+  pluginName: string,
+  cwd: string,
+  options: ResolvedAddOptions
+): Promise<boolean> {
+  try {
+    const { config } = await loadConfig({ configPath: options.config, cwd });
+    return (config.plugins ?? []).some(each => each.name === pluginName);
+  } catch {
+    return false;
+  } finally {
+    // The loader keeps what it read; the steps after the edit read the file anew.
+    clearConfigCache();
+  }
+}
+
+/**
+ * Loads the edited config as every command loads it, and puts the file back
+ * as it was when that fails: a plugin the loader refuses, such as one asking
+ * for another core version, would otherwise leave a site whose config no
+ * longer loads, in development, at build and at start.
+ */
+async function keepOnlyIfItLoads(
+  file: string,
+  before: string,
+  cwd: string,
+  options: ResolvedAddOptions,
+  context: CommandContext
+): Promise<void> {
+  try {
+    await loadConfig({ configPath: options.config, cwd });
+  } catch (error) {
+    await writeFile(file, before);
+    context.logger.warn(
+      `${projectPath(cwd, file)} did not load with the plugin in it, so it was put back as it was.`
+    );
+    throw error;
+  } finally {
+    clearConfigCache();
+  }
+}
+
+/** Registers the plugin in the config, or names that edit under a dry run. */
+async function register(
+  name: string,
+  planned: Planned,
+  cwd: string,
+  options: ResolvedAddOptions,
+  context: CommandContext,
+  changes: DryRunChange[]
+): Promise<void> {
+  const { registration, values, plugin } = planned;
+  const entry = (local: string) => entryText(registration, local, values);
+  const file = configFileOf(cwd, options);
+  const text =
+    file === undefined
+      ? undefined
+      : await readFile(file, "utf8").catch(() => undefined);
+  if (file === undefined || text === undefined) {
+    throw pluginConfigNotEditable(
+      "No nextly.config.ts was found in the project",
+      manualRegistrationLines({
+        packageName: name,
+        exportName: registration.exportName,
+        localName: registration.localName,
+        entry,
+      }),
+      plugin.name
+    );
+  }
+  const { parse } = await import("@babel/parser");
+  const answer = pluginRegistrationEdit({
+    file: projectPath(cwd, file),
+    text,
+    parser: parse,
+    packageName: name,
+    exportName: registration.exportName,
+    localName: registration.localName,
+    entry,
+  });
+  if (answer.kind === "manual") {
+    throw pluginConfigNotEditable(answer.reason, answer.lines, plugin.name);
+  }
+  if (answer.kind === "listed") {
+    context.logger.info(
+      `${projectPath(cwd, file)} already lists ${answer.local}; it was left as it was.`
+    );
+    return;
+  }
+  // The file can list the plugin in a shape the edit does not read, such as
+  // `const made = factory()` and then `made.plugin`; a second entry would be
+  // a duplicate the config refuses. What the config registers decides it.
+  if (await alreadyConfigured(plugin.name, cwd, options)) {
+    context.logger.info(
+      `${projectPath(cwd, file)} already registers ${plugin.name}; it was left as it was.`
+    );
+    return;
+  }
+  if (options.dryRun) {
+    changes.push({ action: "edit", target: projectPath(cwd, file) });
+    return;
+  }
+  await writeFile(file, answer.after);
+  // The loader keeps the config it read last; the next step must read this one.
+  clearConfigCache();
+  await keepOnlyIfItLoads(file, text, cwd, options, context);
+  context.logger.success(
+    `Registered ${plugin.name} in ${projectPath(cwd, file)}`
   );
+}
+
+/** Adds the plugin's install step to the build script, or names that edit under a dry run. */
+async function addBuildStep(
+  pluginName: string,
+  cwd: string,
+  options: ResolvedAddOptions,
+  context: CommandContext,
+  changes: DryRunChange[]
+): Promise<void> {
+  const file = join(cwd, "package.json");
+  const text = await readFile(file, "utf8").catch(() => "");
+  const answer = buildScriptEdit(text, pluginName);
+  if (answer.kind === "installed") return;
+  if (answer.kind === "manual") {
+    // Not a refusal: the plugin works in development without it, and a
+    // build that migrates some other way is the site's to finish.
+    context.logger.warn(
+      `${answer.reason}, so the build was not changed. Run "${answer.step}" where your build runs "nextly migrate", before the app is built: a production start refuses a plugin that was never installed.`
+    );
+    return;
+  }
+  if (options.dryRun) {
+    changes.push({ action: "edit", target: "package.json" });
+    return;
+  }
+  await writeFile(file, answer.after);
+  context.logger.success(`The build now installs ${pluginName}`);
+}
+
+/**
+ * Applies the plugin's schema. A database `nextly migrate` has not prepared
+ * yet is not a failure: the build migrates and installs it, as the step just
+ * added says.
+ */
+async function applySchema(
+  pluginName: string,
+  options: ResolvedAddOptions,
+  context: CommandContext
+): Promise<void> {
+  // The database is the one the environment files name, and those are read
+  // from the folder the command started in. Run with `--cwd` for another
+  // project, they could name a different project's database.
+  const environment = environmentFolder();
+  const project = resolve(options.cwd ?? process.cwd());
+  if (environment !== undefined && resolve(environment) !== project) {
+    context.logger.warn(
+      `The environment files were read from ${environment}, not from ${project}, so the schema of ${pluginName} was not applied to a database they name. Your build applies it; to apply it now, run "nextly plugins install ${pluginName}" from ${project}.`
+    );
+    return;
+  }
+  const { isDatabaseNotMigrated, runPluginInstall } = await import(
+    "./plugin-lifecycle-runner"
+  );
+  try {
+    await runPluginInstall(
+      pluginName,
+      { config: options.config, cwd: options.cwd },
+      context
+    );
+  } catch (error) {
+    if (!isDatabaseNotMigrated(error)) throw error;
+    context.logger.warn(
+      `This database has not been migrated yet, so the schema of ${pluginName} was not applied. Your build applies it; to apply it now, run "nextly migrate", then "nextly plugins install ${pluginName}".`
+    );
+  }
+}
+
+/**
+ * Installs the package, or names the install under a dry run. Returns whether
+ * the run installs it, which a dry run's plan depends on.
+ */
+async function installStep(
+  pkg: string,
+  cwd: string,
+  options: ResolvedAddOptions,
+  context: CommandContext,
+  changes: DryRunChange[]
+): Promise<boolean> {
+  if (options.skipInstall) return false;
+  const { logger } = context;
+  // The one install the run makes: a dry run names this same command line,
+  // and the real run runs it.
+  const { pm, args } = await installFor(cwd, pkg, options.dev ?? false);
+  if (options.dryRun) {
+    changes.push({ action: "run", target: [pm, ...args].join(" ") });
+    return true;
+  }
+  logger.info(
+    `Installing ${pc.cyan(args.at(-1) ?? pkg)} with ${pc.yellow(pm)}…`
+  );
+  const code = await runInstall(pm, args, cwd);
+  if (code !== 0) {
+    // A failed install is a failed run, so it ends with the shared 1; the
+    // package manager's own code is named in the message instead.
+    exitWithError(logger, packageInstallFailed(pm, pkg, code));
+  }
+  logger.success(`Installed ${pkg}`);
+  return true;
+}
+
+/**
+ * The registration plan, or nothing when a dry run has reported its end: the
+ * refusal the real run would meet working it out, in its words, or, for a
+ * package a dry run has not installed yet, that the rest follows the install.
+ */
+async function planOrReport(
+  name: string,
+  cwd: string,
+  installs: boolean,
+  options: ResolvedAddOptions,
+  context: CommandContext,
+  changes: DryRunChange[]
+): Promise<Planned | undefined> {
+  let planned: Planned | undefined;
+  try {
+    planned = await planRegistration(name, cwd, options);
+  } catch (error) {
+    if (!(options.dryRun && error instanceof CliError)) throw error;
+    reportDryRun(context.logger, { changes, refusals: [error.what] });
+    return undefined;
+  }
+  if (planned !== undefined) return planned;
+  if (!(options.dryRun && installs)) throw pluginPackageNotInstalled(name);
+  reportDryRun(context.logger, {
+    changes,
+    notes: [
+      `How ${name} is registered is read from the package once it is installed; run again with --skip-install --dry-run after installing it to see the rest.`,
+    ],
+  });
+  return undefined;
+}
+
+/** Generates the types and applies the schema, or names both under a dry run. */
+async function finish(
+  pluginName: string,
+  options: ResolvedAddOptions,
+  context: CommandContext,
+  changes: DryRunChange[]
+): Promise<void> {
+  const { logger } = context;
+  if (options.dryRun) {
+    changes.push(
+      { action: "run", target: "nextly generate:types" },
+      { action: "run", target: `nextly plugins install ${pluginName}` }
+    );
+    reportDryRun(logger, { changes });
+    return;
+  }
+  const { runGenerateTypes } = await import("./generate-types");
+  await runGenerateTypes(
+    { cwd: options.cwd, config: options.config, quiet: options.quiet },
+    context
+  );
+  await applySchema(pluginName, options, context);
   logger.newline();
+  logger.success(`Added ${pluginName}.`);
+  logger.info(
+    `Start your dev server (${pc.yellow("next dev")}) or run your build to see it.`
+  );
 }
 
 export async function runAdd(
@@ -143,41 +510,36 @@ export async function runAdd(
   options: ResolvedAddOptions,
   context: CommandContext
 ): Promise<void> {
-  const { logger } = context;
   const cwd = options.cwd ?? process.cwd();
+  const name = packageNameOf(pkg);
+  const changes: DryRunChange[] = [];
 
-  logger.header("Nextly Add");
-
-  // The one install the run makes, if any: a dry run names this same
-  // command line, and the real run runs it.
-  const install = options.skipInstall
-    ? null
-    : installFor(cwd, pkg, options.dev ?? false);
-
-  if (install && !options.dryRun) {
-    const { pm, args } = install;
-    logger.info(`Installing ${pc.cyan(pkg)} with ${pc.yellow(pm)}…`);
-    const code = await runInstall(pm, args, cwd);
-    if (code !== 0) {
-      // A failed install is a failed run, so it ends with the shared 1; the
-      // package manager's own code is named in the message instead.
-      exitWithError(logger, packageInstallFailed(pm, pkg, code));
-    }
-    logger.success(`Installed ${pkg}`);
+  context.logger.header("Add a plugin");
+  const installs = await installStep(pkg, cwd, options, context, changes);
+  const planned = await planOrReport(
+    name,
+    cwd,
+    installs,
+    options,
+    context,
+    changes
+  );
+  if (planned === undefined) return;
+  const pluginName = planned.plugin.name;
+  try {
+    await register(name, planned, cwd, options, context, changes);
+  } catch (error) {
+    // Under a dry run, a config the real run would not edit is its refusal,
+    // reported in its words.
+    if (!(options.dryRun && error instanceof CliError)) throw error;
+    reportDryRun(context.logger, { changes, refusals: [error.what] });
+    return;
   }
-
-  showWiring(pkg, context);
-
-  if (options.dryRun) {
-    reportDryRun(logger, {
-      changes: install
-        ? [{ action: "run", target: [install.pm, ...install.args].join(" ") }]
-        : [],
-    });
-  }
+  await addBuildStep(pluginName, cwd, options, context, changes);
+  await finish(pluginName, options, context, changes);
 }
 
-/** The action of `nextly add`, loaded when it runs. */
+/** The action of `nextly plugins add` and `nextly add`, loaded when it runs. */
 export async function addAction(
   pkg: string,
   cmdOptions: AddCommandOptions,
@@ -188,6 +550,7 @@ export async function addAction(
   const resolved: ResolvedAddOptions = {
     ...cmdOptions,
     cwd: globalOpts.cwd,
+    config: globalOpts.config,
     verbose: globalOpts.verbose,
     quiet: globalOpts.quiet,
   };

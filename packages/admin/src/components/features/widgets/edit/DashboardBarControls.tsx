@@ -1,18 +1,20 @@
 "use client";
 
 /**
- * The dashboard's part of the admin's top bar: its breadcrumb at the bar's
- * left, and its one action at the bar's right.
+ * The dashboard's controls: its breadcrumb at the top bar's left, the cog
+ * that opens customise mode, and the mode's own controls.
  *
- * At rest the action is a cog, "Customize dashboard". In customise mode the
- * cog gives way to the mode's controls, Reset, Add widget, Cancel and Save, and
- * the breadcrumb reads "Dashboard / Customizing", its "Dashboard" a way out of
- * the mode. Where the bar is a phone's width, Reset steps aside and Add widget
- * is drawn as its icon, so Cancel and Save keep their words.
+ * At rest the cog, "Customize dashboard", sits at the right end of the
+ * greeting row, beside the cards it changes. In customise mode it leaves the
+ * row, and the mode's controls, Reset, Add widget, Cancel and Save, take the
+ * bar's right end, while the breadcrumb reads "Dashboard / Customizing", its
+ * "Dashboard" a way out of the mode. Where the bar is a phone's width, Reset
+ * steps aside and Add widget is drawn as its icon, so Cancel and Save keep
+ * their words.
  *
- * In the bar rather than on the page, as every admin page's actions are, and
- * because the bar stays put while the cards scroll, so Save and Cancel are in
- * reach however far down the reader has gone.
+ * The mode's controls are in the bar because it stays put while the cards
+ * scroll, so Save and Cancel are in reach however far down the reader has
+ * gone.
  *
  * @module components/features/widgets/edit/DashboardBarControls
  */
@@ -24,8 +26,9 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 
+import { GreetingAction } from "@admin/components/features/dashboard/GreetingAction";
 import * as Icons from "@admin/components/icons";
 import {
   TopBarPlace,
@@ -113,6 +116,11 @@ export interface DashboardBarControlsProps {
   addWidgetRef?: Register;
   /** Registers the mode's controls, where focus lands as the mode opens. */
   barRef: Register;
+}
+
+/** Draw `action` at the bar's right end. */
+function inBar(action: ReactNode): JSX.Element {
+  return <TopBarPlace name="end">{action}</TopBarPlace>;
 }
 
 /** The cog that opens customise mode, named and tooltipped by what it does. */
@@ -244,22 +252,29 @@ function EditControls({
 }
 
 /**
- * The dashboard's action at the bar's right end: the cog at rest, the mode's
- * controls while customising, and nothing before the arrangement is read.
+ * The dashboard's action: the cog at the greeting row's end at rest, the
+ * mode's controls at the bar's right end while customising, and nothing
+ * before the arrangement is read.
  */
 export function DashboardBarControls({
   isEditing,
   canBegin,
   onBegin,
   ...controls
-}: DashboardBarControlsProps): JSX.Element {
-  return (
-    <TopBarPlace name="end">
-      {isEditing ? (
+}: DashboardBarControlsProps): JSX.Element | null {
+  if (isEditing) {
+    return (
+      <TopBarPlace name="end">
         <EditControls {...controls} />
-      ) : canBegin ? (
-        <CustomizeCog onBegin={onBegin} isWriting={controls.isWriting} />
-      ) : null}
-    </TopBarPlace>
+      </TopBarPlace>
+    );
+  }
+  if (!canBegin) return null;
+  // A page whose greeting a plugin replaced draws no row; the cog goes to
+  // the bar's right end then, so Customize is never out of reach.
+  return (
+    <GreetingAction withoutRow={inBar}>
+      <CustomizeCog onBegin={onBegin} isWriting={controls.isWriting} />
+    </GreetingAction>
   );
 }

@@ -309,6 +309,36 @@ describe.each(getConfiguredTestDialects())(
       expect(await recorded(t)).toEqual({ "en|/second": `pages:${second}` });
     });
 
+    it("records every page none had recorded, though one listed is deleted while it lists", async () => {
+      const { t } = await boot(dialect);
+      const pages = [
+        await publish(t, "pages", "one"),
+        await publish(t, "pages", "two"),
+        await publish(t, "pages", "three"),
+      ];
+      await forget(t);
+
+      // One page per read, the first listed deleted after the first read: a
+      // listing by position would then step past one it has not read.
+      let deleted: string | undefined;
+      await catchUp({
+        pageSize: 1,
+        betweenPages: async listed => {
+          if (deleted !== undefined) return;
+          deleted = listed[0]?.holder.id;
+          if (deleted !== undefined) {
+            await t.nextly.delete({ collection: "pages", id: deleted });
+          }
+        },
+      });
+
+      const left = pages.filter(id => id !== deleted);
+      expect(left).toHaveLength(2);
+      expect(Object.values(await recorded(t)).sort()).toEqual(
+        left.map(id => `pages:${id}`).sort()
+      );
+    });
+
     it("lets go of a page that no longer exists", async () => {
       const { t, ctx } = await boot(dialect);
       await ctx.services.collections.withTransaction(tx =>
