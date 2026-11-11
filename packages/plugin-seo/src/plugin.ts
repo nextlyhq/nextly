@@ -12,12 +12,14 @@ import { createRequire } from "node:module";
 import {
   definePlugin,
   group,
+  isSecret,
   type FieldConfig,
   type PageMetadataResolver,
   type PluginContext,
   type PluginContributions,
   type PluginDefinition,
   type PluginRoute,
+  type Secret,
 } from "@nextlyhq/plugin-sdk";
 
 import { startCatchUp } from "./address-record/catch-up";
@@ -34,6 +36,17 @@ import {
 import { PAGES_PAGE, PAGES_PAGE_HREF } from "./code-pages/contract";
 import { codePageRoutes } from "./code-pages/route";
 import { readCodeRoutes, type CodeRoute } from "./code-pages/routes";
+import {
+  indexNowKeyProxyHandler,
+  watchForIndexNow,
+} from "./connections/indexnow";
+import { INDEXNOW_HOST } from "./connections/indexnow-send";
+import { searchConsoleRoutes } from "./connections/search-console";
+import {
+  SEARCH_CONSOLE_HOSTS,
+  type GoogleClient,
+} from "./connections/search-console-send";
+import { CONNECTION_SECRETS, connectionSettings } from "./connections/store";
 import { defaultSeoFields } from "./fields";
 import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
@@ -261,6 +274,38 @@ export interface SeoPluginOptions {
    * for the Pages and addresses screen and the sitemap.
    */
   nextBuildDir?: string;
+  /**
+   * @experimental The Google sign-in Search Console is connected with, from
+   * a Google Cloud OAuth client of the "Web application" kind. Without it,
+   * the Connections tab says Search Console needs one. Keep the secret out
+   * of the code: read it from the environment, wrapped in `secret()`.
+   *
+   * ```ts
+   * seoPlugin({
+   *   collections: ["posts"],
+   *   searchConsole: {
+   *     clientId: process.env.GOOGLE_CLIENT_ID ?? "",
+   *     clientSecret: secret(process.env.GOOGLE_CLIENT_SECRET ?? ""),
+   *   },
+   * });
+   * ```
+   */
+  searchConsole?: { clientId: string; clientSecret: string | Secret<string> };
+}
+
+/** The Google sign-in `options` name, or none; a blank one is refused at boot. */
+function googleClientOf(options: SeoPluginOptions): GoogleClient | undefined {
+  const named = options.searchConsole;
+  if (named === undefined) return undefined;
+  const clientSecret = isSecret(named.clientSecret)
+    ? named.clientSecret.reveal()
+    : named.clientSecret;
+  if (named.clientId.trim() === "" || clientSecret.trim() === "") {
+    throw new Error(
+      "seoPlugin: searchConsole needs both a clientId and a clientSecret"
+    );
+  }
+  return { clientId: named.clientId.trim(), clientSecret };
 }
 
 /**
@@ -470,6 +515,15 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         ? {}
         : { buildDir: options.nextBuildDir }
     );
+  // The site's configured origin, where the sitemap is served and a baseUrl
+  // is set, for every output that names the site's addresses.
+  const siteOrigin = configuredOrigin(
+    options,
+    sitemapConfig(options, sitemapSubset)
+  );
+  const googleClient = googleClientOf(options);
+  // Stops noting changes for IndexNow when the plugin is taken down.
+  let stopIndexNow: (() => Promise<void>) | undefined;
 
   // Checked here, so a misspelled type or detail fails when the site starts.
   const readStructuredDataRules = rulesFromOptions(
@@ -571,17 +625,21 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Every host but the site's production addresses is kept out of search,
     // and redirects answer before the page is served. Only a redirect
     // answers, so the order changes nothing a visitor gets.
-    // A page's plain-text copy, once switched on, is answered here too, at
-    // the copy's own address only.
+    // A page's plain-text copy and the IndexNow key, once switched on, are
+    // answered here too, each at its own address only.
     proxy: [
       stagingGuard(readRules),
       redirectsProxyHandler(),
       plainCopyProxyHandler({
         readRules,
-        ...configuredOrigin(options, sitemapConfig(options, sitemapSubset)),
+        ...siteOrigin,
         ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
       }),
+      indexNowKeyProxyHandler({ readRules, ...siteOrigin }),
     ],
+    // The optional connections' own state, their credentials sealed: core
+    // encrypts each secret path and never returns it to the admin.
+    settings: connectionSettings,
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
@@ -660,6 +718,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   }
 
   routes.push(
+        // The Connections tab's reads, and Search Console's sign-in.
+    ...searchConsoleRoutes({ readRules, client: googleClient, ...siteOrigin }),
     ...siteFileRoutes(options, readRules, sitemapSubset, codeRoutes),
     shareImageRoute(options.baseUrl),
     // What the settings screen reads: the types SEO is added to, and which
@@ -732,6 +792,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // The route helpers ask this plugin for each page's head.
     provides: ["page-metadata"],
     contributes,
+    capabilities: {
+      // IndexNow's shared endpoint and Google's Search Console addresses,
+      // and nothing else.
+      net: { outbound: [INDEXNOW_HOST, ...SEARCH_CONSOLE_HOSTS] },
+      secrets: CONNECTION_SECRETS,
+    },
     init(ctx) {
       // The settings Single's registered name, for readers other plugins call.
       rememberSettingsSingle(ctx);
@@ -750,6 +816,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // Each saved page checked again for the problem list.
       watchSaves(ctx, problemChecks);
       keepCodeRoutes(codeRoutes);
+      // Changed pages noted for IndexNow, told once they settle.
+      stopIndexNow = watchForIndexNow(
+        ctx,
+        { readRules, ...siteOrigin },
+        targets
+      );
+    },
+    async destroy() {
+      // What was noted is still sent: a notice is not lost to a shutdown.
+      const stop = stopIndexNow;
+      stopIndexNow = undefined;
+      await stop?.();
     },
     onReady(ctx) {
       // Started, not awaited: it waits for the boot to finish, and brings the

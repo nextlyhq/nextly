@@ -28,6 +28,7 @@ export const DESCRIPTION_LIMIT = 160;
 /** Every kind of problem the list checks for. */
 export type ProblemKind =
   | "productionAddress"
+  | "connection"
   | "noAddress"
   | "redirectChain"
   | "languageCode"
@@ -55,6 +56,12 @@ export const KIND_TEXT: Readonly<
   productionAddress: {
     title: "Production address missing",
     explain: "Nextly can't tell the real site from a test copy.",
+    siteWide: true,
+  },
+  connection: {
+    title: "Optional connection not working",
+    explain:
+      "No page is affected, but the service isn't getting what the site sends it.",
     siteWide: true,
   },
   redirectChain: {
@@ -149,6 +156,7 @@ export const KIND_TEXT: Readonly<
 export const KIND_ORDER: readonly ProblemKind[] = [
   "productionAddress",
   "noAddress",
+  "connection",
   "redirectChain",
   "languageCode",
   "notListed",
@@ -211,7 +219,7 @@ const SEO_TAB_ID = "nextlyhq-plugin-seo.tab";
 export const WHOLE_SITE: ProblemSubject = { label: "Whole site" };
 
 /** The SEO settings' tabs a fix can land on. */
-export type SettingsTab = "general" | "types" | "brand";
+export type SettingsTab = "general" | "types" | "brand" | "connections";
 
 /**
  * Where a problem is fixed:

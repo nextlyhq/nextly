@@ -81,6 +81,12 @@ describe("seoPlugin", () => {
         route.public,
       ])
     ).toEqual([
+      // The Connections tab's reads, and Search Console's sign-in.
+      ["GET", "/connections", undefined, undefined],
+      ["POST", "/connections/search-console/connect", undefined, undefined],
+      ["GET", "/connections/search-console/callback", undefined, undefined],
+      ["POST", "/connections/search-console/disconnect", undefined, undefined],
+      ["GET", "/connections/search-console/report", undefined, undefined],
       ["GET", "/sitemap.xml", "root", true],
       ["GET", "/robots.txt", "root", true],
       // Registered always; it answers once switched on in the settings.
@@ -167,6 +173,11 @@ describe("seoPlugin", () => {
   it("omits the sitemap routes when sitemap is disabled, and keeps robots.txt", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
+      "/connections",
+      "/connections/search-console/connect",
+      "/connections/search-console/callback",
+      "/connections/search-console/disconnect",
+      "/connections/search-console/report",
       "/robots.txt",
       "/llms.txt",
       "/share-image",
@@ -197,6 +208,11 @@ describe("seoPlugin", () => {
       robots: false,
     });
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
+      "/connections",
+      "/connections/search-console/connect",
+      "/connections/search-console/callback",
+      "/connections/search-console/disconnect",
+      "/connections/search-console/report",
       // Switched on and off in the settings, not by these options.
       "/llms.txt",
       "/share-image",
@@ -464,5 +480,51 @@ describe("the SEO tab and fields of a project's own", () => {
       fields: [text({ name: "metaTitle" }), text({ name: "metaDescription" })],
     });
     expect(plugin.contributes?.admin?.contributions).toHaveLength(2);
+  });
+});
+
+describe("the optional connections the plugin declares", () => {
+  it("reaches only IndexNow's endpoint and Google's Search Console addresses", () => {
+    const plugin = seoPlugin({ collections: ["pages"] });
+    expect(plugin.capabilities?.net?.outbound).toEqual([
+      "api.indexnow.org",
+      "oauth2.googleapis.com",
+      "www.googleapis.com",
+      "searchconsole.googleapis.com",
+    ]);
+  });
+
+  it("keeps every credential at a secret path, which core encrypts and never returns", () => {
+    const plugin = seoPlugin({ collections: ["pages"] });
+    expect(plugin.capabilities?.secrets).toEqual([
+      "indexNowKey",
+      "searchConsole.refreshToken",
+      "searchConsolePending.state",
+      "searchConsolePending.verifier",
+    ]);
+    // Each secret path is one the declared settings hold.
+    const shape = plugin.contributes?.settings?.shape ?? {};
+    expect(Object.keys(shape)).toEqual(
+      expect.arrayContaining([
+        "indexNowKey",
+        "searchConsole",
+        "searchConsolePending",
+      ])
+    );
+  });
+
+  it("refuses a Search Console sign-in with a blank client id or secret", () => {
+    expect(() =>
+      seoPlugin({
+        collections: ["pages"],
+        searchConsole: { clientId: " ", clientSecret: "s" },
+      })
+    ).toThrow(/clientId and a clientSecret/);
+    expect(() =>
+      seoPlugin({
+        collections: ["pages"],
+        searchConsole: { clientId: "id", clientSecret: "" },
+      })
+    ).toThrow(/clientId and a clientSecret/);
   });
 });

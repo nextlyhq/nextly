@@ -318,6 +318,43 @@ export async function addressHolders(
   return (data as unknown[]).flatMap(entry => rowOf(entry).holder ?? []);
 }
 
+/** What one page's addresses became in a recorded batch. */
+export interface AddressMove {
+  /** The addresses it held before and holds no more. */
+  released: readonly HeldAddress[];
+  /** Every address it holds now. */
+  holds: readonly HeldAddress[];
+}
+
+/** Told each page's addresses once a batch is recorded. */
+type MovesListener = (moves: readonly AddressMove[]) => void;
+
+const movesListeners = new Set<MovesListener>();
+
+/**
+ * Tell `listener` each page's addresses whenever a batch of saves is
+ * recorded: every page, never a redirect. Called inside the save's
+ * transaction, so the listener must only take note, quickly and without
+ * throwing, and act later; the save may still be undone. Answers the call
+ * that stops telling it.
+ */
+export function onAddressesMoved(listener: MovesListener): () => void {
+  movesListeners.add(listener);
+  return () => movesListeners.delete(listener);
+}
+
+/** Every listener told, none of them able to fail the save. */
+function tellMoves(moves: readonly AddressMove[]): void {
+  if (moves.length === 0) return;
+  for (const listener of movesListeners) {
+    try {
+      listener(moves);
+    } catch {
+      // A listener only takes note; whatever it failed at, the save stands.
+    }
+  }
+}
+
 /** The participant, bound to the SEO plugin's context. */
 export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   const { slug, rowsWhere, holdLock, holdHolderLock, rowsOf } = recordRows(ctx);
@@ -613,6 +650,14 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
           await redirectReleased(transaction, update, released);
         }
       }
+      tellMoves(
+        batch
+          .filter(update => !isRedirect(update.holder))
+          .map(update => ({
+            released: letGo.get(update)?.released ?? [],
+            holds: update.holds,
+          }))
+      );
     },
   };
 }
