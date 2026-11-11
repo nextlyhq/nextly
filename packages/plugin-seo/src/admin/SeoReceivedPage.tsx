@@ -580,7 +580,14 @@ function ReceivedTable({
     answer?.crawlers ??
     CRAWLERS.map(({ key, name }) => ({ key, name, ms: 0, redirected: false }));
   return (
-    <div className="nx-seo-rcv-box">
+    // Scrolls sideways on a narrow screen, so it can be reached and
+    // scrolled from the keyboard too.
+    <div
+      className="nx-seo-rcv-box"
+      role="region"
+      aria-label="What each crawler received"
+      tabIndex={0}
+    >
       <table className="nx-seo-rcv-grid">
         <thead>
           <tr>

@@ -164,7 +164,13 @@ describe.each(getConfiguredTestDialects())(
           defineCollection({
             slug: "posts",
             status: true,
-            fields: [text({ name: "title" }), text({ name: "slug" })],
+            // Readers see only the open team's posts.
+            access: { read: () => ({ team: { equals: "open" } }) },
+            fields: [
+              text({ name: "title" }),
+              text({ name: "slug" }),
+              text({ name: "team" }),
+            ],
             publicAddress: "/blog/{slug}",
           }),
         ],
@@ -174,11 +180,22 @@ describe.each(getConfiguredTestDialects())(
         data: {
           title: "Surfer vs Rext",
           slug: "surfer-vs-rext",
+          team: "open",
           status: "published",
           seo: {
             metaTitle: "Surfer vs Rext | Rext AI",
             metaDescription: "Surfer grades drafts; Rext writes them.",
           },
+        },
+      });
+      await t.nextly.create({
+        collection: "posts",
+        data: {
+          title: "Closed plans",
+          slug: "closed-plans",
+          team: "closed",
+          status: "published",
+          seo: { metaTitle: "Closed plans | Rext AI" },
         },
       });
       await lastCatchUp();
@@ -276,6 +293,14 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("holds nothing to compare for a page the caller may not read", async () => {
+      // The reader may read posts, but not this one: its row is filtered out.
+      const answer = await check(reader, `${origin}/blog/closed-plans`);
+      expect(answer.kind).toBe("checked");
+      expect(answer).not.toHaveProperty("stored");
+      expect(JSON.stringify(answer)).not.toContain("Closed plans | Rext AI");
+    });
+
     it("refuses an address on another site without asking anything", async () => {
       for (const address of [
         "https://evil.example/",
@@ -314,10 +339,13 @@ describe.each(getConfiguredTestDialects())(
     it("offers the site's own pages, and refuses anyone not signed in", async () => {
       const response = await call(reader, "GET", [...BASE, "pages"]);
       expect(response.status, await response.clone().text()).toBe(200);
-      expect((await response.json()) as ReceivedPagesBody).toEqual({
-        origins: [origin],
-        pages: [`${origin}/blog/surfer-vs-rext`],
-      });
+      const body = (await response.json()) as ReceivedPagesBody;
+      expect(body.origins).toEqual([origin]);
+      // The site's sitemap, which lists every published page, in id order.
+      expect([...body.pages].sort()).toEqual([
+        `${origin}/blog/closed-plans`,
+        `${origin}/blog/surfer-vs-rext`,
+      ]);
       const anonymous = await call(undefined, "POST", BASE, {
         address: `${origin}/blog/surfer-vs-rext`,
       });

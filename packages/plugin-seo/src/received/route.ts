@@ -14,6 +14,7 @@
  */
 import {
   addressOfRequest,
+  getCachedNextly,
   NextlyError,
   type AddressHolder,
   type PageMetadataAnswer,
@@ -27,7 +28,6 @@ import { z } from "nextly/zod";
 
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
-import { singleIn } from "../languages/versions";
 import { originOf } from "../origin";
 import { listPages } from "../outputs/listing";
 import type { ReadRules } from "../resolver/provider";
@@ -121,9 +121,13 @@ async function checkBody(req: Request): Promise<z.infer<typeof CHECK_BODY>> {
   return parsed.data;
 }
 
-/** A page's published document, or nothing where it has none. */
+/**
+ * A page's published document, read as the route's caller, so the
+ * collection's row and field rules decide what of it they see: nothing where
+ * it has none or they may not read it.
+ */
 async function publishedDocument(
-  ctx: PluginContext,
+  ctx: PluginRouteContext,
   collection: string,
   id: string,
   locale: string
@@ -138,10 +142,43 @@ async function publishedDocument(
       depth: 1,
       pagination: { limit: 1, page: 1 },
     },
-    { as: "system", locale }
+    { as: "user", user: ctx.user ?? undefined, locale }
   );
   const first: unknown = (result.data as unknown[])[0];
   return isRecord(first) ? first : undefined;
+}
+
+/**
+ * A Single's published document, read as the route's caller with the
+ * Single's access and field rules enforced: nothing where it has none or
+ * they may not read it.
+ */
+async function publishedSingle(
+  ctx: PluginRouteContext,
+  slug: string,
+  locale: string
+): Promise<Record<string, unknown> | undefined> {
+  const identity = await signedIn(ctx).identity();
+  const nextly = await getCachedNextly();
+  try {
+    const document: unknown = await nextly.findSingle({
+      slug,
+      createIfMissing: false,
+      status: "published",
+      depth: 1,
+      locale,
+      overrideAccess: false,
+      user: identity.user,
+      ...(identity.authenticatedScope === undefined
+        ? {}
+        : { actor: identity.authenticatedScope }),
+    });
+    return isRecord(document) ? document : undefined;
+  } catch (error) {
+    if (NextlyError.isCode(error, "NOT_FOUND")) return undefined;
+    if (NextlyError.isCode(error, "FORBIDDEN")) return undefined;
+    throw error;
+  }
 }
 
 /** What Nextly holds for a page, every address made absolute on `origin`. */
@@ -189,8 +226,8 @@ async function sourceOf(
     const single = holder.collection.slice("single:".length);
     if (!setup.singles.includes(single)) return undefined;
     if (!(await caller.can("read", single))) return undefined;
-    const document = await singleIn(single, locale);
-    return document === null
+    const document = await publishedSingle(ctx, single, locale);
+    return document === undefined
       ? undefined
       : { kind: "single", slug: single, document };
   }
@@ -323,6 +360,8 @@ export function receivedRoutes(setup: ReceivedSetup): PluginRoute[] {
                 await listPages(ctx, {
                   origin: first,
                   readRules: setup.readRules,
+                  // The picker shows the first pages; the rest are not read.
+                  limit: MAX_PAGES,
                 })
               ).pages;
         const body: ReceivedPagesBody = {

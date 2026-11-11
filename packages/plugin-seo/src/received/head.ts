@@ -32,6 +32,15 @@ export interface ReceivedHead {
 const NOT_THE_HEAD =
   /<!--[\s\S]*?-->|<(script|style|svg|template|noscript|textarea)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 
+/**
+ * Every `<name …>` tag, read to its own closing `>`: a `>` inside a quoted
+ * value (`content="A > B"`) is part of the value, not the end of the tag.
+ */
+function tagsNamed(html: string, name: string): string[] {
+  const pattern = new RegExp(`<${name}\\b(?:[^>"']|"[^"]*"|'[^']*')*>`, "gi");
+  return [...html.matchAll(pattern)].map(([tag]) => tag);
+}
+
 /** The characters an HTML entity may stand for here. */
 const NAMED: Record<string, string> = {
   amp: "&",
@@ -94,7 +103,7 @@ function metaValues(html: string): {
 } {
   const values = new Map<string, string>();
   const robots: string[] = [];
-  for (const [tag] of html.matchAll(/<meta\b[^>]*>/gi)) {
+  for (const tag of tagsNamed(html, "meta")) {
     const attributes = attributesOf(tag);
     const key = (
       attributes.get("name") ??
@@ -119,7 +128,7 @@ function metaValues(html: string): {
 
 /** The address of the first `<link rel="canonical">`. */
 function canonicalOf(html: string): string | undefined {
-  for (const [tag] of html.matchAll(/<link\b[^>]*>/gi)) {
+  for (const tag of tagsNamed(html, "link")) {
     const attributes = attributesOf(tag);
     const rel = (attributes.get("rel") ?? "").toLowerCase().split(/\s+/);
     const href = attributes.get("href");

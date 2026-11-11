@@ -97,6 +97,19 @@ describe("reading a page's head", () => {
     });
   });
 
+  it("reads a quoted value with a > in it whole", () => {
+    const head = readHead(
+      `<meta name="description" content="Surfer > Rext? A -> B">
+       <meta property='og:title' content='Fast > slow'>
+       <link href="https://rext.ai/a?b>c" rel="canonical">`
+    );
+    expect(head).toMatchObject({
+      description: "Surfer > Rext? A -> B",
+      canonical: "https://rext.ai/a?b>c",
+      og: { title: "Fast > slow" },
+    });
+  });
+
   it("reads the robots rules of every robots and googlebot tag", () => {
     const head = readHead(
       `<meta name="robots" content="NOINDEX, follow"><meta name="googlebot" content="nosnippet">`
