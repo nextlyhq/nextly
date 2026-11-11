@@ -105,3 +105,8 @@ export type {
 export { shareImageProblems } from "./social/problems";
 export type { ShareImageProblem, ShareImageReaders } from "./social/problems";
 export type { SocialCardOptions } from "./social/card";
+// Logs the address a not-found page was asked for, from the site's
+// not-found page. Redirects themselves reach requests through the site's
+// Proxy, which `seoPlugin` contributes a handler to.
+export { logNotFound } from "./not-found/report";
+export type { HeaderReader } from "./not-found/report";

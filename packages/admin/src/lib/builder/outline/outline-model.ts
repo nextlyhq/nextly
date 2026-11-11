@@ -20,6 +20,8 @@ import { fieldLocalized } from "../field-localized";
 import type { FieldPlacement } from "../field-placement";
 import { convertToBuilderField } from "../field-transformers";
 
+import { fillBlocks, type BlockCatalog } from "./block-rows";
+
 /** A field group the entity uses, as the Builder loaded it. */
 export interface LoadedFieldGroup {
   slug: string;
@@ -40,7 +42,8 @@ export type ReadOnlyReason =
   | { kind: "code" }
   | { kind: "plugin"; owner?: string }
   | { kind: "locked" }
-  | { kind: "field-group"; slug: string; label: string };
+  | { kind: "field-group"; slug: string; label: string }
+  | { kind: "block"; source: string | null };
 
 /** The sentence a read-only row shows: where it is defined. */
 export function describeReadOnly(reason: ReadOnlyReason): string {
@@ -54,6 +57,11 @@ export function describeReadOnly(reason: ReadOnlyReason): string {
       return "Locked";
     case "field-group":
       return `Defined in the field group ${reason.label}`;
+    case "block":
+      // A registered block, and its props, are defined where it was registered.
+      return reason.source === null
+        ? "A registered block"
+        : `Defined by ${reason.source}`;
   }
 }
 
@@ -117,7 +125,8 @@ export type OutlineContainer =
   | "repeater"
   | "field-group"
   | "field-group-entry"
-  | "blocks";
+  | "blocks"
+  | "block";
 
 /** One row of the outline and the rows beneath it. */
 export interface OutlineNode {
@@ -159,7 +168,20 @@ export interface OutlineNode {
    * For a blocks field: the blocks it accepts, as its policy names them (a
    * block's name or a pattern); absent when it accepts any block.
    */
-  blocks?: { allow: readonly string[] | undefined };
+  blocks?: {
+    allow: readonly string[] | undefined;
+    /** Why the blocks it accepts are not shown yet, when they are not. */
+    unavailable?: "loading" | "failed" | "unavailable";
+    /** Allow-list entries that admit no registered block. */
+    unmatched?: readonly string[];
+  };
+  /**
+   * A row that is no field: a registered block a blocks field accepts, or one
+   * of its props. It can be read, never selected or changed.
+   */
+  meta?: "block" | "prop";
+  /** What the row's type column says, when it is not a field type. */
+  typeName?: string;
   /** Keeps a value per language: its own rule, in a translated holder. */
   translatable: boolean;
 }
@@ -170,6 +192,7 @@ export type FieldGroupsLoad = "loading" | "loaded" | "failed";
 interface BuildContext {
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
   load: FieldGroupsLoad;
+  blockCatalogs: ReadonlyMap<string, BlockCatalog> | undefined;
 }
 
 /** A field group's own field, as a Builder field with an id from its place. */
@@ -241,9 +264,9 @@ function fillContainer(
       fillFieldGroup(node, ctx, level.chain);
       return;
     case "blocks":
-      // The policy as written: no list accepts any block, an empty list none,
-      // and an entry may be a pattern standing for many.
-      node.blocks = { allow: node.field.blocks?.allow };
+      // The policy as written (no list accepts any block, an empty list none,
+      // and an entry may be a pattern), with the blocks it admits once read.
+      fillBlocks(node, ctx.blockCatalogs);
       return;
     default:
       return;
@@ -380,6 +403,8 @@ export function buildOutline(
     fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
     /** Whether `fieldGroups` has arrived; loaded unless said. */
     fieldGroupsLoad?: FieldGroupsLoad;
+    /** The blocks each allow-list admits, by `blockCatalogKey`. */
+    blockCatalogs?: ReadonlyMap<string, BlockCatalog>;
   }
 ): OutlineNode[] {
   return buildLevel(
@@ -387,6 +412,7 @@ export function buildOutline(
     {
       fieldGroups: options.fieldGroups,
       load: options.fieldGroupsLoad ?? "loaded",
+      blockCatalogs: options.blockCatalogs,
     },
     {
       parent: null,

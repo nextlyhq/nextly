@@ -21,6 +21,10 @@ import {
 } from "../i18n/companion-join";
 import { appLocalization } from "../i18n/configured-locales";
 import {
+  addressLanguagesOf,
+  defaultAddressLanguageOf,
+} from "../i18n/language-addresses";
+import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../i18n/per-language-storage";
@@ -55,8 +59,7 @@ export interface LanguageVersion {
  * address by two languages.
  */
 export function addressLanguages(): string[] {
-  const codes = appLocalization()?.locales.map(locale => locale.code) ?? [];
-  return codes.length > 0 ? codes : [defaultAddressLanguage()];
+  return addressLanguagesOf(appLocalization());
 }
 
 /**
@@ -65,8 +68,7 @@ export function addressLanguages(): string[] {
  * `"en"` where it names none.
  */
 export function defaultAddressLanguage(): string {
-  const fallback = appLocalization()?.defaultLocale;
-  return fallback !== undefined && fallback !== "" ? fallback : "en";
+  return defaultAddressLanguageOf(appLocalization());
 }
 
 /** The type a write names: `single:<slug>` is a Single, anything else a collection. */
