@@ -13,9 +13,9 @@
 export const BLOCKS_LIST_ROUTE_PATH = "/blocks";
 
 /**
- * The one query parameter: a blocks field's allow-list, its entries joined by
- * commas (a block name never holds one). Absent means the field accepts any
- * block; an empty value means none.
+ * The one query parameter: a blocks field's allow-list as a JSON array of its
+ * entries, sent exactly as stored, so the listing judges the policy a save
+ * judges. Absent means the field accepts any block; `[]` means none.
  */
 export const BLOCKS_LIST_ALLOW_PARAM = "allow";
 

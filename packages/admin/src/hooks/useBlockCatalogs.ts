@@ -11,6 +11,7 @@
  * from a read that failed.
  */
 import { useQueries } from "@tanstack/react-query";
+import { pluginRouteFullPath } from "nextly/config";
 import { useMemo } from "react";
 
 import { isApiError } from "@admin/lib/api/parseApiError";
@@ -20,14 +21,24 @@ import type {
   BlockCatalogItem,
 } from "@admin/lib/builder/outline/block-rows";
 
-/** Where the Page Builder answers its block listing. */
-const BLOCK_LISTING_PATH = "/plugins/@nextlyhq/plugin-page-builder/blocks";
+/**
+ * Where the Page Builder answers its block listing, by the dispatcher's own
+ * rule for a plugin route's address.
+ */
+const BLOCK_LISTING_PATH = pluginRouteFullPath(
+  "@nextlyhq/plugin-page-builder",
+  "/blocks"
+);
 
-/** The listing's address for one allow-list; none asks for every block. */
+/**
+ * The listing's address for one allow-list; none asks for every block. The
+ * list travels as JSON, exactly as stored, so no entry is split or trimmed
+ * on the way and the listing judges the policy a save judges.
+ */
 function listingPath(allow: readonly string[] | undefined): string {
   return allow === undefined
     ? BLOCK_LISTING_PATH
-    : `${BLOCK_LISTING_PATH}?allow=${encodeURIComponent(allow.join(","))}`;
+    : `${BLOCK_LISTING_PATH}?allow=${encodeURIComponent(JSON.stringify(allow))}`;
 }
 
 /** The answer of one listing read, as the outline draws it. */

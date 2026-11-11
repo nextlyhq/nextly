@@ -47,7 +47,7 @@ describe("useBlockCatalogs", () => {
     );
     expect(get.mock.calls.map(([path]) => path).sort()).toEqual([
       "/plugins/@nextlyhq/plugin-page-builder/blocks",
-      `/plugins/@nextlyhq/plugin-page-builder/blocks?allow=${encodeURIComponent("core/*,acme/hero")}`,
+      `/plugins/@nextlyhq/plugin-page-builder/blocks?allow=${encodeURIComponent('["core/*","acme/hero"]')}`,
     ]);
   });
 

@@ -174,6 +174,8 @@ describe("agreeing with the blocks field's validator", () => {
     [["acme/*", "core/heading"], "acme/hero"],
     [["acme/*", "core/heading"], "core/paragraph"],
     [[], "core/heading"],
+    [["core/heading,acme/hero"], "core/heading"],
+    [[" core/heading"], "core/heading"],
   ] as const)(
     "allow %j and a %s block: listed exactly when a save keeps it",
     (allow, type) => {
@@ -206,10 +208,11 @@ describe("the route", () => {
     };
   };
 
-  it("reads the allow-list from its query, its entries joined by commas", async () => {
-    const body = await ask(
-      `?${BLOCKS_LIST_ALLOW_PARAM}=${encodeURIComponent("core/heading,acme/*")}`
-    );
+  const allowQuery = (allow: unknown) =>
+    `?${BLOCKS_LIST_ALLOW_PARAM}=${encodeURIComponent(JSON.stringify(allow))}`;
+
+  it("reads the allow-list from its query, as a JSON array", async () => {
+    const body = await ask(allowQuery(["core/heading", "acme/*"]));
     expect(body.items.map(item => item.name)).toEqual([
       "acme/hero",
       "core/heading",
@@ -219,13 +222,29 @@ describe("the route", () => {
 
   it("lists every block when the query names no allow-list, and none for an empty one", async () => {
     expect((await ask("")).items).toHaveLength(4);
-    expect((await ask(`?${BLOCKS_LIST_ALLOW_PARAM}=`)).items).toEqual([]);
+    expect((await ask(allowQuery([]))).items).toEqual([]);
   });
 
-  it("refuses an allow-list longer than it reads", async () => {
-    const tooMany = Array.from({ length: 201 }, (_, i) => `x/b${i}`).join(",");
-    await expect(
-      ask(`?${BLOCKS_LIST_ALLOW_PARAM}=${encodeURIComponent(tooMany)}`)
-    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  it("keeps each entry as stored, splitting or trimming none, as a save judges it", async () => {
+    // One entry holding a comma names no block, so a save keeps neither
+    // heading nor hero: the listing must not read it as two.
+    expect((await ask(allowQuery(["core/heading,acme/hero"]))).items).toEqual(
+      []
+    );
+    expect((await ask(allowQuery([" core/heading"]))).items).toEqual([]);
+  });
+
+  it("refuses an allow-list longer than it reads, or one that is not a list of names", async () => {
+    const tooMany = Array.from({ length: 201 }, (_, i) => `x/b${i}`);
+    for (const query of [
+      allowQuery(tooMany),
+      allowQuery("core/heading"),
+      allowQuery([1, 2]),
+      `?${BLOCKS_LIST_ALLOW_PARAM}=${encodeURIComponent("core/heading,acme/*")}`,
+    ]) {
+      await expect(ask(query)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+    }
   });
 });

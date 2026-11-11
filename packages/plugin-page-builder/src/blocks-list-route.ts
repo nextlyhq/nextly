@@ -46,27 +46,29 @@ const REGISTRY_READS: BlocksListReads = {
 const MAX_ENTRIES = 200;
 const MAX_ENTRY_LENGTH = 200;
 
+/** The entries of an allow-list, as a blocks field stores them. */
+const ALLOW_LIST = z.array(z.string().max(MAX_ENTRY_LENGTH)).max(MAX_ENTRIES);
+
 /**
- * The `allow` parameter: absent for "any block", else its comma-separated
- * entries, an empty value being an empty list. Bounded, since it is outside
- * input.
+ * The `allow` parameter: absent for "any block", else the field's allow-list
+ * as a JSON array, read exactly as sent: no entry split, trimmed or dropped,
+ * so the listing judges the very policy a save judges. Bounded, since it is
+ * outside input; anything but an array of strings is refused.
  */
 const QUERY_SCHEMA = z.object({
   [BLOCKS_LIST_ALLOW_PARAM]: z
     .string()
-    .max(MAX_ENTRIES * (MAX_ENTRY_LENGTH + 1))
-    .optional()
-    .transform(value =>
-      value === undefined
-        ? undefined
-        : value
-            .split(",")
-            .map(entry => entry.trim())
-            .filter(entry => entry !== "")
-    )
-    .pipe(
-      z.array(z.string().max(MAX_ENTRY_LENGTH)).max(MAX_ENTRIES).optional()
-    ),
+    .max(MAX_ENTRIES * (MAX_ENTRY_LENGTH + 4) + 2)
+    .transform((value, ctx): unknown => {
+      try {
+        return JSON.parse(value) as unknown;
+      } catch {
+        ctx.addIssue({ code: "custom", message: "not a JSON array" });
+        return z.NEVER;
+      }
+    })
+    .pipe(ALLOW_LIST)
+    .optional(),
 });
 
 /**
