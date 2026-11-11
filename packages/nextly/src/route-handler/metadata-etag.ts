@@ -11,7 +11,10 @@
  *   of them moves it, on whichever server copy;
  * - what the caller may read, which the permission version (the RBAC epoch)
  *   follows, and who the caller is (person or key, and a session's claims,
- *   which a rule may read);
+ *   which a rule may read). An assignment's expiry moves neither version, so
+ *   the roles in force for the caller now, and the soonest expiry among
+ *   them, are part of it too: read through the permission layer's own cache
+ *   (`resolveUserRoles`), which keeps them no longer than that expiry;
  * - the running configuration (plugins' admin views, the "removed from code"
  *   marks), which changes only with a new configuration: a deploy, or a
  *   development reload, each a new configuration object here;
@@ -28,6 +31,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { AuthContext } from "../auth/middleware";
+import { resolveUserRoles } from "../services/lib/permissions";
 import {
   currentEpoch,
   epochIsTrustworthy,
@@ -93,12 +97,20 @@ export async function metadataEtag(
   if (!METADATA_READS.has(`${service}.${method}`)) return undefined;
   if (caller === undefined || schemaVersion === undefined) return undefined;
   let permissionVersion: string;
+  let roles: { roleIds: string[]; validUntil: number | undefined };
   try {
     await refreshEpoch();
     if (!epochIsTrustworthy()) return undefined;
     permissionVersion = currentEpoch();
+    // The roles in force now: one that lapsed since a tag was made is gone
+    // from this, so that tag no longer matches.
+    const resolved = await resolveUserRoles(caller.userId);
+    roles = {
+      roleIds: [...resolved.roleIds].sort(),
+      validUntil: resolved.validUntil,
+    };
   } catch {
-    // The permission version could not be read: answered in full.
+    // The permission version or the roles could not be read: answered in full.
     return undefined;
   }
   const url = new URL(req.url);
@@ -111,6 +123,12 @@ export async function metadataEtag(
         caller.userId,
         caller.apiKeyId ?? null,
         caller.claims ?? null,
+        // A key's own scope, and its maker's super-admin authority, are
+        // decided per request: each is part of what the key may read.
+        [...caller.permissions].sort(),
+        caller.keyHoldsSuperAdmin ?? null,
+        roles.roleIds,
+        roles.validUntil ?? null,
         identityOf(config),
         url.pathname,
         url.search,
@@ -124,15 +142,18 @@ export async function metadataEtag(
 
 /**
  * Whether the request's `If-None-Match` names `etag`, compared weakly as the
- * header is (RFC 9110, 13.1.2): `*`, or any listed tag equal to it once a
- * `W/` prefix is set aside.
+ * header is (RFC 9110, 13.1.2): any listed tag equal to it once a `W/`
+ * prefix is set aside.
+ *
+ * `*` is not honoured. It means "any current answer exists", which the tag,
+ * decided before the read runs, cannot say: a schema that does not exist, or
+ * one this caller may not read, would be answered "unchanged" instead of
+ * its 404. Such a request is answered in full.
  */
 export function holdsCurrentTag(req: Request, etag: string): boolean {
   const header = req.headers.get("if-none-match");
   if (header === null) return false;
   const opaque = (tag: string) => tag.trim().replace(/^W\//, "");
   const wanted = opaque(etag);
-  return header
-    .split(",")
-    .some(tag => tag.trim() === "*" || opaque(tag) === wanted);
+  return header.split(",").some(tag => opaque(tag) === wanted);
 }

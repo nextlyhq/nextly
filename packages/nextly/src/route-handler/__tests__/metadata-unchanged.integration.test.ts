@@ -11,10 +11,15 @@
  *   gets the full, new answer;
  * - after a change to what the caller may read (a role granted), the old tag
  *   gets the full answer;
- * - another caller sending this caller's tag gets the full answer.
+ * - another caller sending this caller's tag gets the full answer;
+ * - once a role the caller held lapses (an assignment's expiry passes, which
+ *   moves neither version), the old tag gets the full answer;
+ * - `If-None-Match: *` never answers "unchanged", so a missing schema is
+ *   still answered 404.
  * The startup request, which answers several reads at once, never answers a
  * part "unchanged", whatever it is sent.
  */
+import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -25,6 +30,7 @@ import {
 import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
 import { defineCollection, defineSingle, text } from "../../config";
+import { getDialectTables } from "../../database/index";
 import { dispatchCollections } from "../../dispatcher/handlers/collection-dispatcher";
 import {
   createTestNextly,
@@ -180,6 +186,50 @@ describe.each(getConfiguredTestDialects())(
 
       await grantTo(t, READER, "update", [NOTES]);
       expect((await get(READER, LIST, tag)).status).toBe(200);
+    }, 300_000);
+
+    it("answers in full once a role the caller held lapses", async () => {
+      const t = await boot();
+      await userWhoMay(t, READER, "read", [NOTES]);
+      // The role that lets the reader read NOTES lapses a few seconds from now.
+      const lapses = Date.now() + 3000;
+      const { userRoles } = getDialectTables(t.adapter.dialect);
+      const db = t.adapter.getDrizzle() as unknown as {
+        update(table: unknown): {
+          set(values: Record<string, unknown>): {
+            where(condition: unknown): Promise<unknown>;
+          };
+        };
+      };
+      await db
+        .update(userRoles)
+        .set({ expiresAt: new Date(lapses) })
+        .where(eq(userRoles.userId, READER));
+      const slugs = async (response: Response) =>
+        ((await response.json()) as { items: { slug: string }[] }).items.map(
+          item => item.slug
+        );
+
+      const first = await get(READER, LIST);
+      const tag = first.headers.get("etag") ?? "";
+      expect(await slugs(first)).toContain(NOTES);
+      expect((await get(READER, LIST, tag)).status).toBe(304);
+
+      await new Promise(resolve =>
+        setTimeout(resolve, Math.max(0, lapses - Date.now()) + 500)
+      );
+      const after = await get(READER, LIST, tag);
+      expect(after.status).toBe(200);
+      expect(await slugs(after)).not.toContain(NOTES);
+    }, 300_000);
+
+    it("answers `If-None-Match: *` in full, and a missing schema 404", async () => {
+      await boot();
+      // A schema that does not exist is answered as missing, not "unchanged".
+      const missing = await get(EDITOR, "/collections/schema/no_such_one", "*");
+      expect(missing.status).toBe(404);
+      const present = await get(EDITOR, `/collections/schema/${NOTES}`, "*");
+      expect(present.status).toBe(200);
     }, 300_000);
 
     it("answers another caller in full, whatever tag it sends", async () => {
