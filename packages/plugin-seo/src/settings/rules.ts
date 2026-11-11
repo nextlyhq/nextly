@@ -214,6 +214,9 @@ async function readSeoSettingsDocument(
 /**
  * The site's SEO rules in `locale`: its name, default description and share
  * image, production addresses, and each content type's patterns.
+ *
+ * Read while handling a request or a job, never awaited in a plugin's `init`
+ * or `onReady`: the read waits for the site's start to finish.
  */
 export async function readSeoRules(
   ctx: PluginContext,
@@ -222,7 +225,10 @@ export async function readSeoRules(
   return rulesOf(await readSeoSettingsDocument(ctx, locale), mediaImages(ctx));
 }
 
-/** The site's brand facts in `locale`, for structured data and the like. */
+/**
+ * The site's brand facts in `locale`, for structured data and the like. Like
+ * {@link readSeoRules}, never awaited while the site starts.
+ */
 export async function readBrandFacts(
   ctx: PluginContext,
   locale?: string

@@ -378,20 +378,32 @@ page reads the new rules. The settings are one set for every language of a trans
 ### Reading the settings in code
 
 ```ts
-import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { definePlugin, respondDoc } from "@nextlyhq/plugin-sdk";
 import { readBrandFacts, readSeoRules } from "@nextlyhq/plugin-seo";
 
 export const brandCard = definePlugin({
   name: "@acme/brand-card",
   version: "1.0.0",
   nextly: ">=0.0.2-alpha.74",
-  async init(ctx) {
-    const rules = await readSeoRules(ctx);
-    const brand = await readBrandFacts(ctx);
-    ctx.logger.info(`${rules.siteName ?? "No name yet"}: ${brand.profiles.length} profiles`);
+  contributes: {
+    routes: [
+      {
+        method: "GET",
+        path: "/brand",
+        public: true,
+        handler: async (_req, ctx) => {
+          const rules = await readSeoRules(ctx);
+          const brand = await readBrandFacts(ctx);
+          return respondDoc({ site: rules.siteName, profiles: brand.profiles });
+        },
+      },
+    ],
   },
 });
 ```
+
+Read them while handling a request or a job, never while the site starts: they wait for the start
+to finish, so awaiting one in a plugin's `init` or `onReady` would wait on itself.
 
 `readSeoRules` answers the site's name, default description and share image, production addresses,
 the default pattern and each type's own patterns. `readBrandFacts` answers the brand's names, logo,
