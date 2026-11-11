@@ -154,9 +154,9 @@ async function boot(
 }
 
 /** A root file, as the site's rewrite reaches the API handler with it. */
-async function rootFile(file: string, query = "") {
+async function rootFile(file: string, query = "", at = "http://localhost") {
   const response = await createDynamicHandlers().GET(
-    new Request(`http://localhost/admin/api/${file}${query}`),
+    new Request(`${at}/admin/api/${file}${query}`),
     { params: Promise.resolve({ params: [file] }) }
   );
   return {
@@ -271,7 +271,18 @@ describe.each(getConfiguredTestDialects())(
         title: "Syndicated",
         slug: "syndicated",
         status: "published",
-        seo: { canonical: "https://elsewhere.example/original" },
+        seo: {
+          canonical: "https://elsewhere.example/original",
+          canonicalElsewhere: true,
+        },
+      });
+      // An address off the site, not confirmed as the page's first home, is
+      // not a canonical, so the page stays listed at its own address.
+      await create(t, "posts", {
+        title: "Unconfirmed",
+        slug: "unconfirmed",
+        status: "published",
+        seo: { canonical: "https://elsewhere.example/copy" },
       });
       // A canonical typed as the page's own address keeps it listed.
       await create(t, "pages", {
@@ -286,6 +297,7 @@ describe.each(getConfiguredTestDialects())(
           `${SITE}/`,
           `${SITE}/about`,
           `${SITE}/blog/hello`,
+          `${SITE}/blog/unconfirmed`,
           `${SITE}/pricing`,
           `${SITE}/tags/news`,
         ].sort()
@@ -585,6 +597,32 @@ describe.each(getConfiguredTestDialects())(
       expect(
         robots.body.trimEnd().endsWith(`Sitemap: ${SITE}/sitemap.xml`)
       ).toBe(true);
+    });
+
+    it("names the site's production address, the one asked at where it is among them", async () => {
+      process.env.NEXTLY_PRODUCTION_ADDRESSES =
+        "https://acme.example, https://acme.de";
+      try {
+        const { t } = await boot(dialect, { baseUrl: undefined });
+        await create(t, "posts", {
+          title: "Hello",
+          slug: "hello",
+          status: "published",
+        });
+        const robots = await rootFile("robots.txt");
+        expect(robots.body).toContain(
+          "Sitemap: https://acme.example/sitemap.xml"
+        );
+        // A fixed list of addresses, not whatever a request says.
+        expect(robots.cacheControl).toBeNull();
+        expect((await rootFile("sitemap.xml")).body).toContain(
+          "<loc>https://acme.example/blog/hello</loc>"
+        );
+        const second = await rootFile("robots.txt", "", "https://acme.de");
+        expect(second.body).toContain("Sitemap: https://acme.de/sitemap.xml");
+      } finally {
+        delete process.env.NEXTLY_PRODUCTION_ADDRESSES;
+      }
     });
 
     it("takes the site's address from the request where none is configured, and lets nothing cache it", async () => {

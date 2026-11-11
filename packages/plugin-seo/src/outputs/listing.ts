@@ -23,7 +23,11 @@ import {
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
 
-import { recordSlug, rowOf } from "../address-record/participant";
+import {
+  addressHolders,
+  recordSlug,
+  rowOf,
+} from "../address-record/participant";
 import type { SeoAnswer } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import { MAX_LOC_LENGTH, publishedWhere, toLastModified } from "../sitemap";
@@ -118,7 +122,7 @@ async function heldPaths(
           and: [
             { kind: { equals: "address" } },
             // Held in another language, a path says nothing of this one.
-            { locale: { equals: recordLanguage(ctx) } },
+            { locale: { equals: await recordLanguage(ctx) } },
             { holderCollection: { equals: collection } },
             { holderId: { in: [...ids] } },
           ],
@@ -139,28 +143,6 @@ async function heldPaths(
   }
 }
 
-/** Whichever page the record says holds `path` in the language listed, or none. */
-async function holderOfPath(
-  ctx: PluginContext,
-  path: string
-): Promise<AddressHolder | undefined> {
-  const { data } = await ctx.services.ownCollections.listEntries(
-    recordSlug(ctx),
-    {
-      where: {
-        and: [
-          { kind: { equals: "address" } },
-          { locale: { equals: recordLanguage(ctx) } },
-          { path: { equals: path } },
-        ],
-      },
-      pagination: { limit: 1, page: 1 },
-      depth: 0,
-    }
-  );
-  return (data as unknown[]).map(rowOf)[0]?.holder ?? undefined;
-}
-
 /** The site's default language, where it has languages. */
 function defaultLanguage(ctx: PluginContext): string | undefined {
   const localization = ctx.config.localization;
@@ -171,12 +153,10 @@ function defaultLanguage(ctx: PluginContext): string | undefined {
 
 /**
  * The language the listed pages are read in, as the address record keys it:
- * the site's default, or `"en"` where a site with no languages names none, as
- * core keys the addresses of such a site.
+ * core's answer, the site's default language.
  */
-function recordLanguage(ctx: PluginContext): string {
-  const named = ctx.config.localization?.defaultLocale;
-  return named !== undefined && named !== "" ? named : "en";
+function recordLanguage(ctx: PluginContext): Promise<string> {
+  return ctx.publicAddresses.defaultLanguage();
 }
 
 /**
@@ -276,7 +256,7 @@ async function* candidates(
   options: ListingOptions
 ): AsyncGenerator<Candidate[]> {
   for (const type of await ctx.publicAddresses.types()) {
-    if (!(await covered(type, options, recordLanguage(ctx)))) continue;
+    if (!(await covered(type, options, await recordLanguage(ctx)))) continue;
     yield* type.kind === "single"
       ? singlePages(type)
       : collectionPages(ctx, type);
@@ -292,7 +272,11 @@ async function problemOf(
   holder: AddressHolder,
   path: string
 ): Promise<ListingProblem> {
-  const heldBy = await holderOfPath(ctx, path);
+  const heldBy = (
+    await addressHolders(ctx, path, await recordLanguage(ctx))
+  ).find(
+    other => other.collection !== holder.collection || other.id !== holder.id
+  );
   const page = { collection: holder.collection, id: holder.id };
   return heldBy === undefined
     ? { kind: "not-recorded", holder: page, path }
@@ -414,7 +398,7 @@ async function listed(
     answer,
     options.origin,
     locale,
-    recordLanguage(ctx)
+    await recordLanguage(ctx)
   );
   if (at === null) return null;
   if ("lost" in at) return { lost: { holder, path: at.lost } };

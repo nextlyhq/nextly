@@ -11,6 +11,7 @@ import {
   addressRecordReady,
   retryFailedCatchUp,
 } from "../address-record/catch-up";
+import { productionAddressesOf } from "../canonical";
 import type { ReadRules } from "../resolver/provider";
 
 import { listPages } from "./listing";
@@ -32,16 +33,31 @@ export interface RootFilesConfig {
   robots?: { aiCrawlers: AiCrawlerChoice };
 }
 
-/** The site's origin for one request, and the headers that follow from it. */
-function originOf(
+/**
+ * The site's origin for one request, and the headers that follow from it:
+ * one of the site's production addresses, as the page's head reads them, the
+ * one the request reached where it is among them; else the configured
+ * origin; else the request's own, which nothing may cache, since a request's
+ * host can be anything its sender says.
+ */
+async function originOf(
   req: Request,
+  ctx: PluginRouteContext,
   config: RootFilesConfig,
   contentType: string
-): { origin: string; headers: Record<string, string> } {
+): Promise<{ origin: string; headers: Record<string, string> }> {
   const headers: Record<string, string> = { "content-type": contentType };
-  if (config.origin !== undefined) return { origin: config.origin, headers };
+  const asked = new URL(req.url).origin;
+  const production = productionAddressesOf(
+    (await config.readRules(ctx, undefined)).productionAddresses
+  );
+  const site =
+    production.find(address => address === asked) ??
+    production[0] ??
+    config.origin;
+  if (site !== undefined) return { origin: site, headers };
   headers["cache-control"] = "no-store";
-  return { origin: new URL(req.url).origin, headers };
+  return { origin: asked, headers };
 }
 
 const notFound = () => new Response("Not found", { status: 404 });
@@ -75,8 +91,9 @@ export async function sitemapResponse(
       headers: { "cache-control": "no-store", "retry-after": "120" },
     });
   }
-  const { origin, headers } = originOf(
+  const { origin, headers } = await originOf(
     req,
+    ctx,
     config,
     "application/xml; charset=utf-8"
   );
@@ -117,9 +134,10 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
       path: "/robots.txt",
       mount: "root",
       public: true,
-      handler: req => {
-        const { origin, headers } = originOf(
+      handler: async (req, ctx) => {
+        const { origin, headers } = await originOf(
           req,
+          ctx,
           config,
           "text/plain; charset=utf-8"
         );

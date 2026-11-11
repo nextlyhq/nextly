@@ -41,6 +41,28 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   }),
 }));
 
+// Who holds a path, read from the fake record below as the record is read.
+vi.mock("../../address-record/participant", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../address-record/participant")
+  >()),
+  addressHolders: async (ctx: PluginContext, path: string, locale: string) => {
+    const { data } = await ctx.services.ownCollections.listEntries("", {
+      where: {
+        and: [
+          { kind: { equals: "address" } },
+          { locale: { equals: locale } },
+          { path: { equals: path } },
+        ],
+      },
+    });
+    return (data as Row[]).map(row => ({
+      collection: row.holderCollection,
+      id: row.holderId,
+    }));
+  },
+}));
+
 vi.mock("../../resolver/provider", () => ({
   resolveSeo: async (
     _ctx: unknown,
@@ -94,6 +116,7 @@ function context(
           },
     publicAddresses: {
       types: async () => [{ kind: "collection", slug: "pages" }],
+      defaultLanguage: async () => languages?.[0] ?? "en",
     },
     services: {
       collections: {

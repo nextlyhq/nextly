@@ -271,13 +271,16 @@ These are requests. Well-behaved tools follow them; some ignore them. Asking Goo
 use your pages for AI training (`Google-Extended`) also limits what Gemini can use from
 them. Google Search and Bing are not affected by any choice.
 
-### baseUrl, and why it affects caching
+### The site's address, and why it affects caching
 
-`baseUrl` is the site's production origin: an absolute `http(s)` origin with no path, query,
-fragment or credentials. An invalid value throws when the plugin is constructed, so a typo
-fails at boot.
+Both files name the site by one of its production addresses, read as the page's head reads
+them: `NEXTLY_PRODUCTION_ADDRESSES` first, the one a request reached where it is among them.
+Without one, `baseUrl` is used: an absolute `http(s)` origin with no path, query, fragment
+or credentials. An invalid value throws when the plugin is constructed, so a typo fails at
+boot. A page whose canonical is on another of the site's addresses is listed in that
+address's sitemap.
 
-Without it, each request's own origin is used. That is right for a single-origin deployment,
+Without either, each request's own origin is used. That is right for a single-origin deployment,
 and wrong behind a proxy that rewrites the host. Because a request's host is whatever its
 sender says, both files are then served with `cache-control: no-store`, so nothing in front
 caches one host's answer and serves it for another. **Set `baseUrl` for a cacheable sitemap.**
