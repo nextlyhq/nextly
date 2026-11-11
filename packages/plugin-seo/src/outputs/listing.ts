@@ -279,6 +279,19 @@ async function problemOf(
     : { kind: "held-by-another", holder: page, path, heldBy };
 }
 
+/** `readRules`, read at most once for each language it is asked in. */
+function onceEach(readRules: ReadRules): ReadRules {
+  const read = new Map<string | undefined, ReturnType<ReadRules>>();
+  return (ctx, locale) => {
+    let rules = read.get(locale);
+    if (rules === undefined) {
+      rules = readRules(ctx, locale);
+      read.set(locale, rules);
+    }
+    return rules;
+  };
+}
+
 /**
  * The site's listable pages, in type order and then by id, and the pages left
  * out because they do not hold their own address: one whose answer has no
@@ -291,8 +304,21 @@ export async function listPages(
 ): Promise<{ pages: ListedPage[]; problems: ListingProblem[] }> {
   const found = { pages: [] as ListedPage[], problems: [] as ListingProblem[] };
   const language = await recordLanguage(ctx);
+  // The site's rules are read once per language for the whole listing, not
+  // once a page; nothing is kept past it, so the next listing reads afresh.
+  const readRules =
+    options.readRules === undefined ? undefined : onceEach(options.readRules);
   for await (const batch of candidates(ctx, options)) {
-    await listBatch(ctx, batch, { ...options, language }, found);
+    await listBatch(
+      ctx,
+      batch,
+      {
+        ...options,
+        language,
+        ...(readRules === undefined ? {} : { readRules }),
+      },
+      found
+    );
   }
   return found;
 }

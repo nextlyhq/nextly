@@ -80,9 +80,12 @@ const resolvedIn = new Map<string, string | undefined>();
 
 vi.mock("../../resolver/provider", () => ({
   resolveSeo: async (
-    _ctx: unknown,
-    input: { source: { entry: { id: string } }; locale?: string }
+    ctx: unknown,
+    input: { source: { entry: { id: string } }; locale?: string },
+    readRules?: (ctx: unknown, locale: string | undefined) => Promise<unknown>
   ) => {
+    // The rules are read as the resolver reads them, once per answer.
+    await readRules?.(ctx, input.locale);
     resolvedIn.set(input.source.entry.id, input.locale);
     return answers.get(input.source.entry.id);
   },
@@ -168,6 +171,31 @@ const holds = (id: string, path: string, locale = "en"): Row => ({
 });
 
 describe("the pages the site lists", () => {
+  it("reads the site's rules once for the whole listing, not once a page", async () => {
+    answers.set("1", {
+      robots: listed,
+      canonical: { value: "/en/a", from: "address" },
+    });
+    answers.set("2", {
+      robots: listed,
+      canonical: { value: "/en/b", from: "address" },
+    });
+    const readRules = vi.fn(async () => ({ patterns: {} }));
+
+    await listPages(
+      context(
+        [
+          { id: "1", slug: "a" },
+          { id: "2", slug: "b" },
+        ],
+        [holds("1", "/a"), holds("2", "/b")]
+      ),
+      { origin: SITE, readRules }
+    );
+
+    expect(readRules).toHaveBeenCalledTimes(1);
+  });
+
   it("lists a page at its canonical as its answer gives it", async () => {
     answers.set("1", {
       robots: listed,

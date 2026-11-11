@@ -12,6 +12,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./admin": {
+      "types": "./dist/admin/index.d.ts",
+      "import": "./dist/admin/index.js",
+      "default": "./dist/admin/index.js"
     }
   },
   "files": [
@@ -30,20 +35,36 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
+    "@nextlyhq/admin": "0.0.2-alpha.74",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "nextly": "0.0.2-alpha.74",
+    "react": "^19.3.0",
     "sharp": "^0.35.5"
   },
   "peerDependenciesMeta": {
+    "@nextlyhq/admin": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
     "sharp": {
       "optional": true
     }
   },
   "devDependencies": {
+    "@nextlyhq/admin": "workspace:*",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "jsdom": "^27.1.0",
     "nextly": "workspace:*",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "sharp": "^0.35.5",
     "tsdown": "^0.23.1",
     "typescript": "7.0.2",

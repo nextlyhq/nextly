@@ -15,7 +15,9 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fillPattern, type SiteRules } from "../page-levels";
+import { fillPattern } from "../../settings/patterns";
+import { seoSettingsCacheTags } from "../../settings/single";
+import type { SiteRules } from "../page-levels";
 import { answerOf, resolveSeo, seoPageMetadata } from "../provider";
 
 vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
@@ -126,7 +128,10 @@ const RULES: SiteRules = {
   siteName: "Acme",
   description: "Acme makes things.",
   image: { url: "/site.jpg" },
+  productionAddresses: [],
+  defaultPatterns: {},
   patterns: { posts: { title: "{Title} | {Site name}" } },
+  aiCrawlers: "all",
 };
 
 describe("one answer for each kind of page", () => {
@@ -417,6 +422,29 @@ describe("what the answer depends on", () => {
       entryInput("pages", { slug: "a", seo: { ogImage: "m1" } })
     );
     expect(tags).toEqual(expect.arrayContaining(["nextly:media"]));
+  });
+
+  it("names the SEO settings' tags, so a changed setting expires the head", () => {
+    const tags = seoPageMetadata(context()).tags?.(
+      entryInput("pages", { slug: "a" })
+    );
+    expect(tags).toEqual(expect.arrayContaining(seoSettingsCacheTags()));
+  });
+
+  it("a type with no pattern of its own takes the site's default pattern", async () => {
+    const answer = await resolveSeo(
+      context(),
+      entryInput("pages", { slug: "about", title: "About" }),
+      async () => ({
+        ...RULES,
+        defaultPatterns: { title: "{Title} — {Site name}" },
+      })
+    );
+    expect(answer.title).toEqual({
+      value: "About — Acme",
+      from: "pattern",
+      pattern: "{Title} — {Site name}",
+    });
   });
 });
 

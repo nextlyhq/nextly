@@ -20,13 +20,16 @@ import {
 
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
+import { isRecord, textOf } from "../plain-values";
+import type { AiCrawlerChoice } from "../settings/contract";
+import { fillPattern } from "../settings/patterns";
 
 import type { Levels } from "./order";
 
 /**
- * The site's own SEO rules: its name and defaults, and each content type's
- * pattern, keyed by the collection slug or `single:<slug>`. Read from the
- * SEO settings; empty where none are set.
+ * The site's own SEO rules: its name and defaults, the patterns a type uses
+ * where it has none of its own, and each content type's pattern, keyed by the
+ * collection slug or `single:<slug>`. Read from the SEO settings.
  */
 export interface SiteRules {
   siteName?: string;
@@ -34,12 +37,16 @@ export interface SiteRules {
   productionAddresses?: readonly string[];
   description?: string;
   image?: PageMetadataImage;
+  /** The patterns a type uses where it has none of its own. */
+  defaultPatterns?: { title?: string; description?: string };
   patterns: Record<string, { title?: string; description?: string }>;
   /**
    * The content types hidden from search as a whole, keyed as `patterns`
    * are: every page of one is served `noindex` and left out of the sitemap.
    */
   hiddenTypes?: readonly string[];
+  /** What robots.txt asks AI crawlers to do, where the site has chosen. */
+  aiCrawlers?: AiCrawlerChoice;
 }
 
 /** No rules set: every value comes from the page, its route or its content. */
@@ -54,12 +61,6 @@ const CONTENT_FIELDS = {
   description: ["excerpt", "summary", "description", "subtitle"],
   image: ["coverImage", "cover", "featuredImage", "heroImage", "image"],
 } as const;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const textOf = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim() !== "" ? value : undefined;
 
 /** `values` without the keys whose value is undefined. */
 function defined<T extends Record<string, unknown>>(values: T): Partial<T> {
@@ -124,40 +125,6 @@ export async function imageOf(
   value: unknown
 ): Promise<PageMetadataImage | undefined> {
   return asImage(await mediaOf(ctx, value));
-}
-
-/** A token's name as matched: letters and digits only, any case. */
-const tokenKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, "");
-
-/**
- * `pattern` filled in from the page: `{Title}` and `{Site name}`, and any of
- * the page's own text fields by name. Nothing where a token has no value, so
- * the next level supplies the value rather than a pattern with a hole in it.
- */
-export function fillPattern(
-  pattern: string,
-  values: { title?: string; siteName?: string },
-  document: Readonly<Record<string, unknown>>
-): string | undefined {
-  const fields = new Map(
-    Object.entries(document).map(([name, value]) => [tokenKey(name), value])
-  );
-  let missing = false;
-  const filled = pattern.replace(/\{([^{}]+)\}/g, (_, name: string) => {
-    const key = tokenKey(name);
-    const value =
-      key === "title"
-        ? values.title
-        : key === "sitename"
-          ? values.siteName
-          : (textOf(fields.get(key)) ??
-            (typeof fields.get(key) === "number"
-              ? String(fields.get(key))
-              : undefined));
-    if (value === undefined) missing = true;
-    return value ?? "";
-  });
-  return missing ? undefined : textOf(filled.trim());
 }
 
 /** The first of `names` the document has a value for, and which. */
@@ -349,7 +316,8 @@ export async function levelsOf(
     code: input.code,
     template: input.derived,
     pattern: patternLevel(
-      rules.patterns[key] ?? {},
+      // The type's own patterns, else the site's default for that part.
+      { ...rules.defaultPatterns, ...rules.patterns[key] },
       defined({ title: content.title?.value, siteName: rules.siteName }),
       document
     ),
