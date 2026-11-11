@@ -30,10 +30,7 @@ import { isFieldGroupFieldType } from "nextly/field-group-type";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
 import { isReservedFieldName } from "./constants";
-import {
-  convertToFieldDefinition,
-  deleteFieldById,
-} from "./field-transformers";
+import { convertToFieldDefinition } from "./field-transformers";
 import { insertField, type FieldInsertPosition } from "./insert-field";
 import {
   describeReadOnly,
@@ -331,6 +328,15 @@ export function judgeMove(
       : null) ??
     nameRefusal(field, container, siblingsIn(fields, container), ctx);
   if (refusal) return refusal;
+  const passed = passedReadOnlySibling(
+    fields,
+    field,
+    from,
+    container,
+    target,
+    ctx
+  );
+  if (passed) return passed;
   return {
     allowed: true,
     fields: placed(fields, field, target),
@@ -338,6 +344,77 @@ export function judgeMove(
       .filter(repeater => !from.some(each => each.id === repeater.id))
       .map(called),
   };
+}
+
+/**
+ * `fields` without `field` itself: that one object, where it sits, never
+ * another field that happens to share its id.
+ */
+function withoutField(
+  fields: readonly BuilderField[],
+  field: BuilderField
+): BuilderField[] {
+  return fields
+    .filter(each => each !== field)
+    .map(each =>
+      each.fields && each.fields.length > 0
+        ? { ...each, fields: withoutField(each.fields, field) }
+        : each
+    );
+}
+
+/** The siblings a reorder to `target` passes over, between the field's place and its new one. */
+function siblingsPassed(
+  siblings: readonly BuilderField[],
+  field: BuilderField,
+  target: FieldInsertPosition
+): readonly BuilderField[] {
+  const at = siblings.indexOf(field);
+  const anchor = target.beforeFieldId
+    ? siblings.findIndex(each => each.id === target.beforeFieldId)
+    : -1;
+  const to = anchor === -1 ? siblings.length : anchor;
+  return to > at ? siblings.slice(at + 1, to) : siblings.slice(to, at);
+}
+
+/** Whether a sibling may not change place: built in, or owned by code or a plugin. */
+function cannotChangePlace(
+  sibling: BuilderField,
+  ancestors: readonly BuilderField[],
+  ctx: MoveContext
+): boolean {
+  return (
+    sibling.isSystem === true ||
+    placementReadOnlyReason(sibling, ancestors, ctx.entityReadOnly) !== null
+  );
+}
+
+/**
+ * Why a reorder within one container may not happen, if it may not: every
+ * sibling between the field's place and its new one changes place too, so
+ * none of them may be one that cannot.
+ */
+function passedReadOnlySibling(
+  fields: readonly BuilderField[],
+  field: BuilderField,
+  from: readonly BuilderField[],
+  container: BuilderField | null,
+  target: FieldInsertPosition,
+  ctx: MoveContext
+): MoveVerdict | null {
+  const source = from.length > 0 ? from[from.length - 1] : null;
+  if ((source?.id ?? null) !== (container?.id ?? null)) return null;
+  const fixed = siblingsPassed(
+    siblingsIn(fields, container),
+    field,
+    target
+  ).find(each => cannotChangePlace(each, from, ctx));
+  return fixed
+    ? refuse(
+        "read-only",
+        `${called(field)} cannot move past ${called(fixed)}, which cannot change place.`
+      )
+    : null;
 }
 
 /** `fields` with `field` taken from where it is and put at `target`. */
@@ -351,7 +428,7 @@ function placed(
     target.beforeFieldId === field.id
       ? nextSiblingId(fields, field.id)
       : target.beforeFieldId;
-  const without = deleteFieldById([...fields], field.id);
+  const without = withoutField(fields, field);
   return (
     insertField(without, field, {
       ...(target.parentFieldId ? { parentFieldId: target.parentFieldId } : {}),
@@ -390,8 +467,15 @@ export function moveDestinations(
   fieldId: string,
   ctx: MoveContext
 ): MoveDestination[] {
+  // A place is judged as a container, so the field's own is asked about
+  // staying where it is, not about passing whatever sits after it.
+  const home = chainTo(fields, fieldId)?.slice(0, -1).pop()?.id;
+  const into = (parentFieldId?: string): FieldInsertPosition => ({
+    ...(parentFieldId ? { parentFieldId } : {}),
+    ...(parentFieldId === home ? { beforeFieldId: fieldId } : {}),
+  });
   const places: MoveDestination[] = [
-    { path: [], verdict: judgeMove(fields, fieldId, {}, ctx) },
+    { path: [], verdict: judgeMove(fields, fieldId, into(), ctx) },
   ];
   const walk = (list: readonly BuilderField[], path: BuilderField[]) => {
     for (const field of list) {
@@ -406,7 +490,7 @@ export function moveDestinations(
         places.push({
           parentFieldId: field.id,
           path: here,
-          verdict: judgeMove(fields, fieldId, { parentFieldId: field.id }, ctx),
+          verdict: judgeMove(fields, fieldId, into(field.id), ctx),
         });
       }
       if (field.fields) walk(field.fields, here);

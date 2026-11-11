@@ -7,6 +7,9 @@ import { describe, expect, it } from "vitest";
 
 import { nestedFixtureFields } from "@admin/components/features/schema-builder/__fixtures__/nested-fixture";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import type { FieldDefinition } from "@admin/types/collection";
+
+import { convertToBuilderField } from "../field-transformers";
 
 import {
   judgeMove,
@@ -41,6 +44,11 @@ function namesIn(
   };
   const list = containerId ? (find(fields)?.fields ?? []) : fields;
   return list.map(each => each.name);
+}
+
+/** A stored field, as the Builder loads it. */
+function loaded(definition: Record<string, unknown>): BuilderField {
+  return convertToBuilderField(definition as unknown as FieldDefinition, 0);
 }
 
 function refusal(verdict: MoveVerdict): { reason: string; message: string } {
@@ -293,17 +301,29 @@ describe("moves the rule refuses", () => {
     const fields = [
       ...nestedFixtureFields(),
       plain("f-code", "code", { advanced: { unique: true } }),
-      // A one-to-one reaches the Builder as a relationship marked Unique.
-      plain("f-author", "author", {
-        type: "relationship",
-        relationTo: "users",
-        advanced: { unique: true },
-      }),
-      plain("f-owner", "owner", {
-        type: "relationship",
-        relationTo: "users",
-        advanced: { unique: true, localized: true },
-      }),
+      // A one-to-one, as the server's read gives it to the editor: a
+      // relationship marked Unique, loaded through the Builder's own loader.
+      {
+        ...loaded({
+          name: "author",
+          label: "Author",
+          type: "relationship",
+          relationTo: "users",
+          unique: true,
+        }),
+        id: "f-author",
+      },
+      {
+        ...loaded({
+          name: "owner",
+          label: "Owner",
+          type: "relationship",
+          relationTo: "users",
+          unique: true,
+          localized: true,
+        }),
+        id: "f-owner",
+      },
     ];
     for (const id of ["f-code", "f-author", "f-owner"]) {
       for (const into of ["f-meta", "f-sections", "f-items-cta"]) {
@@ -314,6 +334,44 @@ describe("moves the rule refuses", () => {
         expect(message).toContain("once it is no longer unique");
       }
     }
+  });
+});
+
+describe("fields that cannot change place", () => {
+  it("are not passed by a reorder, up or down, but a move that passes none is allowed", () => {
+    const fields = [
+      plain("f-a", "a"),
+      plain("f-code", "code_owned", { source: "code" }),
+      plain("f-b", "b"),
+      plain("f-c", "c"),
+    ];
+    const down = refusal(
+      judgeMove(fields, "f-a", { beforeFieldId: "f-c" }, ctx)
+    );
+    expect(down.reason).toBe("read-only");
+    expect(down.message).toContain("cannot move past");
+    expect(
+      refusal(judgeMove(fields, "f-c", { beforeFieldId: "f-a" }, ctx)).reason
+    ).toBe("read-only");
+    expect(
+      judgeMove(fields, "f-c", { beforeFieldId: "f-b" }, ctx).allowed
+    ).toBe(true);
+  });
+});
+
+describe("a field among copies that share its id", () => {
+  it("moves that one field, leaving the other where it is", () => {
+    const fields = [
+      plain("f-g1", "first", { type: "group", fields: [plain("f-same", "x")] }),
+      plain("f-g2", "second", {
+        type: "group",
+        fields: [plain("f-same", "x")],
+      }),
+    ];
+    const after = moved(judgeMove(fields, "f-same", {}, ctx));
+    expect(namesIn(after, "f-g1")).toEqual([]);
+    expect(namesIn(after, "f-g2")).toEqual(["x"]);
+    expect(namesIn(after)).toEqual(["first", "second", "x"]);
   });
 });
 
