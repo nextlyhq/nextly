@@ -588,6 +588,7 @@ export type {
   AddressHolder,
   HeldAddress,
   HeldAddressUpdate,
+  HeldDocument,
   ParticipantTransaction,
   PluginPublicAddresses,
   PublicAddressParticipant,

@@ -51,6 +51,7 @@ import { DrawFailureContext, useDrawFailures } from "./draw-failures";
 import { ArrangedGrid } from "./edit/ArrangedGrid";
 import { AtRestSettingsWriteProvider } from "./edit/at-rest-settings-write";
 import { DashboardAddPanel, useAddPanelState } from "./edit/DashboardAddPanel";
+import { DashboardCrumb } from "./edit/DashboardBarControls";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
 import { CardDragContext } from "./edit/drag/CardDragContext";
 import { useCardDrag } from "./edit/drag/useCardDrag";
@@ -72,7 +73,6 @@ import { useDashboardFocus } from "./edit/useDashboardFocus";
 import type { LayoutEditor } from "./edit/useLayoutEditor";
 import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
-import { usePublishGridChrome } from "./grid-chrome";
 import {
   HiddenWhileEmptyContext,
   useHiddenWhileEmptyAtFirstPaint,
@@ -313,7 +313,7 @@ function DashboardLeaveGuard({
 
 /** Why a single-card write is unavailable while the stored layout is unreadable. */
 const UNREADABLE_SINGLE_CARD =
-  "Unavailable: your saved dashboard couldn't be loaded. Save it from Customize first.";
+  "Unavailable: your saved dashboard couldn't be loaded. Save it from Customize dashboard first.";
 
 /** Why a single-card write is unavailable now, or nothing when it is available. */
 function singleCardWriteBlocked(isUnreadable: boolean): string | undefined {
@@ -582,7 +582,6 @@ export function WidgetGrid(): JSX.Element {
     failed,
     settling,
     retry,
-    refresh,
     reportDraw,
   } = useCardsAtDashboardWidth(
     visible,
@@ -595,15 +594,6 @@ export function WidgetGrid(): JSX.Element {
     },
     layout.layout
   );
-
-  // What the page's header draws from the grid.
-  usePublishGridChrome({
-    arrangement,
-    requested,
-    updatedAtFor,
-    refresh,
-    customizeRef: focus.customizeRef,
-  });
 
   const gridAnnouncer = useGridAnnouncer(settling, counted, failed);
   const { announcement } = gridAnnouncer;
@@ -645,6 +635,7 @@ export function WidgetGrid(): JSX.Element {
         data-testid="dashboard-container"
         className="@container/dashboard"
       >
+        <DashboardCrumb />
         {holding}
       </div>
     );
@@ -676,6 +667,7 @@ export function WidgetGrid(): JSX.Element {
             isUnreadable={layout.isUnreadable}
             onStageReset={arrangement.stageReset}
             on={{
+              begin: arrangement.begin,
               cancel: arrangement.cancel,
               addWidget: () => addPanel.setOpen(true),
             }}

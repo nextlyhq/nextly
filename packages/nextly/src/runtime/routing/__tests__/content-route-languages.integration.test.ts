@@ -101,7 +101,7 @@ function pagesRoute(t: TestNextly) {
     collections: ["pages"],
     nextly: t.nextly,
     // A list of three pages, so the first page's other spelling redirects.
-    listPages: () => 3,
+    listPages: async () => 3,
     render: (entry: ContentEntry, context) => ({
       title: entry.title,
       locale: context.locale,
