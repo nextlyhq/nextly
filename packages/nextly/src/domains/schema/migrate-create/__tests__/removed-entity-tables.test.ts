@@ -119,7 +119,9 @@ describe("a removed field group named through its old dbName", () => {
   it("is refused while a remaining field places it, naming the field", async () => {
     const error = await refusal({ collections: [articles] });
 
-    expect(error.publicMessage).toContain(`"seo" cannot be deleted`);
+    // The table and the slug the field still names are both being removed; the refusal names the
+    // slug with the field that places it.
+    expect(error.publicMessage).toContain(`"seo": Fields that place it`);
     expect(error.publicMessage).toContain("articles.seo");
   });
 
