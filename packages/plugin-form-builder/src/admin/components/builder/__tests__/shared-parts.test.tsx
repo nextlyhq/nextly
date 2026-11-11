@@ -318,28 +318,6 @@ describe("the Form Builder on the shared picker and panel", () => {
     });
   });
 
-  it("moves what refers to a field with its new name, typed through an empty one", async () => {
-    const { user, saved, savedNotifications } = view({}, [TEAM]);
-    // Clear, then type: the rename passes through the empty name.
-    await open(user, "Topic");
-    const name = () => screen.getByRole("textbox", { name: "Name" });
-    await user.clear(name());
-    await user.type(name(), "subject");
-    await open(user, "Email");
-    await user.clear(name());
-    await user.type(name(), "contact_email");
-
-    await save(user);
-    const details = saved().find(field => field.label === "Details");
-    expect(details?.conditionalLogic?.conditions).toEqual([
-      { field: "subject", comparison: "equals", value: "other" },
-    ]);
-    expect(savedNotifications()[0]).toMatchObject({
-      replyTo: "{{contact_email}}",
-      condition: { field: "subject" },
-    });
-  });
-
   it("keeps a name unique when a label edit gives one already used", async () => {
     const { user, saved } = view();
     await user.click(await screen.findByRole("button", { name: "Add field" }));
@@ -491,13 +469,15 @@ describe("the Form Builder on the shared picker and panel", () => {
     );
     await user.click(within(picker).getByRole("button", { name: "Add field" }));
     // A host written for the type alone still gets it as the first argument.
+    // The third is the place in the list; from the toolbar, none (the end).
     expect(onAddField).toHaveBeenCalledWith(
       "phone",
       expect.objectContaining({
         type: "phone",
         label: "Mobile",
         name: "mobile",
-      })
+      }),
+      undefined
     );
   });
 

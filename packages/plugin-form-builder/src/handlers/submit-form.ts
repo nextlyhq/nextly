@@ -316,7 +316,10 @@ export async function submitForm(
     // and the check-then-create pair is not atomic, so two truly concurrent
     // submissions can both pass — an airtight version needs a partial
     // unique index the portable field config cannot express yet.
-    if (settings.allowMultipleSubmissions === false && !metadata?.ipAddress) {
+    // One per network address is the one-response check this path makes; the
+    // other modes are not checked here.
+    const onePerAddress = settings.oneResponse === "ip";
+    if (onePerAddress && !metadata?.ipAddress) {
       // Without an identifier there is nothing to deduplicate on. Failing
       // closed would block every server-to-server integration, so the gate
       // stays open — loudly.
@@ -325,7 +328,7 @@ export async function submitForm(
         { formSlug }
       );
     }
-    if (settings.allowMultipleSubmissions === false && metadata?.ipAddress) {
+    if (onePerAddress && metadata?.ipAddress) {
       const existing = await collections.count(
         pluginConfig.formSubmissionOverrides.slug,
         {

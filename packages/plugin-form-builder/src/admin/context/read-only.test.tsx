@@ -63,14 +63,24 @@ const CHANGES_THE_DOCUMENT: Record<
   // Takes the last change back, which changes the document as much as making
   // it did.
   undo: c => (c as FormBuilderContextValue & FieldBookkeeping).undo(),
+  editField: c => {
+    const field = c.fields[0];
+    (c as FormBuilderContextValue & FieldBookkeeping).editField(
+      field,
+      { ...field, label: "Changed" },
+      c.fields
+    );
+  },
 };
 
 /** The actions that are navigation or bookkeeping rather than an edit. */
 const READS = [
   "selectField",
+  "fieldKey",
   "setActiveTab",
   "markAsSaved",
   "beginSave",
+  "saveFailed",
   "markFieldsSaved",
 ];
 

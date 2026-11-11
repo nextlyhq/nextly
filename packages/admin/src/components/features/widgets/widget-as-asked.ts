@@ -17,6 +17,7 @@ import {
   type PublishedContentSource,
   type WidgetQuery,
 } from "nextly/config";
+import type { CountUsersSource } from "nextly/core-widget-data";
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
@@ -107,8 +108,14 @@ export function settingsAsAsked(
 }
 
 /**
+ * What a Collection setting that offers Users (`users: true`) holds for them: a slug no
+ * collection can take, as core stores it.
+ */
+export const USERS_SOURCE: CountUsersSource = "users";
+
+/**
  * The name of a collection as the server published it to this reader: its label, or its slug
- * where none is known.
+ * where none is known; "Users" for the people, which no collection can be called.
  */
 export function collectionLabel(
   collection: string,
@@ -116,7 +123,7 @@ export function collectionLabel(
 ): string {
   return (
     sources?.find(source => source.collection === collection)?.label ??
-    collection
+    (collection === USERS_SOURCE ? "Users" : collection)
   );
 }
 
