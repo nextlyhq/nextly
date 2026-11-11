@@ -187,20 +187,21 @@ instead, where each one can still be edited, and no tab is drawn.
 
 ## Configuration
 
-| Option           | Type                                                             | Default            | What it does                                                                             |
-| ---------------- | ---------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------- |
-| `collections`    | `string[]`                                                       | required           | The collections that get the `seo` group                                                 |
-| `singles`        | `string[]`                                                       | none               | The Singles that get the `seo` group, such as a homepage                                 |
-| `fields`         | `FieldConfig[]`                                                  | the nine above     | The fields placed inside the group                                                       |
-| `baseUrl`        | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name          |
-| `sitemap`        | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                   |
-| `robots`         | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                   |
-| `aiCrawlers`     | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                          |
-| `hiddenTypes`    | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some            |
-| `structuredData` | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields |
-| `socialCard`     | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                |
-| `urlFor`         | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                |
-| `basePath`       | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                  |
+| Option            | Type                                                             | Default            | What it does                                                                             |
+| ----------------- | ---------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------- |
+| `collections`     | `string[]`                                                       | required           | The collections that get the `seo` group                                                 |
+| `singles`         | `string[]`                                                       | none               | The Singles that get the `seo` group, such as a homepage                                 |
+| `fields`          | `FieldConfig[]`                                                  | the nine above     | The fields placed inside the group                                                       |
+| `baseUrl`         | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name          |
+| `sitemap`         | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                   |
+| `robots`          | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                   |
+| `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                          |
+| `hiddenTypes`     | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some            |
+| `structuredData`  | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields |
+| `socialCard`      | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                |
+| `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type      |
+| `urlFor`          | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                |
+| `basePath`        | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                  |
 
 ## The sitemap and robots.txt
 
@@ -435,8 +436,10 @@ them for all of them. The AI tools choice on Crawlers is what robots.txt asks, a
 settings hide are hidden from every output; until the site chooses, the plugin's `aiCrawlers` and
 `hiddenTypes` options answer.
 
-Opening the page needs `read-seo-settings`, and saving needs `update-seo-settings`. Both are
-seeded with the plugin's `seo-settings` Single, which holds the settings.
+Opening the page needs `manage-seo` and `read-seo-settings`, and saving needs `manage-seo` and
+`update-seo-settings`. The last two are seeded with the plugin's `seo-settings` Single, which holds
+the settings, and the Single answers no one without `manage-seo`, however it is asked. See
+[Who may change SEO](#who-may-change-seo).
 
 ### Title patterns
 
@@ -736,6 +739,8 @@ The form refuses what would break: an address a published page holds, a second r
 
 The **Not found** tab lists the addresses people and search engines asked for that don't exist, most visited first. **Redirect…** fills the form with the address and the closest live page as a suggestion, for you to check before adding.
 
+The screen, its import and the **Not found** tab are for someone holding `manage-seo`. The plugin keeps the redirects and the not-found log itself, so the permissions the role screen lists for their collections open nothing on their own.
+
 ### Importing redirects from a file
 
 **Import CSV** reads a file of redirects, one per line: the From address, the To address and, optionally, `temporary`. A first line naming the columns is skipped.
@@ -830,6 +835,10 @@ whole is checked for a missing production address, a collection with no public a
 redirect whose To address redirects again, and a page left out of the sitemap because another page
 holds its address.
 
+The list is for anyone who may read one of the content types the plugin extends, and shows each
+person the problems of the pages they may read. A redirect that takes more than one hop is listed
+only for someone holding `manage-seo`, who may see the redirects.
+
 ### When the list is checked
 
 - **A page is checked again when it is saved**, after the save, so a check never slows or undoes
@@ -873,7 +882,8 @@ which refreshes the card LinkedIn keeps for about a week.
 Open it from a page's SEO tab, or from the menu, where it checks the site's first listed
 page. Any address on the site can be typed in. What Nextly holds is the head the plugin
 answers for the published page at that address, shown only to someone who may read that
-page's content type; anyone signed in to the admin may run a check.
+page's content type. Running a check, and the screen itself, need `check-seo`, since a check has
+the server fetch the site's pages.
 
 What Google shows in its results can still differ from what Googlebot received: Google
 sometimes writes its own title, and keeps an older copy until it visits again. The check
@@ -898,6 +908,49 @@ Every redirect is held to the same rules before it is followed, and the connecti
 made to the very address that was checked, so a name whose answer changes in between
 reaches nothing new. A fetch stops after 10 seconds, 5 MB or 5 redirects, and says so.
 With no production address set, the screen asks for one and checks nothing.
+
+## Who may change SEO
+
+The plugin declares its own permissions, which the role screen files under **SEO**:
+
+| Permission        | What it allows                                                                                                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `manage-seo`      | Site-wide SEO: the [SEO settings](#the-seo-settings) (with the Single's own read or update permission beside it), [redirects](#redirects), their imports, and the addresses not found |
+| `check-seo`       | [What search engines received](#what-search-engines-received): the screen, and the check it runs                                                                                      |
+| `edit-seo-<type>` | Changing the SEO of one content type's pages, such as `edit-seo-posts`, where `pagePermissions` is on                                                                                 |
+
+Each is asked by the server on every request, whatever the admin shows: someone without it is
+refused and given nothing of what it guards. The admin hides the Settings, Redirects and What search
+engines received entries from someone without the screen's permission.
+
+A page's SEO is part of the page. By default whoever may edit a page changes its SEO, and an SEO
+change is saved like any other change to it: held as a draft where the type has drafts, and served,
+and listed with a new `lastmod` in the sitemap, once the page is published.
+
+To let someone edit a type's pages but not their SEO, turn `pagePermissions` on:
+
+```ts
+seoPlugin({ collections: ["posts"], pagePermissions: true });
+```
+
+Each content type the plugin extends then has its own `edit-seo-<type>` permission. A role that
+may update a page and lacks it saves everything else on the page, while the page's SEO stays as it
+was, and the SEO tab shows it read-only. Reading a page's SEO stays part of reading the page.
+
+Which built-in roles hold what:
+
+- **Super Admin** and **Admin** hold every permission the plugin declares.
+- **Editor**, **Author** and **Viewer** hold none of the three above, since the built-in roles
+  other than Admin never pick up a permission a plugin declares. Editors and Authors change a
+  page's SEO with the page while `pagePermissions` is off, and none of them reaches site-wide SEO
+  or the check. Give the people who should a role of your own holding the permissions above.
+
+The sitemap, robots.txt and each page's head are public. Making a [share image](#share-images-of-the-right-size)
+is a change to the media library, asked as `create-media` and `read-media`.
+
+An admin menu entry or screen can ask one permission. The settings screen asks `manage-seo`, so
+someone holding it without `read-seo-settings` sees the entry, and the screen is refused its
+contents.
 
 ## Next steps
 

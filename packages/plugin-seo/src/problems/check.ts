@@ -778,6 +778,11 @@ export interface Reader {
   readsType(type: string): boolean;
   /** How many entries of `type` they may read. */
   count(type: string): Promise<number>;
+  /**
+   * Whether they may see the site's redirects, which only site-wide SEO
+   * may: a problem naming a redirect is shown to no one else.
+   */
+  seesRedirects: boolean;
 }
 
 /** A page's key in a {@link Reader.pages} answer. */
@@ -808,6 +813,9 @@ export async function problemList(
   ]);
   const pages = rows.filter(row => allowed.has(pageRefKey(row.subject)));
   const found = site.problems.filter(problem => {
+    if (problem.kind === "redirectChain" && !reader.seesRedirects) {
+      return false;
+    }
     const page = pageOf(problem);
     return page === undefined || allowed.has(pageRefKey(page));
   });

@@ -5,8 +5,9 @@
  * Both are for a signed-in person who may read at least one of the types
  * SEO is added to, and each answers the problems of the pages they may read,
  * with the site-wide ones, so the list never names a page its reader cannot
- * open. The checks themselves read as the system: what they find is kept
- * for every reader, and each sees their share of it.
+ * open, and names a redirect only to someone holding site-wide SEO. The
+ * checks themselves read as the system: what they find is kept for every
+ * reader, and each sees their share of it.
  *
  * @module problems/route
  */
@@ -22,6 +23,7 @@ import {
   addressRecordReady,
   retryFailedCatchUp,
 } from "../address-record/catch-up";
+import { seoCan } from "../permissions";
 
 import {
   checkSite,
@@ -72,7 +74,10 @@ function idsByType(
  * own, say) decides, as it does for every other read. A type the caller may
  * not read at all is not asked about.
  */
-function readerOf(ctx: PluginRouteContext, types: ReadonlySet<string>): Reader {
+async function readerOf(
+  ctx: PluginRouteContext,
+  types: ReadonlySet<string>
+): Promise<Reader> {
   const asReader = {
     as: "user" as const,
     user: ctx.user ?? undefined,
@@ -108,6 +113,8 @@ function readerOf(ctx: PluginRouteContext, types: ReadonlySet<string>): Reader {
     readsType: type => types.has(type),
     // Counted as the caller, so a rule admitting only some entries decides.
     count: type => ctx.services.collections.count(type, {}, asReader),
+    // Redirects are site-wide SEO's: named only to someone holding it.
+    seesRedirects: await seoCan(ctx, "manage"),
   };
 }
 
@@ -121,7 +128,7 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
       handler: async (_req, ctx) => {
         const readable = await readableTypes(ctx, checks.targets);
         return respondDoc(
-          await problemList(ctx, checks, readerOf(ctx, readable))
+          await problemList(ctx, checks, await readerOf(ctx, readable))
         );
       },
     },
@@ -144,7 +151,11 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
           });
         }
         await checkSite(ctx, checks);
-        const list = await problemList(ctx, checks, readerOf(ctx, readable));
+        const list = await problemList(
+          ctx,
+          checks,
+          await readerOf(ctx, readable)
+        );
         const pages = `${list.pagesChecked} ${list.pagesChecked === 1 ? "page" : "pages"}`;
         return respondAction(`Checked ${pages}.`, { ...list });
       },

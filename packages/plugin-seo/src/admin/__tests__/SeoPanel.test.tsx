@@ -62,6 +62,7 @@ const CONTEXT: SeoTabContext = {
     "noindex",
     "structuredDataType",
   ],
+  mayChange: true,
   structuredData: {
     type: { key: "article", label: "Article" },
     chosen: "type",
@@ -92,7 +93,10 @@ function Harness({
   onMakeShareImage,
   onGoToField,
   receivedHref,
+  writable = true,
 }: {
+  /** Whether the values can be changed, as the tab works it out. */
+  writable?: boolean;
   /** Where the page's check of what search engines received is. */
   receivedHref?: string;
   /** Makes a share image; the harness sets the id it answers as the page's. */
@@ -132,7 +136,7 @@ function Harness({
         }
         values={values}
         chosenImage={undefined}
-        writable
+        writable={writable}
         {...(documentKey === undefined ? {} : { documentKey })}
         {...(errors === undefined ? {} : { errors })}
         onMakeShareImage={
@@ -171,6 +175,24 @@ describe("the SEO panel at rest", () => {
     expect(
       screen.queryByRole("switch", { name: "Hide this page from search" })
     ).toBeNull();
+  });
+
+  it("says when the person may not change the page's SEO, and offers nothing to change", () => {
+    render(
+      <Harness
+        context={{ ...CONTEXT, mayChange: false }}
+        writable={false}
+        initial={{ metaTitle: "Typed before" }}
+      />
+    );
+    expect(screen.getByText("You can't change this page's SEO.")).toBeVisible();
+    expect(titleField()).toBeDisabled();
+    expect(screen.getByLabelText("Description on Google")).toBeDisabled();
+  });
+
+  it("says nothing of it to someone who may change it", () => {
+    render(<Harness />);
+    expect(screen.queryByText("You can't change this page's SEO.")).toBeNull();
   });
 
   it("shows each automatic value, its count and the level it came from", () => {
