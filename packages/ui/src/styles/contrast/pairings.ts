@@ -229,14 +229,22 @@ const STATUS_TEXT: Pairing[] = STATUSES.flatMap((s): Pairing[] => [
     label: `${s} text on page container`,
   },
 ]);
-const STATUS_ON_SOLID: Pairing[] = ["destructive", "success"].map(
-  (s): Pairing => ({
-    fg: `--color-${s}-foreground`,
-    bg: `--color-${s}-solid`,
+const STATUS_ON_SOLID: Pairing[] = [
+  ...["destructive", "success"].map(
+    (s): Pairing => ({
+      fg: `--color-${s}-foreground`,
+      bg: `--color-${s}-solid`,
+      kind: "text",
+      label: `${s} on-color (solid fill)`,
+    })
+  ),
+  {
+    fg: "--color-destructive-foreground",
+    bg: "--color-destructive-hover",
     kind: "text",
-    label: `${s} on-color (solid fill)`,
-  })
-);
+    label: "destructive on-color (hovered solid fill)",
+  },
+];
 
 // A success or warning toast: its text on its own surface, both handed to the
 // toast library by the Toaster in place of the library's own colours.

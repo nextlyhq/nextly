@@ -24,6 +24,7 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
+import { seoPageMetadata } from "./resolver/provider";
 import {
   generateSitemap,
   resolveBaseOrigin,
@@ -168,6 +169,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     extend: [{ target: targets, fields: [seoGroup] }],
     // The record that keeps each public address to one page.
     collections: [addressRecordCollection()],
+    // Every page's head, worked out by the one order of who wins.
+    services: { pageMetadata: ctx => seoPageMetadata(ctx) },
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -264,6 +267,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     },
     category: "seo",
     tags: ["seo", "meta"],
+    // The route helpers ask this plugin for each page's head.
+    provides: ["page-metadata"],
     contributes,
     init(ctx) {
       // The site-wide record that keeps each public address to one page:

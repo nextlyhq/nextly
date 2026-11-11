@@ -48,9 +48,10 @@ import { GRID_CLASS } from "../sizes";
 import { settingsAsAsked, titleAsAsked } from "../widget-as-asked";
 
 import { ArrangedCell, type ArrangedCellProps } from "./ArrangedCell";
-import type { DropLine } from "./drag/drop-geometry";
+import { EscapePutsCardBack } from "./drag/EscapePutsCardBack";
 import type { CardDrag } from "./drag/useCardDrag";
-import type { CellDrag } from "./DraggableWidgetCell";
+import type { CardResize } from "./drag/useCardResize";
+import type { CellDrag, CellResize } from "./DraggableWidgetCell";
 import { isEntriesSetting } from "./drawer-choices";
 import type { CellSettingsWrite } from "./useCardQuickSetting";
 import type { CardSettingsWriteCallbacks } from "./useCardSettingsWrite";
@@ -67,13 +68,15 @@ export interface ArrangedGridProps {
   /** The card just placed (moved, resized, added or put back), ringed until the next. */
   highlightedId?: string | null;
   /**
-   * The drag, for its handles and its line. Its handles are drawn only while it is `enabled`:
-   * at one column the card menu moves cards.
+   * The drag, for its handles and the order it has reached. Its handles are drawn only while it
+   * is `enabled`: at one column the card menu moves cards.
    */
-  drag?: Pick<
-    CardDrag,
-    "enabled" | "drag" | "line" | "onHandleKeyDown" | "onHandleBlur"
-  >;
+  drag?: Pick<CardDrag, "enabled" | "drag">;
+  /**
+   * The edge resize, for each card's right edge and the width one is held at. Its edges are
+   * drawn only from 1,024px, and never while a card is dragged.
+   */
+  resize?: Pick<CardResize, "resizing" | "edgeFor" | "cancel">;
   /** What a card may write now, and how: one prop, as they are one concern. */
   writes: {
     /** Whether a layout write is in flight anywhere on this dashboard. */
@@ -135,7 +138,7 @@ export interface ArrangedGridProps {
   /** Reload one card's data on its own, from its error state's Retry. */
   retry: (placementId: string) => void;
   announcement: string;
-  focus: Pick<DashboardFocus, "menuRef" | "dismissRef" | "handleRef">;
+  focus: Pick<DashboardFocus, "menuRef" | "dismissRef">;
   /** The region's own ref: where focus lands when nothing nearer can take it. */
   gridRef: RefObject<HTMLElement | null>;
   on: {
@@ -174,41 +177,51 @@ function EmptyArrangement({
   );
 }
 
-/**
- * The line where a dragged card will land: beside the card it goes after, or across the grid
- * where it starts a row. Centred in the gap between cards, in the primary colour, and drawn
- * only, never announced: the drag says the same in words.
- */
-function DropLineMark({ line }: { line: DropLine | undefined }) {
-  if (line === undefined) return null;
-  const style =
-    line.orientation === "vertical"
-      ? { left: line.x - 1, top: line.top, width: 2, height: line.length }
-      : { left: line.x, top: line.y - 1, width: line.length, height: 2 };
-  return (
-    <div
-      aria-hidden
-      data-testid="widget-drop-line"
-      data-orientation={line.orientation}
-      className="pointer-events-none absolute z-20 rounded-full bg-primary"
-      style={style}
-    />
-  );
-}
-
-/** One card's handle drag, bound to its placement; absent while dragging is off. */
+/** One card's handle drag; absent while dragging is off. */
 function cellDragFor(
   drag: ArrangedGridProps["drag"],
-  focus: ArrangedGridProps["focus"],
   placementId: string
 ): CellDrag | undefined {
   if (!drag?.enabled) return undefined;
-  return {
-    held: drag.drag?.placementId === placementId,
-    onKeyDown: event => drag.onHandleKeyDown(placementId, event),
-    onBlur: () => drag.onHandleBlur(placementId),
-    handleRef: focus.handleRef(placementId),
-  };
+  return { held: drag.drag?.placementId === placementId };
+}
+
+/** One card's edge, and the width it is held at; absent where it has none or a card is held. */
+function cellResizeFor(
+  drag: ArrangedGridProps["drag"],
+  resize: ArrangedGridProps["resize"],
+  row: ArrangedWidget
+): CellResize | undefined {
+  if (resize === undefined || drag?.drag) return undefined;
+  const edge = resize.edgeFor(row);
+  if (edge === undefined) return undefined;
+  const held = resize.resizing;
+  return held?.placementId === row.placementId
+    ? { edge, resizingTo: held.w }
+    : { edge };
+}
+
+/**
+ * Each card's place in the order a drag has reached, for the grid to lay them out by; empty
+ * while no card is held, when the cards are drawn in their own order.
+ */
+function dragOrder(
+  drag: ArrangedGridProps["drag"]
+): ReadonlyMap<string, number> {
+  const order = drag?.drag?.order;
+  return new Map(order?.map((id, index) => [id, index]) ?? []);
+}
+
+/**
+ * The card as its cell draws it: at the width its edge is held at while it is resized, so the
+ * card, its width label and the cards around it show the width the release would keep.
+ */
+function shownRow(
+  row: ArrangedWidget,
+  resizing: CardResize["resizing"] | undefined
+): ArrangedWidget {
+  if (resizing?.placementId !== row.placementId) return row;
+  return { ...row, size: { ...row.size, w: resizing.w } };
 }
 
 /**
@@ -403,6 +416,7 @@ export function ArrangedGrid({
   isEditing,
   highlightedId = null,
   drag,
+  resize,
   writes,
   announcement,
   focus,
@@ -418,6 +432,7 @@ export function ArrangedGrid({
     isEditing,
     answers
   );
+  const order = dragOrder(drag);
   return (
     // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
     // this, the one element the dashboard's width is measured from.
@@ -431,8 +446,8 @@ export function ArrangedGrid({
         tabIndex={-1}
         // The grid's columns, rows and gaps (`GRID_CLASS`), the ones a card's predicted width
         // counts: rows as tall as their tallest card, at rest and while customising.
-        // `relative` so the drop line is placed from the grid's own corner, where the drag
-        // measures from.
+        // `relative` so each cell's layout offsets are from the grid's own corner, where the
+        // drag measures from.
         className={cn("relative", GRID_CLASS)}
         // When the oldest answer on show arrived, for the page's one freshness line: no card
         // says when its own data arrived.
@@ -450,15 +465,19 @@ export function ArrangedGrid({
           count={shownCount(rows, isEditing, hidden)}
           isEditing={isEditing}
         />
-        <DropLineMark line={drag?.line} />
+        {resize?.resizing ? (
+          <EscapePutsCardBack cancel={resize.cancel} />
+        ) : null}
         {rows.map(row => (
           <ArrangedCell
             key={row.placementId}
-            row={row}
+            row={shownRow(row, resize?.resizing)}
             drawnW={widths.get(row.placementId)}
             isEditing={isEditing}
             highlighted={highlightedId === row.placementId}
-            drag={cellDragFor(drag, focus, row.placementId)}
+            drag={cellDragFor(drag, row.placementId)}
+            resize={cellResizeFor(drag, resize, row)}
+            order={order.get(row.placementId)}
             isWriting={writes.isWriting}
             singleCardWriteBlocked={writes.singleCardWriteBlocked}
             {...cellSettingsWrite(
