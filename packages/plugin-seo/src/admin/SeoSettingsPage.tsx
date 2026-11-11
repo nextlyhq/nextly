@@ -101,7 +101,12 @@ export function SeoSettingsPage(): JSX.Element {
           stored={settings.data}
           types={types.data?.items ?? []}
           typesFailed={types.error !== null}
-          reread={async () => (await settings.refetch()).data}
+          reread={async () => {
+            // Only a read that succeeded is an answer: a failed one still
+            // carries the copy cached before the save.
+            const read = await settings.refetch();
+            return read.error ? undefined : read.data;
+          }}
         />
       </>
     );
@@ -123,6 +128,15 @@ export function SeoSettingsPage(): JSX.Element {
       <SeoStyles />
       {body}
     </div>
+  );
+}
+
+/** Whether a save answered with the stored document, version and all. */
+function isStoredDocument(value: unknown): value is StoredSettings {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { _rev?: unknown })._rev === "string"
   );
 }
 
@@ -148,14 +162,16 @@ function useSettingsSave(
       setSaving(true);
       setFailure(null);
       try {
-        await update.mutateAsync(sent);
-        const fresh = await reread();
-        if (fresh !== undefined) {
-          setStored(fresh);
-          // Edits made while the save was on its way are kept: only a draft
-          // nobody touched since is replaced by what was stored.
-          setDraft(current => (current === next ? draftOf(fresh) : current));
-        }
+        // What the save stored is the new baseline, its version with it; a
+        // re-read that succeeds after it replaces it with the latest.
+        const saved: unknown = await update.mutateAsync(sent);
+        const fresh =
+          (await reread()) ??
+          (isStoredDocument(saved) ? saved : { ...stored, ...sent });
+        setStored(fresh);
+        // Edits made while the save was on its way are kept: only a draft
+        // nobody touched since is replaced by what was stored.
+        setDraft(current => (current === next ? draftOf(fresh) : current));
         return true;
       } catch (error) {
         setFailure(

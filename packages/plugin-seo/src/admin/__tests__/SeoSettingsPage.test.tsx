@@ -460,4 +460,42 @@ describe("saving", () => {
       "could not be read again"
     );
   });
+
+  it("takes the saved document as the new baseline when the re-read after a save fails", async () => {
+    serving({ _rev: "1", siteName: "Acme", setupStep: 3 });
+    const before = stored;
+    // The re-read fails, answering with the copy cached before the save.
+    vi.mocked(useSingleDocument).mockImplementation(
+      () =>
+        ({
+          data: before,
+          error: null,
+          refetch: async () => ({ data: before, error: new Error("offline") }),
+        }) as unknown as ReturnType<typeof useSingleDocument>
+    );
+    render(<SeoSettingsPage />);
+    fireEvent.click(screen.getByRole("tab", { name: "General" }));
+
+    fireEvent.change(screen.getByLabelText("Site name"), {
+      target: { value: "Acme Ltd" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+    expect((screen.getByLabelText("Site name") as HTMLInputElement).value).toBe(
+      "Acme Ltd"
+    );
+
+    fireEvent.change(screen.getByLabelText("Default description"), {
+      target: { value: "Things." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    // The second save sends only its own change, at the version the first
+    // save answered with.
+    expect(sent).toEqual([
+      { siteName: "Acme Ltd", _rev: "1" },
+      { description: "Things.", _rev: "2" },
+    ]);
+  });
 });
