@@ -220,7 +220,10 @@ describe.each(getConfiguredTestDialects())(
         ["read", "posts"],
         ["update", "posts"],
       ]);
-      await person(app(), "bob", [["sign-off", "posts"]]);
+      await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       const post = await entry(app(), "posts");
       await saveIn(app(), "posts", post, "en", { status: "published" });
       const draftInReviewFor = async (title: string) => {
@@ -264,7 +267,10 @@ describe.each(getConfiguredTestDialects())(
         ["read", "posts"],
         ["update", "posts"],
       ]);
-      await person(app(), "bob", [["sign-off", "posts"]]);
+      await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       const post = await postInLegal();
 
       await assign("posts", post, "en", { kind: "user", id: "bob" }, dave);
@@ -308,7 +314,10 @@ describe.each(getConfiguredTestDialects())(
         ["read", "posts"],
         ["update", "posts"],
       ]);
-      await person(app(), "bob", [["sign-off", "posts"]]);
+      await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       await settle("editorial", {
         defaultReviewers: { legal: { kind: "user", id: "bob" } },
       });
@@ -333,7 +342,10 @@ describe.each(getConfiguredTestDialects())(
         ["read", "posts"],
         ["update", "posts"],
       ]);
-      const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+      const bob = await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       const post = await postInLegal();
 
       await take("posts", post, ["en"], "clear", bob);
@@ -362,7 +374,10 @@ describe.each(getConfiguredTestDialects())(
         ["read", "posts"],
         ["update", "posts"],
       ]);
-      const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+      const bob = await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       const post = await postInLegal();
       // Markup in the comment, so the email shows it escaped in HTML and as written in text.
       const comment = "Fix <b>the</b> intro & the outro";
@@ -408,8 +423,14 @@ describe.each(getConfiguredTestDialects())(
         ["read", "posts"],
         ["update", "posts"],
       ]);
-      const bob = await person(app(), "bob", [["sign-off", "posts"]]);
-      const legal = await role(app(), "legal-team", [["sign-off", "posts"]]);
+      const bob = await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
+      const legal = await role(app(), "legal-team", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       // A person whose id is the role's: a role told as though a person would reach them.
       await person(app(), legal, []);
       const post = await postInLegal();
@@ -431,7 +452,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("takes the step and tells no one where the accountable person's account is gone", async () => {
       await boot(dialect);
-      const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+      const bob = await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       // Alice brought the part into review, and has no account here.
       const post = await postInLegal();
 
@@ -449,7 +473,10 @@ describe.each(getConfiguredTestDialects())(
         ["read", "memos"],
         ["update", "memos"],
       ]);
-      const bob = await person(app(), "bob", [["sign-off", "memos"]]);
+      const bob = await person(app(), "bob", [
+        ["read", "memos"],
+        ["sign-off", "memos"],
+      ]);
       const memo = await entry(app(), "memos");
 
       await take("memos", memo, [null], "handOver", carol);
@@ -474,7 +501,10 @@ describe.each(getConfiguredTestDialects())(
         ["read", "posts"],
         ["update", "posts"],
       ]);
-      const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+      const bob = await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       const post = await postInLegal();
       await take("posts", post, ["en"], "clear", bob);
       // Dave's edit withdraws the approval and makes him accountable for Legal check.
@@ -516,7 +546,10 @@ describe.each(getConfiguredTestDialects())(
         ["read", "posts"],
         ["update", "posts"],
       ]);
-      const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+      const bob = await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       await settle("editorial", { emails: { approved: false } });
       const post = await postInLegal();
       const other = await postInLegal();
@@ -539,7 +572,10 @@ describe.each(getConfiguredTestDialects())(
         ["read", "posts"],
         ["update", "posts"],
       ]);
-      const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+      const bob = await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       const post = await postInLegal();
 
       await take("posts", post, ["en"], "clear", bob);
@@ -570,7 +606,10 @@ describe.each(getConfiguredTestDialects())(
         ["read", "posts"],
         ["update", "posts"],
       ]);
-      const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+      const bob = await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       const post = await postInLegal();
       // A Spanish version to approve, then Spanish in Legal check as alice's too.
       await saveIn(app(), "posts", post, "es", { title: "Hola" });
@@ -634,7 +673,10 @@ describe.each(getConfiguredTestDialects())(
       await boot(dialect);
       // Alice may edit Posts but not read them, so she may not be told what one says.
       await person(app(), "alice", [["update", "posts"]]);
-      const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+      const bob = await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       const post = await postInLegal();
       const comment = "Rework the intro";
 
@@ -669,7 +711,10 @@ describe.each(getConfiguredTestDialects())(
         ["read", "posts"],
         ["update", "posts"],
       ]);
-      const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+      const bob = await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
       const post = await postInLegal();
       await take("posts", post, ["en"], "clear", bob);
       const service = container.get<NoticesService>("noticesService");
