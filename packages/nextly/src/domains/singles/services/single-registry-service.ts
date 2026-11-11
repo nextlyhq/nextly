@@ -1285,10 +1285,6 @@ export class SingleRegistryService extends BaseRegistryService<
   // ============================================================
 
   /**
-   * Seed read/update permissions for a single and assign to super_admin.
-   * Non-blocking — errors are logged but do not fail the parent operation.
-   */
-  /**
    * The record as stored for a slug, from one read of every record rather than
    * a read per slug, so a sync costs the same number of reads for five Singles
    * as for fifty. Read past the registry row cache, as `findRecordForWrite`
@@ -1309,6 +1305,10 @@ export class SingleRegistryService extends BaseRegistryService<
     }
   }
 
+  /**
+   * Seed read/update permissions for a single and assign to super_admin.
+   * Non-blocking — errors are logged but do not fail the parent operation.
+   */
   private async seedPermissionsForSingle(slug: string): Promise<void> {
     if (!this.permissionSeedService) return;
 

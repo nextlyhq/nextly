@@ -114,7 +114,9 @@ describe.each(getConfiguredTestDialects())(
 
     /** A database migrated for `n` entities, with one development start run on it. */
     async function startedDatabase(
-      n: number
+      n: number,
+      // Whether a development start has run on it already, as after a first `next dev`.
+      started = true
     ): Promise<() => Promise<DrizzleAdapter>> {
       let url: string;
       if (dialect === "sqlite") {
@@ -141,7 +143,7 @@ describe.each(getConfiguredTestDialects())(
         ...entities(n),
       });
       await shutdownServices();
-      await recordStart(adapterFor, entities(n));
+      if (started) await recordStart(adapterFor, entities(n));
       return adapterFor;
     }
 
@@ -236,5 +238,57 @@ describe.each(getConfiguredTestDialects())(
         calls.some(call => WRITE.test(call.text) && named(call).has("p2x"))
       ).toBe(true);
     }, 300_000);
+
+    it("checks again an entity whose registry row another writer changed, and no other", async () => {
+      const adapterFor = await startedDatabase(5);
+      // What an HMR apply, `nextly migrate` or a hand edit leaves: the row no
+      // longer holds what the declaration describes, though the declaration is
+      // the one the last start recorded.
+      const editor = await adapterFor();
+      await editor.executeQuery(
+        "UPDATE dynamic_collections SET schema_hash = 'edited' WHERE slug = 'p1x'"
+      );
+      await editor.disconnect();
+
+      const calls = await recordStart(adapterFor, entities(5));
+
+      const seen = new Set(calls.flatMap(call => [...named(call)]));
+      expect(seen.has("p1x")).toBe(true);
+      expect([...seen].filter(slug => slug !== "p1x")).toEqual([]);
+    }, 300_000);
+
+    it("checks a changed entity again until a start finds it in line, then skips it", async () => {
+      const adapterFor = await startedDatabase(5);
+      // The drift check of this start finds p2x's new field not applied yet,
+      // so this start does not vouch for it.
+      await recordStart(adapterFor, entities(5, "p2x"));
+
+      const again = await recordStart(adapterFor, entities(5, "p2x"));
+      expect(again.some(call => named(call).has("p2x"))).toBe(true);
+
+      const after = await recordStart(adapterFor, entities(5, "p2x"));
+      expect(
+        after.filter(call => named(call).size > 0).map(c => c.text)
+      ).toEqual([]);
+    }, 300_000);
+
+    it("records 50 entities with as many statements as 5", async () => {
+      /** The writes to `nextly_meta` of a first development start. */
+      const recordingWrites = async (n: number) => {
+        await shutdownServices();
+        const calls = await recordStart(
+          await startedDatabase(n, false),
+          entities(n)
+        );
+        return calls.filter(
+          call => WRITE.test(call.text) && /nextly_meta/i.test(call.text)
+        ).length;
+      };
+      const few = await recordingWrites(5);
+      const many = await recordingWrites(50);
+
+      expect(few).toBeGreaterThan(0);
+      expect(many).toBe(few);
+    }, 600_000);
   }
 );

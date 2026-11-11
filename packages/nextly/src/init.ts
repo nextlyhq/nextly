@@ -45,6 +45,7 @@ import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-fiel
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
 import { NextlyError } from "./errors/nextly-error";
 import {
+  markNotInLine,
   recordStartFingerprints,
   runBootTimeApplyIfDev,
   unchangedSinceLastStart,
@@ -433,10 +434,6 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // The drift check itself is failure-safe; we don't wrap a
         // try/catch around getService("config") so a real DI bug
         // crashes loudly instead of being masked.
-        // The collections the drift check reads, and whether it found any drifted: those are left
-        // unrecorded below, so the next start checks them, and warns, again.
-        let driftChecked: string[] = [];
-        let drifted = false;
         if (process.env.NODE_ENV === "development") {
           const config = getService("config");
           const driftLogger = {
@@ -455,15 +452,31 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
                 !unchangedSinceLastStart("collection", collection.slug)
             )
           );
-          driftChecked = changed.map(collection => collection.slug);
-          drifted =
-            (
-              await runDriftCheck({
-                adapter,
-                collections: changed,
-                logger: driftLogger,
-              })
-            ).kind === "drift";
+          const { previewDesiredSchema } = await import(
+            "./domains/schema/pipeline/preview"
+          );
+          await runDriftCheck({
+            adapter,
+            collections: changed,
+            logger: driftLogger,
+            deps: {
+              // Each collection's own preview, judged on its own: one that fails or finds changes
+              // is left unrecorded, so the next start checks it, and warns, again.
+              previewDesiredSchema: async args => {
+                const [slug] = Object.keys(args.desired.collections);
+                try {
+                  const preview = await previewDesiredSchema(args);
+                  if (slug && preview.operations.length > 0) {
+                    markNotInLine("collection", slug);
+                  }
+                  return preview;
+                } catch (error) {
+                  if (slug) markNotInLine("collection", slug);
+                  throw error;
+                }
+              },
+            },
+          });
         }
 
         // Boot-time auto-apply for code-first schema changes (dev only).
@@ -496,11 +509,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
 
         // What this development start brought in line, for the next to skip. Written only when it
         // differs from what is recorded, so a start with nothing changed writes nothing here.
-        await recordStartFingerprints(
-          adapter,
-          getService("logger"),
-          drifted ? driftChecked.map(slug => `collection:${slug}`) : []
-        );
+        await recordStartFingerprints(adapter, getService("logger"));
 
         // The remaining post-initialisation tasks (templates, code-field sync,
         // and the like) run in the background so that getNextly() returns as

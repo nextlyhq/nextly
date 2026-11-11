@@ -117,7 +117,11 @@ export async function runDriftCheck(
   const { adapter, collections, logger } = args;
   const deps = await resolveDeps(args.deps);
 
-  if (collections.length === 0) return { kind: "clean" };
+  // Every preview also compares the tables plugins and the app declare, so with
+  // no collection to ask about (a development start that skips every unchanged
+  // one), one preview of none still compares them.
+  const asks: ReadonlyArray<DriftCheckCollection | null> =
+    collections.length > 0 ? collections : [null];
 
   // Bounded-parallel preview. Earlier this was `Promise.all` of N parallel
   // calls, which against a Neon poolMax:5 with 10+ collections instantly
@@ -130,15 +134,17 @@ export async function runDriftCheck(
   > = [];
   let cursor = 0;
   const worker = async () => {
-    while (cursor < collections.length) {
+    while (cursor < asks.length) {
       const myIndex = cursor++;
-      const collection = collections[myIndex];
+      const collection = asks[myIndex];
       try {
         const preview = await deps.previewDesiredSchema({
           desired: {
-            collections: {
-              [collection.slug]: collection as unknown as DesiredCollection,
-            },
+            collections: collection
+              ? {
+                  [collection.slug]: collection as unknown as DesiredCollection,
+                }
+              : {},
             singles: {},
             components: {},
           },
@@ -149,16 +155,15 @@ export async function runDriftCheck(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.debug?.(
-          `[nextly] Drift preview failed for '${collection.slug}': ${msg} (continuing).`
+          `[nextly] Drift preview failed for '${collection?.slug ?? "the plugin and app tables"}': ${msg} (continuing).`
         );
         results[myIndex] = { ok: false, error: msg };
       }
     }
   };
   await Promise.all(
-    Array.from(
-      { length: Math.min(DRIFT_CONCURRENCY, collections.length) },
-      () => worker()
+    Array.from({ length: Math.min(DRIFT_CONCURRENCY, asks.length) }, () =>
+      worker()
     )
   );
 
@@ -183,7 +188,7 @@ export async function runDriftCheck(
   // when drift introspection is broken on most collections.
   if (failureCount > 0) {
     logger.warn(
-      `[nextly] ${failureCount} of ${collections.length} drift previews failed. ` +
+      `[nextly] ${failureCount} of ${asks.length} drift previews failed. ` +
         `Run \`nextly db:sync\` to investigate.`
     );
   }

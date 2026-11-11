@@ -171,6 +171,8 @@ import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import {
   bootApplyEnabled,
   checkRelationsBeforePlugins,
+  markNotInLine,
+  markStartIncomplete,
   readStartFingerprints,
   unchangedSinceLastStart,
 } from "../init/boot-apply";
@@ -3780,6 +3782,8 @@ async function syncCodeFirstCollections(
   // by migrations yet, so every sync fails with "does not exist". That's
   // expected — the app should still start so the /setup endpoint works.
   if (syncResult.errors.length > 0) {
+    // Not brought in line, so the next development start checks them again.
+    for (const { slug } of syncResult.errors) markNotInLine("collection", slug);
     const allAreMissingTable = syncResult.errors.every(
       e =>
         e.error.includes("does not exist") ||
@@ -4063,6 +4067,10 @@ async function syncCodeFirstComponents(
   );
 
   if (componentSyncResult.errors.length > 0) {
+    // Not brought in line, so the next development start checks them again.
+    for (const { slug } of componentSyncResult.errors) {
+      markNotInLine("fieldGroup", slug);
+    }
     const errorDetails = componentSyncResult.errors
       .map(e => `  - ${e.slug}: ${e.error}`)
       .join("\n");
@@ -4326,6 +4334,9 @@ async function syncCodeFirstSingles(
   // not-found for a single the config declares. Reported rather than
   // swallowed, so the boot says which single and why.
   if (singleSyncResult.errors.length > 0) {
+    // Not brought in line, so the next development start checks them again.
+    for (const { slug } of singleSyncResult.errors)
+      markNotInLine("single", slug);
     const allAreMissingTable = singleSyncResult.errors.every(
       entry =>
         entry.error.includes("does not exist") ||
@@ -4684,11 +4695,14 @@ async function createMissingCodeFirstTables(
         promptChannel: "terminal",
       });
       if (!result.success) {
+        // Tables this start could not create: nothing it did is vouched for.
+        markStartIncomplete();
         logger.warn?.(
           `Auto-sync tables failed (${result.error.code}): ${result.error.message}`
         );
       }
     } catch (error) {
+      markStartIncomplete();
       const errorMsg = error instanceof Error ? error.message : String(error);
       logger.warn?.(`Auto-sync tables failed: ${errorMsg}`);
     }
@@ -4705,6 +4719,8 @@ async function createMissingCodeFirstTables(
       // Reported as missing below.
     }
     try {
+      // A table still missing is not in line, so the next start checks again.
+      if (!exists) markStartIncomplete();
       await (exists ? followUp.afterCreate() : followUp.onMissing());
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);

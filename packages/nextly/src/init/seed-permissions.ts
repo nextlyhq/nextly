@@ -129,6 +129,10 @@ const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
 const globalForSeeding = globalThis as unknown as {
   __nextly_seeding?: Promise<void>;
   __nextly_seedingHolds?: Set<Promise<void>>;
+  /** How many seeding runs have been asked for in this process. */
+  __nextly_seedingAsked?: number;
+  /** Each hold, with how many seeding runs had been asked for when it was taken. */
+  __nextly_seedingHeldAt?: Map<Promise<void>, number>;
   __nextly_publicRoleRetry?: ReturnType<typeof setTimeout>;
 };
 
@@ -161,6 +165,10 @@ const globalForSeeding = globalThis as unknown as {
  * that run, and {@link awaitBootSeeding} waits for it.
  */
 export function seedPermissionsAndRolePresets(): Promise<void> {
+  // Asked for, whatever happens next: a hold taken before this no longer has a
+  // seeding to come (`bootSeedingFollows`).
+  globalForSeeding.__nextly_seedingAsked =
+    (globalForSeeding.__nextly_seedingAsked ?? 0) + 1;
   // A production build boots Nextly too, when it prerenders a page that reads
   // through it, and it writes nothing here. It serves no request, and the first
   // runtime boot seeds before it does. It may run against a database other
@@ -203,20 +211,31 @@ export function holdBootSeeding(): () => void {
   });
   const holds = (globalForSeeding.__nextly_seedingHolds ??= new Set());
   holds.add(held);
+  const heldAt = (globalForSeeding.__nextly_seedingHeldAt ??= new Map());
+  heldAt.set(held, globalForSeeding.__nextly_seedingAsked ?? 0);
   return () => {
     holds.delete(held);
+    heldAt.delete(held);
     release();
   };
 }
 
 /**
- * Whether a boot holds the seeding gate: it has yet to seed, and will, once it
- * has registered the services (`holdBootSeeding`). Work it would repeat, such
- * as a registry sync ensuring each entity's permissions, is left to that one
- * seeding, so a start ensures each permission once.
+ * Whether a start's own seeding is still to come: a boot holds the seeding gate
+ * (`holdBootSeeding`) and no seeding run has been asked for since it took it.
+ * Work the seeding would repeat, such as a registry sync ensuring each entity's
+ * permissions, is left to it then, so a start ensures each permission once.
+ * Once a run has been asked for, the start's seeding is behind it, and work
+ * done after it (an entity the request-path boot's apply registers from a
+ * migration) seeds for itself.
  */
 export function bootSeedingFollows(): boolean {
-  return (globalForSeeding.__nextly_seedingHolds?.size ?? 0) > 0;
+  const asked = globalForSeeding.__nextly_seedingAsked ?? 0;
+  for (const askedWhenHeld of globalForSeeding.__nextly_seedingHeldAt?.values() ??
+    []) {
+    if (askedWhenHeld === asked) return true;
+  }
+  return false;
 }
 
 /**

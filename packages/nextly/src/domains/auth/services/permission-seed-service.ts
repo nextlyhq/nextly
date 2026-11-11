@@ -704,39 +704,9 @@ export class PermissionSeedService extends BaseService {
   private async seedCollectionPermissionsRows(
     collectionSlug: string
   ): Promise<SeedResult> {
+    // The one rule every road seeds an entity's permissions by, for one entity.
     const result = this.emptySeedResult();
-    const actions = COLLECTION_SEEDED_ACTIONS;
-
-    for (const action of actions) {
-      // Spelled by the one function a rename also spells them with, so a
-      // renamed entity's permissions read as if it had been created so.
-      const { name, slug, description } = entityPermissionSpelling(
-        action,
-        collectionSlug
-      );
-
-      result.total++;
-      try {
-        const ensureResult = await this.permissionService.ensurePermission(
-          action,
-          collectionSlug,
-          name,
-          slug,
-          description
-        );
-
-        if (ensureResult.created) {
-          result.created++;
-          result.newPermissionIds.push(ensureResult.id);
-        } else {
-          result.skipped++;
-        }
-      } catch {
-        result.errors++;
-      }
-    }
-
-    await this.seedWorkflowPermissions("collection", collectionSlug, result);
+    await this.seedEntitiesPermissions("collection", [collectionSlug], result);
     return result;
   }
 
@@ -757,53 +727,28 @@ export class PermissionSeedService extends BaseService {
   private async seedSinglePermissionsRows(
     singleSlug: string
   ): Promise<SeedResult> {
+    // The one rule every road seeds an entity's permissions by, for one entity.
     const result = this.emptySeedResult();
-    const actions = SINGLE_SEEDED_ACTIONS;
-
-    for (const action of actions) {
-      // Spelled by the one function a rename also spells them with, so a
-      // renamed entity's permissions read as if it had been created so.
-      const { name, slug, description } = entityPermissionSpelling(
-        action,
-        singleSlug
-      );
-
-      result.total++;
-      try {
-        const ensureResult = await this.permissionService.ensurePermission(
-          action,
-          singleSlug,
-          name,
-          slug,
-          description
-        );
-
-        if (ensureResult.created) {
-          result.created++;
-          result.newPermissionIds.push(ensureResult.id);
-        } else {
-          result.skipped++;
-        }
-      } catch {
-        result.errors++;
-      }
-    }
-
-    await this.seedWorkflowPermissions("single", singleSlug, result);
+    await this.seedEntitiesPermissions("single", [singleSlug], result);
     return result;
   }
 
   /**
-   * Into `result`, the permissions of every entity of `kind` named in `slugs`, as
-   * `seedCollectionPermissions` and `seedSinglePermissions` seed one entity's:
-   * its built-in actions and its workflow's, each spelled as a rename spells
-   * it. Against one read of the table (`rows`, read here when not handed in)
-   * rather than a read per permission, so the cost does not grow with the
-   * number of entities.
+   * Into `result`, the permissions of every entity of `kind` named in `slugs`:
+   * its built-in actions and the ones the workflow attached to it adds
+   * (`workflowPermissionActions`: each step's own actions, and
+   * `publish-without-review`), each spelled as a rename spells it. The one rule
+   * an entity's permissions are seeded by, whether for one entity
+   * (`seedCollectionPermissions`, `seedSinglePermissions`) or for all of them
+   * (`seedAllEntityPermissions`), and against one read of the table (`rows`,
+   * read here when not handed in), so the cost does not grow with the number
+   * of entities. Nothing is attached until the workflows are published, so a
+   * pass before that seeds none and the next one does.
    *
    * A workflow permission is declared only where no row holds it yet, built-in
-   * ones of this same pass included: one an app or a plugin declared stays
-   * theirs, as `seedWorkflowPermissions` keeps it.
+   * ones of this same pass included: identity is the action and the resource,
+   * so one an app or a plugin already declared stays theirs, and taking it over
+   * would flip its owner on every boot.
    */
   private async seedEntitiesPermissions(
     kind: "collection" | "single",
@@ -859,75 +804,14 @@ export class PermissionSeedService extends BaseService {
   }
 
   /**
-   * Into `result`, the permissions the workflow attached to `entitySlug` adds
-   * (`workflowPermissionActions`): each of its steps' own actions, and `publish-without-review`.
-   * Seeded with the entity's built-in ones, so every path that seeds those, boot and the per-entity
-   * syncs alike, seeds these, idempotently. Nothing is attached until the workflows are published,
-   * so a pass before that seeds none and the next one does.
-   *
-   * One an app or a plugin already declared stays theirs: identity is the action and the resource,
-   * so a step asks for that permission either way, and taking it over would flip its owner on
-   * every boot.
-   */
-  private async seedWorkflowPermissions(
-    kind: "collection" | "single",
-    entitySlug: string,
-    result: SeedResult
-  ): Promise<void> {
-    // Loaded on demand: the registry reaches the versions domain, which the auth seeder need not
-    // load to seed an entity with no workflow.
-    const { workflowAttachedTo } = await import("../../workflows/registry");
-    const attached = workflowAttachedTo(kind, entitySlug);
-    if (!attached) return;
-    // Held as the class itself, so the call below is read as the service's own member.
-    const permissions: PermissionService = this.permissionService;
-    for (const action of workflowPermissionActions(attached.workflow)) {
-      result.total++;
-      try {
-        // A row already there keeps its owner and group: an app's, a plugin's, or an admin's own
-        // ownerless permission the step happens to name is not made the workflow's. Only a row
-        // the seeder creates is stored under the workflow group.
-        const owner = await permissions.ownerOf(action, entitySlug);
-        if (owner !== undefined) {
-          result.skipped++;
-          continue;
-        }
-        const { name, slug, description } = entityPermissionSpelling(
-          action,
-          entitySlug
-        );
-        // Stored under the workflow group, which is how the presets tell it is a workflow's.
-        const ensured = await permissions.ensurePermission(
-          action,
-          entitySlug,
-          name,
-          slug,
-          description,
-          { group: WORKFLOW_PERMISSION_GROUP }
-        );
-        if (ensured.created) {
-          result.created++;
-          result.newPermissionIds.push(ensured.id);
-        } else {
-          result.skipped++;
-        }
-      } catch {
-        result.errors++;
-      }
-    }
-  }
-
-  /**
    * Seed permissions for ALL dynamic collections.
    *
    * Reads all collection slugs from the `dynamic_collections` table
    * (including plugin-registered collections) and seeds the six CRUD and
    * publish-lifecycle permissions for each.
    */
-  async seedAllCollectionPermissions(
-    rows?: readonly PermissionRow[]
-  ): Promise<SeedResult> {
-    return inPermissionSweep(() => this.seedAllCollectionPermissionsRows(rows));
+  async seedAllCollectionPermissions(): Promise<SeedResult> {
+    return inPermissionSweep(() => this.seedAllCollectionPermissionsRows());
   }
 
   /**
@@ -977,10 +861,8 @@ export class PermissionSeedService extends BaseService {
    * Reads all single slugs from the `dynamic_singles` table and seeds
    * read, update, publish and unpublish permissions for each.
    */
-  async seedAllSinglePermissions(
-    rows?: readonly PermissionRow[]
-  ): Promise<SeedResult> {
-    return inPermissionSweep(() => this.seedAllSinglePermissionsRows(rows));
+  async seedAllSinglePermissions(): Promise<SeedResult> {
+    return inPermissionSweep(() => this.seedAllSinglePermissionsRows());
   }
 
   private async seedAllSinglePermissionsRows(

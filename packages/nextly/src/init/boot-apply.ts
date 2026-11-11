@@ -121,6 +121,8 @@ export async function runBootTimeApplyIfDev(opts?: {
       );
       throw err;
     }
+    // Nothing this start applied can be vouched for.
+    markStartIncomplete();
     consoleLogger.warn(
       `${label} Boot-time schema apply failed: ${msg}. ` +
         `The dev server still works against the live DB schema, ` +
@@ -312,17 +314,17 @@ async function seedPermissionsForMigrationCollections(
     }
 
     const permissionSeedService = container.get<{
-      seedAllCollectionPermissions: () => Promise<{
-        newPermissionIds: string[];
+      seedAllEntityPermissions: () => Promise<{
+        collections: { newPermissionIds: string[] };
+        singles: { newPermissionIds: string[] };
       }>;
-      seedAllSinglePermissions: () => Promise<{ newPermissionIds: string[] }>;
       assignNewPermissionsToSuperAdmin: (ids: string[]) => Promise<unknown>;
     }>("permissionSeedService");
 
-    // Seed permissions for all collections (including newly registered ones)
-    const collectionResult =
-      await permissionSeedService.seedAllCollectionPermissions();
-    const singleResult = await permissionSeedService.seedAllSinglePermissions();
+    // Every collection's and Single's permissions, newly registered ones
+    // included, against one read of the table.
+    const { collections: collectionResult, singles: singleResult } =
+      await permissionSeedService.seedAllEntityPermissions();
 
     const allNewIds = [
       ...collectionResult.newPermissionIds,
@@ -505,7 +507,9 @@ async function applyPendingMigrations(label: string): Promise<number> {
       result.metadata.collectionsRegistered + result.metadata.singlesRegistered
     );
   } catch (err) {
-    // Migration check/apply failed - log but don't block startup
+    // Migration check/apply failed - log but don't block startup. The
+    // per-document columns run inside it, so nothing it did is vouched for.
+    markStartIncomplete();
     const msg = err instanceof Error ? err.message : String(err);
     consoleLogger.warn(
       `${label} Migration auto-apply skipped: ${msg}. ` +
@@ -640,27 +644,58 @@ interface StartFingerprints {
 /** The entity kinds a start fingerprints. */
 export type FingerprintedKind = "collection" | "single" | "fieldGroup";
 
+/** A declared entity, as far as a fingerprint and its registry row are compared. */
+interface FingerprintedEntity {
+  slug: string;
+  dbName?: string;
+  fields?: unknown;
+  status?: unknown;
+  localized?: unknown;
+}
+
 /** What a fingerprint is taken of: the configuration's entities and settings. */
 export interface FingerprintedConfig {
-  collections?: ReadonlyArray<{ slug: string; dbName?: string }>;
-  singles?: ReadonlyArray<{ slug: string; dbName?: string }>;
-  fieldGroups?: ReadonlyArray<{ slug: string }>;
+  collections?: ReadonlyArray<FingerprintedEntity>;
+  singles?: ReadonlyArray<FingerprintedEntity>;
+  fieldGroups?: ReadonlyArray<FingerprintedEntity>;
   perLanguageStorage?: boolean;
   localization?: unknown;
 }
 
 /**
- * The fingerprints recorded and the ones this start computed, on `globalThis`
- * for the reason the rest of the boot state is: Next.js can evaluate this
- * module in more than one server graph.
+ * What a declaration says its registry row holds, and what the row holds: the
+ * schema hash, the table, Draft/Published and translation. A row another
+ * writer changed (an HMR apply, `nextly migrate`, a hand edit) no longer says
+ * what the declaration says, so the entity is checked again even where its
+ * declaration is the one recorded.
  */
+interface RowShape {
+  schemaHash: string;
+  tableName: string;
+  status: boolean;
+  localized: boolean;
+}
+
+/**
+ * The fingerprints recorded and this start's, and what this start could not
+ * vouch for, on `globalThis` for the reason the rest of the boot state is:
+ * Next.js can evaluate this module in more than one server graph.
+ */
+interface StartState {
+  recorded: StartFingerprints | null;
+  current: StartFingerprints;
+  /** Each configured entity's row as its declaration describes it. */
+  declared: Record<string, RowShape>;
+  /** Each registered entity's row as stored when the start began. */
+  stored: Record<string, RowShape>;
+  /** Entities this start did not bring in line (`markNotInLine`). */
+  notInLine: Set<string>;
+  /** Whether some of this start's schema work failed (`markStartIncomplete`). */
+  incomplete: boolean;
+}
+
 const globalForFingerprints = globalThis as unknown as {
-  __nextly_startFingerprints?: {
-    recorded: StartFingerprints | null;
-    current: StartFingerprints;
-    /** Each configured collection's and Single's table, by fingerprint key. */
-    tables: Record<string, string>;
-  };
+  __nextly_startFingerprints?: StartState;
 };
 
 /** JSON with every object's keys sorted and functions left out, so one declaration gives one text. */
@@ -684,20 +719,25 @@ async function fingerprintOf(value: unknown): Promise<string> {
   return createHash("sha256").update(stableJson(value)).digest("hex");
 }
 
+/** Each kind with its declared entities and its registry. */
+function kindsOf(
+  config: FingerprintedConfig
+): Array<[FingerprintedKind, ReadonlyArray<FingerprintedEntity>]> {
+  return [
+    ["collection", config.collections ?? []],
+    ["single", config.singles ?? []],
+    ["fieldGroup", config.fieldGroups ?? []],
+  ];
+}
+
 async function startFingerprints(
   config: FingerprintedConfig,
   dialect: string
 ): Promise<StartFingerprints> {
   const { getCoreVersion } = await import("../plugins/core-version");
   const entities: Record<string, string> = {};
-  const kinds: Array<[FingerprintedKind, FingerprintedConfig["collections"]]> =
-    [
-      ["collection", config.collections],
-      ["single", config.singles],
-      ["fieldGroup", config.fieldGroups],
-    ];
-  for (const [kind, list] of kinds) {
-    for (const entity of list ?? []) {
+  for (const [kind, list] of kindsOf(config)) {
+    for (const entity of list) {
       try {
         entities[`${kind}:${entity.slug}`] = await fingerprintOf(entity);
       } catch {
@@ -717,11 +757,95 @@ async function startFingerprints(
   };
 }
 
+/** Each configured entity's registry row, as its declaration describes it. */
+async function declaredRows(
+  config: FingerprintedConfig
+): Promise<Record<string, RowShape>> {
+  const [
+    { calculateSchemaHash },
+    { resolveCollectionTableName, resolveComponentTableName },
+    { resolveSingleTableName },
+  ] = await Promise.all([
+    import("../domains/schema/services/schema-hash"),
+    import("../domains/schema/utils/resolve-table-name"),
+    import("../domains/singles/services/resolve-single-table-name"),
+  ]);
+  const tableOf: Record<FingerprintedKind, (e: FingerprintedEntity) => string> =
+    {
+      collection: e => resolveCollectionTableName(e.slug, e.dbName),
+      single: e => resolveSingleTableName({ slug: e.slug, dbName: e.dbName }),
+      fieldGroup: e => resolveComponentTableName(e.slug),
+    };
+  const rows: Record<string, RowShape> = {};
+  for (const [kind, list] of kindsOf(config)) {
+    for (const entity of list) {
+      try {
+        rows[`${kind}:${entity.slug}`] = {
+          schemaHash: calculateSchemaHash(
+            (entity.fields ?? []) as Parameters<typeof calculateSchemaHash>[0]
+          ),
+          tableName: tableOf[kind](entity),
+          status: entity.status === true,
+          localized: entity.localized === true,
+        };
+      } catch {
+        // No row shape, so the entity is never taken for unchanged.
+      }
+    }
+  }
+  return rows;
+}
+
+/** A stored text column, or empty where it holds none. */
+function textOf(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+/**
+ * Each registered entity's row as stored: one read per registry, whatever the
+ * number of entities.
+ */
+async function storedRows(
+  adapter: DrizzleAdapter
+): Promise<Record<string, RowShape>> {
+  const { resolveFieldGroupRegistryName } = await import(
+    "../domains/field-groups/storage/resolve-storage-names"
+  );
+  const registries: Array<[FingerprintedKind, string | null]> = [
+    ["collection", "dynamic_collections"],
+    ["single", "dynamic_singles"],
+    ["fieldGroup", await resolveFieldGroupRegistryName(adapter)],
+  ];
+  const rows: Record<string, RowShape> = {};
+  for (const [kind, registry] of registries) {
+    if (!registry) continue;
+    const found = await adapter.select<Record<string, unknown>>(registry, {
+      columns: ["slug", "schema_hash", "table_name", "status", "localized"],
+    });
+    // Keyed by each column's property name (`schemaHash`), as the adapter
+    // returns a projection.
+    for (const row of found) {
+      rows[`${kind}:${String(row.slug)}`] = {
+        schemaHash: textOf(row.schemaHash),
+        tableName: textOf(row.tableName),
+        // Stored as 0/1 on MySQL and SQLite, a boolean on PostgreSQL.
+        status: row.status === true || row.status === 1 || row.status === "1",
+        localized:
+          row.localized === true ||
+          row.localized === 1 ||
+          row.localized === "1",
+      };
+    }
+  }
+  return rows;
+}
+
 /**
  * At a development start, before any per-entity work: the fingerprints the
- * last development start recorded (one read of `nextly_meta`), and this start's,
- * for `unchangedSinceLastStart` to compare. Any other start reads nothing and
- * takes every entity for changed.
+ * last development start recorded (one read of `nextly_meta`), this start's,
+ * and each entity's registry row as declared and as stored (one read per
+ * registry), for `unchangedSinceLastStart` to compare. Any other start reads
+ * nothing and takes every entity for changed.
  */
 export async function readStartFingerprints(
   adapter: DrizzleAdapter,
@@ -730,57 +854,70 @@ export async function readStartFingerprints(
 ): Promise<void> {
   globalForFingerprints.__nextly_startFingerprints = undefined;
   if (process.env.NODE_ENV !== "development") return;
-  let current: StartFingerprints;
   try {
-    current = await startFingerprints(config, adapter.dialect);
-  } catch {
-    // Settings that cannot be written out (a cycle, say) give no salt: nothing
-    // is taken for unchanged, and the start does the full work.
-    return;
-  }
-  let recorded: StartFingerprints | null = null;
-  try {
+    const current = await startFingerprints(config, adapter.dialect);
+    const declared = await declaredRows(config);
     const { MetaService } = await import(
       "../domains/meta/services/meta-service"
     );
     // One read of the whole (small) table, whatever the number of entities.
-    const stored = await new MetaService(adapter, logger).getAll();
-    const salt = stored[START_SALT_KEY];
+    const meta = await new MetaService(adapter, logger).getAll();
+    const salt = meta[START_SALT_KEY];
+    let recorded: StartFingerprints | null = null;
     if (typeof salt === "string") {
       const entities: Record<string, string> = {};
-      for (const [key, value] of Object.entries(stored)) {
+      for (const [key, value] of Object.entries(meta)) {
         if (key.startsWith(START_ENTITY_PREFIX) && typeof value === "string") {
           entities[key.slice(START_ENTITY_PREFIX.length)] = value;
         }
       }
       recorded = { salt, entities };
     }
+    globalForFingerprints.__nextly_startFingerprints = {
+      recorded,
+      current,
+      declared,
+      stored: recorded ? await storedRows(adapter) : {},
+      notInLine: new Set(),
+      incomplete: false,
+    };
   } catch {
-    // A meta table not created yet records nothing: every entity is changed.
+    // Nothing to compare (a meta or registry table not created yet, settings
+    // that cannot be written out): every entity is changed, and the start does
+    // the full work.
   }
-  const [{ resolveCollectionTableName }, { resolveSingleTableName }] =
-    await Promise.all([
-      import("../domains/schema/utils/resolve-table-name"),
-      import("../domains/singles/services/resolve-single-table-name"),
-    ]);
-  const tables: Record<string, string> = {};
-  for (const c of config.collections ?? []) {
-    tables[`collection:${c.slug}`] = resolveCollectionTableName(
-      c.slug,
-      c.dbName
-    );
+}
+
+/**
+ * Whether the entity's declaration is the one the last development start
+ * recorded, under the same Nextly version, dialect and settings, and its
+ * registry row still holds what that declaration describes: its schema reads
+ * (the layout refusal, the table probe, the drift check, the per-document
+ * columns) are skipped then, because nothing about it changed since a start
+ * brought it in line. False outside a development start, and for anything not
+ * recorded.
+ */
+export function unchangedSinceLastStart(
+  kind: FingerprintedKind,
+  slug: string
+): boolean {
+  const state = globalForFingerprints.__nextly_startFingerprints;
+  if (!state?.recorded || state.recorded.salt !== state.current.salt) {
+    return false;
   }
-  for (const single of config.singles ?? []) {
-    tables[`single:${single.slug}`] = resolveSingleTableName({
-      slug: single.slug,
-      dbName: single.dbName,
-    });
-  }
-  globalForFingerprints.__nextly_startFingerprints = {
-    recorded,
-    current,
-    tables,
-  };
+  const key = `${kind}:${slug}`;
+  const now = state.current.entities[key];
+  if (now === undefined || state.recorded.entities[key] !== now) return false;
+  const declared = state.declared[key];
+  const stored = state.stored[key];
+  return (
+    declared !== undefined &&
+    stored !== undefined &&
+    declared.schemaHash === stored.schemaHash &&
+    declared.tableName === stored.tableName &&
+    declared.status === stored.status &&
+    declared.localized === stored.localized
+  );
 }
 
 /**
@@ -796,73 +933,107 @@ export function tablesChangedSinceLastStart(): readonly string[] | undefined {
   if (!state?.recorded || state.recorded.salt !== state.current.salt) {
     return undefined;
   }
-  return Object.entries(state.tables)
-    .filter(([key]) => {
-      const [kind, ...slug] = key.split(":");
-      return !unchangedSinceLastStart(
-        kind as FingerprintedKind,
-        slug.join(":")
-      );
-    })
-    .map(([, table]) => table);
+  const tables: string[] = [];
+  for (const [key, row] of Object.entries(state.declared)) {
+    const [kind, ...slug] = key.split(":");
+    if (kind === "fieldGroup") continue;
+    if (!unchangedSinceLastStart(kind as FingerprintedKind, slug.join(":"))) {
+      tables.push(row.tableName);
+    }
+  }
+  return tables;
 }
 
 /**
- * Whether the entity's declaration is the one the last development start
- * recorded, under the same Nextly version, dialect and settings: its schema
- * reads (the layout refusal, the table probe, the drift check, the
- * per-document columns) are skipped then, because nothing about it changed
- * since a start brought it in line. False outside a development start, and
- * for anything not recorded.
+ * An entity this start did not bring in line: its drift preview failed or
+ * found changes, its registration failed. Left unrecorded, so the next start
+ * checks it again.
  */
-export function unchangedSinceLastStart(
-  kind: FingerprintedKind,
-  slug: string
-): boolean {
+export function markNotInLine(kind: FingerprintedKind, slug: string): void {
+  globalForFingerprints.__nextly_startFingerprints?.notInLine.add(
+    `${kind}:${slug}`
+  );
+}
+
+/**
+ * Some of this start's schema work failed and was only logged (a table it
+ * could not create, a boot apply or per-document columns that did not run):
+ * it records nothing new, so the next start checks every changed entity again.
+ */
+export function markStartIncomplete(): void {
   const state = globalForFingerprints.__nextly_startFingerprints;
-  if (!state?.recorded || state.recorded.salt !== state.current.salt) {
-    return false;
-  }
-  const key = `${kind}:${slug}`;
-  const now = state.current.entities[key];
-  return now !== undefined && state.recorded.entities?.[key] === now;
+  if (state) state.incomplete = true;
 }
 
 /**
  * Once a development start has brought its entities in line: record their
  * fingerprints for the next start, writing only the rows that differ from what
- * is recorded, so a start with nothing changed writes nothing and one with an
- * entity changed writes that entity's row alone. An entity in `notInLine` (the
- * drift check found it drifted, say) is left unrecorded, and so is one no
- * longer declared, so the next start checks it again.
+ * is recorded, in one delete and one insert whatever their number, so a start
+ * with nothing changed writes nothing and one with an entity changed writes
+ * that entity's row alone. An entity this start could not vouch for
+ * (`markNotInLine`), or one no longer declared, is left unrecorded; a start
+ * whose schema work failed (`markStartIncomplete`) records nothing new.
  */
 export async function recordStartFingerprints(
   adapter: DrizzleAdapter,
-  logger: Logger,
-  notInLine: Iterable<string> = []
+  logger: Logger
 ): Promise<void> {
   const state = globalForFingerprints.__nextly_startFingerprints;
   if (!state || process.env.NODE_ENV !== "development") return;
-  const entities = { ...state.current.entities };
-  for (const key of notInLine) delete entities[key];
-  const before = state.recorded?.entities ?? {};
+  if (state.incomplete) return;
+  const before =
+    state.recorded?.salt === state.current.salt ? state.recorded.entities : {};
+  const entities: Record<string, string> = {};
+  for (const [key, fingerprint] of Object.entries(state.current.entities)) {
+    if (!state.notInLine.has(key)) entities[key] = fingerprint;
+  }
+  const written = Object.entries(entities).filter(
+    ([key, fingerprint]) => before[key] !== fingerprint
+  );
+  const removed = Object.keys(state.recorded?.entities ?? {}).filter(
+    key => !(key in entities)
+  );
   try {
-    const { MetaService } = await import(
-      "../domains/meta/services/meta-service"
+    const [{ loadedDialect }, { inArray }] = await Promise.all([
+      import("../database/dialect-tables"),
+      import("drizzle-orm"),
+    ]);
+    const table = loadedDialect(adapter.dialect).tables.nextlyMeta as {
+      key: unknown;
+    };
+    // Typed loosely for the cross-dialect table, as `MetaService` holds it.
+    const db = adapter.getDrizzle() as {
+      delete(t: unknown): { where(c: unknown): Promise<unknown> };
+      insert(t: unknown): { values(v: unknown[]): Promise<unknown> };
+    };
+    const stale = [...removed, ...written.map(([key]) => key)].map(
+      key => `${START_ENTITY_PREFIX}${key}`
     );
-    const meta = new MetaService(adapter, logger);
-    for (const [key, fingerprint] of Object.entries(entities)) {
-      if (before[key] !== fingerprint) {
-        await meta.set(`${START_ENTITY_PREFIX}${key}`, fingerprint);
-      }
+    if (stale.length > 0) {
+      await db
+        .delete(table)
+        .where(inArray(table.key as Parameters<typeof inArray>[0], stale));
     }
-    for (const key of Object.keys(before)) {
-      if (!(key in entities)) await meta.delete(`${START_ENTITY_PREFIX}${key}`);
+    if (written.length > 0) {
+      const updatedAt = new Date();
+      await db.insert(table).values(
+        written.map(([key, fingerprint]) => ({
+          key: `${START_ENTITY_PREFIX}${key}`,
+          value: JSON.stringify(fingerprint),
+          updatedAt,
+        }))
+      );
     }
     // Last, so a start stopped part-way leaves the old salt, and the next does
     // the full work rather than trusting rows half written.
     if (state.recorded?.salt !== state.current.salt) {
-      await meta.set(START_SALT_KEY, state.current.salt);
+      const { MetaService } = await import(
+        "../domains/meta/services/meta-service"
+      );
+      await new MetaService(adapter, logger).set(
+        START_SALT_KEY,
+        state.current.salt
+      );
     }
     state.recorded = { salt: state.current.salt, entities };
   } catch (error) {

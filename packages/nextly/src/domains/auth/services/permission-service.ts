@@ -106,18 +106,6 @@ function refuseDeletingBuiltIn(permission: {
  * const result = await permissionService.listPermissions({ action: 'read' });
  * ```
  */
-/**
- * The permission fields an update may change, named ONCE.
- *
- * They were enumerated three times inside `updatePermission` -- in the no-op comparison, in the
- * payload construction, and in the parameter type -- and the three had to agree for the method to
- * be correct. A field added to the payload but forgotten in the comparison makes an update that
- * changes only that field return early as a no-op, which is a write that silently does nothing;
- * forgotten the other way, an unchanged request writes anyway. Neither shows up as an error.
- *
- * Deriving both behaviours from one list makes those two disagreements unrepresentable, and the
- * parameter type below is the one remaining copy, which the compiler ties to this list.
- */
 /** One permission as a seeder declares it: its identity, its spelling and its provenance. */
 export interface PermissionDeclaration {
   action: string;
@@ -150,6 +138,18 @@ export function permissionKey(action: string, resource: string): string {
   return `${action.toLowerCase()} ${resource.toLowerCase()}`;
 }
 
+/**
+ * The permission fields an update may change, named ONCE.
+ *
+ * They were enumerated three times inside `updatePermission` -- in the no-op comparison, in the
+ * payload construction, and in the parameter type -- and the three had to agree for the method to
+ * be correct. A field added to the payload but forgotten in the comparison makes an update that
+ * changes only that field return early as a no-op, which is a write that silently does nothing;
+ * forgotten the other way, an unchanged request writes anyway. Neither shows up as an error.
+ *
+ * Deriving both behaviours from one list makes those two disagreements unrepresentable, and the
+ * parameter type below is the one remaining copy, which the compiler ties to this list.
+ */
 const EDITABLE_PERMISSION_FIELDS = [
   "name",
   "slug",
