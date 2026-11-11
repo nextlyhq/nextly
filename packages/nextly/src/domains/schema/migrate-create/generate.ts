@@ -45,6 +45,7 @@ import { planFieldAddedToTranslationMigration } from "../../i18n/migration/field
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
   type LeavingTranslationRefusal,
+  moveKeepsEveryValue,
   refusalsForFieldsJoiningTranslation,
   refusalsForFieldsLeavingTranslation,
   refusalsForMovedJoinsNarrowed,
@@ -83,7 +84,6 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
-import { copiesEveryValue } from "../pipeline/classifier/type-widening";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -2805,8 +2805,8 @@ function assertFieldsMayJoinTranslation(
     moved: new Set<string>(),
     narrowed: new Set<string>(),
   };
-  // Reshaped only where the column it would have cannot hold every value the column it has holds:
-  // a widening (a longer varchar, varchar to text, a wider number) copies each value as it is.
+  // Reshaped only where the column it would have cannot hold every value the column it has holds,
+  // by the one rule every judge of a move asks, with the snapshots' types alone.
   const reshaped = joining
     .filter(({ field, column }) => {
       const before = typeIn(prevMain, column.name);
@@ -2815,7 +2815,8 @@ function assertFieldsMayJoinTranslation(
         !moved.has(field.name) &&
         before !== undefined &&
         before !== after &&
-        (after === undefined || !copiesEveryValue(before, after, dialect))
+        (after === undefined ||
+          !moveKeepsEveryValue({ type: before }, { type: after }, dialect))
       );
     })
     .map(({ field }) => field.name);

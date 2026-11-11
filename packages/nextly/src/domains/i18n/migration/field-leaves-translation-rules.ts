@@ -13,11 +13,12 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { copiesEveryValue } from "../../schema/pipeline/classifier/type-widening";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import type { CompanionFieldLike } from "./reconcile-companion";
-import type { LocalizedColumnSpec } from "./types";
+import type { LocalizedColumnKind, LocalizedColumnSpec } from "./types";
 
 /** A field as a schema change describes it, with the flags the rules read. */
 export type LeavingFieldLike = CompanionFieldLike & {
@@ -79,26 +80,49 @@ export function storageDiffers(
   return before !== undefined && shape(before) !== shape(after);
 }
 
+/** The kinds a field may move between as it joins translation, each family's: text, or number. */
+const STORAGE_FAMILY: Partial<Record<LocalizedColumnKind, string>> = {
+  text: "text",
+  shortText: "text",
+  longText: "text",
+  integer: "number",
+  double: "number",
+  decimal: "number",
+};
+
+/** A field's column as a judge of a move into the translations table has it. */
+export interface MovedColumn {
+  /** The declared type, with any length or precision spelled inside it. */
+  type: string;
+  /** The field's column kind, known to a judge that has the field; a judge with only types has none. */
+  kind?: LocalizedColumnKind;
+}
+
 /**
- * Whether a field stored as `after` describes holds every value it held as `before` describes:
- * the same kind, no shorter a length, and as many digits on each side of a decimal point. A bound
- * that is not stated is no bound.
+ * Whether every value of a field stored in `from` survives a move into a column stored as `to`:
+ * the one answer every judge of a field joining translation, or of a retry of that move, asks.
+ * Where both kinds are known, they are one kind or kinds of one family, since a field changing
+ * family (a number made text, a checkbox made a number) changes what it is, whatever the database
+ * would keep of its values. Then the copy keeps each value as it is, within what the new type
+ * allows (`copiesEveryValue`): a widening, never a narrowing.
+ *
+ * A judge with only the database's types has no kinds, and on one dialect two kinds can share a
+ * declared type (SQLite stores a checkbox and a number both as `integer`, and keeps no decimal's
+ * precision); such a judge sees no change there, where the database holds each value as it was.
  */
-export function storageHolds(
-  after: LocalizedColumnSpec,
-  before: LocalizedColumnSpec
+export function moveKeepsEveryValue(
+  from: MovedColumn,
+  to: MovedColumn,
+  dialect: SupportedDialect
 ): boolean {
-  if (after.kind !== before.kind) return false;
-  const length = (spec: LocalizedColumnSpec) => spec.length ?? Infinity;
-  if (length(after) < length(before)) return false;
-  if (after.precision === undefined || before.precision === undefined) {
-    return true;
+  if (from.kind !== undefined && to.kind !== undefined) {
+    const family = STORAGE_FAMILY[from.kind];
+    const sameFamily =
+      from.kind === to.kind ||
+      (family !== undefined && family === STORAGE_FAMILY[to.kind]);
+    if (!sameFamily) return false;
   }
-  const scale = (spec: LocalizedColumnSpec) => spec.scale ?? 0;
-  return (
-    scale(after) >= scale(before) &&
-    after.precision - scale(after) >= before.precision - scale(before)
-  );
+  return copiesEveryValue(from.type, to.type, dialect);
 }
 
 /**

@@ -173,20 +173,24 @@ function decimalHoldsEveryValue(
   );
 }
 
-/** Whether a SQLite declared type has REAL affinity, by SQLite's own rules (an `INT` match first). */
-function sqliteRealAffinity(type: string): boolean {
+/** A SQLite declared type's affinity, by SQLite's own rules, taken in their order. */
+function sqliteAffinity(type: string): string {
   const lower = type.toLowerCase();
-  return !lower.includes("int") && /real|floa|doub/.test(lower);
+  if (lower.includes("int")) return "integer";
+  if (/char|clob|text/.test(lower)) return "text";
+  if (lower.includes("blob") || lower.trim() === "") return "blob";
+  if (/real|floa|doub/.test(lower)) return "real";
+  return "numeric";
 }
 
 /**
  * Whether copying every value of a column of `fromType` into a new column of `toType` keeps each
- * one as it is: a fixed-point type with no fewer digits on either side of the point
- * (`decimalHoldsEveryValue`), or a widening (`isWideningChange`), derived from it. On SQLite one widening in place
- * is not one across a copy: a value written into a column with REAL affinity is stored as a
- * floating-point number, so an integer moved there from another affinity past 2^53 loses its last
- * digits. A copy out of REAL keeps its values, since SQLite converts there only where it loses
- * nothing.
+ * one as it is, and within what the new type allows: a fixed-point type with no fewer digits on
+ * either side of the point (`decimalHoldsEveryValue`), or a widening (`isWideningChange`), derived
+ * from it. On SQLite a widening in place is not one across a copy unless both types have one
+ * affinity: an integer copied into REAL is stored as a floating-point number and past 2^53 loses
+ * its last digits, and a fraction copied into INTEGER or NUMERIC keeps its REAL storage, a value
+ * the new whole-number or fixed-point type refuses, as PostgreSQL and MySQL refuse that change.
  */
 export function copiesEveryValue(
   fromType: string,
@@ -197,9 +201,7 @@ export function copiesEveryValue(
   if (decimal !== null) return decimal;
   if (!isWideningChange(fromType, toType, dialect)) return false;
   return (
-    dialect !== "sqlite" ||
-    sqliteRealAffinity(fromType) ||
-    !sqliteRealAffinity(toType)
+    dialect !== "sqlite" || sqliteAffinity(fromType) === sqliteAffinity(toType)
   );
 }
 

@@ -680,6 +680,42 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(String(row?.views)).toBe(views);
   });
 
+  it("refuses a code-first apply that makes a float an integer as it becomes translated, and changes nothing", async () => {
+    // SQLite would keep 1.5 as it is in an INTEGER column, a value the whole-number field refuses;
+    // PostgreSQL and MySQL would round it.
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      localized: true,
+      fields: [
+        { name: "heading", type: "text", localized: false },
+        { name: "views", type: "number", options: { format: "float" } },
+      ],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler()
+      .getEntryService()
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { heading: "Hello", views: 1.5 }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+    const id = String((entry.data as { id: unknown }).id);
+
+    const applied = await applyCodeFirst([
+      { name: "heading", type: "text", localized: false },
+      { name: "views", type: "number", localized: true },
+    ]);
+
+    expect(applied.success).toBe(false);
+    expect(JSON.stringify(applied)).toMatch(/RESHAPED_FIELD_JOINS_TRANSLATION/);
+    expect(await columnsOf("dc_posts_locales")).not.toContain("views");
+    const [row] = await query<{ views: unknown }>(
+      `SELECT ${quote(dialect, "views")} AS views FROM ${quote(dialect, "dc_posts")} WHERE ${quote(dialect, "id")} = '${id}'`
+    );
+    expect(Number(row?.views)).toBe(1.5);
+  });
+
   // SQLite keeps no length on a text column, so a narrower bound changes nothing it stores.
   it.skipIf(dialect === "sqlite")(
     "refuses a code-first apply that narrows a field's length as it becomes translated, and changes nothing",

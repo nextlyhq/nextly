@@ -16,7 +16,6 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { copiesEveryValue } from "../../schema/pipeline/classifier/type-widening";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import {
   readIndexUniqueness,
@@ -46,8 +45,8 @@ import {
   refusalsForTranslatedFieldRenamedAndReshaped,
   refusalsForTranslatedFieldRenamedAsTranslationEnds,
   refusalsForTranslatedFieldsRemovedBesideAdded,
+  moveKeepsEveryValue,
   storageDiffers,
-  storageHolds,
   withoutLeavingConstraints,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
@@ -65,7 +64,6 @@ import {
   refuseUnindexableTranslatedUnique,
   type TranslatedDuplicate,
 } from "./translated-unique-preconditions";
-import type { LocalizedColumnKind, LocalizedColumnSpec } from "./types";
 
 /**
  * Creates the archive table when it is missing, then runs the given archive writes.
@@ -249,7 +247,7 @@ export async function archiveFieldsLeavingTranslation(args: {
     ...refusalsForFieldsJoiningTranslation({
       // A field whose values an earlier apply already moved has nothing left to copy, so its
       // storage changing is judged apart, below.
-      reshaped: reshapedJoiningFields(
+      reshaped: joiningFieldsLosingValues(
         joining.filter(name => !joined.has(name)),
         { ...args, oldFields },
         dialect
@@ -257,7 +255,7 @@ export async function archiveFieldsLeavingTranslation(args: {
       surface: "builder",
     }),
     ...refusalsForMovedJoinsNarrowed({
-      narrowed: narrowedJoiningFields(
+      narrowed: joiningFieldsLosingValues(
         [...joined],
         { ...args, oldFields },
         dialect
@@ -606,7 +604,7 @@ function renamedSource(
 export interface JoinRetries {
   /** The joining fields whose values an earlier apply already moved (`movedJoiningFields`). */
   moved: ReadonlySet<string>;
-  /** Those of `moved` whose storage the change narrows (`narrowedJoiningFields`). */
+  /** Those of `moved` whose storage the change narrows (`joiningFieldsLosingValues`). */
   narrowed: ReadonlySet<string>;
 }
 
@@ -639,7 +637,7 @@ export async function joinRetries(args: {
   });
   return {
     moved,
-    narrowed: new Set(narrowedJoiningFields([...moved], args, dialect)),
+    narrowed: new Set(joiningFieldsLosingValues([...moved], args, dialect)),
   };
 }
 
@@ -901,14 +899,13 @@ export function fieldsAsFirstPushed<F extends LeavingFieldLike>(args: {
 }
 
 /**
- * The shared fields that become translated in this change while their storage changes, judged
- * against the column each one's value sits in now, which its old definition describes.
+ * Those of `joining` whose storage changes in a way that does not keep every value: stored as the
+ * new fields describe them, they do not hold each value the old fields' column holds
+ * (`moveKeepsEveryValue`, asked with both kinds). One answer for a first move, whose values would
+ * be copied into the new column, and for a retry of a move an earlier apply already made, whose
+ * values sit in a column of the new shape: a change the first allows, the retry finishes.
  */
-/**
- * Those of `joining` whose storage the change narrows: stored as the new fields describe them,
- * they do not hold every value they held before (`storageHolds`).
- */
-function narrowedJoiningFields(
+export function joiningFieldsLosingValues(
   joining: readonly string[],
   args: {
     oldFields: readonly LeavingFieldLike[];
@@ -923,58 +920,6 @@ function narrowedJoiningFields(
       : fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
   const before = new Map(args.oldFields.map(f => [f.name, f]));
   const after = new Map(args.newFields.map(f => [f.name, f]));
-  return joining.filter(name => {
-    const from = columnOf(before.get(name));
-    const to = columnOf(after.get(name));
-    return from != null && to != null && !storageHolds(to, from);
-  });
-}
-
-/** The kinds a field may move between as it joins translation, each family's: text, or number. */
-const STORAGE_FAMILY: Partial<Record<LocalizedColumnKind, string>> = {
-  text: "text",
-  shortText: "text",
-  longText: "text",
-  integer: "number",
-  double: "number",
-  decimal: "number",
-};
-
-/**
- * Whether two descriptions of a field's column are one kind, or kinds of one family. A field
- * changing kind across families (a number made text, a boolean made a number) changes what it
- * is, whatever the database would keep of its values, so it is a reshape however the copy goes.
- */
-function sameStorageFamily(
-  from: LocalizedColumnSpec,
-  to: LocalizedColumnSpec
-): boolean {
-  const family = STORAGE_FAMILY[from.kind];
-  return (
-    from.kind === to.kind ||
-    (family !== undefined && family === STORAGE_FAMILY[to.kind])
-  );
-}
-
-function reshapedJoiningFields(
-  joining: readonly string[],
-  args: {
-    oldFields: readonly LeavingFieldLike[];
-    newFields: readonly LeavingFieldLike[];
-    builtBy: ColumnOrigin;
-  },
-  dialect: SupportedDialect
-): string[] {
-  const columnOf = (field: LeavingFieldLike | undefined) =>
-    field === undefined
-      ? undefined
-      : fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
-  const before = new Map(args.oldFields.map(f => [f.name, f]));
-  const after = new Map(args.newFields.map(f => [f.name, f]));
-  // Reshaped where the field changes kind outside its family (`sameStorageFamily`), or where the
-  // column it gets cannot hold every value the one it has holds, asked of the two columns' types
-  // (`copiesEveryValue`) as the push and `migrate:create` ask it: a widening within a family
-  // copies each value as it is, short text into long text included.
   return joining.filter(name => {
     const from = columnOf(before.get(name));
     const to = columnOf(after.get(name));
@@ -983,8 +928,11 @@ function reshapedJoiningFields(
       !(
         from != null &&
         to != null &&
-        sameStorageFamily(from, to) &&
-        copiesEveryValue(ddlType(from, dialect), ddlType(to, dialect), dialect)
+        moveKeepsEveryValue(
+          { type: ddlType(from, dialect), kind: from.kind },
+          { type: ddlType(to, dialect), kind: to.kind },
+          dialect
+        )
       )
     );
   });

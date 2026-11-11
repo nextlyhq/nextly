@@ -184,9 +184,20 @@ describe("copiesEveryValue", () => {
     expect(copiesEveryValue("integer", "real", "sqlite")).toBe(false);
     expect(copiesEveryValue("numeric", "double", "sqlite")).toBe(false);
   });
-  it("copies every value on SQLite out of REAL storage, or between integer types", () => {
-    expect(copiesEveryValue("real", "integer", "sqlite")).toBe(true);
+  it("is not one on SQLite from REAL or NUMERIC storage into a whole-number or fixed-point type", () => {
+    // A fraction keeps its REAL storage there, a value the new type refuses.
+    expect(copiesEveryValue("real", "integer", "sqlite")).toBe(false);
+    expect(copiesEveryValue("NUMERIC(10, 2)", "INTEGER", "sqlite")).toBe(false);
+    expect(copiesEveryValue("REAL", "NUMERIC(10, 2)", "sqlite")).toBe(false);
+    expect(copiesEveryValue("integer", "numeric", "sqlite")).toBe(false);
+  });
+  it("copies every value on SQLite within one affinity", () => {
     expect(copiesEveryValue("integer", "bigint", "sqlite")).toBe(true);
+    expect(copiesEveryValue("real", "double", "sqlite")).toBe(true);
+    expect(copiesEveryValue("numeric", "numeric", "sqlite")).toBe(true);
+    expect(copiesEveryValue("NUMERIC(10, 2)", "NUMERIC(12, 2)", "sqlite")).toBe(
+      true
+    );
   });
   it("follows the widening rule elsewhere", () => {
     expect(copiesEveryValue("varchar(255)", "text", "mysql")).toBe(true);

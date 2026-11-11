@@ -12,6 +12,7 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { TableSpec } from "../../schema/pipeline/diff/types";
 import type { ColumnMovedToCompanion } from "../../schema/pipeline/moved-to-companion";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
@@ -355,11 +356,7 @@ export async function planJoiningMovesForApply(args: {
 
 /**
  * Refuses a field that becomes translated in the same change that changes how it is stored, before
- * anything runs: its value would be copied as it is into a companion column of the new shape,
- * which PostgreSQL refuses part-way and MySQL and SQLite coerce or cut. The Builder's paths and
- * `migrate:create` refuse this from the entity's previous fields; a code-first apply has only the
- * desired schema, so the live main column is compared with the column the field would have if it
- * stayed shared, by the diff's own rule (`typesDiffer`).
+ * anything runs (`joinsReshapedAgainst`, judged against the live main table).
  */
 async function refuseReshapedJoins(
   e: ApplyEntity,
@@ -370,64 +367,100 @@ async function refuseReshapedJoins(
 ): Promise<void> {
   const [
     { introspectLiveSnapshot },
-    { typesDiffer },
-    { copiesEveryValue },
-    { renderedType },
-    { getColumnDescriptor, getComponentRowColumnDescriptor },
     { refusalsForFieldsJoiningTranslation },
     { NextlyError },
   ] = await Promise.all([
     import("../../schema/pipeline/diff/introspect-live"),
-    import("../../schema/pipeline/diff/declared-size"),
-    import("../../schema/pipeline/classifier/type-widening"),
-    import("../../schema/pipeline/sql-templates/create-table-body"),
-    import("../../schema/services/field-column-descriptor"),
     import("./field-leaves-translation-rules"),
     import("../../../errors/nextly-error"),
   ]);
   const live = (
     await introspectLiveSnapshot(args.db, args.dialect, [e.tableName])
   ).tables.find(t => t.name === e.tableName);
-  const describe = rowColumns
-    ? getComponentRowColumnDescriptor
-    : getColumnDescriptor;
-  const reshaped = joining.filter(j => {
-    const column = live?.columns.find(c => c.name === j.column);
-    const field = e.fields.find(f => f.name === j.field);
-    const shared = field
-      ? describe(
-          { ...field, localized: false } as unknown as Parameters<
-            typeof describe
-          >[0],
-          args.dialect,
-          builtBy
-        )
-      : null;
-    return (
-      column !== undefined &&
-      shared !== null &&
-      // The column the field would have, from its descriptor alone: PostgreSQL and MySQL report a
-      // live column's length or precision apart from its type, and keeping that beside the new
-      // type would compare the old bound with itself.
-      typesDiffer(column, {
-        name: column.name,
-        type: shared.dialectType,
-        nullable: column.nullable,
-      }) &&
-      // Reshaped only where the new column cannot hold every value the live one holds: a widening
-      // (a longer varchar, varchar to text, a wider number) copies each value as it is.
-      !copiesEveryValue(renderedType(column), shared.dialectType, args.dialect)
-    );
+  const reshaped = await joinsReshapedAgainst(live, {
+    fields: e.fields,
+    joining,
+    rowColumns,
+    builtBy,
+    dialect: args.dialect,
   });
   if (reshaped.length === 0) return;
   const refusals = refusalsForFieldsJoiningTranslation({
-    reshaped: reshaped.map(j => j.field),
+    reshaped,
     surface: builtBy === "codeFirst" ? "code" : "builder",
   });
   throw NextlyError.validation({
     errors: refusals,
     logContext: { entity: e.slug, fields: refusals.map(r => r.path) },
   });
+}
+
+/**
+ * The joining fields whose storage changes in a way that does not keep every value, for a code-first
+ * apply: its value would be copied as it is into a companion column of the new shape, which
+ * PostgreSQL refuses part-way and MySQL and SQLite coerce or cut. The Builder's paths and
+ * `migrate:create` judge this from the entity's previous fields; a code-first apply has only the
+ * desired schema, so the `live` main column is compared with the column the field would have if it
+ * stayed shared: changed by the diff's own rule (`typesDiffer`), and losing values by the one rule
+ * every judge of a move asks (`moveKeepsEveryValue`), with the types alone.
+ */
+export async function joinsReshapedAgainst(
+  live: TableSpec | undefined,
+  args: {
+    fields: readonly CompanionFieldLike[];
+    joining: readonly { field: string; column: string }[];
+    /** Whether the entity is a component, whose row columns are described by their own rule. */
+    rowColumns: boolean;
+    builtBy: ColumnOrigin;
+    dialect: SupportedDialect;
+  }
+): Promise<string[]> {
+  const [
+    { typesDiffer },
+    { renderedType },
+    { getColumnDescriptor, getComponentRowColumnDescriptor },
+    { moveKeepsEveryValue },
+  ] = await Promise.all([
+    import("../../schema/pipeline/diff/declared-size"),
+    import("../../schema/pipeline/sql-templates/create-table-body"),
+    import("../../schema/services/field-column-descriptor"),
+    import("./field-leaves-translation-rules"),
+  ]);
+  const describe = args.rowColumns
+    ? getComponentRowColumnDescriptor
+    : getColumnDescriptor;
+  return args.joining
+    .filter(j => {
+      const column = live?.columns.find(c => c.name === j.column);
+      const field = args.fields.find(f => f.name === j.field);
+      const shared = field
+        ? describe(
+            { ...field, localized: false } as unknown as Parameters<
+              typeof describe
+            >[0],
+            args.dialect,
+            args.builtBy
+          )
+        : null;
+      return (
+        column !== undefined &&
+        shared !== null &&
+        // The column the field would have, from its descriptor alone: PostgreSQL and MySQL report
+        // a live column's length or precision apart from its type, and keeping that beside the new
+        // type would compare the old bound with itself.
+        typesDiffer(column, {
+          name: column.name,
+          type: shared.dialectType,
+          nullable: column.nullable,
+        }) &&
+        !moveKeepsEveryValue(
+          { type: renderedType(column) },
+          { type: shared.dialectType },
+          args.dialect
+        )
+      );
+    })
+    .map(j => j.field);
 }
 
 /** One entity's move, planned against its companion as it is now. */
