@@ -51,7 +51,7 @@ function FixButton({ problem }: { problem: Problem }): JSX.Element {
   );
   if (href !== undefined) {
     return (
-      <Button asChild variant="outline" size="sm">
+      <Button asChild variant="outline" size="sm" className="nx-seo-sbtn">
         <a
           href={href}
           onClick={event => {
@@ -72,6 +72,7 @@ function FixButton({ problem }: { problem: Problem }): JSX.Element {
       type="button"
       variant="outline"
       size="sm"
+      className="nx-seo-sbtn"
       onClick={() => {
         void navigator.clipboard?.writeText(note).then(
           () => toastMutationResult(`Copied: “${note}”`, []),
@@ -163,6 +164,7 @@ function Meta({
         type="button"
         variant="outline"
         size="sm"
+        className="nx-seo-sbtn"
         disabled={checking}
         onClick={check}
       >
@@ -245,7 +247,7 @@ export function SeoProblemsPage(): JSX.Element {
   return (
     <div className={`${ROOT} nx-seo-page`}>
       <SeoStyles />
-      <div className="nx-seo-head">
+      <div className="nx-seo-head nx-seo-phead">
         <div>
           <h1>Problems</h1>
           <p>

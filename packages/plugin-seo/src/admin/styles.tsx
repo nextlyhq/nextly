@@ -118,10 +118,13 @@ const CSS = `
 .nx-seo-minilist .grow{flex:1;min-width:0}
 .nx-seo-warnc{color:var(--nx-warning-text);display:inline-flex;flex:none}
 .nx-seo-okc{color:var(--nx-success-text);display:inline-flex;flex:none}
+.nx-seo-phead > div:first-child{flex:1 1 360px;min-width:0}
 .nx-seo-pmeta{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--nx-muted-foreground);flex-wrap:wrap}
+.nx-seo .nx-seo-sbtn{height:28px;padding:0 9px;font-size:12px;gap:6px;border-radius:8px}
+.nx-seo .nx-seo-sbtn svg{width:14px;height:14px}
 .nx-seo-pgroups{display:grid;gap:12px}
 .nx-seo-pgroup{border:1px solid var(--nx-border);border-radius:10px;background:var(--nx-card);overflow:hidden}
-.nx-seo-pg-h{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;background:var(--nx-table-header-bg);border-bottom:1px solid var(--nx-border-subtle)}
+.nx-seo-pg-h{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;background:var(--nx-muted);border-bottom:1px solid var(--nx-border-subtle)}
 .nx-seo-pg-h .nx-seo-warnc{margin-top:1px}
 .nx-seo-grow{flex:1;min-width:0}
 .nx-seo-pg-h h2{margin:0;font-weight:600;font-size:14px;line-height:1.45}
@@ -137,10 +140,13 @@ const CSS = `
 .nx-seo-what{line-height:1.45;overflow-wrap:anywhere}
 .nx-seo-fixes{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
 @media (max-width:1100px){
-.nx-seo-prow{grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) auto}
+.nx-seo-prow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"where fixes" "what what";gap:6px 14px}
+.nx-seo-where{grid-area:where}
+.nx-seo-what{grid-area:what}
+.nx-seo-fixes{grid-area:fixes}
 }
 @media (max-width:720px){
-.nx-seo-prow{grid-template-columns:minmax(0,1fr);gap:6px}
+.nx-seo-prow{grid-template-columns:minmax(0,1fr);grid-template-areas:"where" "what" "fixes"}
 .nx-seo-fixes{justify-content:flex-start}
 .nx-seo-head{padding:18px 16px 0}
 .nx-seo-tabs{padding:0 16px}
