@@ -322,7 +322,7 @@ with a line on the page to finish later. Every answer stays editable on the tabs
 | Tab           | What it holds                                                                                                  |
 | ------------- | -------------------------------------------------------------------------------------------------------------- |
 | General       | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, the default share image and description |
-| Content types | Each content type with SEO, whether it has a public address yet, and its title pattern                        |
+| Content types | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from |
 | Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                         |
 | Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none |
 
@@ -351,6 +351,16 @@ newest page updates as you type.
   `{Title} | {Site name}`, a title typed as `Pricing | Acme` stays `Pricing | Acme`.
 
 **Reset to default** returns a type to the site's default pattern.
+
+### Hiding a type, and its structured data
+
+**Hide whole group** keeps every page of a content type out of search, whatever each page says, and
+out of the sitemap. The **Structured data** column chooses what the type's pages are described as;
+**Automatic** describes a page with an author and a date as an Article, and any other as a Web page.
+For a type that needs details, such as an Article's author, **Map details** chooses the field each
+detail is read from. A detail left unchosen is read from a field named like it, and a type missing a
+detail is left out of the page's markup and listed in Problems. Both are saved with the settings and
+take over from the plugin's `hiddenTypes` and `structuredData` options.
 
 ### Changes reach pages without a redeploy
 

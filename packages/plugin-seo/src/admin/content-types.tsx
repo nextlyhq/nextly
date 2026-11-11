@@ -256,6 +256,48 @@ function DetailsEditor({
   );
 }
 
+/** How many entries a type has, when the reader may count them. */
+function EntryCount({
+  count,
+}: {
+  count: number | undefined;
+}): JSX.Element | null {
+  if (count === undefined) return null;
+  if (count === 0) return <small>No entries yet</small>;
+  return <small>{`${count} ${count === 1 ? "entry" : "entries"}`}</small>;
+}
+
+/** A type's title pattern as a chip that opens its editor, with any problem under it. */
+function PatternCell({
+  type,
+  draft,
+  open,
+  toggle,
+}: {
+  type: SeoContentType;
+  draft: TabProps["draft"];
+  open: boolean;
+  toggle: () => void;
+}): JSX.Element {
+  const { pattern, own } = patternOf(draft, type.key);
+  const problem = open ? null : patternProblem(pattern, type);
+  return (
+    <>
+      <button
+        type="button"
+        className="nx-seo-pattern"
+        aria-expanded={open}
+        aria-label={`Edit the title pattern for ${type.label}`}
+        onClick={toggle}
+      >
+        {pattern}
+        {own ? null : <small>default</small>}
+      </button>
+      {problem === null ? null : <p className="nx-seo-error">{problem}</p>}
+    </>
+  );
+}
+
 /** One content type's row, and the editor open under it, if any. */
 function TypeRows({
   type,
@@ -268,10 +310,8 @@ function TypeRows({
   open: OpenEditor | null;
   setOpen: (open: OpenEditor | null) => void;
 }): JSX.Element {
-  const { pattern, own } = patternOf(draft, type.key);
   const patternOpen = open?.key === type.key && open.kind === "pattern";
   const map = open?.key === type.key && open.kind === "map" ? open : null;
-  const problem = patternOpen ? null : patternProblem(pattern, type);
   const hidden = isHidden(draft, type.key);
   return (
     <>
@@ -286,31 +326,20 @@ function TypeRows({
         </td>
         <td className="nx-seo-tname">
           <b>{type.label}</b>
-          {type.count === undefined ? null : (
-            <small>
-              {type.count === 0
-                ? "No entries yet"
-                : `${type.count} ${type.count === 1 ? "entry" : "entries"}`}
-            </small>
-          )}
+          <EntryCount count={type.count} />
         </td>
         <td data-label="Public address">
           <TypeAddress type={type} />
         </td>
         <td data-label="Title pattern">
-          <button
-            type="button"
-            className="nx-seo-pattern"
-            aria-expanded={patternOpen}
-            aria-label={`Edit the title pattern for ${type.label}`}
-            onClick={() =>
+          <PatternCell
+            type={type}
+            draft={draft}
+            open={patternOpen}
+            toggle={() =>
               setOpen(patternOpen ? null : { key: type.key, kind: "pattern" })
             }
-          >
-            {pattern}
-            {own ? null : <small>default</small>}
-          </button>
-          {problem === null ? null : <p className="nx-seo-error">{problem}</p>}
+          />
         </td>
         <td data-label="Hide whole group">
           <Switch
