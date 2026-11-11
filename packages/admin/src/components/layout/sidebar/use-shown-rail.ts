@@ -31,8 +31,6 @@ export interface ShownRailInputs<Item extends MainMenuItem> {
   contentAnswerPending: boolean;
   collectionsLoading: boolean;
   singlesLoading: boolean;
-  /** On a phone the drawer draws "+ New" itself, so the rail does not wait. */
-  onPhone?: boolean;
 }
 
 export function useShownRail<Item extends MainMenuItem>({
@@ -44,7 +42,6 @@ export function useShownRail<Item extends MainMenuItem>({
   contentAnswerPending,
   collectionsLoading,
   singlesLoading,
-  onPhone,
 }: ShownRailInputs<Item>): {
   rail: { items: readonly Item[]; settled: boolean };
   newMenu: RailNewMenuState;
@@ -73,5 +70,5 @@ export function useShownRail<Item extends MainMenuItem>({
     collectionsLoading,
     singlesLoading,
   ]);
-  return { rail: railBehindNewMenu(rail, newMenu, onPhone), newMenu };
+  return { rail: railBehindNewMenu(rail, newMenu), newMenu };
 }

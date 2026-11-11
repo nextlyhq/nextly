@@ -283,12 +283,17 @@ describe(`DualSidebar's rail and its "+ New" button`, () => {
     ).toBe("pending");
   });
 
-  it(`leaves "+ New" to the drawer's own row on a phone`, () => {
+  it(`draws "+ New" in the phone drawer's rail too, behind the same answer`, () => {
     answers = settledAnswers;
     newMenu = { types: [], isReady: false };
+    const { unmount } = render(<DualSidebar isMobile />);
+    expect(railLabels()).toEqual([]);
+    unmount();
+    newMenu = { types: [{ slug: "posts" }], isReady: true };
     render(<DualSidebar isMobile />);
-    expect(screen.queryByTestId("new-menu")).toBeNull();
-    // The drawer's rail does not wait on an answer it does not draw.
-    expect(railLabels()).toContain("Dashboard");
+    expect(screen.getByTestId("new-menu")).toHaveAttribute(
+      "data-variant",
+      "rail"
+    );
   });
 });

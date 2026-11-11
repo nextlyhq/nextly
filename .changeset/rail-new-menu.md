@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-"+ New" is at the top of the admin's icon rail, under the logo, and is the first row of the phone's navigation drawer: one searchable list of every type you may create. Where you may create nothing, it is not drawn, and the rail's entries wait for that answer so none of them moves.
+"+ New" is at the top of the admin's icon rail, under the logo, on every width (the phone's navigation drawer holds the same rail): one searchable list of every type you may create. Where you may create nothing, it is not drawn, and the rail's entries wait for that answer so none of them moves.

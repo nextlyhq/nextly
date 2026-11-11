@@ -353,7 +353,6 @@ export function DualSidebar({
     contentAnswerPending,
     collectionsLoading: isCollectionsLoading,
     singlesLoading: isSinglesLoading,
-    onPhone: isMobile,
   });
 
   const activeCategory = useMemo(
@@ -524,7 +523,7 @@ export function DualSidebar({
         <nav className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto px-3 py-1 [scrollbar-width:none]">
           {/* "+ New" heads the entries, inside their column rather than
               above it, so the column's own box never moves as it arrives. */}
-          <RailNewMenu onPhone={isMobile} state={newMenu} />
+          <RailNewMenu state={newMenu} />
           {rail.items.map(item => {
             const Icon = item.icon;
             const isSelected = railItemOf(shownMain) === item.id;
