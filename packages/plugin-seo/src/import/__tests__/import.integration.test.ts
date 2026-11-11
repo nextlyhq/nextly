@@ -211,7 +211,12 @@ async function boot(
   current = t;
   await t.nextly.updateSingle({
     slug: SEO_SETTINGS_SLUG,
-    data: { _overwrite: true, siteName: "Rext AI", separator: "|" },
+    data: {
+      _overwrite: true,
+      siteName: "Rext AI",
+      separator: "|",
+      productionAddresses: ["https://nextlyhq.com"],
+    },
   });
   const owner = await t.nextly.users.create({
     data: {
@@ -421,6 +426,24 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       slug: "jasper",
       metaData: { seoTitle: "Jasper vs Rext | Rext AI", robotsIndex: "index" },
     });
+    // A shared title the same as the title the page shows, which a typed
+    // title decides, is left automatic; one the same as only the automatic
+    // title, which the typed one replaces, is kept.
+    await post(t, {
+      title: "Writesonic vs Rext",
+      slug: "writesonic",
+      seo: { metaTitle: "Writesonic, compared" },
+      metaData: {
+        ogTitle: "Writesonic, compared",
+        ogDescription: "Writesonic vs Rext",
+      },
+    });
+    await post(t, {
+      title: "Rytr vs Rext",
+      slug: "rytr",
+      seo: { metaTitle: "Rytr, compared" },
+      metaData: { ogTitle: "Rytr vs Rext | Rext AI" },
+    });
     // A title a person already typed in the SEO tab is kept.
     await post(t, {
       title: "Koala vs Rext",
@@ -440,20 +463,19 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
 
     const dry = await dryRun(staff.importer, source);
     expect(dry).toMatchObject({
-      checked: 3,
+      checked: 5,
       fromFile: false,
-      pages: 2,
-      same: 1,
+      pages: 4,
+      same: 2,
       kept: 1,
       redirects: 0,
       left: ["twitterCard", "keywords"],
-      drafts: false,
     });
     expect(dry.lines).toEqual(
       expect.arrayContaining([
         { target: "title", from: ["seoTitle"], pages: 1 },
         { target: "description", from: ["seoDescription"], pages: 2 },
-        { target: "socialTitle", from: ["ogTitle"], pages: 1 },
+        { target: "socialTitle", from: ["ogTitle"], pages: 2 },
         { target: "hidden", from: ["robotsIndex"], pages: 1 },
       ])
     );
@@ -471,6 +493,9 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     });
     expect(after.jasper?.metaTitle ?? "").toBe("");
     expect(after.jasper?.noindex ?? false).toBe(false);
+    expect(after.writesonic?.socialTitle ?? "").toBe("");
+    expect(after.writesonic?.socialDescription).toBe("Writesonic vs Rext");
+    expect(after.rytr?.socialTitle).toBe("Rytr vs Rext | Rext AI");
     expect(after.koala).toMatchObject({
       metaTitle: "Typed in the tab",
       metaDescription: "Old description",
@@ -489,11 +514,23 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
         noIndex: true,
       },
     });
-    // A canonical naming the page's own address says nothing new.
+    // A canonical naming the page's own address, on the site's own origin,
+    // says nothing new.
     await page(t, {
       title: "About",
       slug: "about",
       pageSeo: { canonicalUrl: "https://nextlyhq.com/about/" },
+    });
+    // The same path on another origin, or with a query, is another address.
+    await page(t, {
+      title: "Elsewhere",
+      slug: "elsewhere",
+      pageSeo: { canonicalUrl: "https://original.example/elsewhere" },
+    });
+    await page(t, {
+      title: "Edition",
+      slug: "edition",
+      pageSeo: { canonicalUrl: "/edition?edition=original" },
     });
     const source: ImportSource = {
       kind: "group",
@@ -507,7 +544,7 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       },
     };
     const dry = await dryRun(staff.importer, source);
-    expect(dry).toMatchObject({ checked: 2, pages: 1, same: 1 });
+    expect(dry).toMatchObject({ checked: 4, pages: 3, same: 1 });
 
     const applied = await apply(staff.importer, source, dry.plan);
     expect(applied.status, await applied.clone().text()).toBe(200);
@@ -519,6 +556,10 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       noindex: true,
     });
     expect(after.about?.canonical ?? "").toBe("");
+    expect(after.elsewhere?.canonical).toBe(
+      "https://original.example/elsewhere"
+    );
+    expect(after.edition?.canonical).toBe("/edition?edition=original");
   });
 
   it("makes the earlier plugin's typed values that match the automatic ones automatic, and keeps the rest", async () => {

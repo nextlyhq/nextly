@@ -20,7 +20,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
-import { asCaller } from "../bulk/route";
+import { asCaller, defaultLanguageOnly } from "../bulk/route";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 
 import {
@@ -87,11 +87,15 @@ async function parsedBody<T>(req: Request, schema: z.ZodType<T>): Promise<T> {
   return parsed.data;
 }
 
-/** The request as the import reads it. */
-function requestOf(body: z.infer<typeof REQUEST>): ImportRequest {
+/** The request as the import reads it, in the site's default language. */
+async function requestOf(
+  ctx: PluginRouteContext,
+  body: z.infer<typeof REQUEST>
+): Promise<ImportRequest> {
+  const locale = await defaultLanguageOnly(ctx, body.locale);
   return {
     source: body.source,
-    ...(body.locale ? { locale: body.locale } : {}),
+    ...(locale === undefined ? {} : { locale }),
   };
 }
 
@@ -118,7 +122,10 @@ export function importRoutes(setup: ImportSetup): PluginRoute[] {
       noStore: true,
       requiredPermission: MANAGE_SEO_PERMISSION,
       handler: async (req, ctx) => {
-        const locale = param(new URL(req.url), "locale");
+        const locale = await defaultLanguageOnly(
+          ctx,
+          param(new URL(req.url), "locale")
+        );
         const body: ImportGroupsBody = {
           groups: await importGroups(ctx, setup, asIn(ctx, locale), locale),
         };
@@ -130,7 +137,7 @@ export function importRoutes(setup: ImportSetup): PluginRoute[] {
       path: IMPORT_DRY_RUN_PATH,
       requiredPermission: MANAGE_SEO_PERMISSION,
       handler: async (req, ctx) => {
-        const request = requestOf(await parsedBody(req, REQUEST));
+        const request = await requestOf(ctx, await parsedBody(req, REQUEST));
         const plan = await planImport(
           ctx,
           setup,
@@ -146,7 +153,7 @@ export function importRoutes(setup: ImportSetup): PluginRoute[] {
       requiredPermission: MANAGE_SEO_PERMISSION,
       handler: async (req, ctx) => {
         const body = await parsedBody(req, APPLY);
-        const request = requestOf(body);
+        const request = await requestOf(ctx, body);
         const applied = await applyImport(
           ctx,
           setup,

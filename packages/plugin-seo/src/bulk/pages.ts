@@ -22,7 +22,7 @@ import {
 import { withAddressHolders } from "../address-record/participant";
 import { idText } from "../import/records";
 import { isRecord, textOf } from "../plain-values";
-import { resolveOrder } from "../resolver/order";
+import { resolveOrder, type Levels } from "../resolver/order";
 import { levelsOf, type SiteRules } from "../resolver/page-levels";
 import { TITLE_FIELDS } from "../settings/patterns";
 import { mediaReadFor } from "../tab/route";
@@ -45,6 +45,11 @@ export interface ReadPage {
   seo: Record<string, unknown>;
   /** Its title and description without anything typed. */
   auto: { title?: string; description?: string };
+  /**
+   * Every level of the order for the page with nothing typed, which the
+   * page's answer for any typed values is worked out over.
+   */
+  levels: Levels;
 }
 
 /** What a read of pages needs beside the context. */
@@ -146,13 +151,13 @@ async function pathOf(
   }
 }
 
-/** A page's title and description with nothing typed. */
+/** A page's levels with nothing typed, and its title and description then. */
 async function automaticOf(
   ctx: PluginContext,
   slug: string,
   document: Record<string, unknown>,
   options: PageReadOptions
-): Promise<ReadPage["auto"]> {
+): Promise<Pick<ReadPage, "auto" | "levels">> {
   const input: PageMetadataInput = {
     ...(options.locale === undefined ? {} : { locale: options.locale }),
     source: { kind: "entry", collection: slug, entry: withoutTyped(document) },
@@ -160,14 +165,16 @@ async function automaticOf(
     derived: {},
   };
   // No image is needed, so none is looked up.
-  const answer = resolveOrder(
-    await levelsOf(mediaReadFor(ctx, false), input, options.rules)
-  );
+  const levels = await levelsOf(mediaReadFor(ctx, false), input, options.rules);
+  const answer = resolveOrder(levels);
   return {
-    ...(answer.title === undefined ? {} : { title: answer.title.value }),
-    ...(answer.description === undefined
-      ? {}
-      : { description: answer.description.value }),
+    levels,
+    auto: {
+      ...(answer.title === undefined ? {} : { title: answer.title.value }),
+      ...(answer.description === undefined
+        ? {}
+        : { description: answer.description.value }),
+    },
   };
 }
 
@@ -201,7 +208,7 @@ async function pagesOf(
         ...(typeof rev === "string" ? { rev } : {}),
         document,
         seo: isRecord(document[SEO_GROUP]) ? { ...document[SEO_GROUP] } : {},
-        auto: await automaticOf(ctx, slug, document, options),
+        ...(await automaticOf(ctx, slug, document, options)),
       });
     }
     return pages;

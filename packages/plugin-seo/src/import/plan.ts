@@ -34,13 +34,15 @@ import {
   type ReadPage,
 } from "../bulk/pages";
 import { refusalAbout, seoWith, writablePages } from "../bulk/route";
+import { productionAddressesOf } from "../canonical";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
 import { putRedirect } from "../redirects/store";
+import { resolveOrder } from "../resolver/order";
 import type { SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import { SEPARATORS } from "../settings/patterns";
-import { SEO_GROUP } from "../tab/typed";
+import { SEO_GROUP, typedPageLevel } from "../tab/typed";
 
 import type {
   DryRunBody,
@@ -201,7 +203,8 @@ function separatorOf(rules: SiteRules): string {
 /** The source's records, read from the request. */
 function parsedSource(
   request: ImportRequest,
-  pages: readonly ReadPage[]
+  pages: readonly ReadPage[],
+  language: string
 ): ParsedSource {
   const { source } = request;
   switch (source.kind) {
@@ -218,7 +221,7 @@ function parsedSource(
         ? readRankMathExport(source.text)
         : readRankMathCsv(source.text);
     case "payload":
-      return readPayload(source.text, request.locale);
+      return readPayload(source.text, language);
   }
 }
 
@@ -301,15 +304,28 @@ function same(a: string | undefined, b: string | undefined): boolean {
   return tidy(a) === tidy(b);
 }
 
-/** A canonical that names the page's own address, which it has anyway. */
-function ownAddress(canonical: string, page: ReadPage): boolean {
+/**
+ * A canonical that names the page's own address, which it has anyway: its
+ * path, alone or on one of the site's own origins, with no query or
+ * fragment. Anything else names another address, and is kept.
+ */
+function ownAddress(
+  canonical: string,
+  page: ReadPage,
+  origins: readonly string[]
+): boolean {
   if (page.path === undefined) return false;
+  let url: URL;
   try {
-    const path = new URL(canonical, "https://example.invalid").pathname;
-    return path.replace(/\/+$/, "") === page.path.replace(/\/+$/, "");
+    url = new URL(canonical, "https://relative.invalid");
   } catch {
     return false;
   }
+  if (url.search !== "" || url.hash !== "") return false;
+  const onSite =
+    url.origin === "https://relative.invalid" || origins.includes(url.origin);
+  const trim = (path: string) => path.replace(/\/+$/, "") || "/";
+  return onSite && trim(url.pathname) === trim(page.path);
 }
 
 /** The digest an apply is held to: every change, and each page's version. */
@@ -357,6 +373,8 @@ interface Decision {
 
 /** What deciding one record's values needs about its page. */
 interface Deciding {
+  /** The site's own origins, a canonical on which names the page itself. */
+  origins: readonly string[];
   record: ImportedRecord;
   page: ReadPage;
   templates: TemplateValues;
@@ -364,22 +382,19 @@ interface Deciding {
   decision: Decision;
 }
 
-/** The value a text place shows automatically, given what is decided so far. */
+/**
+ * What a text place answers with nothing typed in it, given every other
+ * value the page keeps and the import writes: the resolver's own answer, so
+ * a social title compared here falls back to the title the page would show.
+ */
 function automaticFor(
-  place: (typeof TEXT_PLACES)[number],
+  place: Exclude<(typeof TEXT_PLACES)[number], "canonical">,
   page: ReadPage,
   decided: Readonly<Record<string, unknown>>
 ): string | undefined {
-  const title = textValue(decided[STORED.title]) ?? page.auto.title;
-  const description =
-    textValue(decided[STORED.description]) ?? page.auto.description;
-  const automatic: Partial<Record<(typeof TEXT_PLACES)[number], string>> = {
-    title: page.auto.title,
-    description: page.auto.description,
-    socialTitle: title,
-    socialDescription: description,
-  };
-  return automatic[place];
+  const { [STORED[place]]: _left, ...others } = { ...page.seo, ...decided };
+  return resolveOrder({ ...page.levels, page: typedPageLevel(others) })[place]
+    ?.value;
 }
 
 /** Write `value` into `place`, unless it is typed already or is automatic. */
@@ -399,11 +414,11 @@ function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
     if (!same(current, value)) at.tally.kept++;
     return;
   }
-  const automatic = automaticFor(place, at.page, at.decision.writes);
-  if (
-    same(value, automatic) ||
-    (place === "canonical" && ownAddress(value, at.page))
-  ) {
+  const automatic =
+    place === "canonical"
+      ? ownAddress(value, at.page, at.origins)
+      : same(value, automaticFor(place, at.page, at.decision.writes));
+  if (automatic) {
     at.tally.same++;
     return;
   }
@@ -455,9 +470,11 @@ function decide(
   page: ReadPage,
   templates: TemplateValues,
   images: ReadonlyMap<string, string>,
-  tally: Tally
+  tally: Tally,
+  origins: readonly string[]
 ): Decision {
   const at: Deciding = {
+    origins,
     record,
     page,
     templates,
@@ -712,8 +729,11 @@ async function writableOf(
   ctx: PluginRouteContext,
   changing: readonly PlannedPage[],
   options: { locale: string | undefined; pagePermissions: boolean }
-): Promise<{ writable: PlannedPage[]; refused: string[] }> {
+): Promise<{ writable: PlannedPage[]; refused: string[]; drafted: string[] }> {
   const allowed = new Set<string>();
+  const drafting = new Set(
+    changing.map(page => page.type).filter(type => keepsDrafts(ctx, type))
+  );
   for (const type of new Set(changing.map(page => page.type))) {
     const ids = changing
       .filter(page => page.type === type)
@@ -723,9 +743,15 @@ async function writableOf(
     }
   }
   const may = (page: PlannedPage) => allowed.has(`${page.type}|${page.id}`);
+  const left = changing.filter(page => !may(page));
   return {
     writable: changing.filter(may),
-    refused: changing.filter(page => !may(page)).map(page => page.label),
+    refused: left
+      .filter(page => !drafting.has(page.type))
+      .map(page => page.label),
+    drafted: left
+      .filter(page => drafting.has(page.type))
+      .map(page => page.label),
   };
 }
 
@@ -745,9 +771,12 @@ export async function planImport(
     source
   );
   const pages = await everyPage(ctx, types, as, locale, rules);
-  const parsed = parsedSource(request, pages);
+  const defaultLanguage =
+    locale ?? (await ctx.publicAddresses.defaultLanguage());
+  const parsed = parsedSource(request, pages, defaultLanguage);
   const own = source.kind === "group" && source.field === SEO_GROUP;
   const templates = templatesOf(rules);
+  const origins = productionAddressesOf(rules.productionAddresses);
   const images = await mediaIds(ctx, imageUrls(parsed.records));
   const tally: Tally = { same: 0, kept: 0, unfilled: 0, missingImages: 0 };
   const matched = matchRecords(
@@ -756,9 +785,13 @@ export async function planImport(
     (record, page) =>
       own
         ? tidyOwn(page, tally)
-        : decide(record, page, templates, images, tally)
+        : decide(record, page, templates, images, tally, origins)
   );
-  const { writable: changing, refused: notYours } = await writableOf(
+  const {
+    writable: changing,
+    refused: notYours,
+    drafted,
+  } = await writableOf(
     ctx,
     matched.planned.filter(page => page.places.length > 0),
     { locale, pagePermissions: setup.pagePermissions }
@@ -769,8 +802,11 @@ export async function planImport(
       `${count(notYours.length, "page")} would change, but you may not change ${either(notYours.length, "its", "their")} SEO, so ${either(notYours.length, "it is", "they are")} left out: ${someOf(notYours)}.`
     );
   }
-  const defaultLanguage =
-    locale ?? (await ctx.publicAddresses.defaultLanguage());
+  if (drafted.length > 0) {
+    warnings.push(
+      `${count(drafted.length, "page")} would change, but ${either(drafted.length, "its type keeps", "their types keep")} drafts, so ${either(drafted.length, "its", "their")} SEO is changed in ${either(drafted.length, "its", "each page's")} own editor and ${either(drafted.length, "it is", "they are")} left out: ${someOf(drafted)}.`
+    );
+  }
   const refused = await refusedRedirects(
     ctx,
     defaultLanguage,
@@ -794,7 +830,6 @@ export async function planImport(
       redirects: kept.length,
       left: parsed.left,
       warnings,
-      drafts: changing.some(page => keepsDrafts(ctx, page.type)),
       plan: planDigest(request, changing, kept),
     },
   };

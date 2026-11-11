@@ -287,3 +287,98 @@ describe.each(getConfiguredTestDialects())("bulk edit (%s)", dialect => {
     expect((await seoBySlug(t)).surfer?.metaTitle ?? "").toBe("");
   });
 });
+
+describe.each(getConfiguredTestDialects())(
+  "bulk edit on a translated site, and a type keeping drafts (%s)",
+  dialect => {
+    async function bootTranslated() {
+      const t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        plugins: [
+          seoPlugin({ collections: ["posts", "drafts"], sitemap: false }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            localized: true,
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+          defineCollection({
+            slug: "drafts",
+            status: true,
+            versions: { drafts: true },
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/notes/{slug}",
+          }),
+        ],
+      });
+      current = t;
+      const owner = await t.nextly.users.create({
+        data: {
+          email: "owner@example.com",
+          password: "Password123!",
+          name: "Owner",
+          isActive: true,
+        },
+      });
+      const keys = t.getService("apiKeyService") as unknown as {
+        createApiKey(
+          userId: string,
+          input: { name: string; tokenType: string; expiresIn: string }
+        ): Promise<{ key: string }>;
+      };
+      // The owner's own key: the site's first person may do anything.
+      const { key } = await keys.createApiKey(String(owner.item.id), {
+        name: "owner key",
+        tokenType: "full-access",
+        expiresIn: "unlimited",
+      });
+      return { t, key };
+    }
+
+    it("reads and saves in the default language, and refuses another", async () => {
+      const { t, key } = await bootTranslated();
+      const created = await t.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title: "Harbour", slug: "harbour" },
+      });
+      const id = String(created.item.id);
+      const german = await call(key, "GET", "/bulk/rows?type=posts&locale=de");
+      expect(german.status).toBe(400);
+      const saved = await call(key, "POST", "/bulk/save", {
+        type: "posts",
+        locale: "de",
+        changes: [{ id, title: "Hafen" }],
+      });
+      expect(saved.status).toBe(400);
+      const english = await call(key, "GET", "/bulk/rows?type=posts&locale=en");
+      expect(english.status, await english.clone().text()).toBe(200);
+    });
+
+    it("shows the pages of a type keeping drafts read-only, and saves none", async () => {
+      const { t, key } = await bootTranslated();
+      const created = await t.nextly.create({
+        collection: "drafts",
+        data: { title: "Note", slug: "note", status: "published" },
+      });
+      const id = String(created.item.id);
+      const types = (await (
+        await call(key, "GET", "/bulk/types")
+      ).json()) as BulkTypesBody;
+      expect(types.types.find(type => type.slug === "drafts")?.drafts).toBe(
+        true
+      );
+      const read = await call(key, "GET", "/bulk/rows?type=drafts");
+      const rows = ((await read.json()) as BulkRowsBody).rows;
+      expect(rows.find(row => row.id === id)?.editable).toBe(false);
+      const saved = await call(key, "POST", "/bulk/save", {
+        type: "drafts",
+        changes: [{ id, title: "Changed" }],
+      });
+      expect(saved.status).toBe(403);
+    });
+  }
+);

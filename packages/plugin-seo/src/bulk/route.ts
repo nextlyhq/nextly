@@ -73,6 +73,27 @@ export function asCaller(ctx: PluginRouteContext): ServiceOpts {
   };
 }
 
+/**
+ * The language a request names, where it is the site's default, or a
+ * refusal: a write on a transaction is made in the default language, so
+ * the table and the import read and write in it alone, rather than read one
+ * language and write another.
+ */
+export async function defaultLanguageOnly(
+  ctx: PluginContext,
+  locale: string | null | undefined
+): Promise<string | undefined> {
+  if (locale === undefined || locale === null || locale === "") {
+    return undefined;
+  }
+  if (locale === (await ctx.publicAddresses.defaultLanguage())) return locale;
+  throw NextlyError.invalidInput({
+    message:
+      "Bulk edit and imports work in the site's default language. Edit other languages' SEO on each page.",
+    logContext: { reason: "seo-bulk-not-default-language", locale },
+  });
+}
+
 /** A content type SEO is added to, or a refusal naming the slug. */
 function targetOf(setup: BulkSetup, slug: string): string {
   if (!setup.targets.includes(slug)) {
@@ -100,6 +121,10 @@ export async function writablePages(
   if (!(await mayChangePageSeo(ctx, type, options.pagePermissions))) {
     return writable;
   }
+  // A published page of a type keeping working drafts holds its pending
+  // edits in a draft these reads do not see, so its SEO is changed in its
+  // own editor, where the draft is, and is read-only here.
+  if (keepsDrafts(ctx, type)) return writable;
   const identity = await caller.identity();
   for (const id of new Set(ids)) {
     const may = await mayWriteEntry(identity, {
@@ -277,9 +302,10 @@ async function save(
   body: SaveBody
 ): Promise<BulkSaveBody> {
   const type = targetOf(setup, body.type);
+  const locale = await defaultLanguageOnly(ctx, body.locale);
   const as: ServiceOpts = {
     ...asCaller(ctx),
-    ...(body.locale ? { locale: body.locale } : {}),
+    ...(locale === undefined ? {} : { locale }),
   };
   const ids = body.changes.map(change => change.id);
   if (new Set(ids).size !== ids.length) {
@@ -291,7 +317,7 @@ async function save(
   // Every page is asked first, so a page the caller may not change refuses
   // the whole save before anything is written.
   const writable = await writablePages(ctx, type, ids, {
-    locale: body.locale ?? undefined,
+    locale,
     pagePermissions: setup.pagePermissions,
   });
   const refused = ids.find(id => !writable.has(id));
@@ -348,7 +374,10 @@ export function bulkRoutes(setup: BulkSetup): PluginRoute[] {
       path: BULK_TYPES_PATH,
       noStore: true,
       handler: async (req, ctx) => {
-        const locale = param(new URL(req.url), "locale");
+        const locale = await defaultLanguageOnly(
+          ctx,
+          param(new URL(req.url), "locale")
+        );
         const body: BulkTypesBody = {
           types: await typesFor(ctx, setup, locale),
         };
@@ -365,7 +394,7 @@ export function bulkRoutes(setup: BulkSetup): PluginRoute[] {
         if (!(await ctx.caller?.can("read", type))) {
           throw NextlyError.forbidden();
         }
-        const locale = param(url, "locale");
+        const locale = await defaultLanguageOnly(ctx, param(url, "locale"));
         const page = Math.max(1, Number(param(url, "page") ?? "1") || 1);
         const read = await readPages(ctx, type, {
           as: asCaller(ctx),

@@ -129,8 +129,6 @@ export interface DryRunBody {
   left: string[];
   /** What the person should know before applying it. */
   warnings: string[];
-  /** Where a change is held as a draft until its page is published. */
-  drafts: boolean;
   /** What the apply is checked against: the changes, as this run found them. */
   plan: string;
 }
