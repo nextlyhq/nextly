@@ -1,22 +1,47 @@
 "use client";
 
 /**
- * `@nextlyhq/plugin-seo/admin`: the SEO settings screen, registered with the
- * admin under the component path the plugin's page names.
+ * `@nextlyhq/plugin-seo/admin`: the admin's SEO screens, each registered
+ * under the component path the plugin names it by: the settings page, the
+ * SEO tab on each page the plugin adds SEO to, its side panel line, and the
+ * panel the tab draws, for any surface that edits a page's SEO, and the
+ * problem list.
  *
- * The registration is what makes the page render: a page names its component
- * by a string, and the admin resolves that string through its component
- * registry, so a component exported but not registered leaves the page empty.
+ * The registration is what makes them render: the admin resolves a component
+ * path through its registry, so a component exported but not registered
+ * draws nothing. A site's generated component map imports this module.
  *
  * @module admin
  */
 import { registerComponents } from "@nextlyhq/plugin-sdk/admin";
 
+import { PROBLEMS_PAGE } from "../problems/contract";
 import { SETTINGS_PAGE } from "../settings/contract";
+import { SEO_STATUS_COMPONENT, SEO_TAB_COMPONENT } from "../tab/contributions";
 
+import { SeoProblemsPage } from "./SeoProblemsPage";
 import { SeoSettingsPage } from "./SeoSettingsPage";
+import { SeoTab } from "./SeoTab";
+import { SeoStatusSection } from "./status";
 
 // Registered as the module loads, which is when the component map imports it.
-registerComponents({ [SETTINGS_PAGE.component]: SeoSettingsPage });
+registerComponents({
+  [SETTINGS_PAGE.component]: SeoSettingsPage,
+  [SEO_TAB_COMPONENT]: SeoTab,
+  [SEO_STATUS_COMPONENT]: SeoStatusSection,
+  [PROBLEMS_PAGE.component]: SeoProblemsPage,
+});
 
+export { SeoProblemsPage } from "./SeoProblemsPage";
 export { SeoSettingsPage } from "./SeoSettingsPage";
+export { SeoTab } from "./SeoTab";
+export { SeoStatusSection } from "./status";
+export { SeoPanel, type SeoPanelProps } from "./SeoPanel";
+export {
+  panelAnswers,
+  SEO_PANEL_FIELDS,
+  type ChosenImage,
+  type PanelAnswers,
+  type SeoPanelField,
+  type SeoPanelValues,
+} from "./values";

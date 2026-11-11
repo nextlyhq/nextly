@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-import { text } from "nextly";
+import { select, text } from "nextly";
 import type { FieldConfig } from "nextly";
 import { describe, expect, it } from "vitest";
 
@@ -53,6 +53,8 @@ describe("seoPlugin", () => {
     ).toEqual([
       "metaTitle",
       "metaDescription",
+      "socialTitle",
+      "socialDescription",
       "ogImage",
       "canonical",
       "canonicalElsewhere",
@@ -85,6 +87,10 @@ describe("seoPlugin", () => {
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
       ["GET", "/settings/document", undefined, undefined],
+      ["POST", "/resolve", undefined, undefined],
+      // The problem list, read and checked again by a signed-in reader.
+      ["GET", "/problems", undefined, undefined],
+      ["POST", "/problems/check", undefined, undefined],
     ]);
   });
 
@@ -107,6 +113,9 @@ describe("seoPlugin", () => {
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/resolve",
+      "/problems",
+      "/problems/check",
     ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
@@ -122,6 +131,9 @@ describe("seoPlugin", () => {
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/resolve",
+      "/problems",
+      "/problems/check",
     ]);
   });
 
@@ -179,6 +191,8 @@ describe("seoPlugin", () => {
     expect(fieldNames(defaultSeoFields())).toEqual([
       "metaTitle",
       "metaDescription",
+      "socialTitle",
+      "socialDescription",
       "ogImage",
       "canonical",
       "canonicalElsewhere",
@@ -216,6 +230,11 @@ describe("the dashboard card the plugin contributes", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
     expect(plugin.contributes?.admin).not.toHaveProperty("widgets");
+    // Its admin contributions are the SEO tab and its side panel line.
+    expect(plugin.contributes?.admin?.contributions).toEqual([
+      expect.objectContaining({ kind: "tab" }),
+      expect.objectContaining({ kind: "sidebarSection" }),
+    ]);
     // Read as a property of the value: `widgetSources` is no field of the
     // contributions type, so a typed read of it does not compile.
     expect(plugin.contributes).toBeDefined();
@@ -241,5 +260,128 @@ describe("the dashboard card the plugin contributes", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
     expect(plugin.nextly).toBe(`>=${plugin.version}`);
+  });
+});
+
+describe("the SEO tab the plugin contributes", () => {
+  it("adds one tab to each extended collection's and Single's page, editing the seo group", () => {
+    const plugin = seoPlugin({
+      collections: ["pages", "posts"],
+      singles: ["homepage"],
+      sitemap: false,
+    });
+    expect(plugin.contributes?.extend?.[0]?.target).toEqual([
+      "pages",
+      "posts",
+      "homepage",
+    ]);
+    expect(plugin.contributes?.admin?.contributions).toEqual([
+      {
+        id: "nextlyhq-plugin-seo.tab",
+        kind: "tab",
+        place: "collection.edit",
+        label: "SEO",
+        component: "@nextlyhq/plugin-seo/admin#SeoTab",
+        collections: ["pages", "posts"],
+        fields: ["seo"],
+      },
+      {
+        id: "nextlyhq-plugin-seo.status",
+        kind: "sidebarSection",
+        place: "collection.edit",
+        label: "Search",
+        component: "@nextlyhq/plugin-seo/admin#SeoStatusSection",
+        after: "details",
+        collections: ["pages", "posts"],
+      },
+      {
+        id: "nextlyhq-plugin-seo.single-tab",
+        kind: "tab",
+        place: "single.edit",
+        label: "SEO",
+        component: "@nextlyhq/plugin-seo/admin#SeoTab",
+        singles: ["homepage"],
+        fields: ["seo"],
+      },
+      {
+        id: "nextlyhq-plugin-seo.single-status",
+        kind: "sidebarSection",
+        place: "single.edit",
+        label: "Search",
+        component: "@nextlyhq/plugin-seo/admin#SeoStatusSection",
+        after: "details",
+        singles: ["homepage"],
+      },
+    ]);
+  });
+
+  it("adds no Single's tab while it extends no Single", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    expect(
+      plugin.contributes?.admin?.contributions?.map(each => each.place)
+    ).toEqual(["collection.edit", "collection.edit"]);
+  });
+});
+
+describe("the SEO tab and fields of a project's own", () => {
+  it("leaves a group the tab cannot edit whole among the page's own fields", () => {
+    const plugin = seoPlugin({
+      collections: ["pages"],
+      sitemap: false,
+      fields: [
+        text({ name: "metaTitle" }),
+        text({ name: "metaDescription" }),
+        text({ name: "focusKeyword" }),
+      ],
+    });
+    expect(plugin.contributes?.admin?.contributions).toBeUndefined();
+  });
+
+  it("leaves a group whose fields say they may not be edited among the page's fields", () => {
+    for (const admin of [
+      { readOnly: true },
+      { disabled: true },
+      { hidden: true },
+      { condition: { field: "metaTitle", equals: "x" } },
+    ]) {
+      const plugin = seoPlugin({
+        collections: ["pages"],
+        sitemap: false,
+        fields: [
+          text({ name: "metaTitle", admin }),
+          text({ name: "metaDescription" }),
+        ],
+      });
+      expect(
+        plugin.contributes?.admin?.contributions,
+        JSON.stringify(admin)
+      ).toBeUndefined();
+    }
+  });
+
+  it("leaves a group whose fields are of another type than the tab writes", () => {
+    for (const metaTitle of [
+      select({
+        name: "metaTitle",
+        options: [{ label: "A", value: "a" }],
+      }),
+      text({ name: "metaTitle", hasMany: true }),
+    ]) {
+      const plugin = seoPlugin({
+        collections: ["pages"],
+        sitemap: false,
+        fields: [metaTitle, text({ name: "metaDescription" })],
+      });
+      expect(plugin.contributes?.admin?.contributions).toBeUndefined();
+    }
+  });
+
+  it("draws the tab for a group of fields it edits, fewer than the defaults", () => {
+    const plugin = seoPlugin({
+      collections: ["pages"],
+      sitemap: false,
+      fields: [text({ name: "metaTitle" }), text({ name: "metaDescription" })],
+    });
+    expect(plugin.contributes?.admin?.contributions).toHaveLength(2);
   });
 });

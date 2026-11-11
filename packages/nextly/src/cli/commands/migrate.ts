@@ -35,6 +35,7 @@ import { basename, resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-plain-passwords";
 import {
@@ -180,7 +181,12 @@ import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-
 import { provisionUserFieldStorage } from "../../domains/users/services/provision-user-field-storage";
 import { UserExtSchemaService } from "../../domains/users/services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
+import {
+  buildWorkflowRegistry,
+  publishWorkflows,
+} from "../../domains/workflows/registry";
 import { NextlyError, describeError } from "../../errors";
+import { seedPermissionsRolesAndPresets } from "../../init/seed-permissions";
 import { configWatchAllowed } from "../../runtime/hmr-listener";
 import type { UserConfig } from "../../users/config/types";
 import { CliError, exitWithError } from "../errors";
@@ -204,6 +210,7 @@ import {
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
+import { withCommandServicesLent } from "../utils/lend-command-services";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
   migrationFilesInRunOrder,
@@ -549,6 +556,14 @@ export async function runMigrate(
         allowDropNonEmptyRetired,
         ensureLedger: () => ensureSchemaEventsTable(dz),
         step: options.step,
+        // A production start does not add permissions or set grants, so the deploy step does:
+        // through the services a start seeds with, on this command's connection and config.
+        seedPermissions: () =>
+          seedAccessOnCommandConnection(
+            adapter as unknown as DrizzleAdapter,
+            configResult,
+            logger
+          ),
         // A translations column already in place that cannot hold a field the config newly
         // translates, judged as the files left it and before the registry records them: refused
         // here, the registry keeps its definitions and the next run is refused the same way.
@@ -724,6 +739,61 @@ export async function runMigrate(
   } finally {
     await adapter.disconnect();
   }
+}
+
+/**
+ * Phase 4 of `nextly migrate`: the permissions, declared roles and preset grants
+ * (`seedPermissionsRolesAndPresets`), on the command's own connection, lent to
+ * the services a grants change goes through (`withCommandServicesLent`), so the
+ * cached permission answers and content reads of every running instance are
+ * retired when it changes a grant.
+ *
+ * The configuration's attached workflows are judged and published first, as a
+ * start publishes them before it seeds: the permissions a workflow's steps add
+ * are seeded with their collection's, and the presets leave them out, so a
+ * declared role bundling one is made with it. A configuration whose workflows
+ * cannot attach is refused by every start; here it is said, its workflows'
+ * permissions are left to a later run, and a role bundling one is not made yet.
+ * The workflows published before are put back after.
+ */
+async function seedAccessOnCommandConnection(
+  adapter: DrizzleAdapter,
+  configResult: { config: SanitizedNextlyConfig; configPath?: string | null },
+  logger: Logger
+): Promise<void> {
+  const { config } = configResult;
+  // Each seeder's progress is detail here; its warnings and errors are the operator's.
+  const seedLogger = {
+    debug: (message: string) => logger.debug(message),
+    info: (message: string) => logger.debug(message),
+    warn: (message: string) => logger.warn(message),
+    error: (message: string) => logger.error(message),
+  };
+  await withCommandServicesLent(adapter, seedLogger, async () => {
+    let previous: ReturnType<typeof publishWorkflows> | undefined;
+    try {
+      // Judged as a configuration reload judges them: the configuration's own
+      // components as written, any other from the registry Phase 3 just wrote.
+      previous = publishWorkflows(
+        await buildWorkflowRegistry(config, configResult.configPath ?? null, {
+          components: config.fieldGroups ?? [],
+        })
+      );
+    } catch (error) {
+      logger.warn(
+        `The configuration's workflows could not be attached, so their permissions were not added: ${describeError(error)}`
+      );
+    }
+    try {
+      await seedPermissionsRolesAndPresets({
+        adapter,
+        config,
+        logger: seedLogger,
+      });
+    } finally {
+      if (previous !== undefined) publishWorkflows(previous);
+    }
+  });
 }
 
 /**
@@ -910,6 +980,14 @@ export interface MigrateCoreDeps {
    * newly translates.
    */
   beforeMetadata?: () => Promise<void>;
+  /**
+   * Phase 4: adds the missing permissions and declared roles and sets the preset roles' grants
+   * (`seedPermissionsRolesAndPresets`). Runs inside the lock, after Phase 3 has written the
+   * registry rows the entities' permissions are read from. A throw fails the run; the files and
+   * rows stay, and the next run, which writes only what differs, completes it. `nextly migrate`
+   * passes it; absent, the run leaves permissions, roles and grants to whoever else writes them.
+   */
+  seedPermissions?: () => Promise<void>;
   /**
    * Refuse, before anything changes, a pending file with a Schema Builder
    * name and no snapshot that is not recognised as an earlier Builder's
@@ -2259,6 +2337,17 @@ export async function migrateCore(
       // columns creates tables without them, and an entity whose registry
       // row only Phase 3 records is found only once it has.
       await (deps.documentColumnsFn ?? addDocumentColumnsFor)(deps);
+
+      // Phase 4, still inside the lock: the permissions of the entities whose rows Phase 3 just
+      // wrote, with core's, the app's and the plugins', then the roles and the preset grants
+      // computed from them. Under the lock so no other run sets them from another state between.
+      if (deps.seedPermissions !== undefined) {
+        deps.logger.info(
+          "Phase 4: adding permissions, roles and preset grants..."
+        );
+        await deps.assertLockHeld?.();
+        await deps.seedPermissions();
+      }
     },
     {
       command: deps.lockCommand ?? "nextly migrate",

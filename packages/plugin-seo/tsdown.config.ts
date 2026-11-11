@@ -3,7 +3,8 @@ import { defineConfig } from "tsdown";
 export default defineConfig({
   // Two entries. The root is Node-safe, with no `next` or `react` coupling,
   // so it stays usable in headless and admin-only projects; `admin` carries
-  // the settings screen, a client module the root never imports.
+  // the settings screen and the SEO tab, client modules the root never
+  // imports.
   entry: ["src/index.ts", "src/admin/index.ts"],
   format: ["esm"],
   // `.js` and `.d.ts`, the names the exports map already publishes.

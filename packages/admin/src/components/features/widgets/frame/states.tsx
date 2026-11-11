@@ -311,8 +311,9 @@ export function CardError({
       className="grid justify-items-center gap-1"
       data-testid="widget-card-error"
     >
+      {/* An icon is ink, so it takes the danger status's text colour; the solid one is for fills. */}
       <XCircle
-        className="mb-1 h-5 w-5 text-danger-solid"
+        className="mb-1 h-5 w-5 text-danger-text"
         aria-hidden="true"
         data-testid="widget-card-error-mark"
       />

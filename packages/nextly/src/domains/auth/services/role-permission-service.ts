@@ -344,13 +344,22 @@ export class RolePermissionService extends BaseService {
    * rows against each other. Here, an unchanged set is answered by a read alone,
    * with no write and no lock, and a change either lands whole or not at all.
    *
+   * With `leaveOrphanedGrants`, a permission marked orphaned is neither added
+   * nor removed: the role keeps it if it holds it, and does not gain it if it
+   * does not. Preset seeding sets its roles against the declared permissions
+   * only, so without this a role set by difference lost its grant of any
+   * permission a start had just marked orphaned, and an orphan mark is meant
+   * to take nothing away.
+   *
    * @param roleId - Role ID to set permissions for
    * @param permissionIds - The complete desired set of permission IDs
+   * @param options.leaveOrphanedGrants - Leave grants of orphaned permissions as they are
    * @returns Updated array of permission objects with id, action, resource
    */
   async setRolePermissions(
     roleId: string,
-    permissionIds: string[]
+    permissionIds: string[],
+    options: { leaveOrphanedGrants?: boolean } = {}
   ): Promise<Array<{ id: string; action: string; resource: string }>> {
     // A retired `manage-` permission is stored as the plain four it stands
     // for, so a role set with one, a preset's at each boot included, never
@@ -371,9 +380,22 @@ export class RolePermissionService extends BaseService {
     // counts as held and is removed below. MySQL's table declares no foreign
     // key, so such a row can be there.
     const before = await this.readAssignments(roleId);
-    if (
-      sameMembers(new Set(before.map(row => row.permissionId)), unchangedIf)
-    ) {
+    const heldBefore = new Set(before.map(row => row.permissionId));
+    // Only the held orphans are known from this read. A wanted id not held
+    // counts as an addition here, so a set that would add an orphan goes on
+    // to the transaction, which reads every id's mark and leaves it out.
+    const wantedBefore = options.leaveOrphanedGrants
+      ? leavingOrphans(
+          unchangedIf,
+          heldBefore,
+          new Set(
+            before
+              .filter(row => row.permission?.orphanedAt != null)
+              .map(row => row.permissionId)
+          )
+        )
+      : unchangedIf;
+    if (sameMembers(heldBefore, wantedBefore)) {
       return named(before);
     }
 
@@ -391,8 +413,17 @@ export class RolePermissionService extends BaseService {
         // are named as the schema declares them, which is how the adapter reads a
         // where clause and returns a row.
         await tx.lockRow("roles", roleId);
-        const desired = await storedAsPlainLocked(tx, permissionIds, maxParams);
+        const stored = await storedAsPlainLocked(tx, permissionIds, maxParams);
         const held = await this.heldIn(tx, roleId);
+        // Read under the role's lock, so the grants of orphaned permissions
+        // are left exactly as this transaction finds them.
+        const desired = options.leaveOrphanedGrants
+          ? leavingOrphans(
+              stored,
+              held,
+              await this.orphanedIn(tx, [...new Set([...stored, ...held])])
+            )
+          : stored;
 
         const extra = [...held].filter(id => !desired.has(id));
         for (const ids of batches(extra, maxParams - 1)) {
@@ -433,6 +464,32 @@ export class RolePermissionService extends BaseService {
 
       return this.listRolePermissions(roleId);
     });
+  }
+
+  /**
+   * Which of `permissionIds` name a permission marked orphaned, read on
+   * transaction `tx` in statements that bind no more parameters than one
+   * query may.
+   */
+  private async orphanedIn(
+    tx: TransactionContext,
+    permissionIds: readonly string[]
+  ): Promise<Set<string>> {
+    const orphaned = new Set<string>();
+    const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+    for (const ids of batches(permissionIds, maxParams)) {
+      const rows = await tx.select<{ id: string; orphanedAt: unknown }>(
+        "permissions",
+        {
+          columns: ["id", "orphanedAt"],
+          where: { and: [{ column: "id", op: "IN", value: ids }] },
+        }
+      );
+      for (const row of rows) {
+        if (row.orphanedAt != null) orphaned.add(String(row.id));
+      }
+    }
+    return orphaned;
   }
 
   /** The permission ids `roleId` holds, read on transaction `tx`. */
@@ -664,6 +721,9 @@ export class RolePermissionService extends BaseService {
             id: true,
             action: true,
             resource: true,
+            // Read so a set that leaves orphaned grants alone can tell, from
+            // this one read, that it has nothing to change.
+            orphanedAt: true,
           },
         },
       },
@@ -674,7 +734,11 @@ export class RolePermissionService extends BaseService {
 /** An assignment row, and the permission it names when that still exists. */
 type Assignment = {
   permissionId: string;
-  permission?: { action: string; resource: string } | null;
+  permission?: {
+    action: string;
+    resource: string;
+    orphanedAt?: unknown;
+  } | null;
 };
 
 /**
@@ -696,6 +760,24 @@ function named(
         ]
       : []
   );
+}
+
+/**
+ * The set a role is brought to when grants of orphaned permissions are left
+ * as they are: `wanted`, less any orphan the role does not hold, plus every
+ * orphan it does. The one statement of that rule, so the read that decides
+ * whether anything changes and the write that changes it cannot disagree.
+ */
+function leavingOrphans(
+  wanted: ReadonlySet<string>,
+  held: ReadonlySet<string>,
+  orphaned: ReadonlySet<string>
+): Set<string> {
+  const result = new Set<string>();
+  for (const id of wanted)
+    if (!orphaned.has(id) || held.has(id)) result.add(id);
+  for (const id of orphaned) if (held.has(id)) result.add(id);
+  return result;
 }
 
 /** Whether two sets hold the same members. */

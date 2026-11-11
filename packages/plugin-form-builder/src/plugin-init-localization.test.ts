@@ -16,6 +16,7 @@ function bootContext(getCollection: (slug: string) => Promise<unknown>) {
     // `init` also subscribes the submission-notification hook. Stubbed
     // because this file is about what it RECORDS, not what it subscribes.
     hooks: { on: vi.fn(), off: vi.fn(), onInTransaction: vi.fn() },
+    security: { digests: { prepare: vi.fn(), digest: vi.fn() } },
     events: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
   } as never;
 }

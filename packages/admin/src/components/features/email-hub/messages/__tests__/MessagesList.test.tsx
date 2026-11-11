@@ -244,7 +244,7 @@ describe("MessagesList", () => {
         within(table())
           .getByRole("link", { name: "Newsletter" })
           .getAttribute("href")
-      ).toBe("/admin/email/messages/edit/newsletter");
+      ).toBe("/admin/settings/email/messages/edit/newsletter");
     });
 
     it("gives the site's own email a Delete and an owner's email none", async () => {

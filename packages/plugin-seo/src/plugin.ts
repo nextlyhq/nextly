@@ -40,6 +40,10 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
+import { PROBLEMS_PAGE, PROBLEMS_PAGE_HREF } from "./problems/contract";
+import { watchSaves } from "./problems/hooks";
+import { problemRoutes } from "./problems/route";
+import { problemsCollection } from "./problems/store";
 import { redirectsCollection } from "./redirects/collection";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
@@ -74,6 +78,7 @@ import {
   rulesFromOptions,
   type StructuredDataOptions,
 } from "./structured-data/rules";
+import { seoTabParts } from "./tab/install";
 import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
@@ -90,9 +95,13 @@ export interface SeoPluginOptions {
    */
   collections: string[];
   /**
+   * The Singles to extend with the SEO field group, such as a homepage. None
+   * when absent. A Single's page gets the same SEO tab a collection's has.
+   */
+  singles?: string[];
+  /**
    * The fields placed INSIDE the `seo` group. Defaults to
-   * {@link defaultSeoFields} (metaTitle, metaDescription, ogImage, canonical,
-   * noindex). Custom fields are still nested under `seo` (e.g. a `focusKeyword`
+   * {@link defaultSeoFields}. Custom fields are still nested under `seo` (e.g. a `focusKeyword`
    * override lands at `entry.seo.focusKeyword`), so consumers always read SEO
    * data from one predictable place.
    */
@@ -385,6 +394,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // twice (a duplicate-field error), and would list the same URLs twice in the
   // sitemap.
   const targets = [...new Set(options.collections)];
+  const singleTargets = [...new Set(options.singles ?? [])];
 
   const sitemapSubset = subsetOf(options.sitemap, targets);
   const readRules = rulesReader(options);
@@ -398,19 +408,47 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     socialCardRulesFromOptions(options.baseUrl, options.socialCard)
   );
 
-  // The site's sitemap and robots.txt, and the action that makes a share
-  // image of the right size; all added below.
+  // The SEO tab on each page the group is added to, and the route it reads
+  // a page's automatic values from.
+  const tab = seoTabParts({
+    collections: targets,
+    singles: singleTargets,
+    fields: seoFields,
+    baseUrl: options.baseUrl,
+    readRules,
+    readStructuredDataRules,
+    readSocialCardRules,
+  });
+
+  // What the problem list checks, read with the rules every page's head is
+  // worked out by, so the list and the page never disagree.
+  const problemChecks = {
+    targets,
+    readers: {
+      readRules,
+      readStructuredDataRules: structuredDataFromSettings(
+        readStructuredDataRules
+      ),
+      readSocialCardRules,
+    },
+  };
+
+  // The site's sitemap and robots.txt, the action that makes a share image
+  // of the right size, the SEO tab's own and the problem list's; all added
+  // below.
   const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
-    extend: [{ target: targets, fields: [seoGroup] }],
+    extend: [{ target: [...targets, ...singleTargets], fields: [seoGroup] }],
     // The record that keeps each public address to one page, the redirects
-    // whose From addresses it holds, and the log of addresses not found.
+    // whose From addresses it holds, the log of addresses not found, and
+    // what the problem list's checks found.
     collections: [
       addressRecordCollection(),
       redirectsCollection(),
       notFoundCollection(),
+      problemsCollection(),
     ],
     // Every page's head, worked out by the one order of who wins, with its
     // links to its other languages, its social card completed, and its
@@ -452,6 +490,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // asks AI tools and which types are hidden, which the site's own
     // robots.txt and pages already say.
     admin: {
+      ...tab.admin,
       clientConfig: {
         aiCrawlers: options.aiCrawlers ?? "all",
         hiddenTypes: [...new Set(options.hiddenTypes ?? [])],
@@ -460,6 +499,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         structuredData: checkedTypeRules(options.structuredData?.types),
       },
       menu: [
+        // Shown to everyone in the admin: the list answers each person with
+        // the pages of the types they may read, and says so where none.
+        { label: "Problems", to: PROBLEMS_PAGE_HREF, icon: "AlertTriangle" },
         {
           label: "Settings",
           to: SETTINGS_PAGE_HREF,
@@ -468,6 +510,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         },
       ],
       pages: [
+        PROBLEMS_PAGE,
         { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
       ],
     },
@@ -494,7 +537,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
     contentTypesRoute(targets),
-    settingsDocumentRoute()
+    settingsDocumentRoute(),
+    ...tab.routes,
+    ...problemRoutes(problemChecks)
   );
 
   return definePlugin({
@@ -553,6 +598,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       releaseOnCollectionDelete(ctx);
       // Kept for the site's not-found page, which logs through it.
       keepSeoContext(ctx);
+      // Each saved page checked again for the problem list.
+      watchSaves(ctx, problemChecks);
     },
     onReady(ctx) {
       // Started, not awaited: it waits for the boot to finish, and brings the

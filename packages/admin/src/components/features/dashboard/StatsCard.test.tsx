@@ -35,14 +35,14 @@ describe("StatsCard", () => {
 
     expect(screen.getByText("+12.5%")).toBeInTheDocument();
     // A quiet chip: no tinted fill or ink on the chip itself, and the arrow alone in the
-    // success status's solid colour, never the danger one. Both halves are needed: swapping the
+    // success status's text colour, never the danger one. Both halves are needed: swapping the
     // two branches is exactly the regression this guards.
     const badge = trendBadge("+12.5%");
     expect(badge).toHaveClass("bg-card", "text-foreground");
     expect(badge.className).not.toMatch(/-(surface|text)\b/);
     const mark = within(badge).getByTestId("trend-mark");
-    expect(mark).toHaveClass("text-success-solid");
-    expect(mark).not.toHaveClass("text-danger-solid");
+    expect(mark).toHaveClass("text-success-text");
+    expect(mark).not.toHaveClass("text-danger-text");
   });
 
   it("renders with negative trend indicator", () => {
@@ -54,8 +54,8 @@ describe("StatsCard", () => {
     const badge = trendBadge("-5.2%");
     expect(badge).toHaveClass("bg-card", "text-foreground");
     const mark = within(badge).getByTestId("trend-mark");
-    expect(mark).toHaveClass("text-danger-solid");
-    expect(mark).not.toHaveClass("text-success-solid");
+    expect(mark).toHaveClass("text-danger-text");
+    expect(mark).not.toHaveClass("text-success-text");
   });
 
   it("does not render trend when change is undefined", () => {
