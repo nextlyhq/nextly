@@ -8,15 +8,16 @@
  * says the page holds that address. A page whose address another page holds,
  * or that no page holds yet, is left out and returned as a problem instead.
  *
+ * On a site with several languages, each version of a page is listed in its
+ * own right, in every language the record says the page is published in,
+ * and carries the page's language links.
+ *
  * Every page is read as the system, published versions only: a working draft
  * changes nothing listed until it is published.
  *
  * @module outputs/listing
  */
 import {
-  getCachedNextly,
-  languageAddressOf,
-  NextlyError,
   publicAddressOf,
   type AddressHolder,
   type PublicAddress,
@@ -26,13 +27,24 @@ import {
 
 import {
   addressHolders,
-  recordSlug,
-  rowOf,
   withAddressHolders,
 } from "../address-record/participant";
+import { languageLinks } from "../languages/links";
+import {
+  absolute,
+  documentsIn,
+  heldLanguages,
+  onceEach,
+  otherLanguages,
+  resolveIn,
+  servedAt,
+  singleIn,
+  standingOf,
+  type HeldLanguages,
+} from "../languages/versions";
 import type { SeoAnswer } from "../resolver/order";
-import { resolveSeo, type ReadRules } from "../resolver/provider";
-import { MAX_LOC_LENGTH, publishedWhere, toLastModified } from "../sitemap";
+import type { ReadRules } from "../resolver/provider";
+import { publishedWhere, toLastModified } from "../sitemap";
 
 import type { SitemapPage } from "./sitemap-files";
 
@@ -41,6 +53,8 @@ export interface ListedPage extends SitemapPage {
   holder: AddressHolder;
   /** The page's own address, from the site's root. */
   path: string;
+  /** The language this version of the page is in, as the site spells it. */
+  language: string;
 }
 
 /**
@@ -52,6 +66,8 @@ export interface ListingProblem {
   kind: "held-by-another" | "not-recorded";
   holder: AddressHolder;
   path: string;
+  /** The language of the version left out. */
+  language: string;
   heldBy?: AddressHolder;
 }
 
@@ -77,72 +93,15 @@ export interface ListingOptions {
 
 /** How many documents one read takes. */
 const PAGE_SIZE = 100;
-/** How many record rows one read takes. */
-const RECORD_PAGE = 500;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-
-/**
- * `address` resolved against `origin` into an absolute address, or null where
- * it is not a web address at all. Resolution only: whether a canonical is
- * usable is the answer's to say, and it is taken as answered.
- */
-function absolute(address: string, origin: string): string | null {
-  try {
-    const url = new URL(address, origin);
-    return url.protocol === "http:" || url.protocol === "https:"
-      ? url.href
-      : null;
-  } catch {
-    return null;
-  }
-}
 
 /** One document of a type, with the key its address is held under. */
 interface Candidate {
   type: PublicAddressType;
   holder: AddressHolder;
   document: Record<string, unknown>;
-}
-
-/**
- * The paths each of `ids` holds in the record, by id, read a page at a time.
- */
-async function heldPaths(
-  ctx: PluginContext,
-  collection: string,
-  ids: readonly string[]
-): Promise<Map<string, Set<string>>> {
-  const held = new Map<string, Set<string>>();
-  if (ids.length === 0) return held;
-  for (let page = 1; ; page++) {
-    const { data } = await ctx.services.ownCollections.listEntries(
-      recordSlug(ctx),
-      {
-        where: {
-          and: [
-            { kind: { equals: "address" } },
-            // Held in another language, a path says nothing of this one.
-            { locale: { equals: await recordLanguage(ctx) } },
-            { holderCollection: { equals: collection } },
-            { holderId: { in: [...ids] } },
-          ],
-        },
-        sort: { field: "claimKey", direction: "asc" },
-        pagination: { limit: RECORD_PAGE, page },
-        depth: 0,
-      }
-    );
-    const rows = (data as unknown[]).map(rowOf);
-    for (const row of rows) {
-      if (row.holder === null || row.address === null) continue;
-      const paths = held.get(row.holder.id) ?? new Set<string>();
-      paths.add(row.address.path);
-      held.set(row.holder.id, paths);
-    }
-    if (rows.length < RECORD_PAGE) return held;
-  }
 }
 
 /**
@@ -153,48 +112,11 @@ function recordLanguage(ctx: PluginContext): Promise<string> {
   return ctx.publicAddresses.defaultLanguage();
 }
 
-/**
- * `path` as the language `locale` serves it, root-relative or on that
- * language's own domain; `path` itself on a site with no languages.
- */
-async function servedAt(
-  path: string,
-  locale: string
-): Promise<string | undefined> {
-  const served = await languageAddressOf(path, locale);
-  return served.status === "resolved"
-    ? `${served.origin ?? ""}${served.path}`
-    : undefined;
-}
-
-/** A Single's published document, or null where it has none. */
-async function singleDocument(
-  slug: string
-): Promise<Record<string, unknown> | null> {
-  const nextly = await getCachedNextly();
-  try {
-    const document: unknown = await nextly.findSingle({
-      slug,
-      createIfMissing: false,
-      overrideAccess: true,
-      // Published values only, as a visitor is served them: a draft, and a
-      // Single a release has withdrawn, are no page.
-      status: "published",
-      depth: 1,
-    });
-    return isRecord(document) ? document : null;
-  } catch (error) {
-    // A Single never published is not found by a read of published values.
-    if (NextlyError.isCode(error, "NOT_FOUND")) return null;
-    throw error;
-  }
-}
-
 /** A Single's page, where it has a published one. */
 async function* singlePages(
   type: PublicAddressType
 ): AsyncGenerator<Candidate[]> {
-  const document = await singleDocument(type.slug);
+  const document = await singleIn(type.slug, undefined);
   if (document === null) return;
   const holder = { collection: `single:${type.slug}`, id: String(document.id) };
   yield [{ type, holder, document }];
@@ -260,43 +182,30 @@ async function* candidates(
 }
 
 /**
- * A page left out because it does not hold its own address: which page holds
- * it instead, where one does.
+ * A version left out because it does not hold its own address in its
+ * language: which page holds it instead, where one does.
  */
 async function problemOf(
   ctx: PluginContext,
   holder: AddressHolder,
-  path: string
+  path: string,
+  language: string
 ): Promise<ListingProblem> {
-  const heldBy = (
-    await addressHolders(ctx, path, await recordLanguage(ctx))
-  ).find(
+  const heldBy = (await addressHolders(ctx, path, language)).find(
     other => other.collection !== holder.collection || other.id !== holder.id
   );
   const page = { collection: holder.collection, id: holder.id };
   return heldBy === undefined
-    ? { kind: "not-recorded", holder: page, path }
-    : { kind: "held-by-another", holder: page, path, heldBy };
-}
-
-/** `readRules`, read at most once for each language it is asked in. */
-function onceEach(readRules: ReadRules): ReadRules {
-  const read = new Map<string | undefined, ReturnType<ReadRules>>();
-  return (ctx, locale) => {
-    let rules = read.get(locale);
-    if (rules === undefined) {
-      rules = readRules(ctx, locale);
-      read.set(locale, rules);
-    }
-    return rules;
-  };
+    ? { kind: "not-recorded", holder: page, path, language }
+    : { kind: "held-by-another", holder: page, path, language, heldBy };
 }
 
 /**
- * The site's listable pages, in type order and then by id, and the pages left
- * out because they do not hold their own address: one whose answer has no
- * canonical although its type declares it an address, or one the record
- * does not give the address it is listed at.
+ * The site's listable pages, in type order, then by id, then by language,
+ * the default language first, and the versions left out because they do
+ * not hold their own address: one whose answer has no canonical although
+ * its type declares it an address, or one the record does not give the
+ * address it is listed at.
  */
 export async function listPages(
   ctx: PluginContext,
@@ -323,10 +232,15 @@ export async function listPages(
   return found;
 }
 
+/** A version of a page that stands for itself, as it would be listed. */
+type Standing = Map<string, ListedPage[]>;
+
 /**
- * One read's pages, listed into `found`: the record read once for the whole
- * batch, both for what each page holds and for who holds each page's own
- * address, which the answer of each page asks.
+ * One read's pages, listed into `found` in every language each is published
+ * in: the record read once for the whole batch, in every language, and each
+ * other language's documents read once. Each version carries the language
+ * links of its page, built from every version that stands for itself, those
+ * on another of the site's addresses included, so each names all the others.
  */
 async function listBatch(
   ctx: PluginContext,
@@ -334,32 +248,90 @@ async function listBatch(
   options: ListingOptions & { language: string },
   found: { pages: ListedPage[]; problems: ListingProblem[] }
 ): Promise<void> {
+  const [first] = batch;
+  if (first === undefined) return;
+  const held = await heldLanguages(
+    ctx,
+    first.holder.collection,
+    batch.map(candidate => candidate.holder.id)
+  );
+  const standing: Standing = new Map();
+  await listIn(ctx, batch, options.language, held, options, found, standing);
+  for (const language of otherLanguages(held.values(), options.language)) {
+    // Only the pages the record says are published in it: a page read in a
+    // language it has no published version in is served another's values.
+    const ids = batch.flatMap(candidate =>
+      held.get(candidate.holder.id)?.has(language) === true
+        ? [candidate.holder.id]
+        : []
+    );
+    const documents = await documentsIn(ctx, first.type, ids, language);
+    const versions = batch.flatMap(candidate => {
+      const document = documents.get(candidate.holder.id);
+      return document === undefined ? [] : [{ ...candidate, document }];
+    });
+    await listIn(ctx, versions, language, held, options, found, standing);
+  }
+  const site = new URL(options.origin).origin;
+  for (const candidate of batch) {
+    const versions = standing.get(candidate.holder.id) ?? [];
+    const { links } = languageLinks(
+      versions.map(page => ({ language: page.language, href: page.loc })),
+      options.language
+    );
+    for (const page of versions) {
+      // A version on another of the site's addresses, such as a language's
+      // own domain, is listed in that address's sitemap: a sitemap lists its
+      // own origin's pages alone. It is still one of the links of the rest.
+      if (new URL(page.loc).origin !== site) continue;
+      found.pages.push(
+        links.length > 0 ? { ...page, alternates: links } : page
+      );
+    }
+  }
+}
+
+/**
+ * The versions of `candidates` in `language`, each read in it: those that
+ * stand for themselves and hold their address there into `standing`, and a
+ * problem for each that would be listed but does not hold its address. Who
+ * holds each version's own address is read once for them all.
+ */
+async function listIn(
+  ctx: PluginContext,
+  candidates: readonly Candidate[],
+  language: string,
+  held: ReadonlyMap<string, HeldLanguages>,
+  options: ListingOptions,
+  found: { problems: ListingProblem[] },
+  standing: Standing
+): Promise<void> {
   // Asked in the language the record keeps it in, so the address compared
   // with the record is the one the record was made from.
   const owns = await Promise.all(
-    batch.map(candidate =>
-      publicAddressOf(candidate.type, candidate.document, options.language)
+    candidates.map(candidate =>
+      publicAddressOf(candidate.type, candidate.document, language)
     )
-  );
-  const held = await heldPaths(
-    ctx,
-    batch[0]?.holder.collection ?? "",
-    batch.map(candidate => candidate.holder.id)
   );
   const paths = owns.flatMap(own =>
     own.status === "resolved" ? [own.path] : []
   );
-  await withAddressHolders(ctx, options.language, paths, async () => {
-    for (const [at, candidate] of batch.entries()) {
+  await withAddressHolders(ctx, language, paths, async () => {
+    for (const [at, candidate] of candidates.entries()) {
       const own = owns[at];
       const outcome =
-        own === undefined ? null : await listed(ctx, candidate, own, options);
+        own === undefined
+          ? null
+          : await listed(ctx, candidate, own, language, options);
       if (outcome === null) continue;
       const { holder, path } = "lost" in outcome ? outcome.lost : outcome.page;
-      if ("page" in outcome && held.get(holder.id)?.has(path) === true) {
-        found.pages.push(outcome.page);
+      const holds = held.get(holder.id)?.get(language)?.has(path) === true;
+      if ("page" in outcome && holds) {
+        const versions = standing.get(holder.id) ?? [];
+        versions.push(outcome.page);
+        standing.set(holder.id, versions);
       } else {
-        found.problems.push(await problemOf(ctx, holder, path));
+        found.problems.push(await problemOf(ctx, holder, path, language));
       }
     }
   });
@@ -373,77 +345,46 @@ function ownImage(answer: SeoAnswer, origin: string): string[] {
 }
 
 /**
- * Where a page whose own address is `own` is listed, from its answer: at its
- * canonical as the answer gives it, where that is its own address. A canonical typed to
- * another page is that page's to list. Null where the page is hidden, has no
- * declared address, or names an address past the protocol's length;
- * `lost` where its type declares it an address but its answer has no
- * canonical, so another page holds it.
- */
-async function listedAt(
-  answer: SeoAnswer,
-  origin: string,
-  locale: string,
-  own: PublicAddress
-): Promise<{ loc: string; path: string } | { lost: string } | null> {
-  if (!answer.robots.value.index) return null;
-  if (own.status !== "resolved") return null;
-  if (answer.canonical === undefined) return { lost: own.path };
-  const loc = absolute(answer.canonical.value, origin);
-  // A typed canonical is the page's own where it names the page's address as
-  // the page's language serves it.
-  const served = await servedAt(own.path, locale);
-  const elsewhere =
-    answer.canonical.from !== "address" &&
-    (served === undefined || loc !== absolute(served, origin));
-  if (loc === null || elsewhere || loc.length > MAX_LOC_LENGTH) return null;
-  // A canonical on another of the site's addresses, such as a language's own
-  // domain, is listed in that address's sitemap: a sitemap lists its own
-  // origin's pages alone.
-  if (new URL(loc).origin !== new URL(origin).origin) return null;
-  return { loc, path: own.path };
-}
-
-/**
- * The page `candidate` is, as it would be listed, the address it lost where
- * it lost its own, or null where it is not listed at all.
+ * The version `candidate` is in `language`, as it would be listed, the
+ * address it lost where it lost its own, or null where it is not listed at
+ * all: hidden, with no declared address, or naming another page.
  */
 async function listed(
   ctx: PluginContext,
   candidate: Candidate,
   own: PublicAddress,
-  options: ListingOptions & { language: string }
+  language: string,
+  options: ListingOptions
 ): Promise<
   | { page: ListedPage }
   | { lost: { holder: AddressHolder; path: string } }
   | null
 > {
   const { type, document, holder } = candidate;
-  // Read in the site's default language as the live language list names it:
-  // the page is listed where that language serves it, which on a site with
-  // no other language is the page's own path. Its other languages'
-  // addresses are its own.
-  const locale = options.language;
-  const answer = await resolveSeo(
+  if (own.status !== "resolved") return null;
+  // Read in the version's language as the live language list names it: the
+  // page is listed where that language serves it, which on a site with no
+  // other language is the page's own path.
+  const answer = await resolveIn(
     ctx,
-    {
-      source:
-        type.kind === "single"
-          ? { kind: "single", slug: type.slug, document }
-          : { kind: "entry", collection: type.slug, entry: document },
-      code: {},
-      derived: {},
-      locale,
-    },
+    type,
+    document,
+    language,
     options.readRules
   );
-  const at = await listedAt(answer, options.origin, locale, own);
+  const at = standingOf(
+    answer,
+    options.origin,
+    await servedAt(own.path, language)
+  );
   if (at === null) return null;
-  if ("lost" in at) return { lost: { holder, path: at.lost } };
+  if (at === "lost") return { lost: { holder, path: own.path } };
   const lastModified = toLastModified(document.updatedAt);
   return {
     page: {
-      ...at,
+      loc: at.loc,
+      path: own.path,
+      language,
       holder,
       images: ownImage(answer, options.origin),
       ...(lastModified === undefined ? {} : { lastModified }),
