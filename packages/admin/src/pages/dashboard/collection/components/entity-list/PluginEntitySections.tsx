@@ -74,6 +74,11 @@ export interface PluginEntitySectionsProps<Row extends { label?: string }> {
   slugOf: (row: Row) => string;
   /** The section's columns, given the plugin's name for its source cell. */
   columnsFor: (pluginName: string) => NextlyColumn<Row>[];
+  /**
+   * The site table's columns as the reader's column choice resolved them:
+   * each section shows and hides the same ones.
+   */
+  resolvedColumns: readonly NextlyColumn<Row>[];
   /** Each row's actions: never a delete, since a plugin's entries are its own. */
   rowActions: (row: Row) => RowAction<Row>[];
   onRowClick: (row: Row) => void;
@@ -93,6 +98,7 @@ export function PluginEntitySections<Row extends { label?: string }>({
   search,
   slugOf,
   columnsFor,
+  resolvedColumns,
   rowActions,
   onRowClick,
 }: PluginEntitySectionsProps<Row>): JSX.Element | null {
@@ -140,6 +146,7 @@ export function PluginEntitySections<Row extends { label?: string }>({
           noun={noun}
           slugOf={slugOf}
           columnsFor={columnsFor}
+          resolvedColumns={resolvedColumns}
           rowActions={rowActions}
           onRowClick={onRowClick}
         />
@@ -153,19 +160,31 @@ function PluginSection<Row extends { label?: string }>({
   noun,
   slugOf,
   columnsFor,
+  resolvedColumns,
   rowActions,
   onRowClick,
 }: Pick<
   PluginEntitySectionsProps<Row>,
-  "noun" | "slugOf" | "columnsFor" | "rowActions" | "onRowClick"
+  | "noun"
+  | "slugOf"
+  | "columnsFor"
+  | "resolvedColumns"
+  | "rowActions"
+  | "onRowClick"
 > & { group: PluginGroup<Row> }): JSX.Element {
   // Folded until asked for: the site's own entries are what the page is for.
   const [open, setOpen] = useState(false);
   const panelId = useId();
-  const columns = useMemo(
-    () => columnsFor(group.name),
-    [columnsFor, group.name]
-  );
+  // The plugin's columns, each shown or hidden as the site table's is.
+  const columns = useMemo(() => {
+    const hidden = new Map(
+      resolvedColumns.map(column => [column.name, column.hidden === true])
+    );
+    return columnsFor(group.name).map(column => ({
+      ...column,
+      hidden: hidden.get(column.name) ?? column.hidden,
+    }));
+  }, [columnsFor, resolvedColumns, group.name]);
   const count = `${group.rows.length} ${group.rows.length === 1 ? noun.one : noun.many}`;
   return (
     <section

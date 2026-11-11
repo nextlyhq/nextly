@@ -354,4 +354,33 @@ describe("CollectionTable columns", () => {
       await screen.findByRole("button", { name: /Page Builder\s*1 collection/ })
     ).toBeDefined();
   });
+
+  it("hides in each plugin section the columns the reader hid", async () => {
+    const user = userEvent.setup();
+    seedStoredChoice(TOGGLEABLE.filter(name => name !== "migrationStatus"));
+    branding.current = {
+      plugins: [
+        {
+          name: "@nextlyhq/plugin-page-builder",
+          appearance: { label: "Page Builder" },
+          collections: ["pages"],
+        },
+      ],
+    };
+    serve(
+      [collection({})],
+      [collection({ name: "pages", label: "Site pages" })]
+    );
+    renderTable();
+    await user.click(
+      await screen.findByRole("button", { name: /Page Builder\s*1 collection/ })
+    );
+
+    const section = screen.getByRole("table", {
+      name: "Page Builder collections",
+    });
+    // SOURCE is the control: a header the section does draw.
+    expect(within(section).getAllByText("SOURCE").length).toBeGreaterThan(0);
+    expect(within(section).queryByText("SCHEMA")).toBeNull();
+  });
 });

@@ -500,6 +500,7 @@ export default function CollectionTable(): JSX.Element {
         search={debouncedSearch}
         slugOf={slugOfCollection}
         columnsFor={columnsFor}
+        resolvedColumns={columns}
         rowActions={pluginRowActions}
         onRowClick={handleEdit}
       />

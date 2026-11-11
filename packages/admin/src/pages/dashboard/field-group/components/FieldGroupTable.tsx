@@ -528,6 +528,7 @@ export default function FieldGroupTable(): JSX.Element {
         search={debouncedSearch}
         slugOf={slugOfFieldGroup}
         columnsFor={columnsFor}
+        resolvedColumns={columns}
         rowActions={pluginRowActions}
         onRowClick={handleEdit}
       />

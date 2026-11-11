@@ -512,6 +512,7 @@ export default function SinglesTable({
         search={debouncedSearch}
         slugOf={slugOfSingle}
         columnsFor={columnsFor}
+        resolvedColumns={columns}
         rowActions={pluginRowActions}
         onRowClick={handleEdit}
       />
