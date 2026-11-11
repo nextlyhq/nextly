@@ -29,8 +29,10 @@
 "@nextlyhq/plugin-commerce": patch
 ---
 
-A required relationship or upload now gets a NOT NULL column from `nextly migrate:create`, as the Schema Builder's create already gave it, and turning `required` on or off is planned as a change to the column. A required relationship whose column was created nullable gets NOT NULL on the next migration; it is refused, naming the rows, if any entry has no value.
+A required relationship or upload on a collection now gets a NOT NULL column from `nextly migrate:create`, as the Schema Builder's create already gave it, and turning `required` on or off is planned as a change to the column. A collection's required relationship whose column was created nullable gets NOT NULL on the next migration; it is refused, naming the rows, if any entry has no value.
 
-In the Schema Builder, making a relationship required now makes its column NOT NULL, where the save succeeded and left it nullable, and is refused with the same message while an entry has no value in it.
+In the Schema Builder, making a collection's relationship required now makes its column NOT NULL, where the save succeeded and left it nullable, and is refused with the same message while an entry has no value in it.
 
 A translated many-to-many on a translated Single now gets its join table when a schema save adds it, moves to a new one when its target changes, and loses it when the field is removed.
+
+A Single's relationship or upload column accepts an empty value even when the field is required, because the Single's one entry is created on its first read before anything is chosen. The requirement is still checked when the entry is saved. A Single made in the Schema Builder with a required relationship can now be read for the first time, where it failed. Unless the field states otherwise, deleting the entry it links to now empties the link (`set null`) instead of refusing the delete. A Builder Single created before this keeps its NOT NULL column, and `nextly repair-columns` reports it as a NOT NULL drop.
