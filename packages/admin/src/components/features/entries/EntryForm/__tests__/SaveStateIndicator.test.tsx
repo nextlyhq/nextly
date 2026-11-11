@@ -180,7 +180,7 @@ describe("SaveStateIndicator", () => {
     ];
     for (const saveState of states) {
       const { unmount } = render(
-        <div data-save-state-compact="">
+        <div data-state-compact="">
           <SaveStateIndicator saveState={saveState} recovery={noRecovery} />
         </div>
       );
@@ -189,11 +189,12 @@ describe("SaveStateIndicator", () => {
       );
       // Read where the bar's right part is under 32rem, and nowhere else.
       expect(label.className).toContain(
-        "in-data-[save-state-compact]:@max-lg/toolbar:sr-only"
+        "in-data-[state-compact]:@max-lg/toolbar:sr-only"
       );
-      // The reserved width gives way there too, so nothing pushes the verbs.
+      // The reserved width gives way to the icon alone, which never shrinks
+      // under the verbs.
       expect(indicator().className).toContain(
-        "in-data-[save-state-compact]:@max-lg/toolbar:min-w-0"
+        "in-data-[state-compact]:@max-lg/toolbar:min-w-fit"
       );
       unmount();
     }

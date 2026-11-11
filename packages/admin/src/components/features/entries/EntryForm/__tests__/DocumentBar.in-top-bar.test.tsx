@@ -101,7 +101,7 @@ describe("an open document inside the admin's shell", () => {
   it("lets the save state draw only its icon where the bar is narrow", () => {
     renderInShell();
     const bar = screen.getByTestId("document-bar");
-    expect(bar.querySelector("[data-save-state-compact]")).not.toBeNull();
+    expect(bar.querySelector("[data-state-compact]")).not.toBeNull();
   });
 
   it("keeps every part on the bar's one row", () => {

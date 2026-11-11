@@ -52,6 +52,7 @@ import { useEntryLocale } from "../EntryLocaleContext";
 import { SharePreviewPopover } from "../PreviewShare/SharePreviewPopover";
 import { translationCounts } from "../translation-meta";
 
+import { STATE_COMPACT_ATTRIBUTE } from "./narrow-bar";
 import { actionsAt } from "./document-actions";
 import { useDocumentBarHeight } from "./document-bar-height";
 import type { DocumentPanelMode } from "./document-panel-mode";
@@ -891,11 +892,11 @@ function DocumentBarState({
     <div
       className={cn(
         "flex flex-1 items-center gap-x-3 gap-y-1 text-[13px] leading-[18px] text-muted-foreground",
-        inTopBar ? "min-w-0 flex-nowrap" : "flex-wrap"
+        inTopBar ? "min-w-0 flex-nowrap @max-lg/toolbar:gap-x-2" : "flex-wrap"
       )}
-      // In the one-row bar the save state draws its words only where there
-      // is room for them beside the verbs.
-      data-save-state-compact={inTopBar ? "" : undefined}
+      // In the one-row bar each part draws its words only where there is
+      // room for them beside the verbs.
+      {...(inTopBar ? { [STATE_COMPACT_ATTRIBUTE]: "" } : {})}
     >
       <BarStatusPill documentStatus={hasStatus ? documentStatus : undefined} />
       {saveState}
