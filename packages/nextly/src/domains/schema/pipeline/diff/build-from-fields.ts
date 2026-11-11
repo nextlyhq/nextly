@@ -44,6 +44,7 @@ import {
   type ColumnOrigin,
   kindAndSizes,
   systemColumnsForFields,
+  relationHoldsReferenceList,
   relationshipStoresJson,
   relationStorageShape,
 } from "../../services/field-column-descriptor";
@@ -863,8 +864,9 @@ export function buildDesiredTableFromComponentFields(
       // the creator asks, so the two declare the same indexes.
       isSingleRelation: componentRelationIsSingleReference,
       // The creator makes a component column unique by its Unique mark alone, never by a
-      // relationship's cardinality.
-      columnIsUnique: field => field.unique === true,
+      // relationship's cardinality, and never a relation holding a list.
+      columnIsUnique: field =>
+        field.unique === true && !relationHoldsReferenceList(field),
       hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
       localizedNames,
       columnNameFor: field =>

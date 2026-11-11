@@ -37,6 +37,7 @@ import {
 } from "../../domains/schema/pipeline/diff/index-util";
 import {
   fieldProducesColumn,
+  relationHoldsReferenceList,
   toSnakeCase,
 } from "../../domains/schema/services/field-column-descriptor";
 import {
@@ -125,6 +126,8 @@ export type ValidationErrorCode =
   | "RELATIONSHIP_TARGET_REQUIRED"
   | "RELATIONSHIP_TARGET_INVALID"
   | "RELATIONSHIP_TARGET_UNKNOWN"
+  // `unique` on a relation holding a list of references, which no index can make unique.
+  | "UNIQUE_NOT_ON_LIST"
   | "ARRAY_FIELDS_REQUIRED"
   | "GROUP_FIELDS_REQUIRED"
   | "DECIMAL_PRECISION_INVALID"
@@ -451,6 +454,19 @@ function validateField(
     return;
   }
   const fieldType = f.type as string;
+
+  // A relation holding a list of references cannot be unique on any dialect
+  // (`relationHoldsReferenceList` says why), so the mark is refused here
+  // rather than built as an index that refuses long lists, or as none at all.
+  if (f.unique === true && relationHoldsReferenceList(f)) {
+    errors.push({
+      path: `${path}.unique`,
+      message:
+        `"${String(f.name)}" holds a list of references, which cannot be unique. ` +
+        "Remove the unique flag.",
+      code: "UNIQUE_NOT_ON_LIST",
+    });
+  }
 
   // A plugin type reaches none of the cases below, so its own declaration
   // checks run here rather than as a case that could never be written for a

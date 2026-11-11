@@ -57,6 +57,7 @@ import {
   usesJunctionTable,
   getColumnDescriptor,
   getSystemColumnDescriptors,
+  relationHoldsReferenceList,
   relationshipStoresJson,
   relationStorageShape,
   renderSystemColumnSql,
@@ -222,6 +223,8 @@ const NO_REFERENTIAL_ACTION_CHANGE: ReferentialActionChange = {
  * whether a later save keeps the constraint its table holds.
  */
 export function builderColumnIsUnique(field: FieldDefinition): boolean {
+  // A relation holding a list is never unique, whatever it is marked (`relationHoldsReferenceList`).
+  if (relationHoldsReferenceList(field)) return false;
   return (
     field.unique === true ||
     (field.type === "relationship" &&

@@ -360,6 +360,24 @@ export function componentRelationshipHoldsReferenceList(field: {
   hasMany?: unknown;
   options?: unknown;
 }): boolean {
+  return relationHoldsReferenceList(field);
+}
+
+/**
+ * Whether a relation holds a LIST of references, on any row: a `hasMany` relationship or upload (to
+ * one collection or several), or a many-to-many, whose links a collection keeps in a junction table
+ * and a component row in its own column.
+ *
+ * Also the rule for which relation is never unique, on every dialect. "Unique" on a list would mean
+ * no two entries hold the identical list, which is rarely what is meant, and a unique btree over a
+ * long list refuses the save on PostgreSQL once the list holds about a hundred ids. A single
+ * reference, polymorphic or not, is one value and keeps its uniqueness.
+ */
+export function relationHoldsReferenceList(field: {
+  type?: unknown;
+  hasMany?: unknown;
+  options?: unknown;
+}): boolean {
   const isRelation = field.type === "relationship" || field.type === "upload";
   return (isRelation && Boolean(field.hasMany)) || usesJunctionTable(field);
 }

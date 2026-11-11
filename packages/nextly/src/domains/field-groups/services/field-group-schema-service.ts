@@ -76,6 +76,7 @@ import {
   componentRelationshipHoldsReferenceList,
   componentRelationshipStoresJson,
   getComponentRowColumnDescriptor,
+  relationHoldsReferenceList,
   usesJunctionTable,
   type ColumnDescriptor,
 } from "../../schema/services/field-column-descriptor";
@@ -636,6 +637,23 @@ export class FieldGroupSchemaService {
     field: DataFieldConfig,
     tableName: string
   ): void {
+    // A relation holding a list is never unique, on any dialect (`relationHoldsReferenceList`
+    // says why): refused before any statement, as the field asks for something no index gives.
+    if (relationHoldsReferenceList(field)) {
+      const listName = "name" in field && field.name ? String(field.name) : "";
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `fields.${listName}`,
+            code: "UNIQUE_NOT_ON_LIST",
+            message:
+              `"${listName}" is marked unique, but it holds a list of references, which cannot be ` +
+              `unique. Remove the unique flag.`,
+          },
+        ],
+        logContext: { tableName, field: listName, dialect: this.dialect },
+      });
+    }
     const columnType = this.getColumnType(this.asMappableField(field));
     if (columnType === null) return;
     if (uniquenessCanBeAnIndex(columnType, this.dialect)) return;
