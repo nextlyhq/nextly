@@ -61,7 +61,10 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   range: "consumed",
   dateField: "consumed",
   select: "refused",
-  limit: "refused",
+  // Every query the validator checks without a range carries a limit; a count
+  // reads no rows, so it bounds nothing here, and refusing it would refuse
+  // every checked count.
+  limit: "consumed",
   where: "refused",
   sort: "refused",
   status: "refused",
