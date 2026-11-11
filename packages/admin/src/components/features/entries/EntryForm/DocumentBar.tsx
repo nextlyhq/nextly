@@ -42,6 +42,11 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
+import {
+  TopBarPlace,
+  useInTopBar,
+} from "@admin/components/layout/header/TopBarPlaces";
+
 import { useEntryLocale } from "../EntryLocaleContext";
 import { SharePreviewPopover } from "../PreviewShare/SharePreviewPopover";
 import { translationCounts } from "../translation-meta";
@@ -242,9 +247,113 @@ export function DocumentBar(props: DocumentBarProps): JSX.Element | null {
   // Its real height, for the panel that sticks under it. Called before the
   // early return below, as every hook is.
   const measureBar = useDocumentBarHeight();
+  // Inside the admin's shell the document's controls are drawn in its one top
+  // bar; a bar of the document's own is drawn only where there is no shell.
+  const inTopBar = useInTopBar();
 
   if (!form) {
     return null;
+  }
+
+  // The bar's content, drawn in the admin's one top bar inside the shell, or
+  // in a bar of its own where there is no shell (a page rendered alone).
+  const content = (
+    <>
+      <DocumentBarState
+        mode={mode}
+        hasStatus={hasStatus}
+        documentStatus={documentStatus}
+        languageCode={
+          entryLocale.isNonDefaultLocale ? entryLocale.locale : undefined
+        }
+        saveState={
+          <SaveStateIndicator
+            saveState={documentActions.saveState}
+            recovery={{
+              enabled: autosaveEnabled,
+              storedAt: autosaveLastSavedAt,
+              pendingOfferAt: pendingRecoveryAt,
+            }}
+            // The indicator reserves the width of its widest state so that
+            // nothing after it moves as the state changes. On a bar as
+            // narrow as the one where the preview's and History's words
+            // step aside, that reserve is width the actions need, and kept
+            // it wraps the bar onto a second row, so there it takes only
+            // what it shows.
+            className="@max-[51rem]/toolbar:min-w-0"
+          />
+        }
+      />
+
+      {/* Every action, right-aligned, in the bar's one order: a feature's
+        controls, History, Preview, the document's own verbs, then the panel
+        toggle at the far end.
+
+        On a phone (the panel's sheet mode) History, the preview and the
+        panel toggle fold into the document's menu as rows, so the actions
+        stay one row. The group also wraps inside itself, never past
+        the editor's edge: a preview pane can narrow the editor on a wide
+        screen, and a feature's contributed controls, which this cannot size,
+        must never push the bar's own off it. */}
+      <div
+        className={cn(
+          "ml-auto flex min-w-0 max-w-full items-center justify-end gap-1.5",
+          // The admin's bar is one row tall, so there the controls give up
+          // their words rather than wrap.
+          inTopBar ? "flex-nowrap" : "flex-wrap"
+        )}
+      >
+        {/* What a feature contributes, such as a takeover's mode switch:
+          first, so the document's own verbs keep their place at the end. It
+          stays while a past version is on screen, showing that version's
+          own mode. */}
+        {toolbarSlot}
+        <DocumentBarActions
+          {...props}
+          historyOffered={historyOffered}
+          historyOpen={historyOpen}
+          onOpenHistory={() => setHistoryOpen(true)}
+          documentActions={documentActions}
+          shareOpen={shareOpen}
+          onShareOpenChange={setShareOpen}
+        />
+      </div>
+      <DocumentBarLive
+        saveState={documentActions.saveState}
+        pendingRecovery={pendingRecoveryAt !== null}
+        entry={entry}
+      />
+
+      {/* Mounted at the bar's root so the panel survives whichever set of
+          actions is drawn. */}
+      {props.historyFields && entry?.id ? (
+        <DocumentBarHistory
+          {...props}
+          entryId={String(entry.id)}
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          liveStatus={documentActions.effectiveStatus}
+          editingLocale={entryLocale.locale}
+        />
+      ) : null}
+    </>
+  );
+
+  if (inTopBar) {
+    return (
+      <TopBarPlace name="end">
+        {/* After the trail, set apart from it; the document's state, then its
+            actions at the bar's right end, on the bar's one row. The bar is
+            the toolbar container these controls size themselves against. */}
+        <div
+          data-testid="document-bar"
+          className="flex min-w-0 flex-1 flex-nowrap items-center gap-x-3"
+        >
+          <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
+          {content}
+        </div>
+      </TopBarPlace>
+    );
   }
 
   return (
@@ -264,78 +373,8 @@ export function DocumentBar(props: DocumentBarProps): JSX.Element | null {
           "flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 @lg/toolbar:px-6"
         )}
       >
-        <DocumentBarState
-          mode={mode}
-          hasStatus={hasStatus}
-          documentStatus={documentStatus}
-          languageCode={
-            entryLocale.isNonDefaultLocale ? entryLocale.locale : undefined
-          }
-          saveState={
-            <SaveStateIndicator
-              saveState={documentActions.saveState}
-              recovery={{
-                enabled: autosaveEnabled,
-                storedAt: autosaveLastSavedAt,
-                pendingOfferAt: pendingRecoveryAt,
-              }}
-              // The indicator reserves the width of its widest state so that
-              // nothing after it moves as the state changes. On a bar as
-              // narrow as the one where the preview's and History's words
-              // step aside, that reserve is width the actions need, and kept
-              // it wraps the bar onto a second row, so there it takes only
-              // what it shows.
-              className="@max-[51rem]/toolbar:min-w-0"
-            />
-          }
-        />
-
-        {/* Every action, right-aligned, in the bar's one order: a feature's
-          controls, History, Preview, the document's own verbs, then the panel
-          toggle at the far end.
-
-          On a phone (the panel's sheet mode) History, the preview and the
-          panel toggle fold into the document's menu as rows, so the actions
-          stay one row. The group also wraps inside itself, never past
-          the editor's edge: a preview pane can narrow the editor on a wide
-          screen, and a feature's contributed controls, which this cannot size,
-          must never push the bar's own off it. */}
-        <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5">
-          {/* What a feature contributes, such as a takeover's mode switch:
-            first, so the document's own verbs keep their place at the end. It
-            stays while a past version is on screen, showing that version's
-            own mode. */}
-          {toolbarSlot}
-          <DocumentBarActions
-            {...props}
-            historyOffered={historyOffered}
-            historyOpen={historyOpen}
-            onOpenHistory={() => setHistoryOpen(true)}
-            documentActions={documentActions}
-            shareOpen={shareOpen}
-            onShareOpenChange={setShareOpen}
-          />
-        </div>
+        {content}
       </div>
-
-      <DocumentBarLive
-        saveState={documentActions.saveState}
-        pendingRecovery={pendingRecoveryAt !== null}
-        entry={entry}
-      />
-
-      {/* Mounted at the bar's root so the panel survives whichever set of
-          actions is drawn. */}
-      {props.historyFields && entry?.id ? (
-        <DocumentBarHistory
-          {...props}
-          entryId={String(entry.id)}
-          open={historyOpen}
-          onOpenChange={setHistoryOpen}
-          liveStatus={documentActions.effectiveStatus}
-          editingLocale={entryLocale.locale}
-        />
-      ) : null}
     </div>
   );
 }

@@ -20,7 +20,9 @@
 
 import type { JSX, ReactNode } from "react";
 
+import { useInTopBar } from "@admin/components/layout/header/TopBarPlaces";
 import { TargetSlot } from "@admin/components/shared/target-slot";
+import { cn } from "@admin/lib/utils";
 
 import { DOCUMENT_EDITOR_FRAME_ATTRIBUTE } from "./document-bar-height";
 import type { DocumentPanelMode } from "./document-panel-mode";
@@ -85,6 +87,9 @@ export function DocumentEditorLayout({
   frameRef,
   panelMode,
 }: DocumentEditorLayoutProps): JSX.Element {
+  // Inside the shell the document's bar is drawn in the admin's top bar,
+  // above the scroll area, so nothing here sticks under a bar of its own.
+  const inTopBar = useInTopBar();
   return (
     // Vertical only: from `@4xl` the editor cancels the page's `py-8`, so the
     // bar reaches the top of the scroll area and the panel the bottom. The
@@ -94,7 +99,10 @@ export function DocumentEditorLayout({
       ref={frameRef}
       {...{ [DOCUMENT_EDITOR_FRAME_ATTRIBUTE]: "" }}
       {...(panelMode === undefined ? {} : { "data-panel-mode": panelMode })}
-      className="flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[var(--editor-scrollport,calc(100vh-var(--admin-bar-height)))]"
+      className={cn(
+        "flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[var(--editor-scrollport,calc(100vh-var(--admin-bar-height)))]",
+        inTopBar && "[--document-bar-height:0px]"
+      )}
     >
       <TargetSlot
         {...place}

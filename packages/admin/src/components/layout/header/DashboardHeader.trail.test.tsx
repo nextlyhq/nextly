@@ -159,8 +159,11 @@ describe("the top bar's trail", () => {
     expect(
       toList[0]?.querySelector("svg")?.getAttribute("class") ?? ""
     ).toContain("@max-[37.5rem]/topbar:inline");
-    // Measured against the bar itself, so a sidebar narrowing it counts.
-    expect(screen.getByRole("banner").className).toContain("@container/topbar");
+    // Measured against the bar itself, so a sidebar narrowing it counts: the bar is a size
+    // container named `topbar` (and `toolbar`, for an open document's controls).
+    const bar = screen.getByRole("banner").className;
+    expect(bar).toContain("[container-type:inline-size]");
+    expect(bar).toContain("[container-name:topbar_toolbar]");
   });
 
   it("lets a long list name shrink and truncate rather than push into the controls, keeping it whole in the tooltip", () => {
@@ -188,11 +191,16 @@ describe("the top bar's trail", () => {
       <Editor trail={{ ...ENTRY, pluralLabel: long }} title="Spring is here" />
     );
     const slot = trail().parentElement!;
-    // Grows into the bar from a basis of none, and may shrink below its content: a long label is
-    // cut short within the bar, never wider than it.
-    expect(slot.className).toMatch(/(^|\s)flex-1(\s|$)/);
+    // Keeps its own width and may shrink below its content: a long label is cut short within
+    // the bar, never wider than it. The bar's right part is the one that grows into the rest,
+    // so an open document's state sits right after the trail.
     expect(slot.className).toMatch(/(^|\s)min-w-0(\s|$)/);
     expect(slot.className).not.toMatch(/(^|\s)shrink-0(\s|$)/);
+    expect(slot.className).not.toMatch(/(^|\s)flex-1(\s|$)/);
+    const end = screen
+      .getByRole("banner")
+      .querySelector('[data-top-bar-place="end"]');
+    expect(end?.className).toMatch(/(^|\s)flex-1(\s|$)/);
     // The trail's row is the bar's own: the account menu and help links are no longer in the
     // bar, so nothing beside it takes its width.
     expect(slot.parentElement).toBe(screen.getByRole("banner"));
