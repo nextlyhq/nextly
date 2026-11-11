@@ -384,7 +384,10 @@ describe.each(LOCK_DIALECTS)(
      * Builder made without uniqueness, recorded now as a one-to-one: the main table from the
      * production generator and the translations table as the runtime creates it.
      */
-    async function seedTranslatedNotes(): Promise<void> {
+    async function seedTranslatedNotes(
+      /** Whether the translations table has `person` yet, or only another translated field's column. */
+      personOnTranslations = true
+    ): Promise<void> {
       const tables = new DynamicCollectionSchemaService(undefined, dialect);
       await run(
         splitStatements([tables.generateMigrationSQL(NOTES, [] as never)])
@@ -397,7 +400,9 @@ describe.each(LOCK_DIALECTS)(
         builtBy: "collection",
         slug: "notes",
         tableName: NOTES,
-        fields: [person("manyToOne")] as never,
+        fields: (personOnTranslations
+          ? [person("manyToOne")]
+          : [{ name: "summary", type: "text", localized: true }]) as never,
         dialect,
       });
       await adapter.insert("dynamic_collections", {
@@ -911,6 +916,14 @@ describe.each(LOCK_DIALECTS)(
       );
       expect(await personIsUnique()).toBe(false);
       expect(await ledger()).toEqual(["applied"]);
+    }, 120_000);
+
+    it("leaves a translated one-to-one whose column the translations table does not have yet to the run that adds it", async () => {
+      await seedTranslatedNotes(false);
+
+      await migrate();
+
+      expect(await notesPersonIsUniquePerLanguage()).toBe(false);
     }, 120_000);
   }
 );

@@ -336,9 +336,9 @@ export function uniqueIndexesCreatedBy(
       : undefined;
   if (named === undefined || !cursor.accept("(")) return undefined;
   const columns = columnList(cursor);
-  return columns !== undefined && cursor.done()
-    ? [{ ...named, columns }]
-    : undefined;
+  if (columns === undefined || !cursor.done()) return undefined;
+  // MySQL names an unnamed one after its first column.
+  return [{ table: named.table, name: named.name ?? columns[0], columns }];
 }
 
 /**
@@ -347,7 +347,7 @@ export function uniqueIndexesCreatedBy(
  */
 function createdUniqueIndex(
   cursor: StatementCursor
-): { table: string; name: string } | undefined {
+): { table: string; name: string | undefined } | undefined {
   cursor.accept("CONCURRENTLY");
   cursor.acceptCondition();
   const name = cursor.name();
@@ -360,20 +360,28 @@ function createdUniqueIndex(
   return { table, name };
 }
 
-/** The table and name of `ALTER TABLE … ADD CONSTRAINT … UNIQUE`, read after ALTER TABLE. */
+/**
+ * The table and name of a unique key an ALTER TABLE adds, read after ALTER TABLE:
+ * `ADD CONSTRAINT name UNIQUE [INDEX|KEY]`, and MySQL's `ADD UNIQUE [INDEX|KEY] [name]`, whose
+ * name may be left out.
+ */
 function addedUniqueConstraint(
   cursor: StatementCursor
-): { table: string; name: string } | undefined {
+): { table: string; name: string | undefined } | undefined {
   cursor.acceptCondition();
   cursor.accept("ONLY");
   const table = cursor.name();
-  if (table === undefined || !cursor.accept("ADD", "CONSTRAINT")) {
-    return undefined;
+  if (table === undefined || !cursor.accept("ADD")) return undefined;
+  if (cursor.accept("CONSTRAINT")) {
+    const name = cursor.name();
+    if (name === undefined || !cursor.accept("UNIQUE")) return undefined;
+    if (!cursor.accept("INDEX")) cursor.accept("KEY");
+    return { table, name };
   }
-  const name = cursor.name();
-  return name !== undefined && cursor.accept("UNIQUE")
-    ? { table, name }
-    : undefined;
+  if (!cursor.accept("UNIQUE")) return undefined;
+  if (!cursor.accept("INDEX")) cursor.accept("KEY");
+  // The key list opens next when the statement names no index.
+  return { table, name: cursor.isWord("(") ? undefined : cursor.name() };
 }
 
 /** The plain column names of a key list already opened, consumed with its `)`, or undefined. */

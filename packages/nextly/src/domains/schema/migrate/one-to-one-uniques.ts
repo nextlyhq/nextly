@@ -167,9 +167,18 @@ async function missingOnTranslations(
   if (present === undefined) return [];
   const indexes = await readIndexUniqueness(db, dialect, present);
   const unique = uniqueIndexNames(indexes);
+  // A column the translations table does not have yet holds nothing to repeat, and gets its index
+  // when the run adds it: judged here, its absent values would stop the run.
+  const columns = new Set(
+    (
+      await introspectLiveColumns(db, dialect, [present])
+    ).tables[0]?.columns.map(column => column.name.toLowerCase()) ?? []
+  );
   return wanted
     .filter(
-      c => !unique.has(companionUniqueIndexName(companionTable, c.column))
+      c =>
+        columns.has(c.column.toLowerCase()) &&
+        !unique.has(companionUniqueIndexName(companionTable, c.column))
     )
     .map(c => ({
       entity,
