@@ -31,6 +31,7 @@ import { z } from "nextly/zod";
 import {
   BLOCKS_LIST_ROUTE_PATH,
   type BlockListItem,
+  type BlocksListRequest,
 } from "./blocks-list-contract";
 import { readBodyWith } from "./composition-route-kit";
 import { onePage } from "./loop-collections-route";
@@ -104,7 +105,9 @@ export function blocksListRoute(reads: BlocksListReads = REGISTRY_READS): {
     method: "POST",
     path: BLOCKS_LIST_ROUTE_PATH,
     handler: async req => {
-      const { allow } = await readBodyWith(
+      // Typed as the contract, so the schema cannot drift from what the
+      // listing is documented to be asked.
+      const { allow }: BlocksListRequest = await readBodyWith(
         req,
         REQUEST_SCHEMA,
         "block listing"
