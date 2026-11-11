@@ -28,11 +28,6 @@ import {
 } from "../../schema/services/schema-hash";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
-  omitDirectComponentFields,
-  storesItsChildren,
-  type DirectField,
-} from "../direct-component-fields";
-import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
 } from "../storage/field-group-field-type";
@@ -196,6 +191,29 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    */
   async getAllFieldLists(): Promise<DynamicFieldGroupRecord[]> {
     return this.getAllRecordsWithColumns(["fields"]);
+  }
+
+  /**
+   * Every stored field group's table: where a row placed under a field-group instance can be,
+   * whatever the definitions place now. Read on `executor` when a write's transaction supplies
+   * one, so the read waits on no second connection, and as stored rather than cached.
+   */
+  async getAllTableNames(executor?: unknown): Promise<string[]> {
+    try {
+      const rows = await this.adapter.select<Record<string, unknown>>(
+        await this.resolveRegistryTableName(),
+        { columns: ["slug", "table_name"] },
+        executor
+      );
+      return rows
+        .map(row => this.deserializeRecord(row).tableName)
+        .filter(
+          (name): name is string => typeof name === "string" && name !== ""
+        );
+    } catch (error) {
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
   }
 
   async listComponents(
@@ -1112,9 +1130,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     fields: Record<string, unknown>[],
     componentMap: Map<string, DynamicFieldGroupRecord>,
     /** The field groups being drawn on the way down to these fields; see `drawnComponentFields`. */
-    drawing: ReadonlySet<string>,
-    /** Inside a group or a repeater, whose value is stored as JSON; see `drawnComponentFields`. */
-    inContainer = false
+    drawing: ReadonlySet<string>
   ): Promise<EnrichedFieldConfig[]> {
     const enrichedFields: EnrichedFieldConfig[] = [];
 
@@ -1131,8 +1147,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
             enrichedField.componentFields = await this.drawnComponentFields(
               component,
               componentMap,
-              drawing,
-              inContainer
+              drawing
             );
           }
         }
@@ -1148,8 +1163,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
                 fields: await this.drawnComponentFields(
                   component,
                   componentMap,
-                  drawing,
-                  inContainer
+                  drawing
                 ),
                 admin: component.admin,
               };
@@ -1169,10 +1183,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         enrichedField.fields = await this.enrichFieldsRecursive(
           nestedFields,
           componentMap,
-          drawing,
-          // A named group or a repeater stores its children in its own JSON value; a container
-          // with no name only arranges the form and keeps them where it sits.
-          inContainer || storesItsChildren(field)
+          drawing
         );
       }
 
@@ -1184,28 +1195,16 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
   /**
    * The fields a form draws for one component, with the components nested in it enriched in turn.
-   *
-   * Where it matters where the component sits: outside any group or repeater, its instance is a row
-   * of its own table, and a component field placed directly among its fields gets no column there
-   * and no table write, so nothing stores it and a form must not render, seed or send it. Held in a
-   * group or repeater, the component's whole value is stored in that container's JSON, a directly
-   * placed component included, so nothing is left out. The component write and the entry's
-   * validation make the same distinction.
+   * Every field is drawn wherever the component sits: a component placed directly among its fields
+   * is stored as a row of its own, and one held in a group or repeater in that container's value.
    */
   private async drawnComponentFields(
     component: DynamicFieldGroupRecord,
     componentMap: Map<string, DynamicFieldGroupRecord>,
-    drawing: ReadonlySet<string>,
-    inContainer: boolean
+    drawing: ReadonlySet<string>
   ): Promise<Record<string, unknown>[]> {
-    const own = component.fields as unknown as Record<string, unknown>[];
-    if (!Array.isArray(own)) return own;
-    const fields = inContainer
-      ? own
-      : (omitDirectComponentFields(own as DirectField[]) as Record<
-          string,
-          unknown
-        >[]);
+    const fields = component.fields as unknown as Record<string, unknown>[];
+    if (!Array.isArray(fields)) return fields;
     // Field groups nest to any depth, so the form is drawn as deep as they reach. Only a field
     // group already being drawn on the way down stops it: a definition placing one inside itself,
     // saved before such a cycle was refused, would otherwise be drawn forever.
@@ -1223,8 +1222,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     return this.enrichFieldsRecursive(
       fields,
       componentMap,
-      new Set([...drawing, component.slug]),
-      inContainer
+      new Set([...drawing, component.slug])
     );
   }
 
