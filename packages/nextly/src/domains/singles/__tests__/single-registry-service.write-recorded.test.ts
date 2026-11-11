@@ -266,6 +266,21 @@ describe("SingleRegistryService.writeRecordedSingle", () => {
     expect(ctx.permissionSeed.seedSinglePermissions).not.toHaveBeenCalled();
   });
 
+  it("moves the row to the table a changed dbName names", async () => {
+    // Fields and metadata as stored: only the physical table differs.
+    storedRow(ctx, dbRow());
+    ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+    const outcome = await ctx.service.writeRecordedSingle(
+      declared({ tableName: "settings" }),
+      { source: "code", locked: true }
+    );
+
+    expect(outcome).toBe("updated");
+    // Resolved as a registration resolves it, prefix included.
+    expect(updateData(ctx).table_name).toBe("single_settings");
+  });
+
   it("writes a metadata-only change without touching the fields or the migration columns", async () => {
     storedRow(ctx, dbRow());
     ctx.adapter.update.mockResolvedValue([dbRow()]);

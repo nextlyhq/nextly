@@ -199,7 +199,10 @@ function declaredRow(
   return {
     ...declaredMetadata(config),
     fields: config.fields,
-    timestamps: config.timestamps,
+    // Resolved, as a registration resolves it: a config that drops
+    // `timestamps: false` returns the collection to the default, which an
+    // undefined value would leave unwritten.
+    timestamps: config.timestamps ?? true,
     schemaHash,
     status: config.status === true,
     versions: config.versions,
@@ -971,8 +974,13 @@ export class CollectionRegistryService extends BaseRegistryService<
       // their own comparison or a changed default never reaches the write.
       fieldDefaultsSignature(config.fields) !==
         fieldDefaultsSignature(existing.fields) ||
-      // A collection's physical table, which a Single has no equivalent of.
-      desiredTableName !== existing.tableName
+      // A collection's physical table: a changed `dbName` moves it.
+      desiredTableName !== existing.tableName ||
+      // The timestamp columns, which the schema hash omits: turning them on
+      // or off changes the table, so the row must follow. The stored flag
+      // may read back as 0/1, so it is compared as a boolean.
+      (config.timestamps ?? true) !==
+        (existing.timestamps == null ? true : Boolean(existing.timestamps))
     ) {
       return decided("update");
     }

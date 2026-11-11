@@ -225,10 +225,7 @@ function declaredSingleRegistration(
     // Route through the canonical resolver so registry and DDL paths
     // never disagree on the single's physical table name, even when
     // an explicit dbName/tableName is provided without the prefix.
-    tableName: resolveSingleTableName({
-      slug: config.slug,
-      dbName: config.tableName,
-    }),
+    tableName: declaredSingleTable(config),
     description: config.description,
     fields: config.fields,
     admin: config.admin,
@@ -274,7 +271,20 @@ function declaredSingleRow(
     // of leaving a stale opt-out suppressing the outbox.
     webhooks: config.webhooks ?? null,
     localized: config.localized === true,
+    tableName: declaredSingleTable(config),
   };
+}
+
+/**
+ * The physical table a Single's declaration names, through the canonical
+ * resolver, so the registry and the DDL never disagree on it, even where an
+ * explicit `dbName` is given without its prefix.
+ */
+function declaredSingleTable(config: CodeFirstSingleConfig): string {
+  return resolveSingleTableName({
+    slug: config.slug,
+    dbName: config.tableName,
+  });
 }
 
 /** The columns a metadata-only change rewrites: label, description and admin options. */
@@ -822,6 +832,14 @@ export class SingleRegistryService extends BaseRegistryService<
     if (data.status !== undefined) {
       updateData.status = data.status === true ? 1 : 0;
     }
+    // The pointer to the Single's table, resolved as a registration resolves
+    // it; written when a changed `dbName` moved the table.
+    if (data.tableName !== undefined) {
+      updateData.table_name = resolveSingleTableName({
+        slug,
+        dbName: data.tableName,
+      });
+    }
     if (data.localized !== undefined) {
       updateData.localized = data.localized === true ? 1 : 0;
     }
@@ -1208,7 +1226,10 @@ export class SingleRegistryService extends BaseRegistryService<
         config,
         existing,
         !schemaHashesMatch(schemaHash, existing.schemaHash)
-      )
+      ) ||
+      // A Single's physical table, which a changed `dbName` moves: the row
+      // follows it, or reads address a table that is gone.
+      declaredSingleTable(config) !== existing.tableName
     ) {
       return decided("update");
     }
