@@ -125,7 +125,7 @@ export async function writablePages(
   // A published page of a type keeping working drafts holds its pending
   // edits in a draft these reads do not see, so its SEO is changed in its
   // own editor, where the draft is, and is read-only here.
-  if (keepsDrafts(ctx, type)) return writable;
+  if (await keepsDrafts(ctx, type)) return writable;
   const identity = await caller.identity();
   for (const id of new Set(ids)) {
     const may = await mayWriteEntry(identity, {
@@ -182,17 +182,43 @@ async function typesFor(
       ...typeNamesOf(ctx, slug),
       total: await ctx.services.collections.count(slug, {}, as),
       ...(pattern === undefined ? {} : { titlePattern: pattern }),
-      drafts: keepsDrafts(ctx, slug),
+      drafts: await keepsDrafts(ctx, slug),
     });
   }
   if (types.length === 0) throw NextlyError.forbidden();
   return types;
 }
 
-/** A query parameter's text, or none. */
-function param(url: URL, name: string): string | undefined {
-  const value = url.searchParams.get(name);
-  return value === null || value === "" ? undefined : value;
+/** What the screen's reads may ask in their query, parsed. */
+export interface RouteQuery {
+  type?: string | undefined;
+  locale?: string | undefined;
+  page?: number | undefined;
+}
+
+/** What the screen's reads may ask in their query. */
+const QUERY: z.ZodType<RouteQuery> = z.object({
+  type: z.string().min(1).max(255).optional(),
+  locale: z.string().min(1).max(64).optional(),
+  page: z.coerce.number().int().min(1).max(100_000).optional(),
+});
+
+/** A read's query, parsed, or a refusal naming what is wrong. */
+export function queryOf(req: Request): RouteQuery {
+  const given = Object.fromEntries(
+    [...new URL(req.url).searchParams].filter(([, value]) => value !== "")
+  );
+  const parsed = QUERY.safeParse(given);
+  if (!parsed.success) {
+    throw NextlyError.invalidInput({
+      message: "The query is not one this route accepts.",
+      logContext: {
+        reason: "seo-bulk-query-invalid",
+        issues: parsed.error.issues.map(issue => issue.path.join(".")),
+      },
+    });
+  }
+  return parsed.data;
 }
 
 const SAVE_BODY = z.object({
@@ -254,16 +280,11 @@ function storedForm(value: unknown): string {
   return id ?? JSON.stringify(value ?? null);
 }
 
-/**
- * Refuse a save that kept the page but not every value sent into its `seo`
- * group: a field rule inside the group (a site's own `fields`) leaves out a
- * value the person may not set, and the save would otherwise answer as if it
- * were made. Thrown on the save's transaction, so nothing of it is kept.
- */
-export function refuseDroppedValues(
+/** Refuse where a value sent into the group is not what was stored. */
+function refuseDroppedValues(
   saved: unknown,
   values: Readonly<Record<string, unknown>>,
-  label: string
+  id: string
 ): void {
   const seo =
     isRecord(saved) && isRecord(saved[SEO_GROUP]) ? saved[SEO_GROUP] : {};
@@ -272,7 +293,7 @@ export function refuseDroppedValues(
   );
   if (dropped.length === 0) return;
   throw NextlyError.forbidden({
-    logContext: { reason: "seo-value-not-yours", page: label, fields: dropped },
+    logContext: { reason: "seo-value-not-yours", id, fields: dropped },
   });
 }
 
@@ -304,7 +325,7 @@ export function asStored(locale: string | undefined): ServiceOpts {
 }
 
 /** The pages a write names, read on its transaction, by id. */
-export async function storedPages(
+async function storedPages(
   ctx: PluginContext,
   transaction: Parameters<
     PluginContext["services"]["collections"]["updateEntryInTransaction"]
@@ -331,6 +352,110 @@ export async function storedPages(
     }
   }
   return found;
+}
+
+/**
+ * The pages `ids` names, read before a write as `as`: by the caller, for
+ * the names a refusal may show them, or as stored (`asStored`), for the
+ * groups the write goes over. Read outside the write's transaction, so it
+ * holds no lock on the rows the write then takes; each write sends the
+ * version its page was read at, which refuses it where the page has changed
+ * since.
+ */
+export async function readStored(
+  ctx: PluginContext,
+  type: string,
+  ids: readonly string[],
+  as: ServiceOpts
+): Promise<Map<string, Record<string, unknown>>> {
+  const found = new Map<string, Record<string, unknown>>();
+  for (let at = 0; at < ids.length; at += 100) {
+    const chunk = ids.slice(at, at + 100);
+    const { data } = await ctx.services.collections.listEntries(
+      type,
+      {
+        where: { id: { in: chunk } },
+        depth: 0,
+        pagination: { limit: chunk.length, page: 1 },
+      },
+      as
+    );
+    for (const entry of data as unknown[]) {
+      if (isRecord(entry)) found.set(String(entry.id), entry);
+    }
+  }
+  return found;
+}
+
+/**
+ * Refuse a write that kept the page but not every value sent into its `seo`
+ * group, read back as stored on the write's own transaction, where the
+ * write's row is already held: a field rule inside the group (a site's own
+ * `fields`) leaves out a value the person may not set, and the write would
+ * otherwise answer as if it were made. Thrown on the transaction, so
+ * nothing of it is kept.
+ */
+export async function refuseIfNotStored(
+  ctx: PluginContext,
+  transaction: Parameters<
+    PluginContext["services"]["collections"]["updateEntryInTransaction"]
+  >[0],
+  page: { type: string; id: string; locale: string | undefined },
+  values: Readonly<Record<string, unknown>>
+): Promise<void> {
+  const stored = await storedPages(
+    ctx,
+    transaction,
+    page.type,
+    [page.id],
+    asStored(page.locale)
+  );
+  refuseDroppedValues(stored.get(page.id), values, page.id);
+}
+
+/** The values a change sets in the `seo` group. */
+function valuesOf(
+  change: SaveBody["changes"][number]
+): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
+  if (change.title !== undefined && change.title !== null) {
+    values.metaTitle = change.title;
+  }
+  if (change.description !== undefined && change.description !== null) {
+    values.metaDescription = change.description;
+  }
+  return values;
+}
+
+/**
+ * Every page a save names, read as stored, each with the version the
+ * change was made from: a page gone, or a change naming no version of a
+ * page that keeps one, refuses the save before anything is written.
+ */
+async function storedForSave(
+  ctx: PluginRouteContext,
+  type: string,
+  body: SaveBody,
+  locale: string | undefined
+): Promise<Map<string, Record<string, unknown>>> {
+  const ids = body.changes.map(change => change.id);
+  const stored = await readStored(ctx, type, ids, asStored(locale));
+  for (const change of body.changes) {
+    const entry = stored.get(change.id);
+    if (entry === undefined) {
+      throw NextlyError.notFound({
+        logContext: { reason: "seo-bulk-page-gone", id: change.id },
+      });
+    }
+    if (typeof entry._rev === "string" && !change.rev) {
+      throw NextlyError.invalidInput({
+        message:
+          "A change names no version of its page, so it can't be told from one made before someone else's. Read the table again.",
+        logContext: { reason: "seo-bulk-no-version", id: change.id },
+      });
+    }
+  }
+  return stored;
 }
 
 /** Save every change in one transaction, or none of them. */
@@ -364,45 +489,35 @@ async function save(
       logContext: { reason: "seo-bulk-page-not-writable", id: refused },
     });
   }
+  // A page's name in a refusal is read as the caller reads it.
+  const visible = await readStored(ctx, type, ids, as);
+  const label = (id: string) => pageLabel(ctx, type, visible.get(id) ?? { id });
+  const stored = await storedForSave(ctx, type, body, locale);
   await ctx.services.collections.warmLocalizedReadiness(type);
   const revs: Record<string, string> = {};
   await ctx.services.collections.withTransaction(async transaction => {
-    const stored = await storedPages(
-      ctx,
-      transaction,
-      type,
-      ids,
-      asStored(locale)
-    );
     for (const change of body.changes) {
-      const entry = stored.get(change.id);
-      if (entry === undefined) {
-        throw NextlyError.notFound({
-          logContext: { reason: "seo-bulk-page-gone", id: change.id },
-        });
-      }
-      const values: Record<string, unknown> = {};
-      if (change.title !== undefined && change.title !== null) {
-        values.metaTitle = change.title;
-      }
-      if (change.description !== undefined && change.description !== null) {
-        values.metaDescription = change.description;
-      }
+      const values = valuesOf(change);
       try {
         const saved = await ctx.services.collections.updateEntryInTransaction(
           transaction,
           type,
           change.id,
           {
-            [SEO_GROUP]: seoWith(entry[SEO_GROUP], values),
+            [SEO_GROUP]: seoWith(stored.get(change.id)?.[SEO_GROUP], values),
             ...(change.rev ? { _rev: change.rev } : { _overwrite: true }),
           },
           as
         );
-        refuseDroppedValues(saved, values, pageLabel(ctx, type, entry));
+        await refuseIfNotStored(
+          ctx,
+          transaction,
+          { type, id: change.id, locale },
+          values
+        );
         if (typeof saved._rev === "string") revs[change.id] = saved._rev;
       } catch (error) {
-        throw refusalAbout(error, pageLabel(ctx, type, entry));
+        throw refusalAbout(error, label(change.id));
       }
     }
   });
@@ -419,10 +534,7 @@ export function bulkRoutes(setup: BulkSetup): PluginRoute[] {
       path: BULK_TYPES_PATH,
       noStore: true,
       handler: async (req, ctx) => {
-        const locale = await defaultLanguageOnly(
-          ctx,
-          param(new URL(req.url), "locale")
-        );
+        const locale = await defaultLanguageOnly(ctx, queryOf(req).locale);
         const body: BulkTypesBody = {
           types: await typesFor(ctx, setup, locale),
         };
@@ -434,13 +546,13 @@ export function bulkRoutes(setup: BulkSetup): PluginRoute[] {
       path: BULK_ROWS_PATH,
       noStore: true,
       handler: async (req, ctx) => {
-        const url = new URL(req.url);
-        const type = targetOf(setup, param(url, "type") ?? "");
+        const query = queryOf(req);
+        const type = targetOf(setup, query.type ?? "");
         if (!(await ctx.caller?.can("read", type))) {
           throw NextlyError.forbidden();
         }
-        const locale = await defaultLanguageOnly(ctx, param(url, "locale"));
-        const page = Math.max(1, Number(param(url, "page") ?? "1") || 1);
+        const locale = await defaultLanguageOnly(ctx, query.locale);
+        const page = query.page ?? 1;
         const read = await readPages(ctx, type, {
           as: asCaller(ctx),
           ...(locale === undefined ? {} : { locale }),

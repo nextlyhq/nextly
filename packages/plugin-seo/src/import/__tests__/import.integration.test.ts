@@ -167,6 +167,7 @@ async function call(
 interface Staff {
   importer: string;
   editorOnly: string;
+  importerWithoutMedia: string;
 }
 
 async function boot(
@@ -275,8 +276,16 @@ async function boot(
   return {
     t,
     staff: {
-      importer: await keyHolding([...content, MANAGE_SEO_PERMISSION]),
+      importer: await keyHolding([
+        ...content,
+        "read-media",
+        MANAGE_SEO_PERMISSION,
+      ]),
       editorOnly: await keyHolding(content),
+      importerWithoutMedia: await keyHolding([
+        ...content,
+        MANAGE_SEO_PERMISSION,
+      ]),
     },
   };
 }
@@ -749,11 +758,15 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
   it("dry-runs and applies Rank Math's CSV, adding the redirect it names through the redirect rules", async () => {
     const { t, staff } = await boot(dialect);
     await post(t, { title: "Surfer vs Rext", slug: "surfer" });
+    await post(t, { title: "Jasper vs Rext", slug: "jasper" });
     const csv = [
       "id,slug,url,seo_title,seo_description,robots,focus_keyword,redirect_to,redirect_type",
       '12,surfer,https://old.example/blog/surfer/,"Surfer, compared",Rank Math says so,"index,follow",surfer,,',
       "13,old-post,https://old.example/blog/old-post/,,,,,/blog/surfer,301",
       "14,removed,https://old.example/blog/removed/,,,,,,410",
+      // Matched by its slug to the page now at /blog/jasper, and a redirect
+      // from the address it had, which no page holds.
+      "15,jasper,https://old.example/old-jasper/,Jasper compared,,,,/blog/jasper,301",
     ].join("\n");
     const source: ImportSource = {
       kind: "rankMath",
@@ -761,7 +774,7 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       text: csv,
     };
     const dry = await dryRun(staff.importer, source);
-    expect(dry).toMatchObject({ checked: 3, pages: 1, redirects: 1 });
+    expect(dry).toMatchObject({ checked: 4, pages: 2, redirects: 2 });
     expect(dry.left).toEqual(["focus keyword"]);
     expect(await redirectCount(t)).toBe(0);
 
@@ -776,13 +789,24 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       limit: 10,
       overrideAccess: true,
     });
-    expect(items).toEqual([
-      expect.objectContaining({
-        source: "/blog/old-post",
-        target: "/blog/surfer",
-        origin: "import",
-      }),
-    ]);
+    expect((await seoBySlug(t, "posts")).jasper?.metaTitle).toBe(
+      "Jasper compared"
+    );
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "/blog/old-post",
+          target: "/blog/surfer",
+          origin: "import",
+        }),
+        expect.objectContaining({
+          source: "/old-jasper",
+          target: "/blog/jasper",
+          origin: "import",
+        }),
+      ])
+    );
+    expect(items).toHaveLength(2);
   });
 
   it("dry-runs and applies a Payload export", async () => {
@@ -885,6 +909,48 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(refused.status).toBeGreaterThanOrEqual(400);
     expect(await seoBySlug(t, "posts")).toEqual(beforeFile);
     expect(await redirectCount(t)).toBe(0);
+  });
+
+  it("leaves a page of a type hidden whole to the type, and matches no image for someone who may not read the library", async () => {
+    const { t, staff } = await boot(dialect);
+    await t.nextly.updateSingle({
+      slug: SEO_SETTINGS_SLUG,
+      data: { _overwrite: true, siteName: "Rext AI", hiddenTypes: ["pages"] },
+    });
+    await page(t, {
+      title: "Tag page",
+      slug: "tag",
+      pageSeo: { noIndex: true, metaDescription: "A tag." },
+    });
+    const source: ImportSource = {
+      kind: "group",
+      field: "pageSeo",
+      map: { metaDescription: "description", noIndex: "hidden" },
+    };
+    const dry = await dryRun(staff.importer, source);
+    expect(dry).toMatchObject({ pages: 1, same: 1 });
+    const applied = await apply(staff.importer, source, dry.plan);
+    expect(applied.status, await applied.clone().text()).toBe(200);
+    expect((await seoBySlug(t, "pages")).tag?.noindex ?? false).toBe(false);
+
+    const xml = wordPressExport([
+      {
+        title: "Tag page",
+        link: "https://old.example/tag/",
+        slug: "tag",
+        meta: {
+          "_yoast_wpseo_opengraph-image": "https://old.example/harbour.png",
+        },
+      },
+    ]);
+    const file: ImportSource = { kind: "yoast", fileName: "e.xml", text: xml };
+    const blind = await dryRun(staff.importerWithoutMedia, file);
+    expect(blind.warnings.join(" ")).toContain(
+      "You may not read the media library"
+    );
+    expect(blind.warnings.join(" ")).not.toContain(
+      "isn't in the media library"
+    );
   });
 
   it("refuses an apply once a page changed since the dry run, changing nothing", async () => {

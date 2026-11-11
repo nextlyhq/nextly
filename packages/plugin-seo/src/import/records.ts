@@ -129,7 +129,7 @@ export function fillTemplate(
   // A variable may take arguments, as Rank Math's `%customfield(price)%`
   // does; none is one Nextly can fill, so it leaves its value out.
   const pattern = new RegExp(
-    `${escape(open)}([a-z_]+)(\\([^)]*\\))?${escape(close)}`,
+    `${escape(open)}([a-z0-9_]+)(\\([^)]*\\))?${escape(close)}`,
     "gi"
   );
   const known: Readonly<Record<string, string | undefined>> = {

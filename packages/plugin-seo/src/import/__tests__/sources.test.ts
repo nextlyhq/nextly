@@ -243,3 +243,15 @@ describe("template variables that take arguments", () => {
     ).toBe(undefined);
   });
 });
+
+describe("template variables with digits in their names", () => {
+  it("leaves out a value naming one, which Nextly can't fill", () => {
+    expect(
+      fillTemplate("%%title2%% here", "yoast", {
+        title: "Fish",
+        siteName: "Acme",
+        separator: "|",
+      })
+    ).toBe(undefined);
+  });
+});

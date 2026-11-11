@@ -15,7 +15,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text, textarea } from "nextly/config";
+import { defineCollection, password, text, textarea } from "nextly/config";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -276,6 +276,19 @@ describe.each(getConfiguredTestDialects())("bulk edit (%s)", dialect => {
     expect(await seoBySlug(t)).toEqual(before);
   });
 
+  it("refuses a change naming no version, and a page that is not a number", async () => {
+    const { t, editor } = await boot(dialect);
+    const id = await post(t, { title: "Surfer vs Rext", slug: "surfer" });
+    const response = await call(editor, "POST", "/bulk/save", {
+      type: "posts",
+      changes: [{ id, title: "No version" }],
+    });
+    expect(response.status).toBe(400);
+    expect((await seoBySlug(t)).surfer?.metaTitle ?? "").toBe("");
+    const odd = await call(editor, "GET", "/bulk/rows?type=posts&page=1.5");
+    expect(odd.status).toBe(400);
+  });
+
   it("refuses a save from someone who may not change the type", async () => {
     const { t, reader } = await boot(dialect);
     const id = await post(t, { title: "Surfer vs Rext", slug: "surfer" });
@@ -296,7 +309,10 @@ describe.each(getConfiguredTestDialects())(
         ...(dialect === "sqlite" ? {} : { dialect }),
         localization: { locales: ["en", "de"], defaultLocale: "en" },
         plugins: [
-          seoPlugin({ collections: ["posts", "drafts"], sitemap: false }),
+          seoPlugin({
+            collections: ["posts", "drafts", "secured"],
+            sitemap: false,
+          }),
         ],
         collections: [
           defineCollection({
@@ -311,6 +327,18 @@ describe.each(getConfiguredTestDialects())(
             versions: { drafts: true },
             fields: [text({ name: "title" }), text({ name: "slug" })],
             publicAddress: "/notes/{slug}",
+          }),
+          // Asks for drafts, but holds a password, so core keeps none.
+          defineCollection({
+            slug: "secured",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title" }),
+              text({ name: "slug" }),
+              password({ name: "secret" }),
+            ],
+            publicAddress: "/secured/{slug}",
           }),
         ],
       });
@@ -379,6 +407,20 @@ describe.each(getConfiguredTestDialects())(
         changes: [{ id, title: "Changed" }],
       });
       expect(saved.status).toBe(403);
+
+      // A type that asks for drafts but cannot keep them saves as any other.
+      const secured = await t.nextly.create({
+        collection: "secured",
+        data: { title: "Vault", slug: "vault", status: "published" },
+      });
+      const securedRows = (
+        (await (
+          await call(key, "GET", "/bulk/rows?type=secured")
+        ).json()) as BulkRowsBody
+      ).rows;
+      expect(
+        securedRows.find(row => row.id === String(secured.item.id))?.editable
+      ).toBe(true);
     });
   }
 );
@@ -453,16 +495,16 @@ describe.each(getConfiguredTestDialects())(
 describe.each(getConfiguredTestDialects())(
   "bulk edit where a field of the site's own SEO group can't be read (%s)",
   dialect => {
-    it("keeps that field's value when another is saved", async () => {
+    it("saves a field it can't read, keeps another, and names no hidden title", async () => {
       const t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
         plugins: [
           seoPlugin({
             collections: ["posts"],
             sitemap: false,
-            // The canonical may be changed but never read.
+            // The title and canonical may be changed but never read.
             fields: [
-              text({ name: "metaTitle" }),
+              text({ name: "metaTitle", access: { read: () => false } }),
               text({ name: "canonical", access: { read: () => false } }),
             ],
           }),
@@ -471,7 +513,11 @@ describe.each(getConfiguredTestDialects())(
           defineCollection({
             slug: "posts",
             status: true,
-            fields: [text({ name: "title" }), text({ name: "slug" })],
+            fields: [
+              // A page's name the editor may not read either.
+              text({ name: "title", access: { read: () => false } }),
+              text({ name: "slug" }),
+            ],
             publicAddress: "/blog/{slug}",
           }),
         ],
@@ -522,7 +568,7 @@ describe.each(getConfiguredTestDialects())(
       const read = (await (
         await call(key, "GET", "/bulk/rows?type=posts")
       ).json()) as BulkRowsBody;
-      const surfer = read.rows.find(row => row.label === "Surfer");
+      const [surfer] = read.rows;
       const response = await call(key, "POST", "/bulk/save", {
         type: "posts",
         changes: [
@@ -534,6 +580,13 @@ describe.each(getConfiguredTestDialects())(
         metaTitle: "Surfer, compared",
         canonical: "https://rext.ai/original",
       });
+      // Saved again from the old version: refused, naming no hidden title.
+      const stale = await call(key, "POST", "/bulk/save", {
+        type: "posts",
+        changes: [{ id: surfer?.id, rev: surfer?.rev, title: "Again" }],
+      });
+      expect(stale.status).toBe(409);
+      expect(await stale.text()).not.toContain("Surfer");
     });
   }
 );

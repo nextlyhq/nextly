@@ -35,10 +35,10 @@ import {
 } from "../bulk/pages";
 import {
   asStored,
+  readStored,
   refusalAbout,
-  refuseDroppedValues,
+  refuseIfNotStored,
   seoWith,
-  storedPages,
   writablePages,
 } from "../bulk/route";
 import { productionAddressesOf, typedCanonical } from "../canonical";
@@ -515,7 +515,11 @@ function decideImage(at: Deciding, images: ReadonlyMap<string, string>): void {
 function decideHidden(at: Deciding): void {
   const hidden = at.record.values.hidden;
   const current = at.page.seo[STORED.hidden] === true;
-  if (hidden === true && !current) {
+  // A type hidden whole hides the page already, and showing the type again
+  // should show it: the page is left to the type.
+  if (hidden === true && !current && at.page.levels.typeHidden === true) {
+    at.tally.same++;
+  } else if (hidden === true && !current) {
     at.decision.writes[STORED.hidden] = true;
     at.decision.places.push("hidden");
   } else if (hidden === false && current) {
@@ -648,7 +652,6 @@ interface Skipped {
   unmatched: string[];
   ambiguous: string[];
   repeated: string[];
-  redirectsFromPages: number;
   redirectsWithoutAddress: number;
 }
 
@@ -665,14 +668,9 @@ interface Matched {
  */
 function redirectOf(
   record: ImportedRecord,
-  page: ReadPage | "ambiguous" | undefined,
   skipped: Skipped
 ): PlannedRedirect | undefined {
   if (record.redirect === undefined) return undefined;
-  if (page !== undefined) {
-    skipped.redirectsFromPages++;
-    return undefined;
-  }
   if (record.match.path === undefined) {
     skipped.redirectsWithoutAddress++;
     return undefined;
@@ -694,17 +692,21 @@ function matchRecords(
     unmatched: [],
     ambiguous: [],
     repeated: [],
-    redirectsFromPages: 0,
     redirectsWithoutAddress: 0,
   };
   const planned = new Map<string, PlannedPage>();
   const redirects: PlannedRedirect[] = [];
   for (const record of records) {
     const page = find(record);
-    const redirect = redirectOf(record, page, skipped);
+    // A redirect from the record's own address is tried by the redirect
+    // rules, which refuse one from an address a published page holds; the
+    // record's values still go to the page it matched, wherever that is now.
+    const redirect = redirectOf(record, skipped);
     if (redirect !== undefined) redirects.push(redirect);
-    else if (page === undefined) {
-      if (record.match.page === undefined) skipped.unmatched.push(record.label);
+    if (page === undefined) {
+      if (record.match.page === undefined && redirect === undefined) {
+        skipped.unmatched.push(record.label);
+      }
     } else if (page === "ambiguous") skipped.ambiguous.push(record.label);
     else if (planned.has(`${page.type}|${page.id}`)) {
       skipped.repeated.push(record.label);
@@ -766,11 +768,6 @@ function warningsOf(skipped: Skipped, tally: Tally): string[] {
         `${count(n, "official address", "official addresses")} (canonical) ${either(n, "isn't an address", "aren't addresses")} a page can name, so ${either(n, "it is", "they are")} left out.`,
     ],
     [
-      skipped.redirectsFromPages,
-      n =>
-        `${count(n, "redirect")} start at a page that is on this site, so ${either(n, "it is", "they are")} left out.`,
-    ],
-    [
       skipped.redirectsWithoutAddress,
       n =>
         `${count(n, "redirect")} in the file ${either(n, "has", "have")} no address to start from, so ${either(n, "it is", "they are")} left out. Add ${either(n, "it", "them")} in Redirects.`,
@@ -803,9 +800,10 @@ async function writableOf(
   options: { locale: string | undefined; pagePermissions: boolean }
 ): Promise<{ writable: PlannedPage[]; refused: string[]; drafted: string[] }> {
   const allowed = new Set<string>();
-  const drafting = new Set(
-    changing.map(page => page.type).filter(type => keepsDrafts(ctx, type))
-  );
+  const drafting = new Set<string>();
+  for (const type of new Set(changing.map(page => page.type))) {
+    if (await keepsDrafts(ctx, type)) drafting.add(type);
+  }
   for (const type of new Set(changing.map(page => page.type))) {
     const ids = changing
       .filter(page => page.type === type)
@@ -849,7 +847,13 @@ export async function planImport(
   const own = source.kind === "group" && source.field === SEO_GROUP;
   const templates = templatesOf(rules);
   const origins = productionAddressesOf(rules.productionAddresses);
-  const images = await mediaIds(ctx, imageUrls(parsed.records));
+  // Images are looked for only by someone who may read the media library,
+  // so the import says nothing about files they may not see.
+  const urls = imageUrls(parsed.records);
+  const mayReadMedia = (await ctx.caller?.can("read", "media")) === true;
+  const images = mayReadMedia
+    ? await mediaIds(ctx, urls)
+    : new Map<string, string>();
   const tally: Tally = {
     same: 0,
     kept: 0,
@@ -875,7 +879,14 @@ export async function planImport(
     matched.planned.filter(page => page.places.length > 0),
     { locale, pagePermissions: setup.pagePermissions }
   );
+  // Not looked for, so not said to be missing from the library either.
+  if (!mayReadMedia) tally.missingImages = 0;
   const warnings = [...parsed.warnings, ...warningsOf(matched.skipped, tally)];
+  if (!mayReadMedia && urls.length > 0) {
+    warnings.push(
+      "You may not read the media library, so the share images in the file can't be matched to it."
+    );
+  }
   if (notYours.length > 0) {
     warnings.push(
       `${count(notYours.length, "page")} would change, but you may not change ${either(notYours.length, "its", "their")} SEO, so ${either(notYours.length, "it is", "they are")} left out: ${someOf(notYours)}.`
@@ -930,28 +941,15 @@ async function writeAll(
   ctx: PluginRouteContext,
   transaction: Transaction,
   plan: ImportPlan,
+  stored: ReadonlyMap<string, Record<string, unknown>>,
   as: ServiceOpts
 ): Promise<void> {
-  const stored = new Map<string, Record<string, unknown>>();
-  for (const type of new Set(plan.pages.map(page => page.type))) {
-    const ids = plan.pages
-      .filter(page => page.type === type)
-      .map(page => page.id);
-    const read = await storedPages(
-      ctx,
-      transaction,
-      type,
-      ids,
-      asStored(plan.locale)
-    );
-    for (const [id, entry] of read) stored.set(`${type}|${id}`, entry);
-  }
   for (const page of plan.pages) {
     // Written over the group as stored, every value the person may not
     // read kept as it was.
     const group = stored.get(`${page.type}|${page.id}`)?.[SEO_GROUP];
     try {
-      const saved = await ctx.services.collections.updateEntryInTransaction(
+      await ctx.services.collections.updateEntryInTransaction(
         transaction,
         page.type,
         page.id,
@@ -963,7 +961,12 @@ async function writeAll(
         },
         as
       );
-      refuseDroppedValues(saved, page.writes, page.label);
+      await refuseIfNotStored(
+        ctx,
+        transaction,
+        { type: page.type, id: page.id, locale: plan.locale },
+        page.writes
+      );
     } catch (error) {
       throw refusalAbout(error, page.label);
     }
@@ -1001,11 +1004,26 @@ export async function applyImport(
         "Pages have changed since the dry run, so it no longer shows what would happen. Nothing was imported. Do the dry run again.",
     });
   }
+  // The groups as stored, read before the transaction so it holds no lock
+  // on the rows it then writes; each write sends its page's version, which
+  // refuses it where the page changed since.
+  const stored = new Map<string, Record<string, unknown>>();
   for (const type of new Set(plan.pages.map(page => page.type))) {
+    const ids = plan.pages
+      .filter(page => page.type === type)
+      .map(page => page.id);
+    for (const [id, entry] of await readStored(
+      ctx,
+      type,
+      ids,
+      asStored(plan.locale)
+    )) {
+      stored.set(`${type}|${id}`, entry);
+    }
     await ctx.services.collections.warmLocalizedReadiness(type);
   }
   await ctx.services.collections.withTransaction(transaction =>
-    writeAll(ctx, transaction, plan, as)
+    writeAll(ctx, transaction, plan, stored, as)
   );
   // Committed: each changed page is checked again for the problem list.
   for (const page of plan.pages) {

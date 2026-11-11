@@ -14,6 +14,8 @@
 import {
   humanizeFieldName,
   publicAddressOf,
+  resolvedCollectionDraftSplit,
+  resolvedCollectionView,
   type PageMetadataInput,
   type PluginContext,
   type ServiceOpts,
@@ -119,16 +121,17 @@ export function typeNamesOf(
 }
 
 /**
- * Whether a change to a published page of the type is held as a draft:
- * where it has both the draft and published lifecycle and versions that
- * keep drafts, as the type declares them.
+ * Whether a change to a published page of the type is held as a working
+ * draft: core's own answer, asked of the type's registered record, which
+ * holds its versions resolved whether code or the Schema Builder made it.
  */
-export function keepsDrafts(ctx: PluginContext, slug: string): boolean {
-  const declaration = declarationOf(ctx, slug);
-  if (declaration?.status !== true) return false;
-  const versions = declaration.versions;
-  if (versions === true) return true;
-  return isRecord(versions) && versions.drafts !== false;
+export async function keepsDrafts(
+  ctx: PluginContext,
+  slug: string
+): Promise<boolean> {
+  const record = await ctx.services.collections.getCollection(slug, {});
+  return (await resolvedCollectionDraftSplit(resolvedCollectionView(record)))
+    .eligible;
 }
 
 /** The page's address, as its type forms it, or none. */

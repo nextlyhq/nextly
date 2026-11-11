@@ -20,7 +20,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
-import { asCaller, defaultLanguageOnly } from "../bulk/route";
+import { asCaller, defaultLanguageOnly, queryOf } from "../bulk/route";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 
 import {
@@ -107,12 +107,6 @@ function asIn(
   return { ...asCaller(ctx), ...(locale === undefined ? {} : { locale }) };
 }
 
-/** A query parameter's text, or none. */
-function param(url: URL, name: string): string | undefined {
-  const value = url.searchParams.get(name);
-  return value === null || value === "" ? undefined : value;
-}
-
 /** The import's routes. */
 export function importRoutes(setup: ImportSetup): PluginRoute[] {
   const routes: PluginRoute[] = [
@@ -122,10 +116,7 @@ export function importRoutes(setup: ImportSetup): PluginRoute[] {
       noStore: true,
       requiredPermission: MANAGE_SEO_PERMISSION,
       handler: async (req, ctx) => {
-        const locale = await defaultLanguageOnly(
-          ctx,
-          param(new URL(req.url), "locale")
-        );
+        const locale = await defaultLanguageOnly(ctx, queryOf(req).locale);
         const body: ImportGroupsBody = {
           groups: await importGroups(ctx, setup, asIn(ctx, locale), locale),
         };
