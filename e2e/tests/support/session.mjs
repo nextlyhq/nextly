@@ -40,7 +40,10 @@ export const STORAGE_STATE = path.join(E2E_ROOT, ".playwright", "session.json");
  * A production server has no dev auto-login, so the suite signs in as it,
  * through the form, as the production suite does.
  */
-const SEEDED_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
+export const SEEDED_USER = {
+  email: "dev@nextly.local",
+  password: "DevPassword123!",
+};
 
 /** How old the stored session may be before a test is handed a new one. */
 export const SESSION_MAX_AGE_MS = 10 * 60_000;
