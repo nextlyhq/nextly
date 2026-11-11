@@ -191,6 +191,7 @@ import {
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
+import { reportUserMenuItemProblems } from "../plugins/header-item";
 import { setInitializedPlugins } from "../plugins/initialized-plugins";
 import {
   collectCustomPermissions,
@@ -1671,6 +1672,9 @@ function logRegisteredPlugins(
   // plugin author's and breaks nothing, and an operator cannot fix a
   // third-party package from their own config.
   warnUndescribedPlugins(transformedConfig.plugins, logger);
+  // Beside it for the same reason: a person's-menu item with neither a link
+  // nor an action, or both, is left out of the menu without a word otherwise.
+  reportUserMenuItemProblems(transformedConfig.plugins);
 }
 
 /**

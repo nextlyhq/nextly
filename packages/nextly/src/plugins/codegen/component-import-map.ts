@@ -100,19 +100,33 @@ const HEADER = [
 ].join("\n");
 
 /**
- * Header, schema-builder and form-toolbar slots. They render through the
- * same registry from surfaces the plugin does not own, so they need the
- * map's import as much as a page does.
+ * Header, schema-builder and form-toolbar slots, and the component a
+ * person's-menu item opens. They render through the same registry from
+ * surfaces the plugin does not own, so they need the map's import as much as
+ * a page does.
  */
 function collectAdminSlotPaths(admin: PluginAdminContributions): string[] {
   // `header.slot` supersedes the deprecated top-level spelling; both are
-  // read exactly as admin-meta reads them.
+  // read exactly as admin-meta reads them, at the bar or the rail's foot.
   const headerSlot = admin.header?.slot ?? admin.headerSlot;
   return [
     headerSlot,
+    userMenuOpenedPath(admin.header?.item),
     admin.schemaBuilderSlot,
     admin.entryFormToolbarSlot,
   ].filter((path): path is ComponentPath => Boolean(path));
+}
+
+/**
+ * The component a person's-menu item opens, read as plain JavaScript hands it
+ * over: anything else is no path.
+ */
+function userMenuOpenedPath(item: unknown): string | undefined {
+  const action = isRecord(item) ? item.action : undefined;
+  const opened = isRecord(action) ? action.open : undefined;
+  return typeof opened === "string" && opened.trim() !== ""
+    ? opened
+    : undefined;
 }
 
 /**

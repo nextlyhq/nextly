@@ -807,6 +807,10 @@ function exposedComponentPaths(meta: PluginAdminMeta): ExposedPaths {
     // browser is handed.
     meta.headerSlot,
     meta.header?.slot,
+    // The component a person's-menu item opens.
+    meta.header?.item?.action && "open" in meta.header.item.action
+      ? meta.header.item.action.open
+      : undefined,
     meta.schemaBuilderSlot,
     meta.entryFormToolbarSlot,
     ...(meta.fieldTypes ?? []).map(fieldType => fieldType.component),
@@ -918,6 +922,33 @@ describe("parity with the admin-meta surface", () => {
     // reading it as one would demand an import for a module named `#0ea5e9`.
     expect(meta.clientConfig).toEqual({ accent: "#0ea5e9" });
     expect(collected.has("#0ea5e9")).toBe(false);
+  });
+
+  it("collects a rail-foot slot and the component a menu item opens", () => {
+    const at = (header: unknown) =>
+      ({
+        name: "@acme/x",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { admin: { header } },
+      }) as unknown as PluginDefinition;
+    for (const p of [
+      at({ slot: "@acme/x/admin#RailHelper", place: "rail-foot" }),
+      at({
+        place: "menu",
+        item: {
+          label: "Report",
+          icon: "BookOpen",
+          action: { open: "@acme/x/admin#ReportDialog" },
+        },
+      }),
+    ]) {
+      const meta = buildPluginAdminMeta([p], undefined)[0];
+      const exposed = exposedComponentPaths(meta);
+      expect(exposed.unclassified).toEqual([]);
+      expect(exposed.registered).toHaveLength(1);
+      expect(collectAdminComponentPaths(p)).toEqual(exposed.registered);
+    }
   });
 
   it("covers a disabled plugin too, whose meta keeps its field types", () => {

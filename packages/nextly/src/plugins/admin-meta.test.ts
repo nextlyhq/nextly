@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { PluginDefinition } from "./plugin-context";
 import { definePlugin } from "./plugin-context";
@@ -6,7 +6,10 @@ import { definePlugin } from "./plugin-context";
 import { NEXTLY_ERROR_STATUS } from "../errors/error-codes";
 import { NextlyError } from "../errors/nextly-error";
 
+import { setNextlyLogger } from "../observability/logger";
+
 import { buildPluginAdminMeta } from "./admin-meta";
+import { reportUserMenuItemProblems } from "./header-item";
 
 const base = {
   name: "@acme/p",
@@ -1390,5 +1393,190 @@ describe("buildPluginAdminMeta, a plugin's translations", () => {
         undefined
       )
     ).toThrow(NextlyError);
+  });
+});
+
+describe("a plugin's own item, in the place it chose", () => {
+  const withHeader = (header: unknown, rest: object = {}) =>
+    asPlugins([{ ...base, ...rest, contributes: { admin: { header } } }]);
+  const headerOf = (header: unknown, rest?: object) =>
+    buildPluginAdminMeta(withHeader(header, rest), undefined)[0];
+
+  it("keeps a slot that names no place at the bar, exactly as before", () => {
+    const meta = headerOf({ slot: "@acme/p/admin#Publish" });
+    expect(meta.header).toEqual({ slot: "@acme/p/admin#Publish" });
+    expect(meta.headerSlot).toBe("@acme/p/admin#Publish");
+  });
+
+  it("serializes the bar named outright as the default, with no place", () => {
+    const meta = headerOf({ slot: "@acme/p/admin#Publish", place: "bar" });
+    expect(meta.header).toEqual({ slot: "@acme/p/admin#Publish" });
+    expect(meta.headerSlot).toBe("@acme/p/admin#Publish");
+  });
+
+  it("serializes a slot at the rail's foot, and mirrors no bar slot for it", () => {
+    const meta = headerOf({
+      slot: "@acme/p/admin#Helper",
+      place: "rail-foot",
+      hide: ["docs"],
+    });
+    expect(meta.header).toEqual({
+      slot: "@acme/p/admin#Helper",
+      place: "rail-foot",
+      hide: ["docs"],
+    });
+    expect(meta.headerSlot).toBeUndefined();
+  });
+
+  it("folds the deprecated headerSlot into the rail's foot when that is the place", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            admin: {
+              headerSlot: "@acme/p/admin#Old",
+              header: { place: "rail-foot" },
+            },
+          },
+        },
+      ]),
+      undefined
+    )[0];
+    expect(meta.header).toEqual({
+      slot: "@acme/p/admin#Old",
+      place: "rail-foot",
+    });
+    expect(meta.headerSlot).toBeUndefined();
+  });
+
+  it("serializes a menu link with its id, and no slot", () => {
+    const meta = headerOf({
+      place: "menu",
+      item: { label: "Support", icon: "LifeBuoy", to: "/admin/plugins/p" },
+      hideDefaults: true,
+    });
+    expect(meta.header).toEqual({
+      place: "menu",
+      item: {
+        id: "acme-p.user-menu",
+        label: "Support",
+        icon: "LifeBuoy",
+        to: "/admin/plugins/p",
+      },
+      hideDefaults: true,
+    });
+    expect(meta.headerSlot).toBeUndefined();
+  });
+
+  it("serializes a menu action, and only the declared fields", () => {
+    const action = { run: { method: "POST", path: "/sync" } };
+    const meta = headerOf({
+      place: "menu",
+      item: { label: "Sync", icon: "RefreshCw", action, extra: "dropped" },
+    });
+    expect(meta.header?.item).toEqual({
+      id: "acme-p.user-menu",
+      label: "Sync",
+      icon: "RefreshCw",
+      action,
+    });
+  });
+
+  it("never publishes a component for the menu, even a deprecated headerSlot", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            admin: {
+              headerSlot: "@acme/p/admin#Old",
+              header: {
+                place: "menu",
+                item: { label: "Help", icon: "BookOpen", to: "/x" },
+              },
+            },
+          },
+        },
+      ]),
+      undefined
+    )[0];
+    expect(meta.header?.slot).toBeUndefined();
+    expect(meta.headerSlot).toBeUndefined();
+  });
+
+  it.each([
+    ["neither a link nor an action", { label: "X", icon: "BookOpen" }],
+    [
+      "both a link and an action",
+      { label: "X", icon: "BookOpen", to: "/x", action: { open: "@a#B" } },
+    ],
+  ])("leaves out a menu item with %s", (_case, item) => {
+    const meta = headerOf({ place: "menu", item, hide: ["github"] });
+    expect(meta.header).toEqual({ hide: ["github"] });
+  });
+
+  it("publishes nothing for a disabled plugin, in any place", () => {
+    for (const header of [
+      { slot: "@acme/p/admin#Helper", place: "rail-foot" },
+      { place: "menu", item: { label: "X", icon: "BookOpen", to: "/x" } },
+    ]) {
+      const meta = headerOf(header, { enabled: false });
+      expect(meta.header).toBeUndefined();
+      expect(meta.headerSlot).toBeUndefined();
+    }
+  });
+});
+
+describe("the start-up report of a menu item left out", () => {
+  const warn = vi.fn();
+  const logger = { error: vi.fn(), warn, info: vi.fn(), debug: vi.fn() };
+  const plugins = asPlugins([
+    {
+      ...base,
+      contributes: {
+        admin: {
+          header: { place: "menu", item: { label: "X", icon: "BookOpen" } },
+        },
+      },
+    },
+    {
+      ...base,
+      name: "@acme/fine",
+      contributes: {
+        admin: {
+          header: {
+            place: "menu",
+            item: { label: "Y", icon: "BookOpen", to: "/y" },
+          },
+        },
+      },
+    },
+  ]);
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    setNextlyLogger(undefined);
+    warn.mockReset();
+  });
+
+  it("names the plugin and why, in development", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    setNextlyLogger(logger);
+    reportUserMenuItemProblems(plugins);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatchObject({
+      kind: "plugin-user-menu-item-left-out",
+      message: expect.stringContaining(
+        "@acme/p: its item has neither a link nor an action"
+      ),
+    });
+  });
+
+  it.each(["production", "test"])("is silent in %s", env => {
+    vi.stubEnv("NODE_ENV", env);
+    setNextlyLogger(logger);
+    reportUserMenuItemProblems(plugins);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
