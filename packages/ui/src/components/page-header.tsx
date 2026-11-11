@@ -93,7 +93,11 @@ export const PageHeader: ForwardRefExoticComponent<
       className={cn("mb-8", className)}
       {...props}
     >
-      {breadcrumbs ? <div className="mb-6">{breadcrumbs}</div> : null}
+      {breadcrumbs ? (
+        // Collapses when the breadcrumb is drawn elsewhere (the admin draws it
+        // in its top bar), so the header keeps no empty row above its title.
+        <div className="mb-6 empty:hidden">{breadcrumbs}</div>
+      ) : null}
 
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div className="flex min-w-0 items-start gap-4">

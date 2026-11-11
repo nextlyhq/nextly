@@ -124,7 +124,7 @@ describe("PageContainer", () => {
 
     for (const shared of [
       "admin-page-container",
-      "min-h-[calc(100vh-4rem)]",
+      "min-h-[calc(100vh-var(--admin-bar-height))]",
       "py-6",
     ]) {
       expect(blockClasses, `block layout lost ${shared}`).toContain(shared);

@@ -107,10 +107,12 @@ export function MeasuredPageFrame({
   // `== null` deliberately, covering `null` as well as `undefined`: a caller
   // whose trail is conditional renders `null`, and that is the same statement
   // — there is nothing to put a gap around.
+  // `empty:hidden` for a trail drawn elsewhere: in the admin a breadcrumb is
+  // drawn in the top bar, leaving this row with nothing in it.
   const trailClass = framed
     ? breadcrumbs == null
       ? undefined
-      : "mb-6"
+      : "mb-6 empty:hidden"
     : "hidden";
 
   return (
