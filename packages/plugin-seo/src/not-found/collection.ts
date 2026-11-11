@@ -6,6 +6,7 @@
  *
  * @module not-found/collection
  */
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import {
   date,
   defineCollection,
@@ -14,7 +15,6 @@ import {
   textarea,
   type CollectionConfig,
 } from "nextly/config";
-import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
 export const NOT_FOUND_SLUG = "nx_seo_not_found";
 
@@ -26,11 +26,21 @@ export function notFoundCollection(): CollectionConfig {
     fields: [
       // The SHA-256 of the address, so one address is one row on every
       // dialect, whatever its length.
-      text({ name: "pathKey", label: "Path key", required: true, unique: true }),
+      text({
+        name: "pathKey",
+        label: "Path key",
+        required: true,
+        unique: true,
+      }),
       // The address as it was asked for, without its query.
       textarea({ name: "path", label: "Address", required: true }),
       number({ name: "hits", label: "Visits", required: true, index: true }),
-      date({ name: "lastSeen", label: "Last seen", required: true, index: true }),
+      date({
+        name: "lastSeen",
+        label: "Last seen",
+        required: true,
+        index: true,
+      }),
       // `missing` for a request that found nothing, `moved` for an old
       // address a deploy moved whose redirect could not be saved.
       text({ name: "kind", label: "Kind", required: true }),

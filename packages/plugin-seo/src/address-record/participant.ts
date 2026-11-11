@@ -55,11 +55,7 @@ function sha256(text: string): string {
 }
 
 /** The stored claim key of an address, range or path lock row. */
-export function claimKey(
-  kind: RowKind,
-  locale: string,
-  path: string
-): string {
+export function claimKey(kind: RowKind, locale: string, path: string): string {
   return sha256(`${kind}:${locale}|${path}`);
 }
 
@@ -309,8 +305,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   const collections = ctx.services.collections;
   const redirects = redirectsSlug(ctx);
   /** Whether `holder` is a redirect, holding its From address. */
-  const isRedirect = (holder: AddressHolder) =>
-    holder.collection === redirects;
+  const isRedirect = (holder: AddressHolder) => holder.collection === redirects;
 
   /**
    * Whether `held`, held by `holder`, keeps `asker` from holding `asked`.
@@ -331,10 +326,17 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     asked: HeldAddress
   ): boolean {
     if (!isRedirect(asker)) return !isRedirect(holder) && overlaps(held, asked);
-    if (asked.range !== true) {
-      if (isRedirect(holder) && held.range === true) return false;
-      return overlaps(held, asked);
-    }
+    return asked.range === true
+      ? keepsPatternOff(holder, held, asked)
+      : !(isRedirect(holder) && held.range === true) && overlaps(held, asked);
+  }
+
+  /** Whether `held`, held by `holder`, keeps a pattern redirect off `asked`. */
+  function keepsPatternOff(
+    holder: AddressHolder,
+    held: HeldAddress,
+    asked: HeldAddress
+  ): boolean {
     if (held.range !== true || held.locale !== asked.locale) return false;
     if (held.path === asked.path) return true;
     return !isRedirect(holder) && within(asked.path, held.path);
@@ -489,6 +491,19 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     return { still, released };
   }
 
+  /** Claim every address `update` holds that `kept` does not already. */
+  async function claimNew(
+    transaction: Transaction,
+    update: HeldAddressUpdate,
+    kept: ReadonlySet<string> = new Set()
+  ): Promise<void> {
+    for (const held of update.holds) {
+      if (!kept.has(claimKey(kindOf(held), held.locale, held.path))) {
+        await claim(transaction, update, held);
+      }
+    }
+  }
+
   /** Write `held` for `update.holder`, refused by the key where another holds it. */
   async function claim(
     transaction: Transaction,
@@ -575,12 +590,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
         letGo.set(update, await release(transaction, update));
       }
       for (const update of batch) {
-        const kept = letGo.get(update)?.still ?? new Set<string>();
-        for (const held of update.holds) {
-          if (!kept.has(claimKey(kindOf(held), held.locale, held.path))) {
-            await claim(transaction, update, held);
-          }
-        }
+        await claimNew(transaction, update, letGo.get(update)?.still);
       }
       // Once every claim stands, so a redirect never meets an address the
       // batch is about to take.

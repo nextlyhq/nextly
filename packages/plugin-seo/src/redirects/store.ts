@@ -71,7 +71,7 @@ export type RedirectOutcome =
   | { refused: string; reason: RefusalReason; existing?: string };
 
 /** The stored key of an exact address in a language. */
-export function redirectKey(locale: string, path: string): string {
+function redirectKey(locale: string, path: string): string {
   return createHash("sha256").update(`${locale}|${path}`, "utf8").digest("hex");
 }
 
@@ -93,8 +93,7 @@ export function redirectOf(entry: unknown): StoredRedirect {
     target: text(row.target),
     // Stored as a boolean, or 0/1 where the dialect keeps one as a number.
     permanent: row.permanent !== false && row.permanent !== 0,
-    origin:
-      origin === "automatic" || origin === "import" ? origin : "person",
+    origin: origin === "automatic" || origin === "import" ? origin : "person",
     addedBy: typeof row.addedBy === "string" ? row.addedBy : null,
     createdAt: isoOf(row.createdAt),
     updatedAt: isoOf(row.updatedAt),
@@ -159,6 +158,103 @@ function heldOf(
   };
 }
 
+type Refusal = Extract<RedirectOutcome, { refused: string }>;
+
+/** A redirect's two addresses read and checked, or why they cannot be used. */
+function checked(
+  input: RedirectInput
+): { source: string; address: { path: string; range?: true } } | Refusal {
+  const parsed = parseSource(input.source);
+  if (!parsed.ok) return { refused: parsed.error, reason: "invalid" };
+  const problem = checkTarget(input.target, parsed.source);
+  if (problem !== null) return { refused: problem, reason: "invalid" };
+  return { source: parsed.source, address: parsed.address };
+}
+
+/**
+ * Make a new redirect's row and claim its From address, or undo the row and
+ * answer why the address cannot be claimed.
+ */
+async function created(
+  ctx: PluginContext,
+  transaction: Transaction,
+  input: RedirectInput,
+  from: { source: string; address: { path: string; range?: true } },
+  fields: Record<string, unknown>
+): Promise<StoredRedirect | Refusal> {
+  const slug = redirectsSlug(ctx);
+  const saved = redirectOf(
+    await ctx.services.collections.createEntryInTransaction(transaction, slug, {
+      ...fields,
+      sourceKey: redirectKey(input.locale, from.source),
+      source: from.source,
+      locale: input.locale,
+      origin: input.origin,
+      addedBy: input.addedBy ?? null,
+    })
+  );
+  const { refused } = await ctx.publicAddresses.move(
+    [
+      {
+        holder: { collection: slug, id: saved.id, label: from.source },
+        holds: [heldOf(input.locale, from.address)],
+      },
+    ],
+    transaction
+  );
+  if (refused.length === 0) return saved;
+  await ctx.services.collections.deleteEntryInTransaction(
+    transaction,
+    slug,
+    saved.id
+  );
+  return {
+    refused: `${from.source} is the address of a published page, so it can't redirect. Give that page another address first.`,
+    reason: "held",
+  };
+}
+
+/**
+ * Point every redirect that went to `source` on to `final`, where `saved`
+ * now sends it, and take `source` off the not-found log, since it answers
+ * now. Answers how many were pointed on.
+ */
+async function pointedOn(
+  ctx: PluginContext,
+  transaction: Transaction,
+  locale: string,
+  source: string,
+  final: string,
+  saved: StoredRedirect
+): Promise<number> {
+  const read = reads(ctx, transaction);
+  const targetKey = targetKeyOf(locale, final);
+  let repointed = 0;
+  // Each page read is pointed on before the next is read, so the first page
+  // is read again until none is left; a chain never ends where it began, so
+  // every update moves a redirect out of what is read.
+  for (;;) {
+    const page = (await read.to(locale, source)).filter(
+      before => before.id !== saved.id
+    );
+    if (page.length === 0 || targetKey === redirectKey(locale, source)) break;
+    for (const before of page) {
+      await ctx.services.collections.updateEntryInTransaction(
+        transaction,
+        read.slug,
+        before.id,
+        { target: final, targetKey, _overwrite: true }
+      );
+    }
+    repointed += page.length;
+  }
+  const served = await languageAddressOf(source, locale);
+  if (served.status === "resolved") {
+    await forgetNotFound(ctx, transaction, served.path);
+  }
+  return repointed;
+}
+
 /**
  * Save a redirect from `input.source` to `input.target`, new or, with
  * `editing`, in place of that redirect's To address and type. Answers what
@@ -170,29 +266,26 @@ export async function putRedirect(
   input: RedirectInput,
   editing?: string
 ): Promise<RedirectOutcome> {
-  const parsed = parseSource(input.source);
-  if (!parsed.ok) return { refused: parsed.error, reason: "invalid" };
-  const targetProblem = checkTarget(input.target, parsed.source);
-  if (targetProblem !== null) {
-    return { refused: targetProblem, reason: "invalid" };
-  }
+  const from = checked(input);
+  if ("refused" in from) return from;
   const { locale } = input;
   const read = reads(ctx, transaction);
-  const existing = await read.from(locale, parsed.source);
+  const existing = await read.from(locale, from.source);
   if (existing !== undefined && existing.id !== editing) {
     return {
-      refused: `${parsed.source} already has a redirect. Remove it first, or edit it in the list.`,
+      refused: `${from.source} already has a redirect. Remove it first, or edit it in the list.`,
       reason: "duplicate",
       existing: existing.id,
     };
   }
-  const editedRow = editing === undefined ? undefined : await read.byId(editing);
-  if (editing !== undefined && editedRow === undefined) {
-    throw NextlyError.notFound({ logContext: { reason: "redirect-gone", id: editing } });
+  const edited = editing === undefined ? undefined : await read.byId(editing);
+  if (editing !== undefined && edited === undefined) {
+    throw NextlyError.notFound({
+      logContext: { reason: "redirect-gone", id: editing },
+    });
   }
-
   const end = await followChain(
-    parsed.source,
+    from.source,
     storedTarget(input.target),
     async path => {
       const next = await read.from(locale, path);
@@ -206,82 +299,22 @@ export async function putRedirect(
     targetKey: targetKeyOf(locale, end.final),
     permanent: input.permanent ?? true,
   };
-  let saved: StoredRedirect;
-  if (editedRow !== undefined) {
-    saved = redirectOf(
-      await ctx.services.collections.updateEntryInTransaction(
-        transaction,
-        read.slug,
-        editedRow.id,
-        { ...fields, _overwrite: true }
-      )
-    );
-  } else {
-    saved = redirectOf(
-      await ctx.services.collections.createEntryInTransaction(
-        transaction,
-        read.slug,
-        {
-          ...fields,
-          sourceKey: redirectKey(locale, parsed.source),
-          source: parsed.source,
-          locale,
-          origin: input.origin,
-          addedBy: input.addedBy ?? null,
-        }
-      )
-    );
-    const { refused } = await ctx.publicAddresses.move(
-      [
-        {
-          holder: { collection: read.slug, id: saved.id, label: parsed.source },
-          holds: [heldOf(locale, parsed.address)],
-        },
-      ],
-      transaction
-    );
-    if (refused.length > 0) {
-      await ctx.services.collections.deleteEntryInTransaction(
-        transaction,
-        read.slug,
-        saved.id
-      );
-      return {
-        refused: `${parsed.source} is the address of a published page, so it can't redirect. Give that page another address first.`,
-        reason: "held",
-      };
-    }
-  }
-
-  // Every redirect that went to this From address now goes where it ends.
-  let repointed = 0;
-  if (!parsed.address.range) {
-    // Each page read is pointed on before the next is read, so the first page
-    // is read again until none is left; a chain never ends where it began,
-    // so every update moves a redirect out of what is read.
-    for (;;) {
-      const page = (await read.to(locale, parsed.source)).filter(
-        before => before.id !== saved.id
-      );
-      if (page.length === 0 || fields.targetKey === redirectKey(locale, parsed.source)) {
-        break;
-      }
-      for (const before of page) {
-        await ctx.services.collections.updateEntryInTransaction(
-          transaction,
-          read.slug,
-          before.id,
-          { target: end.final, targetKey: fields.targetKey, _overwrite: true }
+  const saved =
+    edited === undefined
+      ? await created(ctx, transaction, input, from, fields)
+      : redirectOf(
+          await ctx.services.collections.updateEntryInTransaction(
+            transaction,
+            read.slug,
+            edited.id,
+            { ...fields, _overwrite: true }
+          )
         );
-      }
-      repointed += page.length;
-    }
-    // The address answers now, so it no longer belongs in the not-found log.
-    const served = await languageAddressOf(parsed.source, locale);
-    if (served.status === "resolved") {
-      await forgetNotFound(ctx, transaction, served.path);
-    }
-  }
+  if ("refused" in saved) return saved;
+  // A pattern is never another redirect's To address, and never logged.
+  const repointed = from.address.range
+    ? 0
+    : await pointedOn(ctx, transaction, locale, from.source, end.final, saved);
   return { saved, chain: end.path, repointed };
 }
 

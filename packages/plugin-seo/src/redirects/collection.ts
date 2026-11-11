@@ -8,6 +8,7 @@
  *
  * @module redirects/collection
  */
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import {
   checkbox,
   defineCollection,
@@ -15,7 +16,6 @@ import {
   textarea,
   type CollectionConfig,
 } from "nextly/config";
-import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
 export const REDIRECTS_SLUG = "nx_seo_redirects";
 
@@ -28,7 +28,12 @@ export function redirectsCollection(): CollectionConfig {
     fields: [
       // The SHA-256 of the language and the From address: one redirect per
       // address, whatever the collation, and a From address of any length.
-      text({ name: "sourceKey", label: "Source key", required: true, unique: true }),
+      text({
+        name: "sourceKey",
+        label: "Source key",
+        required: true,
+        unique: true,
+      }),
       // Long text, so an address of any length fits.
       textarea({ name: "source", label: "From", required: true }),
       text({ name: "locale", label: "Language", required: true, index: true }),

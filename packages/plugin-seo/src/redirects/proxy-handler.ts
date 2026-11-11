@@ -19,7 +19,12 @@ import {
   type PluginProxyHandler,
 } from "@nextlyhq/plugin-sdk";
 
-import { claimKey, pathsAbove, recordSlug, rowOf } from "../address-record/participant";
+import {
+  claimKey,
+  pathsAbove,
+  recordSlug,
+  rowOf,
+} from "../address-record/participant";
 import { notAPageAddress } from "../not-found/log";
 
 import { destinationOf, pickRedirect, type HeldRow } from "./addresses";
@@ -33,7 +38,7 @@ import { redirectOf, type StoredRedirect } from "./store";
 export const ASKED_FOR_HEADER = "x-nextly-seo-asked-for";
 
 /** The redirect that answers `address`, if any. */
-export async function redirectFor(
+async function redirectFor(
   ctx: PluginContext,
   address: KeptAddress
 ): Promise<StoredRedirect | undefined> {
@@ -58,8 +63,7 @@ export async function redirectFor(
       {
         path: row.address.path,
         range: row.address.range === true,
-        redirect:
-          row.holder.collection === redirects ? row.holder.id : null,
+        redirect: row.holder.collection === redirects ? row.holder.id : null,
       },
     ];
   });
@@ -100,26 +104,42 @@ async function locationOf(
   return location.toString();
 }
 
+/**
+ * The language and kept path a page request asks for, without a trailing
+ * slash, as a From address is stored: `/old/` is the address `/old`. None
+ * for a request no redirect or log is for: one that only reads no page, or
+ * one for the admin, the API or an asset.
+ */
+async function pageAddressOf(
+  request: Request,
+  url: URL
+): Promise<KeptAddress | undefined | "not-a-page"> {
+  if (request.method !== "GET" && request.method !== "HEAD")
+    return "not-a-page";
+  if (notAPageAddress(url.pathname)) return "not-a-page";
+  const asked = await addressOfRequest(url);
+  if (
+    asked === undefined ||
+    asked.path.length <= 1 ||
+    !asked.path.endsWith("/")
+  ) {
+    return asked;
+  }
+  return { ...asked, path: asked.path.slice(0, -1) };
+}
+
 /** The handler the plugin contributes to the site's Proxy. */
 export function redirectsProxyHandler(): PluginProxyHandler {
   return {
     name: "redirects",
     async handle(request, ctx) {
       const url = new URL(request.url);
-      if (
-        (request.method !== "GET" && request.method !== "HEAD") ||
-        notAPageAddress(url.pathname)
-      ) {
+      const address = await pageAddressOf(request, url);
+      if (address === "not-a-page") {
         // Emptied rather than left alone: a value a visitor sent in this
         // header themselves must never be logged as an address asked for.
         return { requestHeaders: { [ASKED_FOR_HEADER]: "" } };
       }
-      const asked = await addressOfRequest(url);
-      // `/old/` is the address `/old`, as a From address is stored.
-      const address =
-        asked !== undefined && asked.path.length > 1 && asked.path.endsWith("/")
-          ? { ...asked, path: asked.path.slice(0, -1) }
-          : asked;
       const redirect =
         address === undefined ? undefined : await redirectFor(ctx, address);
       if (redirect !== undefined && address !== undefined) {

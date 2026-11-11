@@ -359,6 +359,55 @@ Without the plugin, `buildMetadata` from `nextly/runtime` still turns the `seo` 
 Next.js `Metadata` object by hand. The `buildMetadata` section of
 [Routing and SEO](/docs/guides/routing-and-seo) covers it.
 
+## Redirects
+
+A published page whose address changes leaves a permanent redirect from its old address to its new one, with no question asked: rename a post's slug from `hello` to `hello-world` and `/hello` goes on sending people, and search engines, to `/hello-world`. A deploy that changes an address template does the same, at the next start.
+
+- **One hop.** A redirect is stored to the end of its chain: move a page from `/a` to `/b` and then to `/c`, and `/a` and `/b` both go straight to `/c`.
+- **No loops.** A redirect that would come back to where it started is refused. Moving a page back to an old address takes that address from its redirect, since the page is meant to live there.
+- **None where another page lives.** No redirect is made from an address another page holds after the change, so two pages swapping addresses make none, and a page taken off the site leaves none.
+- **Kept, or refused.** If a save's redirect cannot be stored, the save is refused with the reason and the page keeps its old address. After a deploy the route has already moved, so the old address is listed among the addresses not found instead.
+
+A redirect's From address is held like a page's address, so a published page and a redirect never share one. A From address may also be a pattern, `/old/*`, sending `/old/anything` to the same place under a new address with a To address of `/new/*`. Where several redirects match, an exact one answers first, then the pattern with the longest fixed part. A page at an address inside a pattern is served, and the pattern still redirects every other address below it.
+
+### Running redirects
+
+Redirects answer from the site's Proxy, before the page is served, so a page that no longer exists never starts streaming a "not found" first. Wire the Proxy once, as [Proxy handlers](/docs/plugins/proxy) shows:
+
+```ts
+// src/proxy.ts
+import { createNextlyProxy } from "nextly/runtime";
+
+import nextlyConfig from "../nextly.config";
+
+export const proxy = createNextlyProxy(nextlyConfig);
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+};
+```
+
+A saved redirect applies from the next request, on every server, since each request reads it. A permanent redirect answers `301`, a temporary one `302`, and the visitor's query string goes with them unless the To address has its own. Admin, API and asset requests are never redirected.
+
+### Addresses not found
+
+The plugin keeps a log of the page addresses people and search engines asked for that did not exist, one row per address with how often and when, so each can be given a redirect. Admin, API and asset requests are left out, and the log keeps its most recent and most frequent addresses once it reaches 1,000.
+
+Log a request from the site's not-found page, with the request headers the Proxy passes on:
+
+```tsx
+// src/app/not-found.tsx
+import { headers } from "next/headers";
+import { logNotFound } from "@nextlyhq/plugin-seo";
+
+export default async function NotFound() {
+  await logNotFound(await headers());
+  return <h1>Page not found</h1>;
+}
+```
+
+`logNotFound` never throws, and logs nothing for a request the Proxy did not pass on.
+
 ## Next steps
 
 - [Routing and SEO](/docs/guides/routing-and-seo) for rendering the tags and serving the sitemap

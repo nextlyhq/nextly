@@ -53,7 +53,8 @@ export function parseSource(text: string): ParsedSource {
     const path = trimmed(value);
     return { ok: true, source: path, address: { path } };
   }
-  if (stars > 1 || !value.endsWith("/*")) return { ok: false, error: STAR_FROM };
+  if (stars > 1 || !value.endsWith("/*"))
+    return { ok: false, error: STAR_FROM };
   const base = value.slice(0, -2);
   if (base === "") {
     return {
@@ -76,19 +77,29 @@ export function checkTarget(target: string, source: string): string | null {
   if (to.startsWith("//")) {
     return "Start the To address with a single /, or use a full https:// address.";
   }
-  if (to.includes("*")) {
-    if (!source.includes("*")) {
-      return "The To address can only use * when the From address does.";
-    }
-    if (to.split("*").length - 1 > 1 || !to.endsWith("/*")) {
-      return "Use * only at the end of the To address, as in /new/*.";
-    }
-  }
+  const star = starProblem(to, source);
+  if (star !== null) return star;
   if (to.startsWith("/")) {
     return trimmed(to) === trimmed(source)
       ? "That would send the address to itself."
       : null;
   }
+  return elsewhereProblem(to);
+}
+
+/** Why a To address's `*` cannot be used, or null. */
+function starProblem(to: string, source: string): string | null {
+  if (!to.includes("*")) return null;
+  if (!source.includes("*")) {
+    return "The To address can only use * when the From address does.";
+  }
+  return to.split("*").length - 1 > 1 || !to.endsWith("/*")
+    ? "Use * only at the end of the To address, as in /new/*."
+    : null;
+}
+
+/** Why a To address on another site cannot be used, or null. */
+function elsewhereProblem(to: string): string | null {
   if (/^http:\/\//i.test(to)) {
     return "Use https:// for an address on another site.";
   }

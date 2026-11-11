@@ -21,7 +21,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { seoPlugin } from "../../plugin";
 import { putRedirect } from "../../redirects/store";
 import { NOT_FOUND_SLUG } from "../collection";
-import { recordNotFound } from "../log";
+import { pruneNotFound, recordNotFound } from "../log";
 import { keptSeoContext, logNotFound } from "../report";
 
 let current: TestNextly | undefined;
@@ -47,80 +47,114 @@ async function boot(dialect: TestDialect) {
  */
 async function renderedWith(path: string, sent: Record<string, string> = {}) {
   let forwarded = new Headers(sent);
-  const proxy = createNextlyProxy({} as Parameters<typeof createNextlyProxy>[0], {
-    start: async () => undefined,
-    next: () => init => {
-      if (init?.request) forwarded = init.request.headers;
-      return new Response(null);
-    },
-  });
+  const proxy = createNextlyProxy(
+    {} as Parameters<typeof createNextlyProxy>[0],
+    {
+      start: async () => undefined,
+      next: () => init => {
+        if (init?.request) forwarded = init.request.headers;
+        return new Response(null);
+      },
+    }
+  );
   await proxy(new Request(`https://example.com${path}`, { headers: sent }));
   return forwarded;
 }
 
 /** The log, as `address` → visits. */
 async function logged(t: TestNextly) {
-  const { items } = await t.nextly.find({ collection: NOT_FOUND_SLUG, limit: 500 });
+  const { items } = await t.nextly.find({
+    collection: NOT_FOUND_SLUG,
+    limit: 500,
+  });
   return Object.fromEntries(
-    (items as Record<string, unknown>[]).map(row => [String(row.path), Number(row.hits)])
+    (items as Record<string, unknown>[]).map(row => [
+      String(row.path),
+      Number(row.hits),
+    ])
   );
 }
 
-describe.each(getConfiguredTestDialects())("the not-found log (%s)", dialect => {
-  it("logs the address a not-found page was asked for, grouped with a count", async () => {
-    const { t } = await boot(dialect);
+describe.each(getConfiguredTestDialects())(
+  "the not-found log (%s)",
+  dialect => {
+    it("logs the address a not-found page was asked for, grouped with a count", async () => {
+      const { t } = await boot(dialect);
 
-    await logNotFound(await renderedWith("/missing?utm=x"));
-    await logNotFound(await renderedWith("/missing"));
-    await logNotFound(await renderedWith("/blog/feed.xml"));
+      await logNotFound(await renderedWith("/missing?utm=x"));
+      await logNotFound(await renderedWith("/missing"));
+      await logNotFound(await renderedWith("/blog/feed.xml"));
 
-    expect(await logged(t)).toEqual({ "/missing": 2, "/blog/feed.xml": 1 });
-  });
+      expect(await logged(t)).toEqual({ "/missing": 2, "/blog/feed.xml": 1 });
+    });
 
-  it("leaves admin, API and asset requests out, whatever header a visitor sends", async () => {
-    const { t } = await boot(dialect);
-    const spoofed = { "x-nextly-seo-asked-for": "https://example.com/made-up" };
+    it("leaves admin, API and asset requests out, whatever header a visitor sends", async () => {
+      const { t } = await boot(dialect);
+      const spoofed = {
+        "x-nextly-seo-asked-for": "https://example.com/made-up",
+      };
 
-    for (const path of ["/admin/x", "/api/x", "/_next/x", "/logo.png", "/app.js"]) {
-      await logNotFound(await renderedWith(path, spoofed));
-    }
+      for (const path of [
+        "/admin/x",
+        "/api/x",
+        "/_next/x",
+        "/logo.png",
+        "/app.js",
+      ]) {
+        await logNotFound(await renderedWith(path, spoofed));
+      }
 
-    expect(await logged(t)).toEqual({});
-  });
+      expect(await logged(t)).toEqual({});
+    });
 
-  it("stays bounded under a flood of distinct addresses, keeping the most recent and the most frequent", async () => {
-    const { t, seo } = await boot(dialect);
-    const bound = { limit: 10, slack: 2 };
-    const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute));
-    for (let visit = 0; visit < 5; visit++) {
-      await recordNotFound(seo, "/popular", "missing", at(0), bound);
-    }
-    await recordNotFound(seo, "/once-early", "missing", at(1), bound);
-    for (let n = 0; n < 30; n++) {
-      await recordNotFound(seo, `/flood-${n}`, "missing", at(10 + n), bound);
-    }
+    it("stays bounded under a flood of distinct addresses, keeping the most recent and the most frequent", async () => {
+      const { t, seo } = await boot(dialect);
+      const bound = { limit: 10, slack: 2 };
+      const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute));
+      for (let visit = 0; visit < 5; visit++) {
+        await recordNotFound(seo, "/popular", "missing", at(0), bound);
+      }
+      await recordNotFound(seo, "/once-early", "missing", at(1), bound);
+      for (let n = 0; n < 30; n++) {
+        await recordNotFound(seo, `/flood-${n}`, "missing", at(10 + n), bound);
+      }
 
-    const after = await logged(t);
-    expect(Object.keys(after).length).toBeLessThanOrEqual(bound.limit + bound.slack);
-    expect(after["/popular"]).toBe(5);
-    expect(after["/flood-29"]).toBe(1);
-    expect(after).not.toHaveProperty("/once-early");
-  });
+      const after = await logged(t);
+      expect(Object.keys(after).length).toBeLessThanOrEqual(
+        bound.limit + bound.slack
+      );
+      expect(after["/popular"]).toBe(5);
+      expect(after["/flood-29"]).toBe(1);
+      expect(after).not.toHaveProperty("/once-early");
 
-  it("takes an address off once a redirect answers it", async () => {
-    const { t, seo } = await boot(dialect);
-    await logNotFound(await renderedWith("/gone"));
-    await logNotFound(await renderedWith("/still-gone"));
+      // Pruned now, the log keeps exactly the five most recent and the five
+      // most visited, a tie on visits going to the more recent address.
+      await pruneNotFound(seo, bound.limit);
+      expect(await logged(t)).toEqual({
+        "/popular": 5,
+        "/flood-25": 1,
+        "/flood-26": 1,
+        "/flood-27": 1,
+        "/flood-28": 1,
+        "/flood-29": 1,
+      });
+    });
 
-    await seo.services.collections.withTransaction(tx =>
-      putRedirect(seo, tx, {
-        locale: "en",
-        source: "/gone",
-        target: "/here",
-        origin: "person",
-      })
-    );
+    it("takes an address off once a redirect answers it", async () => {
+      const { t, seo } = await boot(dialect);
+      await logNotFound(await renderedWith("/gone"));
+      await logNotFound(await renderedWith("/still-gone"));
 
-    expect(await logged(t)).toEqual({ "/still-gone": 1 });
-  });
-});
+      await seo.services.collections.withTransaction(tx =>
+        putRedirect(seo, tx, {
+          locale: "en",
+          source: "/gone",
+          target: "/here",
+          origin: "person",
+        })
+      );
+
+      expect(await logged(t)).toEqual({ "/still-gone": 1 });
+    });
+  }
+);

@@ -17,7 +17,7 @@ import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
 import { notFoundSlug } from "./collection";
 
 /** The most addresses the log keeps once it is pruned. */
-export const NOT_FOUND_LIMIT = 1000;
+const NOT_FOUND_LIMIT = 1000;
 
 /** How far past its limit the log grows before it is pruned again. */
 const PRUNE_SLACK = 100;
@@ -32,7 +32,7 @@ const PAGE = 200;
 export type NotFoundKind = "missing" | "moved";
 
 /** A row of the log, read back. */
-export interface NotFoundRow {
+interface NotFoundRow {
   id: string;
   path: string;
   hits: number;
@@ -69,7 +69,7 @@ export function notAPageAddress(path: string): boolean {
 }
 
 /** A stored row read back, every column checked rather than trusted. */
-export function notFoundRowOf(entry: unknown): NotFoundRow {
+function notFoundRowOf(entry: unknown): NotFoundRow {
   const row = entry as Record<string, unknown>;
   const lastSeen = row.lastSeen;
   return {
@@ -146,66 +146,52 @@ export async function recordNotFound(
     if (made !== undefined) await bump(made);
     return;
   }
-  if ((await ctx.services.ownCollections.count(slug)) > bound.limit + bound.slack) {
+  if (
+    (await ctx.services.ownCollections.count(slug)) >
+    bound.limit + bound.slack
+  ) {
     await pruneNotFound(ctx, bound.limit);
   }
 }
 
-/** The ids of the first `limit` rows by `field`, most first. */
-async function topIds(
-  ctx: PluginContext,
-  field: "lastSeen" | "hits",
-  limit: number
-): Promise<Set<string>> {
-  const ids = new Set<string>();
-  for (let page = 1; ids.size < limit; page++) {
-    const { data } = await ctx.services.ownCollections.listEntries(
-      notFoundSlug(ctx),
-      {
-        pagination: { limit: Math.min(PAGE, limit), page },
-        sort: { field, direction: "desc" },
-        depth: 0,
-      }
-    );
-    const rows = data as Record<string, unknown>[];
-    for (const row of rows) {
-      if (ids.size < limit) ids.add(String(row.id));
-    }
-    if (rows.length < Math.min(PAGE, limit)) break;
-  }
-  return ids;
-}
-
 /**
- * Bring the log back to its limit: keep the half most recently asked for and
- * the half most often asked for, and let the rest go.
+ * Bring the log back to `limit`: keep the half most recently asked for and
+ * the half most often asked for, an address asked for as often as another
+ * kept where it was asked for more recently, and let the rest go. The log
+ * is pruned at a small, bounded size, so its rows are read whole.
  */
 export async function pruneNotFound(
   ctx: PluginContext,
   limit: number = NOT_FOUND_LIMIT
 ): Promise<void> {
-  const half = Math.ceil(limit / 2);
-  const keep = new Set([
-    ...(await topIds(ctx, "lastSeen", half)),
-    ...(await topIds(ctx, "hits", half)),
-  ]);
   const slug = notFoundSlug(ctx);
-  const gone: string[] = [];
+  const rows: NotFoundRow[] = [];
   for (let page = 1; ; page++) {
     const { data } = await ctx.services.ownCollections.listEntries(slug, {
       pagination: { limit: PAGE, page },
       sort: { field: "pathKey", direction: "asc" },
       depth: 0,
     });
-    const rows = data as Record<string, unknown>[];
-    for (const row of rows) {
-      const id = String(row.id);
-      if (!keep.has(id)) gone.push(id);
-    }
-    if (rows.length < PAGE) break;
+    rows.push(...(data as unknown[]).map(notFoundRowOf));
+    if ((data as unknown[]).length < PAGE) break;
   }
-  for (const id of gone) {
-    await ctx.services.collections.deleteEntry(slug, id);
+  const half = Math.ceil(limit / 2);
+  const recent = (a: NotFoundRow, b: NotFoundRow) =>
+    Date.parse(b.lastSeen) - Date.parse(a.lastSeen);
+  const keep = new Set([
+    ...[...rows]
+      .sort(recent)
+      .slice(0, half)
+      .map(row => row.id),
+    ...[...rows]
+      .sort((a, b) => b.hits - a.hits || recent(a, b))
+      .slice(0, half)
+      .map(row => row.id),
+  ]);
+  for (const row of rows) {
+    if (!keep.has(row.id)) {
+      await ctx.services.collections.deleteEntry(slug, row.id);
+    }
   }
 }
 
