@@ -247,13 +247,17 @@ describe.each(getConfiguredTestDialects())(
       await ctx.db.transaction(async tx => {
         kept = tx;
       });
-      expect(() => ctx.events.emit(PAID, { order: "o-7" }, { tx: kept! })).toThrow(
+      expect(() =>
+        ctx.events.emit(PAID, { order: "o-7" }, { tx: kept! })
+      ).toThrow(
         expect.objectContaining({
           logContext: { reason: "plugin-transaction-finished" },
         })
       );
       // The refusal says what to do instead.
-      expect(() => ctx.events.emit(PAID, { order: "o-7" }, { tx: kept! })).toThrow(
+      expect(() =>
+        ctx.events.emit(PAID, { order: "o-7" }, { tx: kept! })
+      ).toThrow(
         expect.objectContaining({
           publicData: {
             errors: [

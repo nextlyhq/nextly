@@ -2,8 +2,8 @@
 
 /**
  * Saving one change to one card at once, outside customise mode: its settings (the quick setting
- * on the card, the quick popover, and the settings sheet's Done when the reader is not
- * customising) or its size (the card menu's and the popover's Size).
+ * on the card's header, and the settings drawer's Save when the reader is not customising), with
+ * its width where the drawer changed it.
  *
  * The same single-card write a dismissal makes (`single-card-write`), on its own channel: the
  * whole arrangement with this one card changed, under the read's own version and scope, sent as
@@ -33,23 +33,22 @@ import { landed, singleCardWrite } from "./single-card-write";
 
 /**
  * One change to one card: its settings, as `toStoredConfig` builds them (only what departs from
- * a default), or its size, held to its widget's bounds as the customise menu's resize is.
+ * a default), and, where the change sets them, its own title and its size, held to its widget's
+ * bounds as customise mode's resize is.
  */
-export type CardChange =
-  | {
-      readonly kind: "settings";
-      readonly config: Record<string, unknown>;
-      /**
-       * The title the reader gave the card, where the change sets it: the settings panel's
-       * Title. Absent, the card keeps the title it has.
-       */
-      readonly ownTitle?: string;
-    }
-  | {
-      readonly kind: "size";
-      readonly size: GridSize;
-      readonly bounds: WidgetSizeBounds;
-    };
+export interface CardChange {
+  readonly config: Record<string, unknown>;
+  /**
+   * The title the reader gave the card, where the change sets it: the settings drawer's Title.
+   * Absent, the card keeps the title it has.
+   */
+  readonly ownTitle?: string;
+  /** The card's size, where the change sets it: the settings drawer's Width. */
+  readonly size?: {
+    readonly size: GridSize;
+    readonly bounds: WidgetSizeBounds;
+  };
+}
 
 export interface CardSettingsWriteInput {
   placementId: string;
@@ -89,21 +88,21 @@ const UNREADABLE =
 const NOT_READ = "Your dashboard has not loaded yet.";
 const CONFLICT = (title: string) =>
   `${title} changed elsewhere, so this change was not saved.`;
-const FAILED = (title: string, what: string, reason: string) =>
-  `Could not save ${title}'s ${what}: ${reason}`;
+const FAILED = (title: string, reason: string) =>
+  `Could not save ${title}'s settings: ${reason}`;
 const REFRESH_FAILED = (title: string) =>
   `${title} was saved, but the dashboard could not be refreshed. Reload the page to see it.`;
 const BUSY =
   "Another change to your dashboard is still saving. Try again in a moment.";
-const GONE = (title: string, what: string) =>
-  `${title} is no longer on your dashboard, so its ${what} ${what === "size" ? "was" : "were"} not saved.`;
+const GONE = (title: string) =>
+  `${title} is no longer on your dashboard, so its settings were not saved.`;
 const OUT_OF_BOUNDS = (title: string) =>
   `${title} can't be that size, so it was not resized.`;
 
 /**
- * `change` applied to the stored list, how the card in it shows the change, and what the reader
- * is told the change was to. The list is changed by the customise editor's own functions, so a
- * change saved at once is the change customise mode would stage for Save.
+ * `change` applied to the stored list, and how the card in it shows the change. The list is
+ * changed by the customise editor's own functions, so a change saved at once is the change
+ * customise mode would stage for Save.
  */
 function applied(
   placements: readonly WidgetPlacement[],
@@ -112,35 +111,27 @@ function applied(
 ): {
   placements: WidgetPlacement[];
   shows: (placement: WidgetPlacement) => boolean;
-  what: string;
 } {
-  if (change.kind === "size") {
-    return {
-      placements: setPlacementSize(
-        placements,
-        placementId,
-        change.size,
-        change.bounds
-      ),
-      shows: placement =>
-        placement.w === change.size.w && placement.h === change.size.h,
-      what: "size",
-    };
-  }
+  const configured = setPlacementConfig(
+    placements,
+    placementId,
+    change.config,
+    change.ownTitle
+  );
+  const { size } = change;
   return {
-    placements: setPlacementConfig(
-      placements,
-      placementId,
-      change.config,
-      change.ownTitle
-    ),
+    placements:
+      size === undefined
+        ? configured
+        : setPlacementSize(configured, placementId, size.size, size.bounds),
     // Compared by value: the settings come back from the server as a new object. The title as
     // the write stores it, trimmed, absent when nothing is left.
     shows: placement =>
       sameSettingValue(placement.config ?? {}, change.config) &&
       (change.ownTitle === undefined ||
-        (placement.title ?? "") === change.ownTitle.trim()),
-    what: "settings",
+        (placement.title ?? "") === change.ownTitle.trim()) &&
+      (size === undefined ||
+        (placement.w === size.size.w && placement.h === size.size.h)),
   };
 }
 
@@ -181,7 +172,7 @@ export function useCardSettingsWrite(
       }
       const next = applied(stored.placements, input.placementId, input.change);
       if (!stored.placements.some(p => p.id === input.placementId)) {
-        fail(GONE(input.title, next.what));
+        fail(GONE(input.title));
         return;
       }
       // A size outside the widget's bounds leaves the list as it was (`setPlacementSize`), and
@@ -209,7 +200,7 @@ export function useCardSettingsWrite(
             fail(CONFLICT(input.title));
             return;
           }
-          fail(FAILED(input.title, next.what, error.message));
+          fail(FAILED(input.title, error.message));
         },
       });
     },
