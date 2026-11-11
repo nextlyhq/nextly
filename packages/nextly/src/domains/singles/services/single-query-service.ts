@@ -1026,7 +1026,8 @@ export class SingleQueryService extends BaseService {
         options.locale,
         options.fallbackLocale,
         statusFilterValues,
-        params.translations
+        params.translations,
+        options.sourceLocales === true
       );
     } catch (error) {
       throw translationLoadFailure(slug, error);
@@ -1703,7 +1704,9 @@ export class SingleQueryService extends BaseService {
     fallbackLocale: string | false | undefined,
     statusFilterValues: readonly string[] | undefined,
     /** The document's translations, when they were read with it: resolved, not read again. */
-    translations?: JoinedTranslations
+    translations?: JoinedTranslations,
+    /** Also attach each value's source language (`_sources`). */
+    sources = false
   ): Promise<void> {
     if (translations) {
       fillCompanionFields({
@@ -1716,6 +1719,7 @@ export class SingleQueryService extends BaseService {
           translations.companion.hasStatus && statusFilterValues
             ? statusFilterValues
             : undefined,
+        sources,
       });
       return;
     }
@@ -1747,6 +1751,7 @@ export class SingleQueryService extends BaseService {
           : undefined,
       // A pooled read, so this may resolve rather than only read what is remembered.
       readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      sources,
     });
   }
 

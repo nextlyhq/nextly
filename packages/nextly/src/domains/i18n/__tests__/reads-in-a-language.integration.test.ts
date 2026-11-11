@@ -53,7 +53,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         status: true,
         access: { read: () => true },
-        fields: [text({ name: "title" })],
+        fields: [text({ name: "title" }), text({ name: "tagline" })],
       }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -367,6 +367,41 @@ describe.each(getConfiguredTestDialects())(
         body: "en",
         slug: "es",
       });
+    }, 90_000);
+
+    // Whole-document fallback applies to a read of one document: a list asked
+    // for it is refused, never read without it.
+    it("refuses ?fallback=document on a list read", async () => {
+      await boot(dialect);
+      const listed = await restGet(
+        ["collections", DOCS, "entries"],
+        "?locale=es&fallback=document"
+      );
+      expect(listed.status, JSON.stringify(listed.json)).toBe(400);
+    }, 90_000);
+
+    // A Single says its values' languages as an entry does.
+    it("says which language each of a Single's translatable values came from", async () => {
+      const t = await boot(dialect);
+      const singles = singlesOf(t);
+      for (const [locale, data] of [
+        ["en", { title: "Site in English", tagline: "English tagline" }],
+        ["es", { title: "Sitio" }],
+      ] as const) {
+        const saved = await singles.update(
+          SITE,
+          { ...data, status: "published", _overwrite: true },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+
+      const read = await singles.get(SITE, {
+        locale: "es",
+        status: "published",
+        sourceLocales: true,
+      });
+      expect(read.data?._sources).toEqual({ title: "es", tagline: "en" });
     }, 90_000);
   }
 );

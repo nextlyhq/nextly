@@ -92,6 +92,9 @@ export interface GetSingleOptions {
    */
   wholeDocumentFallback?: boolean;
 
+  /** Attach `_sources`: for each translatable field, the language its value came from. */
+  sourceLocales?: boolean;
+
   /** User context for access control and hooks. */
   user?: UserContext;
 

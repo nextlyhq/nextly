@@ -1110,6 +1110,20 @@ const COLLECTIONS_METHODS: Record<
     // translate to canonical PaginationMeta via paginatedResponseToMeta.
     execute: async (svc, p, _body, request) => {
       requireParam(p, "collectionName");
+      // Whole-document fallback answers for one document in the first
+      // language it is published in; a list has no one such language, so it
+      // is refused rather than read without it.
+      if (parseFallbackParam(p.fallback)) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "fallback",
+              code: "INVALID_VALUE",
+              message: "fallback=document applies to a read of one document.",
+            },
+          ],
+        });
+      }
 
       // Build sort parameter from sortBy and sortOrder.
       // Frontend sends: sortBy=createdAt&sortOrder=desc
