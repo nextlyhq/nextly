@@ -28,6 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from "@nextlyhq/ui";
+import { cardHeightPx } from "nextly/card-geometry";
 import { GRID_COLUMNS } from "nextly/config";
 import { CORE_DEFAULT_LAYOUT } from "nextly/core-widget-data";
 import type { CSSProperties, JSX, ReactNode } from "react";
@@ -295,9 +296,6 @@ const DEFAULT_CARD_WIDTHS: readonly number[] = CORE_DEFAULT_LAYOUT.map(
   card => card.w ?? GRID_COLUMNS / 2
 );
 
-/** A card's outline height for its stored rows: the grid's rows, with the gaps between them. */
-const cardOutlineHeight = (rows: number): number => rows * 72 + (rows - 1) * 16;
-
 /**
  * The dashboard's cards, each a titled card with a few rows, on the
  * dashboard's own grid: the grid's classes (`GRID_CLASS`) and each card's
@@ -328,7 +326,9 @@ export function DashboardCardsOutline({
             )}
             // A card of the default's four rows; the real card is as tall as
             // its content, which no outline can know.
-            style={{ minHeight: cardOutlineHeight(4) }}
+            // The height a real card of four rows takes, from the grid's own
+            // geometry, so the outline stands as tall as the card it precedes.
+            style={{ minHeight: cardHeightPx(4) }}
           >
             <OutlineBar className="h-3.5 w-[120px]" />
             {RECENT_ROW_WIDTHS.map(width => (
