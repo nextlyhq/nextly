@@ -479,6 +479,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "EventEnvelope (type)",
   "EventHandler (type)",
   "EventName (type)",
+  "FRAMEWORK_CRAWL_EXCLUSIONS (value)",
   "FieldAdminOptions (type)",
   "FieldConfig (type)",
   "FieldValueDeclaration (type)",

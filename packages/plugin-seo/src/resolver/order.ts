@@ -10,6 +10,9 @@
  * 5. A value taken from the page's own content.
  * 6. The site's defaults.
  *
+ * Visibility has one level above them all: a content type hidden whole keeps
+ * every page in it hidden, whatever the page's own setting.
+ *
  * A level with nothing for a value, or only blank text, gives way to the next
  * rather than answering it empty. Every value is reported with the level
  * that supplied it, so the SEO tab can say where an automatic value comes
@@ -29,7 +32,8 @@ export type SeoLevel =
   | "pattern"
   | "content"
   | "site"
-  | "address";
+  | "address"
+  | "type";
 
 /** A value with the level that supplied it. */
 export interface Sourced<T> {
@@ -88,6 +92,8 @@ export interface Levels {
   };
   /** The page's own public address in its language, where it has one. */
   address?: string;
+  /** Whether the page's content type is hidden from search as a whole. */
+  typeHidden?: boolean;
 }
 
 /** A page's answer: each value with its source. */
@@ -210,10 +216,14 @@ export function resolveOrder(levels: Levels): SeoAnswer {
     },
     { value: text(levels.address), from: "address" },
   ]);
+  // A hidden type comes first: its pages stay hidden, whatever each says,
+  // and return to their own setting once the type is shown again.
   const robots: Sourced<{ index: boolean; follow: boolean }> =
-    levels.page.hidden === true
-      ? { value: { index: false, follow: true }, from: "page" }
-      : { value: { index: true, follow: true }, from: "site" };
+    levels.typeHidden === true
+      ? { value: { index: false, follow: true }, from: "type" }
+      : levels.page.hidden === true
+        ? { value: { index: false, follow: true }, from: "page" }
+        : { value: { index: true, follow: true }, from: "site" };
   return {
     ...(title === undefined ? {} : { title }),
     ...(description === undefined ? {} : { description }),

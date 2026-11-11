@@ -284,6 +284,39 @@ describe("one answer for each kind of page", () => {
     expect(answer.title).toBe("Ideas");
   });
 
+  it("a page of a hidden type: not listed, whatever the page says", async () => {
+    const rules: SiteRules = {
+      ...RULES,
+      hiddenTypes: ["posts", "single:home"],
+    };
+    const post = await resolveSeo(
+      context(),
+      entryInput("posts", { slug: "hello", seo: { noindex: false } }),
+      async () => rules
+    );
+    expect(post.robots).toEqual({
+      value: { index: false, follow: true },
+      from: "type",
+    });
+    const home = await resolveSeo(
+      context(),
+      {
+        source: { kind: "single", slug: "home", document: {} },
+        code: {},
+        derived: {},
+      },
+      async () => rules
+    );
+    expect(home.robots.from).toBe("type");
+    // A type not named keeps each page's own setting.
+    const page = await resolveSeo(
+      context(),
+      entryInput("pages", { slug: "about" }),
+      async () => rules
+    );
+    expect(page.robots.from).toBe("site");
+  });
+
   it("a share image stored by id is looked up, and one that cannot be is skipped", async () => {
     const ctx = context({
       m1: {
