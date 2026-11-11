@@ -13,6 +13,7 @@
  * @module domains/schema/pipeline/recorded-shapes
  */
 import {
+  relationshipStoresJson,
   relationStorageShape,
   toSnakeCase,
 } from "../services/field-column-descriptor";
@@ -110,24 +111,33 @@ export async function reachesRelationStorage(args: {
   after: readonly RecordedField[];
   liveTable: () => Promise<TableSpec | undefined>;
 }): Promise<boolean> {
+  // By column, as the push keys a relation's shape: two names that spell one column are one.
+  const columnOf = (field: RecordedField) =>
+    typeof field.name === "string"
+      ? toSnakeCase(field.name).toLowerCase()
+      : undefined;
   const shapeOf = (fields: readonly RecordedField[]) =>
     new Map(
       fields.flatMap(field => {
+        const column = columnOf(field);
         const shape = relationStorageShape(field);
-        return typeof field.name === "string" && shape !== undefined
-          ? [[field.name, shape] as const]
+        return column !== undefined && shape !== undefined
+          ? [[column, shape] as const]
           : [];
       })
     );
   const was = shapeOf(args.before);
-  const now = shapeOf(args.after);
-  for (const [name, shape] of now) {
-    const before = was.get(name);
+  for (const [column, shape] of shapeOf(args.after)) {
+    const before = was.get(column);
     if (before !== undefined && before !== shape) return true;
   }
-  const keyless = [...now]
-    .filter(([, shape]) => shape !== "one")
-    .map(([name]) => toSnakeCase(name).toLowerCase());
+  // The columns that keep no key to one row, by the one rule the push drops their keys by.
+  const keyless = args.after.flatMap(field => {
+    const column = columnOf(field);
+    return column !== undefined && relationshipStoresJson(field)
+      ? [column]
+      : [];
+  });
   if (keyless.length === 0) return false;
   const table = await args.liveTable();
   return (table?.foreignKeys ?? []).some(key =>

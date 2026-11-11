@@ -9,7 +9,7 @@ process.env.NEXTLY_SECRET =
   "test-secret-must-be-at-least-32-characters-long!!";
 
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -34,6 +34,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
+import { SchemaEventsRepository } from "../../../schema/events/schema-events-repository";
 import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
 import { _resetApplyDesiredSchemaForTests } from "../../../schema/pipeline/index";
 
@@ -799,10 +800,36 @@ for (const dialect of getConfiguredTestDialects()) {
               data: { title: "P1", author: a },
             })
           ).item.id as string;
+          // The writer's migrations, which the push road never writes to.
+          const { migrationsDir } = container.get<{ migrationsDir: string }>(
+            "builderSaveSetup"
+          );
+          const sqlFiles = async () =>
+            (await readdir(migrationsDir).catch(() => [])).filter(file =>
+              file.endsWith(".sql")
+            );
+          const before = await sqlFiles();
+
           expect(await switchAuthor(database.adapter, true)).toEqual({
             accepted: true,
           });
           expect(await authorOf(t, post)).toEqual([a]);
+
+          // The writer still writes the switch's migration, recorded applied once the push ran it.
+          const added = (await sqlFiles()).filter(
+            file => !before.includes(file)
+          );
+          if (road === "the push") {
+            expect(added).toEqual([]);
+          } else {
+            expect(added).toHaveLength(1);
+            expect(
+              await new SchemaEventsRepository(
+                database.adapter.getDrizzle(),
+                dialect
+              ).isFileApplied(added[0])
+            ).toBe(true);
+          }
         });
 
         it("refuses many to one while a row holds several, naming the field and its rows", async () => {
