@@ -355,7 +355,10 @@ export default function FieldGroupBuilderEditPage({
           ) : null}
           <DirectFieldGroupsNotice fields={fieldGroup.fields} />
           {/* Who a change here reaches, before any change is made. */}
-          <FieldGroupUsedBy slug={fieldGroup.slug} />
+          <FieldGroupUsedBy
+            slug={fieldGroup.slug}
+            unsavedCount={unsavedCount}
+          />
         </>
       }
       isSaving={isSaving || confirmation.isApplying}

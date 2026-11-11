@@ -73,6 +73,11 @@ const mockHandlerConfig: {
   plugins?: unknown[];
 } = {};
 
+// Watched, and a no-op: nothing in this file boots an app, and a test asks
+// when the services start.
+const ensureServicesInitialized = vi.hoisted(() =>
+  vi.fn(async (): Promise<void> => {})
+);
 vi.mock("../route-handler", async () => {
   const actual =
     await vi.importActual<typeof import("../route-handler")>(
@@ -80,6 +85,7 @@ vi.mock("../route-handler", async () => {
     );
   return {
     ...actual,
+    ensureServicesInitialized,
     // Only the config getter is consulted by the admin-meta branch; the
     // rest of the route-handler surface (parseRestRoute, getDispatcher,
     // etc.) is irrelevant here so we keep the actual implementations.
@@ -235,6 +241,20 @@ describe("requestCallerFor", () => {
     permissions: [],
     authMethod: "session" as const,
   };
+
+  it("starts the app's services before it looks up the caller's roles", async () => {
+    // A route signed-in alone (the field-group list, where a field group is
+    // used) starts no services at its gate; on a cold process the role lookup
+    // would read an adapter that does not exist yet.
+    resolveRoleSlugsMock.mockResolvedValue(["editor"]);
+
+    await _requestCallerForTest(sessionUser, true);
+
+    expect(ensureServicesInitialized).toHaveBeenCalledTimes(1);
+    expect(ensureServicesInitialized.mock.invocationCallOrder[0]).toBeLessThan(
+      resolveRoleSlugsMock.mock.invocationCallOrder[0]!
+    );
+  });
 
   it("resolves the caller's role slugs when the route needs them", async () => {
     // Session auth carries role IDs; the handlers hand access rules SLUGS, so

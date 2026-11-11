@@ -53,6 +53,7 @@ import type { FieldResolution } from "../../domains/schema/services/schema-chang
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
+import type { FieldOwner } from "../../domains/collections/services/collection-dependents";
 import { NextlyError } from "../../errors";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 // From the types module, not the barrel, which loads every dialect's tables.
@@ -199,9 +200,8 @@ async function placementsOf(slug: string) {
     const { fieldGroupUsedBy } = await import(
       "../../domains/collections/services/collection-dependents"
     );
-    return await fieldGroupUsedBy(slug, {
-      fieldOwners: () => readableFieldOwners(adapter),
-    });
+    const { owners } = await readableFieldOwners(adapter);
+    return await fieldGroupUsedBy(slug, { fieldOwners: async () => owners });
   } catch (error) {
     throw placementsUnreadable(slug, error);
   }
@@ -217,7 +217,11 @@ async function placementsOf(slug: string) {
  */
 async function readableFieldOwners(
   adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>
-) {
+): Promise<{
+  owners: FieldOwner[];
+  /** Whether the reader may read every collection and Single there is. */
+  complete: boolean;
+}> {
   const { ownersReadableBy, readFieldOwners } = await import(
     "../../domains/collections/services/collection-dependents"
   );
@@ -228,7 +232,10 @@ async function readableFieldOwners(
     readableOwnerSlugs(caller, "single"),
     readFieldOwners(adapter),
   ]);
-  return ownersReadableBy(owners, { collection, single });
+  const readable = ownersReadableBy(owners, { collection, single });
+  // Every collection and Single is an owner, so dropping any means the
+  // reader may not read all of them.
+  return { owners: readable, complete: readable.length === owners.length };
 }
 
 /**
@@ -284,8 +291,15 @@ async function placementCountsFor(
     const { fieldGroupPlacementCounts } = await import(
       "../../domains/collections/services/collection-dependents"
     );
+    const { owners, complete } = await readableFieldOwners(adapter);
+    // A count from part of the site would read as the whole of it ("not
+    // used" for a field group only a hidden owner places), so a reader who
+    // cannot read every collection and Single is shown none. Decided by the
+    // reader, not by any one field group, so a missing count hints at no
+    // hidden use.
+    if (!complete) return null;
     return await fieldGroupPlacementCounts(slugs, {
-      fieldOwners: () => readableFieldOwners(adapter),
+      fieldOwners: async () => owners,
     });
   } catch (error) {
     (getLoggerFromDI() ?? DISCARDED_LOG).warn(

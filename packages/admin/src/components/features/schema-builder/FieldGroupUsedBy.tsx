@@ -18,6 +18,8 @@ import {
   type FieldGroupPlacement,
 } from "@admin/hooks/useFieldGroupUsedBy";
 
+import { mayLeaveBuilder } from "./leave-builder";
+
 /** What each kind of holder is called, and where its editor is. */
 const HOLDERS: Record<
   FieldGroupPlacement["entityType"],
@@ -60,10 +62,19 @@ function summary(
     return "Not used in any collection, Single or field group you can read.";
   }
   const holders = byHolder(placements).length;
-  return `Used by ${holders} ${holders === 1 ? "place" : "places"}. A change here reaches all of them.`;
+  // Only the places this reader may read are listed, so the sentence claims
+  // no more than that.
+  return `Used by ${holders} ${holders === 1 ? "place" : "places"} you can read. A change here reaches each of them.`;
 }
 
-export function FieldGroupUsedBy({ slug }: { slug: string }): JSX.Element {
+export function FieldGroupUsedBy({
+  slug,
+  unsavedCount,
+}: {
+  slug: string;
+  /** The editor's unsaved changes, which following a link here discards. */
+  unsavedCount: number;
+}): JSX.Element {
   const query = useFieldGroupUsedBy(slug);
   // Any failed read, a refresh included, leaves the answer unknown. An earlier
   // answer kept past a failed refresh is not shown as current: a kept empty
@@ -85,6 +96,13 @@ export function FieldGroupUsedBy({ slug }: { slug: string }): JSX.Element {
                 {noun}{" "}
                 <Link
                   href={buildRoute(route, { slug: holder.entitySlug })}
+                  // Leaving discards unsaved changes, so it asks first, as
+                  // every other exit from the Builder does.
+                  onClick={event => {
+                    if (!mayLeaveBuilder(unsavedCount, "field-group")) {
+                      event.preventDefault();
+                    }
+                  }}
                   className="font-medium underline underline-offset-2"
                 >
                   {holder.entitySlug}

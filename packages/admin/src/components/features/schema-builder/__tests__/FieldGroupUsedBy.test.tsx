@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   act,
   createTestQueryClient,
+  fireEvent,
   render,
   screen,
   within,
@@ -17,6 +18,9 @@ import {
 import { FieldGroupUsedBy } from "../FieldGroupUsedBy";
 
 const get = vi.hoisted(() => vi.fn());
+// Where a link would take the page, watched rather than followed.
+const navigateTo = vi.hoisted(() => vi.fn());
+vi.mock("@admin/lib/navigation", () => ({ navigateTo }));
 vi.mock("@admin/lib/api/protectedApi", () => ({ protectedApi: { get } }));
 
 describe("FieldGroupUsedBy", () => {
@@ -34,14 +38,14 @@ describe("FieldGroupUsedBy", () => {
       ],
       meta: { total: 4 },
     });
-    render(<FieldGroupUsedBy slug="seo" />);
+    render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />);
 
     const section = await screen.findByRole("region", {
       name: "Where this field group is used",
     });
     expect(
       await within(section).findByText(
-        "Used by 3 places. A change here reaches all of them."
+        "Used by 3 places you can read. A change here reaches each of them."
       )
     ).toBeInTheDocument();
     expect(get).toHaveBeenCalledWith("/field-groups/seo/used-by");
@@ -65,7 +69,7 @@ describe("FieldGroupUsedBy", () => {
 
   it("says it is used in nothing the reader can read, and claims no more", async () => {
     get.mockResolvedValue({ items: [], meta: { total: 0 } });
-    render(<FieldGroupUsedBy slug="seo" />);
+    render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />);
     expect(
       await screen.findByText(
         "Not used in any collection, Single or field group you can read."
@@ -75,7 +79,7 @@ describe("FieldGroupUsedBy", () => {
 
   it("says it does not know, rather than that it is used nowhere", async () => {
     get.mockRejectedValue(new Error("down"));
-    render(<FieldGroupUsedBy slug="seo" />);
+    render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />);
     expect(
       await screen.findByText(/could not be read, so it is not known/)
     ).toBeInTheDocument();
@@ -85,7 +89,7 @@ describe("FieldGroupUsedBy", () => {
   it("says it does not know after a failed refresh, not the answer it had", async () => {
     const queryClient = createTestQueryClient();
     get.mockResolvedValueOnce({ items: [], meta: { total: 0 } });
-    render(<FieldGroupUsedBy slug="seo" />, { queryClient });
+    render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />, { queryClient });
     expect(
       await screen.findByText(
         "Not used in any collection, Single or field group you can read."
@@ -109,7 +113,9 @@ describe("FieldGroupUsedBy", () => {
       },
     });
     get.mockResolvedValueOnce({ items: [], meta: { total: 0 } });
-    const first = render(<FieldGroupUsedBy slug="seo" />, { queryClient });
+    const first = render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />, {
+      queryClient,
+    });
     expect(
       await screen.findByText(
         "Not used in any collection, Single or field group you can read."
@@ -126,12 +132,56 @@ describe("FieldGroupUsedBy", () => {
       ],
       meta: { total: 1 },
     });
-    render(<FieldGroupUsedBy slug="seo" />, { queryClient });
+    render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />, { queryClient });
     expect(screen.queryByText(/Not used in any/)).toBeNull();
     expect(
       await screen.findByText(
-        "Used by 1 place. A change here reaches all of them."
+        "Used by 1 place you can read. A change here reaches each of them."
       )
     ).toBeInTheDocument();
+  });
+
+  it("asks before a link leaves an editor with unsaved changes", async () => {
+    get.mockResolvedValue({
+      items: [
+        { entityType: "collection", entitySlug: "posts", fieldPath: "seo" },
+      ],
+      meta: { total: 1 },
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      render(<FieldGroupUsedBy slug="seo" unsavedCount={2} />);
+      navigateTo.mockClear();
+      const link = await screen.findByRole("link", { name: "posts" });
+      // Declined: the editor and its changes stay.
+      fireEvent.click(link);
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(confirm.mock.calls[0]?.[0]).toContain("unsaved changes");
+      expect(navigateTo).not.toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it("leaves without asking when nothing is unsaved", async () => {
+    get.mockResolvedValue({
+      items: [
+        { entityType: "collection", entitySlug: "posts", fieldPath: "seo" },
+      ],
+      meta: { total: 1 },
+    });
+    const confirm = vi.spyOn(window, "confirm");
+    try {
+      render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />);
+      navigateTo.mockClear();
+      const link = await screen.findByRole("link", { name: "posts" });
+      fireEvent.click(link);
+      expect(confirm).not.toHaveBeenCalled();
+      expect(navigateTo).toHaveBeenCalledWith(
+        "/admin/builder/collections/posts"
+      );
+    } finally {
+      confirm.mockRestore();
+    }
   });
 });

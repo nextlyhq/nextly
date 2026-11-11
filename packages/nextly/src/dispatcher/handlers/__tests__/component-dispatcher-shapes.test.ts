@@ -328,7 +328,7 @@ describe("dispatchComponents, listComponents use counts", () => {
     expect(readFieldOwners).toHaveBeenCalledTimes(1);
   });
 
-  it("counts no field of a collection the reader may not read", async () => {
+  it("shows no count to a reader who cannot read every collection and Single", async () => {
     readFieldOwners.mockResolvedValue([
       {
         entityType: "collection",
@@ -352,7 +352,37 @@ describe("dispatchComponents, listComponents use counts", () => {
       const body = await (
         (await dispatchComponents("listComponents", {}, undefined)) as Response
       ).json();
-      // "secret" places "card" too, but this reader's list hides it.
+      // A count of what this reader sees would read as the whole: "seo" would
+      // show "not used" though a hidden collection may place it. So none, for
+      // every row alike, whether or not a hidden owner places it.
+      expect(
+        body.items.map((item: { placedBy: unknown }) => item.placedBy)
+      ).toEqual([null, null]);
+    } finally {
+      readAuthenticatedUser.mockReset();
+      readableSlugsOfKind.mockReset();
+    }
+  });
+
+  it("counts every use for a reader who may read every collection and Single", async () => {
+    readFieldOwners.mockResolvedValue([
+      {
+        entityType: "collection",
+        entitySlug: "pages",
+        fields: [{ name: "teaser", type: "component", component: "card" }],
+      },
+    ]);
+    readAuthenticatedUser.mockReturnValue({ id: "u1", role: "admin" });
+    readableSlugsOfKind.mockImplementation(
+      async (_caller: unknown, kind: string) => ({
+        slugs: kind === "collection" ? ["pages"] : [],
+        reachable: true,
+      })
+    );
+    try {
+      const body = await (
+        (await dispatchComponents("listComponents", {}, undefined)) as Response
+      ).json();
       expect(body.items[0]).toMatchObject({ slug: "card", placedBy: 1 });
     } finally {
       readAuthenticatedUser.mockReset();

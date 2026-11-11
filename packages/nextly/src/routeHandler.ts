@@ -3095,6 +3095,10 @@ async function requestCallerFor(
   needsRoles: boolean
 ): Promise<RequestCaller | undefined> {
   if (!authorizedUser) return undefined;
+  // The role lookup reads the app's services, which a route signed-in alone
+  // has not started yet (its gate reads none): started first, as the
+  // dispatch would only later. Idempotent where a gate already started them.
+  if (needsRoles) await ensureServicesInitialized();
   const roles = needsRoles
     ? ((await resolveRoleSlugs(authorizedUser)) ?? [])
     : undefined;
