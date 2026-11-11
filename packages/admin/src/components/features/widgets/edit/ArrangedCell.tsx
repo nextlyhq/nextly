@@ -44,7 +44,6 @@ import { WidgetRenderer } from "../WidgetRenderer";
 
 import { CardActionsMenu, CardSizeLabel } from "./CardActionsMenu";
 import { CardMenu, removeLabelFor } from "./CardMenu";
-import { CardQuickPopover, CardTitleButton } from "./CardQuickSetting";
 import {
   CardControlsOverlay,
   CardControlsSpace,
@@ -56,7 +55,6 @@ import { requestSettingsPanel } from "./settings-panel-registry";
 import type { SettingsPanelProps } from "./SettingsPanel";
 import {
   useCardQuickSetting,
-  useQuickPopoverOpening,
   type CellSettingsWrite,
 } from "./useCardQuickSetting";
 import type { ArrangedWidget } from "./useDashboardArrangement";
@@ -74,8 +72,6 @@ export interface ArrangedCellProps {
   highlighted?: boolean;
   /** Its handle's drag, while dragging is on; absent at one column. */
   drag?: CellDrag;
-  /** Lists the card menu's sizes in the menu itself: where the dashboard draws one column. */
-  sizesInPlace?: boolean;
   /**
    * Whether a layout write is in flight anywhere on this dashboard.
    *
@@ -113,8 +109,8 @@ export interface ArrangedCellProps {
     onRetry?: () => void;
   };
   /**
-   * How this card's settings are saved at once, outside customise mode: its quick setting.
-   * ABSENT while customising, where a change waits for the dashboard's Save, and before an
+   * How this card's settings are saved at once, outside customise mode: its header's quick
+   * setting and its settings drawer's Save. ABSENT while customising, where a change waits for the dashboard's Save, and before an
    * arrangement has been read, when there is no stored placement to write into.
    */
   settingsWrite?: CellSettingsWrite | undefined;
@@ -151,7 +147,7 @@ export interface ArrangedCellProps {
   };
 }
 
-/** A card's size and its one menu, side by side, while customising. */
+/** A card's width and its one menu, side by side, while customising. */
 function CardEditActions(props: {
   row: ArrangedCellProps["row"];
   /** The size the card is drawn at. */
@@ -161,9 +157,9 @@ function CardEditActions(props: {
   /** Registers the menu button, so focus can be sent back to it. */
   menuRef: (element: HTMLElement | null) => void;
   on: ArrangedCellProps["on"];
-  /** Present only when the card offers settings: its quick popover, or its sheet. */
-  openSettings?: (() => void) | undefined;
-  sizesInPlace: boolean;
+  openSettings: () => void;
+  /** Ask again for this card's data alone, where it asks for any. */
+  refresh: (() => void) | undefined;
 }) {
   const { row, size, can, isWriting, menuRef, on, openSettings } = props;
   return (
@@ -171,17 +167,15 @@ function CardEditActions(props: {
       <CardSizeLabel size={size} />
       <CardActionsMenu
         title={row.widget.title}
-        size={size}
-        bounds={row.widget.size}
         can={can}
         disabled={isWriting}
         triggerRef={menuRef}
-        sizesInPlace={props.sizesInPlace}
+        removeLabel={removeLabelFor(row.widget.id)}
         on={{
           move: on.move,
-          setSize: on.setSize,
           remove: on.remove,
-          ...(openSettings ? { openSettings } : {}),
+          openSettings,
+          refresh: props.refresh,
         }}
       />
     </span>
@@ -197,8 +191,6 @@ function CardBody(props: {
   headerAction: ReactNode;
   /** The card's quick setting, at rest; the frame decides when to draw it. */
   quick: ReactNode;
-  /** The card's title as the control that opens its quick popover, at rest. */
-  titleTrigger: ((title: string) => ReactNode) | undefined;
   data: ArrangedCellProps["data"];
   isEditing: boolean;
   /** Opens this card's settings from its empty state, where the reader can change them. */
@@ -229,7 +221,6 @@ function CardBody(props: {
       placement={placement}
       headerAction={headerAction}
       quick={quick}
-      titleTrigger={props.titleTrigger}
       subtitle={subtitle}
       {...(props.onOpenSettings
         ? { onOpenSettings: props.onOpenSettings }
@@ -240,8 +231,8 @@ function CardBody(props: {
 }
 
 /**
- * A card's controls: its quick setting and quick popover, its menu's Settings, its menu in its
- * header at rest, and where its sheet's Done goes.
+ * A card's controls: its header's quick setting, its menus' Settings…, its menu in its header at
+ * rest, and where its drawer's Save goes.
  */
 function useCardControls(
   props: ArrangedCellProps,
@@ -255,43 +246,25 @@ function useCardControls(
     widget: props.row.widget,
     title: widget.title,
     config: props.row.config,
-    size,
     isEditing: props.isEditing,
     isFetching: props.data.isFetching,
     updatedAt: props.data.updatedAt,
     settingsWrite: props.settingsWrite,
-    // While customising, the same changes the customise menu and the panel stage.
-    staged: {
-      config: props.on.saveSettings,
-      size: props.on.setSize,
-      isWriting: props.isWriting,
-    },
   });
-  const popover = useQuickPopoverOpening();
   const menus = useMenuButtons(props);
-  // A popover belongs to the mode it opened in: its anchor is the title at rest and the
-  // customise controls while customising, and the other is not drawn.
-  const { onOpenChange } = popover;
-  useEffect(() => onOpenChange(false), [props.isEditing, onOpenChange]);
-  const openSettings = settingsOpener(
-    quick.popover ? () => popover.openFrom(menus.button.current) : undefined,
-    () => setSettingsOpen(true)
-  );
+  // Every card offers Settings…, since every card has a title and a width its reader can set.
+  const openSettings = () => setSettingsOpen(true);
   return {
     quick,
-    popover,
     openSettings,
-    // Where focus goes back to as the panel closes: the control the popover was opened from,
-    // when the panel was reached through it, else the card's menu button, which opens the
-    // panel itself on a card with no popover. Read as the panel closes, not as it opened: the
-    // panel outlives customise mode, whose controls are gone once it ends, so a control no
-    // longer on the page gives way to the menu the card draws now.
-    panelReturnFocusTo: () =>
-      onPage(popover.returnFocusTo()) ?? onPage(menus.button.current),
+    // Where focus goes back to as the drawer closes: the menu the reader opened it from. Read
+    // as the drawer closes, not as it opened: the drawer outlives customise mode, whose menu is
+    // gone once it ends, so a button no longer on the page gives way to the one the card draws
+    // now.
+    panelReturnFocusTo: () => onPage(menus.button.current),
     customiseMenuRef: menus.customise,
     // The menu is the one control a card's header holds at rest: its Remove is the dismissal.
     header: restingMenuFor(props, widget, {
-      quick,
       openSettings,
       menuRef: menus.rest,
     }),
@@ -324,18 +297,6 @@ function useMenuButtons(props: ArrangedCellProps) {
   return { button, rest, customise };
 }
 
-/**
- * What the menus' Settings does: opens the quick popover where the card has one (its More
- * settings leads on to the panel), else the settings panel itself. Offered on every card, since
- * every card has a title its reader can give it in the panel.
- */
-function settingsOpener(
-  openPopover: (() => void) | undefined,
-  openPanel: () => void
-): () => void {
-  return openPopover ?? openPanel;
-}
-
 /** `element` while it is still on the page, else `null`: focus on a removed node is lost. */
 function onPage(element: HTMLElement | null): HTMLElement | null {
   return element?.isConnected === true ? element : null;
@@ -349,33 +310,23 @@ function settingsBlocked(write: CellSettingsWrite | undefined): boolean {
 }
 
 /**
- * The card's menu at rest, in the same place on every card: Settings, Size, Refresh and Remove,
- * each where the card has it (`CardMenu`). Nothing while customising, where the customise menu
- * stands in its place, nor for a card that would offer nothing in it. Settings and Size are
- * offered once an arrangement has been read, as Remove is: before it there is no stored card to
- * save them into.
+ * The card's menu at rest, in the same place on every card: Settings…, Refresh and Remove, each
+ * where the card has it (`CardMenu`). Nothing while customising, where the customise menu stands
+ * in its place, nor for a card that would offer nothing in it. Settings… is offered once an
+ * arrangement has been read, as Remove is: before it there is no stored card to save into.
  */
 function restingMenuFor(
   props: ArrangedCellProps,
   widget: DashboardWidget,
   controls: {
-    quick: ReturnType<typeof useCardQuickSetting>;
-    openSettings: (() => void) | undefined;
+    openSettings: () => void;
     menuRef: (element: HTMLElement | null) => void;
   }
 ): ReactNode | undefined {
   if (props.isEditing) return undefined;
   const write = props.settingsWrite;
-  const popover = controls.quick.popover;
   const items = {
     onOpenSettings: write ? controls.openSettings : undefined,
-    size: popover?.size
-      ? {
-          ...popover.size,
-          inPlace: props.sizesInPlace === true,
-          onSetSize: popover.changeSize,
-        }
-      : undefined,
     onRefresh: props.data.onRetry,
     onRemove: props.on.dismiss,
   };
@@ -396,11 +347,13 @@ function restingMenuFor(
 }
 
 /**
- * Where the panel's Done goes, decided by where the reader is when they press it, since the
- * sheet stays open across a change of mode. While customising it is recorded in the draft, kept
- * with the dashboard's other unsaved changes, and the panel closes. Outside it, it is saved at
- * once through the same write as the quick setting, and the panel hears how that ended: it
- * closes when the save lands and says why in place when it does not.
+ * Where the drawer's Save goes, decided by where the reader is when they press it, since the
+ * drawer stays open across a change of mode. While customising it is staged in the draft, kept
+ * with the dashboard's other unsaved changes until the customise bar's Save, and the drawer
+ * closes. Outside it, the settings, title and width are saved at once in one write, the same
+ * write as the header's quick setting, and the drawer hears how that ended: it closes when the
+ * save lands and says why in place when it does not. A size is sent only when the reader chose
+ * another width (`PanelKept`'s `resize`).
  */
 function doneFor(props: ArrangedCellProps): {
   done: SettingsPanelProps["onDone"];
@@ -411,6 +364,7 @@ function doneFor(props: ArrangedCellProps): {
     return {
       done: (kept, settled) => {
         props.on.saveSettings(kept.config, kept.ownTitle);
+        if (kept.resize) props.on.setSize(kept.resize.size);
         settled.saved();
       },
       blocked: undefined,
@@ -425,7 +379,8 @@ function doneFor(props: ArrangedCellProps): {
           onFailed: settled.failed,
           showsFailure: true,
         },
-        kept.ownTitle
+        kept.ownTitle,
+        kept.resize?.size
       ),
     blocked: write.unavailable,
   };
@@ -433,9 +388,14 @@ function doneFor(props: ArrangedCellProps): {
 
 /**
  * The cell's classes: its columns (`span`, the card's drawn width or the width the grid draws it
- * at in its place), its leaving the grid while hidden, and its spacing.
+ * at in its place), its leaving the grid while hidden, its spacing, and the ring that marks it
+ * while its settings drawer is open (`editing`), so the reader sees which card they change.
  */
-function cellClassName(span: number, isEditing: boolean): string {
+function cellClassName(
+  span: number,
+  isEditing: boolean,
+  editing: boolean
+): string {
   return cn(
     // `relative` so the drag handle, which is absolutely positioned, lands
     // on this cell rather than on the grid. Nothing clips or scrolls: the
@@ -452,103 +412,31 @@ function cellClassName(span: number, isEditing: boolean): string {
     // stops below the customise bar stuck to the top rather than under
     // it. On the controls rather than the cell, because the margin that
     // counts is the focused element's own.
-    isEditing && "[&_button]:scroll-mt-40"
+    isEditing && "[&_button]:scroll-mt-40",
+    editing &&
+      "rounded-lg ring-2 ring-foreground ring-offset-2 ring-offset-background"
   );
 }
 
-/** The card's size and menu while customising, or nothing at rest. */
+/**
+ * The card's width and menu while customising, or nothing at rest: drawn over its own header's
+ * right end, outside the fence that puts the card's own content out of reach.
+ */
 function editActionsOf(
   props: ArrangedCellProps,
   size: GridSize,
-  openSettings: (() => void) | undefined,
-  menuRef: (element: HTMLElement | null) => void
+  controls: ReturnType<typeof useCardControls>
 ): ReactElement | null {
   if (!props.isEditing) return null;
   const { row, can, isWriting, on } = props;
   return (
     <CardEditActions
-      {...{ row, size, can, isWriting, on, menuRef, openSettings }}
-      sizesInPlace={props.sizesInPlace === true}
+      {...{ row, size, can, isWriting, on }}
+      menuRef={controls.customiseMenuRef}
+      openSettings={controls.openSettings}
+      refresh={props.data.onRetry}
     />
   );
-}
-
-/**
- * The card's quick popover around `anchor`: the card's title at rest, which opens it, or its
- * customise controls, whose menu does. `anchor` alone where the card has nothing for it.
- */
-function withQuickPopover(
-  controls: ReturnType<typeof useCardControls>,
-  cardTitle: string,
-  openSheet: (() => void) | undefined,
-  opensFrom: "trigger" | "anchor",
-  anchor: ReactElement
-): ReactElement {
-  const model = controls.quick.popover;
-  if (!model) return anchor;
-  return (
-    <CardQuickPopover
-      model={model}
-      cardTitle={cardTitle}
-      open={controls.popover.open}
-      onOpenChange={controls.popover.onOpenChange}
-      opensFrom={opensFrom}
-      onMoreSettings={openSheet}
-      returnFocusTo={controls.popover.returnFocusTo}
-    >
-      {anchor}
-    </CardQuickPopover>
-  );
-}
-
-/**
- * Where the card's quick popover is drawn from. At rest, its title, which opens it. While
- * customising, the card's size and its one menu, side by side, over its own header's right end,
- * outside the fence that puts the card's own content out of reach; the menu opens it there.
- */
-function popoverPlaces(
-  props: ArrangedCellProps,
-  controls: ReturnType<typeof useCardControls>,
-  size: GridSize,
-  cardTitle: string,
-  openSheet: (() => void) | undefined
-): {
-  titleTrigger: ((title: string) => ReactNode) | undefined;
-  editActions: ReactElement | null;
-} {
-  if (!props.isEditing) {
-    return {
-      titleTrigger: controls.quick.popover
-        ? title =>
-            withQuickPopover(
-              controls,
-              cardTitle,
-              openSheet,
-              "trigger",
-              <CardTitleButton ref={controls.popover.titleRef} label={title} />
-            )
-        : undefined,
-      editActions: null,
-    };
-  }
-  const actions = editActionsOf(
-    props,
-    size,
-    controls.openSettings,
-    controls.customiseMenuRef
-  );
-  return {
-    titleTrigger: undefined,
-    editActions: actions
-      ? withQuickPopover(
-          controls,
-          cardTitle,
-          openSheet,
-          "anchor",
-          <span className="inline-flex">{actions}</span>
-        )
-      : null,
-  };
 }
 
 /** The card's size and menu while customising, drawn over its header's right end. */
@@ -708,14 +596,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   );
   const controls = useCardControls(props, widget, size, setSettingsOpen);
   const { quick, header: restingControls, done } = controls;
-  const { titleTrigger, editActions } = popoverPlaces(
-    props,
-    controls,
-    size,
-    widget.title,
-    // More settings, in the popover: the panel, which every card has for its own title.
-    () => setSettingsOpen(true)
-  );
+  const editActions = editActionsOf(props, size, controls);
   // While customising, the card's header keeps the room its controls are drawn
   // over; at rest it holds the menu.
   const headerAction = isEditing ? <CardControlsSpace /> : restingControls;
@@ -728,13 +609,18 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       highlighted={props.highlighted}
       {...(props.drag === undefined ? {} : { drag: props.drag })}
       data-testid={`widget-cell-${widget.id}`}
-      className={cellClassName(props.drawnW ?? size.w, isEditing)}
+      className={cellClassName(
+        props.drawnW ?? size.w,
+        isEditing,
+        sheet.settingsOpen
+      )}
       cellRef={held.cellRef}
       style={held.style}
     >
       <CellEditActions actions={editActions} />
       {/* On every card, since every card has its own title to set, once its reader first opens
-          it: the panel's module is fetched then, or as a pointer or focus heads for a control that opens it (`settings-sheet-code`), not with the dashboard. Kept mounted after, not
+          it: the panel's module is fetched then, or as a pointer or focus heads for a control
+          that opens it (`settings-sheet-code`), not with the dashboard. Kept mounted after, not
           only while customising, which is what lets the panel outlive customise mode rather
           than being torn out from under a reader still filling it in. */}
       {sheet.everOpened ? (
@@ -753,7 +639,6 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
             {...{ widget, placement, headerAction, data, isEditing }}
             subtitle={heading.subtitle}
             quick={quick.inline}
-            titleTrigger={titleTrigger}
             onOpenSettings={sheet.openFromEmpty}
           />
         </CardHiddenReportContext.Provider>

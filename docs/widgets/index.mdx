@@ -375,25 +375,31 @@ shape may change.
 
 ## Where a setting is drawn
 
-A card's More settings panel draws its settings in three sections: **Data**, what the card reads;
-**Display**, how it shows it (every card's title is there too); and **Advanced**, folded until a
-reader opens it. Name a setting's section with `section`:
+A card's settings drawer, opened from Settings… in its menu, shows a preview of the card, then
+its settings in sections, none folded: **Content**, what the card reads; **Display**, how it
+shows it (every card's title is there too); and **Size**, the card's width. Name a setting's
+section with `section`, `"data"` for Content or `"display"`:
 
 ```ts
 density: setting.select({
-  label: "Density",
+  label: "Row spacing",
   options: [
-    { label: "Default", value: "default" },
+    { label: "Comfortable", value: "default" },
     { label: "Compact", value: "compact" },
   ],
   defaultValue: "default",
-  section: "advanced",
+  section: "display",
 }),
 ```
 
 Without one, a Collection, Filter, Sort, Group by or Field setting and a `setting.dateRange` are
-drawn under Data, and every other setting under Display. A setting is folded under Advanced only
-when it says so. Startup refuses a `section` other than `"data"`, `"display"` or `"advanced"`.
+drawn under Content, and every other setting under Display. `"advanced"` is still accepted, from
+when the drawer folded settings away, and is drawn under Display. Startup refuses a `section`
+other than `"data"`, `"display"` or `"advanced"`.
+
+A list's "Number of entries", a number setting keyed `limit`, is drawn as a choice of 5, 10 or
+20 within its bounds; a number stored before that is none of them is shown and kept until the
+reader picks another.
 
 ## Related
 

@@ -216,12 +216,6 @@ export interface WidgetRendererProps {
   subtitle?: string | undefined;
   /** The card's one quick setting, which the frame draws before `headerAction`. */
   quick?: ReactNode;
-  /**
-   * Draws the card's title as a control: the dashboard's cards open their quick popover from it.
-   *
-   * @internal Set by the dashboard grid only, never part of the widget kit.
-   */
-  titleTrigger?: ((title: string) => ReactNode) | undefined;
   /** The drag handle in customise mode, drawn before the title. */
   leading?: ReactNode;
   /** Customise mode: the card's content stays visible but out of reach. */
@@ -295,7 +289,6 @@ function sharedCardProps(
     WidgetRendererProps,
     | "headerAction"
     | "quick"
-    | "titleTrigger"
     | "leading"
     | "customizing"
     | "answerSize"
@@ -454,7 +447,6 @@ export function WidgetRenderer({
   placement,
   headerAction,
   quick,
-  titleTrigger,
   leading,
   customizing = false,
   onRetry,
@@ -471,7 +463,6 @@ export function WidgetRenderer({
   const shared = sharedCardProps(definition, placement, {
     headerAction,
     quick,
-    titleTrigger,
     leading,
     customizing,
     answerSize,
