@@ -901,9 +901,16 @@ function reshapedJoiningFields(
       : fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
   const before = new Map(args.oldFields.map(f => [f.name, f]));
   const after = new Map(args.newFields.map(f => [f.name, f]));
-  return joining.filter(name =>
-    storageDiffers(columnOf(before.get(name)), columnOf(after.get(name)))
-  );
+  // Reshaped only where the new storage cannot hold every value the old one holds
+  // (`storageHolds`, as the leaving side judges it): a widening copies each value as it is.
+  return joining.filter(name => {
+    const from = columnOf(before.get(name));
+    const to = columnOf(after.get(name));
+    return (
+      storageDiffers(from, to) &&
+      !(from != null && to != null && storageHolds(to, from))
+    );
+  });
 }
 
 /**

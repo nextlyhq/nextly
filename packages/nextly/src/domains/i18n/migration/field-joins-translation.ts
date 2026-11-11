@@ -371,12 +371,16 @@ async function refuseReshapedJoins(
   const [
     { introspectLiveSnapshot },
     { typesDiffer },
+    { isWideningChange },
+    { renderedType },
     { getColumnDescriptor, getComponentRowColumnDescriptor },
     { refusalsForFieldsJoiningTranslation },
     { NextlyError },
   ] = await Promise.all([
     import("../../schema/pipeline/diff/introspect-live"),
     import("../../schema/pipeline/diff/declared-size"),
+    import("../../schema/pipeline/classifier/type-widening"),
+    import("../../schema/pipeline/sql-templates/create-table-body"),
     import("../../schema/services/field-column-descriptor"),
     import("./field-leaves-translation-rules"),
     import("../../../errors/nextly-error"),
@@ -409,7 +413,10 @@ async function refuseReshapedJoins(
         name: column.name,
         type: shared.dialectType,
         nullable: column.nullable,
-      })
+      }) &&
+      // Reshaped only where the new column cannot hold every value the live one holds: a widening
+      // (a longer varchar, varchar to text, a wider number) copies each value as it is.
+      !isWideningChange(renderedType(column), shared.dialectType, args.dialect)
     );
   });
   if (reshaped.length === 0) return;

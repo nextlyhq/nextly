@@ -79,6 +79,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import { isWideningChange } from "../pipeline/classifier/type-widening";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -2724,10 +2725,17 @@ function assertFieldsMayJoinTranslation(
   ).tables.find(t => t.name === c.tableName);
   const typeIn = (table: TableSpec | undefined, column: string) =>
     table?.columns.find(col => col.name === column)?.type;
+  // Reshaped only where the column it would have cannot hold every value the column it has holds:
+  // a widening (a longer varchar, varchar to text, a wider number) copies each value as it is.
   const reshaped = joining
     .filter(({ column }) => {
       const before = typeIn(prevMain, column.name);
-      return before !== undefined && before !== typeIn(sharedMain, column.name);
+      const after = typeIn(sharedMain, column.name);
+      return (
+        before !== undefined &&
+        before !== after &&
+        (after === undefined || !isWideningChange(before, after, dialect))
+      );
     })
     .map(({ field }) => field.name);
   refuseMigration(
