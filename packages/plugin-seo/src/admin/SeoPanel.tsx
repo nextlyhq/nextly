@@ -12,7 +12,7 @@
  */
 import { navigateTo } from "@nextlyhq/plugin-sdk/admin";
 import { Input, Textarea } from "@nextlyhq/ui";
-import { EyeOff } from "lucide-react";
+import { EyeOff, Lock } from "lucide-react";
 import { useId, type ReactNode } from "react";
 
 import type { Sourced } from "../resolver/order";
@@ -97,6 +97,13 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
   const answer = answers?.answer;
   return (
     <div className="flex flex-col gap-[18px] pt-4 pb-12">
+      {context?.mayChange === false ? (
+        <Note icon={<Lock className="size-4" />}>
+          <b className="font-semibold">You can't change this page's SEO.</b> You
+          can see what search engines and social networks are given. Ask someone
+          who manages the site's SEO to change it.
+        </Note>
+      ) : null}
       {answer?.robots.from === "type" ? (
         <Note icon={<EyeOff className="size-4" />}>
           <b className="font-semibold">

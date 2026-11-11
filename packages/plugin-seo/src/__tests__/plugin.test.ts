@@ -119,14 +119,8 @@ describe("seoPlugin", () => {
     expect(route?.public).toBeUndefined();
   });
 
-  it("asks for the redirects' and not-found log's permissions under the names an installation gives them", () => {
+  it("asks site-wide SEO for the redirects' and not-found log's routes, whatever an installation names those stores", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
-    const renamed = {
-      plugin: "@nextlyhq/plugin-seo",
-      collection: (slug: string, action: string) =>
-        `${action}-site_${slug.slice("nx_seo_".length)}`,
-      single: (slug: string, action: string) => `${action}-${slug}`,
-    };
 
     const asked = (plugin.contributes?.routes ?? [])
       .filter(
@@ -135,18 +129,16 @@ describe("seoPlugin", () => {
       .map(({ method, path, requiredPermission }) => [
         method,
         path,
-        typeof requiredPermission === "function"
-          ? requiredPermission(renamed)
-          : requiredPermission,
+        requiredPermission,
       ]);
 
     expect(asked).toEqual([
-      ["GET", "/redirects", "read-site_redirects"],
-      ["POST", "/redirects", "create-site_redirects"],
-      ["PATCH", "/redirects/:id", "update-site_redirects"],
-      ["DELETE", "/redirects/:id", "delete-site_redirects"],
-      ["POST", "/redirects/import", "create-site_redirects"],
-      ["GET", "/not-found", "read-site_not_found"],
+      ["GET", "/redirects", "manage-seo"],
+      ["POST", "/redirects", "manage-seo"],
+      ["PATCH", "/redirects/:id", "manage-seo"],
+      ["DELETE", "/redirects/:id", "manage-seo"],
+      ["POST", "/redirects/import", "manage-seo"],
+      ["GET", "/not-found", "manage-seo"],
     ]);
   });
 

@@ -14,7 +14,7 @@
  * what each route supplies.
  *
  * Answered to anyone who may read the collection or the Single, an editor or
- * a reader shown the page read-only. The page's images are looked up only for
+ * a reader shown the page read-only, with whether they may change its SEO. The page's images are looked up only for
  * a caller who may read the media library.
  *
  * @module tab/route
@@ -30,6 +30,7 @@ import { z } from "nextly/zod";
 
 import type { Levels } from "../resolver/order";
 import { productionAddressesOf } from "../canonical";
+import { mayChangePageSeo } from "../permissions";
 import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import type { ReadSocialCardRules } from "../social/card";
@@ -75,6 +76,8 @@ export interface SeoTabRouteSetup {
   readStructuredDataRules?: ReadStructuredDataRules;
   /** Where the social card reads its rules from. */
   readSocialCardRules?: ReadSocialCardRules;
+  /** Whether a page's SEO has a permission of its own. */
+  pagePermissions?: boolean;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -298,6 +301,11 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
         typeLabel: typeLabelOf(declaration, body.slug),
         fieldLabels: fieldLabelsOf(declaration, levels),
         fields: [...setup.fields],
+        mayChange: await mayChangePageSeo(
+          ctx,
+          body.slug,
+          setup.pagePermissions === true
+        ),
       };
       // Read for the document as typed, the tab's own values included.
       const typed: PageMetadataInput = {

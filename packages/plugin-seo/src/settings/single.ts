@@ -24,6 +24,8 @@ import {
   type SingleConfig,
 } from "nextly/config";
 
+import { holdsManageSeo } from "../permissions";
+
 import { SEO_PLUGIN_NAME, SEO_SETTINGS_SLUG, SETUP_STEPS } from "./contract";
 import { SEPARATORS } from "./patterns";
 import { productionAddressesProblem } from "./production-addresses";
@@ -62,6 +64,10 @@ export function seoSettingsSingle(): SingleConfig {
     localized: false,
     // Edited on the plugin's own SEO settings screen, not the generic form.
     admin: { hidden: true },
+    // Site-wide SEO: read and changed only with `manage-seo`, beside the
+    // Single's own permission, through every way in. The plugin's own
+    // readers read it as the system.
+    access: { read: holdsManageSeo, update: holdsManageSeo },
     revalidate: { tags: seoSettingsCacheTags() },
     fields: [
       text({ name: "siteName", label: "Site name" }),

@@ -6,10 +6,8 @@ import { useCallback, useState, useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Database } from "@admin/components/icons";
-import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
 import { Link } from "@admin/components/ui/link";
 import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
-import { ROUTES } from "@admin/constants/routes";
 import {
   useBranding,
   useBrandingStatus,
@@ -40,7 +38,6 @@ import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
-import { shellAnswersMarker } from "../lib/shell-answers";
 
 import {
   CONTENT_RAIL_ID,
@@ -67,6 +64,7 @@ import {
 } from "./lib/place-standalone-plugins";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import { resolveActiveSection } from "./lib/resolve-section";
+import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
 import {
   railAnswersIn,
@@ -75,13 +73,13 @@ import {
 } from "./lib/settled-rail";
 import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
 import { RailAccount } from "./RailAccount";
+import { RAIL_FOCUS_RING, RailColumn, RailGhostItems } from "./RailColumn";
 import type {
   MainMenuCategory,
   MainMenuItem,
   RailItemId,
 } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
-import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { SubSidebarPanel } from "./SubSidebarPanel";
 
 /** Whether each rail entry's section has something to show, keyed by entry id. */
@@ -124,20 +122,6 @@ function railSections(answers: RailSectionAnswers): RailSections {
     translations: isMultilingual(answers.branding?.locales),
   };
 }
-
-/**
- * Where keyboard focus is on the rail: a ring, drawn on `:focus-visible`
- * alone, so a pointer click draws none. Offset onto the rail's own surface,
- * so it stays clear of a selected entry's fill and reads in both themes.
- *
- * The browser's outline is hidden only where the ring takes its place, and
- * by `outline-hidden` rather than `outline-none`: under forced colors, as in
- * Windows High Contrast, a box shadow is not drawn, and `outline-hidden`
- * draws a 2px outline there in the system's colour, where `outline-none`
- * would leave focus with nothing drawn at all.
- */
-const RAIL_FOCUS_RING =
-  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar";
 
 interface DualSidebarProps {
   isMobile?: boolean;
@@ -539,121 +523,98 @@ export function DualSidebar({
   return (
     <div className="flex h-full overflow-hidden">
       {/* 1. Icon Sidebar (Main Menu) */}
-      <aside
-        className={cn(
-          // `min-h-0`, so on a short window the rail is as tall as the window
-          // and its navigation scrolls, rather than the rail growing past the
-          // window and pushing its foot out of sight.
-          "flex min-h-0 flex-col items-center py-4 bg-sidebar  border-r border-border z-50",
-          "w-[72px] shrink-0"
-        )}
-        // Whether every answer the rail draws from is in, so a reader of the
-        // page (the layout-shift browser test) can tell when the rail is done.
-        data-shell-answers={shellAnswersMarker(rail.settled)}
+      <RailColumn
+        settled={rail.settled}
+        // The rail's foot: the reader's Inbox and account menu, the same on
+        // every page.
+        foot={<RailAccount className="mt-4 shrink-0" />}
       >
-        {/* Logo */}
-        <Link
-          href={ROUTES.DASHBOARD}
-          className={cn(
-            "mb-8 flex shrink-0 items-center justify-center h-10 w-10 rounded-md group",
-            RAIL_FOCUS_RING
-          )}
-        >
-          <ThemeAwareLogo
-            boxed
-            className="w-8 h-8 object-contain"
-            alt={branding.logoText ?? "Logo"}
+        {rail.items.map(item => {
+          const Icon = item.icon;
+          const isSelected = railItemOf(shownMain) === item.id;
+          const href = resolveItemHref(item);
+          /*
+           * On mobile a category normally stays put and opens the panel
+           * instead of navigating. With the panel SUPPRESSED there is no
+           * panel to open, so staying put does nothing at all and the drawer
+           * stops navigating — the tap only moves a selection nobody can see.
+           */
+          const stayOnPageMobile =
+            isMobile &&
+            hasSubSidebarCategory(item.id) &&
+            !suppressedChrome.has("subSidebar");
+          const renderAsLink = href !== "#" && !stayOnPageMobile;
+
+          // Unselected items use muted foreground so the resting icon meets contrast; a faint primary alpha did not.
+          const className = cn(
+            "flex shrink-0 items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative",
+            RAIL_FOCUS_RING,
+            isSelected
+              ? // `sidebar-accent` rather than `muted`: it is the surface
+                // `sidebar-accent-foreground` is declared against. Pairing
+                // the sidebar's ink with a surface from another scale is a
+                // combination no theme declares, so the contrast suite --
+                // which asserts each token against its declared partner --
+                // never checks it, and it goes unreadable in any theme that
+                // does not happen to survive the mismatch.
+                "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-muted-foreground hover-unified"
+          );
+
+          const iconContent = (
+            <>
+              <Icon className="h-5 w-5" />
+            </>
+          );
+
+          return (
+            <Tooltip key={item.id} delayDuration={0}>
+              <TooltipTrigger asChild>
+                {renderAsLink ? (
+                  <Link
+                    href={href}
+                    onClick={() => selectRailItem(item.id)}
+                    className={className}
+                    data-active={isSelected}
+                    // Named for assistive technology: it draws an icon alone, and its tooltip
+                    // is shown on hover and does not name the control.
+                    aria-label={item.label}
+                  >
+                    {iconContent}
+                  </Link>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => selectRailItem(item.id)}
+                    className={className}
+                    data-active={isSelected}
+                    // Named as the link beside it is: an icon alone, with a tooltip that does
+                    // not name the control.
+                    aria-label={item.label}
+                  >
+                    {iconContent}
+                  </button>
+                )}
+              </TooltipTrigger>
+              <TooltipContent
+                side="right"
+                className="bg-primary border-border text-primary-foreground"
+              >
+                {item.label}
+              </TooltipContent>
+            </Tooltip>
+          );
+        })}
+        {/* While the answers that decide the rest are out, neutral shapes
+            hold their places, so the rail never reads as empty; the entries
+            replace them where they stand. */}
+        {rail.settled ? null : (
+          <RailGhostItems
+            from={rail.items.length}
+            count={filteredMenuItems.length - rail.items.length}
           />
-        </Link>
-
-        {/* Main Icons */}
-        {/* The one part of the rail that gives way on a short window: it
-            scrolls, so the logo above and the account foot below stay in
-            view. Padded vertically so a focus ring at either end is not cut
-            off by the scroll edge. */}
-        <nav className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto px-3 py-1 [scrollbar-width:none]">
-          {rail.items.map(item => {
-            const Icon = item.icon;
-            const isSelected = railItemOf(shownMain) === item.id;
-            const href = resolveItemHref(item);
-            /*
-             * On mobile a category normally stays put and opens the panel
-             * instead of navigating. With the panel SUPPRESSED there is no
-             * panel to open, so staying put does nothing at all and the drawer
-             * stops navigating — the tap only moves a selection nobody can see.
-             */
-            const stayOnPageMobile =
-              isMobile &&
-              hasSubSidebarCategory(item.id) &&
-              !suppressedChrome.has("subSidebar");
-            const renderAsLink = href !== "#" && !stayOnPageMobile;
-
-            // Unselected items use muted foreground so the resting icon meets contrast; a faint primary alpha did not.
-            const className = cn(
-              "flex shrink-0 items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative",
-              RAIL_FOCUS_RING,
-              isSelected
-                ? // `sidebar-accent` rather than `muted`: it is the surface
-                  // `sidebar-accent-foreground` is declared against. Pairing
-                  // the sidebar's ink with a surface from another scale is a
-                  // combination no theme declares, so the contrast suite --
-                  // which asserts each token against its declared partner --
-                  // never checks it, and it goes unreadable in any theme that
-                  // does not happen to survive the mismatch.
-                  "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "text-muted-foreground hover-unified"
-            );
-
-            const iconContent = (
-              <>
-                <Icon className="h-5 w-5" />
-              </>
-            );
-
-            return (
-              <Tooltip key={item.id} delayDuration={0}>
-                <TooltipTrigger asChild>
-                  {renderAsLink ? (
-                    <Link
-                      href={href}
-                      onClick={() => selectRailItem(item.id)}
-                      className={className}
-                      data-active={isSelected}
-                      // Named for assistive technology: it draws an icon alone, and its tooltip
-                      // is shown on hover and does not name the control.
-                      aria-label={item.label}
-                    >
-                      {iconContent}
-                    </Link>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => selectRailItem(item.id)}
-                      className={className}
-                      data-active={isSelected}
-                      // Named as the link beside it is: an icon alone, with a tooltip that does
-                      // not name the control.
-                      aria-label={item.label}
-                    >
-                      {iconContent}
-                    </button>
-                  )}
-                </TooltipTrigger>
-                <TooltipContent
-                  side="right"
-                  className="bg-primary border-border text-primary-foreground"
-                >
-                  {item.label}
-                </TooltipContent>
-              </Tooltip>
-            );
-          })}
-        </nav>
-
-        {/* The rail's foot: the reader's Inbox and account menu, the same on
-            every page. */}
-        <RailAccount className="mt-4 shrink-0" />
-      </aside>
+        )}
+      </RailColumn>
 
       {/* 2. Sub Sidebar (Detail Menu) */}
       <SubSidebarPanel

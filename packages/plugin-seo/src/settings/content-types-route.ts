@@ -17,6 +17,7 @@ import {
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { siteWide } from "../permissions";
 import { isRecord, textOf } from "../plain-values";
 
 import {
@@ -268,10 +269,11 @@ async function switchedOff(
  * after them the site's other types, marked as having none.
  */
 export function contentTypesRoute(collections: readonly string[]): PluginRoute {
-  return {
+  return siteWide({
     method: "GET",
     path: CONTENT_TYPES_ROUTE_PATH,
-    // Whoever may read the SEO settings may see what they apply to.
+    // Whoever may read the SEO settings may see what they apply to: the
+    // Single's read, and site-wide SEO.
     requiredPermission: ({ single }) => single(SEO_SETTINGS_SLUG, "read"),
     handler: async (_req, ctx) => {
       const withoutAddress = new Set(
@@ -295,7 +297,7 @@ export function contentTypesRoute(collections: readonly string[]): PluginRoute {
         hasPrev: false,
       });
     },
-  };
+  });
 }
 
 /**
@@ -303,7 +305,7 @@ export function contentTypesRoute(collections: readonly string[]): PluginRoute {
  * registered it, so the screen reads and saves the renamed one.
  */
 export function settingsDocumentRoute(): PluginRoute {
-  return {
+  return siteWide({
     method: "GET",
     path: SETTINGS_DOCUMENT_ROUTE_PATH,
     requiredPermission: ({ single }) => single(SEO_SETTINGS_SLUG, "read"),
@@ -313,5 +315,5 @@ export function settingsDocumentRoute(): PluginRoute {
       };
       return Promise.resolve(respondDoc(body));
     },
-  };
+  });
 }
