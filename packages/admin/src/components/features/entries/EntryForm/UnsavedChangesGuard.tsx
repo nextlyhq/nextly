@@ -358,11 +358,9 @@ export function UnsavedChangesGuard({
                 {/* No handler: closing IS the refusal, and it is reported once
                     from `onOpenChange` rather than from both places. */}
                 <AlertDialogCancel>Keep Editing</AlertDialogCancel>
-                {/* Hover darkens the fill by one ramp step, not two.
-                    `destructive-700` drops the on-color label to 3.70:1 in dark
-                    mode, under the 4.5:1 text minimum; `destructive-600` holds
-                    5.67:1 dark and 5.92:1 light and still reads as a state
-                    change against the resting fill. */}
+                {/* Hover darkens the fill to `destructive-hover`, one step deeper than
+                    the resting fill: the label holds 5.92:1 light and 5.67:1 dark,
+                    where a deeper step would drop it under the 4.5:1 text minimum. */}
                 <AlertDialogAction
                   onClick={handleConfirm}
                   variant="destructive"
