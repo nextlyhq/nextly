@@ -132,9 +132,12 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
                   <span className="sr-only">Open the navigation menu</span>
                 </Button>
                 <div className="flex items-center gap-2">
+                  {/* The one boxed mark the rail and sign-in show, or the
+                      configured logo fitted to the same square. */}
                   <ThemeAwareLogo
+                    boxed
                     alt={branding?.logoText ?? "Logo"}
-                    className="h-5 w-auto object-contain"
+                    className="size-7 object-contain"
                   />
                   {!branding?.logoUrl &&
                     !branding?.logoUrlLight &&
