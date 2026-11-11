@@ -612,15 +612,15 @@ function SaveFailure({ message }: { message: string | undefined }) {
  * over the drawn steps before this (`useDrawnSetup`), so the line going changes no verdict.
  */
 function listedSteps(counted: CountedSetup): CountedSetup {
-  const steps = counted.steps.filter(
-    step => !(step.kind === "sample" && step.status === "done")
+  // Counted by the host's own tally, the one "You're all set" is judged by, so the two never
+  // count differently.
+  const listed = talliedSetup(
+    counted.steps.filter(
+      step => !(step.kind === "sample" && step.status === "done")
+    )
   );
-  return {
-    known: true,
-    steps,
-    done: steps.filter(stepFinished).length,
-    total: steps.length,
-  };
+  // A tally is always a known answer; the type cannot say so.
+  return listed.known ? listed : counted;
 }
 
 /**
