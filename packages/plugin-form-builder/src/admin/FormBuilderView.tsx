@@ -271,6 +271,7 @@ function useFormSave({
     notifications,
     markAsSaved,
     beginSave,
+    saveFailed,
     markFieldsSaved,
   } = useFieldBookkeeping();
   const queryClient = useQueryClient();
@@ -282,6 +283,9 @@ function useFormSave({
     // A refused save keeps every change and says what to fix, and where, in
     // the page and as a toast.
     const refuse = (next: SaveRefusal) => {
+      // Nothing was stored, so a save that would have made the form live
+      // leaves its ID as it was.
+      saveFailed();
       setRefusal(next);
       toast.error(next.message);
     };
@@ -381,6 +385,7 @@ function useFormSave({
     queryClient,
     markAsSaved,
     beginSave,
+    saveFailed,
     markFieldsSaved,
     // Read inside, so it belongs here. Without it the callback closes over the
     // claim as it stood when the form mounted, and a colleague taking the

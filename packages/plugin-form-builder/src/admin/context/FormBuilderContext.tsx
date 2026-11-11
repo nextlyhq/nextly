@@ -186,10 +186,13 @@ export interface FieldBookkeeping {
    */
   restored: number;
   /**
-   * Whether the form has ever been live, as stored: set back to draft, it
-   * still has. An unsaved pick in the bar does not count.
+   * Whether the form's ID is fixed: it has been live as stored (set back to
+   * draft, it still has), or the save that makes it live is under way. An
+   * unsaved pick in the bar does not count.
    */
-  beenLive: boolean;
+  formIdFixed: boolean;
+  /** The save that began was refused or failed: nothing was stored. */
+  saveFailed: () => void;
   /**
    * The key a field is known by while it is edited, whatever its name
    * becomes: the list's row key and the settings panel's field id.
@@ -255,6 +258,7 @@ const READS_ONLY = new Set([
   "setActiveTab",
   "markAsSaved",
   "beginSave",
+  "saveFailed",
   "markFieldsSaved",
 ]);
 
@@ -762,9 +766,10 @@ export function FormBuilderProvider({
 
   // A save stores the form as it stood when it began, its status among it.
   const {
-    beenLive,
+    idFixed: formIdFixed,
     beginSave: statusBeginSave,
     markSaved: markAsSaved,
+    saveFailed,
   } = useBeenLive(initialData, currentDocument, {
     beginSave: historyBeginSave,
     markSaved: historyMarkSaved,
@@ -827,7 +832,8 @@ export function FormBuilderProvider({
       changeCount,
       undo,
       restored,
-      beenLive,
+      formIdFixed,
+      saveFailed,
       fieldKey,
       editField,
     }),
@@ -862,7 +868,8 @@ export function FormBuilderProvider({
       changeCount,
       undo,
       restored,
-      beenLive,
+      formIdFixed,
+      saveFailed,
       fieldKey,
       editField,
     ]

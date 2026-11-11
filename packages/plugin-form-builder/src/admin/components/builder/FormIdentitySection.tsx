@@ -46,7 +46,7 @@ export function FormIdentitySection(): JSX.Element {
     useFormBuilder();
   // Once live, the site may have read it by its ID, even if it has since
   // been closed or set back to draft.
-  const { beenLive: idFixed } = useFieldBookkeeping();
+  const { formIdFixed: idFixed } = useFieldBookkeeping();
   return (
     <FormSection label="Form">
       <SettingRow

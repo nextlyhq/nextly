@@ -246,6 +246,46 @@ describe("the form's ID", () => {
     expect(screen.getByRole("textbox", { name: "Form ID" })).toBeEnabled();
   });
 
+  it("is fixed while the save that makes it live runs, and freed if refused", async () => {
+    // The save is held open, then refused, to watch the ID while it runs.
+    let refuseSave: () => void = () => undefined;
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) =>
+      init?.method === "PATCH"
+        ? new Promise<Response>(resolve => {
+            refuseSave = () =>
+              resolve(
+                new Response(
+                  JSON.stringify({ error: { message: "Refused." } }),
+                  {
+                    status: 400,
+                    headers: { "content-type": "application/json" },
+                  }
+                )
+              );
+          })
+        : answer(200, {})
+    );
+    const { user } = view({ name: "Meetup", slug: "meetup" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await user.click(screen.getByRole("button", { name: /^Status:/ }));
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: /^Live/ })
+    );
+    await user.click(save());
+
+    // What this save sends is the ID it publishes: a rename while it runs
+    // does not move it.
+    const id = screen.getByRole("textbox", { name: "Form ID" });
+    await waitFor(() => expect(id).toBeDisabled());
+    await user.type(screen.getByRole("textbox", { name: "Name" }), " 2026");
+    expect(id).toHaveValue("meetup");
+
+    // Refused, nothing was stored: the form has not been live.
+    refuseSave();
+    await waitFor(() => expect(id).toBeEnabled());
+  });
+
   it("is fixed once a draft made live is saved, not before, and stays fixed", async () => {
     const { user, fetchMock } = view();
     await user.click(screen.getByRole("button", { name: /^Status:/ }));
