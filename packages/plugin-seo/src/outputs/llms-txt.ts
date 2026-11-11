@@ -9,6 +9,7 @@
  *
  * @module outputs/llms-txt
  */
+import { linkAddress } from "./plain-copy";
 
 /** One page, as llms.txt lists it. */
 export interface LlmsEntry {
@@ -29,16 +30,6 @@ export interface LlmsFile {
 
 /** `text` on one line, its line breaks and runs of space made one space. */
 const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
-
-/**
- * A link's address, its parentheses and spaces percent-encoded, so a page
- * whose address holds one is linked whole rather than cut short.
- */
-const linkAddress = (url: string): string =>
-  url.replace(
-    /[()\s]/g,
-    char => `%${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`
-  );
 
 /** A link's words, with the brackets that would end it escaped. */
 const linkText = (text: string): string =>

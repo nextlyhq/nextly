@@ -35,7 +35,7 @@ import { listedPageAt, listPages, type ListedPage } from "./listing";
 import { llmsTxt, type LlmsEntry } from "./llms-txt";
 import {
   copyAddressOf,
-  pageAddressOfCopy,
+  pagesOfCopy,
   plainCopyOf,
   type CopyField,
 } from "./plain-copy";
@@ -107,19 +107,30 @@ export async function llmsTxtOf(
       : { collections: config.collections }),
   });
   const sections = await sectionsOf(ctx, pages);
-  // Each page's copy, where copies are on and no page holds its address.
+  // Each page's copy, where copies are on and no page holds its address,
+  // and no other page listed has the copy's name for itself: a page named
+  // `index.html` keeps `index.html.md`, and its folder's page links itself.
   const copies =
     rules.plainTextCopies === true
       ? pages.map(page => copyAddressOf(page.loc))
       : [];
   const taken = await copiesTaken(ctx, copies);
+  const literal = new Set(
+    pages.map(page => `${page.loc}.md`).filter(copy => copies.includes(copy))
+  );
+  const linked = (at: number): string | undefined => {
+    const copy = copies[at];
+    const own = `${pages[at]?.loc}.md`;
+    return copy === undefined ||
+      taken.has(copy) ||
+      (literal.has(copy) && copy !== own)
+      ? undefined
+      : copy;
+  };
   const entries: LlmsEntry[] = pages.map((page, at) => ({
     section: sections.get(page.holder.collection) ?? SINGLES_SECTION,
     title: page.title ?? page.path,
-    url:
-      copies[at] !== undefined && !taken.has(copies[at])
-        ? copies[at]
-        : page.loc,
+    url: linked(at) ?? page.loc,
     ...(page.description === undefined
       ? {}
       : { description: page.description }),
@@ -201,25 +212,27 @@ async function documentOf(
 }
 
 /**
- * The language and kept path of the page a request for `url` asks for a copy
- * of, or nothing where `url` is not a copy's address. A path is kept without
- * its trailing slash, as the record keys it.
+ * The language and kept path of each page a request for `url` may ask for a
+ * copy of, in the order they are tried (`pagesOfCopy`). A path is kept
+ * without its trailing slash, as the record keys it.
  */
-async function pageAddressAsked(
+async function pageAddressesAsked(
   url: URL
-): Promise<{ locale: string; path: string } | undefined> {
-  const asked = pageAddressOfCopy(url.pathname);
-  if (asked === undefined) return undefined;
-  const pageUrl = new URL(url.href);
-  pageUrl.pathname = asked;
-  pageUrl.search = "";
-  const address = await addressOfRequest(pageUrl);
-  if (address === undefined) return undefined;
-  const { locale, path } = address;
-  return {
-    locale,
-    path: path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path,
-  };
+): Promise<{ locale: string; path: string }[]> {
+  const asked: { locale: string; path: string }[] = [];
+  for (const candidate of pagesOfCopy(url.pathname)) {
+    const pageUrl = new URL(url.href);
+    pageUrl.pathname = candidate;
+    pageUrl.search = "";
+    const address = await addressOfRequest(pageUrl);
+    if (address === undefined) continue;
+    const { locale, path } = address;
+    asked.push({
+      locale,
+      path: path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path,
+    });
+  }
+  return asked;
 }
 
 /** A listed page's plain-text copy, from its published document. */
@@ -290,27 +303,29 @@ async function plainCopyAt(
 ): Promise<{ body: string; page: ListedPage } | null> {
   const rules = await config.readRules(ctx, undefined);
   if (rules.plainTextCopies !== true) return null;
-  const address = await pageAddressAsked(url);
-  if (address === undefined) return null;
+  // A page of the site's at the copy's address is served there instead.
+  if ((await copiesTaken(ctx, [url.href])).size > 0) return null;
   const origin = (await siteOriginFor(url.origin, ctx, config)) ?? url.origin;
-  const page = await listedPageAt(ctx, address.path, address.locale, {
-    origin,
-    readRules: config.readRules,
-    ...(config.collections === undefined
-      ? {}
-      : { collections: config.collections }),
-  });
-  // One address per copy: the one the page's own address gives, and only
-  // where no page of the site's holds that address itself.
-  if (
-    page === null ||
-    new URL(copyAddressOf(page.loc)).pathname !== url.pathname ||
-    (await copiesTaken(ctx, [url.href])).size > 0
-  ) {
-    return null;
+  // The first listed page whose own copy this is: the page the name says
+  // literally before the folder's own page, as llms.txt links them.
+  for (const address of await pageAddressesAsked(url)) {
+    const page = await listedPageAt(ctx, address.path, address.locale, {
+      origin,
+      readRules: config.readRules,
+      ...(config.collections === undefined
+        ? {}
+        : { collections: config.collections }),
+    });
+    if (
+      page === null ||
+      new URL(copyAddressOf(page.loc)).pathname !== url.pathname
+    ) {
+      continue;
+    }
+    const body = await copyOf(ctx, page);
+    return body === null ? null : { body, page };
   }
-  const body = await copyOf(ctx, page);
-  return body === null ? null : { body, page };
+  return null;
 }
 
 /**

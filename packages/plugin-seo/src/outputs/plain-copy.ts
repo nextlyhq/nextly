@@ -70,12 +70,51 @@ function inline(nodes: readonly Node[]): string {
       if (node.type === "link" || node.type === "autolink") {
         const words = inline(childrenOf(node));
         const url = textOf(node.url);
-        return url === undefined ? words : `[${words}](${url})`;
+        return url === undefined ? words : `[${words}](${linkAddress(url)})`;
       }
-      if (typeof node.text === "string") return node.text;
+      if (typeof node.text === "string") return escapeText(node.text);
       return inline(childrenOf(node));
     })
     .join("");
+}
+
+/** The words of `nodes` as written, for code, where nothing is Markdown. */
+function rawInline(nodes: readonly Node[]): string {
+  return nodes
+    .map(node => {
+      if (node.type === "linebreak") return "\n";
+      if (typeof node.text === "string") return node.text;
+      return rawInline(childrenOf(node));
+    })
+    .join("");
+}
+
+/**
+ * `text` as Markdown reads it back: every character Markdown or HTML would
+ * take as markup escaped, and the start of each line that would begin a
+ * heading, a quote or a list, so the copy says the words the page shows.
+ */
+function escapeText(text: string): string {
+  return text
+    .replace(/[\\`*_[\]()<>|&]/g, "\\$&")
+    .split("\n")
+    .map(line =>
+      line
+        .replace(/^(\s*)(#|[-+])/, "$1\\$2")
+        .replace(/^(\s*\d+)([.)])/, "$1\\$2")
+    )
+    .join("\n");
+}
+
+/**
+ * A link's address, its parentheses and white space percent-encoded, so an
+ * address holding one is linked whole rather than cut short.
+ */
+export function linkAddress(url: string): string {
+  return url.replace(
+    /[()\s]/g,
+    char => `%${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`
+  );
 }
 
 /** `text` with each line begun by `prefix`. */
@@ -120,11 +159,10 @@ function table(node: Node): string {
 function image(node: Node): string {
   const src = textOf(node.src);
   if (src === undefined) return "";
-  const alt = textOf(node.altText) ?? textOf(node.alt) ?? "";
+  const alt = escapeText(textOf(node.altText) ?? textOf(node.alt) ?? "");
   const caption = textOf(node.caption);
-  return caption === undefined
-    ? `![${alt}](${src})`
-    : `![${alt}](${src})\n${caption}`;
+  const drawn = `![${alt}](${linkAddress(src)})`;
+  return caption === undefined ? drawn : `${drawn}\n${escapeText(caption)}`;
 }
 
 /** A link a button draws, as text and address. */
@@ -132,7 +170,9 @@ function button(value: Record<string, unknown>): string {
   const words = textOf(value.text);
   const url = textOf(value.url);
   if (words === undefined) return "";
-  return url === undefined ? words : `[${words}](${url})`;
+  return url === undefined
+    ? escapeText(words)
+    : `[${escapeText(words)}](${linkAddress(url)})`;
 }
 
 /** Each item of a node's list (`images`, `buttons`), drawn by `draw`. */
@@ -165,7 +205,7 @@ const BLOCK_WRITERS: Readonly<Record<string, (node: Node) => string>> = {
   },
   list,
   code: node =>
-    `\`\`\`${textOf(node.language) ?? ""}\n${inline(childrenOf(node))}\n\`\`\``,
+    `\`\`\`${textOf(node.language) ?? ""}\n${rawInline(childrenOf(node))}\n\`\`\``,
   horizontalrule: () => "---",
   image,
   gallery: node => itemsOf(node.images, image, "\n"),
@@ -243,7 +283,7 @@ const deeper = (at: Collecting): Collecting => ({
 /** Text or long text: its words, as written. */
 const wordsField: FieldReader = (_field, value, at) => {
   const words = textOf(value);
-  if (words !== undefined) at.parts.push(words.trim());
+  if (words !== undefined) at.parts.push(escapeText(words.trim()));
 };
 
 /** Rich text: its blocks, as Markdown. */
@@ -326,7 +366,7 @@ function richTextWords(value: unknown, parts: string[], depth: number): void {
 export function plainCopyOf(source: CopySource): string {
   const parts: string[] = [];
   const title = textOf(source.title)?.trim();
-  if (title !== undefined) parts.push(`# ${title}`);
+  if (title !== undefined) parts.push(`# ${escapeText(title)}`);
   if (source.fields === undefined) {
     for (const [name, value] of Object.entries(source.document)) {
       if (!NOT_CONTENT.has(name)) richTextWords(value, parts, 0);
@@ -362,14 +402,18 @@ export function copyAddressOf(address: string): string {
 }
 
 /**
- * The page address a request for `path` asks for a copy of, or nothing where
- * `path` is not a copy's address.
+ * The page addresses a request for `path` may ask for a copy of, in the
+ * order they are tried: the address the copy's name says literally (`/a.md`
+ * for `/a`, `/index.html.md` for `/index.html`), then, for `index.html.md`,
+ * the folder's own page (`/` or `/docs/`), whose copy has that name too.
+ * None where `path` is not a copy's address.
  */
-export function pageAddressOfCopy(path: string): string | undefined {
+export function pagesOfCopy(path: string): string[] {
+  if (!path.endsWith(".md")) return [];
+  const literal = path.slice(0, -".md".length);
+  const pages = literal === "" || literal.endsWith("/") ? [] : [literal];
   if (path.endsWith(`/${INDEX_COPY}`)) {
-    return path.slice(0, -INDEX_COPY.length);
+    pages.push(path.slice(0, -INDEX_COPY.length));
   }
-  if (!path.endsWith(".md")) return undefined;
-  const page = path.slice(0, -".md".length);
-  return page === "" || page.endsWith("/") ? undefined : page;
+  return pages;
 }

@@ -20,7 +20,7 @@ import { describe, expect, it } from "vitest";
 import {
   copyAddressOf,
   markdownOfRichText,
-  pageAddressOfCopy,
+  pagesOfCopy,
   plainCopyOf,
 } from "../plain-copy";
 
@@ -126,6 +126,27 @@ describe("rich text as Markdown", () => {
     );
     expect(markdownOfRichText(value)).toBe(
       "[Start now](/start)\n\n[A](/a) [B](/b)"
+    );
+  });
+
+  it("writes the words people see as words, never as Markdown or HTML", () => {
+    const value = rich(
+      paragraph(
+        text_(
+          "Use <Widget> or [name](/target), *not* _this_ \\ `that` | & so on"
+        )
+      ),
+      paragraph(text_("1. Not a list")),
+      paragraph(text_("# Not a heading")),
+      { type: "code", children: [text_("const a = <b>*c*</b>;")] }
+    );
+    expect(markdownOfRichText(value)).toBe(
+      [
+        "Use \\<Widget\\> or \\[name\\]\\(/target\\), \\*not\\* \\_this\\_ \\\\ \\`that\\` \\| \\& so on",
+        "1\\. Not a list",
+        "\\# Not a heading",
+        "```\nconst a = <b>*c*</b>;\n```",
+      ].join("\n\n")
     );
   });
 
@@ -256,12 +277,17 @@ describe("where a page's plain-text copy is served", () => {
     );
   });
 
-  it("reads a copy's address back to the page's, and nothing else", () => {
-    expect(pageAddressOfCopy("/blog/hello.md")).toBe("/blog/hello");
-    expect(pageAddressOfCopy("/index.html.md")).toBe("/");
-    expect(pageAddressOfCopy("/docs/index.html.md")).toBe("/docs/");
-    expect(pageAddressOfCopy("/blog/hello")).toBeUndefined();
-    expect(pageAddressOfCopy("/.md")).toBeUndefined();
-    expect(pageAddressOfCopy("/notes.txt")).toBeUndefined();
+  it("reads a copy's address back to the page addresses it may be a copy of, the literal one first", () => {
+    expect(pagesOfCopy("/blog/hello.md")).toEqual(["/blog/hello"]);
+    // A page named index.html and the folder's own page share a copy
+    // address: the page whose address it literally is comes first.
+    expect(pagesOfCopy("/index.html.md")).toEqual(["/index.html", "/"]);
+    expect(pagesOfCopy("/docs/index.html.md")).toEqual([
+      "/docs/index.html",
+      "/docs/",
+    ]);
+    expect(pagesOfCopy("/blog/hello")).toEqual([]);
+    expect(pagesOfCopy("/.md")).toEqual([]);
+    expect(pagesOfCopy("/notes.txt")).toEqual([]);
   });
 });

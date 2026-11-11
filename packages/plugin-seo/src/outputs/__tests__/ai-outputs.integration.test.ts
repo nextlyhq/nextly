@@ -90,6 +90,13 @@ async function boot(dialect: TestDialect) {
         fields: [text({ name: "title" }), richText({ name: "intro" })],
         publicAddress: "/",
       }),
+      // A page named index.html, whose copy's name the home page's has too.
+      defineSingle({
+        slug: "legacy-index",
+        access: open,
+        fields: [text({ name: "title" })],
+        publicAddress: "/index.html",
+      }),
       // A page whose own address is the one `/blog/hello`'s copy would have.
       defineSingle({
         slug: "hello-notes",
@@ -191,12 +198,16 @@ function visibleWords(html: string): string[] {
 
 /** The words of a Markdown copy, its markup and link addresses taken out. */
 function copyWords(markdown: string): string[] {
-  return markdown
-    .replace(/\]\([^)]*\)/g, "]")
-    .replace(/^#+ |^> |^- |^\d+\. /gm, "")
-    .replace(/[[\]]/g, "")
-    .split(/\s+/)
-    .filter(word => word !== "");
+  return (
+    markdown
+      .replace(/\]\([^)]*\)/g, "]")
+      // An escaped character is the character itself.
+      .replace(/\\(.)/g, "$1")
+      .replace(/^#+ |^> |^- |^\d+\. /gm, "")
+      .replace(/[[\]]/g, "")
+      .split(/\s+/)
+      .filter(word => word !== "")
+  );
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -362,6 +373,24 @@ describe.each(getConfiguredTestDialects())(
       expect(links).toContain(`${SITE}/blog/hello`);
       expect(links).toContain(`${SITE}/blog/hello.md.md`);
       expect(links).not.toContain(`${SITE}/blog/hello.md`);
+    });
+
+    it("gives index.html.md to the page named index.html, and links the home page itself", async () => {
+      const t = await boot(dialect);
+      await t.nextly.updateSingle({
+        slug: "home",
+        data: { _overwrite: true, title: "Welcome" },
+      });
+      await t.nextly.updateSingle({
+        slug: "legacy-index",
+        data: { _overwrite: true, title: "Old index" },
+      });
+      await switches(t, { plainTextCopies: true, llmsTxt: true });
+
+      expect((await ask("/index.html.md")).body).toBe("# Old index\n");
+      const links = await llmsLinks();
+      expect(links).toContain(`${SITE}/index.html.md`);
+      expect(links).toContain(`${SITE}/`);
     });
   }
 );
