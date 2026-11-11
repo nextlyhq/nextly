@@ -767,6 +767,8 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       // Matched by its slug to the page now at /blog/jasper, and a redirect
       // from the address it had, which no page holds.
       "15,jasper,https://old.example/old-jasper/,Jasper compared,,,,/blog/jasper,301",
+      // An address with a space in it, spelled encoded as a URL is.
+      "16,spaced,https://old.example/old%20page/,,,,,/blog/surfer,301",
     ].join("\n");
     const source: ImportSource = {
       kind: "rankMath",
@@ -774,7 +776,7 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       text: csv,
     };
     const dry = await dryRun(staff.importer, source);
-    expect(dry).toMatchObject({ checked: 4, pages: 2, redirects: 2 });
+    expect(dry).toMatchObject({ checked: 5, pages: 2, redirects: 3 });
     expect(dry.left).toEqual(["focus keyword"]);
     expect(await redirectCount(t)).toBe(0);
 
@@ -804,9 +806,14 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
           target: "/blog/jasper",
           origin: "import",
         }),
+        expect.objectContaining({
+          source: "/old%20page",
+          target: "/blog/surfer",
+          origin: "import",
+        }),
       ])
     );
-    expect(items).toHaveLength(2);
+    expect(items).toHaveLength(3);
   });
 
   it("dry-runs and applies a Payload export", async () => {
@@ -1003,3 +1010,99 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(applied.status).toBe(403);
   });
 });
+
+describe.each(getConfiguredTestDialects())(
+  "the SEO import where a field of the site's own group can't be read (%s)",
+  dialect => {
+    it("leaves a value its importer can't see as it is", async () => {
+      const t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        seedPublic: true,
+        plugins: [
+          seoPlugin({
+            collections: ["posts"],
+            sitemap: false,
+            fields: [
+              text({ name: "metaTitle", access: { read: () => false } }),
+              textarea({ name: "metaDescription" }),
+            ],
+          }),
+        ],
+        fieldGroups: [META_DATA],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            fields: [
+              text({ name: "title" }),
+              text({ name: "slug" }),
+              fieldGroup({ name: "metaData", component: "meta-data" }),
+            ],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+      current = t;
+      const owner = await t.nextly.users.create({
+        data: {
+          email: "owner@example.com",
+          password: "Password123!",
+          name: "Owner",
+          isActive: true,
+        },
+      });
+      const seeded = await t.nextly.permissions.find({ limit: 500 });
+      const role = await t.nextly.roles.create({
+        data: {
+          name: "Importer here",
+          slug: "importer-here",
+          permissionIds: [
+            "read-posts",
+            "update-posts",
+            MANAGE_SEO_PERMISSION,
+          ].map(slug => {
+            const found = seeded.items.find(item => item.slug === slug);
+            if (found === undefined) throw new Error(`${slug} is not seeded`);
+            return found.id;
+          }),
+        },
+      });
+      const keys = t.getService("apiKeyService") as unknown as {
+        createApiKey(
+          userId: string,
+          input: {
+            name: string;
+            tokenType: string;
+            roleId: string;
+            expiresIn: string;
+          }
+        ): Promise<{ key: string }>;
+      };
+      const { key } = await keys.createApiKey(String(owner.item.id), {
+        name: "importer key",
+        tokenType: "role-based",
+        roleId: String(role.item.id),
+        expiresIn: "unlimited",
+      });
+      await post(t, {
+        title: "Surfer",
+        slug: "surfer",
+        seo: { metaTitle: "Typed, and hidden" },
+        metaData: { seoTitle: "From the group", seoDescription: "Described" },
+      });
+      const source: ImportSource = {
+        kind: "group",
+        field: "metaData",
+        map: { seoTitle: "title", seoDescription: "description" },
+      };
+      const dry = await dryRun(key, source);
+      expect(dry).toMatchObject({ pages: 1, kept: 1 });
+      const applied = await apply(key, source, dry.plan);
+      expect(applied.status, await applied.clone().text()).toBe(200);
+      expect((await seoBySlug(t, "posts")).surfer).toMatchObject({
+        metaTitle: "Typed, and hidden",
+        metaDescription: "Described",
+      });
+    });
+  }
+);

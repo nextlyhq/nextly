@@ -11,6 +11,7 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { ImportTarget } from "./contract";
 import {
   pathOfAddress,
+  spelledPathOf,
   textValue,
   type ImportedRecord,
   type ImportedValues,
@@ -140,7 +141,9 @@ function valuesOf(cell: Cells, from: ParsedSource["from"]): ImportedValues {
 
 /** A row as a record, with the redirect it asks for where it can be kept. */
 function recordOf(cell: Cells, values: ImportedValues): ImportedRecord {
-  const path = pathOfAddress(cell("url") ?? cell("permalink") ?? cell("link"));
+  const address = cell("url") ?? cell("permalink") ?? cell("link");
+  const path = pathOfAddress(address);
+  const source = spelledPathOf(address);
   const slug = cell("slug");
   const target = cell("redirect_to");
   const permanent = REDIRECT_CODES[cell("redirect_type") ?? "301"];
@@ -153,7 +156,13 @@ function recordOf(cell: Cells, values: ImportedValues): ImportedRecord {
     values,
     variables: "rankMath",
     ...(target !== undefined && permanent !== undefined
-      ? { redirect: { target, permanent } }
+      ? {
+          redirect: {
+            ...(source === undefined ? {} : { source }),
+            target,
+            permanent,
+          },
+        }
       : {}),
   };
 }

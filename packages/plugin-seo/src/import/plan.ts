@@ -416,6 +416,11 @@ interface Decision {
 interface Deciding {
   /** The site's own origins, a canonical on which names the page itself. */
   origins: readonly string[];
+  /**
+   * The group's fields holding a value the person may not read: never
+   * empty places, so the import leaves them as they are.
+   */
+  unreadable: ReadonlySet<string>;
   record: ImportedRecord;
   page: ReadPage;
   templates: TemplateValues;
@@ -448,6 +453,10 @@ function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
   });
   if (value === undefined) {
     at.tally.unfilled++;
+    return;
+  }
+  if (at.unreadable.has(STORED[place])) {
+    at.tally.kept++;
     return;
   }
   const current = textValue(at.page.seo[STORED[place]]);
@@ -502,6 +511,10 @@ function decideImage(at: Deciding, images: ReadonlyMap<string, string>): void {
     at.tally.missingImages++;
     return;
   }
+  if (at.unreadable.has(STORED.image)) {
+    at.tally.kept++;
+    return;
+  }
   const current = chosenImage(at.page.seo[STORED.image]);
   if (current !== undefined) {
     if (current !== id) at.tally.kept++;
@@ -514,6 +527,10 @@ function decideImage(at: Deciding, images: ReadonlyMap<string, string>): void {
 /** Hide the page where the source hid it; a page a person hid stays hidden. */
 function decideHidden(at: Deciding): void {
   const hidden = at.record.values.hidden;
+  if (hidden !== undefined && at.unreadable.has(STORED.hidden)) {
+    at.tally.kept++;
+    return;
+  }
   const current = at.page.seo[STORED.hidden] === true;
   // A type hidden whole hides the page already, and showing the type again
   // should show it: the page is left to the type.
@@ -537,10 +554,12 @@ function decide(
   templates: TemplateValues,
   images: ReadonlyMap<string, string>,
   tally: Tally,
-  origins: readonly string[]
+  origins: readonly string[],
+  unreadable: ReadonlySet<string>
 ): Decision {
   const at: Deciding = {
     origins,
+    unreadable,
     record,
     page,
     templates,
@@ -671,12 +690,13 @@ function redirectOf(
   skipped: Skipped
 ): PlannedRedirect | undefined {
   if (record.redirect === undefined) return undefined;
-  if (record.match.path === undefined) {
+  const { source } = record.redirect;
+  if (source === undefined) {
     skipped.redirectsWithoutAddress++;
     return undefined;
   }
   return {
-    source: record.match.path,
+    source,
     target: record.redirect.target,
     permanent: record.redirect.permanent,
   };
@@ -825,6 +845,44 @@ async function writableOf(
   };
 }
 
+/** Whether a stored value fills its place. */
+function filledValue(value: unknown): boolean {
+  if (value === null || value === undefined || value === false) return false;
+  return typeof value !== "string" || value.trim() !== "";
+}
+
+/**
+ * Each page's `seo` fields that hold a value its reader was not shown: read
+ * as stored, and compared with the reader's own read, so where a field rule
+ * hides a value, the place is known to be filled without the value itself
+ * being read into the dry run.
+ */
+async function unreadableFields(
+  ctx: PluginContext,
+  pages: readonly ReadPage[],
+  locale: string | undefined
+): Promise<Map<string, Set<string>>> {
+  const found = new Map<string, Set<string>>();
+  for (const type of new Set(pages.map(page => page.type))) {
+    const ofType = pages.filter(page => page.type === type);
+    const stored = await readStored(
+      ctx,
+      type,
+      ofType.map(page => page.id),
+      asStored(locale)
+    );
+    for (const page of ofType) {
+      const group = stored.get(page.id)?.[SEO_GROUP];
+      if (!isRecord(group)) continue;
+      const hidden = Object.keys(group).filter(
+        name => filledValue(group[name]) && !(name in page.seo)
+      );
+      if (hidden.length > 0) found.set(`${type}|${page.id}`, new Set(hidden));
+    }
+  }
+  return found;
+}
+
 /** The import worked out, changing nothing. */
 export async function planImport(
   ctx: PluginRouteContext,
@@ -844,6 +902,7 @@ export async function planImport(
   const defaultLanguage =
     locale ?? (await ctx.publicAddresses.defaultLanguage());
   const parsed = parsedSource(request, pages, defaultLanguage);
+  const unreadable = await unreadableFields(ctx, pages, locale);
   const own = source.kind === "group" && source.field === SEO_GROUP;
   const templates = templatesOf(rules);
   const origins = productionAddressesOf(rules.productionAddresses);
@@ -868,7 +927,15 @@ export async function planImport(
     (record, page) =>
       own
         ? tidyOwn(page, tally)
-        : decide(record, page, templates, images, tally, origins)
+        : decide(
+            record,
+            page,
+            templates,
+            images,
+            tally,
+            origins,
+            unreadable.get(`${page.type}|${page.id}`) ?? new Set()
+          )
   );
   const {
     writable: changing,

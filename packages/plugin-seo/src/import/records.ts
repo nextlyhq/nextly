@@ -42,6 +42,8 @@ export interface RecordMatch {
 
 /** A redirect a record asks for. */
 export interface ImportedRedirect {
+  /** The address it is from, as a URL spells it, where the source gives one. */
+  source?: string;
   target: string;
   permanent: boolean;
 }
@@ -80,14 +82,8 @@ export function textValue(value: unknown): string | undefined {
  * or none where it is not an address. A path alone is read as one.
  */
 export function pathOfAddress(address: string | undefined): string | undefined {
-  const text = textValue(address);
-  if (text === undefined) return undefined;
-  let path: string;
-  try {
-    path = new URL(text, "https://example.invalid").pathname;
-  } catch {
-    return undefined;
-  }
+  const path = spelledPathOf(address);
+  if (path === undefined) return undefined;
   let decoded = path;
   try {
     decoded = decodeURI(path);
@@ -96,6 +92,23 @@ export function pathOfAddress(address: string | undefined): string | undefined {
   }
   const trimmed = decoded.replace(/\/+$/, "");
   return trimmed === "" ? "/" : trimmed;
+}
+
+/**
+ * The path an address names as a URL spells it, percent-encoded, without a
+ * trailing slash: what a redirect from it is stored as, since the redirect
+ * rules read a source as a URL spells it.
+ */
+export function spelledPathOf(address: string | undefined): string | undefined {
+  const text = textValue(address);
+  if (text === undefined) return undefined;
+  try {
+    const path = new URL(text, "https://example.invalid").pathname;
+    const trimmed = path.replace(/\/+$/, "");
+    return trimmed === "" ? "/" : trimmed;
+  } catch {
+    return undefined;
+  }
 }
 
 /** What a template is filled in with. */

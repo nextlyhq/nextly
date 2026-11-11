@@ -43,7 +43,7 @@ describe("Rank Math's CSV", () => {
         match: { path: "/old", slug: "old" },
         values: { title: "A, title", hidden: true },
         variables: "rankMath",
-        redirect: { target: "/new", permanent: false },
+        redirect: { source: "/old", target: "/new", permanent: false },
       },
     ]);
     expect(parsed.left).toEqual(["SEO score"]);
