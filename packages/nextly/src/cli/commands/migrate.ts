@@ -35,6 +35,8 @@ import { basename, resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
+import { Container, container } from "../../di/container";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-plain-passwords";
 import {
@@ -181,6 +183,7 @@ import { provisionUserFieldStorage } from "../../domains/users/services/provisio
 import { UserExtSchemaService } from "../../domains/users/services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
 import { NextlyError, describeError } from "../../errors";
+import { seedPermissionsRolesAndPresets } from "../../init/seed-permissions";
 import { configWatchAllowed } from "../../runtime/hmr-listener";
 import type { UserConfig } from "../../users/config/types";
 import { CliError, exitWithError } from "../errors";
@@ -549,6 +552,14 @@ export async function runMigrate(
         allowDropNonEmptyRetired,
         ensureLedger: () => ensureSchemaEventsTable(dz),
         step: options.step,
+        // A production start does not add permissions or set grants, so the deploy step does:
+        // through the services a start seeds with, on this command's connection and config.
+        seedPermissions: () =>
+          seedAccessOnCommandConnection(
+            adapter as unknown as DrizzleAdapter,
+            configResult.config,
+            logger
+          ),
         // A translations column already in place that cannot hold a field the config newly
         // translates, judged as the files left it and before the registry records them: refused
         // here, the registry keeps its definitions and the next run is refused the same way.
@@ -723,6 +734,42 @@ export async function runMigrate(
     logger.success(`migrate completed in ${formatDuration(duration)}`);
   } finally {
     await adapter.disconnect();
+  }
+}
+
+/**
+ * Phase 4 of `nextly migrate`: the permissions, declared roles and preset grants
+ * (`seedPermissionsRolesAndPresets`), on the command's own connection.
+ *
+ * A permission or grant written here retires the answers every running instance
+ * has cached, and that reaches the database through the service container, which
+ * a command starts with nothing in. So the command's adapter is lent to the
+ * container for the step and withdrawn after; a process that already registered
+ * one (a server, a test that booted an instance) keeps its own, since `restore`
+ * lends only a name not yet registered.
+ */
+async function seedAccessOnCommandConnection(
+  adapter: DrizzleAdapter,
+  config: SanitizedNextlyConfig,
+  logger: Logger
+): Promise<void> {
+  const lent = container.restore(
+    new Container().register("adapter", () => adapter)
+  );
+  try {
+    await seedPermissionsRolesAndPresets({
+      adapter,
+      config,
+      // Each seeder's progress is detail here; its warnings and errors are the operator's.
+      logger: {
+        debug: message => logger.debug(message),
+        info: message => logger.debug(message),
+        warn: message => logger.warn(message),
+        error: message => logger.error(message),
+      },
+    });
+  } finally {
+    container.withdraw(lent);
   }
 }
 
@@ -910,6 +957,14 @@ export interface MigrateCoreDeps {
    * newly translates.
    */
   beforeMetadata?: () => Promise<void>;
+  /**
+   * Phase 4: adds the missing permissions and declared roles and sets the preset roles' grants
+   * (`seedPermissionsRolesAndPresets`). Runs inside the lock, after Phase 3 has written the
+   * registry rows the entities' permissions are read from. A throw fails the run; the files and
+   * rows stay, and the next run, which writes only what differs, completes it. `nextly migrate`
+   * passes it; absent, the run leaves permissions, roles and grants to whoever else writes them.
+   */
+  seedPermissions?: () => Promise<void>;
   /**
    * Refuse, before anything changes, a pending file with a Schema Builder
    * name and no snapshot that is not recognised as an earlier Builder's
@@ -2259,6 +2314,17 @@ export async function migrateCore(
       // columns creates tables without them, and an entity whose registry
       // row only Phase 3 records is found only once it has.
       await (deps.documentColumnsFn ?? addDocumentColumnsFor)(deps);
+
+      // Phase 4, still inside the lock: the permissions of the entities whose rows Phase 3 just
+      // wrote, with core's, the app's and the plugins', then the roles and the preset grants
+      // computed from them. Under the lock so no other run sets them from another state between.
+      if (deps.seedPermissions !== undefined) {
+        deps.logger.info(
+          "Phase 4: adding permissions, roles and preset grants..."
+        );
+        await deps.assertLockHeld?.();
+        await deps.seedPermissions();
+      }
     },
     {
       command: deps.lockCommand ?? "nextly migrate",
