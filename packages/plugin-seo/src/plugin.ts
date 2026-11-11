@@ -66,6 +66,7 @@ import { redirectsCollection } from "./redirects/collection";
 import { REDIRECTS_PAGE } from "./redirects/contract";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
 import { redirectRoutes } from "./redirects/routes";
+import { PAGE_BUILDER_PLUGIN } from "./resolver/design-level";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import {
   contentTypesRoute,
@@ -99,6 +100,8 @@ import {
   type StructuredDataOptions,
 } from "./structured-data/rules";
 import { seoTabParts } from "./tab/install";
+import { PAGE_BUILDER_TAB } from "./template/contributions";
+import { seoTemplateRoute } from "./template/route";
 import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
@@ -569,12 +572,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // robots.txt and pages already say.
     admin: {
       ...tab.admin,
+      // The SEO tab on every edit page the group is added to, and the one in
+      // the Page Builder's Settings, where it runs.
+      contributions: [...(tab.admin?.contributions ?? []), PAGE_BUILDER_TAB],
       clientConfig: {
         aiCrawlers: options.aiCrawlers ?? "all",
         hiddenTypes: [...new Set(options.hiddenTypes ?? [])],
         // Each type's structured data choice the options make, which the
         // screen shows until the site chooses its own.
         structuredData: checkedTypeRules(options.structuredData?.types),
+        // The collections whose pages the SEO tab edits, so the tab in the
+        // Page Builder's Settings knows a page it has a group to edit.
+        tabCollections: tab.admin === undefined ? [] : [...targets],
       },
       menu: [
         // Shown to everyone in the admin: the list answers each person with
@@ -656,6 +665,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       pageMetadata,
     }),
     ...tab.routes,
+    // What a Page Builder template's SEO panel reads.
+    seoTemplateRoute({
+      readRules,
+      ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+    }),
     ...problemRoutes(problemChecks),
     // The Pages and addresses screen's list, and its save of a page with no
     // entry's SEO.
@@ -710,6 +724,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     tags: ["seo", "meta"],
     // The route helpers ask this plugin for each page's head.
     provides: ["page-metadata"],
+    // Where the Page Builder runs, its Settings dialog has an SEO tab; where
+    // it does not, the tab is left out and the site starts as before.
+    optionalDependsOn: { [PAGE_BUILDER_PLUGIN]: `>=${PLUGIN_VERSION}` },
     contributes,
     init(ctx) {
       // The settings Single's registered name, for readers other plugins call.

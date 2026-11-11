@@ -35,6 +35,11 @@ export interface DesignSeoRequest {
   readonly entry: Readonly<Record<string, unknown>>;
   /** The language the page is drawn in. */
   readonly locale?: string;
+  /**
+   * The design to draw the page with, where it is not the one saved: a
+   * design being edited, previewed with the entry before it is saved.
+   */
+  readonly document?: unknown;
 }
 
 /**
@@ -77,7 +82,7 @@ function idOf(entry: Readonly<Record<string, unknown>>): string | undefined {
 
 export function designSeoService(deps: DesignSeoDeps): DesignSeoService {
   return {
-    valuesFor: async ({ collection, entry, locale }) => {
+    valuesFor: async ({ collection, entry, locale, document }) => {
       const nextly = await deps.nextly();
       const base = {
         config: { nextly },
@@ -85,6 +90,8 @@ export function designSeoService(deps: DesignSeoDeps): DesignSeoService {
         entry: { ...entry },
         ...(locale === undefined ? {} : { locale }),
       };
+      // A design handed in draws the page as it is, unsaved.
+      if (document !== undefined) return deps.derive({ ...base, document });
       // A page draws its own blocks, as the pages route draws them.
       if (collection === deps.pages.collection) {
         return deps.derive({ ...base, field: deps.pages.field });

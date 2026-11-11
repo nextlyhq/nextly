@@ -24,6 +24,10 @@ import {
   useSavedRevision,
   type SettingsAddress,
 } from "./settings-address";
+import type { SettingsPlace } from "./settings-place";
+
+/** What each drawing of the place's tabs was handed. */
+const placeTabs: Record<string, unknown>[] = [];
 
 let siteRead: SiteSettingsRead | undefined;
 /** The site code read, empty: its section has tests of its own. */
@@ -76,6 +80,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       fetching: siteFetching,
       refetch,
     };
+  },
+  // The admin's place tabs, standing in: what the dialog hands them, and
+  // the page's own settings drawn as their first tab.
+  PlaceTabs: (props: { children: ReactElement } & Record<string, unknown>) => {
+    placeTabs.push(props);
+    return props.children;
   },
   writePluginRoute: async (write: { path: string; body?: unknown }) => {
     if (write.path === "/publish-readiness") {
@@ -150,6 +160,9 @@ let reshow: () => void = () => {};
 /** The address the dialog is drawn with; a case may change it and reshow. */
 let shownAddress: SettingsAddress | null = null;
 
+/** The place the dialog is drawn with; a case may set it before showing. */
+let shownPlace: SettingsPlace | null = null;
+
 function show(
   onOpenChange = vi.fn(),
   pageLayout?: ReactElement,
@@ -166,6 +179,7 @@ function show(
         onOpenChange={onOpenChange}
         returnFocus={() => null}
         pageFields={<input aria-label="Title" defaultValue="About us" />}
+        place={shownPlace}
         {...(pageLayout === undefined ? {} : { pageLayout })}
         share={{ title: "Who we are", description: "We build tools." }}
         seoFields={seoFields}
@@ -185,6 +199,8 @@ function show(
 }
 
 beforeEach(() => {
+  placeTabs.length = 0;
+  shownPlace = null;
   addressRead = undefined;
   addressAsked.length = 0;
   siteRead = MANAGER;
@@ -216,6 +232,39 @@ describe("the Settings dialog", () => {
       a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
     expect(order(title, sections[0]!)).toBeTruthy();
     expect(order(sections[0]!, sharing)).toBeTruthy();
+  });
+
+  it("draws the page's settings as the first tab of the place other plugins add to", () => {
+    const set = vi.fn();
+    shownPlace = {
+      context: {
+        userId: "u1",
+        document: "template",
+        collection: "templates",
+        entryId: "t1",
+        draws: { collection: "posts", entryId: null },
+      },
+      tabProps: {
+        seo: { value: undefined, set },
+        design: { formatVersion: 1, kind: "template", nodes: [] },
+        control: {} as never,
+        writable: true,
+      },
+    };
+    show();
+    expect(screen.getByLabelText("Title")).toBeTruthy();
+    expect(placeTabs.at(-1)).toMatchObject({
+      place: "nextlyhq-plugin-page-builder.settings",
+      contentLabel: "General",
+      context: shownPlace.context,
+      tabProps: { seo: { set }, writable: true },
+    });
+  });
+
+  it("draws no place for a document that offers none", () => {
+    show();
+    expect(placeTabs).toEqual([]);
+    expect(screen.getByLabelText("Title")).toBeTruthy();
   });
 
   it("shows the page's fields and an approximate share preview", () => {

@@ -136,6 +136,7 @@ import {
   type SettingsAddress,
 } from "./settings-address";
 import { SettingsDialog } from "./settings-dialog";
+import { useSettingsPlace, type SettingsPlace } from "./settings-place";
 import {
   sharePreview,
   type SharePreview,
@@ -1164,7 +1165,8 @@ function pagePreview(view: EditorView, page: PageFacts): SharePreview {
  */
 function editorSettings(
   view: EditorView,
-  page: PageFacts
+  page: PageFacts,
+  place: SettingsPlace | null
 ): NonNullable<React.ComponentProps<typeof BuilderShell>["renderSettings"]> {
   const {
     entryFields,
@@ -1182,6 +1184,8 @@ function editorSettings(
       <SettingsDialog
         {...dialog}
         pageFields={entryFields}
+        // Other plugins' tabs beside the page's own settings.
+        place={place}
         // The page's Layout, in its own section after the page's fields.
         pageLayout={pageLayout}
         // Built only while the dialog is drawn, from the page on screen.
@@ -1479,6 +1483,13 @@ function EditorBody<TFieldValues extends FieldValues>({
   });
 
   const page = usePageFacts(control);
+  // The Settings dialog's place for other plugins' tabs, for a page or a
+  // design: what is being edited, and its own metadata as one undoable edit.
+  const settingsPlace = useSettingsPlace(
+    editor,
+    control,
+    mount.initialDocument.kind
+  );
   // A component's own view, and the way into one from a placement: its
   // banner, which says how far a change reaches, and "Edit component".
   const componentView = useComponentView({
@@ -1727,7 +1738,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             page.title
           )}
           openSettingsRequest={view.pages.settingsRequest}
-          renderSettings={editorSettings(view, page)}
+          renderSettings={editorSettings(view, page, settingsPlace)}
           // The shell owns the region; this fills it. Rendered unconditionally
           // rather than only when something is selected, because the panel states
           // "select a block to edit it" — a region that appears and disappears

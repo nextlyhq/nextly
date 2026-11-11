@@ -24,6 +24,25 @@ function fieldNames(fields: FieldConfig[]): (string | undefined)[] {
   return fields.map(f => ("name" in f ? f.name : undefined));
 }
 
+/** The Page Builder's Settings place, which the SEO plugin adds a tab to. */
+const PAGE_BUILDER_PLACE = "nextlyhq-plugin-page-builder.settings";
+
+/** The tab, as the plugin declares it there. */
+const PAGE_BUILDER_TAB_DECLARED = {
+  id: "nextlyhq-plugin-seo.page-builder-tab",
+  kind: "tab",
+  place: PAGE_BUILDER_PLACE,
+  label: "SEO",
+  component: "@nextlyhq/plugin-seo/admin#PageBuilderSeoTab",
+};
+
+/** The contributions a plugin adds to the entry and Single edit pages. */
+function editPageContributions(plugin: ReturnType<typeof seoPlugin>) {
+  return (plugin.contributes?.admin?.contributions ?? []).filter(
+    each => each.place !== PAGE_BUILDER_PLACE
+  );
+}
+
 describe("seoPlugin", () => {
   it("returns a plugin definition directly (no unwrapping)", () => {
     const plugin = seoPlugin({ collections: ["pages"] });
@@ -100,6 +119,8 @@ describe("seoPlugin", () => {
       ["GET", "/received/pages", undefined, undefined],
       ["POST", "/received", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
+      // A Page Builder template's SEO panel's read.
+      ["POST", "/template", undefined, undefined],
       // The problem list, read and checked again by a signed-in reader.
       ["GET", "/problems", undefined, undefined],
       ["POST", "/problems/check", undefined, undefined],
@@ -178,6 +199,7 @@ describe("seoPlugin", () => {
       "/received/pages",
       "/received",
       "/resolve",
+      "/template",
       "/problems",
       "/problems/check",
       "/pages",
@@ -206,6 +228,7 @@ describe("seoPlugin", () => {
       "/received/pages",
       "/received",
       "/resolve",
+      "/template",
       "/problems",
       "/problems/check",
       "/pages",
@@ -306,10 +329,12 @@ describe("the dashboard card the plugin contributes", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
     expect(plugin.contributes?.admin).not.toHaveProperty("widgets");
-    // Its admin contributions are the SEO tab and its side panel line.
+    // Its admin contributions are the SEO tab, its side panel line, and the
+    // tab in the Page Builder's Settings.
     expect(plugin.contributes?.admin?.contributions).toEqual([
       expect.objectContaining({ kind: "tab" }),
       expect.objectContaining({ kind: "sidebarSection" }),
+      expect.objectContaining({ kind: "tab", place: PAGE_BUILDER_PLACE }),
     ]);
     // Read as a property of the value: `widgetSources` is no field of the
     // contributions type, so a typed read of it does not compile.
@@ -388,6 +413,7 @@ describe("the SEO tab the plugin contributes", () => {
         after: "details",
         singles: ["homepage"],
       },
+      PAGE_BUILDER_TAB_DECLARED,
     ]);
   });
 
@@ -395,7 +421,7 @@ describe("the SEO tab the plugin contributes", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
     expect(
       plugin.contributes?.admin?.contributions?.map(each => each.place)
-    ).toEqual(["collection.edit", "collection.edit"]);
+    ).toEqual(["collection.edit", "collection.edit", PAGE_BUILDER_PLACE]);
   });
 });
 
@@ -410,7 +436,7 @@ describe("the SEO tab and fields of a project's own", () => {
         text({ name: "focusKeyword" }),
       ],
     });
-    expect(plugin.contributes?.admin?.contributions).toBeUndefined();
+    expect(editPageContributions(plugin)).toEqual([]);
   });
 
   it("leaves a group whose fields say they may not be edited among the page's fields", () => {
@@ -428,10 +454,7 @@ describe("the SEO tab and fields of a project's own", () => {
           text({ name: "metaDescription" }),
         ],
       });
-      expect(
-        plugin.contributes?.admin?.contributions,
-        JSON.stringify(admin)
-      ).toBeUndefined();
+      expect(editPageContributions(plugin), JSON.stringify(admin)).toEqual([]);
     }
   });
 
@@ -448,7 +471,7 @@ describe("the SEO tab and fields of a project's own", () => {
         sitemap: false,
         fields: [metaTitle, text({ name: "metaDescription" })],
       });
-      expect(plugin.contributes?.admin?.contributions).toBeUndefined();
+      expect(editPageContributions(plugin)).toEqual([]);
     }
   });
 
@@ -458,6 +481,38 @@ describe("the SEO tab and fields of a project's own", () => {
       sitemap: false,
       fields: [text({ name: "metaTitle" }), text({ name: "metaDescription" })],
     });
-    expect(plugin.contributes?.admin?.contributions).toHaveLength(2);
+    expect(editPageContributions(plugin)).toHaveLength(2);
+  });
+});
+
+describe("the SEO tab in the Page Builder's Settings", () => {
+  it("is added to the Page Builder's place, which the plugin names as an optional dependency", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    expect(plugin.contributes?.admin?.contributions).toContainEqual(
+      PAGE_BUILDER_TAB_DECLARED
+    );
+    expect(plugin.optionalDependsOn).toEqual({
+      "@nextlyhq/plugin-page-builder": `>=${plugin.version}`,
+    });
+  });
+
+  it("is told which collections' pages it edits: those the SEO tab edits", () => {
+    const editing = seoPlugin({ collections: ["pages"], sitemap: false });
+    expect(editing.contributes?.admin?.clientConfig).toMatchObject({
+      tabCollections: ["pages"],
+    });
+    // A group the tab cannot edit stays among the page's fields: no page's
+    // SEO is the Page Builder tab's either, though a template's rule still is.
+    const gated = seoPlugin({
+      collections: ["pages"],
+      sitemap: false,
+      fields: [text({ name: "metaTitle" }), text({ name: "focusKeyword" })],
+    });
+    expect(gated.contributes?.admin?.clientConfig).toMatchObject({
+      tabCollections: [],
+    });
+    expect(gated.contributes?.admin?.contributions).toEqual([
+      PAGE_BUILDER_TAB_DECLARED,
+    ]);
   });
 });

@@ -87,6 +87,21 @@ describe("the design level of a page", () => {
     ]);
   });
 
+  it("is the design handed in, unsaved, whatever is saved", async () => {
+    const derive = vi.fn<DeriveDesignValues>(async () => ({ title: "Draft" }));
+    const { service: s, api } = service(derive);
+    const draft = { formatVersion: 1, kind: "template", nodes: [] };
+
+    await s.valuesFor({
+      collection: "posts",
+      entry: { id: "p2" },
+      document: draft,
+    });
+
+    expect(derive.mock.calls[0]?.[0].document).toBe(draft);
+    expect(api.find).not.toHaveBeenCalled();
+  });
+
   it("is nothing where no design draws the entry", async () => {
     const derive = vi.fn<DeriveDesignValues>(async () => ({ title: "x" }));
     const { service: s } = service(derive);

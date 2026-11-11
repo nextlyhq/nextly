@@ -230,7 +230,7 @@ function originOf(address: string | undefined): string | undefined {
  * Where the site is shown to be: its main production address, else the
  * origin the plugin was configured with, else the one the admin is on.
  */
-function siteOf(
+export function siteOf(
   rules: SiteRules,
   baseUrl: string | undefined,
   req: Request

@@ -55,6 +55,12 @@ const pageBuilder: PluginDefinition = {
   version: "1.0.0",
   nextly: "*",
   contributes: {
+    // Its Settings place, which the SEO plugin adds a tab to.
+    admin: {
+      places: [
+        { name: "nextlyhq-plugin-page-builder.settings", accepts: ["tab"] },
+      ],
+    },
     services: {
       designSeo: () => ({
         valuesFor: async ({ entry }: { entry: Record<string, unknown> }) =>

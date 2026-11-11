@@ -20,7 +20,7 @@ import type {
 import { isRecord } from "../plain-values";
 
 /** The Page Builder, as its services are offered under its name. */
-const PAGE_BUILDER_PLUGIN = "@nextlyhq/plugin-page-builder";
+export const PAGE_BUILDER_PLUGIN = "@nextlyhq/plugin-page-builder";
 
 /** Its service answering a page's design level. */
 const DESIGN_SEO_SERVICE = "designSeo";
@@ -30,6 +30,7 @@ type ValuesFor = (request: {
   collection: string;
   entry: Readonly<Record<string, unknown>>;
   locale?: string;
+  document?: unknown;
 }) => Promise<PageMetadataValues | undefined>;
 
 /** The service's question, where the Page Builder offers it. */
@@ -40,11 +41,16 @@ function valuesForOf(ctx: PluginContext): ValuesFor | undefined {
   return typeof valuesFor === "function" ? (valuesFor as ValuesFor) : undefined;
 }
 
-/** The design level of the page `source` names, in `locale`. */
+/**
+ * The design level of the page `source` names, in `locale`: drawn by
+ * `document` where one is handed (a design being edited), else by the design
+ * the page's route draws it with.
+ */
 export async function designLevelOf(
   ctx: PluginContext,
   source: PageMetadataInput["source"],
-  locale?: string
+  locale?: string,
+  document?: unknown
 ): Promise<PageMetadataValues> {
   // A Single's page is drawn by its own route alone; no design is asked.
   if (source.kind !== "entry") return {};
@@ -54,6 +60,7 @@ export async function designLevelOf(
     collection: source.collection,
     entry: source.entry,
     ...(locale === undefined ? {} : { locale }),
+    ...(document === undefined ? {} : { document }),
   });
   return values ?? {};
 }

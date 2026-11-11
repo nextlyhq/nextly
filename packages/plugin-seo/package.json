@@ -66,6 +66,8 @@
   },
   "devDependencies": {
     "@nextlyhq/admin": "workspace:*",
+    "@nextlyhq/blocks-react": "workspace:*",
+    "@nextlyhq/plugin-page-builder": "workspace:*",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@nextlyhq/ui": "workspace:*",
