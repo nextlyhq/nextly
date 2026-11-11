@@ -52,6 +52,12 @@ describe("removedEntityTables", () => {
     });
   });
 
+  it("reads a collection that carries contributed columns of two of those names as a collection", () => {
+    expect(
+      removed(table("dc_posts", ["title", "_parent_id", "_parent_table"]))
+    ).toEqual({ collections: ["dc_posts"], singles: [], fieldGroups: [] });
+  });
+
   it("reads no field group in a table without a prefix or the parent columns", () => {
     expect(removed(table("my_archive", ["heading"]))).toEqual({
       collections: [],

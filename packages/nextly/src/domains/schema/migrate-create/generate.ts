@@ -3185,21 +3185,27 @@ export interface RemovedEntityTables {
 }
 
 /**
- * Whether a table is a field group's: carrying the parent columns every
- * field-group table has, or named with the field-group prefix. The columns are
- * asked first: a field group named through the `dbName` it once accepted keeps
- * the table its author chose, which may carry any prefix, a collection's or a
- * Single's included, but no collection or Single can have those columns, since
- * a field name starts with a letter.
+ * The system columns every field-group table carries, all of them: its parent's id, table and
+ * field, and its order among them.
+ */
+const FIELD_GROUP_SIGNATURE = [
+  STORAGE_FORMAT.columns.parentId,
+  STORAGE_FORMAT.columns.parentTable,
+  STORAGE_FORMAT.columns.parentField,
+  STORAGE_FORMAT.columns.order,
+];
+
+/**
+ * Whether a table is a field group's: carrying the whole set of system columns every field-group
+ * table has, or named with the field-group prefix. The columns are asked first: a field group
+ * named through the `dbName` it once accepted keeps the table its author chose, which may carry any
+ * prefix, a collection's or a Single's included, but no collection or Single has those columns (a
+ * field name starts with a letter), and a column a plugin or the app contributes is one name, not
+ * the whole set.
  */
 function isFieldGroupTable(table: TableSpec): boolean {
   const columns = new Set(table.columns.map(column => column.name));
-  if (
-    columns.has(STORAGE_FORMAT.columns.parentId) &&
-    columns.has(STORAGE_FORMAT.columns.parentTable)
-  ) {
-    return true;
-  }
+  if (FIELD_GROUP_SIGNATURE.every(column => columns.has(column))) return true;
   return table.name.startsWith(STORAGE_FORMAT.tablePrefix);
 }
 
