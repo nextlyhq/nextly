@@ -462,9 +462,11 @@ export class SingleMetadataService {
     // prevents. That recovery half is the migration lock this relocation exists to unblock, and the
     // ordering changes with it rather than before it.
     // The row and the stored schema version in one transaction, so the
-    // version's count moves with the save it records (`writeRegistryRows`).
-    const record = await writeRegistryRowsWith(this.adapter, () =>
-      this.registry.registerSingle({ ...input, migrationStatus })
+    // version's count moves with the save it records (`writeRegistryRows`);
+    // the permissions are seeded once it has committed.
+    const record = await this.registry.registerSingle(
+      { ...input, migrationStatus },
+      { writeRow: write => writeRegistryRowsWith(this.adapter, write) }
     );
 
     return { record, migrationStatus };
