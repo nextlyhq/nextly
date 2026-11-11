@@ -75,11 +75,17 @@ vi.mock("../../address-record/participant", async importOriginal => ({
   },
 }));
 
+/** The language each page was resolved in, by id. */
+const resolvedIn = new Map<string, string | undefined>();
+
 vi.mock("../../resolver/provider", () => ({
   resolveSeo: async (
     _ctx: unknown,
-    input: { source: { entry: { id: string } } }
-  ) => answers.get(input.source.entry.id),
+    input: { source: { entry: { id: string } }; locale?: string }
+  ) => {
+    resolvedIn.set(input.source.entry.id, input.locale);
+    return answers.get(input.source.entry.id);
+  },
 }));
 
 const SITE = "https://acme.example";
@@ -113,7 +119,8 @@ function meets(row: Row, condition: Record<string, unknown>): boolean {
 function context(
   documents: Record<string, unknown>[],
   rows: Row[],
-  languages?: string[]
+  languages?: string[],
+  registry?: string
 ) {
   return {
     self: { collections: {} },
@@ -128,7 +135,7 @@ function context(
           },
     publicAddresses: {
       types: async () => [{ kind: "collection", slug: "pages" }],
-      defaultLanguage: async () => languages?.[0] ?? "en",
+      defaultLanguage: async () => registry ?? languages?.[0] ?? "en",
     },
     services: {
       collections: {
@@ -336,5 +343,24 @@ describe("the pages the site lists", () => {
       { origin: SITE }
     );
     expect(readTogether).toEqual([["/about", "/team"]]);
+  });
+
+  it("resolves each page in the default language the live language list names, not the configuration's", async () => {
+    // Languages managed in Settings: the configuration declares none.
+    answers.set("1", {
+      robots: listed,
+      canonical: { value: `${SITE}/fr/about`, from: "page" },
+    });
+    const { pages } = await listPages(
+      context(
+        [{ id: "1", slug: "about" }],
+        [holds("1", "/about", "fr")],
+        undefined,
+        "fr"
+      ),
+      { origin: SITE }
+    );
+    expect(resolvedIn.get("1")).toBe("fr");
+    expect(pages.map(page => page.loc)).toEqual([`${SITE}/fr/about`]);
   });
 });

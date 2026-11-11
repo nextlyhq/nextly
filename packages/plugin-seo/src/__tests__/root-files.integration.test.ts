@@ -145,6 +145,13 @@ async function boot(
         fields: [text({ name: "title" })],
         publicAddress: "/",
       }),
+      // A Single with Draft/Published, never published here.
+      defineSingle({
+        slug: "contact",
+        status: true,
+        fields: [text({ name: "title" })],
+        publicAddress: "/contact",
+      }),
     ],
   });
   const ctx = seen.ctx;
@@ -316,6 +323,18 @@ describe.each(getConfiguredTestDialects())(
         status: "published",
       });
       expect(await listed()).toEqual([`${SITE}/en/blog/hello`]);
+    });
+
+    it("leaves out a Single never published, and does not count it as a problem", async () => {
+      const { t, ctx } = await boot(dialect);
+      await t.nextly.updateSingle({
+        slug: "contact",
+        data: { title: "Write to us", status: "draft", _overwrite: true },
+      });
+      expect(await listed()).not.toContain(`${SITE}/contact`);
+      const listing = ctx.services.plugins["@nextlyhq/plugin-seo"]
+        ?.listedPages as ListedPagesService;
+      expect((await listing.list(SITE)).problems).toEqual([]);
     });
 
     it("hiding a page leaves the sitemap and serves noindex in one change", async () => {

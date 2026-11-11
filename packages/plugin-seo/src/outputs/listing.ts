@@ -145,14 +145,6 @@ async function heldPaths(
   }
 }
 
-/** The site's default language, where it has languages. */
-function defaultLanguage(ctx: PluginContext): string | undefined {
-  const localization = ctx.config.localization;
-  return localization !== undefined && localization.locales.length > 0
-    ? localization.defaultLocale
-    : undefined;
-}
-
 /**
  * The language the listed pages are read in, as the address record keys it:
  * core's answer, the site's default language.
@@ -167,9 +159,8 @@ function recordLanguage(ctx: PluginContext): Promise<string> {
  */
 async function servedAt(
   path: string,
-  locale: string | undefined
+  locale: string
 ): Promise<string | undefined> {
-  if (locale === undefined) return path;
   const served = await languageAddressOf(path, locale);
   return served.status === "resolved"
     ? `${served.origin ?? ""}${served.path}`
@@ -186,6 +177,9 @@ async function singleDocument(
       slug,
       createIfMissing: false,
       overrideAccess: true,
+      // Published values only, as a visitor is served them: a draft, and a
+      // Single a release has withdrawn, are no page.
+      status: "published",
       depth: 1,
     });
     return isRecord(document) ? document : null;
@@ -363,7 +357,7 @@ function ownImage(answer: SeoAnswer, origin: string): string[] {
 async function listedAt(
   answer: SeoAnswer,
   origin: string,
-  locale: string | undefined,
+  locale: string,
   own: PublicAddress
 ): Promise<{ loc: string; path: string } | { lost: string } | null> {
   if (!answer.robots.value.index) return null;
@@ -392,14 +386,18 @@ async function listed(
   ctx: PluginContext,
   candidate: Candidate,
   own: PublicAddress,
-  options: ListingOptions
+  options: ListingOptions & { language: string }
 ): Promise<
   | { page: ListedPage }
   | { lost: { holder: AddressHolder; path: string } }
   | null
 > {
   const { type, document, holder } = candidate;
-  const locale = defaultLanguage(ctx);
+  // Read in the site's default language as the live language list names it:
+  // the page is listed where that language serves it, which on a site with
+  // no other language is the page's own path. Its other languages'
+  // addresses are its own.
+  const locale = options.language;
   const answer = await resolveSeo(
     ctx,
     {
@@ -409,10 +407,7 @@ async function listed(
           : { kind: "entry", collection: type.slug, entry: document },
       code: {},
       derived: {},
-      // A site with languages serves each page under its language's address:
-      // the page as read, in the default language, is listed where that
-      // language serves it. Its other languages' addresses are its own.
-      ...(locale === undefined ? {} : { locale }),
+      locale,
     },
     options.readRules
   );
