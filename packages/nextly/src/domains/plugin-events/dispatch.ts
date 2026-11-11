@@ -345,17 +345,9 @@ async function runDelivery(
   ];
   const released = { lockedBy: null, lockedUntil: null };
 
-  const handler = run.subscribers.handlerOf(delivery.subscriber);
-  if (!handler) {
-    // Held for its own subscriber, never another's, its next look put off so
-    // a long-gone subscriber is not read on every pass. One retired by a
-    // reload is back within seconds: looked at again on the next pass.
-    // Rounded down, so the next pass finds it due, where a hold is rounded
-    // up as every lease and backoff is.
-    const nextAttemptAt = run.subscribers.isRetired(delivery.subscriber)
-      ? new Date(Math.floor(at.getTime() / 1000) * 1000)
-      : ceilToSecond(at.getTime() + HOLD_MS);
-    await adapter.transaction(tx =>
+  // Held for its own subscriber, never another's, until `nextAttemptAt`.
+  const hold = (nextAttemptAt: Date) =>
+    adapter.transaction(tx =>
       tx.updateCount(
         PLUGIN_EVENT_DELIVERIES_TABLE,
         {
@@ -368,6 +360,18 @@ async function runDelivery(
         { and: mine }
       )
     );
+
+  const handler = run.subscribers.handlerOf(delivery.subscriber);
+  if (!handler) {
+    // Its next look put off, so a long-gone subscriber is not read on every
+    // pass. One retired by a
+    // reload is back within seconds: looked at again on the next pass.
+    // Rounded down, so the next pass finds it due, where a hold is rounded
+    // up as every lease and backoff is.
+    const nextAttemptAt = run.subscribers.isRetired(delivery.subscriber)
+      ? new Date(Math.floor(at.getTime() / 1000) * 1000)
+      : ceilToSecond(at.getTime() + HOLD_MS);
+    await hold(nextAttemptAt);
     return "held";
   }
 
@@ -375,6 +379,12 @@ async function runDelivery(
     lockEvent(tx, run.dialect, delivery.eventId)
   );
   if (!event) return "skipped";
+  // The name is registered again for another event: that is another
+  // subscriber, and this event's delivery waits for its own.
+  if (run.subscribers.eventOf(delivery.subscriber) !== event.name) {
+    await hold(ceilToSecond(at.getTime() + HOLD_MS));
+    return "held";
+  }
   const attempt = delivery.attemptCount + 1;
   try {
     await handler({

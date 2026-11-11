@@ -59,6 +59,11 @@ export interface DurableSubscribers {
   /** The handler registered under `key`, if any is. */
   handlerOf(key: string): DurableHandler | undefined;
   /**
+   * The event the running subscriber `key` subscribes to: a name registered
+   * again for another event is not owed the old event's deliveries.
+   */
+  eventOf(key: string): string | undefined;
+  /**
    * Whether `key` is retired within its grace: its plugin is expected back,
    * so a delivery owed to it is looked at again soon rather than held.
    */
@@ -131,6 +136,10 @@ export function createDurableSubscribers(
     handlerOf(key) {
       const entry = byKey.get(key);
       return entry?.retiredAt === undefined ? entry?.handler : undefined;
+    },
+    eventOf(key) {
+      const entry = byKey.get(key);
+      return entry?.retiredAt === undefined ? entry?.event : undefined;
     },
     isRetired(key) {
       const entry = byKey.get(key);

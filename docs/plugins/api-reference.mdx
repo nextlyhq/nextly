@@ -315,7 +315,8 @@ ctx.events.onDurable("acme-billing.charged", "award-points", async event => {
   included, and resolves with the event's `id`. Only names your plugin declares
   `durable: true` are accepted; the payload is a JSON object of at most 64 KB.
 - `onDurable(name, subscriber, handler)` subscribes under a name unique within
-  your plugin, 1 to 64 lower-case letters, digits, dots, dashes or underscores.
+  your plugin: 1 to 64 lower-case letters, digits, dots, dashes or underscores,
+  starting with a letter or digit.
   A delivery is owed to that name, so it reaches the same handler after a restart,
   however subscribers were added or reordered. Each subscriber registered when an
   event is dispatched gets one delivery. A plugin reloading in development is

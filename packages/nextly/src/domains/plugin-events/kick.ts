@@ -10,7 +10,8 @@
  * offer does nothing; the sweep delivers. The pass is the sweep's own
  * dispatch, deliveries claimed by lease, so a kick racing the sweep, here or
  * in another process, cannot deliver twice. A burst of commits runs one pass
- * at a time in this process, with at most one more queued behind it.
+ * at a time in this process, with at most one more queued behind it, and
+ * one `after()` callback runs two passes at most.
  *
  * @module domains/plugin-events/kick
  * @experimental
@@ -33,6 +34,13 @@ type AfterFn = (callback: () => void | Promise<void>) => void;
 const KICK_BUDGET_MS = 5_000;
 /** Events fanned out, and deliveries run, per prompt pass at most. */
 const KICK_BATCH = 25;
+/**
+ * Passes one `after()` callback runs at most: its own and one queued behind
+ * it. Under a steady stream of commits every pass would queue another, and
+ * the callback would hold its invocation open for as long as the stream
+ * lasts; what is left is the sweep's.
+ */
+const KICK_PASSES = 2;
 
 /** What the kick is built from. */
 export interface DurableEventsKickOptions {
@@ -73,7 +81,7 @@ export class DurableEventsKick {
     }
   }
 
-  /** The pass, coalesced, its failure logged and swallowed. */
+  /** The passes, coalesced, each failure logged and swallowed. */
   private async run(): Promise<void> {
     if (this.running) {
       this.queued = true;
@@ -82,19 +90,23 @@ export class DurableEventsKick {
     this.running = true;
     try {
       const dispatch = this.options.dispatch ?? (() => this.dispatchOnce());
-      do {
+      for (let pass = 0; pass < KICK_PASSES; pass += 1) {
         this.queued = false;
-        // As the scheduled dispatch runs it: `after()` runs this in the
-        // emitting request's context, and a handler must not act as that
-        // request's caller, under its key's scope or its route actor, for
-        // every event the pass delivers.
-        await runDetachedFromRequest(dispatch);
-      } while (this.queued);
-    } catch (error) {
-      this.options.logger?.warn(
-        "A prompt dispatch of durable events failed; the scheduled dispatch will deliver them",
-        { error: error instanceof Error ? error.message : String(error) }
-      );
+        try {
+          // As the scheduled dispatch runs it: `after()` runs this in the
+          // emitting request's context, and a handler must not act as that
+          // request's caller, under its key's scope or its route actor, for
+          // every event the pass delivers.
+          await runDetachedFromRequest(dispatch);
+        } catch (error) {
+          // A failed pass does not drop the one queued behind it.
+          this.options.logger?.warn(
+            "A prompt dispatch of durable events failed; the scheduled dispatch will deliver them",
+            { error: error instanceof Error ? error.message : String(error) }
+          );
+        }
+        if (!this.queued) break;
+      }
     } finally {
       this.running = false;
     }
