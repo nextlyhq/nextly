@@ -10,7 +10,10 @@
  * - with no provider, a route serves what it always served, and a route with
  *   no `buildMetadata` reads nothing for its metadata at all;
  * - a Single route, which is never told where the app mounts it, asks without
- *   a path.
+ *   a path;
+ * - the page's render is handed the structured data of the same answer, as
+ *   JSON-LD text that no value can break out of, and nothing without a
+ *   provider.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -250,5 +253,100 @@ describe("a Single route with a page-metadata provider", () => {
     });
 
     expect(await route.generateMetadata()).toBe(own);
+  });
+});
+
+/** The JSON-LD text a render was handed, read back. */
+function graphOf(text: string | undefined): unknown {
+  return (JSON.parse(text ?? "") as { "@graph": unknown })["@graph"];
+}
+
+const NODES = [{ "@type": "WebPage", name: "About </script><script>x" }];
+
+describe("structured data handed to a page's render", () => {
+  it("hands a content page the structured data of the answer its head reads", async () => {
+    const asked = provide(() => ({ title: "About", structuredData: NODES }));
+    const { reader } = contentReader();
+    const rendered: Array<string | undefined> = [];
+    const route = createPublicContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      locale: "en",
+      render: (_, context) => {
+        rendered.push(context.structuredData);
+        return "page";
+      },
+      buildMetadata: () => ({ title: "From code" }),
+    });
+
+    await route.generateMetadata(params(["about"]));
+    await route.ContentPage(params(["about"]));
+
+    expect(graphOf(rendered[0])).toEqual(NODES);
+    // No value ends the script element the text is placed in.
+    expect(rendered[0]).not.toMatch(/<\/script/i);
+    // Asked about the same page the same way, so both read one answer.
+    expect(asked).toHaveLength(2);
+    expect(asked[1]).toEqual(asked[0]);
+  });
+
+  it("hands a Single page the structured data of the answer its head reads", async () => {
+    const asked = provide(() => ({ structuredData: NODES }));
+    const rendered: Array<string | undefined> = [];
+    const route = createSingleRoute({
+      slug: "homepage",
+      nextly: singleReader(),
+      locale: "en",
+      render: (_, context) => {
+        rendered.push(context.structuredData);
+        return "home";
+      },
+    });
+
+    await route.generateMetadata();
+    await route.SinglePage();
+
+    expect(graphOf(rendered[0])).toEqual(NODES);
+    expect(asked[1]).toEqual(asked[0]);
+  });
+
+  it("hands nothing, and works nothing out, with no provider", async () => {
+    recordCapabilityProviders([]);
+    const { reader } = contentReader();
+    const contexts: object[] = [];
+    let built = 0;
+    const route = createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      render: (_, context) => {
+        contexts.push(context);
+        return "page";
+      },
+      buildMetadata: () => {
+        built += 1;
+        return { title: "Own" };
+      },
+    });
+
+    await route.ContentPage(params(["about"]));
+
+    expect(contexts[0]).not.toHaveProperty("structuredData");
+    expect(built).toBe(0);
+  });
+
+  it("renders the page without structured data when the provider fails", async () => {
+    provide(() => {
+      throw new Error("settings unreadable");
+    });
+    const { reader } = contentReader();
+    const route = createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      render: (_, context) => context.structuredData ?? "no structured data",
+    });
+
+    expect(await route.ContentPage(params(["about"]))).toBe(
+      "no structured data"
+    );
   });
 });

@@ -52,6 +52,11 @@ const serverEntries = [
   // the app's bundle.
   "src/cache-handler.ts",
   "src/cache-handlers.ts",
+  // `nextly/next`: `withNextly()`, which a site's `next.config` calls. Next.js
+  // loads that file in Node while it reads the app's config, before any bundle
+  // exists, so no browser reaches this entry and it may load Next.js's own
+  // server modules.
+  "src/next.ts",
   "src/scripts/load-env.ts",
   "src/api/auth-state.ts",
   "src/api/health.ts",
@@ -139,7 +144,6 @@ const serverEntries = [
 // check reads it as written, and refuses a shape it cannot read.
 const clientEntries = [
   "src/config.ts",
-  "src/next.ts",
   "src/field-group-type.ts",
   // Types only, consumed by the admin's reconcile surface. Contributes no runtime code.
   "src/field-group-reconcile.ts",

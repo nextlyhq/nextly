@@ -65,9 +65,16 @@ afterEach(() => {
 
 const HEALTHY: SystemHealthData = {
   version: "1.2.3",
+  latest: { status: "latest", version: "1.2.3" },
+  environment: { production: false },
+  database: { dialect: "sqlite", encryption: "not-applicable", exposed: false },
   migrations: { status: "ok", failed: 0, pending: 0 },
   schemaChanges: { failed: [], more: 0 },
   storage: { status: "ok" },
+  email: { provider: null },
+  jobs: { queued: 0, running: 0, failed: 0 },
+  runtime: { node: "24.0.0" },
+  plugins: [],
 };
 
 const person: ReadCaller = { user: { id: "u1" } };
@@ -106,11 +113,11 @@ describe("core's System health, declared", () => {
     );
   });
 
-  it("is one of core's declarations, 4 x 3 by default and 4 x 2 at the least, and not on the default", () => {
+  it("is one of core's declarations, half the width by default and a third at the least, and not on the default", () => {
     expect(CORE_DECLARATIONS.map(widget => widget.id)).toContain(
       "core/system-health"
     );
-    expect(systemHealthWidget.size.default).toEqual({ w: 4, h: 3 });
+    expect(systemHealthWidget.size.default).toEqual({ w: 6, h: 4 });
     expect(systemHealthWidget.size.min).toEqual({ w: 4, h: 2 });
     expect(CORE_DEFAULT_LAYOUT.map(card => card.widget)).not.toContain(
       "core/system-health"
@@ -161,7 +168,12 @@ describe("only a super-admin is told System health exists", () => {
     const signal = new AbortController().signal;
     for (const reader of readers) {
       expect(reader.kind).toBe("system");
-      expect(reader.severity).toBe("critical");
+      // Critical, but for a connection whose encryption could not be read.
+      expect(reader.severity).toBe(
+        reader.id === "core/system-connection-unchecked"
+          ? "warning"
+          : "critical"
+      );
       expect(await reader.visible?.(signal)).toBe(false);
     }
     callerIsSuperAdmin.mockResolvedValue(true);

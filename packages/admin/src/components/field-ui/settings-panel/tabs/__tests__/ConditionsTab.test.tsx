@@ -39,7 +39,7 @@ describe("ConditionsTab", () => {
       screen.getByRole("button", { name: /\+ add condition/i })
     ).toBeInTheDocument();
     expect(screen.queryByText(/^Source field$/i)).toBeNull();
-    // The visual builder, not the JSON textarea it replaced.
+    // The conditions builder, not the JSON textarea it replaced.
     expect(
       screen.queryByPlaceholderText(/"field": "status"/i)
     ).not.toBeInTheDocument();

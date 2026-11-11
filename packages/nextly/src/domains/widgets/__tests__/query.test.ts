@@ -1472,6 +1472,32 @@ describe("validateWidgetQuery, a source's declared filters", () => {
     expect(q.where).toEqual({ collection: "posts", onlyMine: true });
   });
 
+  it("admits Role as a role's slug, and refuses any other value", () => {
+    registerSource({
+      id: "system:people",
+      label: "People",
+      kind: "system",
+      supports: ["list"],
+      fields: [{ name: "name", type: "string" }],
+      filters: ["role"],
+    });
+    const q = validateWidgetQuery({
+      source: "system:people",
+      op: "list",
+      where: { role: "editor" },
+    });
+    expect(q.where).toEqual({ role: "editor" });
+    for (const role of ["", 3, { equals: "editor" }]) {
+      expect(() =>
+        validateWidgetQuery({
+          source: "system:people",
+          op: "list",
+          where: { role },
+        })
+      ).toThrow(/where filter "role" on "system:people" must be a role's slug/);
+    }
+  });
+
   it("refuses a filter in a value it does not take, and one the source does not declare", () => {
     expect(() =>
       validateWidgetQuery({

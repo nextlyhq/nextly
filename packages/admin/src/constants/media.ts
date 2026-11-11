@@ -35,7 +35,7 @@ export const MEDIA_SORT_OPTIONS: ReadonlyArray<{
  * base token. The ui package's contrast tests hold both pairings.
  */
 export const MEDIA_DESTRUCTIVE_TEXT_CLASSES =
-  "text-destructive-700 dark:text-destructive" as const;
+  "text-danger-text" as const;
 
 /**
  * The longest alt text and caption the admin saves for an item: the edit

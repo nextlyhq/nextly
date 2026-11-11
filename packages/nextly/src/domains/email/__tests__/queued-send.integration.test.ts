@@ -23,6 +23,7 @@ process.env.NEXTLY_SECRET =
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { container } from "../../../di/container";
+import { getNextlyLogger } from "../../../observability/logger";
 import { runPostInitTasks } from "../../../init/post-init-tasks";
 import { env } from "../../../lib/env";
 import {
@@ -384,6 +385,7 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
     // past its own failure handling, and the job queue alone counts attempts.
     const t = await boot(dialect);
     behaviour.failures = 1;
+    const errors = vi.spyOn(getNextlyLogger(), "error");
     const result = await t.nextly.email.queue(message);
     expect(result.state).toBe("waiting");
     const get = container.get.bind(container);
@@ -403,6 +405,12 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
     expect(row.settledAt).toEqual(expect.any(Number));
     const [job] = await emailJobs(t);
     expect(job.state).toBe("failed");
+    expect(errors).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "queued-email-failed",
+        queuedId: result.id,
+      })
+    );
   }, 120_000);
 
   it("retries a retryable failure with backoff up to the limit, then fails it", async () => {
@@ -434,6 +442,7 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
   it("fails at once, with no other attempt, when the provider refuses it", async () => {
     const t = await boot(dialect);
     behaviour.refusals = 1;
+    const errors = vi.spyOn(getNextlyLogger(), "error");
 
     const result = await t.nextly.email.queue(message);
     await trigger(t, later(1));
@@ -446,6 +455,15 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
       retryable: false,
       status: 422,
       reason: "The email provider refused the message (status 422).",
+    });
+    // Its sender learns only the id and the state; the reason is logged.
+    expect(errors).toHaveBeenCalledWith({
+      kind: "queued-email-failed",
+      message:
+        "A queued email failed and will not be sent: The email provider refused the message (status 422).",
+      queuedId: result.id,
+      retryable: false,
+      status: 422,
     });
   });
 

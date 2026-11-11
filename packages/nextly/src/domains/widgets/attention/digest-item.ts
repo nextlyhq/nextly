@@ -37,6 +37,17 @@ export interface AttentionDigestItem {
   link?: string;
   /** One line saying why it is waiting; absent when its owner gave none. */
   reason?: string;
+  /**
+   * Where the documentation says how to fix it: an absolute `https://` address
+   * on nextlyhq.com, opened outside the admin. Absent when the item's link or
+   * reason is the place to act.
+   */
+  help?: string;
+  /**
+   * One thing, not a count of things: its row says the label alone, as the
+   * label already says what is wrong ("Database connection is not encrypted").
+   */
+  single?: true;
   /** The count could not be read: it failed, timed out or was not a count. */
   failed?: true;
 }

@@ -465,3 +465,77 @@ describe("teardownEntityComponentData case-distinct catalogs", () => {
     expect(result.tablesTouched).toContain("seo_meta");
   });
 });
+
+describe("teardownEntityComponentData follows a deep chain", () => {
+  it("deletes every level, whatever the definitions place now, probing each table once", async () => {
+    // Six field groups, each with a row parented to the previous level's, beside ten tables that
+    // hold nothing of the entity's. No definition places any of them: every one has since stopped,
+    // which leaves the rows stored where they were written.
+    const chain = ["l1", "l2", "l3", "l4", "l5", "l6"];
+    const others = Array.from({ length: 10 }, (_, i) => `x${i}`);
+    const parentOf = new Map(
+      chain.map((slug, i) => [
+        `comp_${slug}`,
+        i === 0 ? "dc_posts" : `comp_${chain[i - 1]}`,
+      ])
+    );
+    const probes = new Map<string, number>();
+    const reads = new Map<string, number>();
+    const deleted: string[] = [];
+    type Condition = { column: string; op?: string; value?: unknown };
+    // The resolvability probe matches nothing by asking for a row with no id.
+    const isProbe = (conditions: Condition[]) =>
+      conditions.some(c => c.column === "id" && c.op === "IS NULL");
+    const childRowsOf = (table: string, conditions: Condition[]) => {
+      const parent = conditions.find(c => c.column === "_parent_table")?.value;
+      return parentOf.get(table) === parent ? [{ id: `${table}-1` }] : [];
+    };
+    const registryRows = [...chain, ...others].map(slug => ({
+      slug,
+      table_name: `comp_${slug}`,
+      fields: [],
+    }));
+    const adapter = {
+      dialect: "postgresql" as const,
+      listTables: vi
+        .fn()
+        .mockResolvedValue([
+          ...chain.map(slug => `comp_${slug}`),
+          ...others.map(slug => `comp_${slug}`),
+          "dynamic_components",
+        ]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn(async (table: string) => {
+        deleted.push(table);
+        return 1;
+      }),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      select: vi.fn(
+        async (table: string, options?: { where?: { and?: Condition[] } }) => {
+          if (table === "dynamic_components") return registryRows;
+          const conditions = options?.where?.and ?? [];
+          const probe = isProbe(conditions);
+          const tally = probe ? probes : reads;
+          tally.set(table, (tally.get(table) ?? 0) + 1);
+          return probe ? [] : childRowsOf(table, conditions);
+        }
+      ),
+    };
+
+    await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    // Every level of the chain went, though no definition places it.
+    expect(new Set(deleted)).toEqual(
+      new Set(chain.map(slug => `comp_${slug}`))
+    );
+    for (const slug of [...chain, ...others]) {
+      // Resolvability is the table's, so it is asked once, not once per level.
+      expect(probes.get(`comp_${slug}`)).toBe(1);
+      // Each level reads every table: the entity's, then each of the six chain levels.
+      expect(reads.get(`comp_${slug}`)).toBe(chain.length + 1);
+    }
+  });
+});

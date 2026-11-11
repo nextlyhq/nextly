@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The add gallery as the dashboard drives it: the server's gallery read, what an add puts where,
+ * The add panel as the dashboard drives it: the server's gallery read, what an add puts where,
  * and where focus goes once the panel closes.
  *
  * Kept apart from the grid, which already composes the arrangement, its data and its chrome:
@@ -14,6 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { JSX } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { toast } from "@admin/components/ui";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
@@ -29,16 +30,18 @@ import type { LayoutEditor } from "./useLayoutEditor";
 export interface DashboardAddPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  editor: Pick<
-    LayoutEditor,
-    "isEditing" | "placements" | "atCapacity" | "add" | "setSize"
-  >;
+  editor: Pick<LayoutEditor, "isEditing" | "placements" | "atCapacity" | "add">;
   byId: ReadonlyMap<string, DashboardWidget>;
   /** Put a removed card back where it was. */
   restore: (placementId: string) => void;
   /** Ring the card that was just added, or none. */
   highlight: (placementId: string | null) => void;
   focus: Pick<DashboardFocus, "request">;
+  /**
+   * A card was added as one the reader already has: its settings open for them to tell it apart
+   * (`useProvisionalCard`).
+   */
+  startProvisional: (placementId: string) => void;
 }
 
 /** Whether the add panel is open, as the grid holds it. */
@@ -127,9 +130,12 @@ function CustomizingAddPanel({
   restore,
   highlight,
   focus,
+  startProvisional,
 }: DashboardAddPanelProps) {
   // The last card this visit added: where focus goes when the panel closes, in view.
   const lastAdded = useRef<string | null>(null);
+  // Whether the panel closed to open a new card's settings, which then hold focus.
+  const handedOn = useRef(false);
   // Each visit starts with none. Read from `open` itself, since the bar opens the panel
   // by setting it, not through the sheet's own open callback.
   useEffect(() => {
@@ -164,20 +170,27 @@ function CustomizingAddPanel({
     (
       widgetId: string,
       settings?: Record<string, unknown>,
-      width?: number
+      matchesOne?: boolean
     ): AddedCard | null => {
-      // At the end of the order, at its widget's starting size; then at the width chosen, held
-      // to the widget's bounds as every resize is.
+      // At the end of the order, at its widget's starting size and with its defaults.
       const id = editor.add(widgetId, settings);
       if (id === null) return null;
-      const start = byId.get(widgetId)?.size.default;
-      if (width !== undefined && start !== undefined && width !== start.w) {
-        editor.setSize(id, { w: width, h: start.h });
-      }
       landed(id);
-      return { title: titleOf(widgetId, settings) };
+      const title = titleOf(widgetId, settings);
+      if (matchesOne === true) {
+        // The panel gives way to the new card's settings, which take focus as they open, and
+        // says why they opened.
+        lastAdded.current = null;
+        handedOn.current = true;
+        onOpenChange(false);
+        startProvisional(id);
+        toast(
+          `${byId.get(widgetId)?.title ?? title} added. Every collection already has one, so pick its settings.`
+        );
+      }
+      return { title };
     },
-    [editor, byId, landed, titleOf]
+    [editor, byId, landed, titleOf, onOpenChange, startProvisional]
   );
 
   const onAddBack = useCallback(
@@ -192,6 +205,11 @@ function CustomizingAddPanel({
   );
 
   const onClosed = useCallback(() => {
+    // Closed for a new card's settings, which hold focus now.
+    if (handedOn.current) {
+      handedOn.current = false;
+      return;
+    }
     const last = lastAdded.current;
     // The last card added, by its menu, which the focus request scrolls into view; with nothing
     // added, back to Add widget.

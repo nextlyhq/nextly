@@ -86,6 +86,7 @@ function audienceOf(ids: readonly string[], held: readonly string[]) {
     heldActionGates: new Set(held),
     token: "test",
     readableCollections: new Set(),
+    readsUsers: false,
   };
   return audience;
 }

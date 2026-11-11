@@ -111,7 +111,28 @@ export interface PageMetadataAnswer {
   };
   /** The page's address in each language, keyed by language code. */
   languages?: Record<string, string>;
+  /**
+   * The page's structured data: JSON-LD nodes, written without `@context`,
+   * which the route helpers hand the page's render as one schema.org graph.
+   * Plain JSON only, since the answer is cached as JSON.
+   */
+  structuredData?: StructuredDataNode[];
 }
+
+/** @experimental A JSON value, as a structured data node may hold. */
+export type StructuredDataValue =
+  | string
+  | number
+  | boolean
+  | null
+  | StructuredDataValue[]
+  | { [key: string]: StructuredDataValue };
+
+/**
+ * @experimental One JSON-LD node of a page's structured data, such as
+ * `{ "@type": "WebPage", "@id": "https://example.com/about", name: "About" }`.
+ */
+export type StructuredDataNode = { [key: string]: StructuredDataValue };
 
 /**
  * @experimental A page-metadata provider's service.

@@ -497,7 +497,7 @@ function idProblem(id: unknown, inCore: boolean): string | undefined {
 /**
  * Why `description` is not one line of text, or `undefined`.
  *
- * Its length is no fault: the add gallery truncates a long one, and refusing
+ * Its length is no fault: the add panel cuts a long one to one line, and refusing
  * to start over a sentence's length stops a whole site for a cosmetic reason.
  */
 export function descriptionProblem(description: unknown): string | undefined {

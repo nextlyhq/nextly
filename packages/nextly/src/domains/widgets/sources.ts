@@ -197,12 +197,13 @@ export interface WidgetSource {
 
 /**
  * A card setting a source may narrow its answer by: the Collection a row
- * belongs to, Only mine, the reader's own, or Tab, whose work a card shows:
- * the reader's own (`"mine"`) or other people's (`"team"`).
+ * belongs to, Only mine, the reader's own, Tab, whose work a card shows: the
+ * reader's own (`"mine"`) or other people's (`"team"`), or Role, the people
+ * holding one role, by its slug.
  *
  * @experimental
  */
-export type WidgetSourceFilter = "collection" | "onlyMine" | "tab";
+export type WidgetSourceFilter = "collection" | "onlyMine" | "tab" | "role";
 
 /**
  * The values the Tab filter takes, in the order a card offers them: the
@@ -270,6 +271,7 @@ const SOURCE_FILTERS: ReadonlySet<string> = new Set<WidgetSourceFilter>([
   "collection",
   "onlyMine",
   "tab",
+  "role",
 ]);
 
 /**

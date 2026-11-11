@@ -644,7 +644,7 @@ export function EmailProviderForm({
                   <span className="flex items-start gap-1.5">
                     {selectedDescriptor?.capabilities
                       ?.requiresVerifiedSender && (
-                      <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-warning-600 dark:text-warning-500" />
+                      <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-warning-text" />
                     )}
                     <span>
                       {selectedDescriptor?.capabilities

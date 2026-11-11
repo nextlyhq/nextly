@@ -140,6 +140,8 @@ function toTablePaginationState(
     limit: response.meta.limit,
     total: response.meta.total,
     totalPages: response.meta.totalPages,
+    totalCapped: response.meta.totalCapped === true,
+    pageItemCount: response.items.length,
   };
 }
 
@@ -383,6 +385,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       status: "all",
       where: whereFilter,
       translationStatus: wantsTranslationStatus || undefined,
+      // Counting every row of a very large collection is slow, and the list
+      // only needs to say "1000+" past that.
+      cappedCount: true,
     },
   });
   // A request held for the filters is still loading: a disabled query reports

@@ -14,7 +14,7 @@
  * - **Animation**: Width transition (300ms linear) for smooth progress updates
  * - **Variants**:
  *   - `default`: Primary blue (bg-primary-500)
- *   - `success`: Green (bg-success-500)
+ *   - `success`: Green (bg-success-solid)
  *   - `error`: Red (bg-destructive)
  *
  * ## Accessibility
@@ -61,7 +61,7 @@ import type { VariantsFn } from "../lib/variants";
 export const PROGRESS_VARIANT_MAP = {
   variant: {
     default: "bg-primary-500",
-    success: "bg-success-500",
+    success: "bg-success-solid",
     error: "bg-destructive",
   },
 };
@@ -115,7 +115,7 @@ export type ProgressProps = {
    * Visual variant for different states
    *
    * - `default`: Primary blue (bg-primary-500)
-   * - `success`: Green (bg-success-500)
+   * - `success`: Green (bg-success-solid)
    * - `error`: Red (bg-destructive)
    *
    * @default "default"

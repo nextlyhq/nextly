@@ -12,6 +12,8 @@
  */
 
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
+import { Socket } from "node:net";
+import { TLSSocket } from "node:tls";
 
 import { count, getColumns, sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
@@ -67,6 +69,8 @@ import type {
   TransactionOptions,
   SessionOptions,
   StatementSession,
+  ConnectionEncryption,
+  ConnectionInspection,
   DatabaseCapabilities,
   PoolStats,
   DatabaseError,
@@ -2096,6 +2100,117 @@ export abstract class DrizzleAdapter {
    */
   getPoolStats(): PoolStats | null {
     return null;
+  }
+
+  /**
+   * What this adapter can say about its connection, for a health check:
+   * whether it is encrypted (read from a database session, never from
+   * configuration), whether the database is on this machine, the server's
+   * version and how long a small query took.
+   *
+   * @remarks
+   * Never throws: a read that fails answers `"unknown"` encryption, which a
+   * caller must treat as unchecked, not as encrypted. This default knows
+   * nothing about the connection, so it answers exactly that; the dialect
+   * adapters override it.
+   *
+   * @returns The inspection, holding no address
+   */
+  inspectConnection(): Promise<ConnectionInspection> {
+    return Promise.resolve({ encryption: "unknown", local: false });
+  }
+
+  /**
+   * Whether a connection is encrypted, from the two things a dialect adapter
+   * reads: what the database session said about itself, and whether this
+   * process's own socket to the server negotiated TLS.
+   *
+   * The site's own socket decides, where it can be read: it is the leg this
+   * machine's traffic leaves on. Behind a connection pooler or proxy
+   * (PgBouncer, a hosted provider's pooler) the session describes the
+   * pooler's own connection to the database, which can be plain while this
+   * socket is TLS, or encrypted while this socket is plain; either way the
+   * session does not speak for this leg. Where the socket cannot be read, the
+   * session's answer stands, as on a direct connection the two are one.
+   *
+   * A session that could not say is `"unknown"` whatever the socket is, so the
+   * answer is never "encrypted" on less than a read that succeeded.
+   *
+   * @param read.session - The session's own answer; `undefined` when it gave none
+   * @param read.ownSocketTls - Whether this process's socket negotiated TLS;
+   *   `undefined` when the socket could not be read
+   */
+  protected encryptionOf(read: {
+    session: boolean | undefined;
+    ownSocketTls: boolean | undefined;
+  }): ConnectionEncryption {
+    if (read.session === undefined) return "unknown";
+    const encrypted = read.ownSocketTls ?? read.session;
+    return encrypted ? "encrypted" : "unencrypted";
+  }
+
+  /**
+   * Whether a driver's connection handle talks to its server over a socket
+   * that negotiated TLS: node-postgres' client and mysql2's connection each
+   * hold their socket at `connection.stream`, which each replaces with a
+   * `TLSSocket` once TLS is negotiated. `false` for a plain socket (a TCP or
+   * local socket that is not TLS); `undefined` for a handle shaped otherwise,
+   * whose socket could not be read, so neither answer is guessed.
+   *
+   * @param handle - A pooled client or connection, as the driver hands it
+   */
+  protected ownSocketIsTls(handle: unknown): boolean | undefined {
+    if (typeof handle !== "object" || handle === null) return undefined;
+    if (!("connection" in handle)) return undefined;
+    const connection = handle.connection;
+    if (typeof connection !== "object" || connection === null) return undefined;
+    if (!("stream" in connection)) return undefined;
+    const stream = connection.stream;
+    if (stream instanceof TLSSocket) return true;
+    return stream instanceof Socket ? false : undefined;
+  }
+
+  /**
+   * Whether `host` names this machine: a loopback name or address, or a local
+   * socket path. Anything else, an empty or unreadable host included, is
+   * judged remote, so a connection is never excused for an address that
+   * could not be read.
+   *
+   * @param host - A host as configured or parsed from a connection string
+   */
+  protected isLocalHost(host: string | undefined): boolean {
+    if (host === undefined) return false;
+    let name = host.trim().toLowerCase();
+    try {
+      name = decodeURIComponent(name);
+    } catch {
+      return false;
+    }
+    if (name.startsWith("/")) return true;
+    if (name.startsWith("[") && name.endsWith("]")) name = name.slice(1, -1);
+    if (name === "localhost" || name.endsWith(".localhost")) return true;
+    if (name === "::1" || name === "0:0:0:0:0:0:0:1") return true;
+    const v4 = name.startsWith("::ffff:") ? name.slice("::ffff:".length) : name;
+    return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v4);
+  }
+
+  /**
+   * The host a connection string names, for {@link isLocalHost}: its
+   * `host` query parameter when it carries one (a socket directory), else
+   * its host name; `""` when it names none, so the driver's default applies;
+   * and `undefined` when the string cannot be read.
+   *
+   * @param url - A `postgres://` or `mysql://` connection string
+   */
+  protected hostOfUrl(url: string): string | undefined {
+    try {
+      const parsed = new URL(url);
+      const socket = parsed.searchParams.get("host");
+      if (socket !== null && socket !== "") return socket;
+      return parsed.hostname;
+    } catch {
+      return undefined;
+    }
   }
 
   // ============================================================

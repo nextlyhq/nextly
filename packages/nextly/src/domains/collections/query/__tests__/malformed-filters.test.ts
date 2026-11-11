@@ -358,6 +358,20 @@ describe("component fields refuse the same malformed conditions", () => {
     ).toContain("FILTER_NOT_IN_OR");
   });
 
+  it("refuses a path that reaches past the component's own fields, as an unknown field", () => {
+    // `seo.inner.title` names no column of the component's table: a field group placed in it is a
+    // row of its own table, and a group's children live in that group's value. Turned into a
+    // lookup it would read a column named after the whole path and answer with the wrong rows.
+    expect(
+      refusalCodes(() =>
+        extractComponentFieldConditions(
+          { "seo.inner.title": { equals: "b" } },
+          fields
+        )
+      )
+    ).toContain("FILTER_UNKNOWN_FIELD");
+  });
+
   it("still extracts a well-formed component condition", () => {
     const { componentFilters, cleanedWhere } = extractComponentFieldConditions(
       { title: { equals: "a" }, "seo.metaTitle": { contains: "b" } },

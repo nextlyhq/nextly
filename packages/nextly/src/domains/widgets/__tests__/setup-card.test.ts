@@ -108,11 +108,14 @@ describe("who the card shows to", () => {
     expect(superAdmin).not.toHaveBeenCalled();
   });
 
-  it("is left out once its reader dismissed it, and back once they resume", async () => {
+  it("still shows to a reader whose stored state says they dismissed it: hiding is leaving the layout", async () => {
     await changeSetupState("ana", { dismissed: true });
-    expect(await setupShownTo(person)).toBe(false);
-    await changeSetupState("ana", { dismissed: false });
     expect(await setupShownTo(person)).toBe(true);
+  });
+
+  it("is left out once its reader has been told they are all set", async () => {
+    stored.set("ana:setup-retired", new Date(0).toISOString());
+    expect(await setupShownTo(person)).toBe(false);
   });
 });
 

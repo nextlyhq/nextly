@@ -113,6 +113,8 @@ Override the detection with the `DB_PROVIDER` env var (`neon`, `supabase`, or `s
 
 ## SSL / TLS
 
+System health on the dashboard reads whether the connection is actually encrypted; see [Encrypted connections](/docs/database/encrypted-connections).
+
 For Neon and Supabase, SSL is on by default with `rejectUnauthorized: true`. For self-hosted PostgreSQL the default is no SSL -- enable it explicitly:
 
 ```typescript

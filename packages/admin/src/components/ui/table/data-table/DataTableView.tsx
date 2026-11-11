@@ -443,7 +443,7 @@ export function DataTableView<Row extends object>({
       <div className={cn("@container/table w-full space-y-4", className)}>
         <div
           role="alert"
-          className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+          className="rounded-md border border-danger-border bg-danger-surface p-3 text-sm text-danger-text"
         >
           <TableError message={error} />
         </div>
@@ -465,7 +465,7 @@ export function DataTableView<Row extends object>({
       {error && (
         <div
           role="alert"
-          className="mb-3 rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+          className="mb-3 rounded-md border border-danger-border bg-danger-surface p-3 text-sm text-danger-text"
         >
           <TableError message={error} />
         </div>

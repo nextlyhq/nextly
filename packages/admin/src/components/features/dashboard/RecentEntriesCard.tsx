@@ -22,7 +22,6 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useNowTick } from "@admin/hooks/useNowTick";
 
 import { FrameState } from "../widgets/frame/card-state";
-import { useCollectionLabel } from "../widgets/frame/collection-label";
 import { listViewHref } from "../widgets/frame/list-view-href";
 import {
   WidgetTable,
@@ -60,7 +59,6 @@ export const RecentEntriesCard: React.FC<RecentEntriesCardProps> = ({
 }) => {
   // The clock ticks, so "5m ago" moves on as time passes.
   const now = useNowTick();
-  const labelOf = useCollectionLabel();
   const sources = useBranding().widgetSources;
   const slug =
     typeof settings.collection === "string" ? settings.collection : undefined;
@@ -92,7 +90,6 @@ export const RecentEntriesCard: React.FC<RecentEntriesCardProps> = ({
     data.title,
     data.columns,
     now,
-    labelOf,
     lifecycle
   );
   return (
@@ -101,7 +98,6 @@ export const RecentEntriesCard: React.FC<RecentEntriesCardProps> = ({
       titleLabel={model.titleLabel}
       title={model.titleOf}
       {...(model.hrefOf === undefined ? {} : { href: model.hrefOf })}
-      {...(model.leadingOf === undefined ? {} : { leading: model.leadingOf })}
       columns={upToThree(
         model.fields.map(field => ({
           key: field.key,

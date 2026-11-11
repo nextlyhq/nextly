@@ -79,6 +79,11 @@ export interface FindParams {
    * are translated + each one's draft/published status). Sent as `?translation-status=1`.
    */
   translationStatus?: boolean;
+  /**
+   * Count the total no further than the server's cap (`?count=capped`), so a
+   * very large list says "1000+" instead of counting every row.
+   */
+  cappedCount?: boolean;
 }
 
 /**
@@ -378,6 +383,9 @@ export const buildFindQuery = (params: FindParams): string => {
   // Opt into the per-locale translation-status overview map.
   if (params.translationStatus) {
     query.set("translation-status", "1");
+  }
+  if (params.cappedCount) {
+    query.set("count", "capped");
   }
 
   return query.toString();

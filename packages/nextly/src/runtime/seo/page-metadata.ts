@@ -35,12 +35,14 @@ import { defined, isRecord, metadataFromAnswer } from "./answer-metadata";
 import {
   PAGE_METADATA_CAPABILITY,
   PAGE_METADATA_SERVICE,
+  type PageMetadataAnswer,
   type PageMetadataImage,
   type PageMetadataInput,
   type PageMetadataResolver,
   type PageMetadataSource,
   type PageMetadataValues,
 } from "./page-metadata-contract";
+import { structuredDataText } from "./structured-data";
 
 /**
  * A title as text: Next.js accepts a plain string or a template object, of
@@ -284,15 +286,58 @@ const pageMetadataAnswerSchema = z.object({
     })
     .optional(),
   languages: z.record(z.string(), z.string()).optional(),
+  // JSON only, the one form a cached answer and a script element both hold:
+  // a node holding anything else refuses the answer.
+  structuredData: z.array(z.record(z.string(), z.json())).optional(),
 });
+
+/**
+ * The provider's answer for one page, cached; undefined when no provider is
+ * started. Throws what the provider or the answer's parse throws.
+ *
+ * The answer is cached under the page's own tags and the ones the provider
+ * names, so a change to the document or to anything the provider read expires
+ * it, and a site's settings reach every page without a redeploy. The head and
+ * the page's structured data are both read from here, so asked about the same
+ * page they read one cached answer.
+ */
+async function pageAnswerFor(
+  request: PageMetadataRequest
+): Promise<PageMetadataAnswer | undefined> {
+  const resolver = pageMetadataResolver();
+  if (resolver === undefined) return undefined;
+  const input: PageMetadataInput = {
+    ...(request.path === undefined ? {} : { path: request.path }),
+    ...(request.locale === undefined ? {} : { locale: request.locale }),
+    source: request.source,
+    code: codeValuesOf(request.code),
+    derived: request.derived ?? {},
+  };
+  // Parsed inside the cached read, so an answer that is not one is refused
+  // there and never stored: the next request asks the provider again.
+  return cachedFind(
+    async () => pageMetadataAnswerSchema.parse(await resolver.resolve(input)),
+    {
+      // The provider and its version too, so a replaced or upgraded provider
+      // never reads an answer another one cached for the same page.
+      keyParts: [
+        "nextly-page-metadata",
+        capabilityProviderIdentity(PAGE_METADATA_CAPABILITY) ?? "",
+        answerKey(input),
+      ],
+      // The page's own tags first, so the one every write to its document
+      // expires is never the one Next.js's per-read limit drops.
+      tags: readTags(request.tags, resolver.tags?.(input) ?? []),
+      ...(request.revalidate === undefined
+        ? {}
+        : { revalidate: request.revalidate }),
+    }
+  );
+}
 
 /**
  * The head of one page: the provider's answer over the route's own metadata,
  * or the route's own metadata unchanged when no provider is started.
- *
- * The answer is cached under the page's own tags and the ones the provider
- * names, so a change to the document or to anything the provider read expires
- * it, and a site's settings reach every page without a redeploy.
  *
  * A provider that fails is logged and the route's own metadata is served: a
  * page loses its SEO answer for that render, never the page. Next.js's own
@@ -303,35 +348,8 @@ export async function pageMetadataFor(
 ): Promise<Metadata> {
   const { code } = request;
   try {
-    const resolver = pageMetadataResolver();
-    if (resolver === undefined) return code ?? {};
-    const input: PageMetadataInput = {
-      ...(request.path === undefined ? {} : { path: request.path }),
-      ...(request.locale === undefined ? {} : { locale: request.locale }),
-      source: request.source,
-      code: codeValuesOf(code),
-      derived: request.derived ?? {},
-    };
-    // Parsed inside the cached read, so an answer that is not one is refused
-    // there and never stored: the next request asks the provider again.
-    const answer = await cachedFind(
-      async () => pageMetadataAnswerSchema.parse(await resolver.resolve(input)),
-      {
-        // The provider and its version too, so a replaced or upgraded provider
-        // never reads an answer another one cached for the same page.
-        keyParts: [
-          "nextly-page-metadata",
-          capabilityProviderIdentity(PAGE_METADATA_CAPABILITY) ?? "",
-          answerKey(input),
-        ],
-        // The page's own tags first, so the one every write to its document
-        // expires is never the one Next.js's per-read limit drops.
-        tags: readTags(request.tags, resolver.tags?.(input) ?? []),
-        ...(request.revalidate === undefined
-          ? {}
-          : { revalidate: request.revalidate }),
-      }
-    );
+    const answer = await pageAnswerFor(request);
+    if (answer === undefined) return code ?? {};
     return overCode(code, metadataFromAnswer(answer));
   } catch (error) {
     getUnstableRethrow()(error);
@@ -340,5 +358,30 @@ export async function pageMetadataFor(
       { path: request.path, error }
     );
     return code ?? {};
+  }
+}
+
+/**
+ * The structured data of one page, as the text of its JSON-LD script element:
+ * read from the same answer as the page's head, written so that no value can
+ * end the element. Nothing when no provider is started or the answer has none.
+ *
+ * A provider that fails is logged and the page is rendered without it, as its
+ * head is served without the answer.
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export async function pageStructuredDataFor(
+  request: PageMetadataRequest
+): Promise<string | undefined> {
+  try {
+    return structuredDataText((await pageAnswerFor(request))?.structuredData);
+  } catch (error) {
+    getUnstableRethrow()(error);
+    consoleLogger.error(
+      "The page-metadata provider could not answer; rendering the page without structured data.",
+      { path: request.path, error }
+    );
+    return undefined;
   }
 }

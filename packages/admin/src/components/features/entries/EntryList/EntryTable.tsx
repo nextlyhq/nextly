@@ -78,6 +78,10 @@ export interface TablePaginationState {
   total: number;
   /** Total number of pages */
   totalPages: number;
+  /** The total is a lower bound: more entries match than were counted. */
+  totalCapped?: boolean;
+  /** How many entries the current page holds. */
+  pageItemCount?: number;
 }
 
 /**
@@ -672,6 +676,8 @@ export const EntryTable: ForwardRefExoticComponent<
         currentPage: pagination.page,
         totalPages: pagination.totalPages,
         totalItems: pagination.total,
+        totalCapped: pagination.totalCapped,
+        pageItemCount: pagination.pageItemCount,
         pageSize: pagination.limit,
         onPageChange,
         onPageSizeChange: onLimitChange,

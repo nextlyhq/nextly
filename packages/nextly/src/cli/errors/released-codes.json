@@ -195,5 +195,11 @@
   "PLUGIN_DOCUMENT_SURFACE_COLLISION": "Two plugins override the same document action on one collection.",
   "PLUGIN_DOCUMENT_SURFACE_INVALID": "A plugin overrides a document action it may not override, or declares a document action override or panel section with nothing to draw.",
   "ACTION_NOT_AVAILABLE": "A plugin's declared action was asked of an entry its rule does not hold for, or in a collection it is not offered on, so its route's handler did not run.",
-  "PLUGIN_ACTION_ROW_NOT_FOUND": "A plugin's declared action named a row its caller may not read, or one that does not exist, so its route's handler did not run."
+  "PLUGIN_ACTION_ROW_NOT_FOUND": "A plugin's declared action named a row its caller may not read, or one that does not exist, so its route's handler did not run.",
+  "PLUGIN_PACKAGE_NOT_INSTALLED": "`nextly plugins add` found no installed package by the name it was given.",
+  "PLUGIN_DECLARATION_INVALID": "The `nextly.plugin` declaration in a package's package.json cannot be read, or names an export that makes no plugin.",
+  "PLUGIN_REGISTRATION_UNKNOWN": "`nextly plugins add` cannot tell how to register a package: it declares nothing, and its entry exports no single plugin.",
+  "PLUGIN_OPTION_MISSING": "A plugin asks for options at install, and `nextly plugins add` was given none for some of them with no one at the terminal to ask.",
+  "PLUGIN_OPTION_INVALID": "An option given to `nextly plugins add` is malformed, is not one the plugin asks for, or was refused by the plugin.",
+  "PLUGIN_CONFIG_NOT_EDITABLE": "`nextly plugins add` cannot place a plugin in the configuration file safely, so it left the file as it was."
 }

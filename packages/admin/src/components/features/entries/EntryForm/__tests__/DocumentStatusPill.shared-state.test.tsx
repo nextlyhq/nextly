@@ -28,7 +28,8 @@ describe("the status pill and the Status section", () => {
         />
       </>
     );
-    const pill = screen.getByText("Changed");
+    // The word is its own span inside the pill, which carries the state.
+    const pill = screen.getByText("Changed").closest("[data-status]");
     expect(pill).toHaveAttribute("data-status", "changed");
     expect(
       screen.getByRole("region", { name: "Status" }).querySelector("p")

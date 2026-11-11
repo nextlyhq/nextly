@@ -19,16 +19,38 @@ import type { SanitizedNextlyConfig } from "../../collections/config/define-conf
 
 const registerServices = vi.fn();
 const runProdMigrationsIfEnabled = vi.fn();
+let registered = false;
+
+/**
+ * A service that answers every property and call with itself, so each step of
+ * the start after registration runs through without what it reads mattering.
+ * Not thenable, so awaiting it does not hang, and printable, for the start's
+ * log lines.
+ */
+const anything: unknown = new Proxy(function anyService() {}, {
+  get: (_target, key) =>
+    key === "then"
+      ? undefined
+      : key === Symbol.toPrimitive
+        ? () => "stand-in"
+        : anything,
+  apply: () => anything,
+});
 
 vi.mock("../../di/register", () => ({
-  registerServices: (config: unknown) => registerServices(config),
+  registerServices: (config: unknown) => {
+    registerServices(config);
+    registered = true;
+  },
   shutdownServices: vi.fn(),
 }));
-vi.mock("../../di", () => ({
-  isServicesRegistered: () => false,
+// The lookup the start reads, as well as the route handler: a cold request
+// with a config runs `getNextly`'s start.
+vi.mock("../../di/service-access", () => ({
+  isServicesRegistered: () => registered,
   // Permissive: the post-registration steps are not what is under test, and a
   // stub that throws would stop the walk before the point being observed.
-  getService: () => new Proxy({}, { get: () => () => undefined }),
+  getService: () => anything,
 }));
 vi.mock("../../init/prod-migrations", () => ({
   runProdMigrationsIfEnabled: (args: unknown) =>
@@ -54,6 +76,7 @@ const db = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  registered = false;
 });
 
 describe("the request-path boot and production migrations", () => {

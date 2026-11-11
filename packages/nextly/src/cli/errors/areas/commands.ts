@@ -173,9 +173,9 @@ export function initAnswersRequired(): CliError {
   });
 }
 
-// ── nextly add ──────────────────────────────────────────────────────────────
+// ── nextly plugins add ──────────────────────────────────────────────────────────────
 
-/** The package manager `nextly add` ran ended with a failing code. */
+/** The package manager `nextly plugins add` (or `nextly add`) ran ended with a failing code. */
 export function packageInstallFailed(
   packageManager: string,
   pkg: string,
@@ -184,7 +184,7 @@ export function packageInstallFailed(
   return new CliError("PACKAGE_INSTALL_FAILED", {
     what: `Install failed (${packageManager} exited ${code}).`,
     why: `${packageManager} could not install \`${pkg}\`; its own output above says why.`,
-    next: `Fix what ${packageManager} reports, then run \`nextly add ${pkg}\` again.`,
+    next: `Fix what ${packageManager} reports, then run \`nextly plugins add ${pkg}\` again.`,
   });
 }
 

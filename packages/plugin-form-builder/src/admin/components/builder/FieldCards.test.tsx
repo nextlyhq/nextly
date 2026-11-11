@@ -15,11 +15,23 @@
  *
  * @module admin/components/builder/FieldCards.test
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@nextlyhq/ui";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { FormBuilderView } from "../../FormBuilderView";
+import {
+  FormBuilderProvider,
+  useFormBuilder,
+  type FormBuilderContextValue,
+} from "../../context/FormBuilderContext";
+
+import { FieldCards } from "./FieldCards";
 
 beforeAll(() => {
   Element.prototype.hasPointerCapture = () => false;
@@ -30,30 +42,40 @@ beforeAll(() => {
 
 afterEach(cleanup);
 
+/**
+ * The list with two fields added in this session: a saved field keeps its
+ * name, so only a new one can be renamed.
+ */
 function view() {
-  return render(
-    <QueryClientProvider client={new QueryClient()}>
-      <FormBuilderView
-        entryId="form-1"
-        initialData={{
-          name: "Contact",
-          slug: "contact",
-          fields: [
-            { name: "email", label: "Email", type: "email" },
-            { name: "message", label: "Message", type: "textarea" },
-          ],
-        }}
-        onSave={vi.fn()}
-      />
-    </QueryClientProvider>
+  let form!: FormBuilderContextValue;
+  function Probe() {
+    form = useFormBuilder();
+    return null;
+  }
+  render(
+    <TooltipProvider>
+      <FormBuilderProvider initialData={{ fields: [] }}>
+        <Probe />
+        <FieldCards
+          enabledTypes={["email", "textarea"]}
+          onAddField={() => {}}
+        />
+      </FormBuilderProvider>
+    </TooltipProvider>
   );
+  act(() => {
+    form.addField({ name: "email", label: "Email", type: "email" });
+    form.addField({ name: "message", label: "Message", type: "textarea" });
+    form.selectField(null);
+  });
 }
 
 describe("renaming a field from its card", () => {
   it("keeps the Name input mounted and focused across the rename", () => {
     view();
 
-    // Open the email card: the settings panel, with its Name input, opens in it.
+    // Open the email row: the settings panel, with its Name input, opens
+    // under it.
     // Two buttons match /email/i with aria-expanded — the header toggle and
     // the actions-menu trigger beside it ("Actions for Email") — and the
     // drag handle matches on name alone; the toggle is the one that is not a

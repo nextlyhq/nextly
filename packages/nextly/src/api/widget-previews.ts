@@ -1,9 +1,11 @@
 /**
  * GET /api/_dev/widget-previews (development only)
  *
- * Every widget the reader may see, with what the development preview page
- * draws each from: its title, the sizes its cards may take, its view, its
- * declared `preview` cases and its empty state's words.
+ * Every widget the reader may see, with what the preview board draws each
+ * from: its title, the sizes its cards may take, its view, its declared
+ * `preview` cases and its empty state's words. The board is a page of the
+ * browser tests' own app (`@nextlyhq/admin/testing`'s `WidgetPreviewBoard`),
+ * where every widget's accessibility is checked; the admin draws it nowhere.
  *
  * 🔴 It never runs a widget's `load`, `shows`, `isEmpty` or access predicate.
  * A case is the author's own stand-in for an answer, so the page draws the

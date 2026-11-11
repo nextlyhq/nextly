@@ -190,6 +190,9 @@
    * so each can be solved for its own job. The ink that lands on it is
    * `-foreground`, which is white in light mode and black in dark. */
   --color-destructive-solid: var(--nx-destructive-solid);
+  /* The solid button's hover, set per mode beside its fill. Named, so no
+   * caller draws it from a numbered shade. */
+  --color-destructive-hover: var(--nx-destructive-hover);
   --color-destructive-foreground: var(--nx-destructive-foreground);
 
   --color-success: var(--nx-success);
@@ -816,6 +819,12 @@
    * affected pairings with their measured ratios. */
   --nx-destructive: oklch(0.63 0.19 23.03);
   --nx-destructive-solid: oklch(0.63 0.19 23.03);
+  /* Hover deepens the fill toward black, which its white label reads better on. */
+  --nx-destructive-hover: color-mix(
+    in srgb,
+    var(--nx-destructive-solid),
+    black 20%
+  );
   --nx-destructive-foreground: oklch(1 0 0);
   /* white */
   /* Darkened from green-600; renders as #00852c, ~4.8:1 as text on white. */
@@ -1134,6 +1143,13 @@
   /* Same value as the base: the button fill needs no darkening here because
      its ink is black rather than white. */
   --nx-destructive-solid: oklch(0.69 0.2 23.91);
+  /* Hover lightens the fill, since its label here is black: deepening it
+     would take the label toward the fill. */
+  --nx-destructive-hover: color-mix(
+    in srgb,
+    var(--nx-destructive-solid),
+    white 15%
+  );
   /* Black, not white. The dark-mode fill is light enough that black on-color
      text reads at 6.90:1 where white would fall below the minimum. */
   --nx-destructive-foreground: oklch(0 0 0);

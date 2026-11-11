@@ -53,6 +53,7 @@ import {
 } from "../../../emails/starter-messages";
 import type { ConditionalLogicCondition } from "../../../types";
 import {
+  useFieldBookkeeping,
   useFormBuilder,
   createNotification,
   type FormNotification,
@@ -1306,6 +1307,7 @@ export function FormNotificationsTab({
     updateNotification,
     deleteNotification,
   } = useFormBuilder();
+  const { restored } = useFieldBookkeeping();
 
   const [providers, setProviders] = useState<ProviderOption[]>([]);
   const [templates, setTemplates] = useState<TemplateOption[]>([]);
@@ -1409,6 +1411,9 @@ export function FormNotificationsTab({
               }
             >
               <NotificationEditor
+                // The editor keeps the Reply-To mode it opened with; after an
+                // Undo it opens again on the restored rule.
+                key={`${notification.id}:${restored}`}
                 notification={notification}
                 editorId={`notification-editor-${notification.id}`}
                 providers={providers}

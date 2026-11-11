@@ -18,16 +18,19 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   superAdminUser,
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
 import { readAccessCaller } from "../../../auth/entity-read-access";
+import { container } from "../../../di/container";
 import { recordRollbackFailed } from "../../../cli/commands/plugin-module-rollback";
 import { defineCollection, text } from "../../../config";
 import { SCHEMA_CHANGE_STALE_MS } from "../../../domains/schema/events/schema-problems";
+import { forgetLatestVersion } from "../../../domains/health/latest-version";
+import { JobsRepository } from "../../../domains/jobs/jobs-repository";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { runDigest } from "../../../domains/widgets/attention/digest";
 import { createBatchScope } from "../../../domains/widgets/batch-scope";
@@ -50,7 +53,10 @@ import { recordStorageWriteSuccess } from "../../../storage/last-write-failure";
 import { MediaStorage } from "../../../storage/storage";
 import type { IStorageAdapter } from "../../../storage/types";
 import type { ReadCaller } from "../readable-resources";
-import { systemProblemReaders } from "../system-health-source";
+import {
+  ENCRYPTED_CONNECTIONS_DOCS,
+  systemProblemReaders,
+} from "../system-health-source";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
 const NOTES = "shi_notes";
@@ -60,9 +66,26 @@ let current: TestNextly | undefined;
 beforeEach(() => {
   // The storage record is the process's: start every case with it clear.
   recordStorageWriteSuccess();
+  // The newest-version read never reaches the registry from a test: it
+  // answers the tags below, for this case alone.
+  forgetLatestVersion();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ latest: "99.0.0", alpha: "99.0.0-alpha.1" })
+        )
+      )
+    )
+  );
 });
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  forgetLatestVersion();
   _resetBootMigrationsGateForTest();
   recordStorageWriteSuccess();
   await current?.destroy();
@@ -184,14 +207,152 @@ describe.each(getConfiguredTestDialects())(
     it("reports a healthy install to a super-admin, and nothing to an editor", async () => {
       const { admin, editor } = await boot();
       expect(await offered(admin)).toBe(true);
-      expect(await healthFor(admin)).toEqual({
+      const health = await healthFor(admin);
+      expect(health).toEqual({
         version: expect.any(String),
+        // The stubbed registry's channels are all ahead of the build.
+        latest: { status: "update", version: expect.any(String) },
+        environment: { production: false },
+        database: {
+          dialect,
+          serverVersion: expect.stringMatching(/^\d+\.\d+/),
+          roundTripMs: expect.any(Number),
+          // The test databases are reached without TLS, and SQLite is a file.
+          encryption: dialect === "sqlite" ? "not-applicable" : "unencrypted",
+          exposed: false,
+        },
         migrations: { status: "ok", failed: 0, pending: 0 },
         schemaChanges: { failed: [], more: 0 },
-        storage: { status: "ok" },
+        storage: { status: "ok", type: expect.any(String) },
+        email: { provider: null },
+        jobs: { queued: 0, running: 0, failed: 0 },
+        runtime: expect.objectContaining({ node: process.versions.node }),
+        plugins: [],
       });
       expect(await systemItemsFor(admin)).toEqual([]);
       await editorSeesNothing(editor);
+    });
+
+    it("says couldn't check for updates when the registry cannot be reached", async () => {
+      const { admin } = await boot();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => Promise.reject(new TypeError("fetch failed")))
+      );
+      const health = await healthFor(admin);
+      expect(health.latest).toEqual({ status: "unknown" });
+      // The rest of the card is still answered.
+      expect(health.migrations.status).toBe("ok");
+      expect(await systemItemsFor(admin)).toEqual([]);
+    });
+
+    it("counts queued, running and recently failed jobs, and the default email provider", async () => {
+      const { t, admin } = await boot();
+      const jobs = new JobsRepository(t.adapter);
+      const now = new Date();
+      const job = (key: string) =>
+        jobs.enqueue({
+          slug: "shi-job",
+          input: {},
+          runAt: null,
+          runAsUserId: null,
+          dedupeKey: key,
+          now,
+        });
+      await job("shi-a");
+      await job("shi-b");
+      const running = await job("shi-c");
+      const failed = await job("shi-d");
+      const failedLongAgo = await job("shi-e");
+      const done = await job("shi-f");
+      const set = (id: string, data: Record<string, unknown>) =>
+        t.adapter.update("nextly_jobs", data, {
+          and: [{ column: "id", op: "=", value: id }],
+        });
+      await set(running.id, { state: "running" });
+      await set(failed.id, { state: "failed", updatedAt: new Date() });
+      await set(failedLongAgo.id, {
+        state: "failed",
+        updatedAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+      });
+      await set(done.id, { state: "done" });
+
+      await t.getService("emailProviderService").createProvider({
+        name: "Main",
+        type: "smtp",
+        fromEmail: "noreply@example.com",
+        fromName: null,
+        configuration: {
+          host: "smtp.example.com",
+          port: 587,
+          secure: false,
+          auth: { user: "postmaster", pass: "secret-value" },
+        },
+        isDefault: true,
+        isActive: true,
+      });
+
+      const health = await healthFor(admin);
+      expect(health.jobs).toEqual({ queued: 2, running: 1, failed: 1 });
+      expect(health.email).toEqual({ provider: "SMTP" });
+    });
+
+    it("lists an unencrypted connection to another machine in production as a danger, with how to fix it", async () => {
+      const { t, admin, editor } = await boot();
+      vi.stubEnv("NODE_ENV", "production");
+      // The read as a database on another machine, reached without TLS, answers it.
+      vi.spyOn(t.adapter, "inspectConnection").mockResolvedValue({
+        encryption: "unencrypted",
+        local: false,
+      });
+      expect((await healthFor(admin)).database).toMatchObject({
+        encryption: "unencrypted",
+        exposed: true,
+      });
+      expect(await systemItemsFor(admin)).toEqual([
+        expect.objectContaining({
+          id: "core/system-connection-unencrypted",
+          label: "Database connection is not encrypted",
+          count: 1,
+          severity: "critical",
+          help: ENCRYPTED_CONNECTIONS_DOCS,
+          single: true,
+        }),
+      ]);
+      await editorSeesNothing(editor);
+    });
+
+    it("lists a connection whose encryption could not be read in production as a warning, never as encrypted", async () => {
+      const { t, admin } = await boot();
+      vi.stubEnv("NODE_ENV", "production");
+      vi.spyOn(t.adapter, "inspectConnection").mockResolvedValue({
+        encryption: "unknown",
+        local: false,
+      });
+      expect((await healthFor(admin)).database.encryption).toBe("unknown");
+      expect(await systemItemsFor(admin)).toEqual([
+        expect.objectContaining({
+          id: "core/system-connection-unchecked",
+          severity: "warning",
+          help: ENCRYPTED_CONNECTIONS_DOCS,
+        }),
+      ]);
+    });
+
+    it("lists nothing for an unencrypted connection on this machine, or outside production", async () => {
+      const { t, admin } = await boot();
+      vi.spyOn(t.adapter, "inspectConnection").mockResolvedValue({
+        encryption: "unencrypted",
+        local: false,
+      });
+      // Not production: shown on the card, and not a problem.
+      expect(await systemItemsFor(admin)).toEqual([]);
+      vi.stubEnv("NODE_ENV", "production");
+      vi.spyOn(t.adapter, "inspectConnection").mockResolvedValue({
+        encryption: "unencrypted",
+        local: true,
+      });
+      expect(await systemItemsFor(admin)).toEqual([]);
     });
 
     it("reports a failed migration, on the card and in Needs your attention", async () => {
@@ -411,6 +572,20 @@ describe.each(getConfiguredTestDialects())(
       expect((await healthFor(admin)).schemaChanges.failed).toEqual([]);
     });
 
+    it("names the adapter the media library writes through, not the local fallback", async () => {
+      const { admin } = await boot();
+      // Storage routing media to S3, as an install with a cloud adapter has it.
+      container.registerSingleton("mediaStorage", () =>
+        storageAnswering(() =>
+          Promise.resolve({ url: "https://s3.test/a.jpg", path: "a.jpg" })
+        )
+      );
+      expect((await healthFor(admin)).storage).toEqual({
+        status: "ok",
+        type: "s3",
+      });
+    });
+
     it("reports the storage adapter's failed write until a write succeeds", async () => {
       const { admin, editor } = await boot();
       const failing = storageAnswering(() =>
@@ -422,6 +597,7 @@ describe.each(getConfiguredTestDialects())(
 
       expect((await healthFor(admin)).storage).toEqual({
         status: "failed",
+        type: expect.any(String),
         failedAt: expect.any(String),
         adapter: "s3",
         reason: "The storage service could not be reached.",
@@ -439,7 +615,10 @@ describe.each(getConfiguredTestDialects())(
         Promise.resolve({ url: "https://s3.test/a.jpg", path: "a.jpg" })
       );
       await write(working);
-      expect((await healthFor(admin)).storage).toEqual({ status: "ok" });
+      expect((await healthFor(admin)).storage).toEqual({
+        status: "ok",
+        type: expect.any(String),
+      });
       expect(await systemItemsFor(admin)).toEqual([]);
     });
   }

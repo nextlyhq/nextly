@@ -1,19 +1,15 @@
 /**
- * A card's menu at rest: Settings, Size, Refresh and Remove, in that order, each where the card
- * has it. Size lists only what the widget's bounds allow; Remove asks nothing.
+ * A card's one menu: at rest Settings…, Refresh and Remove, in that order, each where the card
+ * has it; while customising the same, with Move earlier and Move later before Remove. Neither
+ * offers a Width or a Height: the width is set in the settings drawer, and a card is as tall as
+ * its content. Remove asks nothing.
  */
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { CardMenu, type CardMenuProps } from "../CardMenu";
-
-/** Resizable from 3 by 2 up to 8 by 4. */
-const BOUNDS = {
-  default: { w: 4, h: 3 },
-  min: { w: 3, h: 2 },
-  max: { w: 8, h: 4 },
-};
+import { CardActionsMenu } from "../CardActionsMenu";
+import { CardMenu, removeLabelFor, type CardMenuProps } from "../CardMenu";
 
 function draw(props: Partial<CardMenuProps> = {}) {
   render(<CardMenu title="Activity" settingsDisabled={false} {...props} />);
@@ -34,27 +30,16 @@ function itemNames(menu: HTMLElement): string[] {
 }
 
 describe("a card's menu at rest", () => {
-  it("lists Settings, Size, Refresh and Remove, in that order", async () => {
+  it("lists Settings…, Refresh and Remove, in that order, and no size", async () => {
     draw({
       onOpenSettings: vi.fn(),
-      size: {
-        size: { w: 4, h: 3 },
-        bounds: BOUNDS,
-        inPlace: false,
-        onSetSize: vi.fn(),
-      },
       onRefresh: vi.fn(),
       onRemove: vi.fn(),
     });
     const { menu } = await open();
-    const names = itemNames(menu);
-    expect(names).toHaveLength(4);
-    expect(names[0]).toMatch(/^Settings/);
-    // Size is the card's width alone, a submenu of its choices: a card is as tall as its
-    // content, so there is no Height.
-    expect(names[1]).toMatch(/^Width/);
-    expect(names[2]).toBe("Refresh");
-    expect(names[3]).toBe("Remove");
+    expect(itemNames(menu)).toEqual(["Settings…", "Refresh", "Remove"]);
+    expect(within(menu).queryByRole("menuitemradio")).toBeNull();
+    expect(within(menu).queryByText(/Width|Height/)).toBeNull();
   });
 
   it("opens the card's settings", async () => {
@@ -76,39 +61,25 @@ describe("a card's menu at rest", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("offers only the sizes the widget's bounds allow, and changes the size by them", async () => {
-    const onSetSize = vi.fn();
-    draw({
-      size: { size: { w: 4, h: 3 }, bounds: BOUNDS, inPlace: true, onSetSize },
-    });
+  it("calls Remove Hide setup on the setup card, and it removes the card as Remove does", async () => {
+    expect(removeLabelFor("core/setup")).toBe("Hide setup");
+    expect(removeLabelFor("core/note")).toBeUndefined();
+    const onRemove = vi.fn();
+    draw({ onRemove, removeLabel: removeLabelFor("core/setup") });
     const { user, menu } = await open();
-    const widths = within(menu)
-      .getAllByRole("menuitemradio")
-      .map(item => item.getAttribute("aria-label"));
-    expect(widths).toEqual([
-      "25% width",
-      "33% width",
-      "50% width",
-      "66% width",
-    ]);
-    // By keyboard: jsdom has no geometry for a pointer to cross the items.
-    within(menu).getByRole("menuitemradio", { name: "50% width" }).focus();
-    await user.keyboard("{Enter}");
-    expect(onSetSize).toHaveBeenCalledWith({ w: 6, h: 3 });
+    expect(itemNames(menu)).toEqual(["Hide setup"]);
+    await user.click(
+      within(menu).getByRole("menuitem", { name: "Hide setup" })
+    );
+    expect(onRemove).toHaveBeenCalledTimes(1);
   });
 
   it("keeps Refresh in reach while the card's settings cannot be saved", async () => {
     // The menu is in the same place on every card, and a write in flight
-    // blocks only Settings and Size, not asking again for the card's data.
+    // blocks only Settings, not asking again for the card's data.
     const onRefresh = vi.fn();
     draw({
       onOpenSettings: vi.fn(),
-      size: {
-        size: { w: 4, h: 3 },
-        bounds: BOUNDS,
-        inPlace: false,
-        onSetSize: vi.fn(),
-      },
       onRefresh,
       settingsDisabled: true,
     });
@@ -119,9 +90,6 @@ describe("a card's menu at rest", () => {
     const { user, menu } = await open();
     expect(
       within(menu).getByRole("menuitem", { name: /Settings/ })
-    ).toHaveAttribute("aria-disabled", "true");
-    expect(
-      within(menu).getByRole("menuitem", { name: /Width/ })
     ).toHaveAttribute("aria-disabled", "true");
     await user.click(within(menu).getByRole("menuitem", { name: /Refresh/ }));
     expect(onRefresh).toHaveBeenCalledTimes(1);
@@ -145,5 +113,89 @@ describe("a card's menu at rest", () => {
         screen.getByRole("button", { name: "Card menu for Activity" })
       ).toHaveFocus()
     );
+  });
+});
+
+describe("a card's menu while customising", () => {
+  function drawCustomising(
+    can = { start: true, earlier: true, later: true, end: true }
+  ) {
+    const on = {
+      move: vi.fn(),
+      remove: vi.fn(),
+      openSettings: vi.fn(),
+      refresh: vi.fn(),
+    };
+    render(
+      <CardActionsMenu
+        title="Activity"
+        can={can}
+        disabled={false}
+        triggerRef={() => {}}
+        on={on}
+      />
+    );
+    return on;
+  }
+
+  async function openCustomising(user = userEvent.setup()) {
+    await user.click(
+      screen.getByRole("button", { name: "Card actions for Activity" })
+    );
+    return { user, menu: await screen.findByRole("menu") };
+  }
+
+  it("lists Settings…, Refresh, Move earlier, Move later and Remove, in that order, and no size", async () => {
+    drawCustomising();
+    const { menu } = await openCustomising();
+    expect(itemNames(menu)).toEqual([
+      "Settings…",
+      "Refresh",
+      "Move earlier",
+      "Move later",
+      "Remove",
+    ]);
+    expect(within(menu).queryByRole("menuitemradio")).toBeNull();
+    expect(within(menu).queryByText(/Width|Height/)).toBeNull();
+  });
+
+  it("opens the card's settings and moves it, each by its own item", async () => {
+    const on = drawCustomising();
+    let opened = await openCustomising();
+    await opened.user.click(
+      within(opened.menu).getByRole("menuitem", { name: "Settings…" })
+    );
+    expect(on.openSettings).toHaveBeenCalledTimes(1);
+    opened = await openCustomising(opened.user);
+    await opened.user.click(
+      within(opened.menu).getByRole("menuitem", { name: "Move later" })
+    );
+    expect(on.move).toHaveBeenCalledWith("later");
+  });
+
+  it("calls Remove Hide setup on the setup card, as the menu at rest does", async () => {
+    render(
+      <CardActionsMenu
+        title="Activity"
+        can={{ start: true, earlier: true, later: true, end: true }}
+        disabled={false}
+        triggerRef={() => {}}
+        removeLabel={removeLabelFor("core/setup")}
+        on={{ move: vi.fn(), remove: vi.fn(), openSettings: vi.fn() }}
+      />
+    );
+    const { menu } = await openCustomising();
+    expect(itemNames(menu).at(-1)).toBe("Hide setup");
+  });
+
+  it("keeps a move that would not move the card in its place, disabled", async () => {
+    drawCustomising({ start: false, earlier: false, later: true, end: true });
+    const { menu } = await openCustomising();
+    expect(
+      within(menu).getByRole("menuitem", { name: "Move earlier" })
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(
+      within(menu).getByRole("menuitem", { name: "Move later" })
+    ).not.toHaveAttribute("aria-disabled");
   });
 });

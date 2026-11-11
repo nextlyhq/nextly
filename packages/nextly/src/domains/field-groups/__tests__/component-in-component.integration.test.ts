@@ -181,12 +181,6 @@ async function boot(
   return current;
 }
 
-const NOT_STORED = {
-  code: "NOT_STORED",
-  message:
-    "A component placed directly in another component is not stored. Put it in a group or repeater.",
-};
-
 // Both storage layouts: where translatable values live must not change what this answers.
 describe.each(
   STORAGE_MODES.flatMap(storage =>
@@ -254,59 +248,60 @@ describe.each(
       );
     });
 
-    it("refuses a value for one placed directly in it, on a create and an update", async () => {
+    it("stores and judges one placed directly in it, on a create and an update", async () => {
       const t = await boot(dialect, storage);
       const created = await t.nextly.create({
         collection: "pages" as never,
-        data: { name: "P", card: { title: "T" } } as never,
+        data: {
+          name: "P",
+          card: { title: "T", badge: { label: "L", code: "ok" } },
+        } as never,
       });
       const id = (created.item as { id: string }).id;
+      const read = (await t.nextly.findByID({
+        collection: "pages" as never,
+        id: id as never,
+      })) as { card?: { badge?: { label?: string } } };
+      expect(read.card?.badge?.label).toBe("L");
 
-      const onCreate = await outcomeOf(() =>
-        t.nextly.create({
-          collection: "pages" as never,
-          data: {
-            name: "Q",
-            card: { title: "T", badge: { label: "L", code: "ok" } },
-          } as never,
-        })
-      );
-      expect(onCreate.ok).toBe(false);
-      expect(onCreate.issues).toContainEqual({ path: "badge", ...NOT_STORED });
-
+      // Judged by its own rules, as a row of its own: its validator refuses this value.
       const onUpdate = await outcomeOf(() =>
         t.nextly.update({
           collection: "pages" as never,
           id: id as never,
           data: {
-            card: { title: "U", badge: { label: "L" } },
+            card: { title: "U", badge: { label: "L", code: "forbidden" } },
             _overwrite: true,
           } as never,
         })
       );
       expect(onUpdate.ok).toBe(false);
-      expect(onUpdate.issues).toContainEqual({ path: "badge", ...NOT_STORED });
+      expect(onUpdate.issues).toContainEqual(
+        expect.objectContaining({ message: "code cannot be forbidden." })
+      );
 
-      // A required one is not asked for: the admin never draws it and nothing could store it, so
-      // an outer component without it is created.
+      // A required one is required: an outer component without it is refused, and one with it kept.
+      const missing = await outcomeOf(() =>
+        t.nextly.create({
+          collection: "pages" as never,
+          data: { name: "R", plaque: {} } as never,
+        })
+      );
+      expect(missing.ok).toBe(false);
+      expect(missing.issues).toContainEqual(
+        expect.objectContaining({
+          code: "REQUIRED",
+          path: expect.stringMatching(/seal$/),
+        })
+      );
       expect(
         await outcomeOf(() =>
           t.nextly.create({
             collection: "pages" as never,
-            data: { name: "Q", plaque: {} } as never,
+            data: { name: "R", plaque: { seal: { label: "S" } } } as never,
           })
         )
       ).toEqual({ ok: true, issues: [] });
-
-      // A value for a required one is refused the same way: required or not, it is not stored.
-      const required = await outcomeOf(() =>
-        t.nextly.create({
-          collection: "pages" as never,
-          data: { name: "R", plaque: { seal: { label: "S" } } } as never,
-        })
-      );
-      expect(required.ok).toBe(false);
-      expect(required.issues).toContainEqual({ path: "seal", ...NOT_STORED });
     });
 
     // Held in the entry's group, the outer component's whole value is stored in that group's JSON,
@@ -333,7 +328,7 @@ describe.each(
       expect(read.box?.plaque?.seal?.label).toBe("S");
     });
 
-    it("does not require one placed directly in it on a Single, published or held", async () => {
+    it("requires one placed directly in it on a Single, published or held, and stores it", async () => {
       const t = await boot(dialect, storage);
       const update = (data: Record<string, unknown>) =>
         outcomeOf(() =>
@@ -343,28 +338,42 @@ describe.each(
           })
         );
 
+      const missing = await update({
+        headline: "H",
+        plaque: {},
+        status: "published",
+      });
+      expect(missing.ok).toBe(false);
+      expect(missing.issues).toContainEqual(
+        expect.objectContaining({
+          code: "REQUIRED",
+          path: expect.stringMatching(/seal$/),
+        })
+      );
       expect(
-        await update({ headline: "H", plaque: {}, status: "published" })
+        await update({
+          headline: "H",
+          plaque: { seal: { label: "S" } },
+          status: "published",
+        })
       ).toEqual({ ok: true, issues: [] });
       // A save naming no status on a published Single is held, and judged as the publish is.
       expect(await update({ headline: "Held" })).toEqual({
         ok: true,
         issues: [],
       });
-      expect(await update({ status: "published" })).toEqual({
-        ok: true,
-        issues: [],
-      });
-      // A value for it is still refused, there as anywhere it is not stored.
-      const refused = await update({ plaque: { seal: { label: "S" } } });
-      expect(refused.issues).toContainEqual({ path: "seal", ...NOT_STORED });
+      const read = (await t.nextly.findSingle({
+        slug: "landing" as never,
+      })) as {
+        plaque?: { seal?: { label?: string } };
+      };
+      expect(read.plaque?.seal?.label).toBe("S");
     });
 
-    it("passes an empty value for one placed directly in it", async () => {
+    it("passes a cleared value for one placed directly in it, and judges an empty one", async () => {
       const t = await boot(dialect, storage);
       for (const card of [
         { title: "T", badge: null },
-        { title: "T", badge: {} },
         { title: "T", badges: [] },
       ]) {
         expect(
@@ -376,13 +385,25 @@ describe.each(
           )
         ).toEqual({ ok: true, issues: [] });
       }
+      // An empty object is an instance like any other, so its required field is asked for.
+      const empty = await outcomeOf(() =>
+        t.nextly.create({
+          collection: "pages" as never,
+          data: { name: "E", card: { title: "T", badge: {} } } as never,
+        })
+      );
+      expect(empty.ok).toBe(false);
+      expect(empty.issues).toContainEqual(
+        expect.objectContaining({
+          code: "REQUIRED",
+          path: expect.stringMatching(/label$/),
+        })
+      );
     });
 
-    // The admin never draws such a field (see below), so nothing seeds it: a value that holds only
-    // the inner component's defaults was still sent by someone, and is lost like any other.
-    it("refuses one holding only its defaults", async () => {
+    it("judges one holding only its defaults by its own rules", async () => {
       const t = await boot(dialect, storage);
-      const refused = await outcomeOf(() =>
+      const judged = await outcomeOf(() =>
         t.nextly.create({
           collection: "pages" as never,
           data: {
@@ -391,10 +412,16 @@ describe.each(
           } as never,
         })
       );
-      expect(refused.issues).toContainEqual({ path: "badge", ...NOT_STORED });
+      expect(judged.ok).toBe(false);
+      expect(judged.issues).toContainEqual(
+        expect.objectContaining({
+          code: "REQUIRED",
+          path: expect.stringMatching(/label$/),
+        })
+      );
     });
 
-    it("leaves one placed directly in it out of the schema the admin draws", async () => {
+    it("draws one placed directly in it in the schema the admin draws", async () => {
       const t = await boot(dialect, storage);
       const [card] = (await t
         .getService("fieldGroupRegistryService")
@@ -403,18 +430,21 @@ describe.each(
         ])) as Array<{
         componentFields?: Array<{
           name?: string;
+          componentFields?: unknown[];
+          componentSchemas?: Record<string, unknown>;
           fields?: Array<{ name?: string; componentFields?: unknown[] }>;
         }>;
       }>;
-      const names = (card?.componentFields ?? []).map(field => field.name);
+      const byName = new Map(
+        (card?.componentFields ?? []).map(field => [field.name, field])
+      );
 
-      // Nothing could store these, so the form gets nothing to render, seed or send.
-      expect(names).not.toContain("badge");
-      expect(names).not.toContain("badges");
-      expect(names).not.toContain("slot");
-      // Held in a group or repeater it is stored, and drawn.
-      expect(names).toEqual(expect.arrayContaining(["title", "meta", "chips"]));
-      const meta = card?.componentFields?.find(field => field.name === "meta");
+      // Stored as rows of their own, so the form renders, seeds and sends them.
+      expect(byName.get("badge")?.componentFields).toBeDefined();
+      expect(byName.get("badges")?.componentFields).toBeDefined();
+      expect(byName.get("slot")?.componentSchemas).toBeDefined();
+      // Held in a group or repeater as before.
+      const meta = byName.get("meta");
       expect(meta?.fields?.[0]).toMatchObject({ name: "badge" });
       expect(meta?.fields?.[0]?.componentFields).toBeDefined();
     });
@@ -442,9 +472,9 @@ describe.each(
     });
 
     // An unnamed group only arranges the form: its children are stored where it sits, so the outer
-    // component under it is still a row of its own table, and the field is still left out. A
+    // component under it is a row of its own table, and what is placed directly in it is drawn. A
     // registry shape (the code-first config names every field), so it is enriched as stored.
-    it("leaves one placed directly in it out under a group that only arranges the form", async () => {
+    it("draws one placed directly in it under a group that only arranges the form", async () => {
       const t = await boot(dialect, storage);
       const [layout] = (await t
         .getService("fieldGroupRegistryService")
@@ -461,7 +491,7 @@ describe.each(
 
       expect(
         (layout?.fields?.[0]?.componentFields ?? []).map(field => field.name)
-      ).not.toContain("seal");
+      ).toContain("seal");
     });
 
     it("judges a held component's validators against that component's own values", async () => {
@@ -484,9 +514,9 @@ describe.each(
       );
     });
 
-    it("refuses a row added to a directly placed list, and a default it turned off", async () => {
+    it("stores a row added to a directly placed list, a default turned off, and a zone row, each judged by its rules", async () => {
       const t = await boot(dialect, storage);
-      // A row the editor added, still holding only its defaults: it was added, so it is a value.
+      // A row the editor added, still holding only its defaults, is judged: its label is required.
       const added = await outcomeOf(() =>
         t.nextly.create({
           collection: "pages" as never,
@@ -496,27 +526,33 @@ describe.each(
           } as never,
         })
       );
-      expect(added.issues).toContainEqual({ path: "badges", ...NOT_STORED });
-
-      // `false` is a choice when the checkbox defaults to `true`.
-      const unticked = await outcomeOf(() =>
-        t.nextly.create({
-          collection: "pages" as never,
-          data: { name: "U", card: { badge: { flag: false } } } as never,
+      expect(added.ok).toBe(false);
+      expect(added.issues).toContainEqual(
+        expect.objectContaining({
+          code: "REQUIRED",
+          path: expect.stringMatching(/label$/),
         })
       );
-      expect(unticked.issues).toContainEqual({ path: "badge", ...NOT_STORED });
 
-      // A zone row names the component someone chose for it, which is a choice too.
-      const chosen: Record<string, unknown> = { label: "" };
+      // `false` is a choice when the checkbox defaults to `true`, and is kept.
+      const chosen: Record<string, unknown> = { label: "Z" };
       writeFieldGroupType(chosen, "badge");
-      const zone = await outcomeOf(() =>
-        t.nextly.create({
-          collection: "pages" as never,
-          data: { name: "Z", card: { slot: chosen } } as never,
-        })
-      );
-      expect(zone.issues).toContainEqual({ path: "slot", ...NOT_STORED });
+      const created = await t.nextly.create({
+        collection: "pages" as never,
+        data: {
+          name: "U",
+          card: { badge: { label: "B", flag: false }, slot: chosen },
+        } as never,
+      });
+      const read = (await t.nextly.findByID({
+        collection: "pages" as never,
+        id: (created.item as { id: string }).id as never,
+      })) as {
+        card?: { badge?: { flag?: boolean }; slot?: Array<{ label?: string }> };
+      };
+      expect(read.card?.badge?.flag).toBe(false);
+      // A zone is read as a list, holding here its one row.
+      expect(read.card?.slot?.map(row => row.label)).toEqual(["Z"]);
     });
 
     it("resolves a held component's schema once per write, however many rows hold it", async () => {

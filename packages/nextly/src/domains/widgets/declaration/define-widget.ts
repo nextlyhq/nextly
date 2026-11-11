@@ -442,8 +442,9 @@ export interface WidgetSummary {
 }
 
 /**
- * One case the preview page draws the card's ready state from: a name, the
- * data, and the settings it was drawn with when they matter.
+ * One case a test draws the card's ready state from (the scaffold's test, and
+ * core's accessibility check of its own widgets): a name, the data, and the
+ * settings it was drawn with when they matter.
  */
 export interface WidgetPreviewCase<Data, Values> {
   name: string;
@@ -555,7 +556,7 @@ export interface WidgetDeclarationInput<
    */
   skeleton?: WidgetSkeleton;
   /**
-   * Cases the preview page and the scaffold draw the ready state from, of the
+   * Cases the scaffold's test and core's checks draw the ready state from, of the
    * widget's own data type, so a case that drifts from the data it stands in
    * for fails to compile. How that is checked depends on the view
    * (`PreviewFor`, `CheckedDeclaration`).
@@ -826,7 +827,7 @@ export type { WidgetRenderSize } from "../result";
  * widget it is told, so a component naming the wrong one compiles and is
  * lied to; a prop is typed by the same `W` as the settings beside it, so the
  * two cannot disagree. A component is then also a plain function of its
- * props: a test or the preview page renders it with data in hand, with no
+ * props: a test renders it with data in hand, with no
  * provider around it.
  *
  * `W extends AnyWidget`, so a declaration refused by its own checks (see

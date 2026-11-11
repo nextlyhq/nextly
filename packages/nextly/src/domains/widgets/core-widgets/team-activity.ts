@@ -25,6 +25,8 @@ import { readCoreList } from "./system-read";
 
 export const teamActivityWidget = defineWidget({
   id: CORE_WIDGET_ID.teamActivity,
+  // Drawn beside its name in the add panel.
+  icon: "Activity",
   title: "Team activity",
   description: "Who changed what in your content, newest first.",
   // Half the row by default; from a third, where its rows still read, to the full width. Five

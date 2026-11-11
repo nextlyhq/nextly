@@ -105,6 +105,27 @@ describe("validateWidgetSettings refuses what an author can fix", () => {
     ).toThrow(/has rows "all"; expected "titled"/);
   });
 
+  it("takes users on a Collection setting alone, and only true", () => {
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "collection", type: "collection", users: true }],
+        "core/x"
+      )
+    ).not.toThrow();
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "note", type: "text", users: true } as never],
+        "core/x"
+      )
+    ).toThrow(/declares users, which only a Collection setting takes/);
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "collection", type: "collection", users: "yes" } as never],
+        "core/x"
+      )
+    ).toThrow(/has users "yes"; expected true/);
+  });
+
   /*
    * 🔴 A default is judged by the SAME predicate a stored value is. A stored
    * value that fails it falls back to the default; a DEFAULT that fails it is

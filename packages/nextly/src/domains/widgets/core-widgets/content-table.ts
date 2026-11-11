@@ -23,9 +23,12 @@ import { readCoreList } from "./system-read";
 
 export const contentTableWidget = defineWidget({
   id: CORE_WIDGET_ID.contentTable,
+  // Drawn beside its name in the add panel.
+  icon: "Table",
   title: "Content",
+  // One line, as the add panel lists it.
   description:
-    "One compact table of the collections and Singles this reader may see: entries, drafts, the last update, and a create button on each row.",
+    "Every collection and Single, with its entries, drafts and a create button.",
   // From half the row, where the table's five columns still read, to the full width.
   size: {
     default: { w: 12, h: 4 },

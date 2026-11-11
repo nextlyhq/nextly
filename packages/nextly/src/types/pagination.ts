@@ -61,6 +61,13 @@ export interface PaginatedResponse<T> {
 
   /** Next page number, or null if on the last page */
   nextPage: number | null;
+
+  /**
+   * True when the read counted no further than a cap and more entries match:
+   * `totalDocs` is then the cap, a lower bound, and the paging fields come
+   * from the rows counted. Absent when the total is exact.
+   */
+  totalCapped?: true;
 }
 
 /**

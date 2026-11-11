@@ -69,8 +69,9 @@ export interface SettingDeclaration<
   /** The setting this one depends on, and is reset with. */
   readonly of?: On;
   /**
-   * Whether it is changed on the card itself: in its quick popover, which holds
-   * at most three per widget, and on its header, which draws the first.
+   * Whether it is changed on the card itself: the card's header draws the
+   * first one marked that it can draw. At most three per widget; the rest are
+   * changed in the card's settings drawer, where every setting is.
    */
   readonly quick?: boolean;
   /**
@@ -208,7 +209,7 @@ export type WidgetFilter = NonNullable<WidgetQuery["where"]>;
  * `LIST_DENSITIES` cannot reach a settings sheet unnamed.
  */
 const DENSITY_LABELS: Readonly<Record<ListDensity, string>> = {
-  default: "Default",
+  default: "Comfortable",
   compact: "Compact",
 };
 

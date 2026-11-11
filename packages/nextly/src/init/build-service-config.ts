@@ -213,6 +213,12 @@ export function buildServiceConfig(
       serviceConfig.localization = nextlyConfig.localization;
     }
 
+    // How each language's address is formed, so a page's address in a
+    // language is answered from the app's declaration.
+    if (!serviceConfig.languageAddresses && nextlyConfig?.languageAddresses) {
+      serviceConfig.languageAddresses = nextlyConfig.languageAddresses;
+    }
+
     // Webhook retention — carry the resolved policy through so writes can offer
     // a retention pass. `undefined` here means "not carried"; the sanitizer
     // always produces either a policy or an explicit null, so a null must be

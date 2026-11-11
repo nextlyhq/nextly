@@ -156,7 +156,7 @@ describe("a setting with its own editor", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Double" }));
     expect(screen.getByText("Goal: 50 for Q4")).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ goal: 50 });
   });
@@ -174,7 +174,7 @@ describe("a setting with its own editor", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Double" }));
     expect(screen.getByText("Goal: 40 for Q4")).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(
       await screen.findByText('"Goal" is at most 30.', { selector: "p" })
     ).toBeTruthy();
@@ -187,7 +187,7 @@ describe("a setting with its own editor", () => {
       screen.getByRole("button", { name: "Pick Subtitle" })
     );
     expect(screen.getByText("Column is subtitle")).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     // The words the layout write refuses the same value with.
     expect(
       await screen.findByText('"Column" names a field that is not available.', {
@@ -202,7 +202,7 @@ describe("a setting with its own editor", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Pick Headline" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls.at(-1)?.[0]).toEqual({
       collection: "posts",
@@ -215,7 +215,7 @@ describe("a setting with its own editor", () => {
     expect(screen.getByText("Column is title")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Clear" }));
     expect(screen.getByText("Column is unset")).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     // No value for `column`, not even the form's blank: the card reads it as unset.
     expect(onSave.mock.calls.at(-1)?.[0]).toEqual({ collection: "posts" });

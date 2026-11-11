@@ -54,13 +54,9 @@ export default function CellSettings({
   isEditing,
   isWriting,
 }: CellSettingsProps): JSX.Element {
-  // The card's width on the dashboard, from the dashboard's own and the card's span, the rule
-  // its first query is sized by: the width it has once the panel closes.
+  // The dashboard's width, which a card's width on it is read from (`cardOuterWidth`), the rule
+  // its query is sized by: the width it has once the drawer closes.
   const dashboardWidth = useDashboardWidthAround();
-  const cardWidth =
-    dashboardWidth === undefined
-      ? undefined
-      : cardOuterWidth(size.w, dashboardWidth);
   return (
     <SettingsPanel
       placementId={row.placementId}
@@ -79,21 +75,32 @@ export default function CellSettings({
       widget={row.widget}
       config={row.config}
       ownTitle={row.ownTitle}
+      // The Size section's Width, opened on the width the card is drawn at.
+      sizing={{ size, bounds: row.widget.size }}
       onDone={done.done}
       {...(done.blocked === undefined ? {} : { blocked: done.blocked })}
-      renderPreview={(draft, clearFilters) => (
-        <SettingsPreview
-          widget={row.widget}
-          placementId={row.placementId}
-          stored={row.config}
-          draft={draft.config}
-          ownTitle={draft.ownTitle}
-          shown={data}
-          size={size}
-          cardWidth={cardWidth}
-          onClearFilters={clearFilters}
-        />
-      )}
+      renderPreview={(draft, clearFilters) => {
+        // Drawn at the width the drawer holds, so choosing another shows the card at it.
+        const w = draft.resize?.size.w ?? size.w;
+        return (
+          <SettingsPreview
+            widget={row.widget}
+            placementId={row.placementId}
+            stored={row.config}
+            draft={draft.config}
+            ownTitle={draft.ownTitle}
+            shown={data}
+            size={{ w, h: size.h }}
+            shownW={size.w}
+            cardWidth={
+              dashboardWidth === undefined
+                ? undefined
+                : cardOuterWidth(w, dashboardWidth)
+            }
+            onClearFilters={clearFilters}
+          />
+        );
+      }}
     />
   );
 }

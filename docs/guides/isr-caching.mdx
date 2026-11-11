@@ -133,9 +133,10 @@ To add them to an app by hand:
 - **Server Action:** the expiry completes before the action returns, and
   `updateTag` lets the person who made the change read it straight away.
 - **Route Handler and the admin API:** the expiry starts before the response is
-  sent and completes in the same invocation. A request made after the response
-  arrives reads the new version. A request already in flight while the write
-  ran may still read the previous one.
+  sent and completes in the same invocation. With Nextly's cache handlers
+  installed, a request made after the response arrives reads the new version.
+  A request already in flight while the write ran may still read the previous
+  one.
 - **Other instances:** with Nextly's cache handlers installed (see Cache
   Components below), every other instance stops serving the previous version
   within about five seconds. They treat the expiry as standing for one second
@@ -145,6 +146,14 @@ To add them to an app by hand:
   written more than about once a second keeps the other instances rebuilding
   the reads that carry it until the writes pause, while the instance making
   the writes is not affected.
+- **Without Nextly's cache handlers:** Next.js's own cache judges a stored page
+  or read by when it was stored, not by when its render read the content. A
+  render stores its page after its response is sent, so a render that began
+  before a write and stored its page a few milliseconds after it is served as
+  fresh, with the previous content, until its lifetime runs out. Next.js's
+  cache also serves a page's previous version once after a write expires it.
+  Nextly's handlers judge each entry by when its render began and expire it at
+  once, which is why `create-nextly-app` installs them.
 
 ### If an expiry fails
 
@@ -381,7 +390,11 @@ each of them.
    the read runs directly, uncached.
 2. **Install Nextly's cache handlers** in `next.config.ts`. Next.js's default
    incremental cache serves a page's previous shell once after its tags are
-   expired, so the first read after a write would still be the old version:
+   expired, so the first read after a write would still be the old version.
+   It also judges an entry by when it was stored, so a page whose render began
+   before a write and was stored just after it stands as fresh
+   ([When the new version shows](#when-the-new-version-shows)). Nextly's
+   handlers judge each entry by when its render began:
 
    ```ts
    cacheComponents: true,

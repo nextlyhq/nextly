@@ -3,6 +3,12 @@ import { describe, expect, it } from "vitest";
 import { submissionsCollection } from "../collections/submissions";
 import { formBuilder } from "../plugin";
 
+/**
+ * The editor as the admin registers it, spelled out rather than imported, so
+ * a declaration naming any other component fails here.
+ */
+const FORM_EDITOR_VIEW = "@nextlyhq/plugin-form-builder/admin#FormBuilderView";
+
 describe("form-builder contributes.admin (P5 dogfood)", () => {
   it("declares standalone main-rail placement with a single Forms identity", () => {
     const { plugin } = formBuilder();
@@ -19,11 +25,30 @@ describe("form-builder contributes.admin (P5 dogfood)", () => {
   it("registers no settings component, custom pages, or beforeList injections", () => {
     // The collection Edit-view override is the single FormBuilderView mount;
     // the old settings-component (a second full builder at /admin/plugins/…),
-    // the filter-widget-as-page, and the beforeList injection stay gone.
+    // the filter-widget-as-page, and the beforeList injection stay gone. The
+    // forms collection's only view entry gives the editor's own pages their
+    // addresses, each drawing that same editor.
     const admin = formBuilder().plugin.contributes?.admin;
     expect(admin?.settings).toBeUndefined();
     expect(admin?.pages ?? []).toHaveLength(0);
-    expect(admin?.views ?? {}).toEqual({});
+    expect(admin?.views ?? {}).toEqual({
+      forms: {
+        documentViews: [
+          { path: "preview", label: "Preview", component: FORM_EDITOR_VIEW },
+          { path: "settings", label: "Settings", component: FORM_EDITOR_VIEW },
+          {
+            path: "notifications",
+            label: "Notifications",
+            component: FORM_EDITOR_VIEW,
+          },
+          {
+            path: "submissions",
+            label: "Submissions",
+            component: FORM_EDITOR_VIEW,
+          },
+        ],
+      },
+    });
   });
 
   it("overrides the submissions List view and disables admin creation", () => {

@@ -6,7 +6,9 @@
  * their own.
  *
  * Minimal and inert by design, because every playground boot loads it: no
- * tables, routes, jobs, hooks or seed writes. It declares one entry-list
+ * tables, routes, jobs, hooks or seed writes. Its one proxy handler sets a
+ * header naming the fixture on every page the site's Proxy lets through, which
+ * the production browser test reads on a prerendered page. It declares one entry-list
  * filter on Posts, which appears in the list's Filter menu and changes nothing
  * until someone chooses it, and contributions to admin places: a block on the
  * dashboard; on a Post's edit page a block, a block behind `update-posts`, a
@@ -153,5 +155,15 @@ export const contributionsFixturePlugin = definePlugin({
         },
       ],
     },
+    // Answers nothing and only marks the response, so a page served through
+    // the Proxy is told apart from one served around it.
+    proxy: [
+      {
+        name: "fixture-header",
+        handle: () => ({
+          headers: { "x-nextly-proxy-fixture": "contributions-fixture" },
+        }),
+      },
+    ],
   },
 });

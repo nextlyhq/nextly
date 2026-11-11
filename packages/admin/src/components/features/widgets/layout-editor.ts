@@ -265,6 +265,18 @@ export function removePlacement(
   );
 }
 
+/**
+ * Takes a card out of the list altogether, as if it had never been added: for a card added this
+ * session whose adding the reader called off. Unlike `removePlacement`, nothing stays to be put
+ * back or saved as removed.
+ */
+export function discardPlacement(
+  placements: readonly WidgetPlacement[],
+  placementId: string
+): WidgetPlacement[] {
+  return placements.filter(placement => placement.id !== placementId);
+}
+
 /** Puts a removed card back, exactly where it was. */
 export function restorePlacement(
   placements: readonly WidgetPlacement[],
@@ -399,7 +411,7 @@ export function addPlacement(
  * one order and the form rebuilt in another would compare as changed and leave
  * Save enabled on a card nobody touched.
  */
-function sameConfig(a: unknown, b: unknown): boolean {
+export function sameConfig(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (Array.isArray(a) && Array.isArray(b)) return sameItems(a, b);
   if (isRecord(a) && isRecord(b)) return sameEntries(a, b);

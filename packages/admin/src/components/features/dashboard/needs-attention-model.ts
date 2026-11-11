@@ -36,6 +36,11 @@ export interface AttentionRow {
   reason?: string;
   /** Where Review leads, when the item's link is one the admin draws. */
   href?: string;
+  /**
+   * Where "How to fix" leads: the documentation, opened outside the admin.
+   * Only a page on Nextly's own site is drawn.
+   */
+  help?: string;
   /** The count could not be read: the row says so and offers Retry. */
   failed: boolean;
   /**
@@ -68,7 +73,7 @@ function attentionRow(item: unknown): AttentionRow | null {
     id: item.id,
     label: item.label,
     severity: item.severity === "critical" ? "critical" : "warning",
-    ...rowWords(item.label, item, failed),
+    ...rowWords(item.label, item, failed || item.single === true),
     ...rowExtras(item),
     failed,
     ...(releases === undefined ? {} : { releases }),
@@ -77,14 +82,15 @@ function attentionRow(item: unknown): AttentionRow | null {
 
 /**
  * The row's label with its count, as drawn and as heard: "Overdue releases · 2". A failed item's
- * count was never read, so its row says the label alone.
+ * count was never read, and a single item ("Database connection is not encrypted") is one thing,
+ * not a count, so each of those rows says the label alone.
  */
 function rowWords(
   label: string,
   item: Record<string, unknown>,
-  failed: boolean
+  labelAlone: boolean
 ): Pick<AttentionRow, "title" | "spoken"> {
-  if (failed) return { title: label, spoken: label };
+  if (labelAlone) return { title: label, spoken: label };
   const count = typeof item.count === "number" ? item.count : 0;
   const atLeast = item.atLeast === true;
   return {
@@ -94,18 +100,31 @@ function rowWords(
 }
 
 /**
- * Why the item waits, when its owner said, and where its Review leads. The link is the one rule
- * startup holds a plugin's link to: a path inside the admin. One that breaks it is drawn with no
- * Review rather than as a link that leaves the admin.
+ * Why the item waits, when its owner said, where its Review leads, and where its "How to fix"
+ * does. The link is the one rule startup holds a plugin's link to: a path inside the admin. One
+ * that breaks it is drawn with no Review rather than as a link that leaves the admin. Help is a
+ * page of Nextly's own documentation, or none.
  */
 function rowExtras(
   item: Record<string, unknown>
-): Pick<AttentionRow, "reason" | "href"> {
+): Pick<AttentionRow, "reason" | "href" | "help"> {
   const href = isText(item.link) ? adminHref(item.link) : undefined;
   return {
     ...(isText(item.reason) ? { reason: item.reason } : {}),
     ...(href === undefined ? {} : { href }),
+    ...(isNextlyDocs(item.help) ? { help: item.help } : {}),
   };
+}
+
+/** Whether `value` is a page of Nextly's documentation, the only help a row links to. */
+function isNextlyDocs(value: unknown): value is string {
+  if (!isText(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "nextlyhq.com";
+  } catch {
+    return false;
+  }
 }
 
 /**

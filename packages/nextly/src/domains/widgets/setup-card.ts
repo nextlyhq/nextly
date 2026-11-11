@@ -50,9 +50,14 @@ export async function isSetupReader(caller: ReadCaller): Promise<boolean> {
 
 /**
  * Whether the card shows for this reader: a person, as the card is a person's
- * own, who has neither dismissed it nor been told "You're all set". Judged
- * before the card loads, so a reader it does not show for has nothing fetched
- * for it.
+ * own, who has not been told "You're all set". Judged before the card loads,
+ * so a reader it does not show for has nothing fetched for it.
+ *
+ * The stored `dismissed` flag is not read here. Hiding the card is removing it
+ * from the reader's layout (its menu's "Hide setup"), and Add widget puts it
+ * back; a flag the old dismiss control set would otherwise hide the card for
+ * good, with nothing left on the dashboard to undo it. The flag stays stored
+ * as it is, unread.
  *
  * Only what is this reader's own. That the card is a super-admin's is decided
  * earlier, where the dashboard's audience is (`SUPER_ADMIN_WIDGET_IDS` in
@@ -63,7 +68,7 @@ export async function isSetupReader(caller: ReadCaller): Promise<boolean> {
 export async function setupShownTo(caller: ReadCaller): Promise<boolean> {
   if (caller.authenticatedScope?.actorType === "apiKey") return false;
   const state = await readSetupState(caller.user.id);
-  return !state.dismissed && state.retiredAt === undefined;
+  return state.retiredAt === undefined;
 }
 
 /**

@@ -37,7 +37,7 @@ import type { Command } from "commander";
 import { sql, type SQL } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
-import { seedAll, type SeederResult } from "../../database/seeders/index";
+import type { SeederResult } from "../../database/seeders/index";
 import { MIGRATION_LOCK_TABLE as FIELD_GROUP_LOCK_TABLE } from "../../domains/field-groups/migration/session";
 // F8 PR 2: was `DrizzlePushService` (legacy). Switched to the freshPushSchema
 // helper which has the same dialect-aware behavior but is self-contained
@@ -862,6 +862,10 @@ async function performSeeding(
   logger.newline();
   logger.info("Running database seeders...");
 
+  // Loaded when seeding runs, not imported at the top: the seeders reach the
+  // service layer, several hundred modules a reset without seeding never
+  // needs.
+  const { seedAll } = await import("../../database/seeders/index");
   let result: SeederResult;
   try {
     result = await seedAll(adapter as unknown as DrizzleAdapter, {

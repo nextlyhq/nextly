@@ -1,7 +1,8 @@
 /**
  * The dashboard's summary sources. `system:team` asks the Team card's own gate
  * before it counts anyone and gives the roles figure only to a reader who may
- * see roles; `system:content` answers the service's Content table within the
+ * see roles; `system:team-people` asks the same gate before it reads anyone,
+ * and answers the card's fields alone; `system:content` answers the service's Content table within the
  * reader's scope, with how many rows it could show in all. Both refuse what they
  * cannot answer.
  */
@@ -9,13 +10,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const countTeamFigure = vi.fn();
 const getContentTable = vi.fn();
+const listTeamPeople = vi.fn();
 const resolveReadableResources = vi.fn();
 const granted = vi.fn<() => string[]>();
 
 vi.mock("../../../di/container", () => ({
   container: {
     has: () => true,
-    get: () => ({ countTeamFigure, getContentTable }),
+    get: () => ({ countTeamFigure, getContentTable, listTeamPeople }),
   },
 }));
 vi.mock("../resolve-readable-resources", () => ({
@@ -49,6 +51,7 @@ import {
 } from "../../../domains/widgets/sources";
 import {
   CONTENT_SOURCE_ID,
+  TEAM_PEOPLE_SOURCE_ID,
   TEAM_SOURCE_ID,
 } from "../../../domains/widgets/system-source-ids";
 import { clearSystemResolvers } from "../../../domains/widgets/system-sources";
@@ -77,6 +80,15 @@ const HOME = {
   group: null,
 };
 
+const ANA = {
+  id: "user-2",
+  name: "Ana",
+  email: "ana@example.test",
+  role: { slug: "editor", name: "Editor" },
+  lastActiveAt: new Date("2026-11-10T09:00:00.000Z"),
+};
+const BO = { id: "user-3", name: null, email: "bo@example.test" };
+
 const caller = { user: { id: "user-1", roles: ["editor"] } };
 const ask = (extra: Record<string, unknown> = {}) =>
   executeWidgetQuery({ source: TEAM_SOURCE_ID, op: "list", ...extra }, caller);
@@ -90,6 +102,7 @@ beforeEach(() => {
   );
   resolveReadableResources.mockResolvedValue(SCOPE);
   getContentTable.mockResolvedValue({ rows: [POSTS], total: 1 });
+  listTeamPeople.mockResolvedValue({ people: [ANA, BO], total: 7 });
   clearSources();
   clearSystemResolvers();
   registerSummaryWidgetSources();
@@ -97,15 +110,15 @@ beforeEach(() => {
 
 describe("who the team source answers", () => {
   it("answers a reader the card is not for exactly as a missing source, and counts no one", async () => {
-    // May read people but neither add nor change them.
-    granted.mockReturnValue(["read-users", "read-roles"]);
+    // May see roles, and add and change people, but not read them.
+    granted.mockReturnValue(["read-roles", "create-users", "update-users"]);
     const refusal = await ask().catch((error: unknown) => error);
     expect(isUnavailableSourceRefusal(refusal)).toBe(true);
     expect(countTeamFigure).not.toHaveBeenCalled();
   });
 
   it("gives the people alone to a reader who may not see roles, with no roles row at all", async () => {
-    granted.mockReturnValue(["read-users", "create-users"]);
+    granted.mockReturnValue(["read-users"]);
     expect(rows(await ask())).toEqual([{ figure: "users", count: 12 }]);
     // Never counted, rather than counted and dropped.
     expect(countTeamFigure).not.toHaveBeenCalledWith("roles");
@@ -131,6 +144,71 @@ describe("what it refuses", () => {
       granted.mockReturnValue(["read-users", "create-users"]);
       await expect(ask(extra)).rejects.toThrow();
       expect(countTeamFigure).not.toHaveBeenCalled();
+    }
+  );
+});
+
+describe("the team's people", () => {
+  const askPeople = (extra: Record<string, unknown> = {}) =>
+    executeWidgetQuery(
+      { source: TEAM_PEOPLE_SOURCE_ID, op: "list", ...extra },
+      caller
+    );
+
+  it("answers a reader the card is not for exactly as a missing source, and reads no one", async () => {
+    // May add and change people, but not read them.
+    granted.mockReturnValue(["create-users", "update-users", "read-roles"]);
+    const refusal = await askPeople().catch((error: unknown) => error);
+    expect(isUnavailableSourceRefusal(refusal)).toBe(true);
+    expect(listTeamPeople).not.toHaveBeenCalled();
+  });
+
+  it("answers the card's fields alone, and how many there are in all", async () => {
+    granted.mockReturnValue(["read-users"]);
+    const answer = await askPeople({ limit: 5 });
+    // No id, and nothing the card does not draw; a field a person has no value for stays absent.
+    expect(rows(answer)).toEqual([
+      {
+        name: "Ana",
+        email: "ana@example.test",
+        role: "Editor",
+        lastActiveAt: new Date("2026-11-10T09:00:00.000Z"),
+      },
+      { email: "bo@example.test" },
+    ]);
+    expect((answer as { total?: number }).total).toBe(7);
+    expect(listTeamPeople).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 5 })
+    );
+    expect(listTeamPeople.mock.calls[0]?.[0]).not.toHaveProperty("roleSlug");
+  });
+
+  it("hands the role its where names to the read, which filters in the database", async () => {
+    granted.mockReturnValue(["read-users", "create-users"]);
+    await askPeople({ where: { role: "editor" }, limit: 10 });
+    expect(listTeamPeople).toHaveBeenCalledWith(
+      expect.objectContaining({ roleSlug: "editor", limit: 10 })
+    );
+  });
+
+  it("reads at most twenty people, whatever it is asked", async () => {
+    granted.mockReturnValue(["read-users", "create-users"]);
+    await askPeople({ limit: 50 });
+    expect(listTeamPeople).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 20 })
+    );
+  });
+
+  it.each([
+    ["another filter", { where: { email: { equals: "ana@example.test" } } }],
+    ["a role that is not a slug", { where: { role: 3 } }],
+    ["a sort", { sort: "email" }],
+  ])(
+    "refuses %s rather than answering a different question",
+    async (_, extra) => {
+      granted.mockReturnValue(["read-users", "create-users"]);
+      await expect(askPeople(extra)).rejects.toThrow();
+      expect(listTeamPeople).not.toHaveBeenCalled();
     }
   );
 });

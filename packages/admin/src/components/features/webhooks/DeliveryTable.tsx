@@ -270,7 +270,7 @@ function DeliveryEventFilter({
         </SelectContent>
       </Select>
       {eventTypesFailed && (
-        <p className="text-sm text-destructive-500">
+        <p className="text-sm text-danger-text">
           Could not load the event types to filter by. Reload the page to try
           again.
         </p>

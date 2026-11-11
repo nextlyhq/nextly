@@ -45,6 +45,12 @@ export interface ColumnConversion {
    * Such a conversion reads each stored value as a list rather than as JSON text.
    */
   referenceList?: boolean;
+  /**
+   * The conversion reads each value through its text, so the new column holds each value as the
+   * old one printed it. Only a conversion that casts that way may say so: it is what lets a
+   * PostgreSQL real become a double with 0.1 still reading 0.1.
+   */
+  throughText?: boolean;
 }
 
 /**

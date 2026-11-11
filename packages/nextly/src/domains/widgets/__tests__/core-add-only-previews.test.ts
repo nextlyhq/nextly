@@ -42,11 +42,10 @@ describe("core's add-only previews", () => {
     expect(text).not.toMatch(/https?:/);
   });
 
-  it("gives Count a total its split adds up to", () => {
+  it("gives Count a number and its default line, the change this week", () => {
     const { data } = onlyCase(countWidget.preview);
-    expect(data.total).toBe(
-      (data.split?.published ?? 0) + (data.split?.draft ?? 0)
-    );
+    expect(data.line).toBe("change");
+    expect(data.change).toBeLessThanOrEqual(data.total);
   });
 
   it("gives Over time a month of days, oldest first, a day apart", () => {

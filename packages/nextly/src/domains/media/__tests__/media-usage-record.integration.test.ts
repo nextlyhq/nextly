@@ -181,11 +181,17 @@ describe.each(getConfiguredTestDialects())(
           fallback: false,
         },
         fieldGroups: [
+          // Placed directly in `usagehero`: its instance is a row of its own.
+          defineFieldGroup({
+            slug: "usageinner",
+            fields: [upload({ name: "photo", relationTo: "media" })],
+          }),
           defineFieldGroup({
             slug: "usagehero",
             fields: [
               text({ name: "heading" }),
               upload({ name: "image", relationTo: "media" }),
+              fieldGroup({ name: "badge", component: "usageinner" }),
             ],
           }),
         ],
@@ -302,6 +308,20 @@ describe.each(getConfiguredTestDialects())(
           ["items.photo", "", A.id],
           ["hero.image", "", B.id],
           ["layout", "", C.id],
+        ])
+      );
+    });
+
+    it("records an item used by a field group placed directly in another", async () => {
+      const id = await createPost({
+        title: "Nested",
+        hero: { heading: "Hi", image: B.id, badge: { photo: E.id } },
+      });
+
+      expect(await recordedFor(t, "collection", "usageposts", id)).toEqual(
+        expected("collection", "usageposts", id, [
+          ["hero.image", "", B.id],
+          ["hero.badge.photo", "", E.id],
         ])
       );
     });

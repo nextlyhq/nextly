@@ -66,6 +66,30 @@ function createCtx(
   return { service, adapter, registry, relationship };
 }
 
+type WhereCondition = { column: string; value?: unknown };
+
+/**
+ * A select that answers each table's stored rows to a read of the instances under the entry's own
+ * table, and nothing to a read beneath them: none of these field groups holds another, so a row
+ * names the entry as its parent and never an instance.
+ */
+function storedUnderEntry(
+  rowsOf: (table: string) => Record<string, unknown>[]
+): (
+  table: string,
+  options?: { where?: { and?: WhereCondition[] } }
+) => Promise<Record<string, unknown>[]> {
+  return (table, options) =>
+    Promise.resolve(
+      options?.where?.and?.some(
+        condition =>
+          condition.column === "_parent_table" && condition.value === "dc_pages"
+      )
+        ? rowsOf(table)
+        : []
+    );
+}
+
 describe("FieldGroupDataService", () => {
   let ctx: ComponentDataTestCtx;
 
@@ -308,7 +332,7 @@ describe("FieldGroupDataService", () => {
     });
 
     it("deletes existing instances that are not present in incoming data", async () => {
-      ctx.adapter.select.mockResolvedValue([
+      const stored = [
         {
           id: "feat-a",
           _parent_id: "entry-1",
@@ -325,7 +349,8 @@ describe("FieldGroupDataService", () => {
           _order: 1,
           title: "B",
         },
-      ]);
+      ];
+      ctx.adapter.select.mockImplementation(storedUnderEntry(() => stored));
 
       await ctx.service.saveComponentData({
         parentId: "entry-1",
@@ -341,10 +366,12 @@ describe("FieldGroupDataService", () => {
     });
 
     it("handles mixed create/update/delete correctly", async () => {
-      ctx.adapter.select.mockResolvedValue([
-        { id: "feat-a", _parent_id: "entry-1", _order: 0, title: "A" },
-        { id: "feat-b", _parent_id: "entry-1", _order: 1, title: "B" },
-      ]);
+      ctx.adapter.select.mockImplementation(
+        storedUnderEntry(() => [
+          { id: "feat-a", _parent_id: "entry-1", _order: 0, title: "A" },
+          { id: "feat-b", _parent_id: "entry-1", _order: 1, title: "B" },
+        ])
+      );
 
       await ctx.service.saveComponentData({
         parentId: "entry-1",
@@ -446,31 +473,33 @@ describe("FieldGroupDataService", () => {
 
     it("deletes removed instances across all component tables", async () => {
       // Existing in comp_hero
-      ctx.adapter.select.mockImplementation(async (table: string) => {
-        if (table === "comp_hero") {
-          return [
-            {
-              id: "hero-1",
-              _parent_id: "entry-1",
-              _order: 0,
-              _component_type: "hero",
-              heading: "Old",
-            },
-          ];
-        }
-        if (table === "comp_cta") {
-          return [
-            {
-              id: "cta-1",
-              _parent_id: "entry-1",
-              _order: 1,
-              _component_type: "cta",
-              label: "Old",
-            },
-          ];
-        }
-        return [];
-      });
+      ctx.adapter.select.mockImplementation(
+        storedUnderEntry(table => {
+          if (table === "comp_hero") {
+            return [
+              {
+                id: "hero-1",
+                _parent_id: "entry-1",
+                _order: 0,
+                _component_type: "hero",
+                heading: "Old",
+              },
+            ];
+          }
+          if (table === "comp_cta") {
+            return [
+              {
+                id: "cta-1",
+                _parent_id: "entry-1",
+                _order: 1,
+                _component_type: "cta",
+                label: "Old",
+              },
+            ];
+          }
+          return [];
+        })
+      );
 
       await ctx.service.saveComponentData({
         parentId: "entry-1",
@@ -1179,6 +1208,33 @@ describe("FieldGroupDataService", () => {
 
       expect(result).toEqual([]);
       expect(ctx.adapter.select).not.toHaveBeenCalled();
+    });
+
+    // A field group placed directly in another is read a level down, after the outer instances.
+    it("defaults a field whose nested level could not be read, as a one-entry read does", async () => {
+      ctx.registry.registerComponent("seo", {
+        ...seoComponentMeta(),
+        fields: [
+          { name: "metaTitle", type: "text" },
+          { name: "badge", type: "component", component: "badge" },
+        ],
+      });
+      ctx.adapter.select.mockResolvedValue([
+        { id: "seo-1", _parent_id: "entry-1", _order: 0, meta_title: "One" },
+      ]);
+      // The outer instances read; the lookup a level down then fails.
+      const lookUp = ctx.registry.getComponent.getMockImplementation();
+      ctx.registry.getComponent
+        .mockImplementationOnce(lookUp)
+        .mockRejectedValueOnce(new Error("lookup failed"));
+
+      const result = await ctx.service.populateComponentDataMany({
+        entries: [{ id: "entry-1", title: "Page 1" }],
+        parentTable: "dc_pages",
+        fields: [seoComponentField()],
+      });
+
+      expect(result[0].seo).toBeNull();
     });
 
     it("applies default values to entries without matching component data", async () => {

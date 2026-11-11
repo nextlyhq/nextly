@@ -120,8 +120,11 @@ describe("Single builder save refused while a migration runs", () => {
       </RestartProvider>
     );
 
+    // A change to save: the field's menu, opened from its row, duplicates it.
+    (await screen.findByTestId("field-row-intro")).focus();
+    await user.keyboard("{Shift>}{F10}{/Shift}");
     await user.click(
-      await screen.findByRole("button", { name: "Duplicate intro" })
+      await screen.findByRole("menuitem", { name: "Duplicate" })
     );
     await user.click(screen.getByRole("button", { name: /^save/i }));
 

@@ -86,6 +86,7 @@ describe("the builder's empty editor", () => {
     };
     return render(
       <BuilderPageLayout
+        entitySlug="example"
         config={{
           kind,
           basicsFields: ["singularName", "slug"],

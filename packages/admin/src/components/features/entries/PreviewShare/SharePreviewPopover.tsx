@@ -22,6 +22,12 @@ import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
 import { SharePreviewPanel } from "./SharePreviewPanel";
 
+/**
+ * The room kept free at the window's bottom for toasts: their 24px offset, a
+ * toast's height and a gap. Kept small at the other edges.
+ */
+const TOAST_CLEARANCE = { top: 8, right: 8, bottom: 112, left: 8 };
+
 export interface SharePreviewPopoverProps {
   /** The one document whose links are shared and listed. */
   document: PreviewLinkDocument;
@@ -49,6 +55,12 @@ export function SharePreviewPopover({
         // reach, since a popover does not scroll the page.
         className="max-h-[var(--radix-popover-content-available-height)] w-[22rem] max-w-[calc(100vw-2rem)] overflow-y-auto p-0"
         aria-label="Share a preview"
+        // Clear of the toasts in the window's bottom corner: making or revoking
+        // a link says so in a toast, and a popover running down under it would
+        // put Revoke all out of reach until the toast left. The room the
+        // popover may take ends this far above the window's bottom instead,
+        // and the popover scrolls within it.
+        collisionPadding={TOAST_CLEARANCE}
         // Not closed by focus moving elsewhere. It is opened from a menu row as
         // often as from a button, and a closing menu hands focus back to its
         // trigger, which would close the popover the moment it opened. Escape,

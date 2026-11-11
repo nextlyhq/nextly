@@ -65,14 +65,14 @@ describe("RequestBar", () => {
       GET: null, // a read is not an event, so it takes no role colour
       POST: "success",
       PATCH: "warning",
-      DELETE: "destructive",
+      DELETE: "danger",
     };
 
     for (const [method, role] of Object.entries(ROLE)) {
       const { tone, pill } =
         METHOD_SEMANTICS[method as keyof typeof METHOD_SEMANTICS];
       if (role === null) {
-        expect(`${tone} ${pill}`).not.toMatch(/success|warning|destructive/);
+        expect(`${tone} ${pill}`).not.toMatch(/success|warning|danger|destructive/);
         continue;
       }
       expect(tone).toContain(role);

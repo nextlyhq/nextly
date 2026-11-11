@@ -12,6 +12,7 @@
     "permissions",
     "security",
     "routes",
+    "proxy",
     "admin-ui",
     "schema",
     "public-addresses",

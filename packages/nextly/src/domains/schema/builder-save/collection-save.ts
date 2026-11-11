@@ -657,8 +657,10 @@ function refuseUnenforceableUniques(
 ): void {
   const dialect = deps.adapter.getCapabilities().dialect;
   for (const field of save.entity?.fields ?? []) {
-    if (field.unique !== true) continue;
-    if (toSnakeCase(field.name) === "slug") continue;
+    // A group with no name only lays fields out and has no column to key.
+    const name = field.name;
+    if (field.unique !== true || name === undefined) continue;
+    if (toSnakeCase(name) === "slug") continue;
     const column = getColumnDescriptor(
       field as FieldDefinition,
       dialect,
@@ -666,7 +668,11 @@ function refuseUnenforceableUniques(
     );
     if (column === null) continue;
     if (!uniquenessCanBeAnIndex(column.dialectType, dialect)) {
-      throw uniquenessNotEnforceableError(table, field, dialect);
+      throw uniquenessNotEnforceableError(
+        table,
+        { name, type: field.type },
+        dialect
+      );
     }
   }
 }

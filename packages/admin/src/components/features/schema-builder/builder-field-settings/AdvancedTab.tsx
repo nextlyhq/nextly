@@ -4,9 +4,10 @@
 // driven by an `isInsideRepeatingAncestor` prop computed at the page
 // level via the helper in lib/builder/is-inside-repeating-ancestor.
 import { Label, Switch } from "@nextlyhq/ui";
-import { defaultLocalizedForType } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 import type { JSX } from "react";
+
+import { fieldLocalized } from "@admin/lib/builder/field-localized";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "../builder-config";
 import type { BuilderField } from "../types";
@@ -85,11 +86,7 @@ export function AdvancedTab({
         // reference always reads OFF: the switch is disabled above, and a
         // legacy save could still carry `localized: true` on the reference —
         // displaying it would present dead metadata as an active setting.
-        checked={
-          isFieldGroupFieldType(field.type)
-            ? false
-            : (adv.localized ?? defaultLocalizedForType(field.type))
-        }
+        checked={fieldLocalized(field)}
         disabled={localizedDisabled}
         onChange={v => setAdv({ localized: v })}
       />

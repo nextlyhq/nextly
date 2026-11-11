@@ -157,4 +157,86 @@ describe("sharedComparison", () => {
       "note",
     ]);
   });
+
+  // An untranslated component holding a translated one directly is kept per language for that one's
+  // sake: what it holds in one language is not another's to compare, its shared parts are.
+  it("compares a translated component placed in an untranslated one by its shared parts", async () => {
+    const withCard = new Map(componentFields);
+    withCard.set(
+      "card",
+      fields(
+        { name: "tone", type: "text" },
+        { name: "badge", type: "component", component: "banner" }
+      )
+    );
+    const panel = (words: string, code: string, tone: string) => ({
+      tone,
+      badge: { words, code, _componentType: "banner" },
+      _componentType: "card",
+    });
+    const base = { panel: panel("w", "c", "warm") };
+    const { shared, views } = await sharedComparison({
+      fields: fields({ name: "panel", type: "component", component: "card" }),
+      translated: new Set(),
+      document: base,
+      componentFields: withCard,
+      isComponentLocalized: slug =>
+        Promise.resolve(translatedComponents.has(slug)),
+    });
+
+    expect(
+      differingFields(
+        shared,
+        base,
+        { panel: panel("otra", "c", "warm") },
+        views
+      )
+    ).toEqual([]);
+    expect(
+      differingFields(shared, base, { panel: panel("w", "c2", "warm") }, views)
+    ).toEqual(["panel"]);
+    expect(
+      differingFields(shared, base, { panel: panel("w", "c", "cool") }, views)
+    ).toEqual(["panel"]);
+  });
+
+  // A group with no name only lays fields out: the translated component in it is placed directly.
+  it("compares a translated component inside a group with no name by its shared parts", async () => {
+    const withCard = new Map(componentFields);
+    withCard.set(
+      "laidcard",
+      fields(
+        { name: "tone", type: "text" },
+        {
+          type: "group",
+          fields: [{ name: "badge", type: "component", component: "banner" }],
+        }
+      )
+    );
+    const panel = (words: string, code: string) => ({
+      tone: "warm",
+      badge: { words, code, _componentType: "banner" },
+      _componentType: "laidcard",
+    });
+    const base = { panel: panel("w", "c") };
+    const { shared, views } = await sharedComparison({
+      fields: fields({
+        name: "panel",
+        type: "component",
+        component: "laidcard",
+      }),
+      translated: new Set(),
+      document: base,
+      componentFields: withCard,
+      isComponentLocalized: slug =>
+        Promise.resolve(translatedComponents.has(slug)),
+    });
+
+    expect(
+      differingFields(shared, base, { panel: panel("otra", "c") }, views)
+    ).toEqual([]);
+    expect(
+      differingFields(shared, base, { panel: panel("w", "c2") }, views)
+    ).toEqual(["panel"]);
+  });
 });

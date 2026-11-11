@@ -228,6 +228,8 @@ function expiryKnown(
 
 interface ViewState {
   ledger?: TagExpiryLedger;
+  /** Callers waiting for a ledger to be published, each told once one is. */
+  ledgerWaiters?: Array<() => void>;
   /** The ledger's answers, per tag. */
   lookups: Map<string, TagLookup>;
   /** Tags being asked about now, with the read that will answer them. */
@@ -329,6 +331,28 @@ export function publishTagExpiryLedger(ledger: TagExpiryLedger | null): void {
   // waiting for that ledger's slot is turned away, not started against it.
   closeLedgerCalls(view.calls);
   view.calls = noLedgerCalls();
+  if (ledger !== null) {
+    const waiters = view.ledgerWaiters ?? [];
+    view.ledgerWaiters = [];
+    for (const wake of waiters) wake();
+  }
+}
+
+/** Whether a ledger is published, so what expired can be asked. */
+export function tagExpiryLedgerPublished(): boolean {
+  return state().ledger !== undefined;
+}
+
+/**
+ * Resolves once a ledger is published, at once when one is. A start publishes
+ * one as soon as its database connects, before the rest of its work.
+ */
+export function whenTagExpiryLedgerPublished(): Promise<void> {
+  const view = state();
+  if (view.ledger !== undefined) return Promise.resolve();
+  return new Promise(resolve => {
+    (view.ledgerWaiters ??= []).push(resolve);
+  });
 }
 
 /**

@@ -124,7 +124,7 @@ function InlinePair({
   return (
     <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
       {status !== "added" ? (
-        <del className="min-w-0 rounded-sm px-0.5 bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100">
+        <del className="min-w-0 rounded-sm px-0.5 bg-danger-surface text-danger-text">
           <span className="sr-only">Before: </span>
           {before}
         </del>
@@ -135,7 +135,7 @@ function InlinePair({
         </span>
       ) : null}
       {status !== "removed" ? (
-        <ins className="min-w-0 rounded-sm px-0.5 underline decoration-1 underline-offset-2 bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100">
+        <ins className="min-w-0 rounded-sm px-0.5 underline decoration-1 underline-offset-2 bg-success-surface text-success-text">
           <span className="sr-only">After: </span>
           {after}
         </ins>

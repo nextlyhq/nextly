@@ -24,6 +24,7 @@ import type {
   MutationResponse,
 } from "../lib/api/response-types";
 
+import { withListOwner, type ListOwner } from "./list-owner";
 import type {
   FieldResolution,
   SchemaApplyResponse,
@@ -110,9 +111,11 @@ const buildQuery = (params: TableParams): string => {
  * Fetch paginated list of Component definitions.
  */
 export const fetchComponents = async (
-  params: TableParams
+  params: TableParams,
+  // The site's field groups or the plugins'; none lists both.
+  owner?: ListOwner
 ): Promise<ListResponse<ApiFieldGroup>> => {
-  const query = buildQuery(params);
+  const query = withListOwner(buildQuery(params), owner);
   const url = `/field-groups${query ? `?${query}` : ""}`;
   return fetcher<ListResponse<ApiFieldGroup>>(url, {}, true);
 };

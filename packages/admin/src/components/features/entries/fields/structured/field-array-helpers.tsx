@@ -94,7 +94,7 @@ export function RowRemoveButton({
       variant="ghost"
       size="icon"
       onClick={onRemove}
-      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 mr-1"
+      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-danger-text hover:bg-danger-surface mr-1"
       aria-label={ariaLabel}
     >
       <Trash2 className="h-4 w-4" />
@@ -450,7 +450,7 @@ export function RowLimitNotice({
   return (
     <>
       {minRows !== undefined && count < minRows && (
-        <p className="text-sm text-warning-600 dark:text-warning-500">
+        <p className="text-sm text-warning-text">
           Minimum {minRows} {pluralLabel} required. Currently have {count}.
         </p>
       )}

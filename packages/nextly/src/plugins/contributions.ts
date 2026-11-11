@@ -30,6 +30,7 @@ import type { ContentTypeScope } from "./content-type-scope";
 import type { EntityTransform } from "./entity-transforms";
 import type { PluginContext } from "./plugin-context";
 import type { PrincipalKindContribution } from "./principals/types";
+import type { PluginProxyHandler } from "./proxy/proxy-types";
 import type { PluginRoute } from "./routes/route-types";
 
 /**
@@ -922,6 +923,15 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    * app mounts the Nextly handler (`/admin/api` in a scaffolded project).
    */
   routes?: PluginRoute[];
+  /**
+   * @experimental Handlers the site's Proxy asks about every request it
+   * matches, before the page is served (`createNextlyProxy` from
+   * `nextly/runtime`, called from the app's `proxy.ts`). A handler may answer
+   * the request, as a redirect does, set headers on whatever is served, or
+   * pass headers on to the page's render. Checked at startup: each needs a
+   * name, unique within the plugin, and a `handle` function.
+   */
+  proxy?: PluginProxyHandler[];
   /**
    * @public Admin UI contributions: menu, pages + settings and per-collection
    * view overrides. Dashboard widgets are declared under `dashboard`, not

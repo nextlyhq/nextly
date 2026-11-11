@@ -144,6 +144,15 @@ export function environmentFilesRead(): string[] {
 }
 
 /**
+ * The folder this run's environment files were read from, which is where its
+ * database settings came from; `undefined` when no environment was loaded, as
+ * in a test that calls a command directly.
+ */
+export function environmentFolder(): string | undefined {
+  return current?.folder;
+}
+
+/**
  * The line naming the run's mode and where its database URL came from, as
  * `Mode: production (DATABASE_URL from .env.production)`; `undefined` when no
  * environment was loaded, as in a test that calls a command directly.

@@ -6,8 +6,9 @@
  * A setting changes a card in one of two ways, and the preview follows both. It changes how the
  * card is drawn, which the component reads from the card's settings (`placement.settings`); and
  * it changes the question the card asks, since its widget's `load` reads the settings too. While
- * the question is the one the card already asked, the preview draws the card's own answer and
- * asks nothing. When the values change the question, the preview asks it once, alone, after the
+ * the question is the one the card already asked, at the width the card is drawn at, the
+ * preview draws the card's own answer and asks nothing; at another width (the drawer's Width) it
+ * is a question of its own, since a widget's `load` is handed the card's size and tier. When the values change the question, the preview asks it once, alone, after the
  * reader stops changing them, so a number typed digit by digit is one request, not one per digit.
  *
  * The preview's request is its own card (`<placement>:preview`) asked with the sheet's values,
@@ -126,8 +127,13 @@ export function useSettingsPreview(args: {
   shown: ShownAnswer;
   /** The title the panel holds for the card, its reader's own; empty for the automatic one. */
   ownTitle?: string;
-  /** The size the card is drawn at on the dashboard, held to its widget's bounds. */
+  /** The size the preview draws the card at: the drawer's width, held to its widget's bounds. */
   size?: GridSize;
+  /**
+   * The width the card itself is drawn at on the dashboard, which its own answer was asked at.
+   * Absent, the preview is drawn at the card's own size.
+   */
+  shownW?: number;
   /** The tier the card is drawn at, from its width on the dashboard, when that is known. */
   tier?: SizeTier;
 }): SettingsPreview {
@@ -154,7 +160,10 @@ export function useSettingsPreview(args: {
   // What the card asks with the sheet's values, and with its stored ones: its settings are what
   // its widget's `load` reads, so any change of them, its density included, is a new question.
   const asking = questionOf(draft);
-  const sameQuestion = asking === questionOf(stored);
+  // And at the card's own width: another width is another size and tier for its `load`.
+  const sameQuestion =
+    asking === questionOf(stored) &&
+    (args.shownW === undefined || args.shownW === args.size?.w);
   // The question settles before it is asked, so a run of changes asks once.
   const settled = useDebouncedValue(asking, PREVIEW_ASK_DELAY_MS);
 

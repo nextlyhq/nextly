@@ -175,7 +175,12 @@ const fieldAdmin = z
 // FieldNode type breaks the circular inference. (A component field is a
 // leaf reference by slug, not a container.)
 export type FieldNode = {
-  name: string;
+  /**
+   * Absent only on a `group` that lays fields out: its fields are stored at the level it sits in,
+   * so it has no data and no name of its own (`uiSchemaFieldSchema` holds every other field to
+   * one).
+   */
+  name?: string;
   // Canonical tokens, OR a plugin-contributed field type slug. Plugin types
   // resolve to a column via the field-type registry in classifyFieldKind and
   // keep their real type in the DB metadata so the plugin's editor still
@@ -283,7 +288,8 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
         .regex(
           /^[A-Za-z][A-Za-z0-9_]*$/,
           "field name must match ^[A-Za-z][A-Za-z0-9_]*$"
-        ),
+        )
+        .optional(),
       // A canonical token, OR a plugin-contributed field type slug. Plugin
       // types aren't in the canonical enum; accept any slug-shaped token so the
       // manifest preserves the real type through to production. The field-type
@@ -369,6 +375,15 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       fields: z.array(uiSchemaFieldSchema).optional(),
     })
     .superRefine((f, ctx) => {
+      // Only a group may go without a name, as the config's field types allow: it then only lays
+      // its fields out, and they are stored where it sits. Every other field stores a value.
+      if (f.name === undefined && f.type !== "group") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "expected string, received undefined",
+          path: ["name"],
+        });
+      }
       const choices = Array.isArray(f.options) ? f.options : undefined;
       if (
         (f.type === "select" || f.type === "radio") &&
@@ -477,7 +492,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
           }
         }
       }
-      if (RESERVED_FIELD_NAMES.has(f.name)) {
+      if (f.name !== undefined && RESERVED_FIELD_NAMES.has(f.name)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `field name '${f.name}' is reserved`,

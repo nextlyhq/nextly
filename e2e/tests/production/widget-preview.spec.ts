@@ -4,38 +4,41 @@ import { includingHidden, test } from "../support/visible";
 import { signIn } from "../support/production-sign-in";
 
 /**
- * The widget preview page's address, and its read, on a PRODUCTION build.
+ * The admin's old widget preview address, and the preview read, on a
+ * PRODUCTION build.
  *
- * The page exists only while the server runs in development, and a production
- * server must neither serve it nor say it exists: a direct visit draws the
- * admin's not-found page, as an address nobody serves does; the dashboard
- * offers no way in; and the read the page draws from answers exactly as a
- * path the server does not serve, byte for byte.
+ * The admin has no preview page in any mode: a direct visit to its old
+ * address draws the admin's not-found page, as an address nobody serves does,
+ * and the dashboard offers no way in. The read the browser tests' widget check
+ * draws from is served by a development server alone, so here it answers
+ * exactly as a path the server does not serve, byte for byte.
  *
- * Only the production suite can ask this: under `next dev` the page is
- * supposed to show (`tests/widget-preview.spec.ts`).
+ * The development half, that the old address is not found there either and
+ * the check's page draws from the read, is `tests/widget-preview.spec.ts`.
  *
  * @module tests/production/widget-preview
  */
 
-/** The preview page's address, and one beside it that no route serves. */
+/** The admin's old preview address, and one beside it that no route serves. */
 const PREVIEWS = "/admin/dev/widget-previews";
 const UNSERVED = "/admin/dev/no-such-page";
 
-test.describe("the widget preview page on a production build", () => {
+test.describe("the widget preview address on a production build", () => {
   test("a direct visit is not found, as an unserved address is, and the dashboard offers no way in", async ({
     page,
   }) => {
     await signIn(page);
-    // Customise mode, where a development server draws the link beside its
-    // other actions, draws none.
+    // Customise mode draws no link to the page.
     await page
       .getByTestId("dashboard-edit-begin")
       .filter({ visible: true })
       .click();
     await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
     await expect(
-      includingHidden(page).getByTestId("widget-previews-link")
+      includingHidden(page).getByText("Preview widgets")
+    ).toHaveCount(0);
+    await expect(
+      includingHidden(page).locator('a[href*="widget-previews"]')
     ).toHaveCount(0);
     await page
       .getByTestId("dashboard-edit-cancel")

@@ -156,6 +156,39 @@ describe("movesOntoTakenColumns", () => {
     ).toEqual([{ move: leaving, table: "single_hero_locales" }]);
   });
 
+  // A field whose column keeps its name as its values move between the tables: `fooBar`, whose
+  // column is `foo_bar`, renamed `foo_bar` as it stops being translated.
+  const sameNameLeaving: ColumnMove = {
+    field: "foo_bar",
+    fromTable: "single_hero_locales",
+    fromColumn: "foo_bar",
+    toTable: "single_hero",
+    toColumn: "foo_bar",
+  };
+
+  it("refuses a move between tables keeping its column's name, onto a column the table it ends on has", () => {
+    expect(
+      movesOntoTakenColumns(
+        [sameNameLeaving],
+        live({
+          single_hero: ["foo_bar"],
+          single_hero_locales: ["foo_bar"],
+        }),
+        "mysql"
+      )
+    ).toEqual([{ move: sameNameLeaving, table: "single_hero" }]);
+  });
+
+  it("passes a move between tables keeping its column's name, onto a free column: its own old column is not in the way", () => {
+    expect(
+      movesOntoTakenColumns(
+        [sameNameLeaving],
+        live({ single_hero: [], single_hero_locales: ["foo_bar"] }),
+        "mysql"
+      )
+    ).toEqual([]);
+  });
+
   it("passes a move between tables that an earlier run already made", () => {
     expect(
       movesOntoTakenColumns(
@@ -210,6 +243,23 @@ describe("renameTargetTakenMessage", () => {
       })
     ).toBe(
       "Column 'heading' cannot be renamed to 'headline': table 'single_hero' already has a column 'headline'. Remove or rename that column first, then save again."
+    );
+  });
+
+  it("says the column moves between the tables when it keeps its name", () => {
+    expect(
+      renameTargetTakenMessage({
+        move: {
+          field: "foo_bar",
+          fromTable: "single_hero_locales",
+          fromColumn: "foo_bar",
+          toTable: "single_hero",
+          toColumn: "foo_bar",
+        },
+        table: "single_hero",
+      })
+    ).toBe(
+      "Column 'foo_bar' cannot be moved from table 'single_hero_locales' to table 'single_hero': table 'single_hero' already has a column 'foo_bar'. Remove or rename that column first, then save again."
     );
   });
 });

@@ -298,14 +298,6 @@ export const ACCEPTED_REGRESSIONS: AcceptedRegression[] = [
     reason: "5% tint over the page container.",
   },
   {
-    fg: "destructive-600",
-    bg: "page-background",
-    mode: "light",
-    ratio: 4.23,
-    reason:
-      "The entry meta strip's 600 shade against the page container. Only measurable once the surface resolved; it was skipped entirely before.",
-  },
-  {
     fg: "destructive",
     bg: "destructive",
     bgAlpha: 0.05,
@@ -416,20 +408,6 @@ export const ACCEPTED_REGRESSIONS: AcceptedRegression[] = [
     ratio: 4.48,
     reason:
       "The same meta-strip ink against the page. Two hundredths short, and the closest entries in this file to passing.",
-  },
-  {
-    fg: "destructive-600",
-    bg: "popover",
-    mode: "light",
-    ratio: 4.48,
-    reason: "The meta-strip ink inside a popover; same colour as on the page.",
-  },
-  {
-    fg: "destructive-600",
-    bg: "sidebar-background",
-    mode: "light",
-    ratio: 4.48,
-    reason: "The meta-strip ink on the sidebar surface.",
   },
   {
     fg: "destructive-600",

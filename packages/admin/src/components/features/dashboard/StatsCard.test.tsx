@@ -38,15 +38,13 @@ describe("StatsCard", () => {
     // sits in a bare child, so the old assertion read an element with no class
     // at all and could never have passed.
     //
-    // Asserted by FAMILY rather than by ramp step: `text-success-700` is the
-    // current value and a legitimate token change would move it, while the
-    // property worth locking is that an up trend is coloured with the success
-    // family and never the destructive one. Both halves are needed — a class
+    // Asserted by the status's text token: an up trend is coloured with the
+    // success status and never the danger one. Both halves are needed — a class
     // list carrying both would satisfy either check alone, and swapping the two
     // branches is exactly the regression this guards.
     const badge = trendBadge("+12.5%");
-    expect(badge.className).toMatch(/\btext-success-\d+\b/);
-    expect(badge.className).not.toMatch(/\btext-destructive-\d+\b/);
+    expect(badge.className).toMatch(/\btext-success-text\b/);
+    expect(badge.className).not.toMatch(/\btext-danger-text\b/);
   });
 
   it("renders with negative trend indicator", () => {
@@ -56,8 +54,8 @@ describe("StatsCard", () => {
 
     expect(screen.getByText("-5.2%")).toBeInTheDocument();
     const badge = trendBadge("-5.2%");
-    expect(badge.className).toMatch(/\btext-destructive-\d+\b/);
-    expect(badge.className).not.toMatch(/\btext-success-\d+\b/);
+    expect(badge.className).toMatch(/\btext-danger-text\b/);
+    expect(badge.className).not.toMatch(/\btext-success-text\b/);
   });
 
   it("does not render trend when change is undefined", () => {

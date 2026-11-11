@@ -124,6 +124,130 @@ function deletedFromTable(cursor: StatementCursor): string[] | undefined {
   return cursor.done() || cursor.isWord("WHERE") ? [table] : undefined;
 }
 
+/** One rename a migration statement makes: a column of a table, or a table. */
+export type StatementRename =
+  | { kind: "column"; table: string; from: string; to: string }
+  | { kind: "table"; from: string; to: string };
+
+/** The name that ends a clause, or undefined when anything else follows it. */
+function lastName(clause: StatementCursor): string | undefined {
+  const name = clause.name();
+  return name !== undefined && clause.done() ? name : undefined;
+}
+
+/** `a TO b`, ending the clause: the old name and the new, or undefined. */
+function namePair(
+  clause: StatementCursor
+): { from: string; to: string } | undefined {
+  const from = clause.name();
+  if (from === undefined || !clause.accept("TO")) return undefined;
+  const to = lastName(clause);
+  return to === undefined ? undefined : { from, to };
+}
+
+/** `a TO b` read as a column of `table` renamed, or undefined. */
+function columnRename(
+  clause: StatementCursor,
+  table: string
+): StatementRename | undefined {
+  const pair = namePair(clause);
+  return pair === undefined ? undefined : { kind: "column", table, ...pair };
+}
+
+/** A name ending the clause, read as the name `table` is renamed to, or undefined. */
+function tableRenamedTo(
+  clause: StatementCursor,
+  table: string
+): StatementRename | undefined {
+  const to = lastName(clause);
+  return to === undefined ? undefined : { kind: "table", from: table, to };
+}
+
+/** What a RENAME clause renames besides the table and its columns. */
+const NOT_A_COLUMN_OR_TABLE = ["INDEX", "KEY", "CONSTRAINT"];
+
+/**
+ * One ALTER TABLE clause read as a rename of `table` or of one of its columns:
+ * `RENAME COLUMN a TO b` and PostgreSQL's and SQLite's `RENAME a TO b`, a
+ * column; `RENAME TO u`, `RENAME AS u` and MySQL's bare `RENAME u`, the table.
+ * Undefined for any other clause, a renamed index, key or constraint
+ * included.
+ */
+function renameClause(
+  clause: StatementCursor,
+  table: string
+): StatementRename | undefined {
+  if (
+    !clause.accept("RENAME") ||
+    NOT_A_COLUMN_OR_TABLE.some(word => clause.isWord(word))
+  ) {
+    return undefined;
+  }
+  if (clause.accept("COLUMN")) return columnRename(clause, table);
+  if (clause.accept("TO") || clause.accept("AS")) {
+    return tableRenamedTo(clause, table);
+  }
+  // A name followed by TO is a column renamed; a name alone, MySQL's table.
+  return clause.isWord("TO", 1)
+    ? columnRename(clause, table)
+    : tableRenamedTo(clause, table);
+}
+
+/** Each `a TO b` of MySQL's `RENAME TABLE`, read after those words, or undefined. */
+function tablesRenamed(cursor: StatementCursor): StatementRename[] | undefined {
+  const renames: StatementRename[] = [];
+  for (const tokens of cursor.clauses()) {
+    const pair = namePair(new StatementCursor(tokens));
+    if (pair === undefined) return undefined;
+    renames.push({ kind: "table", ...pair });
+  }
+  return renames;
+}
+
+/** Each clause of an ALTER TABLE read after those words as a rename, or undefined. */
+function alterTableRenames(
+  cursor: StatementCursor
+): StatementRename[] | undefined {
+  cursor.acceptCondition();
+  cursor.accept("ONLY");
+  const table = cursor.name();
+  if (table === undefined) return undefined;
+  const renames: StatementRename[] = [];
+  for (const tokens of cursor.clauses()) {
+    const rename = renameClause(new StatementCursor(tokens), table);
+    if (rename === undefined) return undefined;
+    renames.push(rename);
+  }
+  return renames;
+}
+
+/**
+ * The renames `statement` makes, in order, when it is made of renames alone:
+ * an ALTER TABLE each of whose clauses renames the table or one of its columns
+ * (`renameClause`; every clause names the table as the statement found it),
+ * or MySQL's `RENAME TABLE a TO b[, c TO d]`. Undefined for any other
+ * statement, for a rename beside a clause that does anything else, and for a
+ * name not read here (schema-qualified, or on PostgreSQL quoted in another
+ * case than lower), so a caller judging renames before a file runs counts such
+ * a statement as a change it did not read. Names come back lower-cased: MySQL
+ * and SQLite compare them without regard to case, so a quoted `Heading` there
+ * is read as the column it names; PostgreSQL keeps a quoted name's case, so
+ * there only the lower-case spelling is read.
+ */
+export function renamesIn(
+  statement: string,
+  dialect: SupportedDialect
+): StatementRename[] | undefined {
+  const cursor = cursorOf(
+    statement,
+    dialect,
+    dialect === "postgresql" ? EXACT : {}
+  );
+  if (cursor.accept("RENAME", "TABLE")) return tablesRenamed(cursor);
+  if (!cursor.accept("ALTER", "TABLE")) return undefined;
+  return alterTableRenames(cursor);
+}
+
 /**
  * The tables `statement` changes, lower-cased, or `undefined` when it is not a
  * form read here: CREATE/ALTER/DROP TABLE, CREATE [UNIQUE] INDEX … ON, MySQL's

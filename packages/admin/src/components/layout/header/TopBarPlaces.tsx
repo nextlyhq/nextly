@@ -18,6 +18,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type JSX,
@@ -102,6 +103,33 @@ export function TopBarPlaceTarget({
     [setTarget, name]
   );
   return <div ref={ref} data-top-bar-place={name} className={className} />;
+}
+
+/**
+ * The width of one of the bar's places, in pixels, while the bar is drawn; `null`
+ * outside the shell or before the place has been measured. What a page draws
+ * into a place can decide how much of itself to show from it.
+ */
+export function useTopBarPlaceWidth(name: TopBarPlaceName): number | null {
+  const places = useContext(TopBarPlacesContext);
+  const target = places?.targets[name] ?? null;
+  const [width, setWidth] = useState<number | null>(null);
+  useEffect(() => {
+    if (target === null || typeof ResizeObserver === "undefined") {
+      setWidth(null);
+      return;
+    }
+    // A width of 0 is a place not laid out yet, not a narrow one.
+    const measured = (width: number) => (width > 0 ? width : null);
+    setWidth(measured(target.getBoundingClientRect().width));
+    const observer = new ResizeObserver(entries => {
+      const entry = entries.at(-1);
+      if (entry) setWidth(measured(entry.contentRect.width));
+    });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [target]);
+  return width;
 }
 
 /** Whether the shell's bar is there to be drawn into. */

@@ -151,6 +151,21 @@ export function pluginModuleDownStatements(
  * registry, and `nextly migrate` creates both. Without them, an install would
  * fail on a missing table part way through, after deciding nothing useful.
  */
+/** The reason the refusal below records, which callers tell it apart by. */
+const DATABASE_NOT_MIGRATED = "database-not-migrated";
+
+/**
+ * Whether `error` is the refusal of a database `nextly migrate` has not
+ * prepared, which `nextly plugins add` reports as a step its build takes
+ * rather than as a failure.
+ */
+export function isDatabaseNotMigrated(error: unknown): boolean {
+  return (
+    error instanceof NextlyError &&
+    error.logContext?.reason === DATABASE_NOT_MIGRATED
+  );
+}
+
 async function assertMigrated(adapter: DrizzleAdapter): Promise<void> {
   const required = ["nextly_schema_events", SCHEMA_OWNERS_TABLE];
   const present = await Promise.all(
@@ -162,7 +177,7 @@ async function assertMigrated(adapter: DrizzleAdapter): Promise<void> {
     reason: "state",
     message:
       'This database has not been migrated yet. Run "nextly migrate" before installing or uninstalling a plugin.',
-    logContext: { reason: "database-not-migrated", missing },
+    logContext: { reason: DATABASE_NOT_MIGRATED, missing },
   });
 }
 

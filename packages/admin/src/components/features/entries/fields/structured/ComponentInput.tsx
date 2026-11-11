@@ -1007,14 +1007,14 @@ export function ComponentInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "rounded-lg  border border-border border-warning-200 bg-warning-50 dark:border-warning-900 dark:bg-warning-950 p-4",
+        "rounded-lg  border border-warning-border bg-warning-surface p-4",
         className
       )}
     >
-      <p className="text-sm text-warning-700 dark:text-warning-300">
+      <p className="text-sm text-warning-text">
         <strong>Field group field:</strong> {field.name}
       </p>
-      <p className="text-xs text-warning-600 dark:text-warning-400 mt-1">
+      <p className="text-xs text-warning-text mt-1">
         Schema data not available. Ensure the collection schema API returns
         enriched field-group fields.
       </p>

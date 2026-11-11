@@ -19,7 +19,7 @@ import { LOCK } from "./support/locks";
 import {
   createRuntimeCollection,
   expectOk,
-  removeMigrationsOf,
+  removeRuntimeCollection,
 } from "./support/runtime-collection";
 
 // Creating a collection changes the schema and the dashboard's cards, as for the
@@ -57,10 +57,8 @@ test("relabelling a saved field keeps its name, with no schema change to review"
     );
 
     await gotoAdmin(page, `/builder/collections/${slug}`);
-    // Exact: the field row's own button names its actions too ("… Edit summary …").
-    await page
-      .getByRole("button", { name: "Edit summary", exact: true })
-      .click();
+    // Selecting the field's row in the outline opens its settings.
+    await page.getByTestId("field-row-summary").click();
     const label = page.getByRole("textbox", { name: "Label", exact: true });
     await label.fill("Excerpt");
     await expect(
@@ -93,6 +91,9 @@ test("relabelling a saved field keeps its name, with no schema change to review"
     };
     expect(items.map(item => item.summary)).toEqual(["Kept under its name"]);
   } finally {
-    await removeMigrationsOf(slug);
+    // The collection only. Its migration files stay: the server's ledger
+    // records them as applied, and deleting them while it runs makes it
+    // refuse every later schema change, in the specs after this one too.
+    await removeRuntimeCollection(page.request, slug);
   }
 });

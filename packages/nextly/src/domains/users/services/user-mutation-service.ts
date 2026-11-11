@@ -43,6 +43,10 @@ import type {
 // NextlyError throws. Methods now return data directly or throw.
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
+import {
+  firstIdentifierNamed,
+  missingSchemaObject,
+} from "../../../database/missing-column";
 import { NextlyError } from "../../../errors";
 import { safeEmit } from "../../../events/domain-events";
 import {
@@ -348,6 +352,21 @@ export interface InviteArtifact {
  * admin needs the link back to deliver it however they choose.
  */
 export type UserMutationResponse = MinimalUser & { invite?: InviteArtifact };
+
+/**
+ * Whether `error` says the user fields' own table does not exist: the one
+ * failure of a custom-field write that the create and update paths step around
+ * (a fresh database before the table is made). A missing table it names must
+ * be `user_ext` itself, so a trigger or key on it that reaches another missing
+ * table fails the write instead of being read as no custom fields at all.
+ */
+function userExtTableMissing(error: unknown): boolean {
+  const missing = missingSchemaObject(error);
+  return (
+    missing?.object === "table" &&
+    firstIdentifierNamed(missing.text, ["user_ext"]) === "user_ext"
+  );
+}
 
 /**
  * A user-field value shaped for the `user_ext` column its field maps to.
@@ -1697,11 +1716,13 @@ export class UserMutationService extends BaseService {
         if (userExtInsertFailed && isUniqueViolation(txErr)) {
           throw takenUserFieldValue(txErr);
         }
-        // Self-healing is scoped to a genuine user_ext insert failure (typical on
-        // a fresh DB before the user_ext table exists): disable user_ext for this
-        // process and retry the user insert alone so the caller still gets a
-        // created user. Any other failure is unrelated and must propagate.
-        if (userExtInsertFailed && userExtTable) {
+        // Self-healing is scoped to the user_ext table being absent (a fresh
+        // database before it is made): disable user_ext for this process and
+        // retry the user insert alone so the caller still gets a created user.
+        // Any other failure of that insert, a missing column or a value its
+        // column refuses, fails the create: retrying without it would create
+        // the user with every custom field dropped, in silence.
+        if (userExtInsertFailed && userExtTable && userExtTableMissing(txErr)) {
           const cause = txErr instanceof Error ? txErr.message : String(txErr);
           this.logger.warn(
             `user_ext insert failed during createLocalUser; disabling user_ext for this process: ${cause}`
@@ -2263,10 +2284,13 @@ export class UserMutationService extends BaseService {
           if (userExtWriteFailed && isUniqueViolation(txErr)) {
             throw takenUserFieldValue(txErr);
           }
-          // Any failure other than the user_ext write is a real error.
+          // Any failure other than the user_ext write is a real error, and so
+          // is a user_ext write that failed with its table there: skipping it
+          // would drop the custom changes and turn custom fields off.
           if (!userExtWriteFailed) throw txErr;
-          // The user_ext table may not exist on this dialect: disable it for
-          // this process and write the rest of the update without it.
+          if (!userExtTableMissing(txErr)) throw txErr;
+          // The user_ext table does not exist yet: disable it for this
+          // process and write the rest of the update without it.
           const cause = txErr instanceof Error ? txErr.message : String(txErr);
           this.logger.warn(
             `user_ext upsert skipped during updateUser: ${cause}`

@@ -84,7 +84,7 @@ export function ReleaseMemberRemoveDialog({
         {remove.isError ? (
           <p
             role="alert"
-            className="text-sm text-destructive-700 dark:text-destructive"
+            className="text-sm text-danger-text"
           >
             {releaseErrorMessage(
               remove.error,

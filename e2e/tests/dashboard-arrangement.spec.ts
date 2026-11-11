@@ -28,6 +28,12 @@ test.describe.configure({ lock: [LOCK.dashboard] });
 const CELLS = '[data-testid^="widget-cell-"]';
 
 /**
+ * A card menu's last item, which takes the card off the dashboard: "Remove", or "Hide setup" on
+ * the setup card, which shows to the suite's super-admin until setup is done.
+ */
+const REMOVE = /^(Remove|Hide setup)$/;
+
+/**
  * The cards' widget ids in DOM order: the order the page is read in. A card
  * hidden while empty keeps its cell but is not drawn (`display: none`), so a
  * reader never meets it; it is left out here as it is from the visual order.
@@ -161,7 +167,7 @@ test("removes a card, brings it back and saves a removal, by keyboard alone", as
   await page.keyboard.press("Enter");
   await expect(page.getByRole("menu")).toBeVisible();
   await page.keyboard.press("End");
-  await expect(page.getByRole("menuitem", { name: "Remove" })).toBeFocused();
+  await expect(page.getByRole("menuitem", { name: REMOVE })).toBeFocused();
   await page.keyboard.press("Enter");
 
   // Gone from the grid, the notice offers it back, and focus is on the next
@@ -200,7 +206,7 @@ test("removes a card, brings it back and saves a removal, by keyboard alone", as
   await page.keyboard.press("Enter");
   await expect(page.getByRole("menu")).toBeVisible();
   await page.keyboard.press("End");
-  await expect(page.getByRole("menuitem", { name: "Remove" })).toBeFocused();
+  await expect(page.getByRole("menuitem", { name: REMOVE })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.locator(CELLS)).toHaveCount(inCustomize.length - 1);
 

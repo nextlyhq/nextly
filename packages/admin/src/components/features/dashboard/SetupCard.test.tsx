@@ -1,18 +1,12 @@
 /**
- * The setup card's states, its row of tiles, its Singles and its controls, drawn from what the
- * card's `load` answered, and what each control writes.
+ * The setup card's states, its checklist, its Singles and its buttons, drawn from what the card's
+ * `load` answered, and what each button writes.
  */
 import { QueryClient } from "@tanstack/react-query";
 import type { SetupCardData, SetupStep } from "nextly/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
-import {
-  CardCollapseContext,
-  type CardCollapse,
-} from "@admin/components/features/widgets/frame/collapse";
-import { cardBodyHeightPx } from "@admin/components/features/widgets/frame/measures";
-import { CardHeightContext } from "@admin/components/features/widgets/frame/tier";
 import { WIDGET_QUERIES_KEY } from "@admin/hooks/queries/widget-queries-key";
 import {
   act,
@@ -53,13 +47,6 @@ vi.mock("@admin/hooks/queries/useSingles", () => ({
   }),
 }));
 
-import {
-  SETUP_BAR,
-  SETUP_GAP,
-  SETUP_ROW,
-  SETUP_ROW_BODY_PX,
-  SETUP_TILE,
-} from "./setup/measures";
 import { SetupCard } from "./SetupCard";
 
 const SINGLES = ["home", "about", "footer", "contact", "legal"];
@@ -90,6 +77,18 @@ function dataOf(patch: Partial<SetupCardData> = {}): SetupCardData {
   };
 }
 
+/** A known answer over `steps`, counted. */
+function stepsOf(steps: SetupStep[]): Partial<SetupCardData> {
+  return {
+    setup: {
+      known: true,
+      steps,
+      done: steps.filter(s => s.status !== "open").length,
+      total: steps.length,
+    },
+  };
+}
+
 const retry = vi.fn();
 
 // The dashboard's answers asked for again in place, by the batch's own query.
@@ -101,68 +100,46 @@ const readInPlace = () =>
       JSON.stringify(filters?.queryKey) === JSON.stringify(WIDGET_QUERIES_KEY)
   ).length;
 
-/** The card as the dashboard draws it, for `render` or a `rerender` with new data. */
-function tree(
-  data: SetupCardData,
-  collapse?: CardCollapse,
-  /** A newer answer is on its way, as the frame says while the card's data is read again. */
-  refreshing = false
-) {
-  const body = (
+/** The card as the dashboard draws it, for `render` or a `rerender` with new data, at `w` columns. */
+function tree(data: SetupCardData, w = 6) {
+  return inFrame(
     <SetupCard
       widgetId="core/setup"
       placementId="core/setup"
       settings={{}}
-      size={{ w: 12, h: 2, tier: "large" }}
+      size={{ w, h: 4, tier: w >= 8 ? "large" : "medium" }}
       data={data}
-      refreshing={refreshing}
+      refreshing={false}
       retry={retry}
-    />
-  );
-  // At the size core declares for it, 12 × 2, as the dashboard draws it.
-  return (
-    <CardHeightContext.Provider value={2}>
-      {inFrame(
-        collapse === undefined ? (
-          body
-        ) : (
-          <CardCollapseContext.Provider value={collapse}>
-            {body}
-          </CardCollapseContext.Provider>
-        ),
-        "Set up your project"
-      )}
-    </CardHeightContext.Provider>
+    />,
+    "Set up your project"
   );
 }
 
-function draw(data: SetupCardData, collapse?: CardCollapse) {
-  return render(tree(data, collapse));
+function draw(data: SetupCardData, w?: number) {
+  return render(tree(data, w));
 }
 
 /** "N of M done", as the frame's header draws it beside the title. */
 const headerCount = () => screen.getByTestId("widget-card-title-count");
 
-/** The frame's header, where the card's own controls are drawn beside its menu. */
-const header = () => screen.getByTestId("widget-card-header");
-
-/** A tile's hint line as it is drawn: what an eye reads, without what only a screen reader hears. */
-function drawnHint(tile: HTMLElement): string {
-  const line = tile.querySelector("[data-setup-actions]")!.parentElement!;
-  const copy = line.cloneNode(true) as HTMLElement;
-  for (const hidden of copy.querySelectorAll(".sr-only")) hidden.remove();
-  return copy.textContent ?? "";
-}
-
-/** The tile of `kind`. */
-const tileOf = (kind: SetupStep["kind"]) =>
-  tiles().find(tile => tile.dataset.setupStep === kind)!;
-
-/** The tiles, in order, by the step each draws. */
-const tiles = () =>
+/** The lines, in order, by the step each draws. */
+const lines = () =>
   screen
     .getAllByRole("listitem")
     .filter(item => item.hasAttribute("data-setup-step"));
+
+/** The line of `kind`. */
+const lineOf = (kind: SetupStep["kind"]) =>
+  lines().find(line => line.dataset.setupStep === kind)!;
+
+/** A line's hint, under its name. */
+const hintOf = (kind: SetupStep["kind"]) =>
+  lineOf(kind).querySelector("[data-setup-hint]")!.textContent;
+
+/** A line's mark. */
+const markOf = (kind: SetupStep["kind"]) =>
+  lineOf(kind).querySelector<HTMLElement>("[data-setup-mark]")!;
 
 beforeEach(() => {
   put.mockReset();
@@ -172,18 +149,21 @@ beforeEach(() => {
   invalidate.mockClear();
 });
 
-describe("the setup card", () => {
-  it("draws one row of tiles with N of M done and a bar, never a vertical list", () => {
+describe("the setup card's checklist", () => {
+  it("draws N of M done in the header, a bar, then one line per step in order", () => {
     draw(dataOf());
     expect(headerCount()).toHaveTextContent("1 of 5 done");
     // Read with the title, as the card's name.
     expect(
       screen.getByRole("region", { name: /Set up your project/ })
     ).toHaveAccessibleName("Set up your project, 1 of 5 done");
-    const row = screen.getByRole("list", { name: "Setup steps" });
-    // One column per step, flowing in one row, scrolling sideways where the body is narrower.
-    expect(row).toHaveClass(...SETUP_ROW.className.split(" "));
-    expect(tiles().map(tile => tile.dataset.setupStep)).toEqual([
+    const bar = document.querySelector<HTMLElement>("[data-setup-progress]")!;
+    expect(bar.firstElementChild).toHaveStyle({ width: "20%" });
+    // Drawn in the success status's solid colour, its own thin shape.
+    expect(bar.firstElementChild).toHaveClass("bg-success-solid");
+    expect(bar).toHaveClass("h-1");
+    expect(screen.getByRole("list", { name: "Setup steps" })).toBeVisible();
+    expect(lines().map(line => line.dataset.setupStep)).toEqual([
       "sample",
       "collection",
       "entry",
@@ -192,34 +172,103 @@ describe("the setup card", () => {
     ]);
   });
 
-  it("keeps every count of steps in one row at every width, never wrapping into rows", () => {
-    // The grid's contract: a card is as tall as its stored rows in every band, so the tiles may not
-    // wrap into a second row of tiles at any width; a narrow body scrolls the row instead.
-    for (const count of [1, 2, 3, 4, 5, 6, 7]) {
-      const steps: SetupStep[] = Array.from({ length: count }, (_, index) => ({
-        kind: `step-${index}` as SetupStep["kind"],
-        status: "open",
-      })) as SetupStep[];
-      const { unmount } = draw(
-        dataOf({ setup: { known: true, steps, done: 0, total: count } })
+  it("draws a tick once a step is done, a dashed circle once skipped and an empty circle while open", () => {
+    draw(
+      dataOf(
+        stepsOf([
+          { kind: "collection", status: "done" },
+          { kind: "entry", status: "open", collection: "posts" },
+          { kind: "invite", status: "skipped" },
+        ])
+      )
+    );
+    expect(markOf("collection").querySelector("svg")).not.toBeNull();
+    expect(markOf("collection")).toHaveClass(
+      "bg-success-solid",
+      "border-success-solid"
+    );
+    expect(markOf("invite")).toHaveClass("border-dashed");
+    expect(markOf("invite").querySelector("svg")).toBeNull();
+    expect(markOf("entry")).not.toHaveClass("border-dashed");
+    expect(markOf("entry").querySelector("svg")).toBeNull();
+    // Done and skipped say so under the name; an open step says what it asks.
+    expect(hintOf("collection")).toBe("Done");
+    expect(hintOf("invite")).toBe("Skipped");
+    expect(hintOf("entry")).toBe("Write something to publish");
+    // Each status in words too, which the mark only shows.
+    expect(lineOf("collection")).toHaveTextContent(
+      "Create a collection — done"
+    );
+    expect(lineOf("invite")).toHaveTextContent("Invite a teammate — skipped");
+    expect(lineOf("entry")).toHaveTextContent(
+      "Add your first entry — still to do"
+    );
+    // No step numbers.
+    for (const line of lines()) {
+      expect(line.querySelector("[data-setup-mark]")).toHaveTextContent("");
+    }
+  });
+
+  it("draws each open step's hint and buttons, Skip beside the two skippable ones", async () => {
+    draw(dataOf());
+    const sample = lineOf("sample");
+    expect(
+      await within(sample).findByRole("button", { name: "Add samples" })
+    ).toBeVisible();
+    expect(hintOf("sample")).toBe("A ready-made site to look around");
+    expect(
+      within(sample).getByRole("button", { name: "No thanks" })
+    ).toBeVisible();
+    expect(
+      within(lineOf("entry")).getByRole("link", {
+        name: "Add entry: Add your first entry",
+      })
+    ).toBeVisible();
+    expect(hintOf("singles")).toBe("2 of 5 filled in");
+    expect(
+      within(lineOf("singles"))
+        .getAllByRole("button")
+        .map(button => button.getAttribute("aria-label"))
+    ).toEqual(["Show: Fill in your Singles", "Skip: Fill in your Singles"]);
+    expect(hintOf("invite")).toBe("Optional");
+    expect(
+      within(lineOf("invite")).getByRole("link", {
+        name: "Invite: Invite a teammate",
+      })
+    ).toHaveAttribute("href", "/admin/users/create");
+    expect(
+      within(lineOf("invite")).getByRole("button", {
+        name: "Skip: Invite a teammate",
+      })
+    ).toBeVisible();
+    // A step done has nothing to press.
+    expect(within(lineOf("collection")).queryAllByRole("button")).toEqual([]);
+    expect(within(lineOf("collection")).queryAllByRole("link")).toEqual([]);
+  });
+
+  it("draws buttons, never underlined links, and no tinted backgrounds", async () => {
+    draw(dataOf());
+    await within(lineOf("sample")).findByRole("button", {
+      name: "Add samples",
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show: Fill in your Singles" })
+    );
+    const card = screen.getByTestId("setup-card");
+    for (const element of card.querySelectorAll("*")) {
+      const classes = element.getAttribute("class") ?? "";
+      expect(classes).not.toMatch(/(^|\s)underline(\s|$)|decoration-/);
+      // A tinted shade: a status colour at an alpha, or a pale step of one.
+      expect(classes).not.toMatch(
+        /bg-(success|warning|danger|info|destructive)(-\d{2,3}|\/\d+)/
       );
-      const row = screen.getByRole("list", { name: "Setup steps" });
-      const classes = [...row.classList];
-      // A grid (without it the flow and columns below do nothing, and the tiles stack in a
-      // column), flowing along the row, a column per tile, scrolling sideways where they do not
-      // fit. Spelled out here rather than read from `SETUP_ROW`, so the constant is what is tested.
-      expect(classes).toEqual(
-        expect.arrayContaining(["grid", "grid-flow-col", "overflow-x-auto"])
-      );
-      expect(classes).toContain("auto-cols-[minmax(max-content,1fr)]");
-      // Positioned, so a scrolled-away tile's screen-reader text stays inside the row's clip.
-      expect(classes).toContain("relative");
-      // No rule that sets columns, at any width, so nothing can wrap the tiles onto a second row.
-      expect(classes.filter(name => /(^|:)grid-cols-/.test(name))).toEqual([]);
-      expect(classes.filter(name => name.startsWith("@"))).toEqual([]);
-      expect(tiles()).toHaveLength(count);
-      for (const tile of tiles()) expect(tile).toHaveClass(SETUP_ROW.tile);
-      unmount();
+    }
+    // Every action is a 28 px button, a link drawn as one where it leads somewhere.
+    for (const control of [
+      ...within(card).getAllByRole("button"),
+      ...within(card).getAllByRole("link"),
+    ]) {
+      expect(control).toHaveClass("h-7");
     }
   });
 
@@ -228,111 +277,46 @@ describe("the setup card", () => {
     expect(screen.getAllByRole("heading")).toHaveLength(1);
   });
 
-  it("makes five Singles one tile, drawn N of M · Open · Skip and read N of M filled in", () => {
+  it("lists the Singles inside their line on Show, each with its state and a Fill in button, and Hide closes it", () => {
     draw(dataOf());
-    const singles = tiles().filter(t => t.dataset.setupStep === "singles");
-    expect(singles).toHaveLength(1);
-    expect(singles[0]).toHaveTextContent("Fill in your Singles");
-    // The design's short copy on the tile, so it reads in full at narrow widths.
-    expect(drawnHint(singles[0]!)).toBe("2 of 5·Open·Skip");
-    // The whole wording for assistive technology, and on hover.
-    const spoken = within(singles[0]!).getByText("2 of 5 filled in");
-    expect(spoken).toHaveClass("sr-only");
-    expect(within(singles[0]!).getByText("2 of 5")).toHaveAttribute(
-      "aria-hidden",
-      "true"
-    );
-    expect(spoken.parentElement).toHaveAttribute("title", "2 of 5 filled in");
-  });
-
-  it("reads Hide · Skip on the Singles tile while its list is open", () => {
-    draw(dataOf());
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open: Fill in your Singles" })
-    );
-    expect(drawnHint(tileOf("singles"))).toBe("2 of 5·Hide·Skip");
-  });
-
-  it("reads Invite · Skip on an open Invite a teammate, with no word before its actions", () => {
-    draw(dataOf());
-    // No "Optional": Skip says it can be skipped; and no "·" before the first action.
-    expect(drawnHint(tileOf("invite"))).toBe("Invite·Skip");
-    expect(tileOf("invite")).not.toHaveTextContent("Optional");
-  });
-
-  it("keeps Done on a done tile", () => {
-    const steps: SetupStep[] = [
-      { kind: "collection", status: "done" },
-      { kind: "invite", status: "done" },
-    ];
-    draw(dataOf({ setup: { known: true, steps, done: 2, total: 2 } }));
-    expect(drawnHint(tileOf("collection"))).toBe("Done");
-    expect(drawnHint(tileOf("invite"))).toBe("Done");
-  });
-
-  it("draws collapse and dismiss in the frame's header while expanded, none beside the tiles", () => {
-    draw(dataOf());
-    const collapse = screen.getByRole("button", { name: "Collapse setup" });
-    const dismiss = screen.getByRole("button", { name: "Dismiss setup" });
-    for (const control of [collapse, dismiss]) {
-      expect(header()).toContainElement(control);
-      expect(screen.getByTestId("setup-card")).not.toContainElement(control);
-    }
-    // Collapse, then dismiss, in that order for the keyboard too.
-    expect(
-      collapse.compareDocumentPosition(dismiss) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    // The menu's own size, over the 24 px a target may be at least.
-    expect(collapse).toHaveClass("size-7");
-    expect(dismiss).toHaveClass("size-7");
-  });
-
-  it("opens a short list of the Singles on choosing that tile, each with its state and link", () => {
-    draw(dataOf());
-    const open = screen.getByRole("button", {
-      name: "Open: Fill in your Singles",
+    const show = screen.getByRole("button", {
+      name: "Show: Fill in your Singles",
     });
-    expect(open).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(open);
-    expect(open).toHaveAttribute("aria-expanded", "true");
+    expect(show).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(show);
+    expect(show).toHaveAttribute("aria-expanded", "true");
+    expect(show).toHaveTextContent("Hide");
+    expect(show).toHaveAccessibleName("Hide: Fill in your Singles");
     const list = screen.getByRole("list", {
       name: "Your Singles, 2 of 5 filled in",
     });
-    const home = within(list).getByText("Home page").closest("li")!;
-    expect(home).toHaveTextContent("Filled in");
-    expect(
-      within(home).getByRole("link", { name: "Edit: Home page" })
-    ).toHaveAttribute("href", "/admin/singles/home");
-    const footer = list.querySelector('[data-setup-single="footer"]')!;
+    expect(lineOf("singles")).toContainElement(list);
+    expect(list).toHaveClass("grid-cols-[minmax(0,1fr)]");
+    const home = list.querySelector<HTMLElement>('[data-setup-single="home"]')!;
+    expect(home).toHaveTextContent("Home pageFilled in");
+    expect(within(home).queryByRole("link")).toBeNull();
+    const footer = list.querySelector<HTMLElement>(
+      '[data-setup-single="footer"]'
+    )!;
     expect(footer).toHaveTextContent("Not filled in yet");
-    fireEvent.click(open);
+    const fill = within(footer).getByRole("link", { name: "Fill in: footer" });
+    expect(fill).toHaveAttribute("href", "/admin/singles/footer");
+    expect(fill).toHaveClass("h-7", "border-control-border");
+    fireEvent.click(show);
     expect(screen.queryByRole("list", { name: /Your Singles/ })).toBeNull();
-  });
-
-  it("fits 12 × 2 at rest: a thin bar over one row of fixed-height tiles, the count in the header", () => {
-    // The body two rows give the card holds the bar, the gap and one tile, with nothing else.
-    expect(SETUP_ROW_BODY_PX).toBeLessThanOrEqual(cardBodyHeightPx(2));
-    const { container } = draw(dataOf());
-    const body = screen.getByTestId("setup-card");
-    expect(body).toHaveClass(SETUP_GAP.className);
-    expect(container.querySelector(`.${SETUP_BAR.className}`)).not.toBeNull();
-    for (const tile of tiles()) expect(tile).toHaveClass(SETUP_TILE.className);
-    // Nothing but the bar, the row and nothing else is drawn in the body at rest.
-    expect(body.children).toHaveLength(2);
   });
 
   it("links Add your first entry to a new entry of the first creatable collection, not the collections index", () => {
     draw(dataOf());
     expect(
-      screen.getByRole("link", { name: "Add: Add your first entry" })
+      screen.getByRole("link", { name: "Add entry: Add your first entry" })
     ).toHaveAttribute("href", "/admin/collections/posts/create");
   });
 
   it("offers Skip on Fill in your Singles and Invite a teammate only, and writes the skip", async () => {
     draw(dataOf());
     const skips = screen.getAllByRole("button", { name: /^Skip/ });
-    expect(skips.map(button => button.textContent)).toEqual([
+    expect(skips.map(button => button.getAttribute("aria-label"))).toEqual([
       "Skip: Fill in your Singles",
       "Skip: Invite a teammate",
     ]);
@@ -364,88 +348,80 @@ describe("the setup card", () => {
     );
   });
 
-  it("collapses to one line, N of M done, writes it, and expands again", async () => {
-    draw(dataOf());
-    fireEvent.click(screen.getByRole("button", { name: "Collapse setup" }));
-    expect(screen.queryByRole("list", { name: "Setup steps" })).toBeNull();
-    expect(headerCount()).toHaveTextContent("1 of 5 done");
-    await waitFor(() =>
-      expect(put).toHaveBeenCalledWith("/dashboard/setup", { collapsed: true })
+  it("drops sample content's line once it is answered, counting the lines shown", () => {
+    draw(
+      dataOf(
+        stepsOf([
+          { kind: "sample", status: "done" },
+          { kind: "collection", status: "done" },
+          { kind: "entry", status: "open", collection: "posts" },
+        ])
+      )
     );
-    const expand = screen.getByRole("button", { name: "Expand setup" });
-    expect(expand).toHaveAttribute("aria-expanded", "false");
-    await waitFor(() => expect(expand).not.toBeDisabled());
-    fireEvent.click(expand);
-    expect(
-      screen.getByRole("list", { name: "Setup steps" })
-    ).toBeInTheDocument();
-    await waitFor(() =>
-      expect(put).toHaveBeenLastCalledWith("/dashboard/setup", {
-        collapsed: false,
-      })
-    );
+    expect(lines().map(line => line.dataset.setupStep)).toEqual([
+      "collection",
+      "entry",
+    ]);
+    expect(headerCount()).toHaveTextContent("1 of 2 done");
+    expect(screen.queryByText("Answered")).toBeNull();
   });
 
-  it("draws the collapsed card as the frame's header alone, its title, N of M done and its controls, one line tall", () => {
-    const setCollapsed = vi.fn();
-    draw(dataOf({ collapsed: true }), {
-      collapsed: true,
-      setCollapsed,
-    });
-    // Asked of the frame before the paint, so the card is one line from its first frame.
-    expect(setCollapsed).toHaveBeenLastCalledWith(true);
-    expect(header()).toHaveTextContent("Set up your project");
-    expect(headerCount()).toHaveTextContent("1 of 5 done");
-    for (const name of ["Expand setup", "Dismiss setup"]) {
-      const control = screen.getByRole("button", { name });
-      expect(header()).toContainElement(control);
-      // The menu's size, as while expanded, so the pair does not change as the card collapses.
-      expect(control).toHaveClass("size-7");
-    }
-    // One line: no bar, no tiles, nothing in the body.
-    expect(screen.queryByTestId("setup-card")).toBeNull();
-    expect(screen.getByTestId("widget-card-body")).toBeEmptyDOMElement();
-    expect(screen.queryByRole("list", { name: "Setup steps" })).toBeNull();
-    // Opened, the frame draws the whole card again.
-    fireEvent.click(screen.getByRole("button", { name: "Expand setup" }));
-    expect(setCollapsed).toHaveBeenLastCalledWith(false);
-  });
-
-  it("never asks the frame to collapse a card that is all set or could not check setup", () => {
-    const setCollapsed = vi.fn();
-    draw(dataOf({ collapsed: true, setup: { known: false } }), {
-      collapsed: false,
-      setCollapsed,
-    });
-    expect(setCollapsed).not.toHaveBeenCalledWith(true);
-  });
-
-  it("is drawn collapsed when the reader left it collapsed, on any device", () => {
+  it("offers no collapse or dismiss of its own, and draws its steps whatever an earlier collapse stored", () => {
     draw(dataOf({ collapsed: true }));
-    expect(screen.queryByRole("list", { name: "Setup steps" })).toBeNull();
+    expect(screen.getByRole("list", { name: "Setup steps" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Collapse setup/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Expand setup/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Dismiss setup/ })).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Expand setup" })
-    ).toBeInTheDocument();
+      within(screen.getByTestId("widget-card-header")).queryAllByRole("button")
+        .length
+    ).toBe(0);
   });
 
-  it("writes the dismissal on Dismiss", async () => {
-    draw(dataOf());
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss setup" }));
-    await waitFor(() =>
-      expect(put).toHaveBeenCalledWith("/dashboard/setup", { dismissed: true })
-    );
+  it("draws the same checklist at 50%, 66%, 75% and 100%, its buttons wrapping under the name, never scrolling sideways", () => {
+    for (const w of [6, 8, 9, 12]) {
+      const { unmount } = draw(dataOf(), w);
+      expect(lines()).toHaveLength(5);
+      for (const line of lines()) {
+        // The name takes what is left and the buttons wrap under it where both do not fit.
+        expect(line).toHaveClass("flex", "flex-wrap");
+        expect(line.querySelector("[data-setup-actions]")).toHaveClass(
+          "ml-auto",
+          "flex-wrap"
+        );
+      }
+      // The card, its list and the Singles' list are one column no wider than the card, so a long
+      // name is cut short rather than widening the column past the card's edge.
+      expect(screen.getByTestId("setup-card")).toHaveClass(
+        "grid-cols-[minmax(0,1fr)]"
+      );
+      expect(screen.getByRole("list", { name: "Setup steps" })).toHaveClass(
+        "grid-cols-[minmax(0,1fr)]"
+      );
+      // Nothing in the card scrolls.
+      for (const element of screen
+        .getByTestId("setup-card")
+        .querySelectorAll("*")) {
+        expect(element.getAttribute("class") ?? "").not.toMatch(
+          /overflow-(x-)?(auto|scroll)/
+        );
+      }
+      unmount();
+    }
   });
 
   it("says when a change could not be saved", async () => {
     put.mockRejectedValue(new Error("network"));
     draw(dataOf());
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss setup" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Skip: Invite a teammate" })
+    );
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "could not be saved"
     );
   });
 
-  it("says You're all set, once every step is done", () => {
+  it("says You're all set once every step is done, with Hide setup, which hides it", async () => {
     draw(
       dataOf({
         allSet: true,
@@ -457,10 +433,14 @@ describe("the setup card", () => {
         },
       })
     );
-    expect(screen.getByTestId("setup-all-set")).toHaveTextContent(
-      "You're all set."
-    );
+    const allSet = screen.getByTestId("setup-all-set");
+    expect(allSet).toHaveTextContent("You're all set");
+    expect(allSet).toHaveTextContent("Every step is done or skipped.");
     expect(screen.queryByRole("list", { name: "Setup steps" })).toBeNull();
+    fireEvent.click(within(allSet).getByRole("button", { name: "Hide setup" }));
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith("/dashboard/setup", { dismissed: true })
+    );
   });
 
   it("says it could not check setup, with Retry, and shows no step open", () => {
@@ -474,7 +454,7 @@ describe("the setup card", () => {
   });
 
   it("says You're all set over the steps it draws, and asks the host to record it with what the route said", async () => {
-    // No sample route for this reader, and Invite skipped: one tile drawn, done.
+    // No sample route for this reader, and Invite skipped: one line drawn, done.
     probe.answer = { available: false };
     const steps: SetupStep[] = [
       { kind: "sample", status: "open" },
@@ -492,12 +472,12 @@ describe("the setup card", () => {
         retire: { sampleRefused: true },
       })
     );
-    // Not before the host has recorded it: until then the one tile is drawn, done.
+    // Not before the host has recorded it: until then the one line is drawn, done.
     expect(screen.queryByTestId("setup-all-set")).toBeNull();
     expect(headerCount()).toHaveTextContent("1 of 1 done");
     act(() => land({}));
     expect(await screen.findByTestId("setup-all-set")).toHaveTextContent(
-      "You're all set."
+      "You're all set"
     );
     expect(put).toHaveBeenCalledTimes(1);
   });
@@ -679,81 +659,6 @@ describe("the setup card", () => {
     expect(put).not.toHaveBeenCalled();
   });
 
-  it("puts the card back as the server holds it when a collapse fails, says so, and collapses on the next try", async () => {
-    put.mockRejectedValueOnce(new Error("network"));
-    draw(dataOf());
-    fireEvent.click(screen.getByRole("button", { name: "Collapse setup" }));
-    // The write failed: drawn expanded again, as the server still has it, and the header says so.
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "could not be saved"
-    );
-    expect(
-      screen.getByRole("list", { name: "Setup steps" })
-    ).toBeInTheDocument();
-    const collapse = screen.getByRole("button", { name: "Collapse setup" });
-    await waitFor(() => expect(collapse).not.toBeDisabled());
-    // Collapse again asks to collapse, not to expand.
-    fireEvent.click(collapse);
-    await waitFor(() =>
-      expect(put).toHaveBeenLastCalledWith("/dashboard/setup", {
-        collapsed: true,
-      })
-    );
-    const expand = screen.getByRole("button", { name: "Expand setup" });
-    await waitFor(() => expect(expand).not.toBeDisabled());
-    fireEvent.click(expand);
-    expect(
-      screen.getByRole("list", { name: "Setup steps" })
-    ).toBeInTheDocument();
-    await waitFor(() =>
-      expect(put).toHaveBeenLastCalledWith("/dashboard/setup", {
-        collapsed: false,
-      })
-    );
-  });
-
-  it("draws the server's answer once the collapse has landed and been read again, even when another device changed it in between", async () => {
-    const { rerender } = draw(dataOf());
-    fireEvent.click(screen.getByRole("button", { name: "Collapse setup" }));
-    await waitFor(() =>
-      expect(put).toHaveBeenCalledWith("/dashboard/setup", { collapsed: true })
-    );
-    // Landed: the card's data is asked for again, and the read is on its way.
-    await waitFor(() => expect(retry).toHaveBeenCalled());
-    rerender(tree(dataOf(), undefined, true));
-    expect(screen.queryByRole("list", { name: "Setup steps" })).toBeNull();
-    // The read answers expanded: another device expanded it after this write landed.
-    rerender(tree(dataOf({ collapsed: false }), undefined, false));
-    expect(
-      screen.getByRole("list", { name: "Setup steps" })
-    ).toBeInTheDocument();
-  });
-
-  it("draws the server's answer again once it holds the reader's collapse, so a later change from elsewhere wins", async () => {
-    const { rerender } = draw(dataOf());
-    fireEvent.click(screen.getByRole("button", { name: "Collapse setup" }));
-    await waitFor(() =>
-      expect(put).toHaveBeenCalledWith("/dashboard/setup", { collapsed: true })
-    );
-    // The card's next read confirms it.
-    rerender(tree(dataOf({ collapsed: true })));
-    expect(screen.queryByRole("list", { name: "Setup steps" })).toBeNull();
-    // The same reader expands it on another device, and a refocus reads that here.
-    rerender(tree(dataOf({ collapsed: false })));
-    expect(
-      screen.getByRole("list", { name: "Setup steps" })
-    ).toBeInTheDocument();
-    // Collapse then asks to collapse, from what is drawn, not from a stale choice.
-    const collapse = screen.getByRole("button", { name: "Collapse setup" });
-    await waitFor(() => expect(collapse).not.toBeDisabled());
-    fireEvent.click(collapse);
-    await waitFor(() =>
-      expect(put).toHaveBeenLastCalledWith("/dashboard/setup", {
-        collapsed: true,
-      })
-    );
-  });
-
   it("asks the host again to record all set after a failed write, on the card's next read, never in a loop", async () => {
     put.mockRejectedValueOnce(new Error("network"));
     probe.answer = { available: false };
@@ -783,28 +688,5 @@ describe("the setup card", () => {
     rerender(tree({ ...data }));
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(put).toHaveBeenCalledTimes(2);
-  });
-
-  it("cuts short only a tile's detail: its links and buttons are never inside the clipped text", () => {
-    draw(dataOf());
-    for (const tile of tiles()) {
-      const actions = within(tile).queryAllByRole("button");
-      const links = within(tile).queryAllByRole("link");
-      for (const control of [...actions, ...links]) {
-        expect(control.closest(".truncate")).toBeNull();
-      }
-    }
-    // The detail is the one part cut short, and the Singles tile keeps Open and Skip beside it.
-    const singles = tileOf("singles");
-    expect(
-      within(singles).getByText("2 of 5").closest(".truncate")
-    ).not.toBeNull();
-    const kept = singles.querySelector("[data-setup-actions]")!;
-    expect(
-      within(kept as HTMLElement).getByRole("button", { name: /^Open/ })
-    ).toBeInTheDocument();
-    expect(
-      within(kept as HTMLElement).getByRole("button", { name: /^Skip/ })
-    ).toBeInTheDocument();
   });
 });

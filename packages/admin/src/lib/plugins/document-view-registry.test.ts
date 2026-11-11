@@ -16,6 +16,8 @@ import {
   clearDocumentViews,
   documentViewApplies,
   documentViewMissing,
+  editViewHasPages,
+  editViewPage,
   resolveViewField,
   matchDocumentView,
   registerDocumentViews,
@@ -538,5 +540,36 @@ describe("the fields a document addresses at its own level", () => {
       ["secret", 1],
       ["note", 2],
     ]);
+  });
+});
+
+describe("the pages of a collection's own edit view", () => {
+  const EDITOR = "@acme/forms/admin#FormEditor";
+
+  it("names a view declared on the collection that draws the edit view", () => {
+    registerDocumentViews([
+      { slug: "forms", path: "settings", component: EDITOR },
+    ]);
+    expect(editViewPage("forms", "settings", EDITOR)).toBe("settings");
+    expect(editViewHasPages("forms", EDITOR)).toBe(true);
+  });
+
+  it("leaves a view that draws another component to the form", () => {
+    registerDocumentViews([
+      { slug: "forms", path: "settings", component: "@acme/other#View" },
+    ]);
+    expect(editViewPage("forms", "settings", EDITOR)).toBeUndefined();
+    expect(editViewHasPages("forms", EDITOR)).toBe(false);
+  });
+
+  it("never takes a field-type view drawing the same component as a page", () => {
+    // A field-type view is offered on any document with its field, and only
+    // its field decides whether it applies; drawn as the editor's page it
+    // would skip that check.
+    registerDocumentViews([
+      { fieldType: "blocks", path: "settings", component: EDITOR },
+    ]);
+    expect(editViewPage("forms", "settings", EDITOR)).toBeUndefined();
+    expect(editViewHasPages("forms", EDITOR)).toBe(false);
   });
 });

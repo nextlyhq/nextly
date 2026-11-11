@@ -32,8 +32,8 @@ collection the reader chooses. On a terminal it asks for anything you leave out.
 - `--dry-run` shows the files and the config edit without writing them.
 - When it cannot edit your config safely, it leaves the file as it was and prints the line to add.
 
-Then open `/admin/dev/widget-previews` on your dev server to see the card before it has data,
-and run its test with `npx vitest run`.
+Its test draws the card from its `preview` case, so you see it before it has data. Run the test
+with `npx vitest run`.
 
 ## Availability
 
@@ -110,9 +110,10 @@ person could have read directly. That is what makes permission scoping reliable 
 something each widget author has to remember.
 
 Core's Count, Breakdown, Over time and Recent entries are declared this way too, each with a
-Collection setting: the add panel offers each once per collection the reader may read, set to
-that collection. Offered, never placed — nobody's dashboard gains a card because a collection
-was created — and a new collection needs no new widget.
+Collection setting: the add panel lists each once, and a card added starts on the first
+collection the reader may read that no card of that widget uses yet. Offered, never placed —
+nobody's dashboard gains a card because a collection was created — and a new collection needs
+no new widget.
 
 <Callout type="warn">
   Contributing a widget from a plugin works today, but `defineWidget` is marked
@@ -225,7 +226,7 @@ export const ordersThisMonth = defineWidget({
   description: "How many orders came in over the last 30 days.",
   size: { default: { w: 3, h: 2 } },
   view: "figure",
-  // Drawn as a number while it loads, and in the add panel.
+  // Drawn as a number while it loads.
   skeleton: "figure",
   load: async ({ services }) => ({
     total: await services.count("orders", { window: { range: "30d" } }),
@@ -253,9 +254,10 @@ export const ordersThisMonth = defineWidget({
 A `dateField`, for `count`'s window or for `timeseries`, must be a date field of the collection
 that everyone who can read the collection can read. Any other field is refused, whoever asks.
 
-`skeleton` says what a card looks like while its data is on the way, and how its row is
-sketched in the add panel: `"figure"`, `"list"`, `"bars"`, `"series"` or `"table"`. Without it,
-the card loads in the frame's generic shape.
+`skeleton` says what a card looks like while its data is on the way: `"figure"`, `"list"`,
+`"bars"`, `"series"` or `"table"`. Without it, the card loads in the frame's generic shape. The
+add panel lists a widget by its `icon` (a Lucide icon's name), its `title` and its
+`description`, which reads best as one line.
 
 All of these are experimental.
 
@@ -375,25 +377,31 @@ shape may change.
 
 ## Where a setting is drawn
 
-A card's More settings panel draws its settings in three sections: **Data**, what the card reads;
-**Display**, how it shows it (every card's title is there too); and **Advanced**, folded until a
-reader opens it. Name a setting's section with `section`:
+A card's settings drawer, opened from Settings… in its menu, shows a preview of the card, then
+its settings in sections, none folded: **Content**, what the card reads; **Display**, how it
+shows it (every card's title is there too); and **Size**, the card's width. Name a setting's
+section with `section`, `"data"` for Content or `"display"`:
 
 ```ts
 density: setting.select({
-  label: "Density",
+  label: "Row spacing",
   options: [
-    { label: "Default", value: "default" },
+    { label: "Comfortable", value: "default" },
     { label: "Compact", value: "compact" },
   ],
   defaultValue: "default",
-  section: "advanced",
+  section: "display",
 }),
 ```
 
 Without one, a Collection, Filter, Sort, Group by or Field setting and a `setting.dateRange` are
-drawn under Data, and every other setting under Display. A setting is folded under Advanced only
-when it says so. Startup refuses a `section` other than `"data"`, `"display"` or `"advanced"`.
+drawn under Content, and every other setting under Display. `"advanced"` is still accepted, from
+when the drawer folded settings away, and is drawn under Display. Startup refuses a `section`
+other than `"data"`, `"display"` or `"advanced"`.
+
+A list's "Number of entries", a number setting keyed `limit`, is drawn as a choice of 5, 10 or
+20 within its bounds; a number stored before that is none of them is shown and kept until the
+reader picks another.
 
 ## Related
 

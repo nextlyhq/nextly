@@ -138,6 +138,12 @@ export function createMockComponentRegistry(): MockRecord {
     getComponentBySlug: vi.fn().mockImplementation(async (slug: string) => {
       return components.get(slug) ?? null;
     }),
+    // Every registered component's table, as the delete beneath a removed instance reads them.
+    getAllTableNames: vi
+      .fn()
+      .mockImplementation(async () =>
+        [...components.values()].map(meta => meta.tableName as string)
+      ),
   };
 }
 

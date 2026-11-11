@@ -171,7 +171,7 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toMatchObject({
         code: "DUPLICATE",
         publicMessage:
-          '/hello (en) is already the address of "Hello" in pages. Choose another address for this entry.',
+          "/hello (en) is already the address of another page. Choose another address for this entry.",
       });
       const stored = await t.nextly.findByID({ collection: "posts", id: post });
       expect((stored as Record<string, unknown>).status).toBe("draft");

@@ -159,6 +159,9 @@ once `nextly plugins install` has finished on that database: a production boot
 refuses it before then while it is enabled, and so does the install of a plugin that depends on it.
 `nextly plugins install --all` installs every enabled plugin in your config, its
 dependencies first, and stops at the first that fails.
+`nextly plugins add <package>` runs this install as its last step, after it has added
+the plugin to your config and to your build (see
+[Adding a Plugin](/docs/plugins#adding-a-plugin)).
 
 A pending module that deletes data needs the data-loss consent before the install
 applies anything, exactly as `nextly migrate` asks for it. The install lists each

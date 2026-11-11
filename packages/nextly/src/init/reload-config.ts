@@ -81,7 +81,6 @@ import {
   keptScopeFields,
 } from "../domains/schema/pipeline/kept-scope-fields";
 import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor";
-import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
 import { ttyRequiredDetail } from "../domains/schema/pipeline/prompt-dispatcher/errors";
 import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline";
 import type {
@@ -1449,6 +1448,26 @@ const globalForReload = globalThis as unknown as {
  */
 export type ReloadOutcome = "refused" | "finished";
 
+/**
+ * The terminal's prompt dispatcher, loaded at its first dispatch and kept for
+ * the rest of the apply. Most reloads ask nothing, and the prompt brings the
+ * CLI's prompt and error reporting with it.
+ */
+function terminalPromptDispatcher(): PromptDispatcher {
+  let loaded: Promise<PromptDispatcher> | undefined;
+  return {
+    async dispatch(args) {
+      loaded ??= import(
+        "../domains/schema/pipeline/prompt-dispatcher/clack-terminal"
+      ).then(
+        ({ ClackTerminalPromptDispatcher }) =>
+          new ClackTerminalPromptDispatcher()
+      );
+      return (await loaded).dispatch(args);
+    },
+  };
+}
+
 export function reloadNextlyConfig(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
@@ -2784,8 +2803,7 @@ async function applyReloadHolding(
   // pipeline/index.ts) so we can thread MySQL databaseName + the
   // resolved adapter into the F3 PushSchemaPipeline at this site.
   // F8 will collapse both seams into the unified pipeline.
-  const promptDispatcher =
-    opts?.dispatcher ?? new ClackTerminalPromptDispatcher();
+  const promptDispatcher = opts?.dispatcher ?? terminalPromptDispatcher();
   const apply = createApplyDesiredSchema({
     applyPipeline: (desiredArg, sourceArg, channelArg) => {
       const pipeline = new PushSchemaPipeline({

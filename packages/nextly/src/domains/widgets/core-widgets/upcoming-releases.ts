@@ -21,6 +21,8 @@ import { readCoreList } from "./system-read";
 
 export const upcomingReleasesWidget = defineWidget({
   id: CORE_WIDGET_ID.upcomingReleases,
+  // Drawn beside its name in the add panel.
+  icon: "CalendarClock",
   title: "Upcoming releases",
   description: "Scheduled releases that have not shipped yet, soonest first.",
   // From a third, where its rows still read, to the full row: the dashboard widens it to 12

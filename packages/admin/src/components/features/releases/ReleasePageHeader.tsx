@@ -274,14 +274,14 @@ function TitleEditor({
         </Button>
       </div>
       {trimmed === "" ? (
-        <p className="text-sm text-destructive-700 dark:text-destructive">
+        <p className="text-sm text-danger-text">
           A release needs a name.
         </p>
       ) : null}
       {update.isError ? (
         <p
           role="alert"
-          className="text-sm text-destructive-700 dark:text-destructive"
+          className="text-sm text-danger-text"
         >
           {releaseErrorMessage(update.error, "The release was not renamed.")}
         </p>
@@ -329,7 +329,7 @@ function DescriptionEditor({
       {update.isError ? (
         <p
           role="alert"
-          className="text-sm text-destructive-700 dark:text-destructive"
+          className="text-sm text-danger-text"
         >
           {releaseErrorMessage(
             update.error,
@@ -392,7 +392,7 @@ function HeaderActions({
                   onSelect={() => onOpenDialog({ release, action: offer.id })}
                   className={cn(
                     offer.destructive &&
-                      "text-destructive-700 dark:text-destructive"
+                      "text-danger-text"
                   )}
                 >
                   {offer.label}

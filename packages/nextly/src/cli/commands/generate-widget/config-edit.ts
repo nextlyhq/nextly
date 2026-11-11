@@ -15,6 +15,9 @@
  * own, or an import that is not the generated named export): a second binding
  * of one name would not compile.
  *
+ * The reading and inserting helpers are exported for `nextly plugins add`,
+ * which registers a plugin in the same config by the same rules.
+ *
  * @module cli/commands/generate-widget/config-edit
  */
 import { dirname, relative, sep } from "node:path";
@@ -35,7 +38,7 @@ export type RegistrationEdit =
   | { kind: "manual"; instructions: string };
 
 /** The indentation of the line `index` falls on. */
-function indentAt(text: string, index: number): string {
+export function indentAt(text: string, index: number): string {
   const lineStart = text.lastIndexOf("\n", index) + 1;
   return /^[ \t]*/.exec(text.slice(lineStart))?.[0] ?? "";
 }
@@ -55,11 +58,17 @@ type Expression = Extract<
   { type: "ExpressionStatement" }
 >["expression"];
 type CallExpression = Extract<Expression, { type: "CallExpression" }>;
-type ObjectExpression = Extract<Expression, { type: "ObjectExpression" }>;
+export type ObjectExpression = Extract<
+  Expression,
+  { type: "ObjectExpression" }
+>;
 type ObjectMember = ObjectExpression["properties"][number];
 type KeyedMember = Exclude<ObjectMember, { type: "SpreadElement" }>;
 /** What an object literal gives one of its keys. */
-type MemberValue = Extract<ObjectMember, { type: "ObjectProperty" }>["value"];
+export type MemberValue = Extract<
+  ObjectMember,
+  { type: "ObjectProperty" }
+>["value"];
 
 /** The parser's options: a module, in TypeScript with JSX, as create-nextly-app reads one. */
 const PARSE_OPTIONS: Parameters<ConfigParser>[1] = {
@@ -97,7 +106,10 @@ function callsTo(
 }
 
 export type Program = ReturnType<ConfigParser>["program"];
-type ImportDeclaration = Extract<Statement, { type: "ImportDeclaration" }>;
+export type ImportDeclaration = Extract<
+  Statement,
+  { type: "ImportDeclaration" }
+>;
 type ImportBinding = ImportDeclaration["specifiers"][number];
 
 /** The file's syntax tree, or why it could not be read. */
@@ -117,7 +129,7 @@ export function readProgram(
  * is none to edit: no call or more than one, or a call given something other
  * than an object literal.
  */
-function rootObject(
+export function rootObject(
   program: Program,
   callee: string
 ): ObjectExpression | undefined {
@@ -255,7 +267,7 @@ function membersKeyed(
  * `undefined` when that cannot be told (a spread or a computed key could carry
  * it, it is written twice, or as a method or a shorthand).
  */
-function member(
+export function member(
   object: ObjectExpression,
   key: string
 ): MemberValue | null | undefined {
@@ -317,13 +329,16 @@ function placement(
 }
 
 /** Text to put into a file at one offset. */
-interface Insertion {
+export interface Insertion {
   at: number;
   text: string;
 }
 
 /** Applies `insertions`, all at offsets into the original text, the last first. */
-function inserted(text: string, insertions: readonly Insertion[]): string {
+export function inserted(
+  text: string,
+  insertions: readonly Insertion[]
+): string {
   return [...insertions]
     .sort((a, b) => b.at - a.at)
     .reduce(
@@ -343,7 +358,7 @@ function entryInsertion(
 }
 
 /** The import, on its own line after the file's last import, or at its top. */
-const importInsertion = (after: number, line: string): Insertion =>
+export const importInsertion = (after: number, line: string): Insertion =>
   after > 0 ? { at: after, text: `\n${line}` } : { at: 0, text: `${line}\n` };
 
 /** How a system spells paths: its `relative` and its separator. */

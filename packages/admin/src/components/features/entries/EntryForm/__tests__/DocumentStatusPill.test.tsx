@@ -39,4 +39,20 @@ describe("DocumentStatusPill", () => {
     render(<DocumentStatusPill status="draft" hasWorkingDraft={false} />);
     expect(screen.getByText("Draft").className).not.toMatch(/hidden/);
   });
+
+  it("in a narrow bar keeps its dot and says its word to a screen reader only", () => {
+    render(
+      <div data-state-compact="">
+        <DocumentStatusPill status="published" hasWorkingDraft />
+      </div>
+    );
+    const word = screen.getByText("Changed");
+    expect(word.className).toContain(
+      "in-data-[state-compact]:@max-lg/toolbar:sr-only"
+    );
+    // The pill still names its state on hover, and the dot is not the word.
+    const pill = word.parentElement;
+    expect(pill?.getAttribute("title")).toBe("Changed");
+    expect(pill?.querySelector("[aria-hidden='true']")).not.toBeNull();
+  });
 });

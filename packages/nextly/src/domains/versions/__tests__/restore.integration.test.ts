@@ -557,3 +557,75 @@ describe("restoreVersion (integration)", () => {
     expect(beforeRestore?.snapshot.byline?.author).toBe(authorId);
   });
 });
+
+describe("restoreVersion with field groups placed directly in one another", () => {
+  it("puts back the earlier value at every level", async () => {
+    current = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({ slug: "rv3", fields: [text({ name: "title" })] }),
+        defineFieldGroup({
+          slug: "rv2",
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "child", component: "rv3" }),
+          ],
+        }),
+        defineFieldGroup({
+          slug: "rv1",
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "child", component: "rv2" }),
+          ],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: "rvposts",
+          versions: true,
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "top", component: "rv1" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const chain = (tag: string) => ({
+      title: `${tag}-1`,
+      child: { title: `${tag}-2`, child: { title: `${tag}-3` } },
+    });
+
+    const created = await handler.createEntry(
+      { collectionName: "rvposts", overrideAccess: true },
+      { title: "P", top: chain("first") }
+    );
+    const entryId = (created.data as { id: string }).id;
+    await handler.updateEntry(
+      { collectionName: "rvposts", entryId, overrideAccess: true },
+      { top: chain("second"), _overwrite: true }
+    );
+
+    await restoreVersion({
+      scopeKind: "collection",
+      slug: "rvposts",
+      entryId,
+      versionNo: 1,
+      user: await storedSuperAdmin(current),
+      version: { _overwrite: true },
+    });
+
+    const after = await handler.getEntry({
+      collectionName: "rvposts",
+      entryId,
+      overrideAccess: true,
+      status: "all",
+    });
+    const top = (after.data as { top?: ReturnType<typeof chain> }).top;
+    expect([top?.title, top?.child.title, top?.child.child.title]).toEqual([
+      "first-1",
+      "first-2",
+      "first-3",
+    ]);
+  });
+});

@@ -11,7 +11,9 @@
  * - what the answer does not cover (an Open Graph `type`, keywords) is kept;
  * - the answer is cached under the page's own tags plus the provider's, so a
  *   change to the provider's settings expires the page;
- * - a provider that fails costs the page its SEO answer, never the page.
+ * - a provider that fails costs the page its SEO answer, never the page;
+ * - the page's structured data is read from the same cached answer as its
+ *   head, and an answer whose structured data is not JSON-LD is refused whole.
  */
 import type { Metadata } from "next";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -50,7 +52,9 @@ vi.mock("../../cache/cached-find", () => ({
   },
 }));
 
-const { pageMetadataFor } = await import("../page-metadata");
+const { pageMetadataFor, pageStructuredDataFor } = await import(
+  "../page-metadata"
+);
 
 const PROVIDER = "@test/seo";
 
@@ -317,6 +321,12 @@ describe("pageMetadataFor with a provider", () => {
     ["nothing", null],
     ["a title that is not text", { title: 5 }],
     ["visibility without its values", { robots: { index: "no" } }],
+    ["structured data that is not a list of nodes", { structuredData: "x" }],
+    ["a structured data node that is text", { structuredData: ["WebPage"] }],
+    [
+      "structured data holding a function",
+      { structuredData: [{ "@type": "Thing", name: () => "x" }] },
+    ],
   ])(
     "serves the route's own metadata for an answer of %s, and caches none of it",
     async (_, answer) => {
@@ -336,5 +346,72 @@ describe("pageMetadataFor with a provider", () => {
     });
     const code: Metadata = { title: "Own" };
     expect(await pageMetadataFor({ ...page, code, tags: [] })).toEqual(code);
+  });
+});
+
+describe("pageStructuredDataFor", () => {
+  const nodes = [
+    { "@type": "WebPage", "@id": "https://example.com/about", name: "About" },
+  ];
+
+  it("is nothing with no provider, and asks nothing", async () => {
+    recordCapabilityProviders([]);
+    expect(
+      await pageStructuredDataFor({ ...page, code: undefined, tags: [] })
+    ).toBeUndefined();
+    expect(cacheCalls).toHaveLength(0);
+  });
+
+  it("is the structured data of the same answer the head is built from", async () => {
+    let asked = 0;
+    provide({
+      resolve: () => {
+        asked += 1;
+        return { title: "About us", structuredData: nodes };
+      },
+    });
+    const request = { ...page, code: { title: "Own" }, tags: ["pages"] };
+
+    const head = await pageMetadataFor(request);
+    const text = await pageStructuredDataFor(request);
+
+    // The head is what it would be without it: structured data is the page's.
+    expect(head).toEqual(metadataFromAnswer({ title: "About us" }));
+    expect(JSON.parse(text ?? "")).toEqual({
+      "@context": "https://schema.org",
+      "@graph": nodes,
+    });
+    // One answer: the same cache entry, asked with the same input.
+    expect(asked).toBe(2);
+    expect(cacheCalls[0]?.keyParts).toEqual(cacheCalls[1]?.keyParts);
+    expect(cacheCalls[0]?.tags).toEqual(cacheCalls[1]?.tags);
+  });
+
+  it("is nothing when the answer has no structured data", async () => {
+    provide({ resolve: () => ({ title: "About us" }) });
+    expect(
+      await pageStructuredDataFor({ ...page, code: undefined, tags: [] })
+    ).toBeUndefined();
+  });
+
+  it("is nothing, never a failed page, when the provider fails", async () => {
+    provide({
+      resolve: () => {
+        throw new Error("settings unreadable");
+      },
+    });
+    expect(
+      await pageStructuredDataFor({ ...page, code: undefined, tags: [] })
+    ).toBeUndefined();
+  });
+
+  it("is nothing for an answer whose structured data is refused", async () => {
+    provide({
+      resolve: () => ({ structuredData: [{ name: () => "x" }] }) as never,
+    });
+    expect(
+      await pageStructuredDataFor({ ...page, code: undefined, tags: [] })
+    ).toBeUndefined();
+    expect(cacheOutcomes).toEqual([{ refused: true }]);
   });
 });

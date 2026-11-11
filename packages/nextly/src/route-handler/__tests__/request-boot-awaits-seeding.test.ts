@@ -11,7 +11,9 @@
  * services and seeding, a boot that finds them registered waits for it,
  * whether it registers them cold or again after a development config change. The
  * seeding gate here is the real one; only the seeding itself and the boot's
- * other steps are stood in for.
+ * other steps are stood in for. A cold boot with a config runs `getNextly`'s
+ * start, as the instrumentation boot does, so the stand-ins replace the service
+ * lookup that start reads too (`di/service-access`).
  */
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -28,10 +30,30 @@ function pending(): { promise: Promise<void>; finish: () => void } {
 
 let seeding = pending();
 let templates: Promise<void> = Promise.resolve();
+/** What a registration waits on once it has marked the services registered. */
+let registering: Promise<void> = Promise.resolve();
 let registered = false;
 const seedPermissionsAndRolePresets = vi.fn(() => seeding.promise);
 const registerServices = vi.fn(async () => {
   registered = true;
+  await registering;
+});
+
+/**
+ * A service that answers every property and call with itself, so each step of
+ * a start (the adapter's capabilities, the Direct API built from the services)
+ * runs through to the seeding and the boot's return, which are what is under
+ * test. Not thenable, so awaiting it does not hang, and printable, for the
+ * start's log lines.
+ */
+const anything: unknown = new Proxy(function anyService() {}, {
+  get: (_target, key) =>
+    key === "then"
+      ? undefined
+      : key === Symbol.toPrimitive
+        ? () => "stand-in"
+        : anything,
+  apply: () => anything,
 });
 
 vi.mock("../../init/seed-permissions", async importOriginal => ({
@@ -44,17 +66,23 @@ vi.mock("../../di/register", () => ({
     registered = false;
   }),
 }));
-vi.mock("../../di", () => ({
+vi.mock("../../di/service-access", () => ({
   isServicesRegistered: () => registered,
-  // The template step is the one between registering and seeding that a test
-  // can hold up; every other step resolves to nothing, since this is about the
-  // order of the seeding and the boot's own return, not what they produce.
+  // The template step of a registration again after a config change is the
+  // one between registering and seeding that a test can hold up; every other
+  // step answers with a stand-in, since this is about the order of the seeding
+  // and the boot's own return, not what they produce.
   getService: (name: string) =>
     name === "emailTemplateService"
       ? { ensureBuiltInTemplates: () => templates }
-      : new Proxy({}, { get: () => () => undefined }),
+      : anything,
 }));
-vi.mock("../../runtime/hmr-listener", () => ({ ensureHmrListener: vi.fn() }));
+vi.mock("../../runtime/hmr-listener", () => ({
+  ensureHmrListener: vi.fn(),
+  // Read by `getNextly` when it answers from the instance it keeps.
+  consumeHmrReloadFlag: () => false,
+  markHmrReloadInFlight: vi.fn(),
+}));
 vi.mock("../../storage/image-processor", () => ({
   getImageProcessor: () => undefined,
 }));
@@ -65,12 +93,17 @@ const { ensureServicesInitialized, setHandlerConfig } = await import(
 const { awaitBootSeeding, holdBootSeeding } = await import(
   "../../init/seed-permissions"
 );
+const { shutdownNextly } = await import("../../init");
 
-afterEach(() => {
+afterEach(async () => {
+  // The instance a cold boot's `getNextly` start keeps, dropped, so each case
+  // boots cold again.
+  await shutdownNextly();
   vi.unstubAllEnvs();
   registered = false;
   seeding = pending();
   templates = Promise.resolve();
+  registering = Promise.resolve();
   vi.clearAllMocks();
 });
 
@@ -116,18 +149,19 @@ it("waits for the boot that registered the services to seed them", async () => {
 it("holds the gate from before it registers the services until it has seeded", async () => {
   setHandlerConfig({} as SanitizedNextlyConfig);
   seeding.finish();
-  const slowTemplates = pending();
-  templates = slowTemplates.promise;
+  const slowRegistration = pending();
+  registering = slowRegistration.promise;
 
-  // Registered, then held up in the template step, before it seeds.
+  // Marked registered, then held up before it seeds.
   const booting = ensureServicesInitialized();
   await vi.waitFor(() => expect(registerServices).toHaveBeenCalled());
+  expect(registered).toBe(true);
 
   // What the instrumentation boot does on finding the services registered.
   const otherBoot = awaitBootSeeding();
   expect(await stillPending(otherBoot)).toBe(true);
 
-  slowTemplates.finish();
+  slowRegistration.finish();
   await booting;
   await otherBoot;
 });
@@ -155,6 +189,29 @@ it("holds the gate while it registers the services again after a config change",
   expect(await stillPending(otherBoot)).toBe(true);
 
   slowTemplates.finish();
+  await booting;
+  await otherBoot;
+});
+
+it("holds the gate while it registers services shut down beneath the instance a start kept", async () => {
+  setHandlerConfig({} as SanitizedNextlyConfig);
+  seeding.finish();
+  await ensureServicesInitialized();
+  // The services shut down without the instance `getNextly` keeps, as a test
+  // harness does: `getNextly` answers from that instance without registering,
+  // so this boot registers them itself.
+  registered = false;
+  registerServices.mockClear();
+  const slowRegistration = pending();
+  registering = slowRegistration.promise;
+
+  const booting = ensureServicesInitialized();
+  await vi.waitFor(() => expect(registerServices).toHaveBeenCalled());
+
+  const otherBoot = awaitBootSeeding();
+  expect(await stillPending(otherBoot)).toBe(true);
+
+  slowRegistration.finish();
   await booting;
   await otherBoot;
 });

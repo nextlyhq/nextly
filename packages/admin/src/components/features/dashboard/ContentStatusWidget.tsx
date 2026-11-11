@@ -112,7 +112,7 @@ export const ContentStatusWidget: React.FC = () => {
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-3 py-10 text-xs font-bold uppercase tracking-widest text-destructive justify-center bg-destructive/5 rounded-md">
+          <div className="flex items-center gap-3 py-10 text-xs font-bold uppercase tracking-widest text-danger-text justify-center bg-danger-surface rounded-md">
             <AlertCircle className="h-4 w-4" />
             <span>Health synchronization failed</span>
           </div>

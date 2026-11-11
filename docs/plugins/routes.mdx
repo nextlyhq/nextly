@@ -53,6 +53,45 @@ a 404 with nothing to explain it. If your routes are not answering, check where 
 
 Paths support `:param` segments (`/items/:id`), captured into `ctx.params`.
 
+## Answering a file at the site root
+
+Some files live at the very root of a site: `/robots.txt`, `/sitemap.xml`, `/llms.txt`. A plugin answers one with a route mounted at the root (`mount: "root"`), which is served behind the API handler at `<mount><path>`:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+export default definePlugin({
+  name: "acme-robots",
+  version: "1.0.0",
+  nextly: ">=0.0.2",
+  contributes: {
+    routes: [
+      {
+        method: "GET",
+        path: "/robots.txt",
+        mount: "root",
+        public: true,
+        handler: () => new Response("User-agent: *\nAllow: /\n"),
+      },
+    ],
+  },
+});
+```
+
+`withNextly()` rewrites `/robots.txt`, `/sitemap.xml` and `/llms.txt` to that address, so they reach the plugin at the site root. The rewrite is checked after the site's own files and routes: a site that ships its own `public/robots.txt` or `app/robots.ts` keeps serving it. So does a site that rewrites one of these files itself, in any phase of its own `rewrites()`, including a pattern such as `/:path*` passing everything on to an older site: that file is left to the site's rewrite. Name more files, or a handler mounted somewhere other than `/admin/api`, with the second argument:
+
+```ts
+// next.config.ts
+import { withNextly } from "nextly/next";
+
+export default withNextly(
+  { reactStrictMode: true },
+  { apiRoute: "/admin/api", rootFiles: ["/humans.txt"] }
+);
+```
+
+A root route is matched only after core's own routes decline the path, so a plugin can never take over a core API address this way.
+
 ## The handler context
 
 A route handler receives the raw web `Request` plus a `PluginRouteContext` — your full

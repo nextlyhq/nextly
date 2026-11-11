@@ -1,0 +1,24 @@
+---
+title: PLUGIN_DECLARATION_INVALID
+description: "The `nextly.plugin` declaration in a package's package.json cannot be read, or names an export that makes no plugin."
+---
+
+## Cause
+
+The `nextly.plugin` declaration in a package's package.json cannot be read, or names an export that makes no plugin.
+
+A plugin package can say in its package.json how it is registered, under `nextly.plugin`: the export that is the plugin, whether it is called, and the options its install asks for. The package's declaration does not parse, or the export it names is missing or makes no plugin. Nothing in your project was changed by the registration; the package itself may already be installed.
+
+## Fix
+
+- Register the plugin by hand as its README shows, then run `nextly plugins install <name>`.
+- Tell the plugin's author: the declaration is described in [Declaring how a plugin is added](/docs/plugins/distribution#declaring-how-a-plugin-is-added).
+
+## Example
+
+```text
+✗ The `nextly.plugin` declaration of "@acme/seo" cannot be used.
+  Why:  It names the export seoPlugin, which its entry does not have. The package's package.json declares how it is registered, and that is the plugin's to fix.
+  Next: Register it by hand as the package's README shows, then run `nextly plugins install` with the plugin's name; and tell the plugin's author.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-declaration-invalid  (PLUGIN_DECLARATION_INVALID)
+```

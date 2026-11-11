@@ -53,6 +53,7 @@ import { contributionsFixturePlugin } from "./src/plugins/contributions-fixture/
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
+import { widgetCheckFixturePlugin } from "./src/plugins/widget-check-fixture/plugin";
 import { widgetKitFixturePlugin } from "./src/plugins/widget-kit-fixture/plugin";
 import { Announcement } from "./src/singles/announcement";
 import { ContactDetails } from "./src/singles/contact-details";
@@ -318,9 +319,14 @@ export default defineConfig({
       : []),
     // Always on, because its widgets are drawn by their own components, which
     // the committed component map must hold; offered only from the add panel,
-    // named as test fixtures. Moves to the dev-only widget preview page once
-    // there is one.
+    // named as test fixtures.
     widgetKitFixturePlugin,
+    // The widget check's page, where the e2e suite draws every widget from its
+    // preview cases and checks each state's accessibility. A test page, so it
+    // exists only on that suite's own server.
+    ...(process.env.NEXTLY_E2E_WIDGET_CHECK === "1"
+      ? [widgetCheckFixturePlugin]
+      : []),
     // Always on, for the same reason: the blocks it contributes reach the
     // editor through the committed component map. Offered only in the Add
     // panel, named as test fixtures, for plugin-blocks.spec.ts.

@@ -127,7 +127,7 @@ export function SectionErrorFallback({
             <summary className="cursor-pointer font-medium">
               {t("nextly.errors.section.details")}
             </summary>
-            <pre className="mt-2 overflow-auto rounded-md bg-destructive/10 p-2">
+            <pre className="mt-2 overflow-auto rounded-md bg-danger-surface p-2">
               {error.message}
             </pre>
           </details>

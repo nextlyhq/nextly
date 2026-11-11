@@ -58,6 +58,7 @@ import { consoleLogger } from "../../../services/shared";
 import type { UserFieldConfig } from "../../../users/config/types";
 import { auditReason } from "../../audit/audit-reasons";
 
+import type { TeamPeopleOptions, TeamPeoplePage } from "./team-people";
 import type { UserAccountService } from "./user-account-service";
 import type {
   UserMutationService,
@@ -332,6 +333,15 @@ export class UserService {
     ids: string[]
   ): Promise<{ id: string; name: string | null }[]> {
     return this.queryService.listUsersByIds(ids);
+  }
+
+  /**
+   * The people a dashboard's Team card lists: name, email, the role they hold
+   * now and when they were last active, most recently active first, and how
+   * many the filter matched. The caller decides who may be answered.
+   */
+  async listTeamPeople(options: TeamPeopleOptions): Promise<TeamPeoplePage> {
+    return this.queryService.listTeamPeople(options);
   }
 
   /**

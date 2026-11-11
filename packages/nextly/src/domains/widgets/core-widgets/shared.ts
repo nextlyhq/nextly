@@ -37,33 +37,33 @@ const NOTE_MAX_LENGTH = 2000;
 
 /**
  * A note's text: Markdown over several lines, empty until its reader writes it.
- * A setting of the note's declaration, which names it by its key (`text`).
+ * A setting of the note's declaration, which names it by its key (`text`). Its
+ * help says what Markdown it takes, each example in backticks, which the
+ * settings drawer draws as code.
  */
 export const NOTE_TEXT = setting.textarea({
-  label: "Note",
+  label: "Text",
   defaultValue: "",
   maxLength: NOTE_MAX_LENGTH,
+  admin: {
+    description:
+      "Supports Markdown: `**bold**`, `_italic_`, `- lists` and `[links](https://…)`. Only you see this note.",
+  },
 });
 
 /**
- * Where every list card's Density is drawn: folded under Advanced in the
- * card's settings panel, since how tightly rows are spaced is a preference
- * few readers change.
- */
-const DENSITY_SECTION = "advanced";
-
-/**
- * Every list card's Density, as a declaration takes it: default or compact
- * rows, default unless chosen, one option for every density the admin sizes
- * rows by (`DENSITY_OPTIONS`), so core's list cards and a plugin's offer the
- * same choice. Keyed `density` by every card that declares it, the name the
- * admin reads to decide how many rows fit.
+ * Every list card's Row spacing, as a declaration takes it: comfortable or
+ * compact rows, comfortable unless chosen, one option for every density the
+ * admin spaces rows by (`DENSITY_OPTIONS`), so core's list cards and a plugin's
+ * offer the same choice. Keyed `density` by every card that declares it, the
+ * name the admin reads to space its rows. Drawn under Display, with how the
+ * card shows what it reads.
  */
 export const LIST_DENSITY_SETTING = setting.select({
-  label: "Density",
+  label: "Row spacing",
   options: DENSITY_OPTIONS,
   defaultValue: "default",
-  section: DENSITY_SECTION,
+  section: "display",
 });
 
 /** The card's Collection: the collection it reads, set from the group it is added from. */

@@ -1,16 +1,6 @@
 "use client";
 
-import {
-  Badge,
-  Button,
-  DropdownMenuCheckboxItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  Skeleton,
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@nextlyhq/ui";
+import { Button, Skeleton } from "@nextlyhq/ui";
 import { Eye, FileEdit, Pencil, Plus, Trash2 } from "lucide-react";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 
@@ -23,14 +13,7 @@ import {
   RemovedFromCodeDescription,
   RemovedFromCodeMark,
 } from "@admin/components/features/entries/RemovedFromCodeNotice";
-import * as Icons from "@admin/components/icons";
-import {
-  Code,
-  FileText,
-  Lock,
-  Package,
-  type LucideIcon,
-} from "@admin/components/icons";
+import { FileText } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
@@ -47,20 +30,32 @@ import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
-  useSingles,
+  singleKeys,
   useDeleteSingle,
   useBulkDeleteSingles,
 } from "@admin/hooks/queries";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { usePagination } from "@admin/hooks/usePagination";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
-import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
+import { singleApi } from "@admin/services/singleApi";
 import type {
   ApiSingle,
   SingleSource,
   SingleMigrationStatus,
 } from "@admin/types/entities";
+
+import {
+  EntityListFilterItems,
+  EntityNameCell,
+  createdColumn,
+  entityIcon,
+  fieldCountColumn,
+  schemaColumn,
+  sourceColumn,
+} from "../../collection/components/entity-list/entity-list-columns";
+import { PluginEntitySections } from "../../collection/components/entity-list/PluginEntitySections";
+import { useSiteEntityPage } from "../../collection/components/entity-list/use-entity-lists-by-owner";
 
 import { SinglesTableSkeleton } from "./SinglesTableSkeleton";
 
@@ -73,49 +68,29 @@ function removedSingle(single: ApiSingle): RemovedEntity {
   };
 }
 
-/** Source badge label + icon. */
-function getSourceBadge(source?: SingleSource): {
-  label: string;
-  icon: React.ReactNode;
-} {
-  switch (source) {
-    case "code":
-      return { label: "Code", icon: <Code className="mr-1 h-3 w-3" /> };
-    case "ui":
-      return { label: "UI", icon: <FileText className="mr-1 h-3 w-3" /> };
-    case "built-in":
-      return { label: "Built-in", icon: <Package className="mr-1 h-3 w-3" /> };
-    default:
-      return { label: "Unknown", icon: null };
-  }
-}
+/** The source filter's options, in the order the menu offers them. */
+const SOURCE_FILTERS: SingleSource[] = ["code", "ui", "built-in"];
 
-/** Migration-status badge variant + label. */
-function getMigrationBadge(status?: string): {
-  variant: "success" | "warning" | "primary" | "default" | "destructive";
-  label: string;
-} {
-  switch (status) {
-    case "synced":
-      return { variant: "success", label: "Synced" };
-    case "pending":
-      return { variant: "warning", label: "Pending" };
-    case "generated":
-      return { variant: "primary", label: "Generated" };
-    case "applied":
-      return { variant: "success", label: "Applied" };
-    case "failed":
-      return { variant: "destructive", label: "Failed" };
-    default:
-      return { variant: "default", label: "-" };
-  }
+/** The schema filter's options, in the order the menu offers them. */
+const SCHEMA_FILTERS: SingleMigrationStatus[] = [
+  "synced",
+  "applied",
+  "pending",
+  "generated",
+];
+
+/** A Single's slug, which the plugins' metadata names it by. */
+const slugOfSingle = (single: ApiSingle): string => single.slug;
+
+/** How many fields a Single has, as the list's answer counts them. */
+function fieldCountOf(single: ApiSingle): number {
+  if (single.fieldCount !== undefined) return single.fieldCount;
+  return single.fields?.length || 0;
 }
 
 interface SinglesTableProps {
   mode?: "builder" | "content";
 }
-
-const iconMap = Icons as unknown as Record<string, LucideIcon>;
 
 /** Columns pinned as always-visible in the column toggle. */
 const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
@@ -155,11 +130,17 @@ export default function SinglesTable({
   } | null>(null);
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
 
-  const { data, isLoading, isFetching, isError, error } = useSingles({
-    pagination: { page, pageSize },
-    sorting: [],
-    filters: { search: debouncedSearch },
-  });
+  // The site's own Singles: the server leaves the plugins' out of the page
+  // AND its count, so the pager counts only rows this table can show.
+  const { data, isLoading, isFetching, isError, error } = useSiteEntityPage(
+    singleKeys.lists(),
+    {
+      pagination: { page, pageSize },
+      sorting: [],
+      filters: { search: debouncedSearch },
+    },
+    singleApi.fetchSingles
+  );
 
   const { mutate: deleteSingle, isPending: isDeleting } = useDeleteSingle();
 
@@ -278,109 +259,45 @@ export default function SinglesTable({
     });
   }, [selectedIds, bulkDeleteSingles, clearSelection, filteredData]);
 
-  const getFieldCount = useCallback((single: ApiSingle): number => {
-    if (single.fieldCount !== undefined) return single.fieldCount;
-    return single.fields?.length || 0;
-  }, []);
-
-  const allColumns = useMemo<NextlyColumn<ApiSingle>[]>(
-    () => [
+  // The columns, with the source cell naming the plugin on a plugin's rows.
+  const columnsFor = useCallback(
+    (pluginName?: string): NextlyColumn<ApiSingle>[] => [
       {
         name: "label",
         header: "SINGLE",
         cell: ({ row }) => (
-          <div className="flex items-center gap-3">
-            <div className="table-row-icon-cover">
-              {React.createElement(iconMap[row.admin?.icon || ""] || FileText, {
-                className: "h-4 w-4",
-              })}
-            </div>
-            <div className="flex min-w-0 flex-1 flex-col">
-              <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium text-foreground">
-                  {row.label}
-                </span>
-                {row.locked && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Locked: Cannot be edited or deleted from UI</p>
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-                {/* Listed, and marked, once the configuration no longer
-                    declares it; the notice with its next step is read out. */}
-                {isRemovedFromCode(row) && (
-                  <>
-                    <RemovedFromCodeMark
-                      entity={removedSingle(row)}
-                      state={row.removedFromCodeState}
-                      className="ml-0"
-                    />
-                    <RemovedFromCodeDescription
-                      entity={removedSingle(row)}
-                      state={row.removedFromCodeState}
-                    />
-                  </>
-                )}
-              </div>
-              <span className="truncate text-xs text-muted-foreground">
-                {row.slug}
-              </span>
-            </div>
-          </div>
+          <EntityNameCell
+            icon={entityIcon(row.admin?.icon, FileText)}
+            label={row.label}
+            slug={row.slug}
+            locked={row.locked}
+          >
+            {/* Listed, and marked, once the configuration no longer
+                declares it; the notice with its next step is read out. */}
+            {isRemovedFromCode(row) && (
+              <>
+                <RemovedFromCodeMark
+                  entity={removedSingle(row)}
+                  state={row.removedFromCodeState}
+                  className="ml-0"
+                />
+                <RemovedFromCodeDescription
+                  entity={removedSingle(row)}
+                  state={row.removedFromCodeState}
+                />
+              </>
+            )}
+          </EntityNameCell>
         ),
       },
-      {
-        name: "source",
-        header: "SOURCE",
-        cell: ({ row }) => {
-          const sourceBadge = getSourceBadge(row.source);
-          return (
-            <Badge
-              variant="default"
-              className="whitespace-nowrap font-normal text-muted-foreground"
-            >
-              {sourceBadge.icon}
-              {sourceBadge.label}
-            </Badge>
-          );
-        },
-      },
-      {
-        name: "migrationStatus",
-        header: "STATUS",
-        cell: ({ row }) => {
-          const migrationBadge = getMigrationBadge(row.migrationStatus);
-          return (
-            <Badge variant={migrationBadge.variant}>
-              {migrationBadge.label}
-            </Badge>
-          );
-        },
-      },
-      {
-        name: "fields",
-        header: "FIELDS",
-        cell: ({ row }) => (
-          <span className="text-sm tabular-nums">{getFieldCount(row)}</span>
-        ),
-      },
-      {
-        name: "createdAt",
-        header: "CREATED",
-        hideOnMobile: true,
-        cell: ({ value }) => (
-          <span className="text-sm text-muted-foreground">
-            {formatDateTime(value as string | undefined)}
-          </span>
-        ),
-      },
+      sourceColumn(pluginName),
+      schemaColumn(),
+      fieldCountColumn("fields", fieldCountOf),
+      createdColumn(),
     ],
-    [getFieldCount]
+    []
   );
+  const allColumns = useMemo(() => columnsFor(), [columnsFor]);
 
   // Resolves persisted column visibility while ensuring pinned single label/created remain visible.
   const { columns, columnsControl } = useTableColumns({
@@ -442,11 +359,32 @@ export default function SinglesTable({
         label: "Delete",
         icon: <Trash2 className="h-4 w-4" />,
         destructive: true,
-        isDisabled: () => Boolean(single.locked),
+        // One owned by code offers no delete, rather than a disabled one.
+        isVisible: () => !single.locked,
         onSelect: () => handleDelete(single),
       },
     ],
     [handleEdit, handleViewDocument, handleDelete]
+  );
+
+  // A plugin's Single is read-only here: it can be opened and its document
+  // edited, never deleted.
+  const pluginRowActions = useCallback(
+    (single: ApiSingle): RowAction<ApiSingle>[] => [
+      {
+        id: "edit",
+        label: "View",
+        icon: <Eye className="h-4 w-4" />,
+        onSelect: () => handleEdit(single),
+      },
+      {
+        id: "view-document",
+        label: "View Document",
+        icon: <FileEdit className="h-4 w-4" />,
+        onSelect: () => handleViewDocument(single),
+      },
+    ],
+    [handleEdit, handleViewDocument]
   );
 
   /*
@@ -487,65 +425,14 @@ export default function SinglesTable({
         // from data nobody has yet would open onto nothing.
         filters={
           showLoadingSkeleton ? undefined : (
-            <>
-              <DropdownMenuLabel>Filter by</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "all"}
-                onCheckedChange={() => handleSourceFilterChange("all")}
-              >
-                All Sources
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "code"}
-                onCheckedChange={() => handleSourceFilterChange("code")}
-              >
-                Code
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "ui"}
-                onCheckedChange={() => handleSourceFilterChange("ui")}
-              >
-                UI
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "built-in"}
-                onCheckedChange={() => handleSourceFilterChange("built-in")}
-              >
-                Built-in
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "all"}
-                onCheckedChange={() => handleMigrationFilterChange("all")}
-              >
-                All Status
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "synced"}
-                onCheckedChange={() => handleMigrationFilterChange("synced")}
-              >
-                Synced
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "pending"}
-                onCheckedChange={() => handleMigrationFilterChange("pending")}
-              >
-                Pending
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "generated"}
-                onCheckedChange={() => handleMigrationFilterChange("generated")}
-              >
-                Generated
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "applied"}
-                onCheckedChange={() => handleMigrationFilterChange("applied")}
-              >
-                Applied
-              </DropdownMenuCheckboxItem>
-            </>
+            <EntityListFilterItems
+              sources={SOURCE_FILTERS}
+              source={sourceFilter}
+              onSource={handleSourceFilterChange}
+              states={SCHEMA_FILTERS}
+              state={migrationFilter}
+              onState={handleMigrationFilterChange}
+            />
           )
         }
         columnsControl={showLoadingSkeleton ? undefined : columnsControl}
@@ -570,7 +457,7 @@ export default function SinglesTable({
         }
         empty={{
           icon: <FileText className="h-5 w-5" aria-hidden="true" />,
-          title: "No Singles yet",
+          title: "No Singles of your own yet",
           description:
             "Get started by creating your first Single to manage site-wide settings like headers, footers, and navigation.",
           action: (
@@ -584,9 +471,9 @@ export default function SinglesTable({
         }}
         emptyFiltered={{
           icon: <FileText className="h-5 w-5" aria-hidden="true" />,
-          title: "No Singles found",
+          title: "No Singles of your own found",
           description:
-            "No Singles match your search. Try adjusting your search terms or filters.",
+            "None of your own Singles match your search. Try adjusting your search terms or filters.",
         }}
         columns={columns}
         rows={filteredData}
@@ -615,6 +502,19 @@ export default function SinglesTable({
               }
             : undefined
         }
+      />
+
+      <PluginEntitySections<ApiSingle>
+        kind="singles"
+        noun={{ one: "Single", many: "Singles" }}
+        listKey={singleKeys.lists()}
+        fetchPage={singleApi.fetchSingles}
+        search={debouncedSearch}
+        slugOf={slugOfSingle}
+        columnsFor={columnsFor}
+        resolvedColumns={columns}
+        rowActions={pluginRowActions}
+        onRowClick={handleEdit}
       />
 
       <BulkDeleteDialog

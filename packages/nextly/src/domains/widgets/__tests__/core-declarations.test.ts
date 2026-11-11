@@ -18,7 +18,7 @@ import * as loggerModule from "../../../observability/logger";
 import { IN_RELEASE_KEY } from "../../collections/query/reserved-filter-keys";
 import { allWidgets, sizeFacts } from "../canonical";
 import { breakdownWidget } from "../core-widgets/breakdown";
-import { countWidget } from "../core-widgets/count";
+import { countWidget, trendFrom } from "../core-widgets/count";
 import { overTimeWidget } from "../core-widgets/over-time";
 import { recentEntriesWidget } from "../core-widgets/recent-entries";
 import {
@@ -28,6 +28,7 @@ import {
 import { CORE_OWNER, declaredWidget } from "../declaration/declared-widgets";
 import type {
   WidgetCollectionDescription,
+  WidgetInterval,
   WidgetLoadSize,
   WidgetReadServices,
 } from "../declaration/define-widget";
@@ -85,10 +86,16 @@ const LOGS: WidgetCollectionDescription = {
 /** The series every mocked `timeseries` read answers. */
 const POINTS = [{ start: "2026-06-15T00:00:00.000Z", count: 4 }];
 
+/** A `count` read's arguments, as a load hands them. */
+type CountRead = (
+  collection: string,
+  options?: { window?: unknown }
+) => Promise<number>;
+
 /** Read services, each a mock that records its calls, as core's batch hands a load them. */
-function bound(options: { count?: () => Promise<number> } = {}) {
+function bound(options: { count?: CountRead } = {}) {
   return {
-    count: vi.fn(options.count ?? (async () => 7)),
+    count: vi.fn<CountRead>(options.count ?? (async () => 7)),
     find: vi.fn(async () => ({
       items: [{ id: "a", title: "First", updatedAt: NOW.toISOString() }],
       total: 12,
@@ -103,7 +110,7 @@ function bound(options: { count?: () => Promise<number> } = {}) {
     })),
     timeseries: vi.fn(async () => ({
       points: POINTS,
-      interval: "day" as const,
+      interval: "day" as WidgetInterval,
     })),
     describe: vi.fn(async (collection: string) =>
       collection === "posts" ? POSTS : collection === "logs" ? LOGS : undefined
@@ -261,97 +268,238 @@ describe("core's declared cards", () => {
 });
 
 describe("Count's load", () => {
-  it("reads the number alone on a small card: no scheduled figure, no trend, no period before", async () => {
-    const services = bound();
+  /** The 7-day window the change line counts over. */
+  const WEEK = { range: "7d" };
+
+  it("reads the number and the change this week by default, nothing else", async () => {
+    const services = bound({
+      count: async (_c: string, options?: { window?: unknown }) =>
+        options?.window === undefined ? 24 : 3,
+    });
     const data = await loadCount({ collection: "posts" }, SMALL, services);
+    expect(services.count).toHaveBeenCalledTimes(2);
+    expect(services.count).toHaveBeenCalledWith("posts", { status: "all" });
+    expect(services.count).toHaveBeenCalledWith("posts", {
+      status: "all",
+      window: WEEK,
+    });
+    expect(services.groupBy).not.toHaveBeenCalled();
+    expect(services.timeseries).not.toHaveBeenCalled();
+    expect(data).toEqual({
+      total: 24,
+      counted: "all",
+      line: "change",
+      change: 3,
+    });
+  });
+
+  it("reads the same at every width: the size never changes what is asked", async () => {
+    const asked = async (size: WidgetLoadSize) => {
+      const services = bound();
+      await loadCount({ collection: "posts" }, size, services);
+      return services.count.mock.calls;
+    };
+    expect(await asked(LARGE)).toEqual(await asked(SMALL));
+    expect(await asked(MEDIUM)).toEqual(await asked(SMALL));
+  });
+
+  it("counts the published entries alone, and their change, under Count: Published", async () => {
+    const services = bound();
+    const data = await loadCount(
+      { collection: "posts", count: "published" },
+      SMALL,
+      services
+    );
+    // A read naming no status reads the published entries.
+    expect(services.count).toHaveBeenCalledWith("posts", {});
+    expect(services.count).toHaveBeenCalledWith("posts", { window: WEEK });
+    expect(data.counted).toBe("published");
+  });
+
+  it("counts the drafts alone, and only drafts in the change, under Count: Drafts", async () => {
+    const drafts = { status: { equals: "draft" } };
+    const services = bound();
+    const data = await loadCount(
+      { collection: "posts", count: "draft" },
+      SMALL,
+      services
+    );
+    expect(services.count).toHaveBeenCalledWith("posts", {
+      status: "all",
+      where: drafts,
+    });
+    // 🔴 The change counts what the number counts: a week of new published
+    // entries is no change to the drafts.
+    expect(services.count).toHaveBeenCalledWith("posts", {
+      status: "all",
+      where: drafts,
+      window: WEEK,
+    });
+    expect(data.counted).toBe("draft");
+  });
+
+  it("reads the split by status with one read for the number, and what scheduled releases will publish", async () => {
+    const services = bound();
+    const data = await loadCount(
+      { collection: "posts", show: "split" },
+      SMALL,
+      services
+    );
     expect(services.groupBy).toHaveBeenCalledTimes(1);
     expect(services.groupBy).toHaveBeenCalledWith("posts", {
       field: "status",
       status: "all",
     });
-    expect(services.count).not.toHaveBeenCalled();
-    expect(services.timeseries).not.toHaveBeenCalled();
-    // The buckets' sum, the null bucket included.
-    expect(data).toEqual({ total: 6, split: { published: 3, draft: 2 } });
-  });
-
-  it("reads what a scheduled release will publish from the medium tier, for a collection with a status", async () => {
-    const services = bound();
-    const data = await loadCount({ collection: "posts" }, MEDIUM, services);
     expect(services.count).toHaveBeenCalledTimes(1);
     expect(services.count).toHaveBeenCalledWith("posts", {
       status: "all",
       where: { [IN_RELEASE_KEY]: true },
     });
-    expect(services.timeseries).not.toHaveBeenCalled();
+    // The buckets' sum, the null bucket included.
     expect(data).toEqual({
       total: 6,
-      split: { published: 3, draft: 2 },
-      scheduled: 7,
+      counted: "all",
+      line: "split",
+      split: { published: 3, draft: 2, scheduled: 7 },
     });
   });
 
-  it("reads the last 30 days and the 30 before them on a large card alone", async () => {
-    const services = bound({ count: async () => 2 });
-    const data = await loadCount({ collection: "posts" }, LARGE, services);
-    expect(services.timeseries).toHaveBeenCalledTimes(1);
+  it("draws the change in place of a split of anything but every entry", async () => {
+    for (const count of ["published", "draft"]) {
+      const services = bound();
+      const data = await loadCount(
+        { collection: "posts", count, show: "split" },
+        SMALL,
+        services
+      );
+      expect(services.groupBy).not.toHaveBeenCalled();
+      expect(data.line).toBe("change");
+      expect(data.split).toBeUndefined();
+    }
+  });
+
+  it("reads the trend over the weeks of the last 90 days, ending at the number", async () => {
+    const services = bound({ count: async () => 10 });
+    services.timeseries.mockResolvedValue({
+      points: [1, 0, 2, 0, 1, 0, 0, 3, 0, 1, 0, 0, 2].map((count, i) => ({
+        start: new Date(Date.UTC(2026, 2, 16 + i * 7)).toISOString(),
+        count,
+      })),
+      interval: "week" as const,
+    });
+    const data = await loadCount(
+      { collection: "posts", show: "trend" },
+      SMALL,
+      services
+    );
     expect(services.timeseries).toHaveBeenCalledWith("posts", {
-      range: "30d",
-      dateField: "createdAt",
+      range: "90d",
       status: "all",
     });
-    // The period before: the window as long that ends where the series starts.
-    expect(services.count).toHaveBeenCalledWith("posts", {
-      status: "all",
-      window: { range: "30d", previous: true },
-    });
-    expect(data.trend).toEqual({ points: POINTS, prior: 2 });
+    expect(services.count).toHaveBeenCalledTimes(1);
+    // Walked back from 10: the last week made 2, the one before 0, and so on.
+    expect(data.trend).toEqual([4, 4, 4, 7, 7, 8, 8, 8, 10]);
+    expect(data.line).toBe("trend");
+  });
+
+  it("draws nothing under the number under Nothing, reading the number alone", async () => {
+    const services = bound();
+    const data = await loadCount(
+      { collection: "posts", show: "none" },
+      SMALL,
+      services
+    );
+    expect(services.count).toHaveBeenCalledTimes(1);
+    expect(data).toEqual({ total: 7, counted: "all", line: "none" });
   });
 
   it("counts every read under the card's Filter", async () => {
-    const services = bound();
     const filter = { title: { equals: "launch" } };
-    await loadCount({ collection: "posts", filter }, LARGE, services);
-    expect(services.groupBy).toHaveBeenCalledWith("posts", {
+    const split = bound();
+    await loadCount(
+      { collection: "posts", filter, show: "split" },
+      SMALL,
+      split
+    );
+    expect(split.groupBy).toHaveBeenCalledWith("posts", {
       field: "status",
       status: "all",
       where: filter,
     });
     // Joined under `and`, so the release condition keeps its top-level key.
-    expect(services.count).toHaveBeenCalledWith("posts", {
+    expect(split.count).toHaveBeenCalledWith("posts", {
       status: "all",
       where: { [IN_RELEASE_KEY]: true, and: [filter] },
     });
-    expect(services.timeseries).toHaveBeenCalledWith(
+    const change = bound();
+    await loadCount({ collection: "posts", filter }, SMALL, change);
+    expect(change.count).toHaveBeenCalledWith("posts", {
+      status: "all",
+      where: filter,
+      window: WEEK,
+    });
+    const trend = bound();
+    await loadCount(
+      { collection: "posts", filter, show: "trend" },
+      SMALL,
+      trend
+    );
+    expect(trend.timeseries).toHaveBeenCalledWith(
       "posts",
       expect.objectContaining({ where: filter })
     );
-    expect(services.count).toHaveBeenCalledWith(
-      "posts",
-      expect.objectContaining({
-        window: { range: "30d", previous: true },
-        where: filter,
-      })
-    );
   });
 
-  it("counts a collection without a status plainly, with no scheduled figure", async () => {
+  it("counts every entry of a collection without a status, whatever its Count or line asks", async () => {
     const services = bound();
-    const data = await loadCount({ collection: "logs" }, MEDIUM, services);
+    const data = await loadCount(
+      { collection: "logs", count: "draft", show: "split" },
+      SMALL,
+      services
+    );
     expect(services.groupBy).not.toHaveBeenCalled();
-    expect(services.count).toHaveBeenCalledTimes(1);
     expect(services.count).toHaveBeenCalledWith("logs", { status: "all" });
-    expect(data).toEqual({ total: 7 });
+    expect(data).toMatchObject({ total: 7, counted: "all", line: "change" });
   });
 
-  it("leaves the scheduled figure out for a reader with no release to read, keeping the number", async () => {
-    const services = bound({
+  it("leaves out a line it cannot read, keeping the number", async () => {
+    const refusesWindows = bound({
+      count: async (_c: string, options?: { window?: unknown }) => {
+        if (options?.window !== undefined) throw new Error("not available");
+        return 5;
+      },
+    });
+    expect(
+      await loadCount({ collection: "posts" }, SMALL, refusesWindows)
+    ).toEqual({ total: 5, counted: "all", line: "change" });
+
+    const refusesReleases = bound({
       count: async () => {
         throw new Error("not available");
       },
     });
-    const data = await loadCount({ collection: "posts" }, MEDIUM, services);
-    expect(data).toEqual({ total: 6, split: { published: 3, draft: 2 } });
+    expect(
+      await loadCount(
+        { collection: "posts", show: "split" },
+        SMALL,
+        refusesReleases
+      )
+    ).toEqual({
+      total: 6,
+      counted: "all",
+      line: "split",
+      split: { published: 3, draft: 2 },
+    });
+  });
+});
+
+describe("trendFrom", () => {
+  it("is the number alone for a series with nothing before this week", () => {
+    expect(trendFrom([{ count: 4 }], 4)).toEqual([4]);
+  });
+
+  it("never draws below zero", () => {
+    expect(trendFrom([{ count: 0 }, { count: 9 }], 3)).toEqual([0, 3]);
   });
 });
 

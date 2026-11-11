@@ -27,6 +27,16 @@ export type PaginationProps = {
   isLoading?: boolean;
   /** Total number of items across all pages */
   totalItems?: number;
+  /**
+   * `totalItems` is a lower bound: more items exist than were counted, so the
+   * count reads "1000+" and the last page, which is not known, is not offered.
+   */
+  totalCapped?: boolean;
+  /**
+   * How many items the current page holds. Ends the shown range when the
+   * total is capped, as the cap cannot say where the last page stops.
+   */
+  pageItemCount?: number;
   /** Noun used in the count, e.g. "entries" -> "Showing 1-10 of 42 entries" */
   itemLabel?: string;
   /** Accessible name for the pagination landmark; "Pagination", in the interface language, when absent */

@@ -28,6 +28,7 @@ import { resolve } from "node:path";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import {
   type CompanionHistory,
@@ -3166,25 +3167,62 @@ export function applyRenameDecisionsForTest(
 }
 
 /*
- * The collection tables a migration would drop. Here, beside the snapshot
- * they are read from: most runs drop none, so `migrate:create` asks this
- * first and loads the check that judges them (`removed-collections`), with
- * the readers it needs, only when there is something to judge.
+ * The entity tables a migration would drop. Here, beside the snapshot they
+ * are read from: most runs drop none, so `migrate:create` asks this first and
+ * loads the check that judges them (`removed-collections`), with the readers
+ * it needs, only when there is something to judge.
  */
 /** Every collection's table starts with this, whatever its slug or `dbName`. */
 export const COLLECTION_TABLE_PREFIX = "dc_";
+/** Every Single's table starts with this, whatever its slug or `dbName`. */
+export const SINGLE_TABLE_PREFIX = "single_";
+
+/** The tables a migration would drop, by the kind of entity each belongs to. */
+export interface RemovedEntityTables {
+  collections: string[];
+  singles: string[];
+  fieldGroups: string[];
+}
 
 /**
- * The collection tables the latest snapshot holds that the configuration no
- * longer declares: the tables the next migration would drop.
+ * The system columns every field-group table carries, all of them: its parent's id, table and
+ * field, and its order among them.
  */
-export function removedCollectionTables(input: {
+const FIELD_GROUP_SIGNATURE = [
+  STORAGE_FORMAT.columns.parentId,
+  STORAGE_FORMAT.columns.parentTable,
+  STORAGE_FORMAT.columns.parentField,
+  STORAGE_FORMAT.columns.order,
+];
+
+/**
+ * Whether a table is a field group's: carrying the whole set of system columns every field-group
+ * table has, or named with the field-group prefix. The columns are asked first: a field group
+ * named through the `dbName` it once accepted keeps the table its author chose, which may carry any
+ * prefix, a collection's or a Single's included, but no collection or Single has those columns (a
+ * field name starts with a letter), and a column a plugin or the app contributes is one name, not
+ * the whole set.
+ */
+function isFieldGroupTable(table: TableSpec): boolean {
+  const columns = new Set(table.columns.map(column => column.name));
+  if (FIELD_GROUP_SIGNATURE.every(column => columns.has(column))) return true;
+  return table.name.startsWith(STORAGE_FORMAT.tablePrefix);
+}
+
+/**
+ * The entity tables the latest snapshot holds that the configuration no
+ * longer declares: the tables the next migration would drop, each by the
+ * prefix its kind of entity names it with, and a field group's by its columns
+ * where its name has no prefix (`isFieldGroupTable`). A removed entity's
+ * translation and junction tables are among them, under the same prefix.
+ */
+export function removedEntityTables(input: {
   previous: NextlySchemaSnapshot;
   collections: MinimalConfigEntity[];
   singles: MinimalConfigEntity[];
   components: MinimalConfigEntity[];
   dialect: SupportedDialect;
-}): string[] {
+}): RemovedEntityTables {
   const desired = new Set(
     buildDesiredSnapshotFromConfig(
       input.collections,
@@ -3193,11 +3231,19 @@ export function removedCollectionTables(input: {
       input.dialect
     ).tables.map(table => table.name)
   );
-  return input.previous.tables
-    .map(table => table.name)
-    .filter(
-      name => name.startsWith(COLLECTION_TABLE_PREFIX) && !desired.has(name)
-    );
+  const removed = input.previous.tables.filter(
+    table => !desired.has(table.name)
+  );
+  const names = (tables: readonly TableSpec[]) => tables.map(t => t.name);
+  const fieldGroups = removed.filter(isFieldGroupTable);
+  const others = removed.filter(t => !fieldGroups.includes(t));
+  return {
+    collections: names(
+      others.filter(t => t.name.startsWith(COLLECTION_TABLE_PREFIX))
+    ),
+    singles: names(others.filter(t => t.name.startsWith(SINGLE_TABLE_PREFIX))),
+    fieldGroups: names(fieldGroups),
+  };
 }
 
 /**

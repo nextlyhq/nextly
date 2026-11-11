@@ -357,3 +357,41 @@ describe("a manifest hook is validated as the executor requires it", () => {
     ).toBe(false);
   });
 });
+
+describe("a field with no name", () => {
+  /** A collection whose `meta` group holds `inner`. */
+  const withInner = (inner: Record<string, unknown>) => ({
+    collections: [
+      {
+        slug: "pages",
+        labels: { singular: "Page", plural: "Pages" },
+        fields: [
+          {
+            name: "meta",
+            type: "group",
+            fields: [inner],
+          },
+        ],
+      },
+    ],
+  });
+
+  it("is a group that lays fields out, which the Builder saves", () => {
+    const parsed = parseUiSchema(
+      withInner({
+        type: "group",
+        label: "Layout",
+        fields: [{ name: "seo", type: "text" }],
+      })
+    );
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+  });
+
+  it("is refused for a field that stores a value", () => {
+    const parsed = parseUiSchema(withInner({ type: "text", label: "Seo" }));
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map(issue => issue.path.join("."))).toEqual([
+      "collections.0.fields.0.fields.0.name",
+    ]);
+  });
+});

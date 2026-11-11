@@ -244,7 +244,7 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
               </label>
 
               {!allEvents && eventTypesFailed && (
-                <p className="text-sm text-destructive-500">
+                <p className="text-sm text-danger-text">
                   Could not load the event types. Reload the page to try again.
                 </p>
               )}
@@ -286,7 +286,7 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
               )}
 
               {eventError && (
-                <p className="text-sm text-destructive-500">{eventError}</p>
+                <p className="text-sm text-danger-text">{eventError}</p>
               )}
             </div>
           </SettingsRowGroup>
@@ -389,7 +389,7 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
                 ))}
 
               {headersError && !clearExistingHeaders && (
-                <p className="text-sm text-destructive-500">{headersError}</p>
+                <p className="text-sm text-danger-text">{headersError}</p>
               )}
 
               {clearExistingHeaders ? (

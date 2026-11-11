@@ -996,6 +996,17 @@ An entry with no value for a key sorts after the entries with one, in either dir
 
 Maximum `limit` is 500 (anything higher is clamped). The response always includes the `meta` envelope with `total`, `page`, `limit`, `totalPages`, `hasNext`, and `hasPrev`.
 
+On a very large collection, counting every matching entry is the slowest part of a list. Ask for a capped count, and the count stops at 1,000:
+
+```
+?count=capped&limit=25&page=41
+```
+
+- **1,000 entries or fewer match:** `total` is exact, as without the parameter.
+- **More match:** `total` is `1000` and `meta.totalCapped` is `true`. Show it as "1000+".
+
+Paging works past the cap either way: `hasNext` and `hasPrev` say whether there is a page after and before this one. `totalPages` counts only the pages known so far, so don't offer a jump to the last page while `totalCapped` is set. Without `count`, or with `count=exact`, the total is always exact. Any other value is refused with a 400.
+
 ### depth
 
 Relationship population depth. `0` returns only IDs; `1+` populates referenced documents.

@@ -29,6 +29,8 @@ import {
   type ComponentPath,
 } from "@nextlyhq/plugin-sdk/admin";
 
+import { FORM_EDITOR_VIEW } from "../form-pages";
+
 import { SubmissionsView } from "./components/submissions/SubmissionsView";
 import { FormBuilderView } from "./FormBuilderView";
 
@@ -85,8 +87,7 @@ export { FormSettingsTab } from "./components/builder/FormSettingsTab";
 export { FormNotificationsTab } from "./components/builder/FormNotificationsTab";
 
 /** Component path for FormBuilderView */
-export const FORM_BUILDER_VIEW_PATH: ComponentPath =
-  "@nextlyhq/plugin-form-builder/admin#FormBuilderView";
+export const FORM_BUILDER_VIEW_PATH: ComponentPath = FORM_EDITOR_VIEW;
 
 /** Component path for SubmissionsView */
 export const SUBMISSIONS_VIEW_PATH: ComponentPath =

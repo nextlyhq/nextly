@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * "Start with sample content" inside the setup card: a few words and its actions in the tile's
- * hint line, and, while a load or its outcome is on show, a panel under the tiles that says it in
- * full (`dashboard-layout` R-18 and R-19):
+ * "Start with sample content" inside the setup card: a word or two in its line's hint and its
+ * buttons on that line, and, while a load or its outcome is on show, a panel under the steps that
+ * says it in full:
  *
- * - offered: Load · No thanks, only to a person the project's route would let load, while the site
- *   holds no entry and nobody answered;
+ * - offered: Add samples and No thanks, only to a person the project's route would let load, while
+ *   the site holds no entry and nobody answered;
  * - loading: says so, from whichever tab started it, until it reports;
  * - a load started and never reported: "A load started at <time> has not finished", with "Add your
  *   first entry" and nothing else, however long ago it started;
@@ -20,45 +20,49 @@
  * @module components/features/dashboard/setup/SampleContentStep
  */
 
+import { Button } from "@nextlyhq/ui";
 import type React from "react";
 
 import { Link } from "@admin/components/ui/link";
 
+import { STEP_BUTTON, STEP_GHOST_BUTTON } from "./step-buttons";
 import type { SampleRunState, SampleView } from "./useSampleRun";
 
-/**
- * A failure's words: the darker shade in light mode, as the base red at this size falls short of
- * the 4.5:1 text contrast there; the base red in dark mode, which reads at that size.
- */
-const FAILED_TEXT = "text-destructive-700 dark:text-destructive";
+/** A failure's words, in the danger status's text colour, which reads at 4.5:1 in both themes. */
+const FAILED_TEXT = "text-danger-text";
 
-/** An action word in the hint line or the panel. */
+/** An action in the panel, drawn as the card's other buttons are. */
 function SampleAction({
   children,
   onClick,
   disabled,
+  quiet = false,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
+  /** The quieter of two actions side by side: Cancel, No thanks. */
+  quiet?: boolean;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant={quiet ? "ghost" : "outline"}
+      size="sm"
       onClick={onClick}
       disabled={disabled}
-      className="font-medium text-foreground underline decoration-primary/40 underline-offset-2 hover:decoration-primary focus-visible:decoration-primary disabled:opacity-50"
+      className={quiet ? STEP_GHOST_BUTTON : STEP_BUTTON}
     >
       {children}
-    </button>
+    </Button>
   );
 }
 
-/** "·" between two parts, for the eye only, spaced by padding as the hint line's flex items drop spaces. */
-function Dot() {
+/** A message's actions, on their own line under its words. */
+function Actions({ children }: { children: React.ReactNode }) {
   return (
-    <span aria-hidden="true" className="px-1">
-      ·
+    <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      {children}
     </span>
   );
 }
@@ -71,58 +75,63 @@ function startedWhen(iso: string): string {
     : at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-/** The tile's hint line while the step is open: its state in a word or two, and its actions. */
-export function SampleContentHint({ sample }: { sample: SampleRunState }) {
-  const { view } = sample;
+/** The step's hint line while it is open, in a word or two, and whether it says something failed. */
+export interface SampleHint {
+  words: string;
+  failed: boolean;
+}
+
+/**
+ * What the step's hint line says of the load, where it says anything of its own: nothing while the
+ * load is offered, whose hint is the step's own words, or once it is answered.
+ */
+export function sampleHint(view: SampleView): SampleHint | undefined {
+  const said = (words: string, failed = false) => ({ words, failed });
   switch (view.kind) {
     case "checking":
-      return <span>Checking…</span>;
-    case "offer":
-      return (
-        <>
-          <SampleAction onClick={sample.load}>Load</SampleAction>
-          <Dot />
-          <SampleAction onClick={sample.decline}>No thanks</SampleAction>
-        </>
-      );
+      return said("Checking…");
     case "unreadable":
-      return <span>Couldn&apos;t check</span>;
+      return said("Couldn't check");
     case "running":
-      return <span>Loading…</span>;
+      return said("Loading…");
     case "declining":
-      return <span role="status">Saving…</span>;
+      return said("Saving…");
     case "unfinished":
-      return <span>Not finished</span>;
+      return said("Not finished");
     case "failed":
-      return <span className={FAILED_TEXT}>Couldn&apos;t load</span>;
+      return said("Couldn't load", true);
     case "confirming":
-      return <span>Load again?</span>;
+      return said("Load again?");
     case "unrecorded":
-      return (
-        <span className={FAILED_TEXT}>
-          {view.recording ? "Recording…" : "Not recorded"}
-        </span>
-      );
+      return said(view.recording ? "Recording…" : "Not recorded", true);
     case "loaded":
-      return <span>Loaded</span>;
+      return said("Loaded");
+    case "offer":
     case "done":
-      return null;
+      return undefined;
   }
+}
+
+/** The step's buttons while the load is offered: Add samples, and No thanks beside it. */
+export function SampleContentActions({ sample }: { sample: SampleRunState }) {
+  if (sample.view.kind !== "offer") return null;
+  return (
+    <>
+      <SampleAction onClick={sample.load}>Add samples</SampleAction>
+      <SampleAction onClick={sample.decline} quiet>
+        No thanks
+      </SampleAction>
+    </>
+  );
 }
 
 /** "Add your first entry", where a load's outcome offers it and the step is open. */
 function FirstEntry({ href }: { href: string | undefined }) {
   if (href === undefined) return null;
   return (
-    <>
-      <Dot />
-      <Link
-        href={href}
-        className="font-medium text-foreground underline decoration-primary/40 underline-offset-2 hover:decoration-primary focus-visible:decoration-primary"
-      >
-        Add your first entry
-      </Link>
-    </>
+    <Button asChild variant="outline" size="sm" className={STEP_BUTTON}>
+      <Link href={href}>Add your first entry</Link>
+    </Button>
   );
 }
 
@@ -141,7 +150,11 @@ function Unfinished({ view, sample }: ViewProps<"unfinished">) {
     <p role="status">
       A load started at {startedWhen(view.startedAt)} has not finished. It may
       still be running, so no other load will start.
-      <FirstEntry href={sample.entryHref} />
+      {sample.entryHref !== undefined && (
+        <Actions>
+          <FirstEntry href={sample.entryHref} />
+        </Actions>
+      )}
     </p>
   );
 }
@@ -158,17 +171,15 @@ function Failed({ view, sample }: ViewProps<"failed">) {
       <span className={FAILED_TEXT}>
         Loading sample content failed: {view.failure}
       </span>
-      <FirstEntry href={sample.entryHref} />
-      {view.retry && (
-        <>
-          <Dot />
+      <Actions>
+        <FirstEntry href={sample.entryHref} />
+        {view.retry && (
           <SampleAction onClick={sample.askAgain}>Try again</SampleAction>
-        </>
-      )}
-      <Dot />
-      <SampleAction onClick={sample.decline}>
-        Decline sample content
-      </SampleAction>
+        )}
+        <SampleAction onClick={sample.decline} quiet>
+          Decline sample content
+        </SampleAction>
+      </Actions>
     </p>
   );
 }
@@ -178,10 +189,12 @@ function Confirming({ sample }: ViewProps<"confirming">) {
     <p role="alert">
       Some sample content may already be there from the load that failed. Load
       it again?
-      <Dot />
-      <SampleAction onClick={sample.confirmAgain}>Load again</SampleAction>
-      <Dot />
-      <SampleAction onClick={sample.cancelAgain}>Cancel</SampleAction>
+      <Actions>
+        <SampleAction onClick={sample.confirmAgain}>Load again</SampleAction>
+        <SampleAction onClick={sample.cancelAgain} quiet>
+          Cancel
+        </SampleAction>
+      </Actions>
     </p>
   );
 }
@@ -193,10 +206,11 @@ function Unrecorded({ view, sample }: ViewProps<"unrecorded">) {
         The sample content loaded, but recording that failed
         {view.again ? " again" : ""}.
       </span>
-      <Dot />
-      <SampleAction onClick={sample.record} disabled={view.recording}>
-        {view.recording ? "Recording…" : "Try again"}
-      </SampleAction>
+      <Actions>
+        <SampleAction onClick={sample.record} disabled={view.recording}>
+          {view.recording ? "Recording…" : "Try again"}
+        </SampleAction>
+      </Actions>
     </p>
   );
 }
@@ -206,8 +220,9 @@ function Loaded({ view, sample }: ViewProps<"loaded">) {
   return (
     <p role="status">
       Sample content loaded.
-      <Dot />
-      <SampleAction onClick={sample.continueOn}>Continue</SampleAction>
+      <Actions>
+        <SampleAction onClick={sample.continueOn}>Continue</SampleAction>
+      </Actions>
     </p>
   );
 }
@@ -235,7 +250,7 @@ function RunMessage({ sample }: { sample: SampleRunState }) {
 }
 
 /**
- * The panel under the tiles: the load or its outcome in full, a refusal the server answered with,
+ * The panel under the steps: the load or its outcome in full, a refusal the server answered with,
  * and a check of the other steps that failed while a run is on show, with its own Retry.
  */
 export function SampleContentPanel({
@@ -248,7 +263,7 @@ export function SampleContentPanel({
   if (!sample.panelShown && !sample.refreshFailed) return null;
   return (
     <div
-      className="grid gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground"
+      className="mt-1.5 grid gap-2 rounded-lg border border-border px-3 py-2.5 text-[12.5px] text-muted-foreground"
       data-setup-sample-panel=""
     >
       {sample.notice !== undefined && <p role="alert">{sample.notice}</p>}
@@ -256,8 +271,9 @@ export function SampleContentPanel({
       {sample.refreshFailed && (
         <p role="alert" data-setup-refresh-failed="">
           We couldn&apos;t check your other steps just now.
-          <Dot />
-          <SampleAction onClick={retry}>Retry</SampleAction>
+          <Actions>
+            <SampleAction onClick={retry}>Retry</SampleAction>
+          </Actions>
         </p>
       )}
     </div>

@@ -32,4 +32,39 @@ describe("perLanguageFieldNames", () => {
     );
     expect([...names].sort()).toEqual(["current", "migrated", "title", "zone"]);
   });
+
+  // A group with no name only lays fields out: a field group in one is stored where it sits.
+  it("counts a field whose untranslated component holds a translated one inside a group with no name", async () => {
+    const definitions = new Map<string, FieldConfig[]>([
+      [
+        "card",
+        fields(
+          { name: "tone", type: "text" },
+          {
+            type: "group",
+            fields: [{ name: "badge", type: "component", component: "banner" }],
+          }
+        ),
+      ],
+    ]);
+    const names = await perLanguageFieldNames(
+      fields({ name: "panel", type: "component", component: "card" }),
+      new Set(),
+      isComponentLocalized,
+      slug => Promise.resolve(definitions.get(slug) ?? null)
+    );
+    expect([...names]).toEqual(["panel"]);
+  });
+
+  it("counts a field with a translated component inside a group with no name", async () => {
+    const names = await perLanguageFieldNames(
+      fields({
+        type: "group",
+        fields: [{ name: "hero", type: "component", component: "banner" }],
+      }),
+      new Set(),
+      isComponentLocalized
+    );
+    expect([...names]).toEqual(["hero"]);
+  });
 });

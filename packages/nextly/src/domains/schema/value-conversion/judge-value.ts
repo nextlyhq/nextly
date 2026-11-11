@@ -70,6 +70,17 @@ export function valueJudgeFor(conversion: ColumnConversion): ValueJudge | null {
   const from = parseColumnType(conversion.from);
   const to = parseColumnType(conversion.to);
   if (conversion.referenceList) return referenceListJudge(conversion, to);
+  // A PostgreSQL real becoming a double keeps every value as its field reads it only when the
+  // conversion reads it through its text: 0.1 stays 0.1, where a plain cast stores its float4
+  // approximation, 0.10000000149011612. A conversion that does not say so has no conversion here.
+  if (
+    conversion.throughText === true &&
+    conversion.dialect === "postgresql" &&
+    from.family === "float4" &&
+    to.family === "float8"
+  ) {
+    return keeps;
+  }
   return (
     jsonJudge(conversion, from, to) ??
     stringJudge(conversion, from, to) ??

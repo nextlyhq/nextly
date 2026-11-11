@@ -146,7 +146,7 @@ export function BuilderFieldPicker({
       config={{
         surface: "entries",
         types: BUILDER_TYPES,
-        exclude: pickerExcludedTypes(config, position.parentFieldId),
+        exclude: pickerExcludedTypes(config),
         mostUsed: MOST_USED_FIELD_TYPES,
         // A label with nothing the name rule keeps (a label in another
         // script, say) still gets a name, "field", which the editor can change.

@@ -99,6 +99,17 @@ export interface CustomEditViewProps {
    * Absent while creating, which has no document to claim.
    */
   documentLock?: DocumentLockGates;
+  /**
+   * @experimental Which of the view's own pages the address names: the path
+   * of a document view the plugin declared on this collection with this edit
+   * view as its component (`/admin/collections/forms/<id>/settings` gives
+   * `"settings"`). Absent on the document's plain edit address, which is the
+   * view's first page.
+   *
+   * The admin keeps the view mounted while the address moves between its
+   * pages, so state the view holds, unsaved work among it, survives the move.
+   */
+  view?: string;
 }
 
 /**

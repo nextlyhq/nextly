@@ -249,9 +249,18 @@ describe.each(getConfiguredTestDialects())(
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
         fieldGroups: [
+          // Placed directly in a `note`: its instance is a row of its own, read back into the note.
+          defineFieldGroup({
+            slug: "deep",
+            fields: [text({ name: "heading" }), ...guarded()],
+          }),
           defineFieldGroup({
             slug: "note",
-            fields: [text({ name: "heading" }), ...guarded()],
+            fields: [
+              text({ name: "heading" }),
+              ...guarded(),
+              fieldGroup({ name: "deep", component: "deep" }),
+            ],
           }),
           // Holds a `note`, inside a group, and a field whose rule reads it.
           defineFieldGroup({
@@ -515,6 +524,27 @@ describe.each(getConfiguredTestDialects())(
           ).toBe(true);
         }
       );
+
+      it("withholds a field of a field group placed directly in another, as its own rule says", async () => {
+        const id = await seed(`deep-${door}`, {
+          one: {
+            heading: "h",
+            ...guardedValues(`deep-${door}-one`),
+            deep: { heading: "d", ...guardedValues(`deep-${door}-deep`) },
+          },
+        });
+
+        const asEditor = await readVia(door, "editor", id, "byId");
+        const deep = (asEditor.one as Doc).deep as Doc;
+        expect(deep.heading).toBe("d");
+        expect(deep).not.toHaveProperty("secret");
+        expect(typeof deep.label).toBe("string");
+
+        const asAllowed = await readVia(door, "allowed", id, "byId");
+        expect(((asAllowed.one as Doc).deep as Doc).secret).toBe(
+          `secret-deep-${door}-deep`
+        );
+      });
 
       it("withholds, in a create's response, every field-group field the writer may not read", async () => {
         const data = pageData(`w-${door}`);

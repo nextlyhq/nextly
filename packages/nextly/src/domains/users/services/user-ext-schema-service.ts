@@ -41,7 +41,7 @@ import {
   mysqlTable,
   text as mysqlText,
   boolean as mysqlBoolean,
-  timestamp as mysqlTimestamp,
+  datetime as mysqlDatetime,
   json as mysqlJson,
   varchar as mysqlVarchar,
   double as mysqlDouble,
@@ -142,7 +142,7 @@ const SQL_COLUMN_TYPES: Record<
     varchar: (length: number) => string;
     boolean: string;
     integer: string;
-    real: string;
+    number: string;
     timestamp: string;
     json: string;
   }
@@ -153,7 +153,9 @@ const SQL_COLUMN_TYPES: Record<
     varchar: (length: number) => `VARCHAR(${length})`,
     boolean: "BOOLEAN",
     integer: "INTEGER",
-    real: "REAL",
+    // Eight bytes, as a collection's number and MySQL's and SQLite's user
+    // numbers are: REAL is four on PostgreSQL and rounds past seven digits.
+    number: "DOUBLE PRECISION",
     timestamp: "TIMESTAMP WITH TIME ZONE",
     json: "JSONB",
   },
@@ -163,7 +165,7 @@ const SQL_COLUMN_TYPES: Record<
     varchar: (length: number) => `VARCHAR(${length})`,
     boolean: "BOOLEAN",
     integer: "INT",
-    real: "DOUBLE",
+    number: "DOUBLE",
     timestamp: "DATETIME",
     json: "JSON",
   },
@@ -173,11 +175,29 @@ const SQL_COLUMN_TYPES: Record<
     varchar: () => "TEXT",
     boolean: "INTEGER",
     integer: "INTEGER",
-    real: "REAL",
+    number: "REAL",
     timestamp: "INTEGER",
     json: "TEXT",
   },
 };
+
+/**
+ * The column a user field is stored in, described once.
+ *
+ * The statements that create and alter `user_ext` spell it (`spellColumn`), and the runtime table
+ * every read and write goes through declares it (`runtimeColumn`), from this one answer. Two
+ * mappings kept side by side had drifted, and Drizzle encodes and decodes a value by the type it
+ * is told, so a column declared as another type than the one made translated values wrongly: a
+ * PostgreSQL date read as a plain timestamp moved by the session's offset, and a SQLite list
+ * bound to a plain text column made the whole custom write fail.
+ */
+type UserExtColumn =
+  | { kind: "text" }
+  | { kind: "varchar"; length: number }
+  | { kind: "number" }
+  | { kind: "boolean" }
+  | { kind: "timestamp" }
+  | { kind: "json" };
 
 /**
  * Identifier quote characters for each dialect.
@@ -243,6 +263,62 @@ const sqliteTolerantJson = customType<{ data: unknown; driverData: string }>({
     }
   },
 });
+
+/** The PostgreSQL column `column` is declared as at runtime. */
+function postgresColumn(name: string, column: UserExtColumn) {
+  switch (column.kind) {
+    case "varchar":
+      return pgVarchar(name, { length: column.length });
+    case "text":
+      return pgText(name);
+    case "number":
+      return pgDoublePrecision(name);
+    case "boolean":
+      return pgBoolean(name);
+    case "timestamp":
+      return pgTimestamp(name, { withTimezone: true });
+    case "json":
+      return pgJsonb(name);
+  }
+}
+
+/** The MySQL column `column` is declared as at runtime. */
+function mysqlColumn(name: string, column: UserExtColumn) {
+  switch (column.kind) {
+    case "varchar":
+      return mysqlVarchar(name, { length: column.length });
+    case "text":
+      return mysqlText(name);
+    case "number":
+      return mysqlDouble(name);
+    case "boolean":
+      return mysqlBoolean(name);
+    case "timestamp":
+      return mysqlDatetime(name);
+    case "json":
+      return mysqlJson(name);
+  }
+}
+
+/**
+ * The SQLite column `column` is declared as at runtime. SQLite spells several kinds alike, a list
+ * and a text both as TEXT, so the kind rather than the spelling picks the encoding.
+ */
+function sqliteColumn(name: string, column: UserExtColumn) {
+  switch (column.kind) {
+    case "varchar":
+    case "text":
+      return sqliteText(name);
+    case "number":
+      return sqliteReal(name);
+    case "boolean":
+      return sqliteInteger(name, { mode: "boolean" });
+    case "timestamp":
+      return sqliteInteger(name, { mode: "timestamp" });
+    case "json":
+      return sqliteTolerantJson(name);
+  }
+}
 
 export class UserExtSchemaService {
   private readonly dialect: SupportedDialect;
@@ -888,19 +964,17 @@ export class UserExtSchemaService {
     const columns: Record<string, unknown> = {
       id: pgText("id").primaryKey(),
       user_id: pgText("user_id").notNull(),
-      created_at: pgTimestamp("created_at").defaultNow().notNull(),
-      updated_at: pgTimestamp("updated_at").defaultNow().notNull(),
+      // Time-zone aware, as the statements make them: a plain timestamp
+      // decodes the value a non-UTC session hands back at the wrong instant.
+      created_at: pgTimestamp("created_at", { withTimezone: true })
+        .defaultNow()
+        .notNull(),
+      updated_at: pgTimestamp("updated_at", { withTimezone: true })
+        .defaultNow()
+        .notNull(),
     };
 
-    for (const field of fields) {
-      if (!this.isUserDataField(field)) continue;
-      if (!("name" in field) || !field.name) continue;
-
-      const column = this.mapFieldToPostgresColumn(field);
-      if (column) {
-        columns[field.name] = column;
-      }
-    }
+    Object.assign(columns, this.fieldColumns(fields));
 
     // Drizzle ORM requires dialect-specific column builders for columns — not publicly
     // exported, so a cast through `never` is unavoidable for runtime-generated column maps.
@@ -921,19 +995,12 @@ export class UserExtSchemaService {
     const columns: Record<string, unknown> = {
       id: mysqlVarchar("id", { length: 36 }).primaryKey(),
       user_id: mysqlVarchar("user_id", { length: 36 }).notNull(),
-      created_at: mysqlTimestamp("created_at").defaultNow().notNull(),
-      updated_at: mysqlTimestamp("updated_at").defaultNow().notNull(),
+      // DATETIME, as the statements make them.
+      created_at: mysqlDatetime("created_at").defaultNow().notNull(),
+      updated_at: mysqlDatetime("updated_at").defaultNow().notNull(),
     };
 
-    for (const field of fields) {
-      if (!this.isUserDataField(field)) continue;
-      if (!("name" in field) || !field.name) continue;
-
-      const column = this.mapFieldToMySQLColumn(field);
-      if (column) {
-        columns[field.name] = column;
-      }
-    }
+    Object.assign(columns, this.fieldColumns(fields));
 
     // Drizzle ORM requires dialect-specific column builders for columns — not publicly
     // exported, so a cast through `never` is unavoidable for runtime-generated column maps.
@@ -957,15 +1024,7 @@ export class UserExtSchemaService {
       ...sqliteTimestampColumns(),
     };
 
-    for (const field of fields) {
-      if (!this.isUserDataField(field)) continue;
-      if (!("name" in field) || !field.name) continue;
-
-      const column = this.mapFieldToSQLiteColumn(field);
-      if (column) {
-        columns[field.name] = column;
-      }
-    }
+    Object.assign(columns, this.fieldColumns(fields));
 
     // Drizzle ORM requires dialect-specific column builders for columns — not publicly
     // exported, so a cast through `never` is unavoidable for runtime-generated column maps.
@@ -1170,38 +1229,65 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
   }
 
   private getColumnType(field: UserFieldConfig): string | null {
+    const column = this.columnFor(field);
+    return column === null ? null : this.spellColumn(column);
+  }
+
+  /** The SQL this dialect's statements spell `column` as. */
+  private spellColumn(column: UserExtColumn): string {
     const types = SQL_COLUMN_TYPES[this.dialect];
+    switch (column.kind) {
+      case "varchar":
+        return types.varchar(column.length);
+      case "text":
+        return types.text;
+      case "number":
+        return types.number;
+      case "boolean":
+        return types.boolean;
+      case "timestamp":
+        return types.timestamp;
+      case "json":
+        return types.json;
+    }
+  }
+
+  /**
+   * The column `field` is stored in, or `null` where this service gives it none: the one answer
+   * the statements and the runtime table both read.
+   */
+  private columnFor(field: UserFieldConfig): UserExtColumn | null {
     // Captured before the built-in guards narrow `field` to `never`.
     const fieldType = field.type;
 
     if (this.isUserSurfaceTextField(field)) {
-      return field.maxLength
-        ? types.varchar(field.maxLength)
-        : types.varchar(255);
+      return { kind: "varchar", length: field.maxLength || 255 };
     }
     if (isTextField(field)) {
-      return this.textColumnType(field.maxLength, field.unique === true);
+      return this.textColumn(field.maxLength, field.unique === true);
     }
     if (isTextareaField(field)) {
-      return types.text;
+      return { kind: "text" };
     }
     if (isEmailField(field)) {
-      return types.varchar(255);
+      return { kind: "varchar", length: 255 };
     }
     if (isNumberField(field)) {
-      return types.real;
+      return { kind: "number" };
     }
     if (isCheckboxField(field)) {
-      return types.boolean;
+      return { kind: "boolean" };
     }
     if (isDateField(field)) {
-      return types.timestamp;
+      return { kind: "timestamp" };
     }
     if (isSelectField(field)) {
-      return field.hasMany ? types.json : types.varchar(255);
+      return field.hasMany
+        ? { kind: "json" }
+        : { kind: "varchar", length: 255 };
     }
     if (isRadioField(field)) {
-      return types.varchar(255);
+      return { kind: "varchar", length: 255 };
     }
 
     // Plugin-contributed types persist as their declared storage primitive, so
@@ -1218,18 +1304,18 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
             maxLength?: number;
             unique?: unknown;
           };
-          return this.textColumnType(maxLength, unique === true);
+          return this.textColumn(maxLength, unique === true);
         }
         case "longText":
-          return types.text;
+          return { kind: "text" };
         case "number":
-          return types.real;
+          return { kind: "number" };
         case "boolean":
-          return types.boolean;
+          return { kind: "boolean" };
         case "timestamp":
-          return types.timestamp;
+          return { kind: "timestamp" };
         case "json":
-          return types.json;
+          return { kind: "json" };
       }
     }
 
@@ -1241,10 +1327,12 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
    * plugin type stored as text alike: a varchar of its length when it has one
    * (see `textLength`), else TEXT.
    */
-  private textColumnType(maxLength: number | undefined, unique: boolean) {
-    const types = SQL_COLUMN_TYPES[this.dialect];
+  private textColumn(
+    maxLength: number | undefined,
+    unique: boolean
+  ): UserExtColumn {
     const length = this.textLength(maxLength, unique);
-    return length === null ? types.text : types.varchar(length);
+    return length === null ? { kind: "text" } : { kind: "varchar", length };
   }
 
   /**
@@ -1268,6 +1356,15 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
    * table being absent.
    */
   textColumnLength(field: UserFieldConfig): number | null {
+    // Read from the column the field is stored in, so the check and the
+    // column are one answer: a URL, email, select or radio is a VARCHAR as
+    // much as a text with a length is.
+    if (this.dialect !== "sqlite") {
+      const column = this.columnFor(field);
+      return column?.kind === "varchar" ? column.length : null;
+    }
+    // SQLite stores every one of these as TEXT, which holds any length; a
+    // text field is still held to its own length there.
     const { maxLength, unique } = field as {
       maxLength?: number;
       unique?: unknown;
@@ -1295,180 +1392,40 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     return getFieldType(type)?.storage ?? null;
   }
 
-  private mapFieldToPostgresColumn(field: UserFieldConfig): unknown {
-    if (!("name" in field) || !field.name) return null;
-    const isRequired = "required" in field && field.required === true;
-    const colName = this.toSnakeCase(field.name);
-    const pluginStorage = this.pluginUserStorage(field);
-    if (pluginStorage) {
-      const col = (() => {
-        switch (pluginStorage) {
-          case "number":
-            return pgDoublePrecision(colName);
-          case "boolean":
-            return pgBoolean(colName);
-          case "timestamp":
-            return pgTimestamp(colName);
-          case "json":
-            return pgJsonb(colName);
-          default:
-            return pgText(colName); // text / longText
-        }
-      })();
-      return isRequired ? col.notNull() : col;
+  /** The runtime columns of `fields`, by field name: those the statements make a column for. */
+  private fieldColumns(fields: UserFieldConfig[]): Record<string, unknown> {
+    const columns: Record<string, unknown> = {};
+    for (const field of fields) {
+      if (!this.isUserDataField(field)) continue;
+      if (!("name" in field) || !field.name) continue;
+      const column = this.runtimeFieldColumn(field);
+      if (column) columns[field.name] = column;
     }
-
-    if (this.isUserSurfaceTextField(field)) {
-      // Matches the DDL, which sizes these as varchar(maxLength ?? 255).
-      const column = pgVarchar(colName, { length: field.maxLength ?? 255 });
-      return isRequired ? column.notNull() : column;
-    }
-    if (isTextField(field) || isEmailField(field)) {
-      return isRequired ? pgText(colName).notNull() : pgText(colName);
-    }
-    if (isTextareaField(field)) {
-      return isRequired ? pgText(colName).notNull() : pgText(colName);
-    }
-    if (isNumberField(field)) {
-      return isRequired
-        ? pgDoublePrecision(colName).notNull()
-        : pgDoublePrecision(colName);
-    }
-    if (isCheckboxField(field)) {
-      return isRequired ? pgBoolean(colName).notNull() : pgBoolean(colName);
-    }
-    if (isDateField(field)) {
-      return isRequired ? pgTimestamp(colName).notNull() : pgTimestamp(colName);
-    }
-    if (isSelectField(field)) {
-      if (field.hasMany) {
-        return isRequired ? pgJsonb(colName).notNull() : pgJsonb(colName);
-      }
-      return isRequired ? pgText(colName).notNull() : pgText(colName);
-    }
-    if (isRadioField(field)) {
-      return isRequired ? pgText(colName).notNull() : pgText(colName);
-    }
-
-    return pgText(colName);
+    return columns;
   }
 
-  private mapFieldToMySQLColumn(field: UserFieldConfig): unknown {
+  /**
+   * The runtime column `field` is read and written through: the column `columnFor` describes, which
+   * is the one the statements made, NOT NULL where the CREATE TABLE makes it so. `null` where the
+   * statements make no column.
+   */
+  private runtimeFieldColumn(field: UserFieldConfig): unknown {
     if (!("name" in field) || !field.name) return null;
+    const column = this.columnFor(field);
+    if (column === null) return null;
+    const declared = this.runtimeColumn(this.toSnakeCase(field.name), column);
     const isRequired = "required" in field && field.required === true;
-    const colName = this.toSnakeCase(field.name);
-    const pluginStorage = this.pluginUserStorage(field);
-    if (pluginStorage) {
-      const col = (() => {
-        switch (pluginStorage) {
-          case "number":
-            return mysqlDouble(colName);
-          case "boolean":
-            return mysqlBoolean(colName);
-          case "timestamp":
-            return mysqlTimestamp(colName);
-          case "json":
-            return mysqlJson(colName);
-          case "longText":
-            return mysqlText(colName);
-          default:
-            return mysqlVarchar(colName, { length: 255 }); // text
-        }
-      })();
-      return isRequired ? col.notNull() : col;
-    }
-
-    if (this.isUserSurfaceTextField(field)) {
-      // Matches the DDL, which sizes these as varchar(maxLength ?? 255).
-      const column = mysqlVarchar(colName, { length: field.maxLength ?? 255 });
-      return isRequired ? column.notNull() : column;
-    }
-    if (isTextField(field) || isEmailField(field)) {
-      return isRequired
-        ? mysqlVarchar(colName, { length: 255 }).notNull()
-        : mysqlVarchar(colName, { length: 255 });
-    }
-    if (isTextareaField(field)) {
-      return isRequired ? mysqlText(colName).notNull() : mysqlText(colName);
-    }
-    if (isNumberField(field)) {
-      return isRequired ? mysqlDouble(colName).notNull() : mysqlDouble(colName);
-    }
-    if (isCheckboxField(field)) {
-      return isRequired
-        ? mysqlBoolean(colName).notNull()
-        : mysqlBoolean(colName);
-    }
-    if (isDateField(field)) {
-      return isRequired
-        ? mysqlTimestamp(colName).notNull()
-        : mysqlTimestamp(colName);
-    }
-    if (isSelectField(field)) {
-      if (field.hasMany) {
-        return isRequired ? mysqlJson(colName).notNull() : mysqlJson(colName);
-      }
-      return isRequired
-        ? mysqlVarchar(colName, { length: 255 }).notNull()
-        : mysqlVarchar(colName, { length: 255 });
-    }
-    if (isRadioField(field)) {
-      return isRequired
-        ? mysqlVarchar(colName, { length: 255 }).notNull()
-        : mysqlVarchar(colName, { length: 255 });
-    }
-
-    return mysqlVarchar(colName, { length: 255 });
+    return isRequired ? declared.notNull() : declared;
   }
 
-  private mapFieldToSQLiteColumn(field: UserFieldConfig): unknown {
-    if (!("name" in field) || !field.name) return null;
-    const isRequired = "required" in field && field.required === true;
-    const colName = this.toSnakeCase(field.name);
-    const pluginStorage = this.pluginUserStorage(field);
-    if (pluginStorage) {
-      const col = (() => {
-        switch (pluginStorage) {
-          case "number":
-            return sqliteReal(colName);
-          case "boolean":
-            return sqliteInteger(colName, { mode: "boolean" });
-          case "timestamp":
-            return sqliteInteger(colName, { mode: "timestamp" });
-          case "json":
-            return sqliteTolerantJson(colName);
-          default:
-            return sqliteText(colName); // text / longText
-        }
-      })();
-      return isRequired ? col.notNull() : col;
-    }
-
-    if (
-      isTextField(field) ||
-      isEmailField(field) ||
-      this.isUserSurfaceTextField(field) ||
-      isTextareaField(field) ||
-      isSelectField(field) ||
-      isRadioField(field)
-    ) {
-      return isRequired ? sqliteText(colName).notNull() : sqliteText(colName);
-    }
-    if (isNumberField(field)) {
-      return isRequired ? sqliteReal(colName).notNull() : sqliteReal(colName);
-    }
-    if (isCheckboxField(field)) {
-      return isRequired
-        ? sqliteInteger(colName, { mode: "boolean" }).notNull()
-        : sqliteInteger(colName, { mode: "boolean" });
-    }
-    if (isDateField(field)) {
-      return isRequired
-        ? sqliteInteger(colName, { mode: "timestamp" }).notNull()
-        : sqliteInteger(colName, { mode: "timestamp" });
-    }
-
-    return sqliteText(colName);
+  /** The Drizzle column this dialect declares `column` as, under `name`. */
+  private runtimeColumn(
+    name: string,
+    column: UserExtColumn
+  ): { notNull(): unknown } {
+    if (this.dialect === "postgresql") return postgresColumn(name, column);
+    if (this.dialect === "mysql") return mysqlColumn(name, column);
+    return sqliteColumn(name, column);
   }
 
   // ============================================================

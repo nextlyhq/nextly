@@ -13,7 +13,7 @@ A plugin that keeps a record signs up as a participant. On every save that may c
 
 1. works out every address the saved document holds now, one per language it is published in;
 2. asks every participant, inside the save's transaction, whether another page holds any of them;
-3. refuses the save if one does, with a `DUPLICATE` error naming the address, the language and both pages;
+3. refuses the save if one does, with a `DUPLICATE` error naming the address and the language (the page holding it goes to the server log only, since the person saving may not be allowed to read it);
 4. otherwise tells every participant what the document holds now.
 
 A draft holds nothing, and neither does a working draft of a published page until it is published. A site with no participant does no address work at all.

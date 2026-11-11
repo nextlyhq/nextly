@@ -156,7 +156,7 @@ describe("handleDuplicateField", () => {
 });
 
 describe("handleRowDragEnd", () => {
-  it("re-packs the row layout and keeps system fields ahead of it", () => {
+  it("moves a top-level field among its siblings, built-in fields staying first", () => {
     const builder = makeBuilder([
       field("id", { isSystem: true }),
       field("a"),
@@ -165,47 +165,33 @@ describe("handleRowDragEnd", () => {
     ]);
     const { result } = renderHook(() => useBuilderFieldActions(builder.api));
 
-    // Every field defaults to full width, so each occupies its own row.
-    result.current.handleRowDragEnd(drag("row-0", "row-2"));
+    // The outline drags one field by its own id.
+    result.current.handleRowDragEnd(drag("field_a", "field_c"));
 
-    expect(builder.api.handleFieldsReorder).toHaveBeenCalledTimes(1);
+    expect(builder.api.setFields).toHaveBeenCalledTimes(1);
     expect(builder.fields.map(f => f.name)).toEqual(["id", "b", "c", "a"]);
   });
 
-  it("moves the row the reader SEES when a hidden field sits above it", () => {
-    // 🔴 The list draws no row for a hidden field, so on screen `row-1` is
-    // `c`. Packed with the hidden field included, `row-1` was the hidden
-    // field itself, and dragging the second visible row moved something the
-    // reader could not see. The hidden field is carried through after the
-    // visible ones rather than lost.
+  it("moves a hidden field like any other, since the outline shows it", () => {
     const builder = makeBuilder([
       field("a"),
       field("mode", { admin: { hidden: true } }),
       field("c"),
-      field("d"),
     ]);
     const { result } = renderHook(() => useBuilderFieldActions(builder.api));
 
-    result.current.handleRowDragEnd(drag("row-1", "row-0"));
+    result.current.handleRowDragEnd(drag("field_mode", "field_a"));
 
-    expect(builder.fields.map(f => f.name)).toEqual(["c", "a", "d", "mode"]);
+    expect(builder.fields.map(f => f.name)).toEqual(["mode", "a", "c"]);
   });
 
-  it("gives a repeater its own row even at a stored half width", () => {
-    // The list forces a container full-width. Packed at its stored 50% it
-    // shared a row with `b`, and `row-1` on screen named a different row from
-    // the one the reorder moved.
-    const builder = makeBuilder([
-      field("a", { admin: { width: "50%" } }),
-      field("gallery", { type: "repeater", admin: { width: "50%" } }),
-      field("b", { admin: { width: "50%" } }),
-    ]);
+  it("refuses a drop on a built-in field", () => {
+    const builder = makeBuilder([field("id", { isSystem: true }), field("a")]);
     const { result } = renderHook(() => useBuilderFieldActions(builder.api));
 
-    // On screen: row 0 = a, row 1 = gallery, row 2 = b.
-    result.current.handleRowDragEnd(drag("row-2", "row-0"));
+    result.current.handleRowDragEnd(drag("field_a", "field_id"));
 
-    expect(builder.fields.map(f => f.name)).toEqual(["b", "a", "gallery"]);
+    expect(builder.api.setFields).not.toHaveBeenCalled();
   });
 
   it("reorders nested fields when both ends share a parent", () => {
@@ -242,13 +228,13 @@ describe("handleRowDragEnd", () => {
     const builder = makeBuilder([field("a"), field("b")]);
     const { result } = renderHook(() => useBuilderFieldActions(builder.api));
 
-    result.current.handleRowDragEnd(drag("row-0", "row-0"));
-    result.current.handleRowDragEnd(drag("row-0", null));
+    result.current.handleRowDragEnd(drag("field_a", "field_a"));
+    result.current.handleRowDragEnd(drag("field_a", null));
 
-    expect(builder.api.handleFieldsReorder).not.toHaveBeenCalled();
+    expect(builder.api.setFields).not.toHaveBeenCalled();
   });
 
-  it("ignores ids from neither drag vocabulary", () => {
+  it("ignores ids that are not fields", () => {
     const builder = makeBuilder([field("a"), field("b")]);
     const { result } = renderHook(() => useBuilderFieldActions(builder.api));
 

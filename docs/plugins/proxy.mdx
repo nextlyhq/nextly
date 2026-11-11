@@ -1,0 +1,75 @@
+---
+title: Proxy handlers
+description: Answer a request before its page is served, or add headers to every page, prerendered ones included, from a plugin.
+---
+
+# Proxy handlers
+
+> **Alpha (`0.x`) — `@experimental`.** `contributes.proxy` and `createNextlyProxy` are new and may change.
+
+Some work has to happen before a page is served, whatever the page is: sending an old address on to a new one, or marking every response from a staging host as not for search engines. A plugin does that with a proxy handler. The site's Proxy (Next.js's `proxy.ts`) asks every handler about each request it matches, before the page is rendered or taken from its prerendered store.
+
+## Wire the Proxy once
+
+The site's `proxy.ts`, beside its `app` folder, hands each request to Nextly:
+
+```ts
+// src/proxy.ts
+import { createNextlyProxy } from "nextly/runtime";
+
+import nextlyConfig from "../nextly.config";
+
+export const proxy = createNextlyProxy(nextlyConfig);
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+};
+```
+
+Keep `config` written out in this file: Next.js reads the matcher without running it. Leave built files and optimized images out, as above, since no handler has anything to say about them.
+
+The Proxy starts Nextly on the first request if nothing has started it yet. It lets a request through untouched when no plugin contributes a handler, when every handler answers nothing, or when Nextly cannot start, so it never takes the site down by itself.
+
+## Contribute a handler
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+export default definePlugin({
+  name: "acme-moves",
+  version: "1.0.0",
+  nextly: ">=0.0.2",
+  contributes: {
+    proxy: [
+      {
+        name: "moved-pages",
+        async handle(request, ctx) {
+          const path = new URL(request.url).pathname;
+          if (path === "/old-pricing") {
+            return {
+              response: Response.redirect(new URL("/pricing", request.url), 301),
+            };
+          }
+          return { headers: { "x-served-by": "acme" } };
+        },
+      },
+    ],
+  },
+});
+```
+
+`handle` gets the request and the plugin's own context, so it can read the plugin's collections through `ctx.services`. It returns an answer with any of three parts, or nothing:
+
+| Part | What it does |
+|---|---|
+| `response` | Answers the request instead of serving the page, as a redirect does. |
+| `headers` | Set on whatever is served: the page, a prerendered one included, or the response that answered. |
+| `requestHeaders` | Added to the request the page renders for, where `headers()` reads them. Never sent to the visitor. |
+
+Every handler runs on every matched request, all at once, and their answers are put together in plugin order: the first `response` answers, and for a header two handlers both set, however each spells its name, the later plugin's value stands. Each needs a `name`, unique within the plugin; startup refuses a handler without one, or without a `handle` function.
+
+A handler that throws is logged with its plugin's logger and passed over, and the page is served as if it had answered nothing.
+
+## Keep it short
+
+A page waits for every handler before it is served, so a handler should do one quick read at most, through an index. Work that can wait belongs in a job or an event subscriber, not here.

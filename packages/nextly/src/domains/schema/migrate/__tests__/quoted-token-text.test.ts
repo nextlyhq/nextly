@@ -17,7 +17,7 @@ describe("a quoted token names its kind", () => {
   it("reads a string, a quoted name and a dollar body as three kinds", () => {
     expect(quoted(`SELECT 'a', "b", $$c$$`, "postgresql")).toEqual([
       { kind: "string", name: undefined, text: "a" },
-      { kind: "name", name: "B" },
+      { kind: "name", name: "B", written: "b" },
       { kind: "body", name: undefined },
     ]);
   });
@@ -34,7 +34,7 @@ describe("a quoted token names its kind", () => {
 
   it("reads MySQL's backtick as a name", () => {
     expect(quoted("SELECT `b`", "mysql")).toEqual([
-      { kind: "name", name: "B" },
+      { kind: "name", name: "B", written: "b" },
     ]);
   });
 });

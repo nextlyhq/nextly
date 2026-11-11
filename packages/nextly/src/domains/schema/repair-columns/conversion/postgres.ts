@@ -22,6 +22,7 @@ import { referenceConversionStatements } from "../../pipeline/reference-list-con
 import { quoteIdent } from "../../pipeline/sql-templates/identifier-quoting";
 import { postgresAlterTypeUsing } from "../../pipeline/sql-templates/postgres-alter-type-using";
 import { parseColumnType } from "../../value-conversion/column-type";
+import type { ColumnType } from "../../value-conversion/types";
 
 import {
   OWNER_CAN,
@@ -390,6 +391,36 @@ function postgresKeepsStorage(request: ConversionRequest): boolean {
   );
 }
 
+/** Whether the column is a PostgreSQL real becoming a double, which converts through its text. */
+export function realToDoubleOnPostgres(
+  from: ColumnType,
+  to: ColumnType,
+  dialect: "postgresql" | "mysql" | "sqlite"
+): boolean {
+  return (
+    dialect === "postgresql" &&
+    parseColumnType(from).family === "float4" &&
+    parseColumnType(to).family === "float8"
+  );
+}
+
+/**
+ * How the type change reads each value. A real becoming a double is read through its text, so each
+ * value keeps the reading its field had (0.1 stays 0.1); a plain cast would store the real's
+ * binary approximation, which reads as 0.10000000149011612. Every other pair converts as a
+ * migration's statement does.
+ */
+function usingFor(
+  request: ConversionRequest,
+  column: string,
+  from: string,
+  to: string
+): string {
+  return realToDoubleOnPostgres(request.from, request.to, "postgresql")
+    ? `USING ${column}::text::${to}`
+    : postgresAlterTypeUsing(column, from, to);
+}
+
 /**
  * The one statement that converts the column: its type, restating a collation of its own where
  * the new type takes one, and its nullability. The list conversion's statement where the column
@@ -432,7 +463,7 @@ function postgresStatements(
         ? ` COLLATE ${quoteIdent(facts.collation.schema, "postgresql")}.${quoteIdent(facts.collation.name, "postgresql")}`
         : "";
     actions.push(
-      `ALTER COLUMN ${column} TYPE ${to}${collation} ${postgresAlterTypeUsing(column, from, to)}`
+      `ALTER COLUMN ${column} TYPE ${to}${collation} ${usingFor(request, column, from, to)}`
     );
   }
   actions.push(...nullability);

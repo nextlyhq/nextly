@@ -110,8 +110,6 @@ const scale = parseThemeScale(css);
 const ALLOWED_DECORATIVE = new Set<string>([
   "text-primary/20", // hover-reveal ghost buttons and sparkline decoration
   "text-muted/10", // chart ring-track backing
-  "border-warning-200/50", // soft border on a light tint badge (fill+text identify it)
-  "border-success-900/50", // dark tonal badge border (fill+text identify it)
   // Decorative accent rings: supplementary emphasis around a badge, dot, or
   // card that is already identified by its fill and text, not a focus indicator
   // (all focus rings are full-strength) nor a sole state cue.
@@ -125,8 +123,6 @@ const ALLOWED_DECORATIVE = new Set<string>([
   // selects is also shown as text in the hex field beside it.
   "ring-black/60",
   "ring-muted/5",
-  "ring-success-500/20",
-  "ring-destructive-500/20",
   // Supplementary hover outline; the hover state is conveyed by bg-accent and
   // its text, so the thin border is decorative.
   "border-accent-foreground/20",
@@ -899,11 +895,11 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
   });
 
   it("marks the variant-scoped utilities the source actually carries", () => {
-    // Membership rather than a count. `dark:border-success-900/50` is in the
-    // admin source, so the scan must report the stripped utility as variant
-    // scoped — and a pattern that stopped capturing the colon would leave this
-    // set empty while every other assertion stayed green.
-    expect(variantScoped.has("border-success-900/50")).toBe(true);
+    // Membership rather than a count. `dark:text-primary-foreground/80` is in
+    // the admin source, so the scan must report the stripped utility as
+    // variant scoped — and a pattern that stopped capturing the colon would
+    // leave this set empty while every other assertion stayed green.
+    expect(variantScoped.has("text-primary-foreground/80")).toBe(true);
     // And a utility written with no variant must NOT be marked, or the rule
     // that refuses them would refuse everything.
     expect(variantScoped.has("ring-primary/20")).toBe(false);

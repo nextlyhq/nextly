@@ -1,9 +1,8 @@
 /**
- * A component placed directly in another component's fields is named when the config is defined.
+ * A component placed in another component's fields is defined without a warning, wherever it sits.
  *
- * Its value is not stored there, and a write that carries one is refused, so the config says so
- * up front rather than leaving it to the first save. A warning rather than a refusal: a config
- * already shipped with the placement still boots, and the outer component's other fields work.
+ * Placed directly, its instances are rows of their own table; held in a group or a repeater, they
+ * are stored in that container's value. Either way it is stored, so the config has nothing to say.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -26,7 +25,7 @@ function defineWith(fields: unknown[]) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("a component placed in another component's fields", () => {
-  it("is named in a warning when placed directly, and the config still defines", () => {
+  it("is defined without a warning when placed directly", () => {
     const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
 
     expect(() =>
@@ -36,9 +35,7 @@ describe("a component placed in another component's fields", () => {
       ])
     ).not.toThrow();
 
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0])).toContain('"card"');
-    expect(String(warn.mock.calls[0]?.[0])).toContain('"badge"');
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("is not warned about when held in a group or a repeater", () => {

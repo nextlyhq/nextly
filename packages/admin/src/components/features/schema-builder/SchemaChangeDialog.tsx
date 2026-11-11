@@ -268,7 +268,7 @@ export function SchemaChangeDialog({
                   </span>
                 </div>
                 {field.rowCount > 0 && (
-                  <span className="ml-16 text-xs text-warning-600">
+                  <span className="ml-16 text-xs text-warning-text">
                     {field.rowCount.toLocaleString()} rows may be affected
                   </span>
                 )}
@@ -375,7 +375,7 @@ export function SchemaChangeDialog({
 
         {/* Interactive fields -- need user input */}
         {promptedFields.length > 0 && (
-          <div className="space-y-3 rounded-md  border border-border border-warning-200 bg-warning-50 p-3 dark:border-warning-800 dark:bg-warning-950">
+          <div className="space-y-3 rounded-md  border border-warning-border bg-warning-surface p-3">
             {promptedFields.map(field => (
               <div key={field.name} className="space-y-2">
                 {/* The prompt says what needs an answer in plain words; the

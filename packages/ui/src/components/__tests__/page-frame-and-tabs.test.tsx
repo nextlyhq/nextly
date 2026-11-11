@@ -32,10 +32,11 @@ describe("a page frame", () => {
     );
   });
 
-  it("draws an editor full width within the gutter", () => {
+  it("draws an editor edge to edge, with no gutter: its panel meets the window's edge", () => {
     const frame = frameOf("editor");
-    expect(frame.getAttribute("data-slot")).toBe("page-shell");
-    expect(frame.style.getPropertyValue("--nx-shell-measure")).toBe("100%");
+    expect(frame.getAttribute("data-slot")).toBe("page-frame");
+    expect(frame.className).not.toContain("nx-page-pad");
+    expect(frame.className).not.toContain("nx-page-shell");
   });
 
   it("draws a list as a padded block, not a grid, inset by the gutter", () => {

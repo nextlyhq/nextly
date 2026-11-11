@@ -34,7 +34,7 @@ export function StateDot({ state }: { state: LanguageState }): JSX.Element {
       className={cn(
         "inline-block size-2 rounded-full shrink-0",
         state === "published" && "bg-foreground",
-        state === "translated" && "bg-success-600 dark:bg-success-400",
+        state === "translated" && "bg-success-solid",
         state === "draft" &&
           "border-[1.5px] border-foreground/70 [background:linear-gradient(90deg,currentColor_50%,transparent_50%)] text-foreground/70",
         // Full strength rather than an alpha: the outline is the only thing

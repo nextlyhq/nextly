@@ -25,6 +25,8 @@ vi.mock("../init/seed-permissions", async importOriginal => ({
 }));
 vi.mock("../init/post-init-tasks", () => ({
   runPostInitTasks: vi.fn(async () => undefined),
+  // The start's own step, which it waits for; stood in for like the rest.
+  provisionUserFieldsAtStart: vi.fn(async () => undefined),
 }));
 
 const { defineConfig } = await import("../collections/config/define-config");

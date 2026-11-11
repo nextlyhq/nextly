@@ -59,7 +59,9 @@ seoPlugin({
 
 ## Next.js metadata
 
-In a Next.js app, `buildMetadata` from `nextly/runtime` turns the `seo` group into a Next `Metadata` object, so a page's `generateMetadata` is one call instead of a hand-written mapping. It sets the title, description, canonical, OpenGraph, Twitter card, and `robots` (from `noindex`), with per-call fallbacks for blank fields:
+With the plugin installed, content routes and Single routes from `nextly/runtime` get each page's head from the plugin, with no call needed. Each value comes from the first level that has one: what a person typed, then the route's own `buildMetadata` (title, description and social values only), the Page Builder design, the content type's pattern, the page's content, and the site's defaults. The canonical is the page's declared address in its language. See the [SEO plugin guide](https://nextlyhq.com/docs/plugins/seo).
+
+Without a content route, `buildMetadata` from `nextly/runtime` turns the `seo` group into a Next `Metadata` object, so a page's `generateMetadata` is one call instead of a hand-written mapping. It sets the title, description, canonical, OpenGraph, Twitter card, and `robots` (from `noindex`), with per-call fallbacks for blank fields:
 
 ```ts
 // app/blog/[slug]/page.tsx

@@ -87,11 +87,11 @@ export function DragOverlayContent({
           <span className="text-sm font-medium text-foreground">
             {field.label || field.name || "Unnamed Field"}
           </span>
-          {/* Dark counterparts, matching the Badge component's pairing: a pale
-              fill with darkened ink is only legible on a light page, and
-              without them the chip keeps its light colours on the dark one. */}
+          {/* A quiet chip, as the Badge draws one: the card's fill and the
+              page's text, with a dot in the danger status's solid colour. */}
           {isRequired && (
-            <span className="text-xs px-2 py-0 bg-destructive-50 text-destructive-600 dark:bg-destructive-900 dark:text-destructive-100 font-normal rounded-sm border border-destructive-200 dark:border-destructive-900">
+            <span className="inline-flex items-center gap-1.5 text-xs px-2 py-0 bg-card text-foreground font-normal rounded-sm border border-border">
+              <span aria-hidden="true" className="size-1.5 rounded-full bg-danger-solid" />
               Required
             </span>
           )}

@@ -33,6 +33,9 @@ export interface SchemaChangeAnswers {
   acknowledgedConversions?: readonly string[];
 }
 
+/** A field as an answer is matched to it: by its name, which a layout-only field lacks. */
+type NamedField = { readonly name?: string };
+
 /** One answer, by field: fill, delete, or make the field optional. */
 type Answer =
   | { field: string; kind: "fill"; value: unknown }
@@ -63,13 +66,6 @@ export function saveOfSchemaChange(args: {
   junctions: NonNullable<CollectionSave["junctions"]>;
   keys: NonNullable<CollectionSave["keys"]>;
 }): { save: CollectionSave; fields: FieldDefinition[] } {
-  const answers = answersOf(args.answers, args.fields, args.table);
-  const optional = new Set(
-    answers.filter(a => a.kind === "make_optional").map(a => a.field)
-  );
-  const fields = args.fields.map(field =>
-    optional.has(field.name) ? { ...field, required: false } : field
-  );
   const previous =
     args.definition.collections.find(c => c.slug === args.slug) ??
     ({
@@ -77,6 +73,17 @@ export function saveOfSchemaChange(args: {
       labels: args.row.labels ?? { singular: args.slug, plural: args.slug },
       fields: args.row.fields ?? [],
     } satisfies UiSchemaEntity);
+  const answers = answersOf(
+    args.answers,
+    { now: args.fields, before: previous.fields },
+    args.table
+  );
+  const optional = new Set(
+    answers.filter(a => a.kind === "make_optional").map(a => a.field)
+  );
+  const fields = args.fields.map(field =>
+    optional.has(field.name) ? { ...field, required: false } : field
+  );
   const entity: UiSchemaEntity = {
     ...previous,
     localized: args.localized,
@@ -128,20 +135,13 @@ export function renamedFieldsOf(
  */
 function answersOf(
   answers: SchemaChangeAnswers,
-  fields: readonly FieldDefinition[],
+  fields: AnsweredFields,
   table: string
 ): Answer[] {
   const out: Answer[] = [];
   for (const resolution of answers.eventResolutions ?? []) {
-    if (resolution.kind === "abort") throw new PromptCancelledError();
-    const field = fieldOfEvent(resolution.eventId, fields, table);
-    if (resolution.kind === "provide_default") {
-      out.push({ field, kind: "fill", value: resolution.value });
-    } else if (resolution.kind === "delete_nonconforming") {
-      out.push({ field, kind: "delete_nonconforming" });
-    } else if (resolution.kind === "make_optional") {
-      out.push({ field, kind: "make_optional" });
-    }
+    const answer = answerOfEvent(resolution, fields, table);
+    if (answer !== undefined) out.push(answer);
   }
   for (const [field, resolution] of Object.entries(answers.resolutions ?? {})) {
     if (resolution.action === "cancel") throw new PromptCancelledError();
@@ -154,6 +154,34 @@ function answersOf(
   return out;
 }
 
+/** The fields an answer is matched against, as the save changes them. */
+interface AnsweredFields {
+  /** The fields this save keeps or adds, which a fill or a change settles. */
+  now: readonly NamedField[];
+  /** The fields before it, among them the ones it removes. */
+  before: readonly NamedField[];
+}
+
+/** One typed answer, by field; undefined for one the file needs nothing for. A cancel stops. */
+function answerOfEvent(
+  resolution: Resolution,
+  fields: AnsweredFields,
+  table: string
+): Answer | undefined {
+  if (resolution.kind === "abort") throw new PromptCancelledError();
+  // A drop's confirmation names a field this save removes, so it is read against the fields
+  // before the save; it still names a field of this collection, and needs nothing in the file.
+  if (resolution.kind === "confirm_drop") {
+    fieldOfEvent(resolution.eventId, fields.before, table);
+    return undefined;
+  }
+  const field = fieldOfEvent(resolution.eventId, fields.now, table);
+  if (resolution.kind === "provide_default") {
+    return { field, kind: "fill", value: resolution.value };
+  }
+  return { field, kind: resolution.kind };
+}
+
 /**
  * The field an event names: the one of `fields` whose column (its name in
  * snake case, as the Builder names a column) is the event's, so a camelCase
@@ -164,7 +192,7 @@ function answersOf(
  */
 function fieldOfEvent(
   eventId: string,
-  fields: readonly FieldDefinition[],
+  fields: readonly NamedField[],
   table: string
 ): string {
   let event: ReturnType<typeof parseEventId> | undefined;
@@ -175,9 +203,12 @@ function fieldOfEvent(
   }
   const field =
     event?.table === table
-      ? fields.find(f => toSnakeCase(f.name) === event.column)
+      ? fields.find(
+          f =>
+            typeof f.name === "string" && toSnakeCase(f.name) === event.column
+        )
       : undefined;
-  if (field === undefined) {
+  if (field?.name === undefined) {
     throw NextlyError.validation({
       errors: [
         {

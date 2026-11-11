@@ -14,12 +14,10 @@
  *
  * @module lib/branding/configured-branding
  */
+import { ADMIN_BRANDING_ELEMENT_ID } from "nextly/config";
 import { z } from "zod";
 
 import type { AdminBranding } from "@admin/types/branding";
-
-/** The element the admin route writes the configured branding into. */
-const CONFIGURED_BRANDING_ELEMENT_ID = "nextly-admin-branding";
 
 /** The keys a configuration may set, each a non-empty string when set. */
 export type ConfiguredBranding = Pick<
@@ -56,9 +54,8 @@ const configuredBrandingSchema = z.object({
  */
 export function readConfiguredBranding(): ConfiguredBranding {
   if (typeof document === "undefined") return {};
-  const text = document.getElementById(
-    CONFIGURED_BRANDING_ELEMENT_ID
-  )?.textContent;
+  // The id the layout writes the element under, shared so the two cannot drift.
+  const text = document.getElementById(ADMIN_BRANDING_ELEMENT_ID)?.textContent;
   if (!text) return {};
   let raw: unknown;
   try {

@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
-import { validateBuilderFields } from "../field-validators";
+import { builderFieldErrors, validateBuilderFields } from "../field-validators";
 
 const baseField = (overrides: Partial<BuilderField> = {}): BuilderField => ({
   id: "f1",
@@ -95,5 +95,51 @@ describe("validateBuilderFields", () => {
     // userFields.length === 0; this test asserts the message is gone.
     const result = validateBuilderFields([]);
     expect(result.errorMessage).toBeUndefined();
+  });
+});
+
+describe("builderFieldErrors", () => {
+  it("marks each field with an error, at any depth, by its id", () => {
+    const fields: BuilderField[] = [
+      baseField({ id: "ok" }),
+      baseField({
+        id: "group",
+        name: "group",
+        type: "group",
+        fields: [
+          baseField({ id: "unnamed", name: "" }),
+          baseField({
+            id: "choice",
+            name: "choice",
+            type: "select",
+            options: [],
+          }),
+          baseField({ id: "ref", name: "ref", type: "component" }),
+        ],
+      }),
+    ];
+    const errors = builderFieldErrors(fields);
+    expect([...errors.keys()]).toEqual(["unnamed", "choice", "ref"]);
+    expect(errors.get("choice")?.message).toBe(
+      'Select/Radio field "choice" must have at least one option'
+    );
+  });
+
+  it("refuses a save with the first error the outline marks", () => {
+    const fields: BuilderField[] = [
+      baseField({ id: "choice", name: "choice", type: "select", options: [] }),
+      baseField({
+        id: "group",
+        name: "group",
+        type: "group",
+        fields: [baseField({ id: "unnamed", name: "" })],
+      }),
+    ];
+    // An unnamed field is reported before a select without options, wherever
+    // it sits, as the save always has.
+    expect(validateBuilderFields(fields)).toEqual({
+      valid: false,
+      errorMessage: "All fields must have a name",
+    });
   });
 });

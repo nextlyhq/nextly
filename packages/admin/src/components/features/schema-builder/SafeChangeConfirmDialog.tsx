@@ -88,7 +88,7 @@ export function SafeChangeConfirmDialog({
               <div key={`add-${f.name}`} className="flex items-center gap-2">
                 <Badge
                   variant="outline"
-                  className="font-mono text-xs bg-success-50 border-success-200 text-success-700 dark:bg-success-950/40 dark:border-success-900/50 dark:text-success-300"
+                  className="font-mono text-xs bg-success-surface border-success-border text-success-text"
                 >
                   + {f.name}
                 </Badge>

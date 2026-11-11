@@ -68,8 +68,9 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  *   production build turns the builder off unless the app opts in, and
  *   refuses its writes with `BUILDER_DISABLED`. The production refusal itself
  *   is `tests/production/builder-guard.spec.ts`, which runs there.
- * - `widget-preview`: the widget preview page exists only while the server
- *   runs in development; a production build answers its address as not found
+ * - `widget-preview`: the widget check's page draws from a read only a
+ *   development server serves; a production build answers that read, and the
+ *   admin's old preview address, as not found
  *   (`tests/production/widget-preview.spec.ts`).
  * - `removed-from-code-singles-list`: the Singles list it reads is the Schema
  *   Builder's, which a production build turns off.
@@ -289,6 +290,11 @@ export default defineConfig({
       // delays. Its card answers at once until that spec asks otherwise, so the
       // other dashboard specs see an ordinary card.
       NEXTLY_E2E_SLOW_WIDGET: "1",
+      // Registers the widget check's page, where widget-preview.spec.ts draws
+      // every widget from its preview cases and checks each state's
+      // accessibility. A test page, so off in a contributor's dev server and
+      // in the admin every site ships.
+      NEXTLY_E2E_WIDGET_CHECK: "1",
       // The builder-shell harness route, gated the same way and for the same
       // reason: a dev-only route under `src/app/` is otherwise reachable in
       // `pnpm dev:app` and indistinguishable from product.

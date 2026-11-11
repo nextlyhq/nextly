@@ -5,12 +5,16 @@
 // pipeline preview output + synthetic field arrays; the live-DB row
 // counting is mocked.
 
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 
 import type { ClassifierEvent } from "../../pipeline/resolution/types";
 import type { PipelinePreviewResult } from "../../pipeline/preview";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../../i18n/per-language-storage";
 import { translatePipelinePreviewToLegacy } from "../translate";
 
 const emptyPreview: PipelinePreviewResult = {
@@ -607,5 +611,89 @@ describe("a removal the preview cannot count, and where it counts", () => {
     expect(result.warnings.some(w => w.includes("between one and many"))).toBe(
       false
     );
+  });
+
+  // Turning translation on for one field moves its values to the companion table, so the save is a
+  // schema change even when the field stored none of the yes-or-no settings the Builder sends.
+  it("reports a field turned translated as a change, though it stored no required, unique or hasMany", async () => {
+    const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "dc_posts",
+      currentFields: [{ name: "views", type: "number" } as FieldDefinition],
+      newFields: [
+        {
+          name: "views",
+          type: "number",
+          required: false,
+          unique: false,
+          localized: true,
+        } as FieldDefinition,
+      ],
+      db: {},
+      dialect: "sqlite",
+      localized: true,
+    });
+
+    expect(result.hasChanges).toBe(true);
+    expect(result.changes.changed).toEqual([
+      expect.objectContaining({ name: "views" }),
+    ]);
+  });
+
+  it("reports turning the entity's translation on as a change, fields otherwise unchanged", async () => {
+    const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "dc_posts",
+      currentFields: [{ name: "summary", type: "text" } as FieldDefinition],
+      newFields: [
+        {
+          name: "summary",
+          type: "text",
+          required: false,
+          unique: false,
+        } as FieldDefinition,
+      ],
+      db: {},
+      dialect: "sqlite",
+      localized: false,
+      requestedLocalized: true,
+    });
+
+    expect(result.hasChanges).toBe(true);
+  });
+
+  describe("under per-language storage", () => {
+    // Every entity keeps its translatable fields in the companion table then, translated or not,
+    // so the entity's own setting moves no value and only a field's own setting does.
+    afterEach(() => _resetPerLanguageStorage());
+
+    const toggled = (fields: FieldDefinition[]) =>
+      translatePipelinePreviewToLegacy(emptyPreview, {
+        tableName: "dc_posts",
+        currentFields: [{ name: "summary", type: "text" } as FieldDefinition],
+        newFields: fields,
+        db: {},
+        dialect: "sqlite",
+        localized: false,
+        requestedLocalized: true,
+      });
+
+    it("reports no change when only the entity's translation is turned on", async () => {
+      setPerLanguageStorage(true);
+
+      const result = await toggled([
+        { name: "summary", type: "text", required: false } as FieldDefinition,
+      ]);
+
+      expect(result.hasChanges).toBe(false);
+    });
+
+    it("still reports a field turned shared as a change", async () => {
+      setPerLanguageStorage(true);
+
+      const result = await toggled([
+        { name: "summary", type: "text", localized: false } as FieldDefinition,
+      ]);
+
+      expect(result.hasChanges).toBe(true);
+    });
   });
 });

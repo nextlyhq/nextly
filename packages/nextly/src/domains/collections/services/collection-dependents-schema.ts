@@ -20,12 +20,24 @@ import type { SupportedDialect } from "../../../database/schema-registry";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-elements";
 
-/** A collection being removed, as the compile seeds its table. */
+/** A collection, Single or field group being removed, as the compile seeds its table. */
 export interface RemovedCollectionSeed {
+  /** Which kind of entity the table was; a collection unless said. */
+  kind?: "collection" | "single" | "fieldGroup";
   slug: string;
   tableName: string;
   /** Its fields where they are still known; a seed without them has only system columns. */
   fields?: readonly unknown[];
+}
+
+/** The configuration entry that compiles back to a removed entity's table. */
+function seedEntry(seed: RemovedCollectionSeed): Record<string, unknown> {
+  // A collection's and a Single's `dbName` is the table itself, so the seed has the name the
+  // table has, whatever its slug resolved to when it was created. A field group's table follows
+  // from its slug alone, and the slug read off the table resolves back to it.
+  return seed.kind === "fieldGroup"
+    ? { slug: seed.slug, fields: seed.fields ?? [] }
+    : { slug: seed.slug, dbName: seed.tableName, fields: seed.fields ?? [] };
 }
 
 /**
@@ -54,16 +66,28 @@ export async function compileExtensionSchemaWith(input: {
       ...input.config,
       collections: [
         ...(input.config.collections ?? []),
-        // `dbName` is the table itself, so the seed has the name the table
-        // has, whatever its slug resolved to when it was created.
-        ...input.removedCollections.map(collection => ({
-          slug: collection.slug,
-          dbName: collection.tableName,
-          fields: collection.fields ?? [],
-        })),
+        ...seedsOf(input.removedCollections, "collection"),
+      ],
+      singles: [
+        ...(input.config.singles ?? []),
+        ...seedsOf(input.removedCollections, "single"),
+      ],
+      fieldGroups: [
+        ...(input.config.fieldGroups ?? []),
+        ...seedsOf(input.removedCollections, "fieldGroup"),
       ],
     },
     logger: input.logger,
   });
   return schema ?? null;
+}
+
+/** The configuration entries of the removed entities of one kind. */
+function seedsOf(
+  seeds: readonly RemovedCollectionSeed[],
+  kind: NonNullable<RemovedCollectionSeed["kind"]>
+): Record<string, unknown>[] {
+  return seeds
+    .filter(seed => (seed.kind ?? "collection") === kind)
+    .map(seedEntry);
 }

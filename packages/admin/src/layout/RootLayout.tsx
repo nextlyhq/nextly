@@ -8,7 +8,6 @@ import { ADMIN_ROBOTS } from "nextly/config";
 import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
 
-import { WidgetPreviewsRegistrar } from "../components/features/widgets/preview/WidgetPreviewsRegistrar";
 import { AdminPending } from "../components/guards/AdminPending";
 import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
@@ -186,8 +185,6 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
           <AdminI18nProvider signedIn={routeType !== "public"}>
             {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
             <PluginPageRegistrar />
-            {/* Registers the widget preview page on the server's development answer alone. */}
-            <WidgetPreviewsRegistrar />
             {/* The settings sync applies the admin timezone to date rendering,
               and mounting it starts the ["generalSettings"] query — an
               endpoint gated by settings permissions, so on the signed-out

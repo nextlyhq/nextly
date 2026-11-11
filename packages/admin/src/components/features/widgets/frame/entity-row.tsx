@@ -66,9 +66,16 @@ export interface EntityRowProps {
   /**
    * The one visible action a widget may declare, drawn in the trailing slot. `spoken` names it
    * for assistive technology where its short label would be one of several alike ("Review
-   * overdue releases" for "Review").
+   * overdue releases" for "Review"). An `external` action leaves the admin, so it opens in a new
+   * tab, as a plain link the admin's router does not handle.
    */
-  action?: { label: string; href: string; spoken?: string };
+  action?: {
+    label: string;
+    href: string;
+    spoken?: string;
+    /** Opens outside the admin, in a new tab: the documentation. */
+    external?: true;
+  };
   /** The row's "…" menu; no menu is drawn when there is nothing in it. */
   menu?: readonly EntityRowMenuItem[];
   density: ListDensity;
@@ -216,9 +223,20 @@ export function EntityRowActions({
     <>
       {action !== undefined && (
         <Button asChild size="sm" variant="outline" className="h-7 shrink-0">
-          <Link href={action.href} aria-label={action.spoken}>
-            {action.label}
-          </Link>
+          {action.external ? (
+            <a
+              href={action.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={action.spoken}
+            >
+              {action.label}
+            </a>
+          ) : (
+            <Link href={action.href} aria-label={action.spoken}>
+              {action.label}
+            </Link>
+          )}
         </Button>
       )}
       {menu.length > 0 && <RowMenu title={title} items={menu} />}

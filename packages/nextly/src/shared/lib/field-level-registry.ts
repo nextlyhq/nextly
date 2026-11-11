@@ -321,7 +321,7 @@ function extractFieldFunctions(
  * could read the result, a field reached through an unnamed repeater is
  * indistinguishable from one reached through an unnamed group.
  */
-function storedAtThisLevel(container: { type?: unknown }): boolean {
+export function storedAtThisLevel(container: { type?: unknown }): boolean {
   return container.type === "group";
 }
 

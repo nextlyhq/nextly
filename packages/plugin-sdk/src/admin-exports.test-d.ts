@@ -105,6 +105,8 @@ expectTypeOf<CustomEditViewProps>().toMatchTypeOf<{
   collectionSlug: string;
   isCreating: boolean;
 }>();
+// The page of the view an address names: a path, or absent on the edit address.
+expectTypeOf<CustomEditViewProps["view"]>().toEqualTypeOf<string | undefined>();
 
 // ---------------------------------------------------------------------------
 // Control primitives.

@@ -139,6 +139,15 @@ export function Toaster({
           // 3.07:1 on its own surface.
           "--warning-bg": "var(--nx-toast-warning-bg)",
           "--warning-text": "var(--nx-toast-warning-text)",
+          // An error or info toast takes its status's surface, border and
+          // text, a pair held to 4.5:1 in both modes; the library's own red
+          // and blue text read below it on their pale surfaces.
+          "--error-bg": "var(--nx-danger-surface)",
+          "--error-border": "var(--nx-danger-border)",
+          "--error-text": "var(--nx-danger-text)",
+          "--info-bg": "var(--nx-info-surface)",
+          "--info-border": "var(--nx-info-border)",
+          "--info-text": "var(--nx-info-text)",
         } as React.CSSProperties
       }
       {...props}

@@ -1,13 +1,17 @@
 /**
  * `nextly repair-columns`: report every column whose type or nullability differs from its field's
- * descriptor, on every table Nextly builds from field definitions.
+ * descriptor, on every table Nextly builds from field definitions, and with `--apply` convert the
+ * ones that are safe.
  *
- * Read-only. It compares the live database with each field as the database last had it applied,
- * gives every column one outcome, and exits with the code its outcomes give: 0 when no difference
- * remains, 2 when differences remain, 3 when a conversion failed or was interrupted, and 1 when it
- * could not run. With `--json` it writes one document to standard output and nothing else there.
- * It changes nothing: no table, row, registry entry or ledger row, and it never takes the schema
- * lock, only reads who holds it.
+ * It compares the live database with each field as the database last had it applied, gives every
+ * column one outcome, and exits with the code its outcomes give: 0 when no difference remains, 2
+ * when differences remain, 3 when a conversion failed or was interrupted, and 1 when it could not
+ * run. With `--json` it writes one document to standard output and nothing else there.
+ *
+ * Without `--apply` it changes nothing: no table, row, registry entry or ledger row, and it never
+ * takes the schema lock, only reads who holds it. With `--apply` it takes the schema lock, converts
+ * each safe column and records each repair; a lock still held after the wait is a run that could
+ * not run.
  *
  * The domain modules are imported when the command runs, not when the CLI loads, so listing the
  * CLI's commands does not pull in the schema services.
@@ -31,6 +35,8 @@ export interface RepairColumnsOptions {
   cwd?: string;
   verbose?: boolean;
   json?: boolean;
+  /** Convert each safe column, rather than only report. */
+  apply?: boolean;
 }
 
 /**
@@ -83,10 +89,12 @@ async function report(
     debug: options.verbose === true && options.json !== true,
   });
 
-  const [{ readRepairEntities }, { dryRunReport }] = await Promise.all([
-    import("../../domains/schema/repair-columns/read-entities"),
-    import("../../domains/schema/repair-columns/run-report"),
-  ]);
+  const [{ readRepairEntities }, { dryRunReport }, { applyRepairs }] =
+    await Promise.all([
+      import("../../domains/schema/repair-columns/read-entities"),
+      import("../../domains/schema/repair-columns/run-report"),
+      import("../../domains/schema/repair-columns/apply"),
+    ]);
 
   const adapter = (await createCliAdapter({
     dialect,
@@ -98,23 +106,23 @@ async function report(
     // The services log with a metadata argument the CLI logger has no place for, and nothing they
     // log here is a finding, so it goes to debug output.
     const debug = (message: string) => logger.debug(message);
-    const entities = await readRepairEntities({
-      adapter,
-      dialect,
-      config,
-      // The manifest and the plugins' extensions of it: a Builder entity is configured as the next
-      // migration would apply it, not only as the registry last saved it.
-      projectRoot,
-      ...(deferredExtends !== undefined ? { deferredExtends } : {}),
-      migrationsDir: resolve(cwd, config.db.migrationsDir),
-      logger: { debug, info: debug, warn: debug, error: debug },
-    });
-    return await dryRunReport({
-      adapter,
-      dialect,
-      entities,
-      nextlyVersion: getCoreVersion(),
-    });
+    // An apply reads them once it holds the schema lock; a dry run takes no lock and reads now.
+    const readEntities = () =>
+      readRepairEntities({
+        adapter,
+        dialect,
+        config,
+        // The manifest and the plugins' extensions of it: a Builder entity is configured as the next
+        // migration would apply it, not only as the registry last saved it.
+        projectRoot,
+        ...(deferredExtends !== undefined ? { deferredExtends } : {}),
+        migrationsDir: resolve(cwd, config.db.migrationsDir),
+        logger: { debug, info: debug, warn: debug, error: debug },
+      });
+    const run = { adapter, dialect, nextlyVersion: getCoreVersion() };
+    return options.apply === true
+      ? await applyRepairs({ ...run, entities: readEntities })
+      : await dryRunReport({ ...run, entities: await readEntities() });
   } finally {
     await adapter.disconnect();
   }
@@ -149,7 +157,7 @@ async function printRun(
 export function repairColumnsAction(
   createContext: (options: GlobalOptions) => CommandContext
 ) {
-  return async (options: { json?: boolean }, cmd: Command) => {
+  return async (options: { json?: boolean; apply?: boolean }, cmd: Command) => {
     const globals = cmd.optsWithGlobals<GlobalOptions>();
     const context = createContext(globals);
     const json = options.json === true;
@@ -166,6 +174,7 @@ export function repairColumnsAction(
         cwd: globals.cwd,
         verbose: globals.verbose,
         json,
+        apply: options.apply === true,
       },
       context
     );

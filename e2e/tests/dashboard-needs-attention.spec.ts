@@ -161,6 +161,32 @@ async function readCardAsEmpty(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Passes the layout read through without the setup card, so the cards after it pair as a
+ * dashboard without setup pairs them: the setup card shows to the suite's super-admin until
+ * setup is done, and drawn beside Needs attention it would set that row's height.
+ */
+async function readWithoutSetupCard(page: Page): Promise<void> {
+  await page.route(isLayoutRead, async (route: Route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    let response: Awaited<ReturnType<Route["fetch"]>>;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
+    const body = (await response.json()) as Record<string, unknown>;
+    const layout = (Array.isArray(body.placements) ? body : body.data) as {
+      placements: Array<{ id: string; widgetId: string }>;
+    };
+    layout.placements = layout.placements.filter(
+      p => p.widgetId !== "core/setup"
+    );
+    await route.fulfill({ response, json: body }).catch(() => {});
+  });
+}
+
 /** A batch answered whole, `{ results }`, or `undefined` for one streamed as lines. */
 function wholeAnswer(text: string): { results: unknown[] } | undefined {
   try {
@@ -400,6 +426,7 @@ test("stands at its one item's height, its row beside Upcoming releases at the s
   const id = await overdueRelease(page, Date.now().toString(36));
   try {
     await answerWithOneItem(page, [CARD, RELEASES]);
+    await readWithoutSetupCard(page);
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoAdmin(page, "");
     const card = page
@@ -443,6 +470,7 @@ test("stands at its one item's height, its row beside Upcoming releases at the s
     ).toBeLessThanOrEqual(1);
   } finally {
     await page.unroute(isBatchRead).catch(() => {});
+    await page.unroute(isLayoutRead).catch(() => {});
     await cancel(page, id);
   }
 });

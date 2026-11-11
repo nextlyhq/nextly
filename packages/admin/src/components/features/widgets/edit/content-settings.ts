@@ -20,6 +20,8 @@ import {
 
 import { canonicalJson } from "@admin/lib/canonical-json";
 
+import { USERS_SOURCE } from "../widget-as-asked";
+
 import { filterFieldNames } from "./content-filter";
 
 /** A content setting that works over a Collection setting of the widget. */
@@ -276,8 +278,11 @@ function staleCollection(
 ): StaleContentValue | undefined {
   if (typeof value !== "string" || value === "") return undefined;
   if (sameSettingValue(value, setting.defaultValue)) return undefined;
+  // Offered as the drawer offers it (`offeredSources`), so a value the setting itself offers,
+  // such as Users, is never read as one that went away.
+  const choices = offeredSources(setting, sources);
   const offered = (slug: unknown) =>
-    sources.some(source => source.collection === slug);
+    choices.some(choice => choice.value === slug);
   if (offered(value)) return undefined;
   const label = setting.label ?? setting.name;
   return {
@@ -290,21 +295,46 @@ function staleCollection(
   };
 }
 
-/** A section of a card's settings panel: Data, Display or Advanced. */
-export type SettingSection = NonNullable<AnyWidgetSetting["section"]>;
+/**
+ * A section of a card's settings drawer that holds settings: Content (`data`, what the card
+ * reads) or Display (how it shows it). The drawer's Size section holds the card's width alone.
+ */
+export type SettingSection = "data" | "display";
 
 /**
- * The section of the settings panel a setting is drawn in: the one it names,
- * else Data for a setting over the card's content (its Collection, Filter,
+ * The section of the settings drawer a setting is drawn in: the one it names,
+ * else Content for a setting over the card's content (its Collection, Filter,
  * Sort, Group by and Field), and Display for every other, the fields each row
- * shows included. A setting is folded under Advanced only when it says so.
- * The one reading of where a setting goes.
+ * shows included. A setting that names `advanced`, from when the drawer folded
+ * some away, is drawn under Display: nothing is folded. The one reading of
+ * where a setting goes.
  */
 export function sectionOf(setting: AnyWidgetSetting): SettingSection {
-  if (setting.section !== undefined) return setting.section;
+  if (setting.section === "data") return "data";
+  if (setting.section !== undefined) return "display";
   return isContentSetting(setting) && setting.type !== "fields"
     ? "data"
     : "display";
+}
+
+/**
+ * What a Collection setting offers to choose: the collections the server sent, then Users where
+ * the setting offers them (the server tells the setting with the offer only to a reader who may
+ * read users). The one list both the drawer's choices and the stale check read.
+ */
+function offeredSources(
+  setting: Extract<ContentSetting, { type: "collection" }>,
+  sources: readonly PublishedContentSource[]
+): { label: string; value: string }[] {
+  return [
+    ...sources.map(source => ({
+      label: source.label,
+      value: source.collection,
+    })),
+    ...(setting.users === true
+      ? [{ label: "Users", value: USERS_SOURCE }]
+      : []),
+  ];
 }
 
 /**
@@ -320,10 +350,7 @@ export function collectionOptions(
   setting: Extract<ContentSetting, { type: "collection" }>,
   sources: readonly PublishedContentSource[]
 ): { label: string; value: string }[] {
-  const options = sources.map(source => ({
-    label: source.label,
-    value: source.collection,
-  }));
+  const options = offeredSources(setting, sources);
   const fallback = setting.defaultValue;
   if (
     fallback === undefined ||

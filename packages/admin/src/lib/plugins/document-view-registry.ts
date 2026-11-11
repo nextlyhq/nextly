@@ -318,6 +318,57 @@ export function drawnDocumentView(
 }
 
 /**
+ * The page of a collection's own edit view that a route's params name, or
+ * `undefined` when they name none.
+ *
+ * A custom edit view with tabs of its own (a form's Builder, Settings and
+ * Submissions) gives each tab an address by declaring a document view on its
+ * slug whose component IS that edit view. Such an address is a page of the
+ * editor, not a screen of its own: the edit view draws it, told which page,
+ * and stays mounted from one page to the next, so what is unsaved on one tab
+ * is still there on the next. Read from the same lookup the resolver uses to
+ * let the address through, so the page drawn is the page found.
+ */
+export function editViewPage(
+  slug: string | string[] | undefined,
+  view: string | string[] | undefined,
+  editView: string | undefined
+): string | undefined {
+  if (editView === undefined) return undefined;
+  const routed = routedDocumentView("collection", slug, view);
+  // Declared on this collection, not offered on a field type: a field-type
+  // view that happened to draw the same component would otherwise skip the
+  // check that the document has its field.
+  return routed !== undefined &&
+    "slug" in routed &&
+    routed.slug === slug &&
+    routed.component === editView
+    ? routed.path
+    : undefined;
+}
+
+/**
+ * Whether a collection's custom edit view has pages of its own: some document
+ * view declared on the slug draws that same edit view (`editViewPage`).
+ *
+ * Such an edit view is a whole editor with its own header and tabs, as the
+ * default editor is, so the page gives it the editor's frame rather than the
+ * padded one a plain custom edit view is drawn in.
+ */
+export function editViewHasPages(
+  slug: string | undefined,
+  editView: string | undefined
+): boolean {
+  if (slug === undefined || editView === undefined) return false;
+  for (const view of registry.values()) {
+    if ("slug" in view && view.slug === slug && view.component === editView) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * A field a view could edit: its address (`hero.body` for a field in a `hero`
  * group, `sections.<rowId>.body` for one in a repeater's row) and label for the
  * chooser, and its declaration for the view.

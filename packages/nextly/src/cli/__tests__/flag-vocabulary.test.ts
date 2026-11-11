@@ -149,6 +149,7 @@ const WRITES = [
   "migrate:down",
   "migrate:resolve",
   "permissions:cleanup",
+  "plugins add",
   "plugins install",
   "plugins uninstall",
   "prune",
@@ -164,6 +165,7 @@ const PREVIEWS = [
   "media orphans",
   "media remove-sizes",
   "migrate:field-groups",
+  "repair-columns",
   "users:clear-plaintext-passwords",
 ];
 const READS = [
@@ -176,7 +178,6 @@ const READS = [
   "plugins",
   "plugins info",
   "plugins list",
-  "repair-columns",
   "telemetry",
   "telemetry status",
 ];

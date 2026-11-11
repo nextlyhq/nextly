@@ -1,8 +1,9 @@
 /**
- * The dashboard's summary sources: `system:team`, how many people and roles,
- * and `system:content`, the Content table's rows. Both answer from the
- * dashboard service's own readings, so their cards and the `/stats` summary
- * cannot come to disagree.
+ * The dashboard's summary sources: `system:team`, how many people and roles;
+ * `system:team-people`, the Team card's people; and `system:content`, the
+ * Content table's rows. The counts answer from the dashboard service's own
+ * readings, so their cards and the `/stats` summary cannot come to disagree;
+ * the people from the users service's.
  *
  * ## `system:team`
  *
@@ -16,6 +17,17 @@
  * without `read-roles` is given the people alone, and the roles row is ABSENT
  * rather than zero, since a zero would still be an answer about rows they may
  * not read.
+ *
+ * ## `system:team-people`
+ *
+ * The Team card's list: each person's name, email, the role they hold now and
+ * when they were last active, most recently active first, at most twenty, and
+ * how many there are in all. Its `where` may name a role by its slug, and the
+ * users service filters, orders and cuts the list in the database. Asked of
+ * the same `TEAM_GATE` as `system:team`, before anything is read, and a
+ * reader it refuses is answered as a source that does not exist. Only the
+ * fields the card draws leave it: no id, no address beyond the email, nothing
+ * about sessions but the one instant.
  *
  * ## `system:content`
  *
@@ -38,7 +50,9 @@
 
 import { readAccessCaller } from "../../auth/entity-read-access";
 import { container } from "../../di/container";
+import type { UserService } from "../../domains/users/services/user-service";
 import type { WidgetQuery } from "../../domains/widgets/query";
+import { listEntries } from "../../domains/widgets/query-limits";
 import type { WidgetResult } from "../../domains/widgets/result";
 import {
   failUnavailableSourceOrOp,
@@ -46,6 +60,7 @@ import {
 } from "../../domains/widgets/sources";
 import {
   CONTENT_SOURCE_ID,
+  TEAM_PEOPLE_SOURCE_ID,
   TEAM_SOURCE_ID,
 } from "../../domains/widgets/system-source-ids";
 import { registerSystemSource } from "../../domains/widgets/system-sources";
@@ -67,6 +82,14 @@ import { resolveReadableResources } from "./resolve-readable-resources";
 const TEAM_FIELDS = [
   { name: "figure", type: "string" as const, label: "Figure" },
   { name: "count", type: "number" as const, label: "Count" },
+];
+
+/** Each person: what the Team card draws of them, and nothing else. */
+const TEAM_PEOPLE_FIELDS = [
+  { name: "name", type: "string" as const, label: "Name" },
+  { name: "email", type: "string" as const, label: "Email" },
+  { name: "role", type: "string" as const, label: "Role" },
+  { name: "lastActiveAt", type: "date" as const, label: "Last active" },
 ];
 
 /**
@@ -119,6 +142,15 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   range: "refused",
 };
 
+/**
+ * What the people resolver does with each field of a widget query: as the
+ * others, but `where` carries the role the card narrows by.
+ */
+const TEAM_PEOPLE_QUERY_FIELD_USE: Record<
+  keyof WidgetQuery,
+  "consumed" | "refused"
+> = { ...QUERY_FIELD_USE, where: "consumed" };
+
 /** The service, resolved at call time, as the other system sources resolve theirs. */
 function dashboard(): DashboardService {
   if (!container.has("dashboardService")) {
@@ -157,6 +189,79 @@ async function resolveTeam(
     }))
   );
   return listOf(rows, TEAM_FIELDS, query);
+}
+
+/** The users service, resolved at call time. */
+function users(): UserService {
+  if (!container.has("userService")) {
+    throw NextlyError.internal({
+      logContext: { reason: "user-service-unregistered" },
+    });
+  }
+  return container.get<UserService>("userService");
+}
+
+/**
+ * The role a query's `where` names, by its slug, everyone when it names none,
+ * or a refusal of anything else in it: a key this source does not read would
+ * be validated and then dropped, and the card would answer a different
+ * question.
+ */
+function roleOf(where: WidgetQuery["where"]): string | undefined {
+  if (where === undefined) return undefined;
+  const unknown = Object.keys(where).filter(key => key !== "role");
+  if (unknown.length > 0) {
+    failUnavailableSourceOrOp(
+      `source "${TEAM_PEOPLE_SOURCE_ID}" narrows by role alone, not: ${unknown.join(", ")}`
+    );
+  }
+  const { role } = where;
+  if (role === undefined) return undefined;
+  if (typeof role !== "string" || role === "") {
+    failUnavailableSourceOrOp(
+      `source "${TEAM_PEOPLE_SOURCE_ID}" takes role as a role's slug`
+    );
+  }
+  return role;
+}
+
+/**
+ * Answer the Team card's list: the people, most recently active first, for a
+ * reader the card is for, and nothing at all for anyone else.
+ */
+async function resolveTeamPeople(
+  query: WidgetQuery,
+  caller: ReadCaller
+): Promise<WidgetResult> {
+  refuseUnconsumedQueryFields(
+    query,
+    TEAM_PEOPLE_QUERY_FIELD_USE,
+    TEAM_PEOPLE_SOURCE_ID
+  );
+  const roleSlug = roleOf(query.where);
+  const verdicts = await permissionVerdicts(
+    [TEAM_GATE],
+    readAccessCaller(caller)
+  );
+  // The precondition, before anyone is read.
+  if (!holdsWidgetPermission(TEAM_GATE, verdicts)) {
+    failUnavailableSourceOrOp(
+      `${TEAM_PEOPLE_SOURCE_ID}: not this reader's card`
+    );
+  }
+  const limit = listEntries(query.limit);
+  const { people, total } = await users().listTeamPeople({
+    ...(roleSlug === undefined ? {} : { roleSlug }),
+    limit,
+    now: new Date(),
+  });
+  const rows = people.map(person => ({
+    name: person.name ?? undefined,
+    email: person.email,
+    role: person.role?.name,
+    lastActiveAt: person.lastActiveAt,
+  }));
+  return { ...listOf(rows, TEAM_PEOPLE_FIELDS, { ...query, limit }), total };
 }
 
 /**
@@ -226,7 +331,7 @@ function listOf(
   };
 }
 
-/** Publish both sources and their resolvers, from the boot-time registry reset. */
+/** Publish the three sources and their resolvers, from the boot-time registry reset. */
 export function registerSummaryWidgetSources(): void {
   registerSystemSource(
     {
@@ -238,6 +343,18 @@ export function registerSummaryWidgetSources(): void {
       fields: TEAM_FIELDS,
     },
     resolveTeam
+  );
+  registerSystemSource(
+    {
+      id: TEAM_PEOPLE_SOURCE_ID,
+      label: "Team members",
+      kind: "system",
+      titleField: "name",
+      supports: ["list"],
+      fields: TEAM_PEOPLE_FIELDS,
+      filters: ["role"],
+    },
+    resolveTeamPeople
   );
   registerSystemSource(
     {

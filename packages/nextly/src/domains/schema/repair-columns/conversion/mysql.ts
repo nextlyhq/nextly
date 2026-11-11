@@ -24,7 +24,10 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { querySqlRows } from "../../pipeline/classifier/count-helpers";
-import { mysqlReferenceListRewrite } from "../../pipeline/reference-list-conversion";
+import {
+  mysqlReferenceListNormalise,
+  mysqlReferenceListRewrite,
+} from "../../pipeline/reference-list-conversion";
 import { isMysqlTextOrBlobType } from "../../pipeline/sql-templates/create-index";
 import { quoteIdent } from "../../pipeline/sql-templates/identifier-quoting";
 import { restatedColumn } from "../../pipeline/sql-templates/mysql-live-restate";
@@ -371,15 +374,24 @@ function mysqlSteps(request: ConversionRequest): string[][] {
     ? { characterSet: "left-out" as const }
     : {};
   const to = renderedType(request.to);
+  // Each statement states how it runs while others use the table, as the report says it does:
+  // a type change copies the table and lets reads continue, a nullability change runs in place.
+  // MySQL refuses one it cannot run that way rather than run it another way.
   if (request.referenceList === true) {
     return [
-      restatedColumn(table, column, { type: "text" }),
+      restatedColumn(table, column, { type: "text", online: "copy" }),
       [mysqlReferenceListRewrite(table, column)],
-      restatedColumn(table, column, {
-        type: to,
-        ...nullability,
-        ...characterSet,
-      }),
+      // The retype, then any value written since the rewrite made a one-item list in the same
+      // step, so the step never ends with a scalar in the list column.
+      [
+        ...restatedColumn(table, column, {
+          type: to,
+          ...nullability,
+          ...characterSet,
+          online: "copy",
+        }),
+        mysqlReferenceListNormalise(table, column),
+      ],
     ];
   }
   if (typeChanges(request)) {
@@ -388,11 +400,12 @@ function mysqlSteps(request: ConversionRequest): string[][] {
         type: to,
         ...nullability,
         ...characterSet,
+        online: "copy",
       }),
     ];
   }
   return "nullable" in nullability
-    ? [restatedColumn(table, column, nullability)]
+    ? [restatedColumn(table, column, { ...nullability, online: "in-place" })]
     : [];
 }
 

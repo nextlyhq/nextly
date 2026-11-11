@@ -422,11 +422,21 @@ function FormConditions(props: FieldSettingsConditionsProps): JSX.Element {
 export const SAVED_TYPE_REASON =
   "A saved field keeps its type, so its answers stay readable. For another type, add a new field.";
 
+/**
+ * Why a saved field's name cannot change: its answers are stored under it, so
+ * a new name would leave every earlier answer behind under the old one.
+ */
+export const SAVED_NAME_REASON =
+  "Answers are stored under this name, so it stays as saved. For another name, add a new field.";
+
 /** How the Form Builder configures the shared settings panel. */
 export const FORMS_FIELD_SURFACE: FieldSettingsSurface = {
   surface: "forms",
   deriveName: formFieldName,
-  fixed: [{ setting: "type", when: "saved", reason: SAVED_TYPE_REASON }],
+  fixed: [
+    { setting: "type", when: "saved", reason: SAVED_TYPE_REASON },
+    { setting: "name", when: "saved", reason: SAVED_NAME_REASON },
+  ],
   extraSettings: { general: FormTypeSettings, validation: FileSizeSetting },
   conditions: FormConditions,
   // Offered only where the form's checks read the rule for that type: a rule

@@ -1740,8 +1740,14 @@ export class SinglePublishAllService extends BaseService {
   ): Promise<Set<string>> {
     const service = this.fieldGroupDataService;
     if (!service) return new Set(localizedFieldNames);
-    return perLanguageFieldNames(fieldConfigs, localizedFieldNames, slug =>
-      service.isComponentLocalized(slug, tx.getDrizzle())
+    return perLanguageFieldNames(
+      fieldConfigs,
+      localizedFieldNames,
+      slug => service.isComponentLocalized(slug, tx.getDrizzle()),
+      // The components placed directly in each, whose values are rows of their own.
+      async slug =>
+        (await service.getComponentDefinition(slug, tx.getDrizzle()))?.fields ??
+        null
     );
   }
 

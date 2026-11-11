@@ -1,8 +1,9 @@
 /**
  * The development preview read, through the admin's authenticated client.
  *
- * Asked only by the preview page, whose code is fetched only once the server
- * has said it runs in development, so a production admin never sends it.
+ * Asked only by the preview board (`WidgetPreviewBoard`), which the admin
+ * itself never draws: the browser tests' app draws it on a page of its own,
+ * on a development server, the only one that serves the read.
  *
  * @module components/features/widgets/preview/useWidgetPreviews
  */

@@ -83,7 +83,7 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
                `-300` are mixed toward white and only clear their minimum on a
                dark page. Hover is carried by the background tint, so the ink
                does not have to move to show the state. */
-            className="flex w-full items-center space-x-2 rounded-md px-3 py-2 text-sm text-destructive hover:bg-destructive-500/10 mt-2 cursor-pointer"
+            className="flex w-full items-center space-x-2 rounded-md px-3 py-2 text-sm text-destructive hover:bg-danger-surface mt-2 cursor-pointer"
           >
             <LogOut className="h-4 w-4" />
             <div className="flex flex-col items-start">

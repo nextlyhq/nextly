@@ -1,7 +1,7 @@
 /**
  * New form submissions in a browser: the form-builder plugin's card, placed by
  * the test through the layout, lists a new submission with who sent it and its
- * form, the row opens the submission, and the header's summary counts it.
+ * form, and the row opens the submission.
  *
  * The suite's user is the first account, a super-admin, who reads every form.
  * The form is published through the entries API with a stamp of its own, so
@@ -84,7 +84,7 @@ async function seed(page: Page, stamp: string) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`lists a new submission whose row opens it, and counts it in the header (${theme})`, async ({
+  test(`lists a new submission whose row opens it (${theme})`, async ({
     page,
   }) => {
     const stamp = Date.now().toString(36);
@@ -105,13 +105,6 @@ for (const theme of ["light", "dark"] as const) {
     await expect(row).toBeVisible();
     await expect(row).toContainText(`Contact ${stamp} · Price list, please`);
 
-    await expect(
-      page
-        .getByTestId("dashboard-header")
-        .filter({ visible: true })
-        .getByText(/\d+ new submissions/)
-        .filter({ visible: true })
-    ).toBeVisible();
     await expect(
       page.locator('[data-testid="widget-card-body"][aria-busy="true"]')
     ).toHaveCount(0, { timeout: 30_000 });

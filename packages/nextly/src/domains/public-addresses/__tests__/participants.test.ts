@@ -125,7 +125,7 @@ describe("the question participants share", () => {
 });
 
 describe("the refusal", () => {
-  it("names the address, language and both documents", () => {
+  it("names the address and language, and keeps the holder out of the message", () => {
     const error = addressHeldError(
       { holder: post, holds: [en] },
       { address: en, heldBy: page }
@@ -133,18 +133,20 @@ describe("the refusal", () => {
 
     expect(error.code).toBe("DUPLICATE");
     expect(error.publicMessage).toBe(
-      '/blog/hello (en) is already the address of "Hello" in pages. Choose another address for this entry.'
+      "/blog/hello (en) is already the address of another page. Choose another address for this entry."
     );
+    // Who holds it is for the log: the saver may not be allowed to read it.
+    expect(error.logContext).toMatchObject({ heldBy: page });
   });
 
-  it("names a holder without a label by its id", () => {
+  it("says the same whether or not the holder has a label", () => {
     const error = addressHeldError(
       { holder: post, holds: [en] },
       { address: en, heldBy: { collection: "pages", id: "1" } }
     );
 
     expect(error.publicMessage).toBe(
-      "/blog/hello (en) is already the address of the entry 1 in pages. Choose another address for this entry."
+      "/blog/hello (en) is already the address of another page. Choose another address for this entry."
     );
   });
 });

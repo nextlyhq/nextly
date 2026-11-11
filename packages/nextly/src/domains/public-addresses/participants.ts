@@ -189,16 +189,10 @@ export async function recordEverywhere(
   for (const runner of told) await runner.record(batch, tx);
 }
 
-/** How a refusal names a holder: its label, or its id. */
-function named(holder: AddressHolder): string {
-  return holder.label !== undefined && holder.label !== ""
-    ? `"${holder.label}"`
-    : `the entry ${holder.id}`;
-}
-
 /**
  * The refusal of `update`, whose `clash.address` another page holds: the
- * address, its language and both documents, for the editor to act on.
+ * address and its language for the editor to act on, and both documents in
+ * the log, since the editor may not be allowed to read the other.
  */
 export function addressHeldError(
   update: HeldAddressUpdate,
@@ -206,7 +200,9 @@ export function addressHeldError(
 ): NextlyError {
   const { address, heldBy } = clash;
   return NextlyError.duplicate({
-    message: `${address.path} (${address.locale}) is already the address of ${named(heldBy)} in ${heldBy.collection}. Choose another address for this entry.`,
+    // Only the address and its language: the saver may not be allowed to
+    // read the page holding it, so who holds it goes to the log alone.
+    message: `${address.path} (${address.locale}) is already the address of another page. Choose another address for this entry.`,
     logContext: {
       reason: "public-address-held",
       address,
