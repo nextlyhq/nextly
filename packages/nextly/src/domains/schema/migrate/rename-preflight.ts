@@ -26,7 +26,12 @@
  * - On a MySQL server comparing table names by case
  *   (`lower_case_table_names=0`), every table rename (`judgedOnThisServer`).
  * - A rename onto a name held only by what the live readers do not describe: a
- *   SQLite generated column, or a relation outside PostgreSQL's current schema.
+ *   SQLite generated column, a relation outside PostgreSQL's current schema, or
+ *   a PostgreSQL type's name (an enum, a domain, a composite type).
+ * - A rename onto a system column the run adds before its files (such as
+ *   `_revision`): the files are judged against the database as they find it.
+ * - Every rename after a PostgreSQL `SET ROLE` or `SET SESSION AUTHORIZATION`,
+ *   which a `$user` in the search path follows.
  *
  * A rename already made (the old name gone, the new one there) is not refused
  * either: there is nothing left to rename.
@@ -64,6 +69,18 @@ export interface TakenRename {
   message: string;
 }
 
+/**
+ * Words of a PostgreSQL setting that change which table an unqualified name
+ * reaches: `search_path` and its alias `SCHEMA`, and the role (`SET ROLE`,
+ * `SET SESSION AUTHORIZATION`), which a `$user` in the search path follows.
+ */
+const REROUTING_SETTINGS: ReadonlySet<string> = new Set([
+  "SEARCH_PATH",
+  "SCHEMA",
+  "ROLE",
+  "AUTHORIZATION",
+]);
+
 /** First words of statements that change no table and no column. */
 const CHANGES_NO_TABLE: readonly string[][] = [
   ["ALTER", "INDEX"],
@@ -76,10 +93,9 @@ const CHANGES_NO_TABLE: readonly string[][] = [
 /**
  * Whether `statement` changes no table and no column, though `tablesChangedIn`
  * does not read it: an index dropped or altered (a `DROP INDEX` without
- * CASCADE), a comment, a session setting other than PostgreSQL's
- * `search_path` and its alias `SCHEMA` (which change the table an unqualified
- * name reaches), or a type or sequence created. Any other statement it cannot
- * read may change any table.
+ * CASCADE), a comment, a session setting other than those changing which table
+ * an unqualified name reaches (`REROUTING_SETTINGS`), or a type or sequence
+ * created. Any other statement it cannot read may change any table.
  */
 function changesNoTable(statement: string, dialect: SupportedDialect): boolean {
   const cursor = cursorOf(statement, dialect);
@@ -87,7 +103,7 @@ function changesNoTable(statement: string, dialect: SupportedDialect): boolean {
   if (cursor.accept("SET")) {
     return !cursor
       .rest()
-      .some(token => token === "SEARCH_PATH" || token === "SCHEMA");
+      .some(token => REROUTING_SETTINGS.has(token as string));
   }
   return CHANGES_NO_TABLE.some(words => cursor.accept(...words));
 }
@@ -112,6 +128,21 @@ function namesARelation(statement: string, dialect: SupportedDialect): boolean {
   if (dialect === "mysql") return false;
   const cursor = cursorOf(statement, dialect);
   return NAMES_A_RELATION.some(words => cursor.accept(...words));
+}
+
+/**
+ * Whether `rename` names the one identifier twice, as the dialect compares
+ * names (`a TO a`, or `a TO A` without regard to case): a rename that changes
+ * nothing, which a database may run, so its new name is never judged taken by
+ * the column or table it renames.
+ */
+function keepsItsName(
+  rename: StatementRename,
+  dialect: SupportedDialect
+): boolean {
+  return (
+    identifierKey(dialect, rename.from) === identifierKey(dialect, rename.to)
+  );
 }
 
 /** The tables a rename involves: its table, or both of a table's names. */
@@ -169,7 +200,7 @@ function judgedIn(
     const unchanged =
       tables.every(table => !changes.tables.has(table)) &&
       !(rename.kind === "table" && changes.relationNames);
-    if (unchanged) judged.push(rename);
+    if (unchanged && !keepsItsName(rename, dialect)) judged.push(rename);
     for (const table of tables) changes.tables.add(table);
   }
   return judged;

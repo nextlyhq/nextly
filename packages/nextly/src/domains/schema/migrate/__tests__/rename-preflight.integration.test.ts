@@ -553,6 +553,56 @@ describe.each(LOCK_DIALECTS)(
       }
     );
 
+    // A rename naming the one identifier twice changes nothing, and SQLite runs it: its new name is
+    // the column it renames, never one in the way.
+    it("does not judge a rename onto the name it already has", async () => {
+      const same = [
+        renameColumn("heading", "heading"),
+        renameColumn(
+          "heading",
+          dialect === "postgresql" ? "heading" : "HEADING"
+        ),
+      ];
+      expect(
+        await renamesOntoTakenTargets(
+          [{ label: FILE, statements: same }],
+          adapter.getDrizzle(),
+          dialect
+        )
+      ).toEqual([]);
+      if (dialect === "sqlite") {
+        writeFile([renameColumn("heading", "heading")]);
+        await migrate();
+        expect(await ledger()).toEqual(["applied"]);
+        expect(await valueOf("heading")).toBe("Kept");
+      }
+    });
+
+    // A `$user` in PostgreSQL's search path follows the role, so a rename after the role changes
+    // is not judged against the tables the run started with.
+    it.runIf(dialect === "postgresql")(
+      "does not judge a rename after SET ROLE or SET SESSION AUTHORIZATION",
+      async () => {
+        for (const setting of [
+          `SET ROLE postgres`,
+          `SET SESSION AUTHORIZATION postgres`,
+        ]) {
+          expect(
+            await renamesOntoTakenTargets(
+              [
+                {
+                  label: FILE,
+                  statements: [setting, renameColumn("heading", "headline")],
+                },
+              ],
+              adapter.getDrizzle(),
+              dialect
+            )
+          ).toEqual([]);
+        }
+      }
+    );
+
     // Controls.
 
     it("runs a rename onto a free name, and the value follows", async () => {
