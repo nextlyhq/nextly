@@ -34,6 +34,11 @@ import { formsEmailTemplates } from "./emails/starter-messages";
 import { addressedFormPages, FORM_EDITOR_VIEW } from "./form-pages";
 import { registerFormClosing } from "./handlers/form-closing-hold";
 import {
+  responseKeyAfterUpdate,
+  responseKeyOf,
+  touchesResponseKey,
+} from "./handlers/one-response";
+import {
   sameSubmittedPayload,
   submissionMarks,
   type SubmissionOriginMarks,
@@ -52,6 +57,7 @@ import type {
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
+import { normalizeFormSettings } from "./utils/form-settings";
 import { normalizeRedirectRelationships } from "./utils/redirect-target";
 import {
   SCHEMA_ONLY_CONTEXT,
@@ -483,6 +489,11 @@ export function formBuilder(
         nextly.self.collections[declaredSubmissionsSlug] ??
         declaredSubmissionsSlug;
       installedSubmissionsSlug = submissionSlug;
+
+      // The plugin's digest key, made and read now, at start: a submission's
+      // one-response key is taken inside its write's transaction, where a
+      // first use is refused.
+      await nextly.security.digests.prepare();
 
       // Hook/event subscriptions are idempotent across HMR — the platform
       // clears a plugin's prior subscriptions before re-init (B2), so the old
@@ -1011,11 +1022,15 @@ export async function prepareSubmissionForWrite(
     data?: Record<string, unknown>;
     operation?: string;
     originalData?: Record<string, unknown>;
+    collection?: string;
     user?: { id?: string };
     req?: { http?: { ip: string | null; method: string } };
   };
   const submission = ctx.data;
   if (!submission || typeof submission !== "object") return ctx.data;
+  // A submission's one-response key is the plugin's to write, never a
+  // caller's: one posting a key could take a value's place before its owner.
+  delete submission.responseKey;
   const stored = ctx.originalData;
 
   // A patch need not repeat the relationship, so the stored row is what says
@@ -1025,6 +1040,8 @@ export async function prepareSubmissionForWrite(
   if (!formId) return ctx.data;
 
   if (ctx.operation !== "create" && !updateNeedsChecking(submission, stored)) {
+    // A status change still moves the key: spam gives it back.
+    await rekeyAfterUpdate(ctx, formsSlug, formId, nextly);
     return ctx.data;
   }
 
@@ -1097,7 +1114,69 @@ export async function prepareSubmissionForWrite(
   if (ctx.operation !== "create" && submission.data === undefined) {
     stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
   }
+  if (ctx.operation === "create" && ctx.req?.http) {
+    // A request's address as the server judged it, never one the caller
+    // posted: the collection grants public create, and a posted address
+    // would choose the network one response per person compares. A create
+    // no request produced (an import) keeps the address it was given.
+    ctx.data.ipAddress = ctx.req.http.ip ?? null;
+  }
+  if (ctx.operation === "create") {
+    // Made from what is stored, after the spam verdict: spam takes no key.
+    ctx.data.responseKey = await responseKeyOf(
+      () => nextly.security.digests,
+      normalizeFormSettings(form.settings),
+      ctx.data
+    );
+  } else {
+    await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);
+  }
   return ctx.data;
+}
+
+/**
+ * Move an updated submission's one-response key with what the update changes
+ * (`responseKeyAfterUpdate`): spam gives it back, a restored or edited
+ * submission takes the key of what it now holds. An update that touches none
+ * of status, answers or address leaves it as stored.
+ */
+async function rekeyAfterUpdate(
+  ctx: {
+    data?: Record<string, unknown>;
+    originalData?: Record<string, unknown>;
+    collection?: string;
+  },
+  formsSlug: string,
+  formId: string,
+  nextly: NextlyInstance,
+  form?: Record<string, unknown>
+): Promise<void> {
+  const row = ctx.data;
+  if (!row || !touchesResponseKey(row)) return;
+  const parent =
+    form ?? (await formToCheckAgainst(undefined, formsSlug, formId, nextly));
+  const stored = ctx.originalData;
+  const movedFrom = stored ? parentFormId(stored) : null;
+  row.responseKey = await responseKeyAfterUpdate({
+    moved: movedFrom !== null && movedFrom !== formId,
+    digests: () => nextly.security.digests,
+    settings: normalizeFormSettings(parent.settings),
+    patch: row,
+    stored,
+    heldElsewhere: async key =>
+      (await nextly.services.collections.count(
+        ctx.collection ?? "form-submissions",
+        {
+          where: {
+            form: { equals: formId },
+            responseKey: { equals: key },
+            ...(stored?.id ? { id: { not_equals: stored.id } } : {}),
+          },
+        },
+        // Elevated: the value is held whoever may read the holder.
+        { as: "system" }
+      )) > 0,
+  });
 }
 
 /**

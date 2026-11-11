@@ -10,9 +10,12 @@ export async function register(): Promise<void> {
   // Next.js writes its Cache Components setting into this file as it builds
   // it. Nextly, loaded from node_modules, cannot read that for itself. With
   // it off, Nextly warns at start; with it on, a cached read that finds no
-  // "use cache" read function says so.
+  // "use cache" read function says so. The same holds for the build's newest
+  // migration, which withNextly sets: a production start compares it with
+  // the database's schema version and warns when the database is behind.
   await createRegister(config, {
     cacheComponents: process.env.__NEXT_CACHE_COMPONENTS,
+    buildSchemaVersion: process.env.NEXTLY_BUILD_SCHEMA_VERSION,
   })();
 
   // Create the user admin.devAutoLogin signs in as (see seed-dev-user.ts).

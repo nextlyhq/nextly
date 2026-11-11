@@ -1138,11 +1138,15 @@ export class PermissionSeedService extends BaseService {
         );
         result.created++;
 
-        this.logger.info?.(
-          isDeclared
-            ? `Permission "${row.action}-${row.resource}" is declared again by ${row.owner}.`
-            : `Permission "${row.action}-${row.resource}" is no longer declared by ${row.owner}; marked as orphaned. Grants are unchanged.`
-        );
+        // Said with the grants the permission has once the mark is written,
+        // which a mark leaves as they were.
+        await this.permissionService.logOrphanMarkChange({
+          id: String(row.id),
+          action: row.action,
+          resource: row.resource,
+          owner: row.owner,
+          orphaned: !isDeclared,
+        });
       }
     } catch (error) {
       this.logger.warn(

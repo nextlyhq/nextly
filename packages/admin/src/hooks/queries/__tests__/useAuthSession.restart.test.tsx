@@ -20,6 +20,11 @@ vi.mock("@admin/lib/auth/session", () => ({
   SessionUnavailableError: class extends Error {},
 }));
 
+import {
+  beginStartupRequest,
+  resetStartupRequestForTests,
+  takeStartupResponse,
+} from "@admin/lib/api/startup-request";
 import { resetSetupStatusCache } from "@admin/lib/auth/setup-status";
 
 import { restartSessionCheck, useAuthSession } from "../useAuthSession";
@@ -32,6 +37,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
 beforeEach(() => {
   vi.resetAllMocks();
   resetSetupStatusCache();
+  resetStartupRequestForTests();
   client = new QueryClient();
 });
 
@@ -59,5 +65,23 @@ describe("restartSessionCheck", () => {
         isAuthenticated: true,
       })
     );
+  });
+
+  it("stops waiting on a hung startup request, so the session is asked afresh", async () => {
+    // The startup request never answers; the session's part is still untaken.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {}))
+    );
+    beginStartupRequest("/admin/api", ["/auth/session"]);
+    mockGet.mockResolvedValue({ isSetup: true, requiresSetupToken: false });
+
+    await act(async () => {
+      await restartSessionCheck(client);
+    });
+
+    // A read of the session now goes to the server rather than waiting on it.
+    expect(takeStartupResponse("/auth/session")).toBeUndefined();
+    vi.unstubAllGlobals();
   });
 });

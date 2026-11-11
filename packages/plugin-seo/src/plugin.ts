@@ -25,6 +25,7 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
+import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
 import { keepSeoContext } from "./not-found/report";
 import { listPages, type ListedPagesService } from "./outputs/listing";
@@ -74,6 +75,7 @@ import {
   rulesFromOptions,
   type StructuredDataOptions,
 } from "./structured-data/rules";
+import { seoTabParts } from "./tab/install";
 import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
@@ -93,9 +95,13 @@ export interface SeoPluginOptions {
    */
   collections: string[];
   /**
+   * The Singles to extend with the SEO field group, such as a homepage. None
+   * when absent. A Single's page gets the same SEO tab a collection's has.
+   */
+  singles?: string[];
+  /**
    * The fields placed INSIDE the `seo` group. Defaults to
-   * {@link defaultSeoFields} (metaTitle, metaDescription, ogImage, canonical,
-   * noindex). Custom fields are still nested under `seo` (e.g. a `focusKeyword`
+   * {@link defaultSeoFields}. Custom fields are still nested under `seo` (e.g. a `focusKeyword`
    * override lands at `entry.seo.focusKeyword`), so consumers always read SEO
    * data from one predictable place.
    */
@@ -376,12 +382,17 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     name: "seo",
     label: "SEO",
     fields: seoFields,
+    // Kept per language wherever the content is translated, so each language
+    // has its own title, description and canonical; on a type that is not
+    // translated, one value as before.
+    localized: true,
   });
 
   // Dedupe once: a repeated slug would make the schema-extend fold add `seo`
   // twice (a duplicate-field error), and would list the same URLs twice in the
   // sitemap.
   const targets = [...new Set(options.collections)];
+  const singleTargets = [...new Set(options.singles ?? [])];
 
   const sitemapSubset = subsetOf(options.sitemap, targets);
   const readRules = rulesReader(options);
@@ -396,14 +407,26 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options.socialCard
   );
 
+  // The SEO tab on each page the group is added to, and the route it reads
+  // a page's automatic values from.
+  const tab = seoTabParts({
+    collections: targets,
+    singles: singleTargets,
+    fields: seoFields,
+    baseUrl: options.baseUrl,
+    readRules,
+    readStructuredDataRules,
+    readSocialCardRules,
+  });
+
   // The site's sitemap and robots.txt, the action that makes a share image
-  // of the right size, and the settings and redirects screens' routes; all
-  // added below.
+  // of the right size, the settings and redirects screens' routes, and the
+  // SEO tab's own; all added below.
   const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
-    extend: [{ target: targets, fields: [seoGroup] }],
+    extend: [{ target: [...targets, ...singleTargets], fields: [seoGroup] }],
     // The record that keeps each public address to one page, the redirects
     // whose From addresses it holds, and the log of addresses not found.
     collections: [
@@ -411,17 +434,17 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       redirectsCollection(),
       notFoundCollection(),
     ],
-    // Every page's head, worked out by the one order of who wins, its
-    // social card completed, and its structured data, worked out from that
-    // same answer and the settings' brand facts, with the plugin's options
-    // where the settings say nothing.
+    // Every page's head, worked out by the one order of who wins, with its
+    // links to its other languages, its social card completed, and its
+    // structured data, worked out from that same answer and the settings'
+    // brand facts, with the plugin's options where the settings say nothing.
     services: {
       pageMetadata: ctx =>
         withStructuredData(
           ctx,
           withSocialCard(
             ctx,
-            seoPageMetadata(ctx, readRules),
+            withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
             readSocialCardRules
           ),
           structuredDataFromSettings(readStructuredDataRules)
@@ -450,6 +473,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // robots.txt asks AI tools until the site chooses: not a secret, it is
     // what the site's own robots.txt says.
     admin: {
+      ...tab.admin,
       clientConfig: { aiCrawlers: options.aiCrawlers ?? "all" },
       menu: [
         {
@@ -495,7 +519,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     contentTypesRoute(targets),
     settingsDocumentRoute(),
     // What the redirects screen reads and writes.
-    ...redirectRoutes()
+    ...redirectRoutes(),
+    ...tab.routes
   );
 
   return definePlugin({

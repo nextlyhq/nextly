@@ -18,6 +18,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { registerFromMigrations } from "../metadata-register";
 
+// The rows' transaction and the stored schema version beside them are the
+// integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here the rows are written on the stub's own handle, as the transaction's.
+vi.mock("../../schema-version", () => ({
+  writeRegistryRows: async (
+    adapter: { getDrizzle: () => unknown },
+    work: (tx: { getDrizzle: () => unknown }) => Promise<unknown>
+  ) => work({ getDrizzle: () => adapter.getDrizzle() }),
+  inRegistryStep: (_adapter: unknown, work: () => Promise<unknown>) => work(),
+}));
+
 let dir: string;
 
 /**
