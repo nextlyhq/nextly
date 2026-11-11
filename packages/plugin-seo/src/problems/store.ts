@@ -61,6 +61,8 @@ export function problemsCollection(): CollectionConfig {
       // ISO text, which orders and compares alike on every dialect.
       text({ name: "checkedAt", label: "Checked at" }),
       checkbox({ name: "outOfDate", label: "Out of date" }),
+      // When the full check was last marked out of date, as ISO text.
+      text({ name: "markedAt", label: "Marked out of date at" }),
       number({ name: "pagesChecked", label: "Pages checked" }),
     ],
     access: {
@@ -339,7 +341,13 @@ export async function readSiteCheck(ctx: PluginContext): Promise<SiteCheck> {
 /** Record a full check, which brings the list up to date. */
 export async function saveSiteCheck(
   ctx: PluginContext,
-  check: { checkedAt: string; pagesChecked: number; problems: Problem[] }
+  check: {
+    /** When the check began, as ISO text. */
+    startedAt: string;
+    checkedAt: string;
+    pagesChecked: number;
+    problems: Problem[];
+  }
 ): Promise<void> {
   await writeRow(ctx, META_KEY, {
     kind: "meta",
@@ -348,6 +356,22 @@ export async function saveSiteCheck(
     problems: check.problems,
     outOfDate: false,
   });
+  // A change marked while the check ran can have altered a result the check
+  // had already read, so the mark stands. Read after the write: a mark made
+  // after this read writes its own after ours.
+  const row = await rowAt(ctx, META_KEY);
+  const markedAt = textOf(row?.markedAt);
+  if (
+    row !== undefined &&
+    markedAt !== undefined &&
+    markedAt >= check.startedAt
+  ) {
+    await ctx.services.collections.updateEntry(
+      problemsSlug(ctx),
+      String(row.id),
+      { outOfDate: true, _overwrite: true }
+    );
+  }
 }
 
 /**
@@ -356,12 +380,15 @@ export async function saveSiteCheck(
  */
 export async function markOutOfDate(ctx: PluginContext): Promise<void> {
   const row = await rowAt(ctx, META_KEY);
-  if (row === undefined || row.outOfDate === true) return;
+  if (row === undefined) return;
+  // Written every time, so a full check under way can tell a mark made
+  // while it ran (see `saveSiteCheck`).
   await ctx.services.collections.updateEntry(
     problemsSlug(ctx),
     String(row.id),
     {
       outOfDate: true,
+      markedAt: new Date().toISOString(),
       _overwrite: true,
     }
   );

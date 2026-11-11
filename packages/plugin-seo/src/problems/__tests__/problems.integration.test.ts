@@ -580,5 +580,38 @@ describe.each(getConfiguredTestDialects())(
       expect(kept.some(row => row.holderCollection === "removed")).toBe(false);
       expect(kept.some(row => row.holderId === id)).toBe(true);
     });
+
+    it("a full check keeps the list out of date where a page changed while it ran", async () => {
+      const { t, ctx } = await boot(dialect);
+      const a = await publish(t, { title: "A", slug: "a" });
+      const b = await publish(t, { title: "B", slug: "b" });
+      await until(t, found => checkedSince(a)(found) && checkedSince(b)(found));
+      await checkSite(ctx, CHECKS);
+
+      // B is deleted while the next full check walks the site.
+      let deleted = false;
+      const publicAddresses = Object.create(ctx.publicAddresses, {
+        held: {
+          value: async (
+            args: Parameters<typeof ctx.publicAddresses.held>[0]
+          ) => {
+            const page = await ctx.publicAddresses.held(args);
+            if (!deleted) {
+              deleted = true;
+              await t.nextly.delete({ collection: "posts", id: b });
+              await until(t, found => !found.some(row => row.holderId === b));
+            }
+            return page;
+          },
+        },
+      }) as PluginContext["publicAddresses"];
+      const walking = Object.create(ctx, {
+        publicAddresses: { value: publicAddresses },
+      }) as PluginContext;
+      await checkSite(walking, CHECKS);
+
+      const list = await problemList(ctx, CHECKS, everything);
+      expect(list.outOfDate).toBe(true);
+    });
   }
 );

@@ -312,7 +312,8 @@ async function checkPage(
   checks: ProblemChecks,
   type: string,
   id: string,
-  reads?: PageReads
+  reads?: PageReads,
+  marks = true
 ): Promise<string[]> {
   const { defaultLanguage, before, held, entries } = reads ??
     (await readBatch(ctx, type, [id])).get(id) ?? {
@@ -342,7 +343,7 @@ async function checkPage(
   const changed = found.some(({ previous, row }) =>
     row === undefined ? previous !== undefined : altersOthers(previous, row)
   );
-  if (changed) await markOutOfDate(ctx);
+  if (changed && marks) await markOutOfDate(ctx);
   const kept: string[] = [];
   for (const { previous, row } of found) {
     if (row !== undefined) {
@@ -417,7 +418,9 @@ async function checkType(
           checks,
           slug,
           id,
-          current ? batch.get(id) : undefined
+          current ? batch.get(id) : undefined,
+          // The full check's own findings mark nothing: it is the recheck.
+          false
         )) {
           seen.add(key);
         }
@@ -435,6 +438,7 @@ async function runSiteCheck(
   ctx: PluginContext,
   siteChecks: ProblemChecks
 ): Promise<void> {
+  const startedAt = new Date().toISOString();
   // The site's rules, read once for each language for the whole scan.
   const checks = { ...siteChecks, readers: readOnceEach(siteChecks.readers) };
   const seen = new Set<string>();
@@ -460,12 +464,20 @@ async function runSiteCheck(
       continue;
     }
     await inTurn(type, id, async () => {
-      for (const key of await checkPage(ctx, checks, type, id)) {
+      for (const key of await checkPage(
+        ctx,
+        checks,
+        type,
+        id,
+        undefined,
+        false
+      )) {
         seen.add(key);
       }
     });
   }
   await saveSiteCheck(ctx, {
+    startedAt,
     checkedAt: new Date().toISOString(),
     // Each language of a page is a page to a search engine.
     pagesChecked: seen.size,
