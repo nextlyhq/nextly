@@ -8,9 +8,8 @@
  * (comma-separated origins), which wins, or else from the SEO settings. With
  * none known, the site's standing decides: a new site with no pages yet is
  * kept out of search until it has an address, while a site that already had
- * pages when this started stays listable, and its missing address is listed
- * as a problem, because dropping a live site out of search is the worse
- * error.
+ * pages when this started stays listable, because dropping a live site out
+ * of search is the worse error, and its missing address is a problem to fix.
  *
  * @module staging/guard
  */
@@ -89,7 +88,7 @@ async function productionAddresses(
 }
 
 /** The site's recorded standing, or nothing before it is decided. */
-export async function readStanding(
+async function readStanding(
   ctx: PluginContext
 ): Promise<StagingStanding | undefined> {
   const { data } = await ctx.services.ownCollections.listEntries(
@@ -140,18 +139,6 @@ export async function decideStanding(
     return (await readStanding(ctx)) ?? standing;
   }
   return standing;
-}
-
-/**
- * Whether the site lacks a production address while it is served listable:
- * the problem asking a person for it.
- */
-export async function productionAddressMissing(
-  ctx: PluginContext,
-  readRules: ReadRules
-): Promise<boolean> {
-  if ((await productionAddresses(ctx, readRules)).length > 0) return false;
-  return (await readStanding(ctx)) !== "guarded";
 }
 
 /**
