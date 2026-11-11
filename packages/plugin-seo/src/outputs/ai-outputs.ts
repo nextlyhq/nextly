@@ -27,7 +27,7 @@ import {
   addressHolders,
   withAddressHolders,
 } from "../address-record/participant";
-import { resolveIn, servedAt } from "../languages/versions";
+import { onceEach, resolveIn, servedAt } from "../languages/versions";
 import { originOf } from "../origin";
 import { isRecord, textOf } from "../plain-values";
 import type { SiteRules } from "../resolver/page-levels";
@@ -102,9 +102,12 @@ export async function llmsTxtOf(
   rules: SiteRules
 ): Promise<string | null> {
   if (rules.llmsTxt !== true) return null;
+  // The site's rules read once per language for the whole file, as the
+  // listing reads them, not once a page.
+  const readRules = onceEach(config.readRules);
   const { pages } = await listPages(ctx, {
     origin,
-    readRules: config.readRules,
+    readRules,
     ...(config.collections === undefined
       ? {}
       : { collections: config.collections }),
@@ -141,7 +144,7 @@ export async function llmsTxtOf(
     const head =
       document === undefined
         ? {}
-        : await publicHead(ctx, page, document, config.readRules);
+        : await publicHead(ctx, page, document, readRules);
     entries.push({
       section: sections.get(page.holder.collection) ?? SINGLES_SECTION,
       title: head.title ?? page.path,
@@ -260,7 +263,9 @@ async function publicDocuments(
   const groups = new Map<string, ListedPage[]>();
   for (const page of pages) {
     const group = `${page.holder.collection}|${page.language}`;
-    groups.set(group, [...(groups.get(group) ?? []), page]);
+    const list = groups.get(group) ?? [];
+    list.push(page);
+    groups.set(group, list);
   }
   const nextly = await getCachedNextly();
   for (const group of groups.values()) {
