@@ -166,6 +166,7 @@ import type { SingleHooks } from "../singles/config/types";
 
 import { planFieldGroupReload } from "./field-group-reload-plan";
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
+import { bootSeedingFollows } from "./seed-permissions";
 import { rewrittenSlugs, unwrittenSlugs } from "./sync-outcome";
 
 // Service-resolver shape. Defaulted to the real getService at runtime;
@@ -401,9 +402,22 @@ async function publishDeferred(
   ]);
 }
 
+/**
+ * How a registry sync this reload runs seeds permissions: left to a start's own
+ * seeding while one is still to come (`bootSeedingFollows`), so a development
+ * start ensures each permission once; seeded by the sync otherwise, as on an
+ * HMR save.
+ */
+function seedingOptions(): { seedPermissions: boolean } {
+  return { seedPermissions: !bootSeedingFollows() };
+}
+
 // Minimal duck-typed surfaces of registry services used here.
 interface CollectionRegistrySurface {
-  syncCodeFirstCollections(configs: unknown[]): Promise<unknown>;
+  syncCodeFirstCollections(
+    configs: unknown[],
+    options?: { seedPermissions?: boolean }
+  ): Promise<unknown>;
   // All registered collections (code + UI) — keeps UI-created ones in the
   // desired schema so drizzle-kit doesn't treat them as orphan drops. Optional
   // so partial resolver fakes still satisfy the type.
@@ -420,7 +434,10 @@ interface CollectionRegistrySurface {
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
 }
 interface SingleRegistrySurface {
-  syncCodeFirstSingles(configs: unknown[]): Promise<unknown>;
+  syncCodeFirstSingles(
+    configs: unknown[],
+    options?: { seedPermissions?: boolean }
+  ): Promise<unknown>;
   // Refresh the live code-first config snapshot the default resolver reads, so
   // an HMR-added single or changed function default is honoured. `keepPriorFor`
   // holds the slugs whose sync failed, so their prior snapshot is retained.
@@ -645,7 +662,7 @@ async function syncCodeFirstMetadataOnly(
     // still held fields its table never received.
     const result =
       payload.length > 0
-        ? await registry.syncCodeFirstCollections(payload)
+        ? await registry.syncCodeFirstCollections(payload, seedingOptions())
         : undefined;
     const failed = unwrittenSlugs(result);
     if (failed.length > 0) {
@@ -670,7 +687,7 @@ async function syncCodeFirstMetadataOnly(
     let failedSlugs = new Set<string>();
     if (payload.length > 0) {
       failedSlugs = failedSingleSlugs(
-        await singleReg.syncCodeFirstSingles(payload)
+        await singleReg.syncCodeFirstSingles(payload, seedingOptions())
       );
     }
     failedSingles = failedSlugs;
@@ -1449,10 +1466,22 @@ const globalForReload = globalThis as unknown as {
  */
 export type ReloadOutcome = "refused" | "finished";
 
-export function reloadNextlyConfig(opts?: {
+/** What a reload is asked with. */
+interface ReloadOptions {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
-}): Promise<ReloadOutcome> {
+  /**
+   * The reload a development start runs (`runBootTimeApplyIfDev`), not an HMR
+   * save. It lands without comparing the schema when every declared entity is
+   * unchanged since the last development start brought it in line, and the
+   * extension schema is unchanged: the start has checked them already.
+   */
+  atStart?: boolean;
+}
+
+export function reloadNextlyConfig(
+  opts?: ReloadOptions
+): Promise<ReloadOutcome> {
   // Checked before the running one: the queued run is cleared inside its own
   // continuation, which is a microtask later than the running one's cleanup.
   // A caller landing in between would otherwise start a second concurrent run
@@ -1476,10 +1505,7 @@ export function reloadNextlyConfig(opts?: {
   return startReload(opts);
 }
 
-function startReload(opts?: {
-  resolver?: ServiceResolver;
-  dispatcher?: PromptDispatcher;
-}): Promise<ReloadOutcome> {
+function startReload(opts?: ReloadOptions): Promise<ReloadOutcome> {
   const started = runReload(opts).finally(() => {
     delete globalForReload.__nextly_reloadInFlight;
   });
@@ -1507,10 +1533,7 @@ function startReload(opts?: {
  * in place, whereas an exception escaping here reaches the dev server and turns
  * every later request into a 500.
  */
-async function runReload(opts?: {
-  resolver?: ServiceResolver;
-  dispatcher?: PromptDispatcher;
-}): Promise<ReloadOutcome> {
+async function runReload(opts?: ReloadOptions): Promise<ReloadOutcome> {
   const resolveService = (name: string): unknown =>
     opts?.resolver ? opts.resolver(name) : defaultResolver(name);
 
@@ -1585,10 +1608,7 @@ async function runReload(opts?: {
  * installs the staged kinds; every other way out drops them here, which a
  * commit has already made a no-op.
  */
-async function applyReload(opts?: {
-  resolver?: ServiceResolver;
-  dispatcher?: PromptDispatcher;
-}): Promise<void> {
+async function applyReload(opts?: ReloadOptions): Promise<void> {
   const { stagePrincipalKinds } = await import(
     "../plugins/principals/registry"
   );
@@ -1617,10 +1637,7 @@ async function applyReload(opts?: {
 
 async function applyReloadHolding(
   principalKinds: { commit: () => void },
-  opts?: {
-    resolver?: ServiceResolver;
-    dispatcher?: PromptDispatcher;
-  }
+  opts?: ReloadOptions
 ): Promise<void> {
   const resolverArg = opts?.resolver;
   const resolve = (name: string): unknown =>
@@ -2158,6 +2175,26 @@ async function applyReloadHolding(
       "[Nextly HMR] Every target was deferred; abandoning this reload."
     );
     undoOptimisticReloadWork();
+    return;
+  }
+
+  // At a development start, a configuration whose every entity is unchanged
+  // since the last start brought it in line has nothing for this reload to
+  // compare: the start's own checks covered it. Landed as the empty case below
+  // lands, without reading any table. Compared in full otherwise, never per
+  // entity: the apply hands drizzle-kit the whole managed set, and a table left
+  // out of it reads as one to drop.
+  // Loaded here: the start's apply loads this module the same way.
+  const { unchangedSinceLastStart } = await import("./boot-apply");
+  if (
+    opts?.atStart === true &&
+    !extensionSchemaChanged &&
+    targets.every(t => unchangedSinceLastStart("collection", t.slug)) &&
+    singleTargets.every(t => unchangedSinceLastStart("single", t.slug)) &&
+    componentTargets.every(t => unchangedSinceLastStart("fieldGroup", t.slug))
+  ) {
+    republishRecordingPolicies(newConfig, { collections: true, singles: true });
+    commitReload();
     return;
   }
 
@@ -2966,8 +3003,10 @@ async function applyReloadHolding(
       const codeFirstConfigs = buildCollectionSyncPayload(
         newConfig.collections ?? []
       );
-      const collectionSync =
-        await registry.syncCodeFirstCollections(codeFirstConfigs);
+      const collectionSync = await registry.syncCodeFirstCollections(
+        codeFirstConfigs,
+        seedingOptions()
+      );
 
       // The pipeline just created any missing tables and altered the edited
       // ones, and the registry's rows still say `pending` for both; see
@@ -3044,7 +3083,8 @@ async function applyReloadHolding(
         // a per-single failure means its serialized metadata is stale, so that
         // slug keeps its prior default snapshot below rather than the new fields.
         const singleSync = await singleReg.syncCodeFirstSingles(
-          codeFirstSingleConfigs
+          codeFirstSingleConfigs,
+          seedingOptions()
         );
         failedSlugs = failedSingleSlugs(singleSync);
         failedSingleMetadata = failedSlugs;

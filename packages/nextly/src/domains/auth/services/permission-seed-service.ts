@@ -757,7 +757,12 @@ export class PermissionSeedService extends BaseService {
     rows?: readonly PermissionRow[]
   ): Promise<void> {
     if (slugs.length === 0) return;
-    const stored = rows ?? (await this.permissionService.permissionRows());
+    // One entity's own rows where one is seeded, every row otherwise.
+    const stored =
+      rows ??
+      (await this.permissionService.permissionRows(
+        slugs.length === 1 ? slugs : undefined
+      ));
     const held = new Set(
       stored.map(row => permissionKey(String(row.action), String(row.resource)))
     );

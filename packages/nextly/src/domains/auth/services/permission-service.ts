@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
-import { and, asc, count, desc, eq, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, or, sql } from "drizzle-orm";
 
 import type {
   PermissionInsertData,
@@ -615,12 +615,14 @@ export class PermissionService extends BaseService {
   }
 
   /**
-   * Every permission row, with what `ensurePermission` compares a declaration
-   * against, in one read.
+   * Every permission row, or those of `resources`, with what
+   * `ensurePermission` compares a declaration against, in one read.
    */
-  async permissionRows(): Promise<PermissionRow[]> {
+  async permissionRows(
+    resources?: readonly string[]
+  ): Promise<PermissionRow[]> {
     const { permissions } = this.tables;
-    return (await this.db
+    const query = this.db
       .select({
         id: permissions.id,
         action: permissions.action,
@@ -631,7 +633,16 @@ export class PermissionService extends BaseService {
         danger: permissions.danger,
         orphanedAt: permissions.orphanedAt,
       })
-      .from(permissions)) as PermissionRow[];
+      .from(permissions);
+    // Matched without regard to case, as `findByActionResource` matches.
+    return (await (resources === undefined
+      ? query
+      : query.where(
+          inArray(
+            sql`LOWER(${permissions.resource})`,
+            resources.map(resource => resource.toLowerCase())
+          )
+        ))) as PermissionRow[];
   }
 
   /**

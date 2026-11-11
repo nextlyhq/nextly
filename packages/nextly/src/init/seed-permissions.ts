@@ -133,6 +133,8 @@ const globalForSeeding = globalThis as unknown as {
   __nextly_seedingAsked?: number;
   /** Each hold, with how many seeding runs had been asked for when it was taken. */
   __nextly_seedingHeldAt?: Map<Promise<void>, number>;
+  /** How many seeding runs had been asked for when the run in flight began. */
+  __nextly_seedingBeganAt?: number;
   __nextly_publicRoleRetry?: ReturnType<typeof setTimeout>;
 };
 
@@ -182,8 +184,22 @@ export function seedPermissionsAndRolePresets(): Promise<void> {
   // A boot that arrives while another is seeding joins that run rather than
   // starting a second one over the same rows.
   const inFlight = globalForSeeding.__nextly_seeding;
-  if (inFlight) return inFlight;
+  if (inFlight) {
+    // A boot that took its hold after the run in flight began registered what
+    // that run may already have read past, so it seeds once that run is done
+    // rather than taking it for its own.
+    const began = globalForSeeding.__nextly_seedingBeganAt ?? 0;
+    const heldSince = [
+      ...(globalForSeeding.__nextly_seedingHeldAt?.values() ?? []),
+    ].some(askedWhenHeld => askedWhenHeld >= began);
+    if (!heldSince) return inFlight;
+    return inFlight
+      .catch(() => undefined)
+      .then(() => seedPermissionsAndRolePresets());
+  }
 
+  globalForSeeding.__nextly_seedingBeganAt =
+    globalForSeeding.__nextly_seedingAsked;
   const run = seedEverything().finally(() => {
     if (globalForSeeding.__nextly_seeding === run) {
       globalForSeeding.__nextly_seeding = undefined;

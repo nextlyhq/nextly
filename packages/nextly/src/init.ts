@@ -484,9 +484,23 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
               // is left unrecorded, so the next start checks it, and warns, again.
               previewDesiredSchema: async args => {
                 const [slug] = Object.keys(args.desired.collections);
+                const own = slug
+                  ? changed.find(c => c.slug === slug)?.tableName
+                  : undefined;
                 try {
                   const preview = await previewDesiredSchema(args);
-                  if (slug && preview.operations.length > 0) {
+                  // Only an operation on the collection's own tables (its
+                  // table, its translations, its junctions): every preview
+                  // also reports the plugin and app tables, which are not it.
+                  if (
+                    slug &&
+                    own &&
+                    preview.operations.some(operation =>
+                      tableOfOperation(operation).some(
+                        table => table === own || table.startsWith(`${own}_`)
+                      )
+                    )
+                  ) {
                     markNotInLine("collection", slug);
                   }
                   return preview;
@@ -885,4 +899,17 @@ export async function shutdownNextly(): Promise<void> {
   if (globalForInit.__nextly_cachedInstance) {
     await globalForInit.__nextly_cachedInstance.shutdown();
   }
+}
+
+/** The tables a schema operation names: the one it changes, or a rename's two. */
+function tableOfOperation(operation: unknown): string[] {
+  const op = operation as {
+    tableName?: unknown;
+    table?: { name?: unknown };
+    fromName?: unknown;
+    toName?: unknown;
+  };
+  return [op.tableName, op.table?.name, op.fromName, op.toName].filter(
+    (name): name is string => typeof name === "string"
+  );
 }

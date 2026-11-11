@@ -240,6 +240,27 @@ describe("seedPermissionsAndRolePresets", () => {
     expect(seedRolePresets).toHaveBeenCalledTimes(1);
   });
 
+  it("seeds again for a boot whose hold was taken after the run in flight began", async () => {
+    let finish: (value: ReturnType<typeof seeded>) => void = () => {};
+    seedSystemPermissions.mockReturnValueOnce(
+      new Promise(resolve => {
+        finish = resolve;
+      })
+    );
+
+    // A run in flight, then a boot that holds the gate and registers what that
+    // run may already have read past, and asks for its seeding.
+    const earlier = seedPermissionsAndRolePresets();
+    const release = holdBootSeeding();
+    const own = seedPermissionsAndRolePresets();
+
+    finish(seeded());
+    await Promise.all([earlier, own]);
+    release();
+    // Its own run, after the earlier one, not the earlier one joined.
+    expect(seedSystemPermissions).toHaveBeenCalledTimes(2);
+  });
+
   it("does not hold a boot up when nothing is seeding", async () => {
     await expect(awaitBootSeeding()).resolves.toBeUndefined();
   });

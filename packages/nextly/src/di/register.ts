@@ -3835,16 +3835,28 @@ async function syncCodeFirstCollections(
   const collectionsBySlug = new Map(
     (transformedConfig.collections ?? []).map(c => [c.slug, c])
   );
+  // Asked of one listing of the tables there are, read once, rather than of the
+  // database once per collection: a table dropped since the last start is
+  // still found missing, at the same cost for five collections as for fifty.
+  let existingTables: Promise<Set<string> | null> | undefined;
+  const tableIsThere = async (tableName: string): Promise<boolean> => {
+    existingTables ??= adapter.listTables().then(
+      names => new Set(names.map(name => name.toLowerCase())),
+      () => null
+    );
+    const listed = await existingTables;
+    return listed
+      ? listed.has(tableName.toLowerCase())
+      : adapter.tableExists(tableName);
+  };
   for (const slug of syncResult.unchanged) {
-    // A development start brought this one's table in line with the same declaration already.
-    if (unchangedSinceLastStart("collection", slug)) continue;
     const collection = collectionsBySlug.get(slug);
     const baseTableName = collection?.dbName ?? slug.replace(/-/g, "_");
     const tableName = baseTableName.startsWith("dc_")
       ? baseTableName
       : `dc_${baseTableName}`;
     try {
-      const tableExists = await adapter.tableExists(tableName);
+      const tableExists = await tableIsThere(tableName);
       if (!tableExists) {
         logger.info?.(
           `Table ${tableName} missing for registered collection ${slug}, adding to sync`
