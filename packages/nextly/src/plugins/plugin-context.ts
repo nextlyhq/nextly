@@ -1995,8 +1995,10 @@ function isDigestKeyAdapter(value: unknown): value is DigestKeyAdapter {
     "withSession",
     "transactionOpenInFlow",
   ];
-  return methods.every(
-    name => typeof (value as Record<string, unknown>)[name] === "function"
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.dialect === "string" &&
+    methods.every(name => typeof record[name] === "function")
   );
 }
 
@@ -2006,7 +2008,7 @@ function asDigestKeyAdapter(adapter: AdapterTransactions): DigestKeyAdapter {
     code: "INTERNAL_ERROR",
     publicMessage: "An unexpected error occurred.",
     logMessage:
-      "The adapter this plugin context resolves has no withSession or transactionOpenInFlow, which keyed digests need.",
+      "The adapter this plugin context resolves has no dialect, withSession or transactionOpenInFlow, which keyed digests need.",
     logContext: { reason: "digest-adapter-incomplete" },
   });
 }

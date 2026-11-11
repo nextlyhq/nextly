@@ -57,6 +57,7 @@ function digests(
     adapter: () => ({
       transactionOpenInFlow: () => flow.inTransaction,
       withSession: work => work({ execute: async () => [] as never }),
+      dialect: "sqlite",
     }),
   });
 }

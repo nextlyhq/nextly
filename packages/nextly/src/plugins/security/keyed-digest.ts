@@ -87,7 +87,7 @@ export interface KeyedDigestsOptions {
 
 /** What the helper needs of the adapter. */
 export type DigestKeyAdapter = OpenTransactionProbe &
-  Pick<DrizzleAdapter, "withSession">;
+  Pick<DrizzleAdapter, "withSession" | "dialect">;
 
 /** Bytes of key material: the HMAC-SHA256 block's worth of entropy. */
 const KEY_BYTES = 32;
@@ -199,6 +199,22 @@ async function loadKey(
   return key;
 }
 
+/**
+ * Run `work` so its statements commit on their own. On SQLite's one
+ * connection a statement run while another request's transaction is open
+ * would join that transaction, and a rollback there would undo a key this
+ * process went on using: there `work` runs in a session, which waits until no
+ * other request's transaction is open. On PostgreSQL and MySQL the store's
+ * statements take a pooled connection of their own already, and a session
+ * would hold the connection they wait for on a pool of one.
+ */
+function onItsOwn<T>(
+  adapter: DigestKeyAdapter,
+  work: () => Promise<T>
+): Promise<T> {
+  return adapter.dialect === "sqlite" ? adapter.withSession(work) : work();
+}
+
 /** @experimental `ctx.security.digests` for one plugin. */
 export function createKeyedDigests(options: KeyedDigestsOptions): KeyedDigests {
   // The key never changes once made, so it is read once per process; the
@@ -212,19 +228,12 @@ export function createKeyedDigests(options: KeyedDigestsOptions): KeyedDigests {
     if (key === undefined) {
       assertNoOpenTransaction(options.adapter(), "security.digests first use");
     }
-    // In a session of its own, so it commits on its own: on SQLite's one
-    // connection a statement run while another request's transaction is
-    // open would join that transaction, and a rollback there would undo a
-    // key this process went on using.
-    key ??= options
-      .adapter()
-      .withSession(() =>
-        loadKey(options.owner, options.store(), options.secrets())
-      )
-      .catch((error: unknown) => {
-        key = undefined;
-        throw error;
-      });
+    key ??= onItsOwn(options.adapter(), () =>
+      loadKey(options.owner, options.store(), options.secrets())
+    ).catch((error: unknown) => {
+      key = undefined;
+      throw error;
+    });
     return key;
   };
   return {
