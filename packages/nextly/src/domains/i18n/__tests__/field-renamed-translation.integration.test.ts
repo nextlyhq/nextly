@@ -1290,9 +1290,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
     "refuses a field renamed, made shared and Required while an entry has no English value, and changes nothing, when $path",
     async ({ table, seed, change }) => {
       const id = await seed();
-      // English, the row the entry keeps, is empty, so it would be left without a value.
+      // No language has a value, so whichever the entry keeps, it would be left without one.
       await query(
-        `UPDATE ${quote(dialect, `${table}_locales`)} SET ${quote(dialect, "heading")} = NULL WHERE ${quote(dialect, "_locale")} = 'en'`
+        `UPDATE ${quote(dialect, `${table}_locales`)} SET ${quote(dialect, "heading")} = NULL`
       );
 
       const refusal = await change(renamedShared({ required: true })).then(
@@ -1305,7 +1305,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
       );
       expect(await companionValues(table, "heading", id)).toEqual({
         en: null,
-        es: "Hola",
+        es: null,
       });
       expect(await columnsOf(table)).not.toContain("title2");
     }

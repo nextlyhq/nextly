@@ -99,8 +99,16 @@ export function planFieldLeavesTranslationMigration(
   const main = q(mainTable, dialect);
   const names = spec.columns.map(c => c.name);
 
+  // Every language, the kept one included: the shared file's DOWN puts each back from here, the
+  // kept language too, which need not be the default one.
   const archiveUp = spec.columns.map(column =>
-    buildFieldLeavesTranslationArchiveStatement(ref, owner, column.name)
+    buildFieldLeavesTranslationArchiveStatement(
+      ref,
+      owner,
+      column.name,
+      column.name,
+      true
+    )
   );
   const archiveDown = [
     // The archived copies stay: a restore may still read them, and they change nothing a rollback
@@ -147,12 +155,11 @@ export function planFieldLeavesTranslationMigration(
     ...spec.columns.flatMap(column => {
       const col = q(column.name, dialect);
       return [
-        // The default language's value is the shared one the main table holds now.
-        `UPDATE ${comp} SET ${col} = (SELECT ${main}.${col} FROM ${main} WHERE ${mainId} = ${parent}) ` +
-          `WHERE ${locale} = ${lit(defaultLocale)}`,
-        // Every other language from the newest value archived for it.
-        `UPDATE ${comp} SET ${col} = ${fromArchivedText(newestArchived(column), column, dialect)} ` +
-          `WHERE ${locale} <> ${lit(defaultLocale)}`,
+        // Every language from the newest value archived for it, the kept one included, which the
+        // archive file records too. A default-language row with nothing archived, as for an entry
+        // made while the field was shared, takes the shared value the main table holds now.
+        `UPDATE ${comp} SET ${col} = COALESCE(${fromArchivedText(newestArchived(column), column, dialect)}, ` +
+          `CASE WHEN ${locale} = ${lit(defaultLocale)} THEN (SELECT ${main}.${col} FROM ${main} WHERE ${mainId} = ${parent}) END)`,
       ];
     }),
   ];

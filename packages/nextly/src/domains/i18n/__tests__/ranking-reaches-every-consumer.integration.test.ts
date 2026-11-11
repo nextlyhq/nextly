@@ -145,6 +145,50 @@ describeEachDialect(
       return { shared: main?.heading, archived: archived.map(r => r.locale) };
     }
 
+    async function companionSql(statement: string): Promise<void> {
+      await current!.adapter.executeQuery(statement);
+    }
+
+    async function makeHeadingShared(handler: CollectionsHandler) {
+      const saved = await handler.updateCollection(
+        { collectionName: "posts" },
+        { fields: [{ name: "heading", type: "text", localized: false }] }
+      );
+      expect(saved.success, saved.message).toBe(true);
+    }
+
+    // A language removed in Settings keeps its rows, which no reader can reach: a published one
+    // is not what readers saw.
+    it("keeps a draft of a language the site lists over a published one of a language it removed", async () => {
+      const { handler, id } = await seeded();
+      await companionSql(
+        `UPDATE ${q("dc_posts_locales")} SET ${q("_status")} = 'draft' WHERE ${q("_locale")} = 'fr'`
+      );
+      await companionSql(
+        `INSERT INTO ${q("dc_posts_locales")} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("heading")}) VALUES ('${id}', 'it', 'published', 'Ciao')`
+      );
+
+      await makeHeadingShared(handler);
+
+      expect(await kept(id)).toEqual({
+        shared: "Hallo",
+        archived: ["fr", "it"],
+      });
+    });
+
+    // A reader whose language's row is empty is shown the next language that has the field, so
+    // the value kept is that one, not the empty row.
+    it("keeps the next live language's value where the first live one has the field empty", async () => {
+      const { handler, id } = await seeded();
+      await companionSql(
+        `UPDATE ${q("dc_posts_locales")} SET ${q("_status")} = 'published', ${q("heading")} = NULL WHERE ${q("_locale")} = 'de'`
+      );
+
+      await makeHeadingShared(handler);
+
+      expect(await kept(id)).toEqual({ shared: "Bonjour", archived: [] });
+    });
+
     it("keeps the published French when the whole collection stops being translated", async () => {
       const { handler, id } = await seeded();
 

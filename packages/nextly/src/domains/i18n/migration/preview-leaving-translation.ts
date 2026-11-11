@@ -157,7 +157,8 @@ export async function previewFieldsLeavingTranslation(
           ? null
           : Object.values(byLocale).reduce((sum, n) => sum + n, 0),
       entriesWithoutDefault: counts?.withoutDefault ?? null,
-      sharedFrom: counts?.sharedFrom ?? null,
+      sharedFrom:
+        counts === null ? null : (counts.sharedFrom.get(column) ?? {}),
       defaultLocale: args.defaultLocale,
       restoreCommand: `nextly i18n:restore --collection ${args.slug} --field ${field.name}`,
       ...(refusal !== undefined ? { refusal } : {}),
@@ -203,12 +204,12 @@ async function countsOf(
 ): Promise<{
   byColumn: Map<string, Record<string, number>>;
   withoutDefault: number;
-  sharedFrom: Record<string, number>;
+  sharedFrom: Map<string, Record<string, number>>;
 } | null> {
   const companion = `${args.tableName}_locales`;
   // The language an entry keeps, ranked as the apply ranks it (`chosenRowOrder`), so the counts
   // say what the apply will do.
-  const keptLocaleOf = (parent: string) =>
+  const keptLocaleOf = (parent: string, column: string) =>
     chosenLocaleOf(
       {
         dialect: args.dialect,
@@ -216,7 +217,8 @@ async function countsOf(
         defaultLocale: args.defaultLocale,
         liveness: copyLiveness(args.languageOrder, args.companionHasStatus),
       },
-      parent
+      parent,
+      column
     );
   try {
     return {
@@ -232,6 +234,7 @@ async function countsOf(
         args.db,
         args.dialect,
         companion,
+        columns,
         args.defaultLocale,
         keptLocaleOf
       ),

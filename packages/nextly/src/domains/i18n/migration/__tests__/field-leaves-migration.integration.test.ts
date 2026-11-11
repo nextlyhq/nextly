@@ -291,7 +291,7 @@ for (const entry of DIALECTS) {
       async function archived(): Promise<{ locale: string; value: string }[]> {
         return adapter.executeQuery<{ locale: string; value: string }>(
           `SELECT ${q("locale")} AS locale, ${q("value")} AS value FROM ${q("nextly_i18n_archive")} ` +
-            `WHERE ${q("collection")} = '${slug}' AND ${q("field")} = 'body' ORDER BY ${q("id")}`
+            `WHERE ${q("collection")} = '${slug}' AND ${q("field")} = 'body' AND ${q("entry_id")} = 'e1' ORDER BY ${q("locale")}, ${q("id")}`
         );
       }
 
@@ -301,7 +301,10 @@ for (const entry of DIALECTS) {
           `SELECT ${q("body")} AS body FROM ${q(table)} WHERE ${q("id")} = 'e1'`
         );
         expect(main?.body).toBe("Hello");
-        expect(await archived()).toEqual([{ locale: "es", value: "Hola" }]);
+        expect(await archived()).toEqual([
+          { locale: "en", value: "Hello" },
+          { locale: "es", value: "Hola" },
+        ]);
         expect(await columnsOf(companion)).not.toContain("body");
       }
 
@@ -386,10 +389,45 @@ for (const entry of DIALECTS) {
         );
         await migrate();
 
+        // The file's archive records the kept French as well, so its DOWN can put it back.
         expect(await keptAndArchived()).toEqual({
           shared: "Bonjour",
-          archived: ["de"],
+          archived: ["de", "fr"],
         });
+      });
+
+      it("puts every language back where it was on the way down, the kept one included", async () => {
+        const { published, languageOrder } = await seededReaders();
+        await adapter.executeQuery(
+          `INSERT INTO ${q(companion)} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("body")}) VALUES ('e1', 'en', 'draft', 'Hi')`
+        );
+        await migrateCreateIn(
+          {
+            ...published,
+            fields: [
+              { name: "body", type: "text", localized: false },
+              { name: "price", type: "number" },
+            ],
+          },
+          languageOrder
+        );
+        await migrate();
+        expect((await keptAndArchived()).shared).toBe("Bonjour");
+
+        // The shared file, the main file and the archive file, newest first.
+        expect(await migrateDown(3)).toHaveLength(3);
+
+        const back = await adapter.executeQuery<{
+          locale: string;
+          body: string | null;
+        }>(
+          `SELECT ${q("_locale")} AS locale, ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' ORDER BY ${q("_locale")}`
+        );
+        expect(back).toEqual([
+          { locale: "de", body: "Hallo" },
+          { locale: "en", body: "Hi" },
+          { locale: "fr", body: "Bonjour" },
+        ]);
       });
 
       it("keeps the published French over a German draft the site lists first, when the collection stops being translated", async () => {
@@ -518,7 +556,7 @@ for (const entry of DIALECTS) {
         ]);
         expect(await columnsOf(table)).not.toContain("body");
 
-        // Applied again, it changes nothing more: the archive still holds one row.
+        // Applied again, it changes nothing more: the archive holds the same rows.
         await migrate();
         await expectShared();
       });
@@ -811,7 +849,10 @@ for (const entry of DIALECTS) {
         await migrateStoppingBefore(
           f => !before.has(f) && !f.includes("_archive_localization_")
         );
-        expect(await archived()).toEqual([{ locale: "es", value: "Hola" }]);
+        expect(await archived()).toEqual([
+          { locale: "en", value: "Hello" },
+          { locale: "es", value: "Hola" },
+        ]);
 
         const file = (await readdir(migrationsDir)).find(f =>
           f.endsWith(`_archive_localization_${slug}.sql`)
@@ -827,7 +868,10 @@ for (const entry of DIALECTS) {
           await adapter.executeQuery(statement);
         }
 
-        expect(await archived()).toEqual([{ locale: "es", value: "Hola" }]);
+        expect(await archived()).toEqual([
+          { locale: "en", value: "Hello" },
+          { locale: "es", value: "Hola" },
+        ]);
       });
 
       it("shows both moves in a dry run, and changes nothing", async () => {

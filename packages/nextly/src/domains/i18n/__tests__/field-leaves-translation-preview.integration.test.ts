@@ -326,10 +326,13 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       (await previewShared(leaving)).leavingTranslation?.[0]?.refusal
     ).toBe(undefined);
 
-    // One entry whose English heading is empty, as an older install may hold: English is the
-    // row it keeps, so it would be left without a heading.
+    // One entry with no heading in any language, as an older install may hold: whichever
+    // language it keeps, it would be left without one.
+    const [two] = await query<{ parent: string }>(
+      `SELECT ${quote(dialect, "_parent")} AS parent FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
+    );
     await query(
-      `UPDATE ${quote(dialect, "dc_posts_locales")} SET ${quote(dialect, "heading")} = NULL WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
+      `UPDATE ${quote(dialect, "dc_posts_locales")} SET ${quote(dialect, "heading")} = NULL WHERE ${quote(dialect, "_parent")} = '${two.parent}'`
     );
 
     expect(
