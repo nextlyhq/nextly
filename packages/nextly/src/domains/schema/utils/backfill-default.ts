@@ -124,6 +124,32 @@ export function backfillDefaultForType(args: BackfillDefaultArgs): string {
 }
 
 /**
+ * A date as a fill stores it, the one form both the push binds and a migration
+ * file writes, so the two land on the same value: the UTC ISO string on
+ * PostgreSQL, as every date Nextly writes is sent (its `timestamp` column has
+ * no time zone, so a bound `Date` would land as the process's local time); the
+ * UTC `YYYY-MM-DD HH:MM:SS.fff` on MySQL, whose session is pinned to UTC and
+ * whose datetime refuses the ISO form's `T` and `Z`; on SQLite, which stores a
+ * date as an integer, its epoch seconds.
+ */
+/**
+ * The shape of MySQL's stored form of a date fill (`storedDateValue`), a UTC
+ * `YYYY-MM-DD HH:MM:SS` with up to six digits of fraction: what a check of a
+ * date fill accepts on MySQL beside the ISO form and a `Date`.
+ */
+export const MYSQL_STORED_DATE =
+  /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?$/;
+
+export function storedDateValue(
+  date: Date,
+  dialect: SupportedDialect
+): string | number {
+  if (dialect === "sqlite") return Math.floor(date.getTime() / 1000);
+  const iso = date.toISOString();
+  return dialect === "mysql" ? iso.slice(0, 23).replace("T", " ") : iso;
+}
+
+/**
  * The value a backfilled column of this field type is filled with, for an apply that binds it as
  * a parameter rather than writing it into the column's definition, such as the schema pipeline's
  * fill of a Required column added to a table that holds rows. The same empty
@@ -145,7 +171,7 @@ export function backfillValueForType(
     case "contributed":
       if (empty.json) return JSON.stringify(empty.value);
       if (empty.value instanceof Date) {
-        return sqlite ? Math.floor(empty.value.getTime() / 1000) : empty.value;
+        return storedDateValue(empty.value, args.dialect);
       }
       return sqlite && typeof empty.value === "boolean"
         ? Number(empty.value)
@@ -157,7 +183,7 @@ export function backfillValueForType(
     case "boolean":
       return sqlite ? 0 : false;
     case "now":
-      return sqlite ? Math.floor(now.getTime() / 1000) : now;
+      return storedDateValue(now, args.dialect);
     case "none":
       return undefined;
     case "text":

@@ -10,6 +10,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import { storedDateValue } from "../../utils/backfill-default";
 
 import { quoteIdent } from "./identifier-quoting";
 
@@ -48,10 +49,10 @@ function sqlValueLiteral(value: unknown, dialect: SupportedDialect): string {
     if (dialect === "postgresql") return value ? "TRUE" : "FALSE";
     return value ? "1" : "0";
   }
-  // A date column's fill reaches here as the push binds it: a `Date` on
-  // PostgreSQL and MySQL (`backfillValueForType`, a field's stated default).
+  // A date reaching here is written in the one form a date fill is stored
+  // in, the form the push binds (`storedDateValue`).
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return dateLiteral(value, dialect);
+    return sqlValueLiteral(storedDateValue(value, dialect), dialect);
   }
   throw new NextlyError({
     code: "VALIDATION_ERROR",
@@ -59,20 +60,6 @@ function sqlValueLiteral(value: unknown, dialect: SupportedDialect): string {
       "A fill value must be a string, a finite number, a boolean or a date.",
     logContext: { valueType: typeof value },
   });
-}
-
-/**
- * `date` as the literal each dialect's date column reads as the same instant
- * the push binds: an ISO timestamp on PostgreSQL; on MySQL, whose session is
- * pinned to UTC, the UTC `YYYY-MM-DD HH:MM:SS.fff` its datetime takes (it
- * refuses the ISO form's `T` and `Z`); on SQLite, which stores a date as epoch
- * seconds, that number.
- */
-function dateLiteral(date: Date, dialect: SupportedDialect): string {
-  if (dialect === "sqlite") return String(Math.floor(date.getTime() / 1000));
-  const iso = date.toISOString();
-  if (dialect === "mysql") return `'${iso.slice(0, 23).replace("T", " ")}'`;
-  return `'${iso}'`;
 }
 
 /** The statement settling `resolution`'s rows. */

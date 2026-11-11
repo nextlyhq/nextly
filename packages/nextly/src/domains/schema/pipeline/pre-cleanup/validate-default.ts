@@ -17,6 +17,7 @@ import {
   ICON_ID_MAX_LENGTH,
   ICON_ID_PATTERN,
 } from "../../../../collections/fields/types/icon";
+import { MYSQL_STORED_DATE } from "../../utils/backfill-default";
 
 interface MinimalFieldDef {
   name: string;
@@ -55,8 +56,17 @@ function schemaForType(type: string, dialect: SupportedDialect): z.ZodTypeAny {
       : z.boolean();
   }
   if (DATE_TYPES.has(type)) {
-    return sqlite
-      ? z.union([z.string().datetime(), z.date(), z.number().int()])
+    if (sqlite) {
+      return z.union([z.string().datetime(), z.date(), z.number().int()]);
+    }
+    // A date fill is bound in the form it is stored in (`storedDateValue`):
+    // on MySQL its UTC datetime, which is a date there too.
+    return dialect === "mysql"
+      ? z.union([
+          z.string().datetime(),
+          z.date(),
+          z.string().regex(MYSQL_STORED_DATE),
+        ])
       : z.union([z.string().datetime(), z.date()]);
   }
   return z.unknown();

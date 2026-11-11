@@ -219,12 +219,7 @@ export async function writeCollectionSave(
     appliedBy?: () => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult> {
-  const written = await writeSave(deps, save, {
-    ...options,
-    // The push runs the translation preflight, which judges a field joining
-    // translation against the database before it changes anything.
-    joiningShapeJudgedByCaller: deps.applies && options.appliedBy !== undefined,
-  });
+  const written = await writeSave(deps, save, options);
   // Once a push has run, the database changed outside the files: they stay.
   let pushed = false;
   try {
@@ -324,11 +319,7 @@ export async function prepareCollectionSave(
 async function writeSave(
   deps: CollectionSaveDeps,
   save: CollectionSave,
-  options: {
-    historyChecked?: boolean;
-    /** The push judges a field joining translation (`GenerateArgs.joiningShapeJudgedByCaller`). */
-    joiningShapeJudgedByCaller?: boolean;
-  }
+  options: { historyChecked?: boolean }
 ): Promise<{
   files: SaveFiles;
   names: readonly string[];
@@ -349,12 +340,8 @@ async function writeSave(
   const undo = (error: unknown) =>
     undoUnapplied(deps, names, before, definitionPath, error);
   try {
-    const files = await writeFiles(
-      deps,
-      save,
-      plan,
-      written => names.push(...written),
-      options.joiningShapeJudgedByCaller === true
+    const files = await writeFiles(deps, save, plan, written =>
+      names.push(...written)
     );
     return { files, names, table: plan.table, undo };
   } catch (error) {
@@ -383,12 +370,7 @@ export async function previewCollectionSave(
       { ...deps, migrationsDir: scratch },
       save,
       plan,
-      () => {},
-      // Judged as the save will be: a collection translated before or after
-      // the save applies through its push (`appliedBy`), whose preflight
-      // judges a field joining translation, wherever the save runs it.
-      deps.applies &&
-        (save.previous?.localized === true || save.entity?.localized === true)
+      () => {}
     );
     const names = [
       ...(files.adopt === undefined ? [] : [files.adopt]),
@@ -730,22 +712,18 @@ async function writeFiles(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   plan: SavePlan,
-  onWritten: (names: string[]) => void,
-  /** The push judges a field joining translation (`GenerateArgs.joiningShapeJudgedByCaller`). */
-  joiningShapeJudgedByCaller: boolean
+  onWritten: (names: string[]) => void
 ): Promise<SaveFiles> {
   // An adopted collection's address and sibling fields predate those rules.
   const held =
     plan.adoption !== null && save.previous !== null
       ? { held: [save.previous] }
       : {};
-  // What every file of this save is generated with.
-  const each = { ...held, joiningShapeJudgedByCaller };
   const now = save.now ?? new Date();
   let adopt: string | undefined;
   if (plan.adoption !== null && save.previous !== null) {
     const adopted = await generateFor(deps, {
-      ...each,
+      ...held,
       manifest: withCollection(plan.current, save.slug, save.previous),
       save,
       name: `${migrationSlug(save.slug)}_adopt`,
@@ -777,7 +755,7 @@ async function writeFiles(
   ) {
     convert.push(
       ...(await generateFor(deps, {
-        ...each,
+        ...held,
         manifest: withCollection(plan.current, save.slug, save.previous),
         save,
         name: `${migrationSlug(save.slug)}_convert`,
@@ -789,7 +767,7 @@ async function writeFiles(
     offset += 1;
   }
   const change = await generateFor(deps, {
-    ...each,
+    ...held,
     manifest: plan.next,
     save,
     name: `${migrationSlug(save.slug)}_${save.change}`,
@@ -997,8 +975,6 @@ async function generateFor(
     resolutions?: readonly ColumnResolution[];
     /** Collections the database holds that no snapshot records (`appMigrationInputs`). */
     held?: readonly UiSchemaEntity[];
-    /** The push judges a field joining translation (`GenerateArgs.joiningShapeJudgedByCaller`). */
-    joiningShapeJudgedByCaller?: boolean;
   }
 ): Promise<string[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -1053,9 +1029,6 @@ async function generateFor(
     ...(args.resolutions === undefined
       ? {}
       : { resolutions: args.resolutions }),
-    ...(args.joiningShapeJudgedByCaller === true
-      ? { joiningShapeJudgedByCaller: true }
-      : {}),
     decideRenames: candidates =>
       Promise.resolve(renamesOf(candidates, args.save.renamedFields ?? [])),
     now: args.now,

@@ -331,14 +331,6 @@ export interface GenerateArgs {
    * all in this file, so every database it reaches is settled the same way.
    */
   resolutions?: readonly ColumnResolution[];
-  /**
-   * A caller whose own apply judges a field joining translation against the
-   * database before anything changes (the Schema Builder's push, through its
-   * preflight) sets this: that judgement knows what an earlier, unfinished
-   * apply already moved and words its refusal for the Builder, so this
-   * generator's offline copy of it is left out rather than refusing first.
-   */
-  joiningShapeJudgedByCaller?: boolean;
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -796,8 +788,7 @@ export async function generateMigration(
     previousSnapshot,
     args.dialect,
     args.defaultLocale ?? "en",
-    companionHistory,
-    args.joiningShapeJudgedByCaller === true
+    companionHistory
   );
 
   // A file that moves existing values between a main table and its companion records the language
@@ -2474,9 +2465,7 @@ function planFieldsJoiningTranslation(
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
   defaultLocale: string,
-  history: TranslationRecords,
-  /** The caller judges a joining field's storage change itself (`joiningShapeJudgedByCaller`). */
-  shapeJudgedByCaller: boolean
+  history: TranslationRecords
 ): FieldJoinsEntry[] {
   return entities.flatMap(entry => {
     const { entity: c, kind } = entry;
@@ -2493,14 +2482,12 @@ function planFieldsJoiningTranslation(
       names.has(f.name) ? { ...f, localized: false } : f
     );
     const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
-    if (!shapeJudgedByCaller) {
-      assertFieldsMayJoinTranslation(
-        { entity: { ...c, fields: oldFields }, kind },
-        joining,
-        prevMain,
-        dialect
-      );
-    }
+    assertFieldsMayJoinTranslation(
+      { entity: { ...c, fields: oldFields }, kind },
+      joining,
+      prevMain,
+      dialect
+    );
     return [
       {
         entity: kind,
