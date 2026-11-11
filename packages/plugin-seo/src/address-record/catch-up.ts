@@ -77,20 +77,36 @@ export function lastCatchUp(): Promise<CatchUpReport> | undefined {
   return started?.run;
 }
 
+/**
+ * What a catch-up may be told to do along the way. `afterListing` runs once
+ * every page has been read and before any is recorded: the moment a save may
+ * land between the two, which a caller can stand in for.
+ */
+interface CatchUpOptions {
+  afterListing?: () => Promise<void>;
+}
+
 /** Run the catch-up again with the last context, as the next start would. */
-export async function catchUp(): Promise<CatchUpReport> {
+export async function catchUp(
+  options: CatchUpOptions = {}
+): Promise<CatchUpReport> {
   if (started === undefined) {
     throw NextlyError.internal({
       logContext: { reason: "address-catch-up-never-started" },
     });
   }
   await started.run;
-  return startCatchUp(started.ctx);
+  const run = caughtUp(started.ctx, options);
+  started = { ctx: started.ctx, run };
+  return run;
 }
 
-async function caughtUp(ctx: PluginContext): Promise<CatchUpReport> {
+async function caughtUp(
+  ctx: PluginContext,
+  options: CatchUpOptions = {}
+): Promise<CatchUpReport> {
   try {
-    return await runCatchUp(ctx);
+    return await runCatchUp(ctx, options);
   } catch (error) {
     ctx.logger.error("The SEO address record could not be brought up to date", {
       error,
@@ -267,13 +283,17 @@ async function claimTheNew(
   return { recorded, lost };
 }
 
-async function runCatchUp(ctx: PluginContext): Promise<CatchUpReport> {
+async function runCatchUp(
+  ctx: PluginContext,
+  options: CatchUpOptions
+): Promise<CatchUpReport> {
   const fingerprint = await ctx.publicAddresses.fingerprint();
   const record = await readRecord(ctx);
   if (record.fingerprint?.value === fingerprint && record.held.length > 0) {
     return NOTHING;
   }
   const pages = await everyPage(ctx);
+  await options.afterListing?.();
   const was = heldBefore(record.held);
   const kept = await keepWhatStands(ctx, pages, was);
   await letGoOfTheGone(ctx, was, kept);
