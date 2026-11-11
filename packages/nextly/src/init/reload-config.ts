@@ -403,13 +403,15 @@ async function publishDeferred(
 }
 
 /**
- * How a registry sync this reload runs seeds permissions: left to a start's own
- * seeding while one is still to come (`bootSeedingFollows`), so a development
- * start ensures each permission once; seeded by the sync otherwise, as on an
- * HMR save.
+ * How a registry sync this reload runs seeds permissions: a start's reload
+ * leaves them to the start's own seeding while that is still to come
+ * (`bootSeedingFollows`), so a development start ensures each permission once.
+ * Any other reload seeds, as an HMR save always has: a save landing while some
+ * start holds the gate cannot know whether that start's seeding has already
+ * read the registry, so an entity the save adds could be missed by it.
  */
-function seedingOptions(): { seedPermissions: boolean } {
-  return { seedPermissions: !bootSeedingFollows() };
+function seedingOptions(atStart: boolean): { seedPermissions: boolean } {
+  return { seedPermissions: !(atStart && bootSeedingFollows()) };
 }
 
 // Minimal duck-typed surfaces of registry services used here.
@@ -631,7 +633,9 @@ async function syncCodeFirstMetadataOnly(
     singles?: SingleDef[];
     fieldGroups?: ComponentDef[];
   },
-  logger?: LoggerLike
+  logger?: LoggerLike,
+  // Whether this is a start's reload, which may leave seeding to the start.
+  atStart = false
 ): Promise<{
   collections: boolean;
   singles: boolean;
@@ -662,7 +666,10 @@ async function syncCodeFirstMetadataOnly(
     // still held fields its table never received.
     const result =
       payload.length > 0
-        ? await registry.syncCodeFirstCollections(payload, seedingOptions())
+        ? await registry.syncCodeFirstCollections(
+            payload,
+            seedingOptions(atStart)
+          )
         : undefined;
     const failed = unwrittenSlugs(result);
     if (failed.length > 0) {
@@ -687,7 +694,7 @@ async function syncCodeFirstMetadataOnly(
     let failedSlugs = new Set<string>();
     if (payload.length > 0) {
       failedSlugs = failedSingleSlugs(
-        await singleReg.syncCodeFirstSingles(payload, seedingOptions())
+        await singleReg.syncCodeFirstSingles(payload, seedingOptions(atStart))
       );
     }
     failedSingles = failedSlugs;
@@ -1594,6 +1601,8 @@ async function runReload(opts?: ReloadOptions): Promise<ReloadOutcome> {
     logger?.error(
       `[Nextly HMR] could not establish migration state, skipping schema reload: ${describeError(error)}`
     );
+    // Nothing was applied, so a start's reload brought nothing in line.
+    if (opts?.atStart === true) await markStartIncomplete();
     return "finished";
   }
 }
@@ -1619,12 +1628,18 @@ async function applyReload(opts?: ReloadOptions): Promise<void> {
     "../domains/webhooks/event-type-registry"
   );
   const webhookEventTypes = stageWebhookEventTypes();
+  let loaded = false;
+  let landed = false;
   try {
     await applyReloadHolding(
       {
         commit: () => {
+          landed = true;
           principalKinds.commit();
           webhookEventTypes.commit();
+        },
+        configLoaded: () => {
+          loaded = true;
         },
       },
       opts
@@ -1633,10 +1648,25 @@ async function applyReload(opts?: ReloadOptions): Promise<void> {
     principalKinds.abandon();
     webhookEventTypes.abandon();
   }
+  // A start's reload that read a configuration and did not land left some of
+  // it behind its declaration (an apply deferred or failed, a sync that
+  // failed), which the start's own checks do not all see: a Single has no drift
+  // check. So the start records nothing new. One that read no configuration
+  // file applies nothing, landed or not: the start's configuration came from
+  // its caller, and `registerServices` brought it in.
+  if (opts?.atStart === true && loaded && !landed) {
+    await markStartIncomplete();
+  }
+}
+
+/** Mark the development start incomplete (`boot-apply` loads this module the same way). */
+async function markStartIncomplete(): Promise<void> {
+  const bootApply = await import("./boot-apply");
+  bootApply.markStartIncomplete();
 }
 
 async function applyReloadHolding(
-  principalKinds: { commit: () => void },
+  principalKinds: { commit: () => void; configLoaded: () => void },
   opts?: ReloadOptions
 ): Promise<void> {
   const resolverArg = opts?.resolver;
@@ -1856,6 +1886,7 @@ async function applyReloadHolding(
     undoOptimisticReloadWork();
     return;
   }
+  principalKinds.configLoaded();
 
   // Republish the audit seam from the reloaded config, so toggling
   // `webhooks.audit` in nextly.config.ts takes effect on save without a restart.
@@ -2597,7 +2628,8 @@ async function applyReloadHolding(
       const synced = await syncCodeFirstMetadataOnly(
         resolve,
         newConfig,
-        logger
+        logger,
+        opts?.atStart === true
       );
       // Every diff was zero-op and the sync ran, so the stored field lists and
       // the physical tables are in step: nothing is ahead of its table, and a
@@ -3005,7 +3037,7 @@ async function applyReloadHolding(
       );
       const collectionSync = await registry.syncCodeFirstCollections(
         codeFirstConfigs,
-        seedingOptions()
+        seedingOptions(opts?.atStart === true)
       );
 
       // The pipeline just created any missing tables and altered the edited
@@ -3084,7 +3116,7 @@ async function applyReloadHolding(
         // slug keeps its prior default snapshot below rather than the new fields.
         const singleSync = await singleReg.syncCodeFirstSingles(
           codeFirstSingleConfigs,
-          seedingOptions()
+          seedingOptions(opts?.atStart === true)
         );
         failedSlugs = failedSingleSlugs(singleSync);
         failedSingleMetadata = failedSlugs;

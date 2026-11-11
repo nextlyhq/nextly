@@ -45,7 +45,11 @@ vi.mock("../../cli/utils/config-loader", async importOriginal => {
   const load = async () => {
     const file = path.join(process.cwd(), "nextly.config.json");
     const declared = JSON.parse(readFileSync(file, "utf8")) as {
-      collections: Array<{ slug: string; fields: Array<{ name: string }> }>;
+      collections: Array<{
+        slug: string;
+        label?: string;
+        fields: Array<{ name: string }>;
+      }>;
     };
     return {
       config: sanitizeConfig(
@@ -54,6 +58,9 @@ vi.mock("../../cli/utils/config-loader", async importOriginal => {
             config.defineCollection({
               slug: c.slug,
               fields: c.fields.map(f => config.text({ name: f.name })),
+              ...(c.label
+                ? { labels: { singular: c.label, plural: c.label } }
+                : {}),
             })
           ),
         })
@@ -74,6 +81,7 @@ import { clearConfigCache, loadConfig } from "../../cli/utils/config-loader";
 import { createAdapter } from "../../database/factory";
 import { shutdownServices } from "../../di/register";
 import { PermissionService } from "../../domains/auth/services/permission-service";
+import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { getNextly, startSettled } from "../../init";
 import {
   createTestNextly,
@@ -82,12 +90,17 @@ import {
 } from "../../plugins/test-nextly";
 import { _resetEnvCache } from "../../shared/lib/env";
 import { reloadNextlyConfig } from "../reload-config";
+import { holdBootSeeding } from "../seed-permissions";
 
-/** The configuration file of an app with `n` collections, each with one text field. */
-function configFile(n: number): string {
+/**
+ * The configuration file of an app with `n` collections, each with one text
+ * field; `relabelled` gains a label, a change that leaves its table as it is.
+ */
+function configFile(n: number, relabelled?: string): string {
   const collections = Array.from({ length: n }, (_, i) => ({
     slug: `p${i}x`,
     fields: [{ name: "title", type: "text" }],
+    ...(`p${i}x` === relabelled ? { label: "Renamed" } : {}),
   }));
   return `${JSON.stringify({ collections })}\n`;
 }
@@ -247,6 +260,86 @@ describe.each(getConfiguredTestDialects())(
 
       const seen = new Set(recorder.calls.flatMap(call => [...named(call)]));
       expect([...seen].sort()).toEqual(["p0x", "p1x", "p2x", "p3x", "p4x"]);
+    }, 300_000);
+
+    it("records nothing for a start whose reload did not land", async () => {
+      const adapterFor = await startedApp(5);
+      /** The fingerprint the last recording start left for p2x. */
+      const recordedP2x = async () => {
+        const reader = await adapterFor();
+        try {
+          const rows = await reader.executeQuery<{ value: unknown }>(
+            "SELECT value FROM nextly_meta WHERE key = 'development_start:entity:collection:p2x'"
+          );
+          return rows.map(row => String(row.value));
+        } finally {
+          await reader.disconnect();
+        }
+      };
+      const before = await recordedP2x();
+      expect(before).toHaveLength(1);
+
+      // A new label: in line with its table, so a start whose reload lands
+      // records it. This start's reload does not land: the registry sync it
+      // runs after the one `registerServices` runs fails.
+      writeFileSync(
+        join(process.cwd(), "nextly.config.json"),
+        configFile(5, "p2x")
+      );
+      clearConfigCache();
+      const real = CollectionRegistryService.prototype.syncCodeFirstCollections;
+      let syncs = 0;
+      const sync = vi
+        .spyOn(CollectionRegistryService.prototype, "syncCodeFirstCollections")
+        .mockImplementation(function (
+          this: CollectionRegistryService,
+          ...args: Parameters<typeof real>
+        ) {
+          syncs += 1;
+          return syncs === 1
+            ? real.apply(this, args)
+            : Promise.reject(new Error("the reload's sync failed"));
+        });
+      try {
+        await recordStart(adapterFor);
+      } finally {
+        sync.mockRestore();
+      }
+
+      expect(syncs).toBeGreaterThan(1);
+      expect(await recordedP2x()).toEqual(before);
+    }, 300_000);
+
+    it("seeds an entity an HMR save adds while a start holds the seeding", async () => {
+      const adapterFor = await startedApp(5);
+      vi.stubEnv("NODE_ENV", "development");
+      const { config } = await loadConfig();
+      const adapter = await adapterFor();
+      const nextly = await getNextly({ config: config as never, adapter });
+      await startSettled();
+
+      writeFileSync(join(process.cwd(), "nextly.config.json"), configFile(6));
+      const ensured: string[] = [];
+      const one = vi.spyOn(PermissionService.prototype, "ensurePermission");
+      const many = vi.spyOn(PermissionService.prototype, "ensurePermissions");
+      // Another start, still to seed, holds the gate while the save reloads:
+      // its seeding may already have read the registry, so the save seeds the
+      // entity it adds itself.
+      const release = holdBootSeeding();
+      try {
+        await reloadNextlyConfig();
+        for (const [, resource] of one.mock.calls) ensured.push(resource);
+        for (const [declared] of many.mock.calls) {
+          for (const { resource } of declared) ensured.push(resource);
+        }
+      } finally {
+        release();
+        one.mockRestore();
+        many.mockRestore();
+        await nextly.shutdown();
+      }
+
+      expect(ensured).toContain("p5x");
     }, 300_000);
   }
 );

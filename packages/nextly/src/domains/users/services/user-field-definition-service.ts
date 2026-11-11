@@ -534,6 +534,9 @@ export class UserFieldDefinitionService extends BaseService {
       .select()
       .from(this.userFieldDefinitions)
       .where(eq(this.userFieldDefinitions.source, "code"));
+    // None declared and none stored: nothing to compare, and no transaction
+    // to open for it.
+    if (codeFields.length === 0 && existingCodeFields.length === 0) return;
 
     const existingByName = new Map(existingCodeFields.map(f => [f.name, f]));
     const incomingNames = new Set(codeFields.map(f => f.name));

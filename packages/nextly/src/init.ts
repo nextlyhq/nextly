@@ -472,9 +472,11 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
                 !unchangedSinceLastStart("collection", collection.slug)
             )
           );
-          const { previewDesiredSchema } = await import(
-            "./domains/schema/pipeline/preview"
-          );
+          const [{ previewDesiredSchema }, { operationTargetTable }] =
+            await Promise.all([
+              import("./domains/schema/pipeline/preview"),
+              import("./domains/schema/pipeline/pushschema-pipeline"),
+            ]);
           await runDriftCheck({
             adapter,
             collections: changed,
@@ -495,11 +497,15 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
                   if (
                     slug &&
                     own &&
-                    preview.operations.some(operation =>
-                      tableOfOperation(operation).some(
-                        table => table === own || table.startsWith(`${own}_`)
-                      )
-                    )
+                    preview.operations.some(operation => {
+                      // The pipeline's own reading of the table an operation
+                      // targets (a rename by its source).
+                      const table = operationTargetTable(operation);
+                      return (
+                        table !== null &&
+                        (table === own || table.startsWith(`${own}_`))
+                      );
+                    })
                   ) {
                     markNotInLine("collection", slug);
                   }
@@ -899,17 +905,4 @@ export async function shutdownNextly(): Promise<void> {
   if (globalForInit.__nextly_cachedInstance) {
     await globalForInit.__nextly_cachedInstance.shutdown();
   }
-}
-
-/** The tables a schema operation names: the one it changes, or a rename's two. */
-function tableOfOperation(operation: unknown): string[] {
-  const op = operation as {
-    tableName?: unknown;
-    table?: { name?: unknown };
-    fromName?: unknown;
-    toName?: unknown;
-  };
-  return [op.tableName, op.table?.name, op.fromName, op.toName].filter(
-    (name): name is string => typeof name === "string"
-  );
 }

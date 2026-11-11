@@ -767,34 +767,34 @@ async function startFingerprints(
       resolveCollectionTableName(c.slug, c.dbName),
     ])
   );
+  const salt = await fingerprintOf([
+    getCoreVersion(),
+    dialect,
+    config.perLanguageStorage === true,
+    config.localization ?? null,
+  ]);
   const entities: Record<string, string> = {};
   for (const [kind, list] of kindsOf(config)) {
     for (const entity of list) {
-      try {
-        // With the tables its relationships point at: a target renamed by its
-        // own `dbName` changes the keys this entity's table holds.
-        const targets = [...relationTargets(entity.fields)]
-          .sort()
-          .map(slug => [slug, collectionTable.get(slug) ?? null]);
-        entities[`${kind}:${entity.slug}`] = await fingerprintOf({
-          entity,
-          targets,
-        });
-      } catch {
-        // A declaration that cannot be written out (a cycle, say) gets no
-        // fingerprint, so it is never taken for unchanged.
-      }
+      // With the tables its relationships point at: a target renamed by its
+      // own `dbName` changes the keys this entity's table holds. And with the
+      // salt: the salt row is written after the entity rows, so a start stopped
+      // between them leaves rows recorded under other settings beside the old
+      // salt row, and those must not match under the old settings.
+      // A declaration that cannot be written out (a cycle, say) throws, and the
+      // start takes every entity for changed (`readStartFingerprints`), rather
+      // than one left without a fingerprint being passed over as unchanged.
+      const targets = [...relationTargets(entity.fields)]
+        .sort()
+        .map(slug => [slug, collectionTable.get(slug) ?? null]);
+      entities[`${kind}:${entity.slug}`] = await fingerprintOf({
+        entity,
+        targets,
+        salt,
+      });
     }
   }
-  return {
-    salt: await fingerprintOf([
-      getCoreVersion(),
-      dialect,
-      config.perLanguageStorage === true,
-      config.localization ?? null,
-    ]),
-    entities,
-  };
+  return { salt, entities };
 }
 
 /** Each configured entity's registry row, as its declaration describes it. */

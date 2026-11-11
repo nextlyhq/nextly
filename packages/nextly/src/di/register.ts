@@ -3848,16 +3848,15 @@ async function syncCodeFirstCollections(
   // Asked of one listing of the tables there are, read once, rather than of the
   // database once per collection: a table dropped since the last start is
   // still found missing, at the same cost for five collections as for fifty.
+  // Compared exactly, as the database compares a quoted table name.
   let existingTables: Promise<Set<string> | null> | undefined;
   const tableIsThere = async (tableName: string): Promise<boolean> => {
     existingTables ??= adapter.listTables().then(
-      names => new Set(names.map(name => name.toLowerCase())),
+      names => new Set(names),
       () => null
     );
     const listed = await existingTables;
-    return listed
-      ? listed.has(tableName.toLowerCase())
-      : adapter.tableExists(tableName);
+    return listed ? listed.has(tableName) : adapter.tableExists(tableName);
   };
   for (const slug of syncResult.unchanged) {
     const collection = collectionsBySlug.get(slug);

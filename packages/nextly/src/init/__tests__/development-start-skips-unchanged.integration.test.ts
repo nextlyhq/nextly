@@ -44,6 +44,17 @@ vi.mock("../drift-check", async original => {
   };
 });
 
+// The Nextly version a start runs, which a test moves to stand in for an
+// upgrade and a downgrade.
+const version = vi.hoisted(() => ({ suffix: "" }));
+vi.mock("../../plugins/core-version", async original => {
+  const actual = await original<typeof import("../../plugins/core-version")>();
+  return {
+    ...actual,
+    getCoreVersion: () => `${actual.getCoreVersion()}${version.suffix}`,
+  };
+});
+
 import { createScratchDatabase } from "../../__tests__/helpers/fresh-database";
 import {
   recordStatements,
@@ -138,6 +149,7 @@ describe.each(getConfiguredTestDialects())(
     const drops: Array<() => Promise<void>> = [];
 
     afterEach(async () => {
+      version.suffix = "";
       await shutdownServices();
       vi.unstubAllEnvs();
       _resetEnvCache();
@@ -316,6 +328,46 @@ describe.each(getConfiguredTestDialects())(
       expect(
         after.filter(call => named(call).size > 0).map(c => c.text)
       ).toEqual([]);
+    }, 300_000);
+
+    it("trusts no entity row recorded under other settings than the salt row names", async () => {
+      const adapterFor = await startedDatabase(5);
+      const saltRow = async (value?: string) => {
+        const db = await adapterFor();
+        try {
+          if (value !== undefined) {
+            await db.executeQuery(
+              `UPDATE nextly_meta SET value = '${value.replace(/'/g, "''")}' WHERE key = 'development_start:salt'`
+            );
+          }
+          const [row] = await db.executeQuery<{ value: unknown }>(
+            "SELECT value FROM nextly_meta WHERE key = 'development_start:salt'"
+          );
+          return String(row.value);
+        } finally {
+          await db.disconnect();
+        }
+      };
+      const first = await saltRow();
+
+      // A start under another Nextly version records every entity's row for
+      // it, and is stopped before its salt row is written: the rows are the
+      // new version's, the salt row still the old one's.
+      version.suffix = "-next";
+      await recordStart(adapterFor, entities(5));
+      await saltRow(first);
+
+      // Back on the first version, the salt row matches but the entity rows
+      // were not recorded under it: every collection is checked again.
+      version.suffix = "";
+      await recordStart(adapterFor, entities(5));
+      expect([...(driftChecked.at(-1) ?? [])].sort()).toEqual([
+        "p0x",
+        "p1x",
+        "p2x",
+        "p3x",
+        "p4x",
+      ]);
     }, 300_000);
 
     it("records 50 entities with as many statements as 5", async () => {
