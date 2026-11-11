@@ -3,7 +3,7 @@
  * typed, its folder as Node resolves a bare name from the project, and the
  * entry an `import` of it loads.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -103,6 +103,37 @@ describe("the installed package", () => {
     expect(await importEntry(project, "@acme/seo")).toEqual({
       seoPlugin: "main",
     });
+  });
+
+  it("finds a package installed above the project from a relative folder", async () => {
+    const dir = await install(project, { name: "@acme/seo" });
+    const app = join(project, "apps", "site");
+    await mkdir(app, { recursive: true });
+    const before = process.cwd();
+    process.chdir(app);
+    try {
+      expect((await findInstalledPackage(".", "@acme/seo"))?.dir).toBe(
+        await realpath(dir)
+      );
+    } finally {
+      process.chdir(before);
+    }
+  });
+
+  it("resolves with the conditions Node was started with", async () => {
+    await installWith(
+      { exports: { ".": { site: "./site.js" } }, type: "module" },
+      { "site.js": 'export const seoPlugin = "site";' }
+    );
+    expect(
+      await importEntry(project, "@acme/seo", {
+        execArgv: ["--conditions=site"],
+      })
+    ).toEqual({ seoPlugin: "site" });
+    // Without it Node finds no entry an import may load.
+    await expect(
+      importEntry(project, "@acme/seo", { execArgv: [] })
+    ).rejects.toMatchObject({ code: "PLUGIN_REGISTRATION_UNKNOWN" });
   });
 
   it("refuses, naming why, a package Node cannot load from the project", async () => {

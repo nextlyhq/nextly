@@ -9,7 +9,7 @@
  */
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -35,7 +35,9 @@ export async function findInstalledPackage(
   cwd: string,
   name: string
 ): Promise<{ dir: string; manifest: PackageManifest } | undefined> {
-  for (let at = cwd; ; at = dirname(at)) {
+  // Absolute first: a relative folder such as `.` is its own dirname, which
+  // would end the walk before any folder above it is looked in.
+  for (let at = resolve(cwd); ; at = dirname(at)) {
     const dir = join(at, "node_modules", ...name.split("/"));
     const text = await readFile(join(dir, "package.json"), "utf8").catch(
       () => undefined
@@ -76,13 +78,44 @@ function reasonOf(error: unknown): string {
  * among them, and any the site passes with `--conditions`) counts exactly as
  * it does for the site.
  */
-async function nodeEntryOf(cwd: string, name: string): Promise<string> {
+async function nodeEntryOf(
+  cwd: string,
+  name: string,
+  execArgv: readonly string[]
+): Promise<string> {
   const { stdout } = await execFileAsync(
     process.execPath,
-    ["--input-type=module", "--eval", RESOLVE, name],
-    { cwd }
+    [
+      ...conditionFlagsOf(execArgv),
+      "--input-type=module",
+      "--eval",
+      RESOLVE,
+      name,
+    ],
+    { cwd: resolve(cwd) }
   );
   return fileURLToPath(stdout);
+}
+
+/**
+ * The flags among `execArgv` that add conditions Node resolves exports by
+ * (`--conditions=site`, `--conditions site`, `-C site`), in order, so the
+ * resolving process matches what this one was started with. Those set in
+ * `NODE_OPTIONS` reach it with the environment.
+ */
+function conditionFlagsOf(execArgv: readonly string[]): string[] {
+  const flags: string[] = [];
+  for (let at = 0; at < execArgv.length; at++) {
+    const arg = execArgv[at] ?? "";
+    if (arg.startsWith("--conditions=") || /^-C.+/.test(arg)) {
+      flags.push(arg);
+    } else if (arg === "--conditions" || arg === "-C") {
+      const value = execArgv[at + 1];
+      if (value !== undefined) flags.push(arg, value);
+      at += 1;
+    }
+  }
+  return flags;
 }
 
 /**
@@ -91,11 +124,12 @@ async function nodeEntryOf(cwd: string, name: string): Promise<string> {
  */
 export async function importEntry(
   cwd: string,
-  name: string
+  name: string,
+  options: { execArgv?: readonly string[] } = {}
 ): Promise<Record<string, unknown>> {
   let entry: string;
   try {
-    entry = await nodeEntryOf(cwd, name);
+    entry = await nodeEntryOf(cwd, name, options.execArgv ?? process.execArgv);
   } catch (error) {
     throw pluginRegistrationUnknown(
       name,
