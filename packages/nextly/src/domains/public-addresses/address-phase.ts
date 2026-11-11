@@ -14,7 +14,12 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { HookRegistry } from "../../hooks/hook-registry";
 import type { InTransactionRunner } from "../../hooks/types";
 
-import { heldIn, readEveryLanguage, typeOfWrite } from "./held-addresses";
+import {
+  addressLanguages,
+  heldIn,
+  readEveryLanguage,
+  typeOfWrite,
+} from "./held-addresses";
 import {
   addressHeldError,
   firstHolder,
@@ -36,9 +41,16 @@ async function hasAddress(
 ): Promise<boolean> {
   const type = typeOfWrite(write.collection);
   try {
-    return (
-      (await declaredFor(type, undefined, undefined, executor)) !== undefined
-    );
+    // Asked in each language: a plugin may supply a Schema Builder type's
+    // address for some languages only, and one is enough to hold.
+    for (const language of addressLanguages()) {
+      if (
+        (await declaredFor(type, language, undefined, executor)) !== undefined
+      ) {
+        return true;
+      }
+    }
+    return false;
   } catch (error) {
     // A collection no configuration or registry names (a system table's)
     // is no page of the site. Any other failure fails the save: a type whose

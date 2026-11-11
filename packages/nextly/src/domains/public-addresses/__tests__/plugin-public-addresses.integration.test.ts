@@ -66,12 +66,22 @@ function asPluginParticipant(record = memoryParticipant()) {
 async function boot(
   dialect: TestDialect,
   participant?: PublicAddressParticipant,
-  postsAddress = "/blog/{slug}"
+  postsAddress = "/blog/{slug}",
+  fallback?: boolean
 ) {
   const { plugin, seen } = recordPlugin(participant);
   current = await createTestNextly({
     dialect,
     plugins: [plugin],
+    ...(fallback === undefined
+      ? {}
+      : {
+          localization: {
+            locales: ["en", "fr"],
+            defaultLocale: "en",
+            fallback,
+          },
+        }),
     collections: [
       defineCollection({
         slug: "posts",
@@ -323,6 +333,51 @@ describe.each(getConfiguredTestDialects())(
         Promise.reject(new Error("onReady never ran")));
       expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
       expect(count).toBe(0);
+    });
+
+    it("a write awaited during the boot, with a participant, does not hold the boot", async () => {
+      const { record, participant } = asPluginParticipant();
+      const plugin = definePlugin({
+        name: "@test/address-boot-write",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        init(ctx) {
+          ctx.publicAddresses.participate(participant);
+        },
+        async onReady(ctx) {
+          await ctx.services.collections.createEntry(
+            "posts",
+            { title: "Seeded", slug: "seeded", status: "published" },
+            { overrideAccess: true } as never
+          );
+        },
+      });
+      current = await createTestNextly({
+        dialect,
+        plugins: [plugin],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+
+      expect(Object.keys(record.held())).toEqual(["en|/blog/seeded"]);
+    });
+
+    it("fingerprint changes when the languages fall back differently", async () => {
+      const on = await (
+        await boot(dialect, undefined, "/blog/{slug}", true)
+      ).ctx.publicAddresses.fingerprint();
+      await current?.destroy();
+      const off = await (
+        await boot(dialect, undefined, "/blog/{slug}", false)
+      ).ctx.publicAddresses.fingerprint();
+
+      expect(off).not.toBe(on);
     });
 
     it("withdraw stops the asking", async () => {

@@ -105,7 +105,7 @@ export const withCatchUp = definePlugin({
 });
 ```
 
-- `ctx.publicAddresses.fingerprint()` changes whenever an address template or the language list does. Store it, and catch up when it differs.
+- `ctx.publicAddresses.fingerprint()` changes whenever an address template, the language list or the fallback settings do. Store it, and catch up when it differs.
 - `ctx.publicAddresses.held({ type, after, limit })` pages through one type's documents oldest first, each with every address it holds now. Pass the returned `next` as `after` for the following page.
 
 Where two documents clash after a deploy, the one already holding the address keeps it.

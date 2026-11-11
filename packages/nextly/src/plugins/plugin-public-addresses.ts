@@ -101,7 +101,10 @@ export interface PluginPublicAddresses {
     after?: string;
     limit?: number;
   }): Promise<{ items: HeldAddressUpdate[]; next?: string }>;
-  /** Changes when any address template or the language list does. */
+  /**
+   * Changes when any address template, the language list or the fallback
+   * settings do.
+   */
   fingerprint(): Promise<string>;
 }
 

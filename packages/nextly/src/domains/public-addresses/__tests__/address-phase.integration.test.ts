@@ -320,6 +320,22 @@ describe.each(getConfiguredTestDialects())(
       expect(record.calls.holderOf).toBeGreaterThan(0);
     });
 
+    it("listing a Single never saved neither creates it nor lists it", async () => {
+      const t = await boot(dialect);
+
+      const { items } = await heldPage({
+        type: { kind: "single", slug: "about" },
+      });
+
+      expect(items).toEqual([]);
+      expect(
+        await t.nextly.findSingle({
+          slug: "about",
+          createIfMissing: false,
+        } as never)
+      ).toBeNull();
+    });
+
     it("with no participant, no handler runs on a save", async () => {
       const t = await boot(dialect);
 
@@ -417,6 +433,56 @@ describe.each(getConfiguredTestDialects())(
       expect(items.map(item => item.holds)).toEqual([
         [{ locale: "en", path: "/contact" }],
       ]);
+    });
+
+    it("falls back past a draft translation to a published one", async () => {
+      current = await createTestNextly({
+        dialect,
+        localization: {
+          locales: ["en", { code: "fr", fallbackLocale: ["de"] }, "de"],
+          defaultLocale: "en",
+        },
+        collections: [
+          defineCollection({
+            slug: "articles",
+            localized: true,
+            status: true,
+            fields: [
+              text({ name: "title", localized: false }),
+              text({ name: "slug" }),
+            ],
+            publicAddress: "/articles/{slug}",
+          }),
+        ],
+      });
+      const t = current;
+      const record = join(memoryParticipant());
+      const article = await create(
+        t,
+        "articles",
+        { title: "Hello", slug: "hello", status: "published" },
+        "en"
+      );
+      await update(
+        t,
+        "articles",
+        article,
+        { slug: "hallo", status: "draft" },
+        { locale: "de" }
+      );
+
+      await update(
+        t,
+        "articles",
+        article,
+        { slug: "", status: "published" },
+        { locale: "fr" }
+      );
+
+      expect(record.held()).toEqual({
+        "en|/articles/hello": `articles:${article}`,
+        "fr|/articles/hello": `articles:${article}`,
+      });
     });
 
     it("keeps a published language's address while another language is saved as a draft", async () => {

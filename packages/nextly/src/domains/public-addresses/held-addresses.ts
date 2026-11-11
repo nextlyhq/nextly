@@ -70,16 +70,18 @@ export function typeOfWrite(collection: string): PublicAddressType {
 }
 
 /**
- * Each translated field's value in each language, by field name, as a read in
- * that language resolves it: along the language's fallback chain where the
- * site falls back, else its own value alone, so a field untranslated there is
- * null rather than the saved language's value.
+ * Each translated field's value in each language, by field name, as a public
+ * read in that language resolves it: along the language's fallback chain,
+ * through the `live` languages only, where the site falls back, else its own
+ * value alone, so a field untranslated there is null rather than the saved
+ * language's value.
  */
 async function translations(
   tx: TransactionContext,
   companion: CompanionSchema,
   id: string,
-  languages: readonly string[]
+  languages: readonly string[],
+  live: ReadonlySet<string>
 ): Promise<Map<string, Record<string, unknown>>> {
   const byColumn = await readCompanionValuesByLocale(
     container.get<DrizzleAdapter>("adapter"),
@@ -91,9 +93,11 @@ async function translations(
   const localization = appLocalization();
   const byName = new Map<string, Record<string, unknown>>();
   for (const language of languages) {
-    const chain = resolveLocaleChain(localization, language, undefined) ?? [
-      language,
-    ];
+    // A fallback passes over a language not live there, as a public read's
+    // does: a draft translation is never what a visitor is served.
+    const chain = (
+      resolveLocaleChain(localization, language, undefined) ?? [language]
+    ).filter(code => code === language || live.has(code));
     const named: Record<string, unknown> = {};
     for (const field of companion.localizedFields) {
       const perLocale = Object.fromEntries(
@@ -214,9 +218,6 @@ export async function readEveryLanguage(
   const languages = addressLanguages();
 
   const companion = await companionOf(type, executor);
-  const translated = companion
-    ? await translations(tx, companion, write.id, languages)
-    : undefined;
   const ownStatus =
     companion?.hasStatus === true
       ? await statuses(tx, companion, write.id)
@@ -227,14 +228,18 @@ export async function readEveryLanguage(
     companion?.hasStatus === true
       ? await mainRowStatus(tx, companion, write.id)
       : shared.status;
+  const live = new Set(
+    languages.filter(language =>
+      publishedIn(language, { lifecycle, mainStatus, ownStatus })
+    )
+  );
+  const translated = companion
+    ? await translations(tx, companion, write.id, languages, live)
+    : undefined;
 
   for (const language of languages) {
     versions.set(language, {
-      published: publishedIn(language, {
-        lifecycle,
-        mainStatus,
-        ownStatus,
-      }),
+      published: live.has(language),
       document: { ...shared, ...translated?.get(language) },
     });
   }

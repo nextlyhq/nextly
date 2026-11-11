@@ -6,12 +6,18 @@ import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { InTransactionRunner } from "../../../hooks/types";
 
 const declared = vi.hoisted(() => ({
-  answer: (): Promise<unknown> => Promise.resolve(undefined),
+  answer: (_locale?: string): Promise<unknown> => Promise.resolve(undefined),
 }));
 
 vi.mock("../public-address", async importOriginal => ({
   ...(await importOriginal<typeof import("../public-address")>()),
-  declaredFor: () => declared.answer(),
+  declaredFor: (_type: unknown, locale?: string) => declared.answer(locale),
+}));
+vi.mock("../held-addresses", async importOriginal => ({
+  ...(await importOriginal<typeof import("../held-addresses")>()),
+  addressLanguages: () => ["en", "fr"],
+  readEveryLanguage: () => Promise.resolve(new Map()),
+  heldIn: () => Promise.resolve([{ locale: "fr", path: "/recettes/soupe" }]),
 }));
 
 import { startAddressPhase } from "../address-phase";
@@ -70,5 +76,22 @@ describe("core's question on a save", () => {
 
     await expect(handlers[0]?.(tx, write)).resolves.toBeUndefined();
     expect(participant.holderOf).not.toHaveBeenCalled();
+  });
+
+  it("asks about a type whose address exists in one language only", async () => {
+    const { registry, handlers } = capturingRegistry();
+    startAddressPhase(registry);
+    addParticipant(participant, "plugin:test");
+    declared.answer = locale =>
+      Promise.resolve(
+        locale === "fr"
+          ? { template: "/recettes/{slug}", pathFields: [] }
+          : undefined
+      );
+
+    await handlers[0]?.(tx, write);
+
+    expect(participant.holderOf).toHaveBeenCalled();
+    expect(participant.record).toHaveBeenCalled();
   });
 });

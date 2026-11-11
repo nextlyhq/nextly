@@ -151,7 +151,10 @@ export async function declaredFor(
   row?: TypeRecord,
   executor?: unknown
 ): Promise<Declared | undefined> {
-  await getCachedNextly();
+  // No wait for the boot here: a save made during the boot (a plugin's
+  // `onReady` writing an entry) reaches this through the address phase, and
+  // waiting for the boot it is part of would never finish. The public entry
+  // points wait instead.
   const code = configured(type);
   if (code !== undefined) {
     if (code.publicAddress === undefined) return undefined;
@@ -182,6 +185,7 @@ export async function publicAddressOf(
   entry?: Readonly<Record<string, unknown>>,
   locale?: string
 ): Promise<PublicAddress> {
+  await getCachedNextly();
   return addressFrom(type, await declaredFor(type, locale), entry);
 }
 

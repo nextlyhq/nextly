@@ -14,6 +14,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../../di";
 import { whenServicesRegistered } from "../../di/service-access";
+import { appLocalization } from "../i18n/configured-locales";
+import { resolveLocaleChain } from "../i18n/resolve-locale";
 import { getCachedNextly } from "../../init";
 import { PAGINATION_DEFAULTS } from "../../types/pagination";
 
@@ -63,8 +65,11 @@ async function singleHeld(
   type: PublicAddressType
 ): Promise<HeldAddressUpdate[]> {
   const nextly = await getCachedNextly();
+  // Read only: a Single never saved has nothing to hold, and listing must
+  // not create it.
   const single = (await nextly.findSingle({
     slug: type.slug,
+    createIfMissing: false,
   } as never)) as Record<string, unknown> | null;
   if (single === null) return [];
   const id = String(single.id);
@@ -165,14 +170,26 @@ export async function heldPage(args: {
 
 /**
  * A digest of what every held address is made from: each site type's address
- * template in each language, and the languages. It changes when a
- * declaration, a template a plugin supplies, or the language list changes,
- * and not otherwise.
+ * template in each language, the languages, and how each resolves an
+ * untranslated field. It changes when a declaration, a template a plugin
+ * supplies, the language list or the fallback settings change, and not
+ * otherwise.
  */
 export async function addressFingerprint(): Promise<string> {
   await whenServicesRegistered();
   const languages = addressLanguages();
-  const parts: string[] = [`languages:${languages.join(",")}`];
+  const localization = appLocalization();
+  // How each language resolves an untranslated field changes what it holds,
+  // so its chain counts as much as the templates do: the fallback switch,
+  // each language's own fallbacks and the default all show in the chains.
+  const parts: string[] = [
+    `languages:${languages.join(",")}`,
+    `default:${localization?.defaultLocale ?? ""}`,
+    ...languages.map(
+      language =>
+        `chain:${language}:${(resolveLocaleChain(localization, language, undefined) ?? [language]).join(",")}`
+    ),
+  ];
   for (const { type, row } of await siteTypes()) {
     for (const language of languages) {
       const declared = await declaredFor(type, language, row);
