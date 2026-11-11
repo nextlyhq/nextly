@@ -593,7 +593,7 @@ describe("WidgetGrid — sizing", () => {
     size: { default: { w, h } },
   });
 
-  it("gives every cell a full-width base span whatever its w", () => {
+  it("gives every cell a full-width base span but a quarter one, half the row on a phone", () => {
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
     mockBranding = brandingWith([
       sized("w3", 3),
@@ -603,10 +603,15 @@ describe("WidgetGrid — sizing", () => {
       sized("w12", 12),
     ]);
     renderGrid();
-    for (const id of ["w3", "w4", "w6", "w8", "w12"]) {
+    // The phone's base span: half the row for a quarter card, which pairs with another there,
+    // and the whole row for every wider one.
+    for (const id of ["w4", "w6", "w8", "w12"]) {
       const cell = screen.getByTestId(`widget-cell-${id}`);
       expect(cell.className.split(" ")).toContain("col-span-12");
     }
+    const quarter = screen.getByTestId("widget-cell-w3").className.split(" ");
+    expect(quarter).toContain("col-span-6");
+    expect(quarter).not.toContain("col-span-12");
   });
 
   it("spans a card's w columns by the DASHBOARD's width, not the window, and no rows: it is as tall as its content", () => {
@@ -615,10 +620,10 @@ describe("WidgetGrid — sizing", () => {
     renderGrid();
     const narrow = screen.getByTestId("widget-cell-narrow");
     expect(narrow).toHaveClass(
-      "col-span-12",
-      "@min-[640px]/dashboard:col-span-6",
+      "col-span-6",
       "@min-[1024px]/dashboard:col-span-3"
     );
+    expect(narrow).not.toHaveClass("col-span-12");
     // 🔴 No row span and nothing that clips: a card's height is its content's, not its `h`.
     expect(narrow.style.gridRow).toBe("");
     expect(narrow).toHaveClass("relative", "min-w-0");

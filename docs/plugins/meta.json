@@ -14,6 +14,7 @@
     "routes",
     "admin-ui",
     "schema",
+    "public-addresses",
     "testing",
     "stability",
     "distribution",

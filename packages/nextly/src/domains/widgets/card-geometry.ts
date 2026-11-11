@@ -211,6 +211,12 @@ const LARGE_TIER_FROM_PX = 700;
 const HALF_GRID = GRID_COLUMNS / 2;
 
 /**
+ * A quarter of the grid: below {@link TWO_UP_FROM_PX}, a card of this many columns or fewer is
+ * drawn at half the grid, so two of them share a row; every wider card takes the whole row.
+ */
+const QUARTER_GRID = GRID_COLUMNS / 4;
+
+/**
  * The gap across the grid, in pixels, on a dashboard `dashboardWidth` wide.
  *
  * @internal
@@ -222,7 +228,10 @@ export function columnGapPx(dashboardWidth: number): number {
 }
 
 /**
- * Whether a dashboard `dashboardWidth` wide draws one column.
+ * Whether a dashboard `dashboardWidth` wide is in its narrowest band, below
+ * {@link TWO_UP_FROM_PX}: a phone's, where every card takes the whole row but
+ * a quarter-width one, two of which share it (`drawnSpan`), and cards are
+ * arranged from their menus.
  *
  * @internal
  */
@@ -232,14 +241,17 @@ export function isOneColumn(dashboardWidth: number): boolean {
 
 /**
  * How many of the twelve columns a card of `w` is drawn across on a dashboard
- * `dashboardWidth` wide: every column below {@link TWO_UP_FROM_PX}; half the
- * grid for a `w` of half or less, else all of it, below
+ * `dashboardWidth` wide: below {@link TWO_UP_FROM_PX}, half the grid for a `w`
+ * of a quarter or less, so two such cards pair on a row, else all of it; half
+ * the grid for a `w` of half or less, else all of it, below
  * {@link AS_SIZED_FROM_PX}; its own `w` from there.
  *
  * @internal
  */
 export function drawnSpan(w: number, dashboardWidth: number): number {
-  if (isOneColumn(dashboardWidth)) return GRID_COLUMNS;
+  if (isOneColumn(dashboardWidth)) {
+    return w <= QUARTER_GRID ? HALF_GRID : GRID_COLUMNS;
+  }
   if (dashboardWidth < AS_SIZED_FROM_PX) {
     return w <= HALF_GRID ? HALF_GRID : GRID_COLUMNS;
   }
