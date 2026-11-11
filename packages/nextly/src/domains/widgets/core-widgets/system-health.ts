@@ -127,7 +127,7 @@ const PREVIEW_DETAILS = {
   plugins: [{ name: "@nextlyhq/plugin-seo", version: "0.0.2-alpha.66" }],
 } satisfies Pick<SystemHealthData, "runtime" | "plugins">;
 
-/** A healthy install, for the preview cases. */
+/** A healthy install, for the preview board. */
 const HEALTHY: SystemHealthData = {
   version: "0.0.2-alpha.66",
   latest: { status: "latest", version: "0.0.2-alpha.66" },
@@ -147,7 +147,7 @@ const HEALTHY: SystemHealthData = {
   ...PREVIEW_DETAILS,
 };
 
-/** An install with a problem on every line, for the preview cases. */
+/** An install with a problem on every line, for the preview board. */
 const WITH_PROBLEMS: SystemHealthData = {
   version: "0.0.2-alpha.66",
   latest: { status: "unknown" },
@@ -175,6 +175,8 @@ const WITH_PROBLEMS: SystemHealthData = {
 
 export const systemHealthWidget = defineWidget({
   id: CORE_WIDGET_ID.systemHealth,
+  // Drawn beside its name in the add panel.
+  icon: "Shield",
   title: "System health",
   description:
     "Versions, database, migrations, storage, email and jobs. For super-admins.",

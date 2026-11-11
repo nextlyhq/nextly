@@ -491,6 +491,29 @@ but its result becomes one input rather than the answer:
 
 Without such a plugin, a route's metadata is served exactly as it returns it.
 
+Where the plugin's answer carries structured data, the page's `render` is handed it as
+`context.structuredData`: JSON-LD text, written so that no value can end its script element. Place
+it as the body of a JSON-LD script element, so it is in the HTML a crawler receives rather than
+added in the browser:
+
+```tsx
+render: (entry, context) => (
+  <article>
+    {context.structuredData && (
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: context.structuredData }}
+      />
+    )}
+    <h1>{String(entry.title)}</h1>
+  </article>
+),
+```
+
+A Single route's `render` is handed it the same way. A route that resolves its entries its own way
+asks for it with `contentPageStructuredData(config, entry, context, path)`, beside
+`contentPageMetadata`.
+
 ## Metadata in the first HTML
 
 Next.js streams a page's metadata in after the `<head>` to a browser, and waits for it only for the

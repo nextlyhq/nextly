@@ -1,7 +1,8 @@
 /**
  * The gallery read a dashboard test's layout fixture implies, for the suites that drive the
- * whole grid: a tile for each widget the layout describes or offers, under the server's rule (a
- * widget the reader may add, or one already placed), with the size its declaration states.
+ * whole grid: a row for each widget the layout describes or offers, under the server's rule (a
+ * widget the reader may add, or one it holds a card of, removed or not), with the size its
+ * declaration states.
  *
  * Only what those suites read: they test the grid's side of an add (where it lands, what it
  * rings, where focus goes), not what the server offers, which the gallery's own integration
@@ -25,14 +26,17 @@ export function galleryFromLayout(
   widgets: readonly FixtureWidget[]
 ): GalleryRead {
   const ids = [
-    ...new Set([...layout.available, ...Object.keys(layout.widgets)]),
+    ...new Set([
+      ...layout.available,
+      ...Object.keys(layout.widgets),
+      ...layout.placements.map(p => p.widgetId),
+    ]),
   ];
-  const placedCount = (id: string) =>
-    layout.placements.filter(p => p.widgetId === id && !p.removed).length;
+  // Removed cards count: a one-card widget's removed card comes back from its row.
+  const held = (id: string) => layout.placements.some(p => p.widgetId === id);
   const tiles = ids.flatMap((id): GalleryTile[] => {
     const offered = layout.available.includes(id);
-    const placed = placedCount(id);
-    if (!offered && placed === 0) return [];
+    if (!offered && !held(id)) return [];
     const widget = widgets.find(each => each.id === id);
     return [
       {
@@ -43,7 +47,7 @@ export function galleryFromLayout(
       },
     ];
   });
-  return { tiles, collections: [], suggested: [] };
+  return { tiles, collections: [] };
 }
 
 /** Whether a GET is the gallery read. */
