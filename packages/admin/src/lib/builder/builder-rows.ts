@@ -5,8 +5,8 @@
  * The outline draws one field per row and drags a field by its own id, so a
  * move is a field changing place among its siblings. It stays in its own
  * container, whether that is the top level, a group or repeating rows; moving
- * between containers is not offered here. A built-in field never moves, and
- * nothing moves past it.
+ * between containers is not offered here. A built-in field, or one owned by
+ * code or a plugin, never moves, and nothing moves past it.
  *
  * @module lib/builder/builder-rows
  */
@@ -18,6 +18,7 @@ import {
   findParentContainerId,
   reorderNestedFields,
 } from "./field-transformers";
+import { ownedElsewhere } from "./outline/outline-model";
 
 /** The fields a field sits among, itself included, or null if it is not one of `fields`. */
 function siblingsOf(
@@ -46,9 +47,21 @@ export function builderDropAccepted(
   if (activeId === overId) return false;
   const around = siblingsOf(fields, activeId);
   if (!around) return false;
-  const active = around.find(field => field.id === activeId);
-  const over = around.find(field => field.id === overId);
-  return Boolean(active && over && !active.isSystem && !over.isSystem);
+  const from = around.findIndex(field => field.id === activeId);
+  const to = around.findIndex(field => field.id === overId);
+  if (from === -1 || to === -1) return false;
+  // Every field from one end to the other changes place, so each must be
+  // free to: a drop past a field owned by code or a plugin would move it.
+  const spanned = around.slice(Math.min(from, to), Math.max(from, to) + 1);
+  return spanned.every(movable);
+}
+
+/**
+ * Whether a field may take part in a move, as the one moved or the one it
+ * moves past: neither built in, nor owned by code or a plugin.
+ */
+function movable(field: BuilderField): boolean {
+  return !field.isSystem && !ownedElsewhere(field);
 }
 
 /**
@@ -64,7 +77,8 @@ export function moveWithinContainer(
   if (!around) return fields;
   const at = around.findIndex(field => field.id === fieldId);
   const target = around[at + delta];
-  if (!target || target.isSystem || around[at]?.isSystem) return fields;
+  const self = around[at];
+  if (!target || !self || !movable(target) || !movable(self)) return fields;
   return reorderNestedFields(fields, fieldId, target.id);
 }
 

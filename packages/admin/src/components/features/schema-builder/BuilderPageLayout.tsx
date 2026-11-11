@@ -28,6 +28,7 @@ import { builderFieldErrors } from "@admin/lib/builder/field-validators";
 import {
   flattenOutline,
   nodePlacement,
+  type FieldGroupsLoad,
   type LoadedFieldGroup,
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
@@ -152,13 +153,18 @@ function BuilderWorkspace(
     | "savedFieldIds"
   >
 ): JSX.Element {
-  const { outline, fieldGroups } = useBuilderOutline(
+  const { outline, fieldGroups, fieldGroupsLoad } = useBuilderOutline(
     props.builder.fields,
     props.locked
   );
   return (
     <div className="flex flex-1 items-start">
-      <FieldListRegion {...props} outline={outline} fieldGroups={fieldGroups} />
+      <FieldListRegion
+        {...props}
+        outline={outline}
+        fieldGroups={fieldGroups}
+        fieldGroupsLoad={fieldGroupsLoad}
+      />
       <EditedFieldSettings {...props} outline={outline} />
     </div>
   );
@@ -243,6 +249,7 @@ function FieldListRegion({
   entitySlug,
   outline,
   fieldGroups,
+  fieldGroupsLoad,
   locked,
   configPath,
   beforeFieldList,
@@ -265,6 +272,7 @@ function FieldListRegion({
 > & {
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
+  fieldGroupsLoad: FieldGroupsLoad;
 }): JSX.Element {
   const selectedId = active.kind === "edit" ? active.fieldId : null;
   // The same map the save's refusal is read from, so a row marked with an
@@ -329,7 +337,12 @@ function FieldListRegion({
           readOnly={locked}
           callbacks={callbacks}
           renderPreview={() => (
-            <FormPreview fields={builder.fields} fieldGroups={fieldGroups} />
+            <FormPreview
+              kind={config.kind}
+              fields={builder.fields}
+              fieldGroups={fieldGroups}
+              fieldGroupsLoad={fieldGroupsLoad}
+            />
           )}
         />
       </DndContext>

@@ -211,12 +211,32 @@ describe("a field group's resolved fields", () => {
     expect(saved).toMatchObject({ type: "component", component: "seo" });
   });
 
+  it("leave another type's own option of the same name alone", () => {
+    // Only a field-group field is resolved by the server. A plugin type may
+    // name an option of its own `componentFields`, and must keep it.
+    const own = { componentFields: ["heading", "image"] };
+    const loaded = convertToBuilderField(
+      {
+        name: "gallery",
+        type: "star-rating",
+        label: "Gallery",
+        pluginOptions: own,
+      } as unknown as Parameters<typeof convertToBuilderField>[0],
+      0
+    );
+    expect(
+      (convertToFieldDefinition(loaded) as { pluginOptions?: unknown })
+        .pluginOptions
+    ).toEqual(own);
+  });
+
   it("are dropped from a definition that was saved holding them", () => {
     const loaded = convertToBuilderField(
       {
-        name: "rating",
-        type: "star-rating",
-        label: "Rating",
+        name: "seo",
+        type: "component",
+        label: "SEO",
+        component: "seo",
         pluginOptions: { ratingScale: SCALE, ...RESOLVED },
       } as unknown as Parameters<typeof convertToBuilderField>[0],
       0

@@ -67,6 +67,34 @@ describe("which drops are moves", () => {
   });
 });
 
+describe("a field owned by code or a plugin", () => {
+  const withOwned = (): BuilderField[] => [
+    field("title"),
+    field("rating", { source: "plugin", owner: "@acme/reviews" }),
+    field("body"),
+    field("tail"),
+  ];
+
+  it("is never passed by a drop, which would move it too", () => {
+    expect(builderDropAccepted(withOwned(), "title", "body")).toBe(false);
+    expect(builderDropAccepted(withOwned(), "tail", "title")).toBe(false);
+    // The control: a drop that spans no owned field is still a move.
+    expect(builderDropAccepted(withOwned(), "body", "tail")).toBe(true);
+  });
+
+  it("is never stepped past, by Move up or Move down", () => {
+    const before = withOwned();
+    expect(moveWithinContainer(before, "body", -1)).toBe(before);
+    expect(moveWithinContainer(before, "title", 1)).toBe(before);
+    expect(ids(moveWithinContainer(withOwned(), "tail", -1))).toEqual([
+      "title",
+      "rating",
+      "tail",
+      "body",
+    ]);
+  });
+});
+
 describe("a one-step move", () => {
   it("moves a field among its siblings, at any depth", () => {
     expect(ids(moveWithinContainer(fields(), "body", -1))).toEqual([

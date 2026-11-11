@@ -79,7 +79,8 @@ export function useOutlineActions(
       if (!node || !node.own || node.readOnly) return false;
       const siblings = siblingsOf(node);
       const target = siblings[siblings.indexOf(node) + delta];
-      return target !== undefined && target.own;
+      // Nor past a read-only sibling: that would move it too.
+      return target !== undefined && target.own && target.readOnly === null;
     };
 
     /** Right after a field, in its own container. */

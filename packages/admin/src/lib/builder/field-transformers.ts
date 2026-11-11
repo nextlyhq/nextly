@@ -433,8 +433,8 @@ const BUILDER_MODELLED_FIELD_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Properties the server adds to a field when it hands a definition out, that
- * are not part of the definition: a field-group field's resolved fields
+ * Properties the server adds to a field-group field when it hands a
+ * definition out, that are not part of the definition: its resolved fields
  * (`componentFields`, `componentSchemas`), read from the field groups it
  * names. Carried as the field's own options they were written back on the
  * next save, freezing a copy of another definition into this one; the Builder
@@ -464,6 +464,9 @@ function collectUnmodelledOptions(
   field: object
 ): Record<string, unknown> | undefined {
   const carried: Record<string, unknown> = {};
+  const fieldGroupField = isFieldGroupFieldType(
+    (field as { type?: unknown }).type
+  );
 
   // Defined rather than assigned, for the same reason the write below defines:
   // a manifest deserialized from JSON can hold an own `__proto__` key, and
@@ -480,9 +483,13 @@ function collectUnmodelledOptions(
     });
   };
 
+  // Only a field-group field carries what the server resolves for it. Any
+  // other type may name its own option the same, and keeps it.
+  const derived = (key: string) =>
+    fieldGroupField && SERVER_DERIVED_FIELD_KEYS.has(key);
   for (const [key, value] of Object.entries(field)) {
     if (BUILDER_MODELLED_FIELD_KEYS.has(key)) continue;
-    if (SERVER_DERIVED_FIELD_KEYS.has(key)) continue;
+    if (derived(key)) continue;
     collect(key, value);
   }
 
@@ -498,7 +505,7 @@ function collectUnmodelledOptions(
       // A definition saved before these were left out may hold them in the
       // container; they are dropped there too, so its next save is clean.
       for (const [key, value] of Object.entries(container)) {
-        if (SERVER_DERIVED_FIELD_KEYS.has(key)) continue;
+        if (derived(key)) continue;
         collect(key, value);
       }
     }

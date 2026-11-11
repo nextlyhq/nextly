@@ -438,14 +438,18 @@ describe("the form preview", () => {
 
     const { rerender } = render(
       <FormPreview
+        kind="collection"
         fields={[half("first"), half("second")]}
         fieldGroups={new Map()}
+        fieldGroupsLoad="loaded"
       />
     );
     expect(twoColumns()).toHaveLength(1);
 
     rerender(
       <FormPreview
+        kind="collection"
+        fieldGroupsLoad="loaded"
         fields={[
           half("first"),
           { ...half("second"), admin: { width: "100%" } },
@@ -467,5 +471,91 @@ describe("the form preview", () => {
       screen.getByRole("button", { name: "Show the outline" })
     );
     expect(screen.getByRole("tree")).toBeInTheDocument();
+  });
+});
+
+describe("the form preview's fields", () => {
+  const titleField: BuilderField = {
+    id: "system_title",
+    name: "title",
+    label: "Title",
+    type: "text",
+    isSystem: true,
+  };
+  const body: BuilderField = {
+    id: "f-body",
+    name: "body",
+    label: "Body",
+    type: "text",
+  };
+
+  it("draws a collection's built-in fields, as its entry form does", () => {
+    render(
+      <FormPreview
+        kind="collection"
+        fields={[titleField, body]}
+        fieldGroups={new Map()}
+        fieldGroupsLoad="loaded"
+      />
+    );
+    expect(screen.getByLabelText(/Title/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Body/)).toBeInTheDocument();
+  });
+
+  it("draws none for a field group, which has no built-in fields of its own", () => {
+    render(
+      <FormPreview
+        kind="field-group"
+        fields={[titleField, body]}
+        fieldGroups={new Map()}
+        fieldGroupsLoad="loaded"
+      />
+    );
+    expect(screen.queryByLabelText(/Title/)).toBeNull();
+    expect(screen.getByLabelText(/Body/)).toBeInTheDocument();
+  });
+
+  it("says when the field groups it uses could not be loaded", () => {
+    render(
+      <FormPreview
+        kind="collection"
+        fields={[body]}
+        fieldGroups={new Map()}
+        fieldGroupsLoad="failed"
+      />
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("could not be loaded");
+  });
+});
+
+describe("a field group the outline was not handed", () => {
+  it.each([
+    ["loading", "Loading its fields…"],
+    ["failed", "Its fields could not be loaded (seo)"],
+    ["loaded", "No field group named seo"],
+  ] as const)("says why its fields are missing while %s", (load, words) => {
+    renderOutline({
+      nodes: buildOutline(nestedFixtureFields(), {
+        entityReadOnly: false,
+        fieldGroups: new Map(),
+        fieldGroupsLoad: load,
+      }),
+    });
+    expect(row("seo")).toHaveTextContent(words);
+    expect(row("seo/meta_title")).toBeNull();
+  });
+});
+
+describe("moving past a read-only sibling", () => {
+  it("is not offered, by key or in the menu", async () => {
+    const { on } = renderOutline();
+    // meta/title's next sibling is meta/rating, which a plugin owns.
+    (row("meta/title") as HTMLElement).focus();
+    await userEvent.keyboard("{Alt>}{ArrowDown}{/Alt}");
+    expect(on.move).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    expect(
+      await screen.findByRole("menuitem", { name: "Move down" })
+    ).toHaveAttribute("aria-disabled", "true");
   });
 });

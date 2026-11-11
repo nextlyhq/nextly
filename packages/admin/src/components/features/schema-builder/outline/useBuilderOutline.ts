@@ -10,6 +10,7 @@ import { useMemo } from "react";
 import { useOutlineFieldGroups } from "@admin/hooks/useOutlineFieldGroups";
 import {
   buildOutline,
+  type FieldGroupsLoad,
   type LoadedFieldGroup,
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
@@ -22,11 +23,17 @@ export function useBuilderOutline(
 ): {
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
+  fieldGroupsLoad: FieldGroupsLoad;
 } {
-  const fieldGroups = useOutlineFieldGroups(fields);
+  const { fieldGroups, load } = useOutlineFieldGroups();
   const outline = useMemo(
-    () => buildOutline(fields, { entityReadOnly, fieldGroups }),
-    [fields, entityReadOnly, fieldGroups]
+    () =>
+      buildOutline(fields, {
+        entityReadOnly,
+        fieldGroups,
+        fieldGroupsLoad: load,
+      }),
+    [fields, entityReadOnly, fieldGroups, load]
   );
-  return { outline, fieldGroups };
+  return { outline, fieldGroups, fieldGroupsLoad: load };
 }

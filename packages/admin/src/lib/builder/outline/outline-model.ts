@@ -74,6 +74,16 @@ function fieldReadOnlyReason(
 }
 
 /**
+ * Whether a field belongs to code or a plugin by its own markers: one that
+ * cannot change, and that no other field moves past either, since that would
+ * change its place too. The move rule asks this of a drag's two ends and of a
+ * one-step move's neighbour.
+ */
+export function ownedElsewhere(field: BuilderField): boolean {
+  return fieldReadOnlyReason(field, null) !== null;
+}
+
+/**
  * The read-only reason of a field placed under `ancestors` (outermost first)
  * in an entity that may itself be read-only: the rule above, applied down the
  * chain, so a field inside an owned container is read-only as the outline
@@ -121,13 +131,26 @@ export interface OutlineNode {
   /** In the entity's own definition, as opposed to a field group's. */
   own: boolean;
   /** For a field-group field: the field groups it uses, and what could not be shown. */
-  fieldGroup?: { slugs: string[]; missing: string[]; cycle: boolean };
+  fieldGroup?: {
+    slugs: string[];
+    missing: string[];
+    cycle: boolean;
+    /**
+     * Why the field groups in `missing` are not shown: not read yet, could not
+     * be read, or read and not there. Undefined when none is missing.
+     */
+    unavailable?: "loading" | "failed" | "not-found";
+  };
   /** For a blocks field: how many blocks it accepts. */
   blocks?: { accepted: number | "all" };
 }
 
+/** Whether the field groups the outline reads have arrived. */
+export type FieldGroupsLoad = "loading" | "loaded" | "failed";
+
 interface BuildContext {
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
+  load: FieldGroupsLoad;
 }
 
 /** A field group's own field, as a Builder field with an id from its place. */
@@ -299,7 +322,20 @@ function fillFieldGroup(
       return entry;
     });
   }
-  node.fieldGroup = { slugs, missing, cycle };
+  node.fieldGroup = {
+    slugs,
+    missing,
+    cycle,
+    ...(missing.length > 0 ? { unavailable: unavailableWhy(ctx.load) } : {}),
+  };
+}
+
+/** Why a field group the outline was not handed is not shown. */
+function unavailableWhy(
+  load: FieldGroupsLoad
+): "loading" | "failed" | "not-found" {
+  if (load === "loading") return "loading";
+  return load === "failed" ? "failed" : "not-found";
 }
 
 /**
@@ -311,11 +347,16 @@ export function buildOutline(
   options: {
     entityReadOnly: boolean;
     fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
+    /** Whether `fieldGroups` has arrived; loaded unless said. */
+    fieldGroupsLoad?: FieldGroupsLoad;
   }
 ): OutlineNode[] {
   return buildLevel(
     fields,
-    { fieldGroups: options.fieldGroups },
+    {
+      fieldGroups: options.fieldGroups,
+      load: options.fieldGroupsLoad ?? "loaded",
+    },
     {
       parent: null,
       inherited: options.entityReadOnly ? { kind: "entity" } : null,

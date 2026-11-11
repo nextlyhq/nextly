@@ -71,12 +71,38 @@ function Badge({
   );
 }
 
-/** What a blocks field accepts, in words; null for any other field. */
-function blocksNote(node: OutlineNode): string | null {
-  if (node.container !== "blocks" || !node.blocks) return null;
-  return node.blocks.accepted === "all"
+/** What a blocks field accepts, in words. */
+function blocksNote(blocks: { accepted: number | "all" }): string {
+  return blocks.accepted === "all"
     ? "Blocks: every block accepted"
-    : `Blocks: ${node.blocks.accepted} accepted`;
+    : `Blocks: ${blocks.accepted} accepted`;
+}
+
+/**
+ * Why a field-group field shows fewer fields than it uses: still loading, not
+ * readable, gone, or using itself. Said in the row, so an incomplete outline
+ * is never taken for the whole schema.
+ */
+function fieldGroupNote(
+  fieldGroup: NonNullable<OutlineNode["fieldGroup"]>
+): string | null {
+  const names = fieldGroup.missing.join(", ");
+  switch (fieldGroup.unavailable) {
+    case "loading":
+      return "Loading its fields…";
+    case "failed":
+      return `Its fields could not be loaded (${names})`;
+    case "not-found":
+      return `No field group named ${names}`;
+    default:
+      return fieldGroup.cycle ? "Uses itself; shown once" : null;
+  }
+}
+
+/** What a row says beside its name, if anything. */
+function rowNote(node: OutlineNode): string | null {
+  if (node.blocks) return blocksNote(node.blocks);
+  return node.fieldGroup ? fieldGroupNote(node.fieldGroup) : null;
 }
 
 /** The badges a row carries, in a fixed order; told in words, not colour. */
@@ -186,7 +212,7 @@ function RowItem({
 >): JSX.Element {
   const { node, level, expanded, match } = row;
   const { field } = node;
-  const what = blocksNote(node);
+  const what = rowNote(node);
   return (
     <div
       role="treeitem"

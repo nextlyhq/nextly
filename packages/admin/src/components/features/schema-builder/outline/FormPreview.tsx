@@ -16,9 +16,13 @@ import { useMemo } from "react";
 
 import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
 import { convertToFieldDefinition } from "@admin/lib/builder";
-import type { LoadedFieldGroup } from "@admin/lib/builder/outline/outline-model";
+import type {
+  FieldGroupsLoad,
+  LoadedFieldGroup,
+} from "@admin/lib/builder/outline/outline-model";
 import type { FieldDefinition } from "@admin/types/collection";
 
+import type { BuilderKind } from "../builder-config";
 import type { BuilderField } from "../types";
 
 /**
@@ -61,27 +65,56 @@ function withFieldGroups(
   });
 }
 
+/**
+ * The fields the entry form draws, in its order. A collection's or Single's
+ * form draws its built-in fields too (title, slug); a field group has none of
+ * its own, since it is drawn inside another entity's form.
+ */
+function formFields(
+  kind: BuilderKind,
+  fields: readonly BuilderField[]
+): BuilderField[] {
+  return kind === "field-group"
+    ? fields.filter(field => !field.isSystem)
+    : [...fields];
+}
+
 export function FormPreview({
+  kind,
   fields,
   fieldGroups,
+  fieldGroupsLoad,
 }: {
-  /** The entity's own fields, as they stand now. */
+  kind: BuilderKind;
+  /** The entity's fields, as they stand now, its built-in ones included. */
   fields: readonly BuilderField[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
+  fieldGroupsLoad: FieldGroupsLoad;
 }): JSX.Element {
   const definitions = useMemo(
     () =>
       withFieldGroups(
-        fields.filter(field => !field.isSystem).map(convertToFieldDefinition),
+        formFields(kind, fields).map(convertToFieldDefinition),
         fieldGroups
       ),
-    [fields, fieldGroups]
+    [kind, fields, fieldGroups]
   );
   return (
-    <ReadOnlyDocumentForm
-      fields={definitions as unknown as FieldConfig[]}
-      values={{}}
-      mode="create"
-    />
+    <div className="space-y-3">
+      {/* Said, so a form missing a field group's fields is not taken for the
+          whole form. */}
+      {fieldGroupsLoad !== "loaded" && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {fieldGroupsLoad === "loading"
+            ? "Loading the field groups this form uses…"
+            : "The field groups this form uses could not be loaded, so their fields are not shown."}
+        </p>
+      )}
+      <ReadOnlyDocumentForm
+        fields={definitions as unknown as FieldConfig[]}
+        values={{}}
+        mode="create"
+      />
+    </div>
   );
 }
