@@ -193,4 +193,173 @@ describe("computeFieldDiff", () => {
     expect(diff.changed[0].name).toBe("status");
     expect(diff.unchanged).toEqual(["title"]);
   });
+
+  // A field made through the REST API, the Direct API or code may store neither flag, while the
+  // Builder always sends both as booleans: a missing flag is the same as false.
+  it.each([
+    ["saved unchanged", {}],
+    ["saved with only its label changed", { label: "Summary text" }],
+  ])(
+    "finds no change in a field stored without required, unique or hasMany, %s",
+    (_case, edit) => {
+      const stored: FieldDefinition[] = [
+        { name: "summary", type: "text" },
+        { name: "author", type: "relationship", relationTo: "users" },
+      ];
+      const fromBuilder: FieldDefinition[] = [
+        {
+          name: "summary",
+          type: "text",
+          required: false,
+          unique: false,
+          ...edit,
+        },
+        {
+          name: "author",
+          type: "relationship",
+          relationTo: "users",
+          required: false,
+          unique: false,
+          hasMany: false,
+        },
+      ];
+
+      const diff = computeFieldDiff(stored, fromBuilder);
+
+      expect(diff.changed).toEqual([]);
+      expect(diff.hasChanges).toBe(false);
+    }
+  );
+
+  it("still finds a field made required that was stored without the flag", () => {
+    const diff = computeFieldDiff(
+      [{ name: "summary", type: "text" }],
+      [{ name: "summary", type: "text", required: true }]
+    );
+
+    expect(diff.changed).toEqual([
+      expect.objectContaining({
+        name: "summary",
+        reason: "constraint_changed",
+      }),
+    ]);
+  });
+
+  describe("in a translated entity", () => {
+    // Where a field's values are stored is decided by the entity, then the field's own setting,
+    // then its type: a text field is translated unless it says otherwise, a number is not.
+    it("finds a change when a field stored without settings is turned translated", () => {
+      const diff = computeFieldDiff(
+        [{ name: "views", type: "number" }],
+        [
+          {
+            name: "views",
+            type: "number",
+            required: false,
+            unique: false,
+            localized: true,
+          },
+        ],
+        { localized: true }
+      );
+
+      expect(diff.hasChanges).toBe(true);
+      expect(diff.changed).toEqual([
+        expect.objectContaining({ name: "views" }),
+      ]);
+    });
+
+    it("finds a change when a text field stored without settings is turned untranslated", () => {
+      const diff = computeFieldDiff(
+        [{ name: "summary", type: "text" }],
+        [{ name: "summary", type: "text", localized: false }],
+        { localized: true }
+      );
+
+      expect(diff.hasChanges).toBe(true);
+    });
+
+    it("finds no change when the Builder states the setting the field already had by default", () => {
+      const diff = computeFieldDiff(
+        [{ name: "summary", type: "text" }],
+        [
+          {
+            name: "summary",
+            type: "text",
+            required: false,
+            unique: false,
+            localized: true,
+          },
+        ],
+        { localized: true }
+      );
+
+      expect(diff.hasChanges).toBe(false);
+    });
+  });
+
+  it("finds no change in a field's translation setting where the entity is not translated", () => {
+    const diff = computeFieldDiff(
+      [{ name: "summary", type: "text" }],
+      [{ name: "summary", type: "text", localized: true }]
+    );
+
+    expect(diff.hasChanges).toBe(false);
+  });
+
+  // Positive controls: the missing-flag reading must not hide a real change to uniqueness.
+  it.each([
+    ["absent to on", undefined, true],
+    ["on to absent", true, undefined],
+    ["off to on", false, true],
+  ])("finds a change when uniqueness goes %s", (_case, from, to) => {
+    const diff = computeFieldDiff(
+      [
+        {
+          name: "code",
+          type: "text",
+          ...(from === undefined ? {} : { unique: from }),
+        },
+      ],
+      [
+        {
+          name: "code",
+          type: "text",
+          ...(to === undefined ? {} : { unique: to }),
+        },
+      ]
+    );
+
+    expect(diff.hasChanges).toBe(true);
+    expect(diff.changed).toEqual([expect.objectContaining({ name: "code" })]);
+  });
+
+  describe("when the entity's translation is turned on or off", () => {
+    // The old field is judged where the entity is translated now, the new one where the save asks.
+    it("finds a change for a field translated by default, otherwise unchanged", () => {
+      const turnedOn = computeFieldDiff(
+        [{ name: "summary", type: "text" }],
+        [{ name: "summary", type: "text", required: false, unique: false }],
+        { localized: false, newLocalized: true }
+      );
+      const turnedOff = computeFieldDiff(
+        [{ name: "summary", type: "text" }],
+        [{ name: "summary", type: "text", required: false, unique: false }],
+        { localized: true, newLocalized: false }
+      );
+
+      expect(turnedOn.hasChanges).toBe(true);
+      expect(turnedOff.hasChanges).toBe(true);
+    });
+
+    it("finds no change for a field that stays shared either way", () => {
+      const diff = computeFieldDiff(
+        [{ name: "views", type: "number" }],
+        [{ name: "views", type: "number", required: false, unique: false }],
+        { localized: false, newLocalized: true }
+      );
+
+      expect(diff.hasChanges).toBe(false);
+    });
+  });
 });

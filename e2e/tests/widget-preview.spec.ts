@@ -1,18 +1,22 @@
 /**
- * The development widget preview page, in a browser on `next dev`.
+ * The widget check's page, in a browser on `next dev`, and the admin's lack of
+ * any preview page of its own.
  *
- * It lists every widget the reader may see, drawn from each widget's declared
- * preview cases with no data read: a plugin's widget (the playground's
- * widget-kit fixture) beside core's. A person lacking a widget's permission is
- * not shown it. And the page's accessibility check, run on each drawn state in
- * light and dark, is what CI holds first-party widgets to: no serious or
- * critical finding. The planted fixture (a control with no label) is the
- * check's positive control, so a check that found nothing anywhere cannot
- * pass as one that found nothing wrong.
+ * The page is the browser tests' own (the playground's `widget-check-fixture`,
+ * registered only on this suite's server), drawing the admin's preview board
+ * from `@nextlyhq/admin/testing`. It lists every widget the reader may see,
+ * drawn from each widget's declared preview cases with no data read: a
+ * plugin's widget (the playground's widget-kit fixture) beside core's. A person
+ * lacking a widget's permission is not shown it. And the board's accessibility
+ * check, run on each drawn state in light and dark, is what CI holds
+ * first-party widgets to: no serious or critical finding. The planted fixture
+ * (a control with no label) is the check's positive control, so a check that
+ * found nothing anywhere cannot pass as one that found nothing wrong.
  *
- * On `next dev` only (`DEV_SPECS` in playwright.config.ts): the page exists
- * only while the server runs in development. Its production half, that a
- * direct visit is not found, is `production/widget-preview.spec.ts`.
+ * On `next dev` only (`DEV_SPECS` in playwright.config.ts): the board's read
+ * is served by a development server alone. That a production server serves
+ * neither the read nor the admin's old preview address is
+ * `production/widget-preview.spec.ts`.
  */
 import { createRequire } from "node:module";
 
@@ -26,7 +30,11 @@ import { fileAccount, includingHidden, test } from "./support/test";
 // Creates a role and a user for the limited reader.
 test.describe.configure({ lock: [LOCK.usersRoles] });
 
-const PREVIEWS = "/dev/widget-previews";
+/** The widget check's page, under its fixture plugin's namespace. */
+const PREVIEWS = "/plugins/widget-check-fixture/widgets";
+/** The address the admin once drew a preview page at, and one no route serves. */
+const OLD_PREVIEWS = "/admin/dev/widget-previews";
+const UNSERVED = "/admin/dev/no-such-page";
 /** A plugin widget drawn by its own component, with a preview case. */
 const KIT = "widget-kit-fixture/kit";
 /** The widget planted with an unlabelled control. */
@@ -39,7 +47,7 @@ const AXE_SCRIPT = createRequire(
   createRequire(import.meta.url).resolve("@axe-core/playwright")
 ).resolve("axe-core/axe.min.js");
 
-/** Opens the preview page and waits for its widgets to be listed. */
+/** Opens the widget check's page and waits for its widgets to be listed. */
 async function openPreviews(page: Page, theme: Theme = "light") {
   await gotoAdmin(page, PREVIEWS, theme);
   await expect(
@@ -161,11 +169,30 @@ test("lists a widget the site config declares", async ({ page }) => {
   await expect(site).toHaveAttribute("data-preview-owner", "the site config");
 });
 
-test("the dashboard offers no way to the page, at rest or in customise mode", async ({
+test("the admin has no preview page, even on a development server", async ({
   page,
 }) => {
-  // The page is reached by its address on a development server; the
-  // dashboard draws no link to it, here as on a production build.
+  // The control: an address no route serves, and what the admin draws there.
+  await page.goto(UNSERVED);
+  const notFound = page
+    .getByText("Oops! This page doesn't exist")
+    .filter({ visible: true });
+  await expect(notFound).toBeVisible({ timeout: 60_000 });
+  const unservedTitle = await page.title();
+
+  await page.goto(OLD_PREVIEWS);
+  await expect(notFound).toBeVisible({ timeout: 60_000 });
+  await expect(
+    page.getByRole("heading", { name: "Widget previews", includeHidden: true })
+  ).toHaveCount(0);
+  await expect(page.locator("[data-preview-section]")).toHaveCount(0);
+  // The tab says what it says for any unserved address.
+  expect(await page.title()).toBe(unservedTitle);
+});
+
+test("the dashboard offers no way to a preview page, at rest or in customise mode", async ({
+  page,
+}) => {
   await gotoAdmin(page, "");
   const begin = page
     .getByTestId("dashboard-edit-begin")
